@@ -227,31 +227,109 @@ final class ThemeEngine {
 
     /// Restore the user's last selected theme (call on app launch).
     ///
+    /// If no theme was previously selected, defaults to "One Dark Pro" from bundled themes.
+    ///
     /// SECURITY: The persisted path is re-validated before loading.
     /// loadTheme() runs ThemeValidator, so even a tampered UserDefaults
     /// path cannot load a malicious file.
     func restoreLastTheme() {
-        guard let path = UserDefaults.standard.string(forKey: "senkani.selectedThemePath") else { return }
-        let url = URL(fileURLWithPath: path)
-        guard FileManager.default.fileExists(atPath: path) else { return }
+        let savedPath = UserDefaults.standard.string(forKey: "senkani.selectedThemePath")
 
-        // Resolve symlinks to prevent escape from themes directory
-        let resolved = url.resolvingSymlinksInPath()
-        let themesDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".senkani/themes").resolvingSymlinksInPath()
-        guard resolved.path.hasPrefix(themesDir.path + "/") else {
-            // Theme file is not in the expected directory — refuse to load
-            UserDefaults.standard.removeObject(forKey: "senkani.selectedThemePath")
+        // Handle bundled theme references (stored as "bundled:filename.json")
+        if let saved = savedPath, saved.hasPrefix("bundled:") {
+            let filename = String(saved.dropFirst("bundled:".count))
+            if let bundlePath = Bundle.module.resourcePath {
+                let bundleURL = URL(fileURLWithPath: bundlePath)
+                    .appendingPathComponent("Themes")
+                    .appendingPathComponent(filename)
+                if FileManager.default.fileExists(atPath: bundleURL.path) {
+                    try? loadBundledTheme(from: bundleURL)
+                    return
+                }
+            }
+        }
+
+        // Handle user theme paths
+        if let path = savedPath, !path.hasPrefix("bundled:") {
+            let url = URL(fileURLWithPath: path)
+            guard FileManager.default.fileExists(atPath: path) else { return }
+
+            // Resolve symlinks to prevent escape from themes directory
+            let resolved = url.resolvingSymlinksInPath()
+            let themesDir = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".senkani/themes").resolvingSymlinksInPath()
+            guard resolved.path.hasPrefix(themesDir.path + "/") else {
+                // Theme file is not in the expected directory — refuse to load
+                UserDefaults.standard.removeObject(forKey: "senkani.selectedThemePath")
+                return
+            }
+
+            try? loadTheme(from: resolved)
             return
         }
 
-        try? loadTheme(from: resolved)
+        // No saved theme — default to One Dark Pro if available in bundle
+        if savedPath == nil {
+            if let bundlePath = Bundle.module.resourcePath {
+                let oneDarkURL = URL(fileURLWithPath: bundlePath)
+                    .appendingPathComponent("Themes")
+                    .appendingPathComponent("one-dark-pro.json")
+                if FileManager.default.fileExists(atPath: oneDarkURL.path) {
+                    try? loadBundledTheme(from: oneDarkURL)
+                    return
+                }
+            }
+        }
     }
 
     // MARK: - Available Themes
 
-    /// Scans `~/.senkani/themes/` for `.json` files and returns name + URL pairs.
-    func availableThemes() -> [(name: String, url: URL)] {
+    /// Metadata for a theme entry in the picker.
+    struct ThemeEntry: Identifiable {
+        let id: String  // unique key (filename or "default-dark")
+        let name: String
+        let url: URL
+        let isBundled: Bool
+        let type: String  // "dark" or "light"
+    }
+
+    /// Returns bundled theme URLs from the app bundle's `Themes/` resource directory.
+    func bundledThemes() -> [ThemeEntry] {
+        guard let bundlePath = Bundle.module.resourcePath else { return [] }
+        let themesDir = URL(fileURLWithPath: bundlePath).appendingPathComponent("Themes")
+
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: themesDir,
+            includingPropertiesForKeys: [.nameKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        return contents
+            .filter { $0.pathExtension.lowercased() == "json" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .compactMap { url in
+                guard let data = try? Data(contentsOf: url),
+                      let raw = try? JSONDecoder().decode(VSCodeThemeJSON.self, from: data) else {
+                    return nil
+                }
+                let displayName = raw.name ?? url.deletingPathExtension().lastPathComponent
+                    .replacingOccurrences(of: "-", with: " ")
+                    .replacingOccurrences(of: "_", with: " ")
+                    .localizedCapitalized
+                return ThemeEntry(
+                    id: "bundled:\(url.lastPathComponent)",
+                    name: displayName,
+                    url: url,
+                    isBundled: true,
+                    type: raw.type ?? "dark"
+                )
+            }
+    }
+
+    /// Scans `~/.senkani/themes/` for user-installed `.json` theme files.
+    func userThemes() -> [ThemeEntry] {
         let themesDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".senkani/themes")
 
@@ -276,13 +354,41 @@ final class ThemeEngine {
                 return resolved.path.hasPrefix(resolvedThemesDir.path + "/")
             }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
-            .map { url in
-                let name = url.deletingPathExtension().lastPathComponent
+            .compactMap { url in
+                guard let data = try? Data(contentsOf: url),
+                      let raw = try? JSONDecoder().decode(VSCodeThemeJSON.self, from: data) else {
+                    return nil
+                }
+                let displayName = raw.name ?? url.deletingPathExtension().lastPathComponent
                     .replacingOccurrences(of: "-", with: " ")
                     .replacingOccurrences(of: "_", with: " ")
                     .localizedCapitalized
-                return (name: name, url: url)
+                return ThemeEntry(
+                    id: "user:\(url.lastPathComponent)",
+                    name: displayName,
+                    url: url,
+                    isBundled: false,
+                    type: raw.type ?? "dark"
+                )
             }
+    }
+
+    /// Returns all available themes: bundled first, then user-installed.
+    func availableThemes() -> [ThemeEntry] {
+        return bundledThemes() + userThemes()
+    }
+
+    /// Load a bundled theme by name (skips ThemeValidator file-path security checks
+    /// since bundled resources are trusted and not in ~/.senkani/themes/).
+    func loadBundledTheme(from url: URL) throws {
+        let data = try Data(contentsOf: url)
+        let raw = try JSONDecoder().decode(VSCodeThemeJSON.self, from: data)
+        applyVSCodeTheme(raw)
+        currentThemeURL = url
+        currentThemeName = raw.name ?? url.deletingPathExtension().lastPathComponent
+
+        // Persist selection with a bundled: prefix so restoreLastTheme knows
+        UserDefaults.standard.set("bundled:\(url.lastPathComponent)", forKey: "senkani.selectedThemePath")
     }
 
     // MARK: - VS Code Mapping

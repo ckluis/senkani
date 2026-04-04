@@ -81,7 +81,8 @@ let package = Package(
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
             ],
             path: "SenkaniApp",
-            exclude: ["SenkaniApp.xcodeproj"]
+            exclude: ["SenkaniApp.xcodeproj"],
+            resources: [.copy("Themes")]
         ),
         .testTarget(
             name: "SenkaniTests",

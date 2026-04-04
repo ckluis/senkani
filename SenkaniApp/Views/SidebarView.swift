@@ -6,6 +6,7 @@ struct SidebarView: View {
     @Binding var showModels: Bool
     @Binding var showAnalytics: Bool
     @Binding var showSkills: Bool
+    @Binding var showSchedules: Bool
 
     var body: some View {
         List(selection: $workspace.activePaneID) {
@@ -14,6 +15,7 @@ struct SidebarView: View {
                     showModels = true
                     showAnalytics = false
                     showSkills = false
+                    showSchedules = false
                     workspace.activePaneID = nil
                 } label: {
                     HStack(spacing: 6) {
@@ -32,6 +34,7 @@ struct SidebarView: View {
                     showAnalytics = true
                     showModels = false
                     showSkills = false
+                    showSchedules = false
                     workspace.activePaneID = nil
                 } label: {
                     HStack(spacing: 6) {
@@ -50,6 +53,7 @@ struct SidebarView: View {
                     showSkills = true
                     showModels = false
                     showAnalytics = false
+                    showSchedules = false
                     workspace.activePaneID = nil
                 } label: {
                     HStack(spacing: 6) {
@@ -63,6 +67,25 @@ struct SidebarView: View {
                 }
                 .buttonStyle(.plain)
                 .listRowBackground(showSkills ? Color.accentColor.opacity(0.12) : Color.clear)
+
+                Button {
+                    showSchedules = true
+                    showModels = false
+                    showAnalytics = false
+                    showSkills = false
+                    workspace.activePaneID = nil
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "calendar.badge.clock")
+                            .font(.system(size: 11))
+                            .foregroundStyle(showSchedules ? .blue : .secondary)
+                        Text("Schedules")
+                            .font(.system(size: 12))
+                            .foregroundStyle(showSchedules ? .primary : .secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(showSchedules ? Color.accentColor.opacity(0.12) : Color.clear)
             }
 
             Section("Panes") {
@@ -102,6 +125,7 @@ struct SidebarView: View {
                 showModels = false
                 showAnalytics = false
                 showSkills = false
+                showSchedules = false
             }
         }
         .safeAreaInset(edge: .bottom) {

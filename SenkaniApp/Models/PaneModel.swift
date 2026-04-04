@@ -63,6 +63,8 @@ final class PaneModel: Identifiable {
     var shellCommand: String
     /// File path for markdown/HTML preview panes.
     var previewFilePath: String
+    /// User-resizable column width. Defaults to theme default.
+    var columnWidth: CGFloat = SenkaniTheme.defaultColumnWidth
 
     init(title: String = "Terminal",
          paneType: PaneType = .terminal,

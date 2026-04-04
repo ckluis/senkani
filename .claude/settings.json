@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [{"type": "command", "command": "./hooks/senkani-intercept.sh"}]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": "./hooks/senkani-intercept.sh"}]
+      },
+      {
+        "matcher": "Grep",
+        "hooks": [{"type": "command", "command": "./hooks/senkani-intercept.sh"}]
+      }
+    ]
+  }
+}

@@ -1,0 +1,443 @@
+import Foundation
+import Combine
+
+// MARK: - Model Status
+
+/// Download/readiness state of a managed model.
+public enum ModelStatus: String, Codable, Sendable {
+    case available    // registered, not yet downloaded
+    case downloading  // download in progress
+    case downloaded   // on disk, verified
+    case error        // download or verification failed
+}
+
+// MARK: - ModelInfo
+
+/// Metadata for a single ML model managed by Senkani.
+public struct ModelInfo: Codable, Sendable, Identifiable {
+    public let id: String
+    public let name: String
+    public let repoId: String          // HuggingFace repo, e.g. "sentence-transformers/all-MiniLM-L6-v2"
+    public let expectedSizeBytes: Int64
+    public var status: ModelStatus
+    public var downloadProgress: Double // 0.0 ..< 1.0
+    public var downloadedAt: Date?
+    public var localPath: String?
+    public var lastError: String?
+
+    /// Alias for view compatibility.
+    public var expectedSize: Int64 { expectedSizeBytes }
+
+    public init(
+        id: String,
+        name: String,
+        repoId: String,
+        expectedSizeBytes: Int64,
+        status: ModelStatus = .available,
+        downloadProgress: Double = 0,
+        downloadedAt: Date? = nil,
+        localPath: String? = nil,
+        lastError: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.repoId = repoId
+        self.expectedSizeBytes = expectedSizeBytes
+        self.status = status
+        self.downloadProgress = downloadProgress
+        self.downloadedAt = downloadedAt
+        self.localPath = localPath
+        self.lastError = lastError
+    }
+}
+
+// MARK: - ModelManager
+
+/// Manages ML model registry, download status, and cache verification.
+///
+/// Core does NOT depend on MLX or Hub. ModelManager checks the HuggingFace
+/// cache on disk (where MLXEmbedders/MLXVLM actually store models) and
+/// tracks readiness. Actual MLX loading stays in the MCP tools.
+///
+/// HuggingFace Hub Swift SDK stores snapshots at:
+///   ~/Documents/huggingface/models/{repo-id}/
+///
+/// ModelManager's role:
+/// - Registry of known models with expected sizes
+/// - Check if HF cache already has the model files (config.json + *.safetensors)
+/// - Report readiness status so tools can gate on it
+/// - Track disk usage across all managed models
+/// - Provide delete capability for cache cleanup
+public final class ModelManager: ObservableObject, @unchecked Sendable {
+
+    public static let shared = ModelManager()
+
+    // MARK: - Published State
+
+    /// Current state of all managed models. Access under lock.
+    private var _models: [ModelInfo]
+    private let lock = NSLock()
+
+    /// Thread-safe read of models array.
+    public var models: [ModelInfo] {
+        lock.lock()
+        defer { lock.unlock() }
+        return _models
+    }
+
+    /// Registered download handler. MCP layer registers its handler so Core
+    /// doesn't need to depend on MLX/Hub.
+    private var downloadHandler: ((String) async throws -> Void)?
+
+    /// Register a download handler (called by MCP layer at startup).
+    public func registerDownloadHandler(_ handler: @escaping (String) async throws -> Void) {
+        downloadHandler = handler
+    }
+
+    // MARK: - HuggingFace Cache Location
+
+    /// The base directory where HuggingFace Hub Swift SDK stores downloaded models.
+    /// Default: ~/Documents/huggingface/models/
+    private let hfCacheBase: URL
+
+    // MARK: - Metadata Persistence
+
+    /// Where we persist our own metadata (status, downloadedAt, etc.).
+    /// ~/Library/Caches/dev.senkani/models/models.json
+    private let metadataURL: URL
+
+    // MARK: - Init
+
+    private init() {
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        self.hfCacheBase = documents.appendingPathComponent("huggingface/models")
+
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("dev.senkani/models")
+        self.metadataURL = cacheDir.appendingPathComponent("models.json")
+
+        // Start with default registry
+        self._models = Self.defaultRegistry
+
+        // Load persisted metadata and merge
+        loadPersistedMetadata()
+
+        // Scan disk to reconcile actual state
+        reconcileWithDisk()
+    }
+
+    /// Visible for testing: create with custom paths.
+    init(hfCacheBase: URL, metadataURL: URL) {
+        self.hfCacheBase = hfCacheBase
+        self.metadataURL = metadataURL
+        self._models = Self.defaultRegistry
+        loadPersistedMetadata()
+        reconcileWithDisk()
+    }
+
+    // MARK: - Default Registry
+
+    private static let defaultRegistry: [ModelInfo] = [
+        ModelInfo(
+            id: "minilm-l6",
+            name: "MiniLM-L6 Embeddings",
+            repoId: "sentence-transformers/all-MiniLM-L6-v2",
+            expectedSizeBytes: 90_000_000   // ~90MB
+        ),
+        ModelInfo(
+            id: "qwen2-vl-2b",
+            name: "Qwen2-VL 2B Vision",
+            repoId: "mlx-community/Qwen2-VL-2B-Instruct-4bit",
+            expectedSizeBytes: 1_500_000_000  // ~1.5GB
+        ),
+        ModelInfo(
+            id: "gemma3-4b",
+            name: "Gemma 3 4B Vision",
+            repoId: "mlx-community/gemma-3-4b-it-qat-4bit",
+            expectedSizeBytes: 5_000_000_000  // ~5GB placeholder
+        ),
+    ]
+
+    // MARK: - Public API
+
+    /// Check whether a model is downloaded and ready to use.
+    public func isReady(_ modelId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return _models.first(where: { $0.id == modelId })?.status == .downloaded
+    }
+
+    /// Get info for a specific model.
+    public func model(_ modelId: String) -> ModelInfo? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _models.first(where: { $0.id == modelId })
+    }
+
+    /// The HuggingFace cache directory for a given repo ID.
+    /// e.g. ~/Documents/huggingface/models/sentence-transformers/all-MiniLM-L6-v2
+    public func hfCachePath(for repoId: String) -> URL {
+        hfCacheBase.appendingPathComponent(repoId)
+    }
+
+    /// The HuggingFace cache directory for a model by its senkani ID.
+    public func localPath(for modelId: String) -> URL? {
+        lock.lock()
+        let info = _models.first(where: { $0.id == modelId })
+        lock.unlock()
+        guard let info else { return nil }
+        return hfCachePath(for: info.repoId)
+    }
+
+    /// Rescan the HuggingFace cache to update model status.
+    /// Call after a tool triggers a download via MLX libraries.
+    public func refresh() {
+        reconcileWithDisk()
+        persistMetadata()
+        notifyChange()
+    }
+
+    /// Mark a model as downloading with progress.
+    public func updateProgress(_ modelId: String, progress: Double) {
+        lock.lock()
+        if let idx = _models.firstIndex(where: { $0.id == modelId }) {
+            _models[idx].status = .downloading
+            _models[idx].downloadProgress = progress
+        }
+        lock.unlock()
+        notifyChange()
+    }
+
+    /// Mark a model as downloaded after MLX libraries finish their download.
+    public func markDownloaded(_ modelId: String) {
+        lock.lock()
+        if let idx = _models.firstIndex(where: { $0.id == modelId }) {
+            _models[idx].status = .downloaded
+            _models[idx].downloadProgress = 1.0
+            _models[idx].downloadedAt = Date()
+            _models[idx].localPath = hfCachePath(for: _models[idx].repoId).path
+        }
+        lock.unlock()
+        persistMetadata()
+        notifyChange()
+    }
+
+    /// Mark a model as errored.
+    public func markError(_ modelId: String, message: String) {
+        lock.lock()
+        if let idx = _models.firstIndex(where: { $0.id == modelId }) {
+            _models[idx].status = .error
+            _models[idx].lastError = message
+        }
+        lock.unlock()
+        persistMetadata()
+        notifyChange()
+    }
+
+    /// Trigger a model download via the registered handler.
+    /// The MCP layer registers the actual download logic at startup.
+    public func download(modelId: String) async throws {
+        guard let handler = downloadHandler else {
+            throw NSError(
+                domain: "dev.senkani.ModelManager",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "No download handler registered. Start the MCP server first."]
+            )
+        }
+        try await handler(modelId)
+    }
+
+    /// Delete a model's cached files from the HuggingFace cache.
+    /// Returns the number of bytes freed.
+    @discardableResult
+    public func delete(_ modelId: String) throws -> Int64 {
+        lock.lock()
+        guard let idx = _models.firstIndex(where: { $0.id == modelId }) else {
+            lock.unlock()
+            return 0
+        }
+        let repoId = _models[idx].repoId
+        lock.unlock()
+
+        let modelDir = hfCachePath(for: repoId)
+        let freed = Self.directorySize(modelDir)
+
+        if FileManager.default.fileExists(atPath: modelDir.path) {
+            try FileManager.default.removeItem(at: modelDir)
+        }
+
+        lock.lock()
+        if let idx = _models.firstIndex(where: { $0.id == modelId }) {
+            _models[idx].status = .available
+            _models[idx].downloadProgress = 0
+            _models[idx].downloadedAt = nil
+            _models[idx].localPath = nil
+            _models[idx].lastError = nil
+        }
+        lock.unlock()
+
+        persistMetadata()
+        notifyChange()
+        return freed
+    }
+
+    /// Delete by labeled argument (view compatibility).
+    public func delete(modelId: String) throws {
+        try delete(modelId)
+    }
+
+    /// Total disk usage of all downloaded models (no-arg convenience for views).
+    public func diskUsage() -> Int64 {
+        totalDiskUsage()
+    }
+
+    /// Total disk usage of all downloaded models.
+    public func totalDiskUsage() -> Int64 {
+        lock.lock()
+        let downloaded = _models.filter { $0.status == .downloaded }
+        lock.unlock()
+
+        return downloaded.reduce(Int64(0)) { total, info in
+            total + Self.directorySize(hfCachePath(for: info.repoId))
+        }
+    }
+
+    /// Disk usage for a single model.
+    public func diskUsage(for modelId: String) -> Int64 {
+        lock.lock()
+        guard let info = _models.first(where: { $0.id == modelId }) else {
+            lock.unlock()
+            return 0
+        }
+        lock.unlock()
+        return Self.directorySize(hfCachePath(for: info.repoId))
+    }
+
+    /// Human-readable disk usage string.
+    public static func formatBytes(_ bytes: Int64) -> String {
+        if bytes >= 1_000_000_000 {
+            return String(format: "%.1f GB", Double(bytes) / 1_000_000_000)
+        } else if bytes >= 1_000_000 {
+            return String(format: "%.1f MB", Double(bytes) / 1_000_000)
+        } else if bytes >= 1_000 {
+            return String(format: "%.1f KB", Double(bytes) / 1_000)
+        }
+        return "\(bytes) bytes"
+    }
+
+    // MARK: - Disk Reconciliation
+
+    /// Check whether a model's files actually exist in the HF cache.
+    /// A model is considered present if config.json and at least one .safetensors file exist.
+    private func modelExistsOnDisk(repoId: String) -> Bool {
+        let modelDir = hfCachePath(for: repoId)
+        let fm = FileManager.default
+
+        let configPath = modelDir.appendingPathComponent("config.json").path
+        guard fm.fileExists(atPath: configPath) else { return false }
+
+        // Check for at least one .safetensors file
+        guard let contents = try? fm.contentsOfDirectory(atPath: modelDir.path) else { return false }
+        return contents.contains(where: { $0.hasSuffix(".safetensors") })
+    }
+
+    /// Verify config.json is valid JSON (basic integrity check).
+    private func verifyConfigIntegrity(repoId: String) -> Bool {
+        let configURL = hfCachePath(for: repoId).appendingPathComponent("config.json")
+        guard let data = try? Data(contentsOf: configURL) else { return false }
+        return (try? JSONSerialization.jsonObject(with: data)) != nil
+    }
+
+    /// Walk all registered models and update their status based on disk reality.
+    private func reconcileWithDisk() {
+        lock.lock()
+        for i in _models.indices {
+            let repoId = _models[i].repoId
+            if modelExistsOnDisk(repoId: repoId) && verifyConfigIntegrity(repoId: repoId) {
+                if _models[i].status != .downloading {
+                    _models[i].status = .downloaded
+                    _models[i].downloadProgress = 1.0
+                    _models[i].localPath = hfCachePath(for: repoId).path
+                    if _models[i].downloadedAt == nil {
+                        _models[i].downloadedAt = Date()
+                    }
+                }
+            } else {
+                // If we thought it was downloaded but files are gone, reset
+                if _models[i].status == .downloaded {
+                    _models[i].status = .available
+                    _models[i].downloadProgress = 0
+                    _models[i].localPath = nil
+                }
+            }
+        }
+        lock.unlock()
+    }
+
+    // MARK: - Persistence
+
+    private struct PersistedMetadata: Codable {
+        let models: [ModelInfo]
+    }
+
+    private func persistMetadata() {
+        lock.lock()
+        let snapshot = _models
+        lock.unlock()
+
+        let metadata = PersistedMetadata(models: snapshot)
+        guard let data = try? JSONEncoder().encode(metadata) else { return }
+
+        let dir = metadataURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        // Atomic write via Data.write with .atomic option
+        try? data.write(to: metadataURL, options: .atomic)
+    }
+
+    private func loadPersistedMetadata() {
+        guard let data = try? Data(contentsOf: metadataURL),
+              let persisted = try? JSONDecoder().decode(PersistedMetadata.self, from: data)
+        else { return }
+
+        // Merge persisted state into registry entries (registry is source of truth for schema)
+        lock.lock()
+        for saved in persisted.models {
+            if let idx = _models.firstIndex(where: { $0.id == saved.id }) {
+                _models[idx].downloadedAt = saved.downloadedAt
+                _models[idx].lastError = saved.lastError
+                // Don't restore status directly — reconcileWithDisk will set it from reality
+            }
+        }
+        lock.unlock()
+    }
+
+    // MARK: - ObservableObject
+
+    /// Notify SwiftUI views on main thread that model state changed.
+    private func notifyChange() {
+        DispatchQueue.main.async { [weak self] in
+            self?.objectWillChange.send()
+        }
+    }
+
+    // MARK: - Helpers
+
+    /// Calculate total size of a directory recursively.
+    private static func directorySize(_ url: URL) -> Int64 {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else { return 0 }
+
+        var total: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            if let size = try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+                total += Int64(size)
+            }
+        }
+        return total
+    }
+}

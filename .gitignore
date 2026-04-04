@@ -1,0 +1,6 @@
+.build/
+.DS_Store
+.senkani/
+.mcp.json
+SPEC.md
+charter.md

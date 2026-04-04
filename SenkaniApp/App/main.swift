@@ -15,5 +15,9 @@ if isMCPMode {
     // Block forever (the socket server runs on GCD)
     dispatchMain()
 } else {
+    // CRITICAL: When launched from the command line (.build/release/SenkaniApp),
+    // macOS treats the process as a CLI tool that can't receive keyboard events.
+    // Setting the activation policy to .regular makes it a proper GUI app.
+    NSApplication.shared.setActivationPolicy(.regular)
     SenkaniGUI.main()
 }

@@ -2,11 +2,60 @@ import SwiftUI
 import AppKit
 import SwiftTerm
 
-/// Hosts SwiftTerm's LocalProcessTerminalView via NSViewControllerRepresentable.
+// MARK: - FocusableTerminalView (the key to making this work)
+
+/// Intermediate NSView container that bridges SwiftUI's responder chain
+/// to SwiftTerm's LocalProcessTerminalView.
 ///
-/// Using a view controller (not just NSViewRepresentable) gives us proper
-/// lifecycle management and responder chain integration with SwiftUI.
-struct TerminalViewRepresentable: NSViewControllerRepresentable {
+/// Pattern from cmux (manaflow-ai/cmux): SwiftUI can't directly manage
+/// first responder for AppKit subviews. This container accepts focus from
+/// SwiftUI and forwards it to the actual terminal.
+///
+/// CRITICAL: Use autoresizingMask, NOT Auto Layout. SwiftTerm's
+/// LocalProcessTerminalView doesn't work correctly with NSLayoutConstraint.
+class FocusableTerminalView: NSView {
+    var terminalView: LocalProcessTerminalView?
+    var onActivate: (() -> Void)?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func becomeFirstResponder() -> Bool {
+        // When SwiftUI gives us focus, forward to the actual terminal
+        if let tv = terminalView {
+            DispatchQueue.main.async {
+                self.window?.makeFirstResponder(tv)
+            }
+        }
+        return true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onActivate?()
+        // Explicitly request focus for the terminal on click
+        if let tv = terminalView {
+            window?.makeFirstResponder(tv)
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func layout() {
+        super.layout()
+        // Resize the terminal to fill the container
+        if let tv = terminalView, bounds.size.width > 0, bounds.size.height > 0 {
+            tv.setFrameSize(bounds.size)
+        }
+    }
+}
+
+// MARK: - SwiftUI Bridge
+
+/// Hosts SwiftTerm's LocalProcessTerminalView in SwiftUI via the
+/// FocusableTerminalView container pattern.
+///
+/// IMPORTANT: Only set processDelegate on the terminal, NEVER
+/// terminalDelegate — setting terminalDelegate breaks keyboard input
+/// in SwiftUI contexts (discovered by cmux project).
+struct TerminalViewRepresentable: NSViewRepresentable {
     let shellPath: String
     let environment: [String: String]
     let workingDirectory: String
@@ -28,100 +77,79 @@ struct TerminalViewRepresentable: NSViewControllerRepresentable {
         self.onActivate = onActivate
     }
 
-    func makeNSViewController(context: Context) -> TerminalViewController {
-        let vc = TerminalViewController()
-        vc.shellPath = shellPath
-        vc.environment = environment
-        vc.workingDirectory = workingDirectory
-        vc.onProcessExited = onProcessExited
-        vc.onActivate = onActivate
-        return vc
-    }
+    func makeNSView(context: Context) -> FocusableTerminalView {
+        let container = FocusableTerminalView()
+        container.wantsLayer = true
+        container.onActivate = onActivate
 
-    func updateNSViewController(_ vc: TerminalViewController, context: Context) {
-        if isActive {
-            vc.requestFocus()
-        }
-    }
-}
+        let tv = LocalProcessTerminalView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
 
-// MARK: - TerminalViewController
+        // CRITICAL: autoresizingMask, NOT Auto Layout
+        tv.autoresizingMask = [.width, .height]
 
-/// NSViewController that owns the LocalProcessTerminalView.
-/// This gives us full control over the view lifecycle, first responder
-/// management, and the responder chain — things that are hard to manage
-/// from NSViewRepresentable alone.
-final class TerminalViewController: NSViewController, @preconcurrency LocalProcessTerminalViewDelegate {
-    var shellPath: String = "/bin/zsh"
-    var environment: [String: String] = [:]
-    var workingDirectory: String = NSHomeDirectory()
-    var onProcessExited: ((Int32) -> Void)?
-    var onActivate: (() -> Void)?
-
-    private var terminalView: LocalProcessTerminalView!
-    private var processStarted = false
-
-    override func loadView() {
-        // The terminal IS the view — no wrapper, no container
-        let tv = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
-        tv.processDelegate = self
-        tv.nativeBackgroundColor = .black
+        // Colors
         tv.nativeForegroundColor = .white
-        self.terminalView = tv
-        self.view = tv
-    }
+        tv.nativeBackgroundColor = .black
 
-    override func viewDidAppear() {
-        super.viewDidAppear()
-        startShellIfNeeded()
-        // Give the window a moment to settle, then grab focus
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            self?.requestFocus()
-        }
-    }
+        // CRITICAL: Only processDelegate. NEVER set terminalDelegate —
+        // it breaks keyboard input in SwiftUI hosting contexts.
+        tv.processDelegate = context.coordinator
 
-    private func startShellIfNeeded() {
-        guard !processStarted else { return }
-        processStarted = true
+        container.addSubview(tv)
+        container.terminalView = tv
 
-        // Build environment: inherit current process env + overrides
+        // Start the shell process
+        let shell = shellPath.isEmpty ? "/bin/zsh" : shellPath
         var env = ProcessInfo.processInfo.environment
         for (key, value) in environment {
             env[key] = value
         }
         let envPairs = env.map { "\($0.key)=\($0.value)" }
 
-        terminalView.startProcess(
-            executable: shellPath,
+        tv.startProcess(
+            executable: shell,
             args: [],
             environment: envPairs,
-            execName: (shellPath as NSString).lastPathComponent,
-            currentDirectory: workingDirectory
+            execName: "-" + (shell as NSString).lastPathComponent
         )
+
+        // Delayed first responder — window hierarchy must be established first
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            container.window?.makeFirstResponder(tv)
+        }
+
+        return container
     }
 
-    func requestFocus() {
-        guard let window = view.window else { return }
-        window.makeFirstResponder(terminalView)
+    func updateNSView(_ nsView: FocusableTerminalView, context: Context) {
+        // Re-establish first responder every time SwiftUI updates this view
+        // (tab switch, pane activation, etc.)
+        if isActive {
+            DispatchQueue.main.async {
+                if let tv = nsView.terminalView {
+                    nsView.window?.makeFirstResponder(tv)
+                }
+            }
+        }
     }
 
-    // MARK: - Mouse handling for pane activation
-
-    override func mouseDown(with event: NSEvent) {
-        onActivate?()
-        // CRITICAL: call super so the terminal gets the event
-        super.mouseDown(with: event)
-        // Also explicitly request focus
-        requestFocus()
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onProcessExited: onProcessExited)
     }
 
-    // MARK: - LocalProcessTerminalViewDelegate
+    class Coordinator: NSObject, @preconcurrency LocalProcessTerminalViewDelegate {
+        let onProcessExited: ((Int32) -> Void)?
 
-    func processTerminated(source: TerminalView, exitCode: Int32?) {
-        onProcessExited?(exitCode ?? -1)
+        init(onProcessExited: ((Int32) -> Void)?) {
+            self.onProcessExited = onProcessExited
+        }
+
+        func processTerminated(source: TerminalView, exitCode: Int32?) {
+            onProcessExited?(exitCode ?? -1)
+        }
+
+        func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
+        func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
+        func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
     }
-
-    func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
-    func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
-    func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
 }

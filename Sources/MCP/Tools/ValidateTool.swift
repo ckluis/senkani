@@ -55,7 +55,9 @@ enum ValidateTool {
         session.recordMetrics(
             rawBytes: results.joined().utf8.count + 200,
             compressedBytes: results.joined().utf8.count,
-            feature: "validate"
+            feature: "validate",
+            command: filePath,
+            outputPreview: String(results.joined(separator: "\n").prefix(200))
         )
 
         let header = "// senkani_validate: \(validators.count) validator(s) for .\(ext)\n"

@@ -126,7 +126,8 @@ enum VisionTool {
 
             // Estimate savings: a GPT-4o vision call on a typical screenshot is ~1000 tokens input
             // Our local call is $0
-            session.recordMetrics(rawBytes: 4000, compressedBytes: result.utf8.count, feature: "vision")
+            session.recordMetrics(rawBytes: 4000, compressedBytes: result.utf8.count, feature: "vision",
+                                  command: absPath, outputPreview: String(result.prefix(200)))
 
             let output = "// senkani_vision: analyzed locally ($0, on-device VLM)\n\(result)"
             return .init(content: [.text(text: output, annotations: nil, _meta: nil)])

@@ -45,7 +45,8 @@ enum ExecTool {
         }
 
         let compressedBytes = output.utf8.count
-        session.recordMetrics(rawBytes: rawBytes, compressedBytes: compressedBytes, feature: "exec")
+        session.recordMetrics(rawBytes: rawBytes, compressedBytes: compressedBytes, feature: "exec",
+                              command: command, outputPreview: String(output.prefix(200)))
 
         let exitCode = process.terminationStatus
         let savedPct = rawBytes > 0 ? Int(Double(rawBytes - compressedBytes) / Double(rawBytes) * 100) : 0

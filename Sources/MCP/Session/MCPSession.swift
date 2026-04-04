@@ -29,6 +29,8 @@ final class MCPSession: @unchecked Sendable {
     let readCache: ReadCache
     let pipeline: FilterPipeline
     let validatorRegistry: ValidatorRegistry
+    let metricsFilePath: String?
+    let sessionId: String?
     private let lock = NSLock()
 
     // Feature toggles (mutable at runtime)
@@ -49,13 +51,16 @@ final class MCPSession: @unchecked Sendable {
 
     init(projectRoot: String, filterEnabled: Bool = true, secretsEnabled: Bool = true,
          indexerEnabled: Bool = true, cacheEnabled: Bool = true,
-         readCache: ReadCache? = nil) {
+         readCache: ReadCache? = nil,
+         metricsFilePath: String? = nil, sessionId: String? = nil) {
         self.projectRoot = projectRoot
         self.filterEnabled = filterEnabled
         self.secretsEnabled = secretsEnabled
         self.indexerEnabled = indexerEnabled
         self.cacheEnabled = cacheEnabled
         self.readCache = readCache ?? ReadCache()
+        self.metricsFilePath = metricsFilePath
+        self.sessionId = sessionId
 
         let config = FeatureConfig(filter: filterEnabled, secrets: secretsEnabled, indexer: indexerEnabled)
         self.pipeline = FilterPipeline(config: config)
@@ -78,12 +83,17 @@ final class MCPSession: @unchecked Sendable {
             }
         }
 
+        let metricsFile = ProcessInfo.processInfo.environment["SENKANI_METRICS_FILE"]
+        let sessionId: String? = metricsFile != nil ? SessionDatabase.shared.createSession() : nil
+
         return MCPSession(
             projectRoot: root,
             filterEnabled: passthrough ? false : envBool("SENKANI_MCP_FILTER", fallback: true),
             secretsEnabled: passthrough ? false : envBool("SENKANI_MCP_SECRETS", fallback: true),
             indexerEnabled: passthrough ? false : envBool("SENKANI_MCP_INDEX", fallback: true),
-            cacheEnabled: passthrough ? false : envBool("SENKANI_MCP_CACHE", fallback: true)
+            cacheEnabled: passthrough ? false : envBool("SENKANI_MCP_CACHE", fallback: true),
+            metricsFilePath: metricsFile,
+            sessionId: sessionId
         )
     }
 
@@ -99,13 +109,63 @@ final class MCPSession: @unchecked Sendable {
     }
 
     /// Record metrics for a tool call.
-    func recordMetrics(rawBytes: Int, compressedBytes: Int, feature: String) {
+    /// Writes to in-memory counters, JSONL file (for MetricsWatcher), and SessionDatabase.
+    func recordMetrics(rawBytes: Int, compressedBytes: Int, feature: String,
+                       command: String? = nil, outputPreview: String? = nil, secretsFound: Int = 0) {
         lock.lock()
         totalRawBytes += rawBytes
         totalCompressedBytes += compressedBytes
         toolCallCount += 1
         perFeatureSaved[feature, default: 0] += (rawBytes - compressedBytes)
         lock.unlock()
+
+        // JSONL write — matches MetricEntry format expected by MetricsWatcher
+        if let path = metricsFilePath {
+            let savedBytes = rawBytes - compressedBytes
+            let savingsPercent = rawBytes > 0 ? Double(savedBytes) / Double(rawBytes) * 100.0 : 0.0
+            let entry = JSONLMetricEntry(
+                command: command ?? feature,
+                rawBytes: rawBytes,
+                filteredBytes: compressedBytes,
+                savedBytes: savedBytes,
+                savingsPercent: savingsPercent,
+                secretsFound: secretsFound,
+                timestamp: Date()
+            )
+            if let data = try? JSONEncoder().encode(entry),
+               let json = String(data: data, encoding: .utf8) {
+                let line = json + "\n"
+                if let lineData = line.data(using: .utf8) {
+                    if let handle = FileHandle(forWritingAtPath: path) {
+                        handle.seekToEndOfFile()
+                        handle.write(lineData)
+                        handle.closeFile()
+                    } else {
+                        FileManager.default.createFile(atPath: path, contents: lineData)
+                    }
+                }
+            }
+        }
+
+        // SessionDatabase write
+        if let sid = sessionId {
+            SessionDatabase.shared.recordCommand(
+                sessionId: sid,
+                toolName: feature,
+                command: command,
+                rawBytes: rawBytes,
+                compressedBytes: compressedBytes,
+                feature: feature,
+                outputPreview: outputPreview
+            )
+        }
+    }
+
+    /// Shut down the session, ending the database session record.
+    func shutdown() {
+        if let sid = sessionId {
+            SessionDatabase.shared.endSession(sessionId: sid)
+        }
     }
 
     func recordCacheSaving(bytes: Int) {
@@ -170,4 +230,17 @@ final class MCPSession: @unchecked Sendable {
         if bytes >= 1_000 { return String(format: "%.1fK", Double(bytes) / 1_000) }
         return "\(bytes)B"
     }
+}
+
+/// JSONL entry format matching MetricEntry in MetricsWatcher.swift.
+/// Uses default JSONEncoder Date encoding (Double, secondsSinceReferenceDate)
+/// which matches the default JSONDecoder in MetricsWatcher.
+private struct JSONLMetricEntry: Codable {
+    let command: String
+    let rawBytes: Int
+    let filteredBytes: Int
+    let savedBytes: Int
+    let savingsPercent: Double
+    let secretsFound: Int
+    let timestamp: Date
 }

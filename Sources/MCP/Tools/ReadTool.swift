@@ -55,7 +55,8 @@ enum ReadTool {
             session.readCache.store(path: absPath, mtime: mtime, content: output, rawBytes: rawBytes)
         }
 
-        session.recordMetrics(rawBytes: rawBytes, compressedBytes: compressedBytes, feature: "read")
+        session.recordMetrics(rawBytes: rawBytes, compressedBytes: compressedBytes, feature: "read",
+                              command: absPath, outputPreview: String(output.prefix(200)))
 
         let header = "// senkani: \(rawBytes) -> \(compressedBytes) bytes (\(savedPct)% saved)\n"
         return .init(content: [.text(text: header + output, annotations: nil, _meta: nil)])

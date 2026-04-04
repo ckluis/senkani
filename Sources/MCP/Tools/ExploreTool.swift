@@ -41,7 +41,8 @@ enum ExploreTool {
         }
 
         let output = lines.joined(separator: "\n")
-        session.recordMetrics(rawBytes: totalSymbols * 300, compressedBytes: output.utf8.count, feature: "explore")
+        session.recordMetrics(rawBytes: totalSymbols * 300, compressedBytes: output.utf8.count, feature: "explore",
+                              command: path ?? session.projectRoot, outputPreview: String(output.prefix(200)))
 
         return .init(content: [.text(text: output, annotations: nil, _meta: nil)])
     }

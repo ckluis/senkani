@@ -33,7 +33,8 @@ enum ParseTool {
         let parsedBytes = parsed.utf8.count
         let savedPct = rawBytes > 0 ? Int(Double(rawBytes - parsedBytes) / Double(rawBytes) * 100) : 0
 
-        session.recordMetrics(rawBytes: rawBytes, compressedBytes: parsedBytes, feature: "parse")
+        session.recordMetrics(rawBytes: rawBytes, compressedBytes: parsedBytes, feature: "parse",
+                              command: "parse", outputPreview: String(parsed.prefix(200)))
 
         let header = "// senkani_parse (\(detectedType)): \(rawBytes) → \(parsedBytes) bytes (\(savedPct)% saved)\n"
         return .init(content: [.text(text: header + parsed, annotations: nil, _meta: nil)])

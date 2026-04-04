@@ -226,7 +226,8 @@ enum EmbedTool {
             }
 
             let output = lines.joined(separator: "\n")
-            session.recordMetrics(rawBytes: files.count * 300, compressedBytes: output.utf8.count, feature: "embed")
+            session.recordMetrics(rawBytes: files.count * 300, compressedBytes: output.utf8.count, feature: "embed",
+                                  command: query, outputPreview: String(output.prefix(200)))
 
             return .init(content: [.text(text: output, annotations: nil, _meta: nil)])
         } catch {

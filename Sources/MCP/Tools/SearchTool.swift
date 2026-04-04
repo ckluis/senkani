@@ -32,7 +32,8 @@ enum SearchTool {
         lines.append("\nUse senkani_fetch to read a symbol's source.")
 
         // Estimated savings: ~50 tokens for this list vs ~5000 for grepping files
-        session.recordMetrics(rawBytes: results.count * 500, compressedBytes: lines.joined().utf8.count, feature: "search")
+        session.recordMetrics(rawBytes: results.count * 500, compressedBytes: lines.joined().utf8.count, feature: "search",
+                              command: query, outputPreview: String(lines.joined(separator: "\n").prefix(200)))
 
         return .init(content: [.text(text: lines.joined(separator: "\n"), annotations: nil, _meta: nil)])
     }

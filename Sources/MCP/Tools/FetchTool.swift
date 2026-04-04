@@ -44,7 +44,8 @@ enum FetchTool {
         let sliceBytes = output.utf8.count
         let savedPct = wholeFileBytes > 0 ? Int(Double(wholeFileBytes - sliceBytes) / Double(wholeFileBytes) * 100) : 0
 
-        session.recordMetrics(rawBytes: wholeFileBytes, compressedBytes: sliceBytes, feature: "fetch")
+        session.recordMetrics(rawBytes: wholeFileBytes, compressedBytes: sliceBytes, feature: "fetch",
+                              command: name, outputPreview: String(output.prefix(200)))
 
         var header = "// \(entry.name) (\(entry.kind)) — \(entry.file):\(entry.startLine)-\(end)\n"
         if let sig = entry.signature { header += "// \(sig)\n" }

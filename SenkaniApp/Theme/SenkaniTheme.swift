@@ -94,7 +94,10 @@ enum SenkaniTheme {
     static let columnSpacing: CGFloat = 8
 
     /// Pane header height.
-    static let headerHeight: CGFloat = 32
+    static let headerHeight: CGFloat = 24
+
+    /// Compact savings bar height at the bottom of panes.
+    static let savingsBarHeight: CGFloat = 18
 
     /// Accent line thickness at top of pane.
     static let accentLineHeight: CGFloat = 1.5
@@ -122,8 +125,9 @@ enum SenkaniTheme {
     /// Scale for focused panes.
     static let focusedScale: CGFloat = 1.0
 
-    /// Scale for unfocused panes (barely perceptible depth).
-    static let unfocusedScale: CGFloat = 0.995
+    /// Scale for unfocused panes — set to 1.0 (no scale) to avoid
+    /// fighting with child window positioning for terminal panes.
+    static let unfocusedScale: CGFloat = 1.0
 
     // MARK: - Helpers
 

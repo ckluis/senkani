@@ -13,10 +13,16 @@ enum PaneType: String, CaseIterable {
 }
 
 /// State of the process running in a terminal pane.
-enum ProcessState {
+enum ProcessState: Equatable {
     case notStarted
     case running
     case exited(Int32)
+
+    /// Whether the process is currently running.
+    var isRunning: Bool {
+        if case .running = self { return true }
+        return false
+    }
 }
 
 /// Per-pane feature toggle state. Mirrors SENKANI_* env vars.

@@ -1,37 +1,33 @@
 import SwiftUI
 
-/// Compact inline savings bar at the bottom of each pane.
-/// Format: "12.4K saved | 72% | $1.24 | F C S I"
-/// Replaces the old SavingsCardView header card.
+/// Ultra-compact inline savings bar at the bottom of each pane.
+/// 18px height. Format: "12.4K  72%  $0.03  F C S I"
+/// All monospaced, 9px. Savings in green, rest dim.
 struct SavingsBarView: View {
     @Bindable var pane: PaneModel
 
     var body: some View {
         HStack(spacing: 0) {
             // Savings amount (green accent)
-            HStack(spacing: 3) {
-                Text(pane.metrics.formattedSavings)
-                    .foregroundStyle(SenkaniTheme.savingsGreen)
-                Text("saved")
-                    .foregroundStyle(SenkaniTheme.textTertiary)
-            }
+            Text(pane.metrics.formattedSavings)
+                .foregroundStyle(SenkaniTheme.savingsGreen)
 
-            separator
+            fixedSpacer
 
             // Savings percentage
             Text(pane.metrics.formattedPercent)
-                .foregroundStyle(SenkaniTheme.textSecondary)
+                .foregroundStyle(SenkaniTheme.textTertiary)
 
-            separator
+            fixedSpacer
 
             // Estimated cost
             Text(estimatedCost)
-                .foregroundStyle(SenkaniTheme.textSecondary)
+                .foregroundStyle(SenkaniTheme.textTertiary)
 
-            separator
+            fixedSpacer
 
             // Feature toggles: F C S I
-            HStack(spacing: 6) {
+            HStack(spacing: 4) {
                 FeatureToggle(label: "F", isOn: $pane.features.filter, color: SenkaniTheme.toggleFilter)
                 FeatureToggle(label: "C", isOn: $pane.features.cache, color: SenkaniTheme.toggleCache)
                 FeatureToggle(label: "S", isOn: $pane.features.secrets, color: SenkaniTheme.toggleSecrets)
@@ -44,18 +40,16 @@ struct SavingsBarView: View {
             if pane.metrics.commandCount > 0 {
                 Text("\(pane.metrics.commandCount)")
                     .foregroundStyle(SenkaniTheme.textTertiary)
-                    .padding(.leading, 4)
             }
         }
-        .font(.system(size: 9.5, design: .monospaced))
+        .font(.system(size: 9, design: .monospaced))
         .padding(.horizontal, 8)
-        .padding(.vertical, 3)
+        .frame(height: SenkaniTheme.savingsBarHeight)
         .background(SenkaniTheme.paneShell)
     }
 
-    private var separator: some View {
-        Text(" | ")
-            .foregroundStyle(SenkaniTheme.textTertiary)
+    private var fixedSpacer: some View {
+        Text("  ")
     }
 
     private var estimatedCost: String {
@@ -76,43 +70,24 @@ struct FeatureToggle: View {
         Button {
             isOn.toggle()
         } label: {
-            HStack(spacing: 2) {
-                Text(label)
-                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                    .foregroundStyle(isOn ? color : SenkaniTheme.textTertiary)
-
-                if isHovering {
-                    Text(featureName)
-                        .font(.system(size: 8, weight: .medium))
-                        .foregroundStyle(isOn ? color.opacity(0.8) : SenkaniTheme.textTertiary)
-                        .transition(.opacity.combined(with: .move(edge: .leading)))
-                }
-            }
-            .padding(.horizontal, 3)
-            .padding(.vertical, 2)
-            .background(
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(isOn ? color.opacity(0.1) : Color.clear)
-            )
-            .contentShape(Rectangle())
+            Text(label)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(isOn ? color : SenkaniTheme.textTertiary.opacity(0.5))
+                .padding(.horizontal, 2)
+                .padding(.vertical, 1)
+                .background(
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(isOn ? color.opacity(0.1) : Color.clear)
+                )
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
+            withAnimation(.easeInOut(duration: 0.1)) {
                 isHovering = hovering
             }
         }
         .help(featureTooltip)
-    }
-
-    private var featureName: String {
-        switch label {
-        case "F": return "Filter"
-        case "C": return "Cache"
-        case "S": return "Secrets"
-        case "I": return "Indexer"
-        default: return label
-        }
     }
 
     private var featureTooltip: String {

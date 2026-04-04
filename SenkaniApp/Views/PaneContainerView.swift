@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Wraps a pane with a Flock-inspired shell: accent line, header, inset body,
-/// focus dimming, and an inline savings bar at the bottom.
+/// Wraps a pane with a minimal, premium shell: thin accent line, compact 24px header,
+/// status dot, contextual info, and an 18px inline savings footer.
+/// No dim overlay — focus is communicated through border color only.
 struct PaneContainerView: View {
     @Bindable var pane: PaneModel
     let isActive: Bool
@@ -9,24 +10,24 @@ struct PaneContainerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Accent line at the very top, colored by pane type
+            // 1.5px accent line at the very top, colored by pane type
             Rectangle()
-                .fill(SenkaniTheme.accentColor(for: pane.paneType))
+                .fill(accentColor.opacity(isActive ? 1.0 : 0.5))
                 .frame(height: SenkaniTheme.accentLineHeight)
 
-            // 32px header: type icon + title + close button
+            // 24px header: status dot + type label + context + close
             paneHeader
 
-            // Separator between header and body
+            // 0.5px separator
             Rectangle()
                 .fill(SenkaniTheme.appBackground)
-                .frame(height: 1)
+                .frame(height: 0.5)
 
-            // Inset body (darker than shell)
+            // Body content
             paneBody
                 .background(SenkaniTheme.paneBody)
 
-            // Inline savings bar at the bottom
+            // 18px compact savings footer
             SavingsBarView(pane: pane)
         }
         .background(SenkaniTheme.paneShell)
@@ -34,53 +35,69 @@ struct PaneContainerView: View {
         .overlay(
             RoundedRectangle(cornerRadius: SenkaniTheme.paneCornerRadius)
                 .stroke(
-                    isActive ? SenkaniTheme.focusBorder : SenkaniTheme.inactiveBorder,
-                    lineWidth: isActive ? 1.5 : 0.5
+                    isActive ? accentColor.opacity(0.8) : SenkaniTheme.inactiveBorder,
+                    lineWidth: isActive ? 1.0 : 0.5
                 )
                 .allowsHitTesting(false)
         )
-        // Dim overlay on inactive panes — MUST NOT block hits
-        .overlay(
-            RoundedRectangle(cornerRadius: SenkaniTheme.paneCornerRadius)
-                .fill(isActive ? Color.clear : SenkaniTheme.dimOverlay)
-                .allowsHitTesting(false)
-        )
+        // No dim overlay — it blocks child window terminal content.
+        // Focus state is communicated by accent line brightness and border color.
         .animation(SenkaniTheme.focusAnimation, value: isActive)
     }
 
-    // MARK: - Header
+    // MARK: - Header (24px)
 
     private var paneHeader: some View {
-        HStack(spacing: 6) {
-            Image(systemName: SenkaniTheme.iconName(for: pane.paneType))
-                .font(.system(size: 10))
-                .foregroundStyle(SenkaniTheme.accentColor(for: pane.paneType))
+        HStack(spacing: 5) {
+            // Process state dot — pulses gently when running
+            Circle()
+                .fill(processStateColor)
+                .frame(width: 5, height: 5)
+                .opacity(pane.processState.isRunning ? 1.0 : 0.7)
+                .animation(
+                    pane.processState.isRunning
+                        ? .easeInOut(duration: 1.2).repeatForever(autoreverses: true)
+                        : .default,
+                    value: pane.processState.isRunning
+                )
 
+            // Type label
             Text(pane.title)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(SenkaniTheme.textPrimary)
                 .lineLimit(1)
 
+            // Contextual info — dim, right of title
+            Text(contextLabel)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(SenkaniTheme.textTertiary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
             Spacer()
 
-            // Process state dot (terminal panes only)
-            if pane.paneType == .terminal {
-                Circle()
-                    .fill(processStateColor)
-                    .frame(width: 5, height: 5)
+            // Secret detection indicator
+            if pane.features.secrets && pane.metrics.secretsCaught > 0 {
+                Image(systemName: "shield.fill")
+                    .font(.system(size: 8))
+                    .foregroundStyle(SenkaniTheme.toggleSecrets)
+                    .help("\(pane.metrics.secretsCaught) secret(s) redacted")
             }
 
+            // Close button
             Button {
                 workspace?.removePane(id: pane.id)
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .semibold))
+                    .font(.system(size: 7, weight: .semibold))
                     .foregroundStyle(SenkaniTheme.textTertiary)
+                    .frame(width: 14, height: 14)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help("Close pane")
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 8)
         .frame(height: SenkaniTheme.headerHeight)
         .background(SenkaniTheme.paneShell)
     }
@@ -133,6 +150,34 @@ struct PaneContainerView: View {
     }
 
     // MARK: - Helpers
+
+    private var accentColor: Color {
+        SenkaniTheme.accentColor(for: pane.paneType)
+    }
+
+    /// Context label shown dim in header: working dir for terminal, item count for others.
+    private var contextLabel: String {
+        switch pane.paneType {
+        case .terminal:
+            // Show abbreviated working directory
+            let home = NSHomeDirectory()
+            let path = pane.previewFilePath.isEmpty ? "~" : pane.previewFilePath
+            return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
+        case .analytics:
+            return "\(pane.metrics.commandCount) cmds"
+        case .skillLibrary:
+            return "skills"
+        case .knowledgeBase:
+            return "knowledge"
+        case .modelManager:
+            return "models"
+        case .scheduleManager:
+            return "schedules"
+        case .markdownPreview, .htmlPreview:
+            let file = (pane.previewFilePath as NSString).lastPathComponent
+            return file.isEmpty ? "preview" : file
+        }
+    }
 
     private var processStateColor: Color {
         switch pane.processState {

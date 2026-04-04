@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Redesigned sidebar: tools section, per-project entries with panes,
-/// and a settings gear for theme picker.
+/// Redesigned sidebar: global tools at top, expandable project list with
+/// inline pane entries and token usage, add project at bottom.
 struct SidebarView: View {
     @Bindable var workspace: WorkspaceModel
     @Binding var showModels: Bool
@@ -14,29 +14,31 @@ struct SidebarView: View {
         VStack(spacing: 0) {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {
-                    // MARK: - Tools section
+                    // MARK: - Global Tools
                     sectionHeader("TOOLS")
 
-                    toolRow(icon: "brain", label: "Models", isActive: showModels) {
-                        showModels = true; showAnalytics = false; showSkills = false; showSchedules = false; showThemePicker = false
-                        workspace.activePaneID = nil
-                    }
-                    toolRow(icon: "chart.bar.xaxis", label: "Analytics", isActive: showAnalytics) {
-                        showAnalytics = true; showModels = false; showSkills = false; showSchedules = false; showThemePicker = false
-                        workspace.activePaneID = nil
-                    }
                     toolRow(icon: "puzzlepiece.extension", label: "Skills", isActive: showSkills) {
-                        showSkills = true; showModels = false; showAnalytics = false; showSchedules = false; showThemePicker = false
-                        workspace.activePaneID = nil
+                        activateTool { showSkills = true }
+                    }
+                    toolRow(icon: "paintpalette", label: "Themes", isActive: showThemePicker) {
+                        activateTool { showThemePicker = true }
+                    }
+                    toolRow(icon: "brain", label: "Models", isActive: showModels) {
+                        activateTool { showModels = true }
                     }
                     toolRow(icon: "calendar.badge.clock", label: "Schedules", isActive: showSchedules) {
-                        showSchedules = true; showModels = false; showAnalytics = false; showSkills = false; showThemePicker = false
-                        workspace.activePaneID = nil
+                        activateTool { showSchedules = true }
                     }
 
-                    // MARK: - Projects section
+                    // Thin divider
+                    Rectangle()
+                        .fill(SenkaniTheme.inactiveBorder.opacity(0.3))
+                        .frame(height: 1)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 12)
+
+                    // MARK: - Projects
                     sectionHeader("PROJECTS")
-                        .padding(.top, 12)
 
                     if workspace.projects.isEmpty {
                         // No projects yet — show flat pane list (backward compat)
@@ -45,16 +47,20 @@ struct SidebarView: View {
                         }
                     } else {
                         ForEach(workspace.projects) { project in
-                            projectSection(project)
+                            projectRow(project)
                         }
                     }
+
+                    // Add Project button
+                    addProjectRow
+                        .padding(.top, 4)
                 }
                 .padding(.vertical, 8)
             }
 
             Spacer(minLength: 0)
 
-            // MARK: - Bottom buttons
+            // MARK: - Bottom bar: add pane + settings gear
             VStack(spacing: 0) {
                 Rectangle()
                     .fill(SenkaniTheme.inactiveBorder.opacity(0.3))
@@ -63,7 +69,6 @@ struct SidebarView: View {
                 HStack(spacing: 0) {
                     addPaneButton
                     Spacer()
-                    addProjectButton
                     themeGearButton
                 }
                 .padding(.horizontal, 4)
@@ -73,11 +78,7 @@ struct SidebarView: View {
         .background(SenkaniTheme.sidebarBackground)
         .onChange(of: workspace.activePaneID) { _, newValue in
             if newValue != nil {
-                showModels = false
-                showAnalytics = false
-                showSkills = false
-                showSchedules = false
-                showThemePicker = false
+                clearToolSelection()
             }
         }
     }
@@ -116,27 +117,24 @@ struct SidebarView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - Project section (collapsible)
+    // MARK: - Project row (expandable)
 
-    private func projectSection(_ project: ProjectModel) -> some View {
+    private func projectRow(_ project: ProjectModel) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Project header row
+            // Project header — click to expand/activate
             Button {
                 workspace.switchToProject(id: project.id)
-                showModels = false; showAnalytics = false; showSkills = false; showSchedules = false; showThemePicker = false
+                clearToolSelection()
             } label: {
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        // Active indicator
-                        Circle()
-                            .fill(project.isActive ? SenkaniTheme.accentAnalytics : SenkaniTheme.textTertiary.opacity(0.4))
-                            .frame(width: 5, height: 5)
+                        // Expand/collapse chevron
+                        Image(systemName: project.isActive ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 7, weight: .bold))
+                            .foregroundStyle(SenkaniTheme.textTertiary)
+                            .frame(width: 8)
 
-                        Image(systemName: "folder")
-                            .font(.system(size: 10))
-                            .foregroundStyle(project.isActive ? SenkaniTheme.accentAnalytics : SenkaniTheme.textTertiary)
-                            .frame(width: 14)
-
+                        // Project name
                         Text(project.name)
                             .font(.system(size: 11, weight: project.isActive ? .semibold : .regular))
                             .foregroundStyle(project.isActive ? SenkaniTheme.textPrimary : SenkaniTheme.textSecondary)
@@ -144,23 +142,23 @@ struct SidebarView: View {
 
                         Spacer()
 
-                        // Savings badge: today / all time
-                        if project.totalSavedBytes > 0 || project.totalRawBytes > 0 {
-                            Text("today \(project.formattedSavings)")
+                        // Token savings today (right-aligned, monospaced)
+                        if project.totalSavedBytes > 0 {
+                            Text("\(project.formattedSavings) today")
                                 .font(.system(size: 8, design: .monospaced))
                                 .foregroundStyle(SenkaniTheme.savingsGreen)
                         }
                     }
 
-                    // Usage bar
+                    // 2px usage bar under the project name
                     if project.totalRawBytes > 0 {
                         GeometryReader { geo in
                             ZStack(alignment: .leading) {
                                 Rectangle()
-                                    .fill(SenkaniTheme.textTertiary.opacity(0.2))
+                                    .fill(SenkaniTheme.textTertiary.opacity(0.15))
                                     .frame(height: 2)
                                 Rectangle()
-                                    .fill(SenkaniTheme.accentAnalytics.opacity(0.6))
+                                    .fill(SenkaniTheme.accentAnalytics.opacity(0.5))
                                     .frame(
                                         width: geo.size.width * min(project.savingsPercent / 100.0, 1.0),
                                         height: 2
@@ -168,7 +166,7 @@ struct SidebarView: View {
                             }
                         }
                         .frame(height: 2)
-                        .padding(.leading, 25)
+                        .padding(.leading, 14)
                     }
                 }
                 .padding(.horizontal, 12)
@@ -182,11 +180,11 @@ struct SidebarView: View {
                 }
             }
 
-            // Panes within this project (shown when active)
+            // Pane entries (shown when project is active/expanded)
             if project.isActive {
                 ForEach(project.panes) { pane in
                     paneRow(pane)
-                        .padding(.leading, 8) // indent under project
+                        .padding(.leading, 14) // indent under project
                 }
             }
         }
@@ -198,60 +196,41 @@ struct SidebarView: View {
         Button {
             workspace.activePaneID = pane.id
         } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    // Active/inactive dot
-                    Circle()
-                        .fill(pane.id == workspace.activePaneID
-                              ? SenkaniTheme.accentColor(for: pane.paneType)
-                              : processStateColor(pane.processState))
-                        .frame(width: 5, height: 5)
+            HStack(spacing: 6) {
+                // Status dot colored by process state
+                Circle()
+                    .fill(pane.id == workspace.activePaneID
+                          ? SenkaniTheme.accentColor(for: pane.paneType)
+                          : processStateColor(pane.processState))
+                    .frame(width: 5, height: 5)
 
-                    // Type icon
-                    Image(systemName: SenkaniTheme.iconName(for: pane.paneType))
-                        .font(.system(size: 10))
-                        .foregroundStyle(SenkaniTheme.accentColor(for: pane.paneType).opacity(
-                            pane.id == workspace.activePaneID ? 1.0 : 0.6
-                        ))
-                        .frame(width: 14)
+                // Type icon
+                Image(systemName: SenkaniTheme.iconName(for: pane.paneType))
+                    .font(.system(size: 9))
+                    .foregroundStyle(SenkaniTheme.accentColor(for: pane.paneType).opacity(
+                        pane.id == workspace.activePaneID ? 1.0 : 0.5
+                    ))
+                    .frame(width: 12)
 
-                    // Title
-                    Text(pane.title)
-                        .font(.system(size: 11))
-                        .foregroundStyle(pane.id == workspace.activePaneID
-                                         ? SenkaniTheme.textPrimary
-                                         : SenkaniTheme.textSecondary)
-                        .lineLimit(1)
+                // Title
+                Text(pane.title)
+                    .font(.system(size: 10))
+                    .foregroundStyle(pane.id == workspace.activePaneID
+                                     ? SenkaniTheme.textPrimary
+                                     : SenkaniTheme.textSecondary)
+                    .lineLimit(1)
 
-                    Spacer()
+                Spacer()
 
-                    // Small savings indicator
-                    if pane.metrics.savedBytes > 0 {
-                        Text(pane.metrics.formattedSavings)
-                            .font(.system(size: 8, design: .monospaced))
-                            .foregroundStyle(SenkaniTheme.savingsGreen)
-                    }
-                }
-
-                // Usage bar: 2px, filled proportionally by savings percent
-                if pane.metrics.totalRawBytes > 0 {
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            Rectangle()
-                                .fill(SenkaniTheme.textTertiary.opacity(0.2))
-                                .frame(height: 2)
-
-                            Rectangle()
-                                .fill(SenkaniTheme.accentColor(for: pane.paneType).opacity(0.6))
-                                .frame(width: geo.size.width * min(pane.metrics.savingsPercent / 100.0, 1.0), height: 2)
-                        }
-                    }
-                    .frame(height: 2)
-                    .padding(.leading, 25) // align with title text
+                // Inline savings
+                if pane.metrics.savedBytes > 0 {
+                    Text(pane.metrics.formattedSavings)
+                        .font(.system(size: 8, design: .monospaced))
+                        .foregroundStyle(SenkaniTheme.savingsGreen)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 5)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
             .background(pane.id == workspace.activePaneID
                         ? SenkaniTheme.accentColor(for: pane.paneType).opacity(0.08)
                         : Color.clear)
@@ -264,7 +243,31 @@ struct SidebarView: View {
         }
     }
 
-    // MARK: - Add pane
+    // MARK: - Add Project row (inline, not in bottom bar)
+
+    private var addProjectRow: some View {
+        Button {
+            openFolderPicker()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "folder.badge.plus")
+                    .font(.system(size: 10))
+                    .foregroundStyle(SenkaniTheme.textTertiary)
+                    .frame(width: 14)
+
+                Text("Add Project")
+                    .font(.system(size: 10))
+                    .foregroundStyle(SenkaniTheme.textTertiary)
+
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Add pane menu
 
     private var addPaneButton: some View {
         Menu {
@@ -311,31 +314,11 @@ struct SidebarView: View {
         .menuStyle(.borderlessButton)
     }
 
-    // MARK: - Add project
-
-    private var addProjectButton: some View {
-        Button {
-            openFolderPicker()
-        } label: {
-            Image(systemName: "folder.badge.plus")
-                .font(.system(size: 10))
-                .foregroundStyle(SenkaniTheme.textSecondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 8)
-        }
-        .buttonStyle(.plain)
-        .help("Add Project")
-    }
-
     // MARK: - Theme gear
 
     private var themeGearButton: some View {
         Button {
-            showThemePicker.toggle()
-            if showThemePicker {
-                showModels = false; showAnalytics = false; showSkills = false; showSchedules = false
-                workspace.activePaneID = nil
-            }
+            activateTool { showThemePicker = true }
         } label: {
             Image(systemName: "gearshape")
                 .font(.system(size: 10))
@@ -356,6 +339,22 @@ struct SidebarView: View {
         case .exited(0): return SenkaniTheme.accentAnalytics.opacity(0.5)
         case .exited: return .red.opacity(0.6)
         }
+    }
+
+    /// Clear all tool selections.
+    private func clearToolSelection() {
+        showModels = false
+        showAnalytics = false
+        showSkills = false
+        showSchedules = false
+        showThemePicker = false
+    }
+
+    /// Activate a tool by clearing everything first, then running the setter.
+    private func activateTool(_ setter: () -> Void) {
+        clearToolSelection()
+        setter()
+        workspace.activePaneID = nil
     }
 
     private func openFolderPicker() {

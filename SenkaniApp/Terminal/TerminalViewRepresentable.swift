@@ -19,7 +19,8 @@ class FocusableTerminalView: NSView {
 
     // Deferred shell start — set in makeNSView, executed in viewDidMoveToWindow
     struct ShellConfig {
-        let path: String
+        let path: String       // Always an absolute path (e.g. /bin/zsh)
+        let args: [String]     // e.g. ["-c", "claude"] for non-shell commands
         let environment: [String]
         let workingDirectory: String
     }
@@ -32,6 +33,7 @@ class FocusableTerminalView: NSView {
     // THIS is when we start the shell — not before.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        print("[TERM] viewDidMoveToWindow fired, window=\(String(describing: window)), bounds=\(bounds)")
         startProcessIfReady()
     }
 
@@ -46,6 +48,7 @@ class FocusableTerminalView: NSView {
     }
 
     private func startProcessIfReady() {
+        print("[TERM] startProcessIfReady: started=\(processStarted) window=\(window != nil) bounds=\(bounds)")
         // ALL conditions must be true:
         // 1. Not already started
         // 2. Shell config is set
@@ -64,16 +67,33 @@ class FocusableTerminalView: NSView {
         // Ensure terminal has our dimensions before starting
         tv.setFrameSize(bounds.size)
 
+        let execName = config.args.isEmpty
+            ? "-" + (config.path as NSString).lastPathComponent  // login shell
+            : (config.path as NSString).lastPathComponent
+
         tv.startProcess(
             executable: config.path,
-            args: [],
+            args: config.args,
             environment: config.environment,
-            execName: "-" + (config.path as NSString).lastPathComponent,
+            execName: execName,
             currentDirectory: config.workingDirectory
         )
 
         // Give terminal keyboard focus
-        win.makeFirstResponder(tv)
+        let frResult = win.makeFirstResponder(tv)
+
+        // Diagnostics
+        print("[TERM] PROCESS STARTED: executable=\(config.path) args=\(config.args)")
+        print("[TERM] terminal frame=\(tv.frame) bounds=\(tv.bounds)")
+        print("[TERM] terminal rows=\(tv.getTerminal().rows) cols=\(tv.getTerminal().cols)")
+        print("[TERM] terminal fgColor=\(tv.nativeForegroundColor) bgColor=\(tv.nativeBackgroundColor)")
+        print("[TERM] terminal font=\(String(describing: tv.font))")
+        print("[TERM] makeFirstResponder result=\(frResult)")
+        print("[TERM] window.firstResponder=\(String(describing: win.firstResponder))")
+        print("[TERM] terminal.acceptsFirstResponder=\(tv.acceptsFirstResponder)")
+        print("[TERM] terminal isHidden=\(tv.isHidden) alphaValue=\(tv.alphaValue)")
+        print("[TERM] terminal superview=\(String(describing: tv.superview))")
+        print("[TERM] container superview=\(String(describing: self.superview))")
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -154,16 +174,35 @@ struct TerminalViewRepresentable: NSViewRepresentable {
         // We must wait for viewDidMoveToWindow.
 
         // Prepare shell config for deferred start
-        let shell = shellPath.isEmpty ? "/bin/zsh" : shellPath
         var env = ProcessInfo.processInfo.environment
         for (key, value) in environment {
             env[key] = value
         }
         env["TERM"] = "xterm-256color"
+        let envArray = env.map { "\($0.key)=\($0.value)" }
+
+        // Determine executable path and args.
+        // SwiftTerm's startProcess needs an absolute path — it doesn't search PATH.
+        // For shell paths like "/bin/zsh", run directly as a login shell.
+        // For commands like "claude" or "ollama run llama3", run via /bin/zsh -c.
+        let command = shellPath.isEmpty ? "/bin/zsh" : shellPath
+        let shellExe: String
+        let shellArgs: [String]
+
+        if command.hasPrefix("/") {
+            // Absolute path — run directly (login shell)
+            shellExe = command
+            shellArgs = []
+        } else {
+            // Non-absolute command — run through shell so PATH is searched
+            shellExe = "/bin/zsh"
+            shellArgs = ["-c", "exec \(command)"]
+        }
 
         container.shellConfig = FocusableTerminalView.ShellConfig(
-            path: shell,
-            environment: env.map { "\($0.key)=\($0.value)" },
+            path: shellExe,
+            args: shellArgs,
+            environment: envArray,
             workingDirectory: workingDirectory
         )
 

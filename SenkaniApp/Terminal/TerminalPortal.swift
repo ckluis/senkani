@@ -84,38 +84,51 @@ class TerminalPortal {
         // DO NOT start process here — must be in a window first
     }
 
-    /// Attach as a child window of the parent
+    /// Attach as a child window of the parent.
+    ///
+    /// Uses a TITLED window with hidden title bar — matching the pure AppKit
+    /// test that ACTUALLY WORKED. Borderless windows and child windows both
+    /// failed to reliably receive keyboard events.
     func attach(to parent: NSWindow) {
         guard childWindow == nil else { return }
         self.parentWindow = parent
 
-        // Create a borderless child window that CAN become key.
-        // Standard borderless NSWindow returns false for canBecomeKey,
-        // which prevents keyboard events from reaching the terminal.
-        let child = KeyableWindow(
+        // TITLED window (like the working test), but with hidden title bar
+        // so it looks borderless. This gives us standard key window behavior.
+        let child = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
-            styleMask: [.borderless],
+            styleMask: [.titled, .resizable],
             backing: .buffered,
             defer: false
         )
-        child.isOpaque = false
+        child.titlebarAppearsTransparent = true
+        child.titleVisibility = .hidden
+        child.isMovableByWindowBackground = false
         child.backgroundColor = .black
         child.hasShadow = false
-        child.level = .normal
         child.isReleasedWhenClosed = false
+        // Hide the standard window buttons (traffic lights)
+        child.standardWindowButton(.closeButton)?.isHidden = true
+        child.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        child.standardWindowButton(.zoomButton)?.isHidden = true
 
-        // The terminal IS the content view
-        child.contentView = terminalView
+        // Terminal as subview of contentView (like the working test)
+        let container = child.contentView!
+        terminalView.frame = container.bounds
+        terminalView.autoresizingMask = [.width, .height]
+        container.addSubview(terminalView)
 
-        // Add as child — moves with parent, always on top
-        parent.addChildWindow(child, ordered: .above)
+        // NOT a child window — standalone, positioned over the pane
+        // Child windows can't reliably become key on macOS.
         child.orderFront(nil)
         self.childWindow = child
 
-        // NOW start the shell — terminal is in a window with real dimensions
+        // Start shell now that terminal is in a real window
         startProcessIfNeeded()
 
-        // Make the terminal first responder immediately
+        // Activate and focus
+        child.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
         child.makeFirstResponder(terminalView)
     }
 
@@ -133,20 +146,23 @@ class TerminalPortal {
 
     /// Update position to match the pane's frame in screen coordinates
     func updateFrame(_ screenFrame: NSRect) {
-        childWindow?.setFrame(screenFrame, display: true)
+        guard let child = childWindow else { return }
+        // Account for title bar height (even though it's transparent, it takes space)
+        let titleBarHeight = child.frame.height - child.contentLayoutRect.height
+        var adjusted = screenFrame
+        adjusted.size.height += titleBarHeight
+        child.setFrame(adjusted, display: true)
     }
 
     /// Give keyboard focus to this terminal
     func focus() {
         guard let child = childWindow else { return }
-        // Make the child window key so it receives keyboard events
-        child.makeKey()
+        child.makeKeyAndOrderFront(nil)
         child.makeFirstResponder(terminalView)
     }
 
     func teardown() {
         if let child = childWindow {
-            parentWindow?.removeChildWindow(child)
             child.orderOut(nil)
             child.close()
         }

@@ -53,6 +53,10 @@ class TerminalPortal {
     private var childWindow: NSWindow?
     private weak var parentWindow: NSWindow?
 
+    private let shellPath: String
+    private let env: [String]
+    private var processStarted = false
+
     init(id: UUID,
          shellPath: String,
          environment: [String: String],
@@ -61,6 +65,15 @@ class TerminalPortal {
 
         self.id = id
         self.delegate = TerminalDelegate(onProcessExited: onProcessExited)
+        self.shellPath = shellPath.isEmpty ? "/bin/zsh" : shellPath
+
+        // Build env pairs now, start process later (after window attach)
+        var envDict = ProcessInfo.processInfo.environment
+        for (key, value) in environment {
+            envDict[key] = value
+        }
+        envDict["TERM"] = "xterm-256color"
+        self.env = envDict.map { "\($0.key)=\($0.value)" }
 
         let tv = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
         tv.autoresizingMask = [.width, .height]
@@ -68,22 +81,7 @@ class TerminalPortal {
         tv.nativeForegroundColor = .white
         tv.processDelegate = delegate
         self.terminalView = tv
-
-        // Start shell
-        let shell = shellPath.isEmpty ? "/bin/zsh" : shellPath
-        var env = ProcessInfo.processInfo.environment
-        for (key, value) in environment {
-            env[key] = value
-        }
-        env["TERM"] = "xterm-256color"
-        let envPairs = env.map { "\($0.key)=\($0.value)" }
-
-        tv.startProcess(
-            executable: shell,
-            args: [],
-            environment: envPairs,
-            execName: "-" + (shell as NSString).lastPathComponent
-        )
+        // DO NOT start process here — must be in a window first
     }
 
     /// Attach as a child window of the parent
@@ -91,7 +89,7 @@ class TerminalPortal {
         guard childWindow == nil else { return }
         self.parentWindow = parent
 
-        // Create a borderless, non-activating child window
+        // Create a borderless child window
         let child = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
             styleMask: [.borderless],
@@ -102,14 +100,33 @@ class TerminalPortal {
         child.backgroundColor = .black
         child.hasShadow = false
         child.level = .normal
-        child.contentView = terminalView
         child.isReleasedWhenClosed = false
 
-        // Add as child — moves with parent, always on top of parent
+        // The terminal IS the content view
+        child.contentView = terminalView
+
+        // Add as child — moves with parent, always on top
         parent.addChildWindow(child, ordered: .above)
         child.orderFront(nil)
-
         self.childWindow = child
+
+        // NOW start the shell — terminal is in a window with real dimensions
+        startProcessIfNeeded()
+
+        // Make the terminal first responder immediately
+        child.makeFirstResponder(terminalView)
+    }
+
+    private func startProcessIfNeeded() {
+        guard !processStarted else { return }
+        processStarted = true
+
+        terminalView.startProcess(
+            executable: shellPath,
+            args: [],
+            environment: env,
+            execName: "-" + (shellPath as NSString).lastPathComponent
+        )
     }
 
     /// Update position to match the pane's frame in screen coordinates

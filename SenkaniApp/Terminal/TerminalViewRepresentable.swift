@@ -2,13 +2,9 @@ import SwiftUI
 import AppKit
 import SwiftTerm
 
-/// SwiftUI placeholder that creates a terminal portal and positions it
-/// to overlay this view's frame.
-///
-/// The actual LocalProcessTerminalView lives on the window's contentView
-/// (outside SwiftUI), not inside the SwiftUI view hierarchy. This view
-/// is just a transparent spacer that tracks geometry and tells the portal
-/// where to position the real terminal.
+/// SwiftUI placeholder for a terminal pane. The actual terminal lives
+/// in a child NSWindow (see TerminalPortal.swift), positioned to
+/// overlay this view's frame.
 struct TerminalViewRepresentable: View {
     let paneId: UUID
     let shellPath: String
@@ -35,131 +31,122 @@ struct TerminalViewRepresentable: View {
     }
 
     var body: some View {
-        // This is just a geometry tracker — the real terminal is on
-        // the window's contentView, positioned by the portal
-        GeometryReader { geo in
-            Color.clear
-                .onAppear {
-                    createPortal()
-                }
-                .onDisappear {
-                    TerminalPortalManager.shared.removePortal(id: paneId)
-                }
-                .onChange(of: isActive) { _, active in
-                    if active {
-                        TerminalPortalManager.shared.portal(for: paneId)?.focus()
-                    }
-                }
-                .background(
-                    PortalFrameTracker(paneId: paneId, isActive: isActive, onActivate: onActivate)
+        // Black background matches the terminal
+        Color.black
+            .background(
+                PortalFrameTracker(
+                    paneId: paneId,
+                    shellPath: shellPath,
+                    environment: environment,
+                    workingDirectory: workingDirectory,
+                    isActive: isActive,
+                    onProcessExited: onProcessExited,
+                    onActivate: onActivate
                 )
-        }
-        .background(Color.black) // Match terminal background
+            )
+    }
+}
+
+// MARK: - Frame Tracker
+
+/// NSViewRepresentable that tracks its frame in SCREEN coordinates
+/// and positions the terminal's child window to match.
+private struct PortalFrameTracker: NSViewRepresentable {
+    let paneId: UUID
+    let shellPath: String
+    let environment: [String: String]
+    let workingDirectory: String
+    let isActive: Bool
+    let onProcessExited: ((Int32) -> Void)?
+    let onActivate: (() -> Void)?
+
+    func makeNSView(context: Context) -> FrameTrackingView {
+        let view = FrameTrackingView()
+        view.paneId = paneId
+        view.shellPath = shellPath
+        view.environment = environment
+        view.workingDirectory = workingDirectory
+        view.onProcessExited = onProcessExited
+        view.onActivate = onActivate
+        view.isActivePane = isActive
+        return view
     }
 
-    private func createPortal() {
-        let _ = TerminalPortalManager.shared.createPortal(
+    func updateNSView(_ nsView: FrameTrackingView, context: Context) {
+        nsView.isActivePane = isActive
+        if isActive {
+            TerminalPortalManager.shared.portal(for: paneId)?.focus()
+        }
+        nsView.syncPortalFrame()
+    }
+}
+
+/// Invisible NSView that creates the terminal portal on window attach
+/// and continuously syncs its screen-space frame.
+class FrameTrackingView: NSView {
+    var paneId: UUID?
+    var shellPath: String = "/bin/zsh"
+    var environment: [String: String] = [:]
+    var workingDirectory: String = NSHomeDirectory()
+    var isActivePane = false
+    var onProcessExited: ((Int32) -> Void)?
+    var onActivate: (() -> Void)?
+    private var portalCreated = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        createPortalIfNeeded()
+        syncPortalFrame()
+    }
+
+    override func layout() {
+        super.layout()
+        syncPortalFrame()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        syncPortalFrame()
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        // When removed from superview, clean up
+        if superview == nil, let paneId {
+            TerminalPortalManager.shared.removePortal(id: paneId)
+            portalCreated = false
+        }
+    }
+
+    private func createPortalIfNeeded() {
+        guard let paneId, let window, !portalCreated else { return }
+        portalCreated = true
+
+        let portal = TerminalPortalManager.shared.createPortal(
             id: paneId,
             shellPath: shellPath,
             environment: environment,
             workingDirectory: workingDirectory,
             onProcessExited: onProcessExited
         )
-    }
-}
+        portal.attach(to: window)
 
-// MARK: - Frame Tracker
-
-/// NSViewRepresentable that tracks its frame in window coordinates
-/// and updates the terminal portal's position.
-///
-/// This is a zero-size invisible NSView whose only job is to report
-/// its position in the window so the portal terminal can be placed there.
-private struct PortalFrameTracker: NSViewRepresentable {
-    let paneId: UUID
-    let isActive: Bool
-    let onActivate: (() -> Void)?
-
-    func makeNSView(context: Context) -> FrameTrackingView {
-        let view = FrameTrackingView()
-        view.paneId = paneId
-        view.onActivate = onActivate
-        return view
+        // Focus after a delay
+        if isActivePane {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                portal.focus()
+            }
+        }
     }
 
-    func updateNSView(_ nsView: FrameTrackingView, context: Context) {
-        nsView.paneId = paneId
-        nsView.isActivePane = isActive
-        nsView.onActivate = onActivate
-        // Trigger a frame update
-        nsView.needsLayout = true
-    }
-}
-
-/// Invisible NSView that tracks its position in the window and
-/// positions the terminal portal to match.
-class FrameTrackingView: NSView {
-    var paneId: UUID?
-    var isActivePane = false
-    var onActivate: (() -> Void)?
-    private var lastFrame: NSRect = .zero
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        updatePortalFrame()
-        attachPortalToWindow()
-    }
-
-    override func layout() {
-        super.layout()
-        updatePortalFrame()
-    }
-
-    override func resizeSubviews(withOldSize oldSize: NSSize) {
-        super.resizeSubviews(withOldSize: oldSize)
-        updatePortalFrame()
-    }
-
-    override func setFrameSize(_ newSize: NSSize) {
-        super.setFrameSize(newSize)
-        updatePortalFrame()
-    }
-
-    private func attachPortalToWindow() {
+    func syncPortalFrame() {
         guard let paneId, let window else { return }
-        TerminalPortalManager.shared.portal(for: paneId)?.attach(to: window)
+        guard let portal = TerminalPortalManager.shared.portal(for: paneId) else { return }
 
-        // Focus after attaching
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            guard let self, self.isActivePane else { return }
-            TerminalPortalManager.shared.portal(for: paneId)?.focus()
-        }
-    }
-
-    private func updatePortalFrame() {
-        guard let paneId, let window, let superview else { return }
-
-        // Convert this view's bounds to window coordinates
+        // Convert bounds to screen coordinates for the child window
         let frameInWindow = convert(bounds, to: nil)
+        let frameOnScreen = window.convertToScreen(frameInWindow)
 
-        // Convert to the contentView's coordinate system (flipped)
-        guard let contentView = window.contentView else { return }
-        let frameInContent = contentView.convert(frameInWindow, from: nil)
-
-        // Only update if frame actually changed
-        if frameInContent != lastFrame {
-            lastFrame = frameInContent
-            TerminalPortalManager.shared.portal(for: paneId)?.updateFrame(frameInContent)
-        }
-    }
-
-    // Detect clicks on our area to activate the pane
-    override func mouseDown(with event: NSEvent) {
-        onActivate?()
-        // Forward to the terminal for handling
-        if let paneId {
-            TerminalPortalManager.shared.portal(for: paneId)?.focus()
-        }
-        super.mouseDown(with: event)
+        portal.updateFrame(frameOnScreen)
     }
 }

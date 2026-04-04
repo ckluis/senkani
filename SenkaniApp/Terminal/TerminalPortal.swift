@@ -1,21 +1,19 @@
 import AppKit
 import SwiftTerm
 
-/// Manages terminal views that live OUTSIDE SwiftUI's view hierarchy
-/// but are positioned to appear inside pane containers.
+/// Manages terminal views that each live in their own child NSWindow,
+/// positioned to float over the SwiftUI pane area.
 ///
-/// SwiftUI's NSHostingView consumes keyboard events before they reach
-/// embedded NSViews. The portal pattern solves this by adding terminals
-/// directly to the window's contentView overlay layer, then positioning
-/// them to match the SwiftUI pane's frame.
+/// Why child windows: SwiftUI's NSHostingView consumes ALL keyboard events
+/// for any NSView in its hierarchy — even subviews added directly to
+/// contentView. The only proven approach is a separate NSWindow, which
+/// has its own responder chain independent of SwiftUI.
 @MainActor
 class TerminalPortalManager {
     nonisolated(unsafe) static let shared = TerminalPortalManager()
 
-    /// Active portals keyed by pane ID
     private var portals: [UUID: TerminalPortal] = [:]
 
-    /// Create a terminal portal for a pane
     func createPortal(
         id: UUID,
         shellPath: String,
@@ -23,7 +21,6 @@ class TerminalPortalManager {
         workingDirectory: String,
         onProcessExited: ((Int32) -> Void)?
     ) -> TerminalPortal {
-        // Clean up existing portal if any
         portals[id]?.teardown()
 
         let portal = TerminalPortal(
@@ -37,26 +34,24 @@ class TerminalPortalManager {
         return portal
     }
 
-    /// Remove a portal
     func removePortal(id: UUID) {
         portals[id]?.teardown()
         portals.removeValue(forKey: id)
     }
 
-    /// Get an existing portal
     func portal(for id: UUID) -> TerminalPortal? {
         portals[id]
     }
 }
 
-/// A single terminal portal — owns the LocalProcessTerminalView and
-/// manages its lifecycle outside SwiftUI.
+/// A terminal that lives in its own borderless child NSWindow.
 @MainActor
 class TerminalPortal {
     let id: UUID
     let terminalView: LocalProcessTerminalView
     private let delegate: TerminalDelegate
-    private var isAttached = false
+    private var childWindow: NSWindow?
+    private weak var parentWindow: NSWindow?
 
     init(id: UUID,
          shellPath: String,
@@ -68,11 +63,10 @@ class TerminalPortal {
         self.delegate = TerminalDelegate(onProcessExited: onProcessExited)
 
         let tv = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
-        tv.autoresizingMask = []  // We manage the frame manually
+        tv.autoresizingMask = [.width, .height]
         tv.nativeBackgroundColor = .black
         tv.nativeForegroundColor = .white
         tv.processDelegate = delegate
-        // NEVER set terminalDelegate — breaks keyboard input
         self.terminalView = tv
 
         // Start shell
@@ -92,28 +86,53 @@ class TerminalPortal {
         )
     }
 
-    /// Attach the terminal to a window's content view
-    func attach(to window: NSWindow) {
-        guard !isAttached else { return }
-        // Add directly to the window's contentView — NOT through SwiftUI
-        window.contentView?.addSubview(terminalView)
-        isAttached = true
+    /// Attach as a child window of the parent
+    func attach(to parent: NSWindow) {
+        guard childWindow == nil else { return }
+        self.parentWindow = parent
+
+        // Create a borderless, non-activating child window
+        let child = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        child.isOpaque = false
+        child.backgroundColor = .black
+        child.hasShadow = false
+        child.level = .normal
+        child.contentView = terminalView
+        child.isReleasedWhenClosed = false
+
+        // Add as child — moves with parent, always on top of parent
+        parent.addChildWindow(child, ordered: .above)
+        child.orderFront(nil)
+
+        self.childWindow = child
     }
 
-    /// Update the terminal's position and size to match the pane frame
-    func updateFrame(_ frame: NSRect) {
-        terminalView.frame = frame
+    /// Update position to match the pane's frame in screen coordinates
+    func updateFrame(_ screenFrame: NSRect) {
+        childWindow?.setFrame(screenFrame, display: true)
     }
 
     /// Give keyboard focus to this terminal
     func focus() {
-        terminalView.window?.makeFirstResponder(terminalView)
+        guard let child = childWindow else { return }
+        // Make the child window key so it receives keyboard events
+        child.makeKey()
+        child.makeFirstResponder(terminalView)
     }
 
-    /// Remove from the window
     func teardown() {
-        terminalView.removeFromSuperview()
-        isAttached = false
+        if let child = childWindow {
+            parentWindow?.removeChildWindow(child)
+            child.orderOut(nil)
+            child.close()
+        }
+        childWindow = nil
+        parentWindow = nil
     }
 }
 

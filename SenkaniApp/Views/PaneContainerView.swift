@@ -146,6 +146,14 @@ struct PaneContainerView: View {
             ModelManagerView()
         case .scheduleManager:
             ScheduleView()
+        case .browser:
+            BrowserPaneView(pane: pane)
+        case .diffViewer:
+            DiffViewerPane(pane: pane)
+        case .logViewer:
+            LogViewerPane(pane: pane)
+        case .scratchpad:
+            ScratchpadPane(pane: pane)
         }
     }
 
@@ -176,6 +184,15 @@ struct PaneContainerView: View {
         case .markdownPreview, .htmlPreview:
             let file = (pane.previewFilePath as NSString).lastPathComponent
             return file.isEmpty ? "preview" : file
+        case .browser:
+            let url = pane.previewFilePath
+            return url.isEmpty ? "browser" : url.replacingOccurrences(of: "https://", with: "").prefix(40).description
+        case .diffViewer:
+            return "diff"
+        case .logViewer:
+            return "log"
+        case .scratchpad:
+            return "notes"
         }
     }
 

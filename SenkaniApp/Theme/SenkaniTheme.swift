@@ -132,6 +132,16 @@ enum SenkaniTheme {
     // MARK: - Helpers
 
     /// Returns the accent color for a given pane type.
+    // New pane type accents
+    /// Browser accent — same blue as analytics
+    static var accentBrowser: Color { accentAnalytics }
+    /// Diff viewer accent — orange
+    static var accentDiffViewer: Color { Color(red: 0.878, green: 0.580, blue: 0.290) }
+    /// Log viewer accent — dim cyan
+    static var accentLogViewer: Color { accentKnowledgeBase }
+    /// Scratchpad accent — warm gray
+    static var accentScratchpad: Color { textSecondary }
+
     static func accentColor(for type: PaneType) -> Color {
         switch type {
         case .terminal: return accentTerminal
@@ -141,6 +151,10 @@ enum SenkaniTheme {
         case .knowledgeBase: return accentKnowledgeBase
         case .modelManager: return accentModelManager
         case .scheduleManager: return accentScheduleManager
+        case .browser: return accentBrowser
+        case .diffViewer: return accentDiffViewer
+        case .logViewer: return accentLogViewer
+        case .scratchpad: return accentScratchpad
         }
     }
 
@@ -155,6 +169,10 @@ enum SenkaniTheme {
         case .knowledgeBase: return "magnifyingglass"
         case .modelManager: return "brain"
         case .scheduleManager: return "calendar.badge.clock"
+        case .browser: return "safari"
+        case .diffViewer: return "arrow.left.arrow.right"
+        case .logViewer: return "text.line.last.and.arrowtriangle.forward"
+        case .scratchpad: return "note.text"
         }
     }
 
@@ -169,10 +187,13 @@ enum SenkaniTheme {
         case .knowledgeBase: return "Search your AI history"
         case .modelManager: return "Download and manage ML models"
         case .scheduleManager: return "View scheduled tasks"
+        case .browser: return "Browse URLs and localhost"
+        case .diffViewer: return "Compare files side by side"
+        case .logViewer: return "Tail and filter log files"
+        case .scratchpad: return "Quick notes and scratch space"
         }
     }
 
-    /// Returns a human-readable display name for a given pane type.
     static func displayName(for type: PaneType) -> String {
         switch type {
         case .terminal: return "Terminal"
@@ -183,6 +204,10 @@ enum SenkaniTheme {
         case .knowledgeBase: return "Knowledge Base"
         case .modelManager: return "Model Manager"
         case .scheduleManager: return "Schedules"
+        case .browser: return "Browser"
+        case .diffViewer: return "Diff Viewer"
+        case .logViewer: return "Log Viewer"
+        case .scratchpad: return "Scratchpad"
         }
     }
 }

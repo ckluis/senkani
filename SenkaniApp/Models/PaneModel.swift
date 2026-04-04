@@ -10,6 +10,10 @@ enum PaneType: String, CaseIterable {
     case knowledgeBase
     case modelManager
     case scheduleManager
+    case browser
+    case diffViewer
+    case logViewer
+    case scratchpad
 }
 
 /// State of the process running in a terminal pane.
@@ -93,16 +97,15 @@ final class PaneModel: Identifiable {
         self.previewFilePath = previewFilePath
         // Set default column width based on pane type
         switch paneType {
-        case .skillLibrary:
-            self.columnWidth = 520
-        case .knowledgeBase:
-            self.columnWidth = 480
-        case .analytics:
-            self.columnWidth = 480
-        case .terminal:
-            self.columnWidth = 360
-        default:
-            self.columnWidth = 360
+        case .skillLibrary:       self.columnWidth = 520
+        case .knowledgeBase:      self.columnWidth = 480
+        case .analytics:          self.columnWidth = 480
+        case .browser:            self.columnWidth = 480
+        case .diffViewer:         self.columnWidth = 520
+        case .logViewer:          self.columnWidth = 400
+        case .scratchpad:         self.columnWidth = 360
+        case .terminal:           self.columnWidth = 360
+        default:                  self.columnWidth = 360
         }
         // Write initial toggle state so the hook script has it from the start
         features.persist(to: configFilePath)

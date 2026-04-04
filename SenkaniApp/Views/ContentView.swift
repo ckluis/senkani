@@ -6,10 +6,11 @@ struct ContentView: View {
     @State var sessions = SessionRegistry()
     @State var showModels = false
     @State var showAnalytics = false
+    @State var showSkills = false
 
     var body: some View {
         NavigationSplitView {
-            SidebarView(workspace: workspace, showModels: $showModels, showAnalytics: $showAnalytics)
+            SidebarView(workspace: workspace, showModels: $showModels, showAnalytics: $showAnalytics, showSkills: $showSkills)
                 .frame(minWidth: 160, maxWidth: 220)
         } detail: {
             VStack(spacing: 0) {
@@ -17,6 +18,8 @@ struct ContentView: View {
                     ModelManagerView()
                 } else if showAnalytics {
                     AnalyticsView(workspace: workspace)
+                } else if showSkills {
+                    SkillBrowserView()
                 } else if workspace.panes.isEmpty {
                     WelcomeView { title, command in
                         addPane(title: title, command: command)

@@ -5,6 +5,7 @@ struct SidebarView: View {
     @Bindable var workspace: WorkspaceModel
     @Binding var showModels: Bool
     @Binding var showAnalytics: Bool
+    @Binding var showSkills: Bool
 
     var body: some View {
         List(selection: $workspace.activePaneID) {
@@ -12,6 +13,7 @@ struct SidebarView: View {
                 Button {
                     showModels = true
                     showAnalytics = false
+                    showSkills = false
                     workspace.activePaneID = nil
                 } label: {
                     HStack(spacing: 6) {
@@ -29,6 +31,7 @@ struct SidebarView: View {
                 Button {
                     showAnalytics = true
                     showModels = false
+                    showSkills = false
                     workspace.activePaneID = nil
                 } label: {
                     HStack(spacing: 6) {
@@ -42,6 +45,24 @@ struct SidebarView: View {
                 }
                 .buttonStyle(.plain)
                 .listRowBackground(showAnalytics ? Color.accentColor.opacity(0.12) : Color.clear)
+
+                Button {
+                    showSkills = true
+                    showModels = false
+                    showAnalytics = false
+                    workspace.activePaneID = nil
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "puzzlepiece.extension")
+                            .font(.system(size: 11))
+                            .foregroundStyle(showSkills ? .blue : .secondary)
+                        Text("Skills")
+                            .font(.system(size: 12))
+                            .foregroundStyle(showSkills ? .primary : .secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(showSkills ? Color.accentColor.opacity(0.12) : Color.clear)
             }
 
             Section("Panes") {
@@ -80,6 +101,7 @@ struct SidebarView: View {
             if newValue != nil {
                 showModels = false
                 showAnalytics = false
+                showSkills = false
             }
         }
         .safeAreaInset(edge: .bottom) {

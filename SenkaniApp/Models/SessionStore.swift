@@ -1,6 +1,8 @@
 import Foundation
+import Core
 
 /// Persisted summary of a past session.
+/// Bridges between SessionDatabase rows and the app UI.
 struct SessionSummaryRecord: Codable, Identifiable {
     var id: String { filename }
     let filename: String
@@ -33,43 +35,76 @@ struct SessionSummaryRecord: Codable, Identifiable {
         let tokens = Double(totalSaved) / 4.0
         return (tokens / 1_000_000) * 3.0
     }
+
+    /// Create from a database row.
+    init(from row: SessionSummaryRow) {
+        self.filename = row.id
+        self.timestamp = row.timestamp
+        self.duration = row.duration
+        self.totalSaved = row.totalSaved
+        self.totalRaw = row.totalRaw
+        self.commandCount = row.commandCount
+        self.paneCount = row.paneCount
+    }
+
+    init(filename: String, timestamp: Date, duration: TimeInterval,
+         totalSaved: Int, totalRaw: Int, commandCount: Int, paneCount: Int) {
+        self.filename = filename
+        self.timestamp = timestamp
+        self.duration = duration
+        self.totalSaved = totalSaved
+        self.totalRaw = totalRaw
+        self.commandCount = commandCount
+        self.paneCount = paneCount
+    }
+}
+
+/// Search result wrapping a CommandSearchResult for display.
+struct CommandSearchResultRecord: Identifiable {
+    let id: Int
+    let sessionId: String
+    let timestamp: Date
+    let toolName: String
+    let command: String?
+    let rawBytes: Int
+    let compressedBytes: Int
+    let outputPreview: String?
+
+    init(from result: CommandSearchResult) {
+        self.id = result.id
+        self.sessionId = result.sessionId
+        self.timestamp = result.timestamp
+        self.toolName = result.toolName
+        self.command = result.command
+        self.rawBytes = result.rawBytes
+        self.compressedBytes = result.compressedBytes
+        self.outputPreview = result.outputPreview
+    }
 }
 
 /// Manages persistence and retrieval of session history.
+/// Now backed by SQLite+FTS5 via SessionDatabase.
 @MainActor @Observable
 final class SessionStore {
     static let shared = SessionStore()
 
     var pastSessions: [SessionSummaryRecord] = []
+    var searchResults: [CommandSearchResultRecord] = []
 
-    private let sessionsDir: String
+    /// ID of the currently active database session (set when app starts).
+    private(set) var activeSessionId: String?
+
+    private let database = SessionDatabase.shared
 
     init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        sessionsDir = appSupport.appendingPathComponent("Senkani/sessions").path
-        try? FileManager.default.createDirectory(atPath: sessionsDir, withIntermediateDirectories: true)
         loadHistory()
     }
 
     // MARK: - Load
 
     func loadHistory() {
-        let fm = FileManager.default
-        guard let files = try? fm.contentsOfDirectory(atPath: sessionsDir) else { return }
-
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-
-        var records: [SessionSummaryRecord] = []
-        for file in files where file.hasSuffix(".json") {
-            let path = (sessionsDir as NSString).appendingPathComponent(file)
-            guard let data = fm.contents(atPath: path),
-                  let record = try? decoder.decode(SessionSummaryRecord.self, from: data)
-            else { continue }
-            records.append(record)
-        }
-
-        pastSessions = records.sorted { $0.timestamp > $1.timestamp }
+        let rows = database.loadSessions(limit: 100)
+        pastSessions = rows.map { SessionSummaryRecord(from: $0) }
     }
 
     // MARK: - Save
@@ -77,28 +112,83 @@ final class SessionStore {
     func saveSession(workspace: WorkspaceModel) {
         let now = Date()
         let duration = now.timeIntervalSince(workspace.sessionStart)
-        let formatter = ISO8601DateFormatter()
-        let filename = "session-\(formatter.string(from: now)).json"
+        let totalCommands = workspace.panes.reduce(0) { $0 + $1.metrics.commandCount }
 
+        // Create a session in the database
+        let sessionId = database.createSession(paneCount: workspace.panes.count)
+
+        // Record all command-level data from each pane's breakdown
+        for pane in workspace.panes {
+            for (cmd, values) in pane.metrics.commandBreakdown {
+                database.recordCommand(
+                    sessionId: sessionId,
+                    toolName: cmd,
+                    command: cmd,
+                    rawBytes: values.raw,
+                    compressedBytes: values.filtered
+                )
+            }
+        }
+
+        // End session to compute duration
+        database.endSession(sessionId: sessionId)
+
+        // Insert into local list
         let record = SessionSummaryRecord(
-            filename: filename,
+            filename: sessionId,
             timestamp: now,
             duration: duration,
             totalSaved: workspace.totalSavedBytes,
             totalRaw: workspace.totalRawBytes,
-            commandCount: workspace.panes.reduce(0) { $0 + $1.metrics.commandCount },
+            commandCount: totalCommands,
             paneCount: workspace.panes.count
         )
-
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-
-        guard let data = try? encoder.encode(record) else { return }
-        let path = (sessionsDir as NSString).appendingPathComponent(filename)
-        try? data.write(to: URL(fileURLWithPath: path))
-
         pastSessions.insert(record, at: 0)
+    }
+
+    /// Begin tracking a live session — call on app launch.
+    func beginLiveSession(paneCount: Int) {
+        activeSessionId = database.createSession(paneCount: paneCount)
+    }
+
+    /// Record a command into the active session.
+    func recordCommand(toolName: String, command: String?, rawBytes: Int, compressedBytes: Int, feature: String? = nil, outputPreview: String? = nil) {
+        guard let sessionId = activeSessionId else { return }
+        database.recordCommand(
+            sessionId: sessionId,
+            toolName: toolName,
+            command: command,
+            rawBytes: rawBytes,
+            compressedBytes: compressedBytes,
+            feature: feature,
+            outputPreview: outputPreview
+        )
+    }
+
+    /// End the active live session.
+    func endLiveSession() {
+        if let sessionId = activeSessionId {
+            database.endSession(sessionId: sessionId)
+            activeSessionId = nil
+            loadHistory()
+        }
+    }
+
+    // MARK: - Search (FTS5)
+
+    func search(query: String) {
+        guard !query.trimmingCharacters(in: .whitespaces).isEmpty else {
+            searchResults = []
+            return
+        }
+        let results = database.search(query: query, limit: 50)
+        searchResults = results.map { CommandSearchResultRecord(from: $0) }
+    }
+
+    // MARK: - Lifetime Stats
+
+    func lifetimeStats() -> LifetimeStats {
+        database.totalStats()
     }
 
     // MARK: - Export

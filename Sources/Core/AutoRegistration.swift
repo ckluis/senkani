@@ -48,15 +48,20 @@ public enum AutoRegistration {
         try writeJSONAtomically(config, to: settingsPath)
     }
 
-    /// Install the PreToolUse hook script and register it in Claude Code settings.
+    /// Install the PreToolUse hook script to ~/.senkani/hooks/ for use
+    /// inside Senkani's embedded terminals.
+    ///
+    /// IMPORTANT: We do NOT register hooks in ~/.claude/settings.json.
+    /// Global hooks would intercept ALL tool calls in ALL projects — a scope
+    /// leak that breaks normal Claude Code usage. Instead, the hooks are
+    /// activated only inside Senkani's spawned terminals via the
+    /// SENKANI_INTERCEPT=on environment variable.
     public static func installHooksIfNeeded() throws {
         let hookDir = NSHomeDirectory() + "/.senkani/hooks"
         let hookPath = hookDir + "/senkani-intercept.sh"
-        let settingsPath = NSHomeDirectory() + "/.claude/settings.json"
         let fm = FileManager.default
 
-        // --- Step 1: Write the hook script ---
-
+        // Write the hook script (but don't register globally)
         if !fm.fileExists(atPath: hookDir) {
             try fm.createDirectory(atPath: hookDir, withIntermediateDirectories: true)
         }
@@ -75,36 +80,8 @@ public enum AutoRegistration {
             try writeHookScript(to: hookPath)
         }
 
-        // --- Step 2: Register in Claude Code settings ---
-
-        var config = try readJSONOrEmpty(at: settingsPath)
-
-        var hooks = config["hooks"] as? [String: Any] ?? [:]
-        var preToolUse = hooks["PreToolUse"] as? [[String: Any]] ?? []
-
-        // Check if senkani hook is already registered
-        let alreadyRegistered = preToolUse.contains { entry in
-            guard let cmd = entry["command"] as? String else { return false }
-            return cmd.contains("senkani-intercept")
-        }
-
-        if alreadyRegistered { return }
-
-        // SECURITY: Back up before first modification
-        backupIfFirstWrite(path: settingsPath)
-
-        // The hook script handles tool routing internally (Read/Bash/Grep),
-        // so we register a single entry.
-        // TODO: Phase 5 -- replace python3 JSON parsing in hook with compiled helper.
-        // The hook uses /usr/bin/python3, a mutable interpreter in the trust chain.
-        preToolUse.append([
-            "type": "command",
-            "command": hookPath,
-        ] as [String: Any])
-        hooks["PreToolUse"] = preToolUse
-        config["hooks"] = hooks
-
-        try writeJSONAtomically(config, to: settingsPath)
+        // Hook is activated per-terminal via SENKANI_INTERCEPT=on env var,
+        // NOT via global settings.json. See PaneContainerView for env setup.
     }
 
     // MARK: - Private: Binary Resolution

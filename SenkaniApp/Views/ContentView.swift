@@ -40,19 +40,6 @@ struct ContentView: View {
         .background(SenkaniTheme.appBackground)
         .frame(minWidth: 800, minHeight: 500)
         .environment(\.themeEngine, ThemeEngine.shared)
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                SessionExportMenuButton(workspace: workspace)
-
-                Button {
-                    showAddPaneSheet = true
-                } label: {
-                    Image(systemName: "plus")
-                }
-                .help("Add pane (Cmd+N)")
-                .keyboardShortcut("n")
-            }
-        }
         .sheet(isPresented: $showAddPaneSheet) {
             AddPaneSheet { type, title, command in
                 addPane(type: type, title: title, command: command)

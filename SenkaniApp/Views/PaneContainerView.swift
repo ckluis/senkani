@@ -30,34 +30,22 @@ struct PaneContainerView: View {
             SavingsBarView(pane: pane)
         }
         .background(SenkaniTheme.paneShell)
-        .clipShape(RoundedRectangle(cornerRadius: SenkaniTheme.paneCornerRadius))
+        .cornerRadius(SenkaniTheme.paneCornerRadius)
         .overlay(
             RoundedRectangle(cornerRadius: SenkaniTheme.paneCornerRadius)
                 .stroke(
                     isActive ? SenkaniTheme.focusBorder : SenkaniTheme.inactiveBorder,
                     lineWidth: isActive ? 1.5 : 0.5
                 )
+                .allowsHitTesting(false)
         )
-        // Focus dim overlay on inactive panes
+        // Dim overlay on inactive panes — MUST NOT block hits
         .overlay(
-            Group {
-                if !isActive {
-                    RoundedRectangle(cornerRadius: SenkaniTheme.paneCornerRadius)
-                        .fill(SenkaniTheme.dimOverlay)
-                        .allowsHitTesting(false)
-                }
-            }
+            RoundedRectangle(cornerRadius: SenkaniTheme.paneCornerRadius)
+                .fill(isActive ? Color.clear : SenkaniTheme.dimOverlay)
+                .allowsHitTesting(false)
         )
-        // Subtle scale for depth: focused 1.0, unfocused 0.995
-        .scaleEffect(isActive ? SenkaniTheme.focusedScale : SenkaniTheme.unfocusedScale)
         .animation(SenkaniTheme.focusAnimation, value: isActive)
-        // Use simultaneousGesture so the tap activates the pane WITHOUT
-        // blocking mouse events from reaching the underlying NSView (terminal).
-        .simultaneousGesture(
-            TapGesture().onEnded {
-                workspace?.activePaneID = pane.id
-            }
-        )
     }
 
     // MARK: - Header
@@ -114,6 +102,9 @@ struct PaneContainerView: View {
                 isActive: isActive,
                 onProcessExited: { code in
                     pane.processState = .exited(code)
+                },
+                onActivate: {
+                    workspace?.activePaneID = pane.id
                 }
             )
             .onAppear {

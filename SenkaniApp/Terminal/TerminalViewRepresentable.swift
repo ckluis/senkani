@@ -32,8 +32,10 @@ class FocusableTerminalView: NSView {
         if let tv = terminalView {
             window?.makeFirstResponder(tv)
         }
-        // Forward to terminal
-        terminalView?.mouseDown(with: event)
+        // CRITICAL: call super, not terminalView.mouseDown directly.
+        // Direct call bypasses AppKit's responder chain machinery.
+        // cmux uses super.mouseDown — Senkani was the only one calling directly.
+        super.mouseDown(with: event)
     }
 
     override func layout() {
@@ -92,6 +94,10 @@ struct TerminalViewRepresentable: NSViewRepresentable {
         tv.nativeForegroundColor = .white
         tv.nativeBackgroundColor = .black
 
+        // Explicit font — both cmux and Flock set this. SwiftTerm may not
+        // fully initialize text rendering without it.
+        tv.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+
         // CRITICAL: Only processDelegate. NEVER terminalDelegate.
         tv.processDelegate = context.coordinator
 
@@ -111,11 +117,12 @@ struct TerminalViewRepresentable: NSViewRepresentable {
             executable: shell,
             args: [],
             environment: envPairs,
-            execName: "-" + (shell as NSString).lastPathComponent
+            execName: "-" + (shell as NSString).lastPathComponent,
+            currentDirectory: workingDirectory
         )
 
-        // Delayed focus
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+        // Request focus — no artificial delay (Flock doesn't need one)
+        DispatchQueue.main.async {
             container.window?.makeFirstResponder(tv)
         }
 

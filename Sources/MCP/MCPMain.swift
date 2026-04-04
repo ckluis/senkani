@@ -26,15 +26,24 @@ public struct MCPServerRunner {
             }
         }
 
-        let server = Server(
-            name: "senkani",
-            version: "0.1.0",
-            instructions: """
+        let baseInstructions = """
             Senkani is a token compression layer. Use senkani_read instead of reading files directly \
             for automatic compression and caching. Use senkani_search and senkani_fetch for \
             token-efficient code navigation. Use senkani_exec for filtered command execution. \
             Call senkani_session with action 'stats' to see savings.
-            """,
+            """
+
+        let instructions: String
+        if TerseMode.isEnabled {
+            instructions = TerseMode.systemPrompt + "\n\n" + baseInstructions
+        } else {
+            instructions = baseInstructions
+        }
+
+        let server = Server(
+            name: "senkani",
+            version: "0.1.0",
+            instructions: instructions,
             capabilities: .init(tools: .init(listChanged: false))
         )
 

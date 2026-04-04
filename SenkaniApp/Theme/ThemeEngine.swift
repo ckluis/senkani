@@ -127,6 +127,8 @@ final class ThemeEngine {
     let toggleCache = Color.green
     let toggleSecrets = Color.orange
     let toggleIndexer = Color.purple
+    /// Warm amber/gold for terse mode toggle.
+    let toggleTerse = Color(red: 0.85, green: 0.65, blue: 0.13)
 
     // MARK: - Theme metadata
 

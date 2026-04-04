@@ -32,6 +32,7 @@ struct SavingsBarView: View {
                 FeatureToggle(label: "C", isOn: $pane.features.cache, color: SenkaniTheme.toggleCache)
                 FeatureToggle(label: "S", isOn: $pane.features.secrets, color: SenkaniTheme.toggleSecrets)
                 FeatureToggle(label: "I", isOn: $pane.features.indexer, color: SenkaniTheme.toggleIndexer)
+                FeatureToggle(label: "T", isOn: $pane.features.terse, color: SenkaniTheme.toggleTerse)
             }
 
             Spacer()
@@ -97,6 +98,7 @@ struct FeatureToggle: View {
         case "C": return "Cache (\(state)): Skip re-reading unchanged files (saves 50-99%)"
         case "S": return "Secrets (\(state)): Auto-redact API keys and tokens"
         case "I": return "Indexer (\(state)): Symbol-level code navigation (saves 95%)"
+        case "T": return "Terse (\(state)): Minimize agent output tokens (saves 50-75%)"
         default: return "\(label): \(state)"
         }
     }

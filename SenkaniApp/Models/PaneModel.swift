@@ -37,6 +37,7 @@ struct PaneFeatureConfig: Equatable {
     var cache: Bool = true
     var secrets: Bool = true
     var indexer: Bool = true
+    var terse: Bool = false
 
     /// Convert to environment variables for the subprocess.
     var environmentVars: [String: String] {
@@ -45,6 +46,7 @@ struct PaneFeatureConfig: Equatable {
         env["SENKANI_CACHE"] = cache ? "on" : "off"
         env["SENKANI_SECRETS"] = secrets ? "on" : "off"
         env["SENKANI_INDEXER"] = indexer ? "on" : "off"
+        env["SENKANI_TERSE"] = terse ? "on" : "off"
         return env
     }
 
@@ -60,7 +62,7 @@ struct PaneFeatureConfig: Equatable {
     }
 
     /// All features off (passthrough mode).
-    static let passthrough = PaneFeatureConfig(filter: false, cache: false, secrets: false, indexer: false)
+    static let passthrough = PaneFeatureConfig(filter: false, cache: false, secrets: false, indexer: false, terse: false)
 }
 
 /// Model for a single pane in the workspace.

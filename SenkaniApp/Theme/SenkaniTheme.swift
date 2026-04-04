@@ -74,6 +74,7 @@ enum SenkaniTheme {
     static var toggleCache: Color { ThemeEngine.shared.toggleCache }
     static var toggleSecrets: Color { ThemeEngine.shared.toggleSecrets }
     static var toggleIndexer: Color { ThemeEngine.shared.toggleIndexer }
+    static var toggleTerse: Color { ThemeEngine.shared.toggleTerse }
 
     // MARK: - Savings
 

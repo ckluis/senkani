@@ -92,11 +92,11 @@ struct PaneContainerView: View {
         switch pane.paneType {
         case .terminal:
             TerminalViewRepresentable(
+                paneId: pane.id,
                 shellPath: pane.shellCommand,
                 environment: pane.features.environmentVars.merging([
                     "SENKANI_METRICS_FILE": pane.metricsFilePath,
                     "SENKANI_CONFIG_FILE": pane.configFilePath,
-                    "TERM": "xterm-256color",
                 ]) { _, new in new },
                 workingDirectory: NSHomeDirectory(),
                 isActive: isActive,

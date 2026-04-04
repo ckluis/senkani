@@ -89,8 +89,10 @@ class TerminalPortal {
         guard childWindow == nil else { return }
         self.parentWindow = parent
 
-        // Create a borderless child window
-        let child = NSWindow(
+        // Create a borderless child window that CAN become key.
+        // Standard borderless NSWindow returns false for canBecomeKey,
+        // which prevents keyboard events from reaching the terminal.
+        let child = KeyableWindow(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
             styleMask: [.borderless],
             backing: .buffered,
@@ -151,6 +153,19 @@ class TerminalPortal {
         childWindow = nil
         parentWindow = nil
     }
+}
+
+// MARK: - KeyableWindow
+
+/// Borderless NSWindow subclass that CAN become key.
+/// By default, borderless windows return false for canBecomeKey,
+/// which prevents them from receiving keyboard events. This is THE
+/// reason the terminal couldn't accept input — the child window
+/// silently refused to become key, so keyDown events went to the
+/// parent (SwiftUI) window which beeped.
+private class KeyableWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false } // stay as child, don't steal main
 }
 
 // MARK: - Delegate

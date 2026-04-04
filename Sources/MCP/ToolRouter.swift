@@ -1,4 +1,5 @@
 import MCP
+import Core
 
 enum ToolRouter {
     static func register(on server: Server, session: MCPSession) async {
@@ -12,6 +13,50 @@ enum ToolRouter {
     }
 
     static func route(_ params: CallTool.Parameters, session: MCPSession) async -> CallTool.Result {
+        // SECURITY: Budget enforcement — non-bypassable gate before any tool execution.
+        // This is the only routing path, so all tool calls pass through this check.
+        let budgetDecision = session.checkBudget()
+        switch budgetDecision {
+        case .block(let reason):
+            // Log the blocked call
+            if let sid = session.sessionId {
+                SessionDatabase.shared.recordBudgetDecision(
+                    sessionId: sid,
+                    toolName: params.name,
+                    decision: "blocked"
+                )
+            }
+            return .init(content: [.text(text: "Budget exceeded: \(reason)", annotations: nil, _meta: nil)], isError: true)
+
+        case .warn(let warning):
+            // Log the warning, execute the tool, and prepend warning to result
+            if let sid = session.sessionId {
+                SessionDatabase.shared.recordBudgetDecision(
+                    sessionId: sid,
+                    toolName: params.name,
+                    decision: "warned"
+                )
+            }
+            let result = await executeRoute(params, session: session)
+            // Prepend budget warning to the result content
+            var content = result.content
+            content.insert(.text(text: "[Budget Warning] \(warning)", annotations: nil, _meta: nil), at: 0)
+            return .init(content: content, isError: result.isError)
+
+        case .allow:
+            // Log allowed (only if session tracking is active)
+            if let sid = session.sessionId {
+                SessionDatabase.shared.recordBudgetDecision(
+                    sessionId: sid,
+                    toolName: params.name,
+                    decision: "allowed"
+                )
+            }
+            return await executeRoute(params, session: session)
+        }
+    }
+
+    private static func executeRoute(_ params: CallTool.Parameters, session: MCPSession) async -> CallTool.Result {
         switch params.name {
         case "senkani_read":
             return ReadTool.handle(arguments: params.arguments, session: session)

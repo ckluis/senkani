@@ -1,5 +1,6 @@
 import SwiftUI
 import Charts
+import Core
 
 /// Rich analytics dashboard with savings charts, command breakdowns, and cost projections.
 struct AnalyticsView: View {
@@ -7,6 +8,8 @@ struct AnalyticsView: View {
     @State private var sessionStore = SessionStore.shared
     @State private var showExportMenu = false
     @State private var now = Date()
+    @State private var budgetConfig = BudgetConfig()
+    @State private var todayCostCents: Int = 0
 
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
@@ -18,6 +21,7 @@ struct AnalyticsView: View {
             ScrollView {
                 VStack(spacing: 20) {
                     summaryCards
+                    budgetCard
                     savingsOverTimeChart
                     commandBreakdownChart
                     costProjectionChart
@@ -30,6 +34,8 @@ struct AnalyticsView: View {
         .background(Color(.windowBackgroundColor))
         .onReceive(timer) { tick in
             now = tick
+            budgetConfig = BudgetConfig.load()
+            todayCostCents = SessionDatabase.shared.costForToday()
         }
     }
 
@@ -117,6 +123,102 @@ struct AnalyticsView: View {
                 color: .orange,
                 icon: "lock.shield"
             )
+        }
+    }
+
+    // MARK: - Budget Card
+
+    private var hasBudget: Bool {
+        budgetConfig.dailyLimitCents != nil || budgetConfig.weeklyLimitCents != nil || budgetConfig.perSessionLimitCents != nil
+    }
+
+    private var budgetCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 4) {
+                Image(systemName: "creditcard")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                Text("Budget")
+                    .font(.system(size: 13, weight: .semibold))
+            }
+
+            if !hasBudget {
+                HStack {
+                    Spacer()
+                    VStack(spacing: 6) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 20))
+                            .foregroundStyle(.tertiary)
+                        Text("No budget set")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                        Text("Create ~/.senkani/budget.json to set limits")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.vertical, 12)
+                    Spacer()
+                }
+            } else {
+                if let dailyLimit = budgetConfig.dailyLimitCents {
+                    budgetRow(
+                        label: "Daily",
+                        spent: todayCostCents,
+                        limit: dailyLimit
+                    )
+                }
+
+                if let weeklyLimit = budgetConfig.weeklyLimitCents {
+                    let weekCost = SessionDatabase.shared.costForWeek()
+                    budgetRow(
+                        label: "Weekly",
+                        spent: weekCost,
+                        limit: weeklyLimit
+                    )
+                }
+
+                if let sessionLimit = budgetConfig.perSessionLimitCents {
+                    let sessionCost = Int(Double(workspace.totalSavedBytes) / 4.0 / 1_000_000 * 300)
+                    budgetRow(
+                        label: "Session",
+                        spent: sessionCost,
+                        limit: sessionLimit
+                    )
+                }
+            }
+        }
+        .padding(12)
+        .background(Color(.controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func budgetRow(label: String, spent: Int, limit: Int) -> some View {
+        let ratio = limit > 0 ? Double(spent) / Double(limit) : 0
+        let color: Color = ratio >= 0.8 ? .red : (ratio >= 0.5 ? .yellow : .green)
+        let spentStr = String(format: "$%.2f", Double(spent) / 100.0)
+        let limitStr = String(format: "$%.2f", Double(limit) / 100.0)
+
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(label)
+                    .font(.system(size: 11, weight: .medium))
+                Spacer()
+                Text("\(spentStr) / \(limitStr)")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(color)
+            }
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Color(.separatorColor))
+                        .frame(height: 6)
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(color)
+                        .frame(width: max(0, min(geo.size.width, geo.size.width * ratio)), height: 6)
+                }
+            }
+            .frame(height: 6)
         }
     }
 

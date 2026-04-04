@@ -148,9 +148,18 @@ public final class SessionDatabase: @unchecked Sendable {
             END;
             """,
         ]
+
+        // Schema migrations — add columns that may not exist yet.
+        let migrations = [
+            "ALTER TABLE commands ADD COLUMN budget_decision TEXT;",
+        ]
         queue.sync {
             for sql in stmts {
                 exec(sql)
+            }
+            // Run migrations — ALTER TABLE will fail silently if column already exists
+            for migration in migrations {
+                execSilent(migration)
             }
         }
     }
@@ -388,6 +397,76 @@ public final class SessionDatabase: @unchecked Sendable {
         }
     }
 
+    // MARK: - Budget Queries
+
+    /// Total cost_saved_cents for sessions started today (UTC).
+    public func costForToday() -> Int {
+        return queue.sync {
+            guard let db = db else { return 0 }
+            // Sessions started on the current UTC date
+            let sql = """
+                SELECT COALESCE(SUM(cost_saved_cents), 0)
+                FROM sessions
+                WHERE date(started_at, 'unixepoch') = date('now');
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                return Int(sqlite3_column_int64(stmt, 0))
+            }
+            return 0
+        }
+    }
+
+    /// Total cost_saved_cents for sessions started in the last 7 days (UTC).
+    public func costForWeek() -> Int {
+        return queue.sync {
+            guard let db = db else { return 0 }
+            let sql = """
+                SELECT COALESCE(SUM(cost_saved_cents), 0)
+                FROM sessions
+                WHERE started_at >= strftime('%s', 'now', '-7 days');
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                return Int(sqlite3_column_int64(stmt, 0))
+            }
+            return 0
+        }
+    }
+
+    /// Record a budget decision for a command.
+    /// Called after budget check to log allow/warn/block decisions.
+    public func recordBudgetDecision(
+        sessionId: String,
+        toolName: String,
+        decision: String,
+        rawBytes: Int = 0,
+        compressedBytes: Int = 0
+    ) {
+        let now = Date().timeIntervalSince1970
+        queue.async { [weak self] in
+            guard let self, let db = self.db else { return }
+            let sql = """
+                INSERT INTO commands (session_id, timestamp, tool_name, raw_bytes, compressed_bytes, budget_decision)
+                VALUES (?, ?, ?, ?, ?, ?);
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_double(stmt, 2, now)
+            sqlite3_bind_text(stmt, 3, (toolName as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(stmt, 4, Int64(rawBytes))
+            sqlite3_bind_int64(stmt, 5, Int64(compressedBytes))
+            sqlite3_bind_text(stmt, 6, (decision as NSString).utf8String, -1, nil)
+            sqlite3_step(stmt)
+        }
+    }
+
     // MARK: - FTS5 Query Sanitization
 
     /// SECURITY: Sanitize user input for FTS5 MATCH queries.
@@ -427,6 +506,14 @@ public final class SessionDatabase: @unchecked Sendable {
             print("[SessionDatabase] SQL error: \(msg)")
             sqlite3_free(err)
         }
+    }
+
+    /// Execute SQL silently — used for migrations where failure (e.g. column already exists) is expected.
+    private func execSilent(_ sql: String) {
+        guard let db = db else { return }
+        var err: UnsafeMutablePointer<CChar>?
+        sqlite3_exec(db, sql, nil, nil, &err)
+        if let err = err { sqlite3_free(err) }
     }
 }
 

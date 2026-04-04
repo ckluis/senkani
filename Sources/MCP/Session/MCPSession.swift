@@ -168,6 +168,35 @@ final class MCPSession: @unchecked Sendable {
         }
     }
 
+    // MARK: - Budget Enforcement
+
+    /// Check budget limits against current session, daily, and weekly spend.
+    /// Returns nil if allowed, a warning string for soft limits, or an error string for hard limits.
+    /// The caller must distinguish warn vs block by checking BudgetConfig.Decision directly.
+    func checkBudget() -> BudgetConfig.Decision {
+        let config = BudgetConfig.load()
+
+        // If no limits configured, skip entirely
+        guard config.perSessionLimitCents != nil
+            || config.dailyLimitCents != nil
+            || config.weeklyLimitCents != nil else {
+            return .allow
+        }
+
+        // Session cost estimate: (total bytes processed) / 4 bytes per token / 1M * $3 in cents
+        lock.lock()
+        let raw = totalRawBytes
+        let compressed = totalCompressedBytes
+        lock.unlock()
+        let sessionCents = Int(Double(raw - compressed) / 4.0 / 1_000_000 * 300)
+
+        // Daily and weekly from database
+        let todayCents = SessionDatabase.shared.costForToday()
+        let weekCents = SessionDatabase.shared.costForWeek()
+
+        return config.check(sessionCents: sessionCents, todayCents: todayCents, weekCents: weekCents)
+    }
+
     func recordCacheSaving(bytes: Int) {
         lock.lock()
         totalCacheSavedBytes += bytes

@@ -13,6 +13,31 @@ final class MenuBarManager {
     private(set) var socketServerRunning = false
     private(set) var launchAtLoginEnabled = LaunchAtLogin.isEnabled
 
+    // Budget tracking
+    private(set) var budgetConfig = BudgetConfig()
+    private(set) var todayCostCents: Int = 0
+    private(set) var dailyLimitCents: Int? = nil
+
+    var hasBudget: Bool {
+        budgetConfig.dailyLimitCents != nil || budgetConfig.weeklyLimitCents != nil || budgetConfig.perSessionLimitCents != nil
+    }
+
+    var budgetText: String {
+        guard hasBudget else { return "" }
+        let spent = String(format: "$%.2f", Double(todayCostCents) / 100.0)
+        if let limit = budgetConfig.dailyLimitCents {
+            let limitStr = String(format: "$%.2f", Double(limit) / 100.0)
+            return "Budget: \(spent) / \(limitStr) today"
+        }
+        return "Budget: \(spent) today"
+    }
+
+    /// Ratio of today's spend to daily limit (0...1+). Returns nil if no daily limit.
+    var budgetRatio: Double? {
+        guard let limit = budgetConfig.dailyLimitCents, limit > 0 else { return nil }
+        return Double(todayCostCents) / Double(limit)
+    }
+
     private var refreshTimer: Timer?
 
     init() {
@@ -30,6 +55,10 @@ final class MenuBarManager {
     func refresh() {
         stats = SessionDatabase.shared.totalStats()
         launchAtLoginEnabled = LaunchAtLogin.isEnabled
+
+        // Refresh budget state
+        budgetConfig = BudgetConfig.load()
+        todayCostCents = SessionDatabase.shared.costForToday()
     }
 
     // MARK: - Formatted accessors
@@ -93,6 +122,21 @@ struct MenuBarContentView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
 
+            if manager.hasBudget {
+                Divider()
+
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(budgetColor)
+                        .frame(width: 6, height: 6)
+                    Text(manager.budgetText)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(budgetColor)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+            }
+
             Divider()
 
             Button("Open Senkani") {
@@ -118,6 +162,13 @@ struct MenuBarContentView: View {
             }
             .keyboardShortcut("q")
         }
+    }
+
+    private var budgetColor: Color {
+        guard let ratio = manager.budgetRatio else { return .secondary }
+        if ratio >= 0.8 { return .red }
+        if ratio >= 0.5 { return .yellow }
+        return .green
     }
 
     private func openMainWindow() {

@@ -18,7 +18,7 @@ struct SenkaniGUI: App {
         WindowGroup {
             ContentView()
         }
-        .windowStyle(.titleBar)
+        .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1100, height: 700)
 
         MenuBarExtra("Senkani", systemImage: "bolt.circle") {

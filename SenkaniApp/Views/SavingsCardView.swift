@@ -31,7 +31,7 @@ struct SavingsBarView: View {
             separator
 
             // Feature toggles: F C S I
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
                 FeatureToggle(label: "F", isOn: $pane.features.filter, color: SenkaniTheme.toggleFilter)
                 FeatureToggle(label: "C", isOn: $pane.features.cache, color: SenkaniTheme.toggleCache)
                 FeatureToggle(label: "S", isOn: $pane.features.secrets, color: SenkaniTheme.toggleSecrets)
@@ -70,17 +70,39 @@ struct FeatureToggle: View {
     let label: String
     @Binding var isOn: Bool
     let color: Color
+    @State private var isHovering = false
 
     var body: some View {
         Button {
             isOn.toggle()
         } label: {
-            Text(label)
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(isOn ? color : SenkaniTheme.textTertiary)
+            HStack(spacing: 2) {
+                Text(label)
+                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(isOn ? color : SenkaniTheme.textTertiary)
+
+                if isHovering {
+                    Text(featureName)
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(isOn ? color.opacity(0.8) : SenkaniTheme.textTertiary)
+                        .transition(.opacity.combined(with: .move(edge: .leading)))
+                }
+            }
+            .padding(.horizontal, 3)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(isOn ? color.opacity(0.1) : Color.clear)
+            )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("\(featureName): \(isOn ? "ON" : "OFF")")
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovering = hovering
+            }
+        }
+        .help(featureTooltip)
     }
 
     private var featureName: String {
@@ -90,6 +112,17 @@ struct FeatureToggle: View {
         case "S": return "Secrets"
         case "I": return "Indexer"
         default: return label
+        }
+    }
+
+    private var featureTooltip: String {
+        let state = isOn ? "ON" : "OFF"
+        switch label {
+        case "F": return "Filter (\(state)): Strip ANSI codes, compress output (saves 60-90%)"
+        case "C": return "Cache (\(state)): Skip re-reading unchanged files (saves 50-99%)"
+        case "S": return "Secrets (\(state)): Auto-redact API keys and tokens"
+        case "I": return "Indexer (\(state)): Symbol-level code navigation (saves 95%)"
+        default: return "\(label): \(state)"
         }
     }
 }

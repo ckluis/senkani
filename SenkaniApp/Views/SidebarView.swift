@@ -144,9 +144,9 @@ struct SidebarView: View {
 
                         Spacer()
 
-                        // Savings badge
-                        if project.totalSavedBytes > 0 {
-                            Text(project.formattedSavings)
+                        // Savings badge: today / all time
+                        if project.totalSavedBytes > 0 || project.totalRawBytes > 0 {
+                            Text("today \(project.formattedSavings)")
                                 .font(.system(size: 8, design: .monospaced))
                                 .foregroundStyle(SenkaniTheme.savingsGreen)
                         }

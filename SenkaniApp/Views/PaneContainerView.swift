@@ -51,10 +51,13 @@ struct PaneContainerView: View {
         // Subtle scale for depth: focused 1.0, unfocused 0.995
         .scaleEffect(isActive ? SenkaniTheme.focusedScale : SenkaniTheme.unfocusedScale)
         .animation(SenkaniTheme.focusAnimation, value: isActive)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            workspace?.activePaneID = pane.id
-        }
+        // Use simultaneousGesture so the tap activates the pane WITHOUT
+        // blocking mouse events from reaching the underlying NSView (terminal).
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                workspace?.activePaneID = pane.id
+            }
+        )
     }
 
     // MARK: - Header

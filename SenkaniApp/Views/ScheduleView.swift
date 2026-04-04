@@ -6,15 +6,41 @@ struct ScheduleView: View {
     @State private var tasks: [ScheduledTask] = []
     @State private var isLoading = true
     @State private var taskToDelete: ScheduledTask?
+    @State private var showNewScheduleForm = false
+
+    // New schedule form fields
+    @State private var newName = ""
+    @State private var newSchedulePreset = "Daily"
+    @State private var newCustomCron = ""
+    @State private var newCommand = ""
+    @State private var newBudgetLimit = ""
+    @State private var createError: String?
+
+    private let schedulePresets = ["Every hour", "Every 6 hours", "Daily", "Weekly", "Custom"]
+    private func cronForPreset(_ preset: String) -> String {
+        switch preset {
+        case "Every hour": return "0 * * * *"
+        case "Every 6 hours": return "0 */6 * * *"
+        case "Daily": return "0 9 * * *"
+        case "Weekly": return "0 9 * * 1"
+        case "Custom": return newCustomCron
+        default: return "0 9 * * *"
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             headerView
             Divider()
 
+            if showNewScheduleForm {
+                newScheduleFormView
+                Divider()
+            }
+
             if isLoading {
                 loadingView
-            } else if tasks.isEmpty {
+            } else if tasks.isEmpty && !showNewScheduleForm {
                 emptyView
             } else {
                 taskListView
@@ -55,6 +81,27 @@ struct ScheduleView: View {
             }
 
             Spacer()
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showNewScheduleForm.toggle()
+                    if showNewScheduleForm {
+                        // Reset form fields
+                        newName = ""
+                        newSchedulePreset = "Daily"
+                        newCustomCron = ""
+                        newCommand = ""
+                        newBudgetLimit = ""
+                        createError = nil
+                    }
+                }
+            } label: {
+                Label(showNewScheduleForm ? "Cancel" : "New Schedule",
+                      systemImage: showNewScheduleForm ? "xmark" : "plus")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
 
             Button {
                 isLoading = true
@@ -162,6 +209,106 @@ struct ScheduleView: View {
         return (.red, "xmark.circle.fill")
     }
 
+    // MARK: - New Schedule Form
+
+    private var newScheduleFormView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Create New Schedule")
+                .font(.system(size: 14, weight: .semibold))
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Name")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    TextField("e.g. daily-review", text: $newName)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12))
+                }
+                .frame(maxWidth: 200)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Schedule")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Picker("", selection: $newSchedulePreset) {
+                        ForEach(schedulePresets, id: \.self) { Text($0) }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 160)
+                }
+
+                if newSchedulePreset == "Custom" {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Cron Expression")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        TextField("0 9 * * 1-5", text: $newCustomCron)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12, design: .monospaced))
+                    }
+                    .frame(maxWidth: 160)
+                }
+            }
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Command")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    TextField("e.g. claude -p 'Review open PRs'", text: $newCommand)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12, design: .monospaced))
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Budget Limit (cents, optional)")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    TextField("e.g. 500", text: $newBudgetLimit)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12, design: .monospaced))
+                }
+                .frame(maxWidth: 180)
+            }
+
+            HStack(spacing: 8) {
+                Button {
+                    createSchedule()
+                } label: {
+                    Label("Create", systemImage: "checkmark.circle")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty
+                          || newCommand.trimmingCharacters(in: .whitespaces).isEmpty)
+
+                if let error = createError {
+                    Text(error)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.red)
+                }
+
+                Spacer()
+
+                // Preview the resolved cron
+                let cron = cronForPreset(newSchedulePreset)
+                if !cron.isEmpty {
+                    Text(CronToLaunchd.humanReadable(cron))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color(.controlBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+            }
+        }
+        .padding(16)
+        .background(Color(.controlBackgroundColor).opacity(0.5))
+    }
+
     // MARK: - States
 
     private var loadingView: some View {
@@ -176,16 +323,32 @@ struct ScheduleView: View {
     }
 
     private var emptyView: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 16) {
+            Spacer()
+
             Image(systemName: "calendar.badge.clock")
                 .font(.system(size: 32))
                 .foregroundStyle(.tertiary)
             Text("No scheduled tasks")
                 .font(.system(size: 14, weight: .medium))
-            Text("Use `senkani schedule create` to add one.")
+            Text("Schedule recurring Claude tasks like\ncode reviews, dependency updates, or reports.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .lineSpacing(2)
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showNewScheduleForm = true
+                }
+            } label: {
+                Label("Create Your First Schedule", systemImage: "plus.circle")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+
+            Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -208,5 +371,53 @@ struct ScheduleView: View {
         try? ScheduleStore.remove(task.name)
         taskToDelete = nil
         loadTasks()
+    }
+
+    private func createSchedule() {
+        let name = newName.trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: " ", with: "-")
+            .lowercased()
+        let command = newCommand.trimmingCharacters(in: .whitespaces)
+        let cron = cronForPreset(newSchedulePreset)
+
+        guard !name.isEmpty else {
+            createError = "Name is required"
+            return
+        }
+        guard !command.isEmpty else {
+            createError = "Command is required"
+            return
+        }
+        guard !cron.isEmpty else {
+            createError = "Schedule is required"
+            return
+        }
+        if newSchedulePreset == "Custom" {
+            guard CronToLaunchd.convert(cron) != nil else {
+                createError = "Invalid cron expression"
+                return
+            }
+        }
+
+        let budget: Int? = newBudgetLimit.isEmpty ? nil : Int(newBudgetLimit)
+
+        let task = ScheduledTask(
+            name: name,
+            cronPattern: cron,
+            command: command,
+            budgetLimitCents: budget,
+            enabled: true
+        )
+
+        do {
+            try ScheduleStore.save(task)
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showNewScheduleForm = false
+                createError = nil
+            }
+            loadTasks()
+        } catch {
+            createError = error.localizedDescription
+        }
     }
 }

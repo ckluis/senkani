@@ -85,6 +85,19 @@ final class PaneModel: Identifiable {
         self.configFilePath = NSHomeDirectory() + "/.senkani/panes/\(paneUUID).env"
         self.shellCommand = shellCommand
         self.previewFilePath = previewFilePath
+        // Set default column width based on pane type
+        switch paneType {
+        case .skillLibrary:
+            self.columnWidth = 520
+        case .knowledgeBase:
+            self.columnWidth = 480
+        case .analytics:
+            self.columnWidth = 480
+        case .terminal:
+            self.columnWidth = 360
+        default:
+            self.columnWidth = 360
+        }
         // Write initial toggle state so the hook script has it from the start
         features.persist(to: configFilePath)
     }

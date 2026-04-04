@@ -62,9 +62,6 @@ struct PaneGridView: View {
                         .padding(.vertical, SenkaniTheme.columnSpacing)
                     }
                     .scrollIndicators(.visible, axes: .horizontal)
-                    .onTapGesture {
-                        workspace?.activePaneID = nil
-                    }
                     // Auto-scroll to reveal newly added pane
                     .onChange(of: activePaneID) { _, newID in
                         if let newID {
@@ -90,6 +87,10 @@ private struct PaneResizeHandle: View {
     let rightPane: PaneModel
 
     @State private var isDragging = false
+    /// Snapshot of column widths at the start of each drag so we can apply
+    /// the cumulative DragGesture translation correctly.
+    @State private var startLeftWidth: CGFloat = 0
+    @State private var startRightWidth: CGFloat = 0
 
     private let handleWidth: CGFloat = SenkaniTheme.columnSpacing
     private let hitTargetWidth: CGFloat = 12  // wider invisible hit area
@@ -118,11 +119,16 @@ private struct PaneResizeHandle: View {
         .gesture(
             DragGesture(minimumDistance: 1)
                 .onChanged { value in
-                    isDragging = true
+                    if !isDragging {
+                        // Snapshot the starting widths on drag start
+                        startLeftWidth = leftPane.columnWidth
+                        startRightWidth = rightPane.columnWidth
+                        isDragging = true
+                    }
                     let delta = value.translation.width
 
-                    let newLeftWidth = leftPane.columnWidth + delta
-                    let newRightWidth = rightPane.columnWidth - delta
+                    let newLeftWidth = startLeftWidth + delta
+                    let newRightWidth = startRightWidth - delta
 
                     // Enforce minimum widths
                     if newLeftWidth >= SenkaniTheme.minColumnWidth &&

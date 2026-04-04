@@ -35,17 +35,21 @@ struct TerminalViewRepresentable: NSViewRepresentable {
         }
         let envPairs = env.map { "\($0.key)=\($0.value)" }
 
-        // Start the shell process
+        // Start the shell process with working directory
         terminalView.startProcess(
             executable: shellPath,
             args: [],
             environment: envPairs,
-            execName: (shellPath as NSString).lastPathComponent
+            execName: (shellPath as NSString).lastPathComponent,
+            currentDirectory: workingDirectory
         )
 
-        // Request keyboard focus once the view is in the hierarchy
-        DispatchQueue.main.async {
-            terminalView.window?.makeFirstResponder(terminalView)
+        // Request keyboard focus after the view is fully added to the hierarchy.
+        // Two-tick delay ensures the window is ready.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            if let window = terminalView.window {
+                window.makeFirstResponder(terminalView)
+            }
         }
 
         return terminalView

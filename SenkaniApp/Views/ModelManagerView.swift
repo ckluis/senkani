@@ -21,14 +21,31 @@ struct ModelManagerView: View {
                 emptyStateView
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 12) {
-                        ForEach(manager.models) { model in
-                            ModelCardView(
-                                model: model,
-                                onDownload: { downloadModel(model.id) },
-                                onDelete: { confirmDelete(model.id) }
-                            )
-                        }
+                    LazyVStack(alignment: .leading, spacing: 24) {
+                        // Embeddings section
+                        modelSection(
+                            title: "Embeddings (Semantic Search)",
+                            icon: "magnifyingglass.circle.fill",
+                            color: .blue,
+                            explanation: "Finds the right file without reading them all. Your projects may have thousands of files -- embeddings let Claude jump straight to the relevant ones instead of scanning everything. Saves 80-95% of tokens.",
+                            whyLocal: "Runs entirely on your Mac. No data leaves your machine, no API costs, no rate limits.",
+                            models: manager.models.filter { $0.id == "minilm-l6" },
+                            recommended: "minilm-l6"
+                        )
+
+                        Divider()
+                            .padding(.horizontal, 4)
+
+                        // Vision section
+                        modelSection(
+                            title: "Vision (Image Understanding)",
+                            icon: "eye.circle.fill",
+                            color: .purple,
+                            explanation: "Analyzes screenshots, diagrams, and UI mockups locally instead of $0.01/image API calls. Useful for design review, bug screenshots, and documentation images.",
+                            whyLocal: "Process sensitive screenshots without uploading them. No per-image charges.",
+                            models: manager.models.filter { $0.id == "qwen2-vl-2b" || $0.id == "gemma3-4b" },
+                            recommended: "qwen2-vl-2b"
+                        )
                     }
                     .padding(16)
                 }
@@ -135,6 +152,69 @@ struct ModelManagerView: View {
         .padding(12)
     }
 
+    // MARK: - Model Section
+
+    private func modelSection(
+        title: String,
+        icon: String,
+        color: Color,
+        explanation: String,
+        whyLocal: String,
+        models: [ModelInfo],
+        recommended: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Section header
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 18))
+                    .foregroundStyle(color)
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+            }
+
+            // Explanation card
+            VStack(alignment: .leading, spacing: 8) {
+                Text(explanation)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineSpacing(2)
+
+                HStack(spacing: 4) {
+                    Image(systemName: "lock.shield")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.green)
+                    Text(whyLocal)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(12)
+            .background(color.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            // Model cards
+            ForEach(models) { model in
+                ModelCardView(
+                    model: model,
+                    isRecommended: model.id == recommended,
+                    comparisonNote: modelComparisonNote(model.id),
+                    onDownload: { downloadModel(model.id) },
+                    onDelete: { confirmDelete(model.id) }
+                )
+            }
+        }
+    }
+
+    private func modelComparisonNote(_ id: String) -> String? {
+        switch id {
+        case "qwen2-vl-2b": return "Smaller and faster -- good default for most tasks"
+        case "gemma3-4b": return "Higher quality output -- better for detailed analysis"
+        case "minilm-l6": return "Fast and lightweight -- ideal for code search"
+        default: return nil
+        }
+    }
+
     // MARK: - Helpers
 
     private var diskUsageLabel: String {
@@ -187,6 +267,8 @@ struct ModelManagerView: View {
 
 struct ModelCardView: View {
     let model: ModelInfo
+    var isRecommended: Bool = false
+    var comparisonNote: String? = nil
     let onDownload: () -> Void
     let onDelete: () -> Void
 
@@ -200,11 +282,23 @@ struct ModelCardView: View {
                     Text(model.name)
                         .font(.system(size: 13, weight: .medium))
                     statusBadge
+
+                    if isRecommended {
+                        Text("Recommended")
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.orange.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
                 }
 
-                Text(modelDescription)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                if let note = comparisonNote {
+                    Text(note)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
 
                 if model.status == .downloading {
                     ProgressView(value: model.downloadProgress)
@@ -314,19 +408,6 @@ struct ModelCardView: View {
             }
             .buttonStyle(.plain)
             .help("Delete \(model.name)")
-        }
-    }
-
-    private var modelDescription: String {
-        switch model.id {
-        case "minilm-l6":
-            return "Semantic embedding for indexed code search (~90 MB)"
-        case "qwen2-vl-2b":
-            return "Image understanding for screenshot analysis (~1.5 GB)"
-        case "gemma3-4b":
-            return "Advanced vision model for screenshot analysis (~5 GB)"
-        default:
-            return "ML model for Senkani tools"
         }
     }
 

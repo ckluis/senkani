@@ -67,8 +67,30 @@ public final class SkillScanner: Sendable {
         let cwd = fm.currentDirectoryPath
         skills.append(contentsOf: scanProjectDir(cwd, fm: fm))
 
+        // Deduplicate: prefer project-local over global.
+        // Key by lowercased name + type to catch the same skill found in multiple locations.
+        let sourcePriority: [String: Int] = ["project": 0, "claude": 1, "cursor": 2, "continue": 3]
+        var seen: [String: Int] = [:]  // dedup key -> index in deduped array
+        var deduped: [SkillInfo] = []
+
+        for skill in skills {
+            let key = "\(skill.name.lowercased())|\(skill.type.rawValue)"
+            let priority = sourcePriority[skill.source.lowercased()] ?? 99
+
+            if let existingIndex = seen[key] {
+                let existingPriority = sourcePriority[deduped[existingIndex].source.lowercased()] ?? 99
+                if priority < existingPriority {
+                    // Replace with higher-priority (lower number) source
+                    deduped[existingIndex] = skill
+                }
+            } else {
+                seen[key] = deduped.count
+                deduped.append(skill)
+            }
+        }
+
         // Sort by source then name
-        return skills.sorted { a, b in
+        return deduped.sorted { a, b in
             if a.source != b.source { return a.source < b.source }
             return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
         }

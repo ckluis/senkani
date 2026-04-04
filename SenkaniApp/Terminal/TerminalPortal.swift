@@ -1,17 +1,15 @@
-// This file intentionally left minimal.
-// Terminal portal (separate window) approach was abandoned.
-// Terminals are now embedded directly via NSViewRepresentable
-// in TerminalViewRepresentable.swift using the FocusableTerminalView
-// pattern from cmux. The setActivationPolicy(.regular) in main.swift
-// was the missing piece that makes this work.
+// Terminal portal approach abandoned — terminals are now embedded directly
+// via NSViewRepresentable in TerminalViewRepresentable.swift.
+//
+// The key fix: startProcess is deferred to viewDidMoveToWindow(), not called
+// in makeNSView(). This ensures the terminal has a real window and frame
+// before the PTY is initialized.
 
-import AppKit
-import SwiftTerm
+import Foundation
 
-// TerminalPortalManager kept as no-op for compatibility
+// Stub kept for compilation compatibility
 @MainActor
 class TerminalPortalManager {
     nonisolated(unsafe) static let shared = TerminalPortalManager()
     func removePortal(id: UUID) {}
-    func portal(for id: UUID) -> AnyObject? { nil }
 }

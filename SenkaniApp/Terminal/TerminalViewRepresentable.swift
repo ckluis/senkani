@@ -2,26 +2,85 @@ import SwiftUI
 import AppKit
 import SwiftTerm
 
-// MARK: - FocusableTerminalView (cmux pattern)
+// MARK: - FocusableTerminalView
 
-/// Intermediate NSView that bridges SwiftUI's responder chain to SwiftTerm.
-/// Pattern proven by cmux (manaflow-ai/cmux).
+/// Container NSView that bridges SwiftUI's responder chain to SwiftTerm.
 ///
-/// CRITICAL requirements for SwiftTerm in SwiftUI:
-/// 1. Use autoresizingMask, NOT Auto Layout
-/// 2. Only set processDelegate, NEVER terminalDelegate
-/// 3. FocusableTerminalView accepts focus and forwards to terminal
-/// 4. App must call NSApp.setActivationPolicy(.regular) — see main.swift
+/// CRITICAL LESSON: startProcess must be called AFTER the view is in a window.
+/// In NSViewRepresentable, makeNSView returns BEFORE SwiftUI adds the view
+/// to its hierarchy. Calling startProcess in makeNSView means the terminal
+/// has no window, no real frame, and the PTY initializes incorrectly.
+///
+/// Solution: defer startProcess to viewDidMoveToWindow(), which fires
+/// when AppKit actually adds the view to the window hierarchy.
 class FocusableTerminalView: NSView {
     var terminalView: LocalProcessTerminalView?
     var onActivate: (() -> Void)?
 
+    // Deferred shell start — set in makeNSView, executed in viewDidMoveToWindow
+    struct ShellConfig {
+        let path: String
+        let environment: [String]
+        let workingDirectory: String
+    }
+    var shellConfig: ShellConfig?
+    private var processStarted = false
+
     override var acceptsFirstResponder: Bool { true }
 
+    // Called by AppKit when this view is added to a window hierarchy.
+    // THIS is when we start the shell — not before.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        startProcessIfReady()
+    }
+
+    override func layout() {
+        super.layout()
+        // Resize terminal to fill container
+        if let tv = terminalView, bounds.width > 0, bounds.height > 0 {
+            tv.setFrameSize(bounds.size)
+        }
+        // Also try starting process here — layout gives us real dimensions
+        startProcessIfReady()
+    }
+
+    private func startProcessIfReady() {
+        // ALL conditions must be true:
+        // 1. Not already started
+        // 2. Shell config is set
+        // 3. Terminal view exists
+        // 4. We're in a window
+        // 5. We have real dimensions (not zero)
+        guard !processStarted,
+              let config = shellConfig,
+              let tv = terminalView,
+              let win = window,
+              bounds.width > 10, bounds.height > 10
+        else { return }
+
+        processStarted = true
+
+        // Ensure terminal has our dimensions before starting
+        tv.setFrameSize(bounds.size)
+
+        tv.startProcess(
+            executable: config.path,
+            args: [],
+            environment: config.environment,
+            execName: "-" + (config.path as NSString).lastPathComponent,
+            currentDirectory: config.workingDirectory
+        )
+
+        // Give terminal keyboard focus
+        win.makeFirstResponder(tv)
+    }
+
     override func becomeFirstResponder() -> Bool {
+        // When SwiftUI gives us focus, forward to the actual terminal
         if let tv = terminalView {
-            DispatchQueue.main.async {
-                self.window?.makeFirstResponder(tv)
+            DispatchQueue.main.async { [weak self] in
+                self?.window?.makeFirstResponder(tv)
             }
         }
         return true
@@ -32,30 +91,14 @@ class FocusableTerminalView: NSView {
         if let tv = terminalView {
             window?.makeFirstResponder(tv)
         }
-        // CRITICAL: call super, not terminalView.mouseDown directly.
-        // Direct call bypasses AppKit's responder chain machinery.
-        // cmux uses super.mouseDown — Senkani was the only one calling directly.
+        // MUST call super — propagates through AppKit responder chain.
+        // Calling terminalView?.mouseDown directly bypasses this.
         super.mouseDown(with: event)
-    }
-
-    override func layout() {
-        super.layout()
-        if let tv = terminalView, bounds.width > 0, bounds.height > 0 {
-            tv.setFrameSize(bounds.size)
-        }
     }
 }
 
 // MARK: - SwiftUI Bridge
 
-/// Embeds SwiftTerm's LocalProcessTerminalView directly in SwiftUI
-/// via NSViewRepresentable + FocusableTerminalView container.
-///
-/// This is the SAME approach cmux uses. It works because:
-/// - setActivationPolicy(.regular) in main.swift makes the app a proper GUI app
-/// - FocusableTerminalView bridges the responder chain
-/// - autoresizingMask (not Auto Layout) is used for sizing
-/// - Only processDelegate is set (terminalDelegate breaks input)
 struct TerminalViewRepresentable: NSViewRepresentable {
     let paneId: UUID
     let shellPath: String
@@ -91,51 +134,48 @@ struct TerminalViewRepresentable: NSViewRepresentable {
         // CRITICAL: autoresizingMask, NOT Auto Layout
         tv.autoresizingMask = [.width, .height]
 
+        // Colors
         tv.nativeForegroundColor = .white
         tv.nativeBackgroundColor = .black
 
-        // Explicit font — both cmux and Flock set this. SwiftTerm may not
-        // fully initialize text rendering without it.
+        // Font — both Flock and cmux set this explicitly
         tv.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
 
         // CRITICAL: Only processDelegate. NEVER terminalDelegate.
         tv.processDelegate = context.coordinator
 
+        // Add terminal to container
         container.addSubview(tv)
         container.terminalView = tv
 
-        // Start shell
+        // DO NOT call startProcess here.
+        // makeNSView returns BEFORE the view is in a window.
+        // Flock adds the terminal to clipView (already in window) THEN calls startProcess.
+        // We must wait for viewDidMoveToWindow.
+
+        // Prepare shell config for deferred start
         let shell = shellPath.isEmpty ? "/bin/zsh" : shellPath
         var env = ProcessInfo.processInfo.environment
         for (key, value) in environment {
             env[key] = value
         }
         env["TERM"] = "xterm-256color"
-        let envPairs = env.map { "\($0.key)=\($0.value)" }
 
-        tv.startProcess(
-            executable: shell,
-            args: [],
-            environment: envPairs,
-            execName: "-" + (shell as NSString).lastPathComponent,
-            currentDirectory: workingDirectory
+        container.shellConfig = FocusableTerminalView.ShellConfig(
+            path: shell,
+            environment: env.map { "\($0.key)=\($0.value)" },
+            workingDirectory: workingDirectory
         )
-
-        // Request focus — no artificial delay (Flock doesn't need one)
-        DispatchQueue.main.async {
-            container.window?.makeFirstResponder(tv)
-        }
 
         return container
     }
 
     func updateNSView(_ nsView: FocusableTerminalView, context: Context) {
-        if isActive {
-            DispatchQueue.main.async {
-                if let tv = nsView.terminalView {
-                    nsView.window?.makeFirstResponder(tv)
-                }
-            }
+        // Only touch first responder if this pane is active AND terminal
+        // isn't already the first responder (avoid thrashing)
+        if isActive, let tv = nsView.terminalView,
+           nsView.window?.firstResponder !== tv {
+            nsView.window?.makeFirstResponder(tv)
         }
     }
 

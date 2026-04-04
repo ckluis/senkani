@@ -2,10 +2,59 @@ import SwiftUI
 import AppKit
 import SwiftTerm
 
-/// SwiftUI placeholder for a terminal pane. The actual terminal lives
-/// in a child NSWindow (see TerminalPortal.swift), positioned to
-/// overlay this view's frame.
-struct TerminalViewRepresentable: View {
+// MARK: - FocusableTerminalView (cmux pattern)
+
+/// Intermediate NSView that bridges SwiftUI's responder chain to SwiftTerm.
+/// Pattern proven by cmux (manaflow-ai/cmux).
+///
+/// CRITICAL requirements for SwiftTerm in SwiftUI:
+/// 1. Use autoresizingMask, NOT Auto Layout
+/// 2. Only set processDelegate, NEVER terminalDelegate
+/// 3. FocusableTerminalView accepts focus and forwards to terminal
+/// 4. App must call NSApp.setActivationPolicy(.regular) — see main.swift
+class FocusableTerminalView: NSView {
+    var terminalView: LocalProcessTerminalView?
+    var onActivate: (() -> Void)?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func becomeFirstResponder() -> Bool {
+        if let tv = terminalView {
+            DispatchQueue.main.async {
+                self.window?.makeFirstResponder(tv)
+            }
+        }
+        return true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onActivate?()
+        if let tv = terminalView {
+            window?.makeFirstResponder(tv)
+        }
+        // Forward to terminal
+        terminalView?.mouseDown(with: event)
+    }
+
+    override func layout() {
+        super.layout()
+        if let tv = terminalView, bounds.width > 0, bounds.height > 0 {
+            tv.setFrameSize(bounds.size)
+        }
+    }
+}
+
+// MARK: - SwiftUI Bridge
+
+/// Embeds SwiftTerm's LocalProcessTerminalView directly in SwiftUI
+/// via NSViewRepresentable + FocusableTerminalView container.
+///
+/// This is the SAME approach cmux uses. It works because:
+/// - setActivationPolicy(.regular) in main.swift makes the app a proper GUI app
+/// - FocusableTerminalView bridges the responder chain
+/// - autoresizingMask (not Auto Layout) is used for sizing
+/// - Only processDelegate is set (terminalDelegate breaks input)
+struct TerminalViewRepresentable: NSViewRepresentable {
     let paneId: UUID
     let shellPath: String
     let environment: [String: String]
@@ -30,123 +79,75 @@ struct TerminalViewRepresentable: View {
         self.onActivate = onActivate
     }
 
-    var body: some View {
-        // Black background matches the terminal
-        Color.black
-            .background(
-                PortalFrameTracker(
-                    paneId: paneId,
-                    shellPath: shellPath,
-                    environment: environment,
-                    workingDirectory: workingDirectory,
-                    isActive: isActive,
-                    onProcessExited: onProcessExited,
-                    onActivate: onActivate
-                )
-            )
-    }
-}
+    func makeNSView(context: Context) -> FocusableTerminalView {
+        let container = FocusableTerminalView()
+        container.wantsLayer = true
+        container.onActivate = onActivate
 
-// MARK: - Frame Tracker
+        let tv = LocalProcessTerminalView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
 
-/// NSViewRepresentable that tracks its frame in SCREEN coordinates
-/// and positions the terminal's child window to match.
-private struct PortalFrameTracker: NSViewRepresentable {
-    let paneId: UUID
-    let shellPath: String
-    let environment: [String: String]
-    let workingDirectory: String
-    let isActive: Bool
-    let onProcessExited: ((Int32) -> Void)?
-    let onActivate: (() -> Void)?
+        // CRITICAL: autoresizingMask, NOT Auto Layout
+        tv.autoresizingMask = [.width, .height]
 
-    func makeNSView(context: Context) -> FrameTrackingView {
-        let view = FrameTrackingView()
-        view.paneId = paneId
-        view.shellPath = shellPath
-        view.environment = environment
-        view.workingDirectory = workingDirectory
-        view.onProcessExited = onProcessExited
-        view.onActivate = onActivate
-        view.isActivePane = isActive
-        return view
-    }
+        tv.nativeForegroundColor = .white
+        tv.nativeBackgroundColor = .black
 
-    func updateNSView(_ nsView: FrameTrackingView, context: Context) {
-        nsView.isActivePane = isActive
-        if isActive {
-            TerminalPortalManager.shared.portal(for: paneId)?.focus()
+        // CRITICAL: Only processDelegate. NEVER terminalDelegate.
+        tv.processDelegate = context.coordinator
+
+        container.addSubview(tv)
+        container.terminalView = tv
+
+        // Start shell
+        let shell = shellPath.isEmpty ? "/bin/zsh" : shellPath
+        var env = ProcessInfo.processInfo.environment
+        for (key, value) in environment {
+            env[key] = value
         }
-        nsView.syncPortalFrame()
-    }
-}
+        env["TERM"] = "xterm-256color"
+        let envPairs = env.map { "\($0.key)=\($0.value)" }
 
-/// Invisible NSView that creates the terminal portal on window attach
-/// and continuously syncs its screen-space frame.
-class FrameTrackingView: NSView {
-    var paneId: UUID?
-    var shellPath: String = "/bin/zsh"
-    var environment: [String: String] = [:]
-    var workingDirectory: String = NSHomeDirectory()
-    var isActivePane = false
-    var onProcessExited: ((Int32) -> Void)?
-    var onActivate: (() -> Void)?
-    private var portalCreated = false
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        createPortalIfNeeded()
-        syncPortalFrame()
-    }
-
-    override func layout() {
-        super.layout()
-        syncPortalFrame()
-    }
-
-    override func setFrameSize(_ newSize: NSSize) {
-        super.setFrameSize(newSize)
-        syncPortalFrame()
-    }
-
-    override func viewDidMoveToSuperview() {
-        super.viewDidMoveToSuperview()
-        // When removed from superview, clean up
-        if superview == nil, let paneId {
-            TerminalPortalManager.shared.removePortal(id: paneId)
-            portalCreated = false
-        }
-    }
-
-    private func createPortalIfNeeded() {
-        guard let paneId, let window, !portalCreated else { return }
-        portalCreated = true
-
-        let portal = TerminalPortalManager.shared.createPortal(
-            id: paneId,
-            shellPath: shellPath,
-            environment: environment,
-            workingDirectory: workingDirectory,
-            onProcessExited: onProcessExited
+        tv.startProcess(
+            executable: shell,
+            args: [],
+            environment: envPairs,
+            execName: "-" + (shell as NSString).lastPathComponent
         )
-        portal.attach(to: window)
 
-        // Focus after a delay
-        if isActivePane {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                portal.focus()
+        // Delayed focus
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            container.window?.makeFirstResponder(tv)
+        }
+
+        return container
+    }
+
+    func updateNSView(_ nsView: FocusableTerminalView, context: Context) {
+        if isActive {
+            DispatchQueue.main.async {
+                if let tv = nsView.terminalView {
+                    nsView.window?.makeFirstResponder(tv)
+                }
             }
         }
     }
 
-    func syncPortalFrame() {
-        guard let paneId, let window else { return }
-        guard let portal = TerminalPortalManager.shared.portal(for: paneId) else { return }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onProcessExited: onProcessExited)
+    }
 
-        // Convert bounds to screen coordinates for the child window
-        let frameInWindow = convert(bounds, to: nil)
-        let frameOnScreen = window.convertToScreen(frameInWindow)
+    class Coordinator: NSObject, @preconcurrency LocalProcessTerminalViewDelegate {
+        let onProcessExited: ((Int32) -> Void)?
 
-        portal.updateFrame(frameOnScreen)
+        init(onProcessExited: ((Int32) -> Void)?) {
+            self.onProcessExited = onProcessExited
+        }
+
+        func processTerminated(source: TerminalView, exitCode: Int32?) {
+            onProcessExited?(exitCode ?? -1)
+        }
+        func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
+        func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
+        func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
     }
 }

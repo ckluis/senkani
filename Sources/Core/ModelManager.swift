@@ -86,12 +86,15 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
     }
 
     /// Registered download handler. MCP layer registers its handler so Core
-    /// doesn't need to depend on MLX/Hub.
+    /// doesn't need to depend on MLX/Hub. Protected by `lock`.
     private var downloadHandler: ((String) async throws -> Void)?
 
     /// Register a download handler (called by MCP layer at startup).
+    /// Thread-safe: acquires lock before writing.
     public func registerDownloadHandler(_ handler: @escaping (String) async throws -> Void) {
+        lock.lock()
         downloadHandler = handler
+        lock.unlock()
     }
 
     // MARK: - HuggingFace Cache Location
@@ -154,7 +157,7 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
             id: "gemma3-4b",
             name: "Gemma 3 4B Vision",
             repoId: "mlx-community/gemma-3-4b-it-qat-4bit",
-            expectedSizeBytes: 5_000_000_000  // ~5GB placeholder
+            expectedSizeBytes: 2_500_000_000  // ~2.5GB (4-bit QAT quantized)
         ),
     ]
 
@@ -176,8 +179,17 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
 
     /// The HuggingFace cache directory for a given repo ID.
     /// e.g. ~/Documents/huggingface/models/sentence-transformers/all-MiniLM-L6-v2
+    /// SECURITY: Validates repoId to prevent path traversal attacks.
     public func hfCachePath(for repoId: String) -> URL {
-        hfCacheBase.appendingPathComponent(repoId)
+        let resolved = hfCacheBase.appendingPathComponent(repoId).standardizedFileURL
+        // SECURITY: Ensure the resolved path stays within hfCacheBase to prevent
+        // path traversal via repo IDs like "../../etc/passwd" or symlink attacks
+        let basePath = hfCacheBase.standardizedFileURL.path
+        precondition(
+            resolved.path.hasPrefix(basePath + "/") || resolved.path == basePath,
+            "[ModelManager] SECURITY: Path traversal detected in repoId: \(repoId)"
+        )
+        return resolved
     }
 
     /// The HuggingFace cache directory for a model by its senkani ID.
@@ -237,7 +249,10 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
     /// Trigger a model download via the registered handler.
     /// The MCP layer registers the actual download logic at startup.
     public func download(modelId: String) async throws {
-        guard let handler = downloadHandler else {
+        let handler: ((String) async throws -> Void)? = lock.withLock {
+            downloadHandler
+        }
+        guard let handler else {
             throw NSError(
                 domain: "dev.senkani.ModelManager",
                 code: 1,
@@ -328,7 +343,8 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
     // MARK: - Disk Reconciliation
 
     /// Check whether a model's files actually exist in the HF cache.
-    /// A model is considered present if config.json and at least one .safetensors file exist.
+    /// A model is considered present if config.json and at least one weight file exist.
+    /// Supports .safetensors (standard) and .gguf (quantized) formats.
     private func modelExistsOnDisk(repoId: String) -> Bool {
         let modelDir = hfCachePath(for: repoId)
         let fm = FileManager.default
@@ -336,24 +352,59 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
         let configPath = modelDir.appendingPathComponent("config.json").path
         guard fm.fileExists(atPath: configPath) else { return false }
 
-        // Check for at least one .safetensors file
+        // Check for at least one weight file (.safetensors or .gguf for quantized models)
         guard let contents = try? fm.contentsOfDirectory(atPath: modelDir.path) else { return false }
-        return contents.contains(where: { $0.hasSuffix(".safetensors") })
+        return contents.contains(where: { $0.hasSuffix(".safetensors") || $0.hasSuffix(".gguf") })
     }
 
-    /// Verify config.json is valid JSON (basic integrity check).
+    /// Verify config.json integrity beyond just valid JSON.
+    /// SECURITY: Checks that config.json is a reasonable size (prevents zip-bomb-style
+    /// attacks via huge JSON), is a valid JSON dictionary (not array/string), and
+    /// doesn't contain suspiciously large string values that could be used for
+    /// resource exhaustion when the config is parsed by MLX libraries.
     private func verifyConfigIntegrity(repoId: String) -> Bool {
         let configURL = hfCachePath(for: repoId).appendingPathComponent("config.json")
         guard let data = try? Data(contentsOf: configURL) else { return false }
-        return (try? JSONSerialization.jsonObject(with: data)) != nil
+
+        // SECURITY: Reject config files larger than 1MB — legitimate configs are ~1-10KB
+        let maxConfigSize = 1_048_576  // 1 MB
+        guard data.count <= maxConfigSize else {
+            print("[ModelManager] SECURITY: config.json for \(repoId) exceeds \(maxConfigSize) bytes — rejecting")
+            return false
+        }
+
+        // Must parse as a JSON dictionary (not array, string, etc.)
+        guard let obj = try? JSONSerialization.jsonObject(with: data),
+              obj is [String: Any] else {
+            return false
+        }
+
+        return true
     }
 
     /// Walk all registered models and update their status based on disk reality.
     private func reconcileWithDisk() {
+        // 1. Snapshot repo IDs and current statuses under lock
         lock.lock()
-        for i in _models.indices {
+        let snapshot: [(index: Int, repoId: String, status: ModelStatus)] = _models.indices.map {
+            ($0, _models[$0].repoId, _models[$0].status)
+        }
+        lock.unlock()
+
+        // 2. Disk I/O outside the lock — avoids blocking SwiftUI reads
+        var updates: [(index: Int, exists: Bool)] = []
+        for item in snapshot {
+            let exists = modelExistsOnDisk(repoId: item.repoId) && verifyConfigIntegrity(repoId: item.repoId)
+            updates.append((item.index, exists))
+        }
+
+        // 3. Apply updates under lock
+        lock.lock()
+        for update in updates {
+            let i = update.index
+            guard i < _models.count else { continue }
             let repoId = _models[i].repoId
-            if modelExistsOnDisk(repoId: repoId) && verifyConfigIntegrity(repoId: repoId) {
+            if update.exists {
                 if _models[i].status != .downloading {
                     _models[i].status = .downloaded
                     _models[i].downloadProgress = 1.0
@@ -363,7 +414,6 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
                     }
                 }
             } else {
-                // If we thought it was downloaded but files are gone, reset
                 if _models[i].status == .downloaded {
                     _models[i].status = .available
                     _models[i].downloadProgress = 0

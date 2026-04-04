@@ -1,6 +1,10 @@
 import Foundation
 
 /// LRU file read cache. Keyed by absolute path + file modification time.
+/// Thread-safe via NSLock — safe for concurrent access from multiple connections.
+// TODO: Phase 5 — For multi-project socket server, consider whether a single
+// shared cache is appropriate or if per-project-root partitioning is needed
+// to prevent one project's cache from evicting another's entries.
 final class ReadCache: @unchecked Sendable {
     struct Entry {
         let path: String
@@ -16,13 +20,18 @@ final class ReadCache: @unchecked Sendable {
     private let maxEntries = 500
     private let maxBytes = 50_000_000  // 50MB
 
-    private(set) var hits = 0
-    private(set) var misses = 0
+    private var hits = 0
+    private var misses = 0
 
+    /// Thread-safe hit rate. Acquires lock to read counters.
     var hitRate: Double {
-        let total = hits + misses
+        lock.lock()
+        let h = hits
+        let m = misses
+        lock.unlock()
+        let total = h + m
         guard total > 0 else { return 0 }
-        return Double(hits) / Double(total)
+        return Double(h) / Double(total)
     }
 
     var totalCachedBytes: Int {

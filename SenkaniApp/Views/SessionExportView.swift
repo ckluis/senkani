@@ -13,12 +13,14 @@ struct SessionExportMenuButton: View {
             } label: {
                 Label("Export as JSON...", systemImage: "doc.text")
             }
+            .keyboardShortcut("e", modifiers: [.command])
 
             Button {
                 exportAsReport()
             } label: {
                 Label("Export as Report...", systemImage: "doc.richtext")
             }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
 
             Divider()
 
@@ -27,6 +29,7 @@ struct SessionExportMenuButton: View {
             } label: {
                 Label("Save Session Snapshot", systemImage: "square.and.arrow.down")
             }
+            .keyboardShortcut("s", modifiers: [.command, .shift])
         } label: {
             Image(systemName: "square.and.arrow.up")
         }

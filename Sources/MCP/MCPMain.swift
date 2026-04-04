@@ -1,8 +1,30 @@
+import Foundation
 import MCP
+import MLXLMCommon
+import MLXVLM
+import MLXEmbedders
+import Core
 
 public struct MCPServerRunner {
     public static func run() async throws {
         let session = MCPSession.resolve()
+
+        // Register download handler so ModelManager.download(modelId:) works from the UI.
+        // This bridges Core (no MLX dependency) to the MCP layer (has MLX).
+        ModelManager.shared.registerDownloadHandler { modelId in
+            switch modelId {
+            case "minilm-l6":
+                _ = try await EmbedTool.engine.ensureModel()
+            case "qwen2-vl-2b", "gemma3-4b":
+                _ = try await VisionTool.engine.ensureModel()
+            default:
+                throw NSError(
+                    domain: "dev.senkani.MCPServer",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "Unknown model ID: \(modelId)"]
+                )
+            }
+        }
 
         let server = Server(
             name: "senkani",

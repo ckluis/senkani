@@ -6,6 +6,8 @@ struct MarkdownPreviewView: View {
     @Bindable var pane: PaneModel
     @State private var filePath: String = ""
     @State private var showFilePicker = false
+    @State private var isDropTargeted = false
+    @State private var pathError: String?
 
     var body: some View {
         if pane.previewFilePath.isEmpty {
@@ -18,16 +20,18 @@ struct MarkdownPreviewView: View {
 
     private var filePickerPrompt: some View {
         VStack(spacing: 16) {
-            Image(systemName: "doc.richtext")
+            Image(systemName: isDropTargeted ? "arrow.down.doc.fill" : "doc.richtext")
                 .font(.system(size: 40))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isDropTargeted ? .blue : .secondary)
+                .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
+
             Text("Markdown Preview")
                 .font(.headline)
-            Text("Choose a .md file to preview")
+            Text("Choose a .md file to preview, or drag and drop")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            HStack {
+            HStack(spacing: 8) {
                 TextField("File path", text: $filePath)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 400)
@@ -36,19 +40,39 @@ struct MarkdownPreviewView: View {
                 Button("Browse...") {
                     pickFile(types: ["md", "markdown", "txt"])
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
             .padding(.horizontal, 40)
+
+            if let error = pathError {
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.windowBackgroundColor))
-        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [8, 4]))
+                    .foregroundStyle(.blue.opacity(0.5))
+                    .padding(8)
+            }
+        }
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             handleDrop(providers)
         }
     }
 
     private func applyPath() {
         let expanded = (filePath as NSString).expandingTildeInPath
-        guard FileManager.default.fileExists(atPath: expanded) else { return }
+        guard FileManager.default.fileExists(atPath: expanded) else {
+            pathError = "File not found at: \(expanded)"
+            return
+        }
+        pathError = nil
         pane.previewFilePath = expanded
     }
 
@@ -91,6 +115,23 @@ struct WebViewRepresentable: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+
+        // SECURITY: Configure WKWebView based on preview mode.
+        // Markdown preview: disable JavaScript entirely — there is no legitimate
+        // reason for JS in rendered markdown, and it prevents XSS from malicious .md files.
+        // HTML preview: allow JavaScript (needed for interactive pages) but restrict
+        // network access and file system access via Content Security Policy injected in HTML.
+        switch mode {
+        case .markdown:
+            config.defaultWebpagePreferences.allowsContentJavaScript = false
+        case .html:
+            // JavaScript allowed for HTML preview; CSP is added in ensureHTMLHead
+            config.defaultWebpagePreferences.allowsContentJavaScript = true
+        }
+
+        // SECURITY: Disable cross-origin resource sharing for all modes
+        config.setValue(false, forKey: "allowUniversalAccessFromFileURLs")
+
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
         context.coordinator.webView = webView
@@ -129,7 +170,9 @@ struct WebViewRepresentable: NSViewRepresentable {
     }
 
     private func errorHTML(_ msg: String) -> String {
-        "<html><body style='font-family:system-ui;color:#999;padding:40px'>\(msg)</body></html>"
+        // SECURITY: HTML-escape the message to prevent XSS via crafted file paths
+        let escaped = msg.htmlEscaped
+        return "<html><body style='font-family:system-ui;color:#999;padding:40px'>\(escaped)</body></html>"
     }
 
     // MARK: - Markdown to HTML conversion
@@ -142,6 +185,7 @@ struct WebViewRepresentable: NSViewRepresentable {
         <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src file: data:;">
         \(stylesheet)
         </head>
         <body>
@@ -315,9 +359,32 @@ struct WebViewRepresentable: NSViewRepresentable {
 
     // MARK: - HTML preview helpers
 
+    /// SECURITY: For HTML preview, we inject a CSP that allows scripts and styles
+    /// (needed for interactive HTML) but blocks network requests to prevent data
+    /// exfiltration. If the HTML already has a <head>, we inject the CSP meta tag
+    /// into it; otherwise we wrap the content with a full head.
+    static let htmlPreviewCSP = """
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src file: data: blob:; font-src file: data:;">
+    """
+
     static func ensureHTMLHead(_ raw: String) -> String {
-        if raw.lowercased().contains("<head") {
-            return raw
+        let lower = raw.lowercased()
+        if let headCloseRange = lower.range(of: "</head") {
+            // SECURITY: Inject CSP before </head> to restrict network access
+            let insertionPoint = raw.index(headCloseRange.lowerBound, offsetBy: 0)
+            var modified = raw
+            modified.insert(contentsOf: "\n\(htmlPreviewCSP)\n", at: insertionPoint)
+            return modified
+        }
+        if lower.contains("<head") {
+            // Has <head but no </head> — inject after first >
+            if let headRange = lower.range(of: "<head"),
+               let closeAngle = raw[headRange.upperBound...].firstIndex(of: ">") {
+                var modified = raw
+                let afterAngle = raw.index(after: closeAngle)
+                modified.insert(contentsOf: "\n\(htmlPreviewCSP)\n", at: afterAngle)
+                return modified
+            }
         }
         return """
         <!DOCTYPE html>
@@ -325,6 +392,7 @@ struct WebViewRepresentable: NSViewRepresentable {
         <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
+        \(htmlPreviewCSP)
         \(stylesheet)
         </head>
         <body>\(raw)</body>

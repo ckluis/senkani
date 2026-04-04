@@ -46,7 +46,7 @@ struct SkillBrowserView: View {
 
                     // Right: detail
                     skillDetailPane
-                        .frame(minWidth: 300)
+                        .frame(minWidth: 400)
                 }
             }
         }
@@ -101,8 +101,8 @@ struct SkillBrowserView: View {
                             Text(source.capitalized)
                                 .font(.system(size: 11, weight: .medium))
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
                         .background(
                             selectedSource == source
                                 ? Color.accentColor.opacity(0.15)
@@ -110,6 +110,7 @@ struct SkillBrowserView: View {
                         )
                         .foregroundStyle(selectedSource == source ? .primary : .secondary)
                         .clipShape(Capsule())
+                        .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
                 }
@@ -148,6 +149,25 @@ struct SkillBrowserView: View {
 
             Divider()
 
+            if filteredSkills.isEmpty {
+                VStack(spacing: 8) {
+                    Spacer()
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 20))
+                        .foregroundStyle(.tertiary)
+                    Text("No matching skills")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    if !searchText.isEmpty {
+                        Text("Try a different search term")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                    }
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+
             List(filteredSkills, selection: $selectedSkill) { skill in
                 HStack(spacing: 8) {
                     Image(systemName: iconForType(skill.type))
@@ -180,6 +200,8 @@ struct SkillBrowserView: View {
                 .contentShape(Rectangle())
             }
             .listStyle(.plain)
+
+            } // end else (filteredSkills not empty)
         }
     }
 
@@ -245,7 +267,7 @@ struct SkillBrowserView: View {
                                 Button {
                                     NSWorkspace.shared.selectFile(skill.filePath, inFileViewerRootedAtPath: "")
                                 } label: {
-                                    Image(systemName: "folder")
+                                    Label("Reveal in Finder", systemImage: "folder.badge.questionmark")
                                         .font(.system(size: 11))
                                 }
                                 .buttonStyle(.bordered)
@@ -268,7 +290,7 @@ struct SkillBrowserView: View {
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .padding(8)
                                 }
-                                .frame(maxHeight: 300)
+                                .frame(maxHeight: 400)
                                 .background(Color(.textBackgroundColor))
                                 .clipShape(RoundedRectangle(cornerRadius: 6))
                             }

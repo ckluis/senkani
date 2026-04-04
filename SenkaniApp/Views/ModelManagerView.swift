@@ -8,6 +8,10 @@ struct ModelManagerView: View {
     @State private var pendingDeleteId: String?
     @State private var errorMessage: String?
 
+    private var isAnyDownloading: Bool {
+        manager.models.contains { $0.status == .downloading }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             headerView
@@ -17,7 +21,7 @@ struct ModelManagerView: View {
                 emptyStateView
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 10) {
+                    LazyVStack(spacing: 12) {
                         ForEach(manager.models) { model in
                             ModelCardView(
                                 model: model,
@@ -38,14 +42,18 @@ struct ModelManagerView: View {
         } message: {
             if let id = pendingDeleteId,
                let model = manager.models.first(where: { $0.id == id }) {
-                Text("Remove \"\(model.name)\" from disk? You can re-download it later.")
+                let usage = manager.diskUsage(for: id)
+                let freed = usage > 0 ? " (\(ModelManager.formatBytes(usage)) freed)" : ""
+                Text("Remove \"\(model.name)\" from disk?\(freed)\nYou can re-download it later.")
             }
         }
         .overlay(alignment: .bottom) {
             if let error = errorMessage {
                 errorBanner(error)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .animation(.easeInOut(duration: 0.25), value: errorMessage != nil)
     }
 
     // MARK: - Header
@@ -71,6 +79,8 @@ struct ModelManagerView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                .disabled(isAnyDownloading)
+                .help(isAnyDownloading ? "Download in progress..." : "Download all available models")
             }
         }
         .padding(.horizontal, 16)
@@ -119,11 +129,10 @@ struct ModelManagerView: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(10)
+        .padding(12)
         .background(Color.red.opacity(0.15))
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .padding(12)
-        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     // MARK: - Helpers
@@ -201,11 +210,13 @@ struct ModelCardView: View {
                     ProgressView(value: model.downloadProgress)
                         .progressViewStyle(.linear)
                         .animation(.easeInOut(duration: 0.3), value: model.downloadProgress)
+                        .padding(.trailing, 4)
                 }
 
                 Text(sizeLabel)
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(.tertiary)
+                    .accessibilityLabel("Size: \(sizeLabel)")
             }
 
             Spacer()

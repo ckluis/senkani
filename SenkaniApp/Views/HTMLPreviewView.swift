@@ -6,6 +6,8 @@ struct HTMLPreviewView: View {
     @Bindable var pane: PaneModel
 
     @State private var filePath: String = ""
+    @State private var isDropTargeted = false
+    @State private var pathError: String?
 
     var body: some View {
         if pane.previewFilePath.isEmpty {
@@ -18,16 +20,18 @@ struct HTMLPreviewView: View {
 
     private var filePickerPrompt: some View {
         VStack(spacing: 16) {
-            Image(systemName: "globe")
+            Image(systemName: isDropTargeted ? "arrow.down.doc.fill" : "globe")
                 .font(.system(size: 40))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isDropTargeted ? .blue : .secondary)
+                .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
+
             Text("HTML Preview")
                 .font(.headline)
-            Text("Choose an .html file to preview")
+            Text("Choose an .html file to preview, or drag and drop")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            HStack {
+            HStack(spacing: 8) {
                 TextField("File path", text: $filePath)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 400)
@@ -36,19 +40,39 @@ struct HTMLPreviewView: View {
                 Button("Browse...") {
                     pickFile()
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
             .padding(.horizontal, 40)
+
+            if let error = pathError {
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.windowBackgroundColor))
-        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [8, 4]))
+                    .foregroundStyle(.blue.opacity(0.5))
+                    .padding(8)
+            }
+        }
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             handleDrop(providers)
         }
     }
 
     private func applyPath() {
         let expanded = (filePath as NSString).expandingTildeInPath
-        guard FileManager.default.fileExists(atPath: expanded) else { return }
+        guard FileManager.default.fileExists(atPath: expanded) else {
+            pathError = "File not found at: \(expanded)"
+            return
+        }
+        pathError = nil
         pane.previewFilePath = expanded
     }
 

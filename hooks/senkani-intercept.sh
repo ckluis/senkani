@@ -85,8 +85,16 @@ except:
         # Only redirect if filter is on (the main value for Bash interception)
         [ "$_FILTER" = "off" ] && echo '{}' && exit 0
 
-        ESCAPED=$(echo "$COMMAND" | sed 's/"/\\"/g')
-        echo "{\"decision\":\"block\",\"reason\":\"Use mcp__senkani__senkani_exec instead of Bash for this read-only command. It filters output (24 command rules, ANSI stripping, dedup, truncation, secret detection). Pass command: \\\"${ESCAPED}\\\"\"}"
+        # SECURITY: Use python3 for proper JSON encoding to prevent injection
+        # via special characters (backslashes, newlines, control chars) in COMMAND
+        REASON=$(echo "$COMMAND" | /usr/bin/python3 -c "
+import sys, json
+cmd = sys.stdin.read().strip()
+reason = 'Use mcp__senkani__senkani_exec instead of Bash for this read-only command. It filters output (24 command rules, ANSI stripping, dedup, truncation, secret detection). Pass command: \"' + cmd + '\"'
+print(json.dumps({'decision': 'block', 'reason': reason}))
+" 2>/dev/null)
+        [ -z "$REASON" ] && echo '{}' && exit 0
+        echo "$REASON"
         ;;
 
     Grep)

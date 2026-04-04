@@ -32,7 +32,20 @@ public final class SkillScanner: Sendable {
 
     public init() {}
 
+    /// Maximum directory depth for recursive scans to prevent runaway traversal.
+    private static let maxScanDepth = 10
+
+    /// Asynchronous scan with cancellation support. Prefer this over the synchronous
+    /// variant when calling from the main thread or UI code.
+    public static func scanAsync() async -> [SkillInfo] {
+        await Task.detached(priority: .utility) {
+            scan()
+        }.value
+    }
+
     /// Synchronously scan all known directories and return discovered skills.
+    /// FIXME: Call scanAsync() from UI code to avoid blocking the main thread
+    /// if dotfile directories are large.
     public static func scan() -> [SkillInfo] {
         var skills: [SkillInfo] = []
         let fm = FileManager.default
@@ -327,11 +340,40 @@ public final class SkillScanner: Sendable {
     }
 
     /// Recursively find files with a specific name.
+    /// Guards against symlink loops by resolving real paths and tracking visited directories.
+    /// Enforces maxScanDepth to prevent runaway traversal in deeply nested structures.
     private static func scanRecursive(dir: String, filename: String, fm: FileManager, handler: (String) -> Void) {
-        guard let enumerator = fm.enumerator(atPath: dir) else { return }
-        while let path = enumerator.nextObject() as? String {
-            if (path as NSString).lastPathComponent == filename {
-                handler((dir as NSString).appendingPathComponent(path))
+        guard let enumerator = fm.enumerator(
+            at: URL(fileURLWithPath: dir),
+            includingPropertiesForKeys: [.isSymbolicLinkKey, .isDirectoryKey],
+            options: [.skipsPackageDescendants]
+        ) else { return }
+
+        var visitedRealPaths: Set<String> = []
+        let realRoot = URL(fileURLWithPath: dir).resolvingSymlinksInPath().path
+        visitedRealPaths.insert(realRoot)
+
+        while let url = enumerator.nextObject() as? URL {
+            // Enforce depth limit
+            let relativeComponents = url.pathComponents.count - URL(fileURLWithPath: dir).pathComponents.count
+            if relativeComponents > maxScanDepth {
+                enumerator.skipDescendants()
+                continue
+            }
+
+            // Detect symlink loops by resolving real paths for directories
+            let resourceValues = try? url.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
+            if resourceValues?.isDirectory == true {
+                let realPath = url.resolvingSymlinksInPath().path
+                if visitedRealPaths.contains(realPath) {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                visitedRealPaths.insert(realPath)
+            }
+
+            if url.lastPathComponent == filename {
+                handler(url.path)
             }
         }
     }

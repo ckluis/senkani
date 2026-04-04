@@ -3,7 +3,7 @@ import Foundation
 /// Handles first-launch auto-registration of Senkani as an MCP server
 /// and installation of PreToolUse hooks for Claude Code.
 ///
-/// Every method is idempotent — safe to call on every launch.
+/// Every method is idempotent -- safe to call on every launch.
 public enum AutoRegistration {
 
     // MARK: - Public API
@@ -17,7 +17,7 @@ public enum AutoRegistration {
 
         var mcpServers = config["mcpServers"] as? [String: Any] ?? [:]
 
-        // Already registered with correct path — nothing to do
+        // Already registered with correct path -- nothing to do
         if let existing = mcpServers["senkani"] as? [String: Any],
            let existingCommand = existing["command"] as? String,
            existingCommand == binaryPath {
@@ -27,10 +27,22 @@ public enum AutoRegistration {
         // SECURITY: Back up before first modification
         backupIfFirstWrite(path: settingsPath)
 
+        // Register both stdio mode (default) and socket mode (daemon) entries.
+        // Claude Code uses the "senkani" entry; "senkani-daemon" is available
+        // when the daemon is running (clients connect via the Unix socket).
         mcpServers["senkani"] = [
             "command": binaryPath,
             "args": ["--mcp-server"],
         ] as [String: Any]
+
+        // Socket-based daemon entry -- uses nc to bridge stdio to the Unix socket.
+        // Only useful when the Senkani app (or --socket-server) is running.
+        let socketPath = NSHomeDirectory() + "/.senkani/mcp.sock"
+        mcpServers["senkani-daemon"] = [
+            "command": "/usr/bin/nc",
+            "args": ["-U", socketPath],
+        ] as [String: Any]
+
         config["mcpServers"] = mcpServers
 
         try writeJSONAtomically(config, to: settingsPath)
@@ -83,7 +95,7 @@ public enum AutoRegistration {
 
         // The hook script handles tool routing internally (Read/Bash/Grep),
         // so we register a single entry.
-        // TODO: Phase 5 — replace python3 JSON parsing in hook with compiled helper.
+        // TODO: Phase 5 -- replace python3 JSON parsing in hook with compiled helper.
         // The hook uses /usr/bin/python3, a mutable interpreter in the trust chain.
         preToolUse.append([
             "type": "command",
@@ -112,7 +124,7 @@ public enum AutoRegistration {
             return argv0
         }
 
-        // Relative path — resolve against cwd
+        // Relative path -- resolve against cwd
         return FileManager.default.currentDirectoryPath + "/" + argv0
     }
 
@@ -125,8 +137,8 @@ public enum AutoRegistration {
             return [:]
         }
         guard let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            // SECURITY: Corrupt JSON — refuse to modify to avoid data loss
-            logWarning("\(path) contains invalid JSON — skipping modification")
+            // SECURITY: Corrupt JSON -- refuse to modify to avoid data loss
+            logWarning("\(path) contains invalid JSON -- skipping modification")
             throw AutoRegistrationError.corruptJSON(path)
         }
         return parsed
@@ -147,7 +159,7 @@ public enum AutoRegistration {
         // Write to temp file first
         try data.write(to: tempURL)
 
-        // Atomic rename — original stays intact if we crash between write and rename
+        // Atomic rename -- original stays intact if we crash between write and rename
         if FileManager.default.fileExists(atPath: path) {
             _ = try FileManager.default.replaceItemAt(url, withItemAt: tempURL)
         } else {
@@ -166,7 +178,7 @@ public enum AutoRegistration {
 
     // MARK: - Private: Hook Script
 
-    /// Date of the embedded hook script — used to skip overwrite if on-disk is newer.
+    /// Date of the embedded hook script -- used to skip overwrite if on-disk is newer.
     /// Update this when the embedded script content changes.
     private static let embeddedHookDate: Date = {
         let formatter = ISO8601DateFormatter()
@@ -179,7 +191,7 @@ public enum AutoRegistration {
         let dir = url.deletingLastPathComponent()
         let tempURL = dir.appendingPathComponent(".\(url.lastPathComponent).tmp.\(ProcessInfo.processInfo.processIdentifier)")
 
-        // Write to temp file, then rename — prevents truncated script on crash
+        // Write to temp file, then rename -- prevents truncated script on crash
         try Data(embeddedHookScript.utf8).write(to: tempURL)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o755],
@@ -204,32 +216,32 @@ public enum AutoRegistration {
         var errorDescription: String? {
             switch self {
             case .corruptJSON(let path):
-                return "\(path) contains invalid JSON — refusing to modify"
+                return "\(path) contains invalid JSON -- refusing to modify"
             }
         }
     }
 
     // MARK: - Embedded Hook Script
 
-    // TODO: Phase 5 — replace python3 JSON parsing with compiled helper
+    // TODO: Phase 5 -- replace python3 JSON parsing with compiled helper
     // The hook uses /usr/bin/python3 for JSON parsing. This is a mutable interpreter
-    // in the trust chain — an attacker who controls python3 could alter hook behavior.
+    // in the trust chain -- an attacker who controls python3 could alter hook behavior.
     // For Phase 1 this is accepted; Phase 5 should ship a small compiled JSON parser.
 
     /// The hook script, embedded as a string so it works in MCP server mode too
     /// (no Bundle resource access needed).
     private static let embeddedHookScript = """
 #!/bin/bash
-# Senkani PreToolUse hook — routes Read/Bash/Grep through senkani MCP tools.
+# Senkani PreToolUse hook -- routes Read/Bash/Grep through senkani MCP tools.
 #
 # Respects ALL toggle states:
-#   SENKANI_MODE=passthrough       → all interception off (native tools only)
-#   SENKANI_INTERCEPT=off          → all interception off
-#   SENKANI_INTERCEPT_READ=off     → Read passes through (native Read)
-#   SENKANI_INTERCEPT_BASH=off     → Bash passes through (native Bash)
-#   SENKANI_INTERCEPT_GREP=off     → Grep passes through (native Grep)
-#   SENKANI_MCP_FILTER=off         → filtering disabled (still routes through MCP for cache/secrets)
-#   SENKANI_MCP_CACHE=off          → cache disabled (still routes for filtering/secrets)
+#   SENKANI_MODE=passthrough       -> all interception off (native tools only)
+#   SENKANI_INTERCEPT=off          -> all interception off
+#   SENKANI_INTERCEPT_READ=off     -> Read passes through (native Read)
+#   SENKANI_INTERCEPT_BASH=off     -> Bash passes through (native Bash)
+#   SENKANI_INTERCEPT_GREP=off     -> Grep passes through (native Grep)
+#   SENKANI_MCP_FILTER=off         -> filtering disabled (still routes through MCP for cache/secrets)
+#   SENKANI_MCP_CACHE=off          -> cache disabled (still routes for filtering/secrets)
 #
 # When ALL MCP features are off, there's no reason to route through MCP.
 # The hook passes through to native tools in that case.
@@ -302,8 +314,16 @@ except:
 
         [ "$_FILTER" = "off" ] && echo '{}' && exit 0
 
-        ESCAPED=$(echo "$COMMAND" | sed 's/"/\\\\"/g')
-        echo "{\\"decision\\":\\"block\\",\\"reason\\":\\"Use mcp__senkani__senkani_exec instead of Bash for this read-only command. It filters output (24 command rules, ANSI stripping, dedup, truncation, secret detection). Pass command: \\\\\\"${ESCAPED}\\\\\\"\\"}";
+        # SECURITY: Use python3 for proper JSON encoding to prevent injection
+        # via special characters (backslashes, newlines, control chars) in COMMAND
+        REASON=$(echo "$COMMAND" | /usr/bin/python3 -c "
+import sys, json
+cmd = sys.stdin.read().strip()
+reason = 'Use mcp__senkani__senkani_exec instead of Bash for this read-only command. It filters output (24 command rules, ANSI stripping, dedup, truncation, secret detection). Pass command: \\"' + cmd + '\\"'
+print(json.dumps({'decision': 'block', 'reason': reason}))
+" 2>/dev/null)
+        [ -z "$REASON" ] && echo '{}' && exit 0
+        echo "$REASON"
         ;;
 
     Grep)
@@ -325,7 +345,7 @@ except:
 
         echo "$PATTERN" | grep -qE '^[a-zA-Z_][a-zA-Z0-9_]*$' || { echo '{}'; exit 0; }
 
-        echo "{\\"decision\\":\\"block\\",\\"reason\\":\\"Use mcp__senkani__senkani_search instead of Grep for symbol lookup. Returns compact results (~50 tokens vs ~5000). Pass query: \\\\\\"${PATTERN}\\\\\\". For regex or content search, Grep is fine — set SENKANI_INTERCEPT_GREP=off to stop this redirect.\\"}"
+        echo "{\\"decision\\":\\"block\\",\\"reason\\":\\"Use mcp__senkani__senkani_search instead of Grep for symbol lookup. Returns compact results (~50 tokens vs ~5000). Pass query: \\\\\\"${PATTERN}\\\\\\". For regex or content search, Grep is fine -- set SENKANI_INTERCEPT_GREP=off to stop this redirect.\\"}"
         ;;
 
     *)

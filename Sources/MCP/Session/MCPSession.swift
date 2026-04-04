@@ -5,9 +5,28 @@ import Indexer
 
 /// Shared session state for the MCP server.
 /// Holds read cache, symbol index, feature config, and running metrics.
+///
+/// In socket-server (daemon) mode, ``MCPSession/shared`` is the process-global
+/// singleton so all connections share one cache, index, and metrics store.
+///
+/// TODO: Phase 5 — For socket server, this session must be shareable across
+/// multiple client connections. Key changes needed:
+/// - Per-connection metrics vs. aggregate metrics (add connection ID tracking)
+/// - ReadCache is already thread-safe (NSLock), but consider per-connection
+///   cache partitioning for isolation if connections serve different projects
+/// - The `projectRoot` is currently fixed at init — for multi-project socket
+///   server, either create one MCPSession per project root or make it dynamic
+/// - Feature toggles (filterEnabled etc.) are session-wide — decide whether
+///   per-connection overrides are needed
 final class MCPSession: @unchecked Sendable {
+    /// Process-global shared session for daemon / socket-server mode.
+    /// Lazily initialized on first access.
+    // TODO: Phase 5 — Consider a session registry (keyed by project root)
+    // instead of a single global singleton for multi-project socket server.
+    static let shared: MCPSession = MCPSession.resolve()
+
     let projectRoot: String
-    let readCache = ReadCache()
+    let readCache: ReadCache
     let pipeline: FilterPipeline
     let validatorRegistry: ValidatorRegistry
     private let lock = NSLock()
@@ -26,15 +45,17 @@ final class MCPSession: @unchecked Sendable {
     private(set) var totalCompressedBytes = 0
     private(set) var totalCacheSavedBytes = 0
     private(set) var toolCallCount = 0
-    private(set) var perFeatureSaved: [String: Int] = [:]  // feature name → bytes saved
+    private(set) var perFeatureSaved: [String: Int] = [:]  // feature name -> bytes saved
 
     init(projectRoot: String, filterEnabled: Bool = true, secretsEnabled: Bool = true,
-         indexerEnabled: Bool = true, cacheEnabled: Bool = true) {
+         indexerEnabled: Bool = true, cacheEnabled: Bool = true,
+         readCache: ReadCache? = nil) {
         self.projectRoot = projectRoot
         self.filterEnabled = filterEnabled
         self.secretsEnabled = secretsEnabled
         self.indexerEnabled = indexerEnabled
         self.cacheEnabled = cacheEnabled
+        self.readCache = readCache ?? ReadCache()
 
         let config = FeatureConfig(filter: filterEnabled, secrets: secretsEnabled, indexer: indexerEnabled)
         self.pipeline = FilterPipeline(config: config)

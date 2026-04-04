@@ -21,6 +21,14 @@ public struct LifetimeStats: Sendable {
     public let totalRawBytes: Int
     public let totalSavedBytes: Int
     public let totalCostSavedCents: Int
+
+    public init(totalSessions: Int, totalCommands: Int, totalRawBytes: Int, totalSavedBytes: Int, totalCostSavedCents: Int) {
+        self.totalSessions = totalSessions
+        self.totalCommands = totalCommands
+        self.totalRawBytes = totalRawBytes
+        self.totalSavedBytes = totalSavedBytes
+        self.totalCostSavedCents = totalCostSavedCents
+    }
 }
 
 /// Thread-safe SQLite+FTS5 session persistence layer.
@@ -48,11 +56,39 @@ public final class SessionDatabase: @unchecked Sendable {
             print("[SessionDatabase] Failed to open: \(err)")
             db = nil
         }
+        enableWAL()
         createTables()
     }
 
     deinit {
-        if let db = db { sqlite3_close(db) }
+        // Ensure all queued work completes before closing.
+        queue.sync {
+            if let db = db { sqlite3_close(db) }
+        }
+    }
+
+    /// Gracefully close the database. Call from applicationWillTerminate or
+    /// similar shutdown path since deinit may never fire for a singleton.
+    public func close() {
+        queue.sync {
+            if let db = db {
+                sqlite3_close(db)
+            }
+            self.db = nil
+        }
+    }
+
+    // MARK: - WAL Mode
+
+    /// Enable WAL journal mode for better concurrent read performance.
+    /// Called once during init, before createTables.
+    private func enableWAL() {
+        guard let db = db else { return }
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, "PRAGMA journal_mode=WAL;", -1, &stmt, nil) == SQLITE_OK {
+            sqlite3_step(stmt)
+        }
+        sqlite3_finalize(stmt)
     }
 
     // MARK: - Schema
@@ -227,6 +263,7 @@ public final class SessionDatabase: @unchecked Sendable {
     }
 
     /// Load recent session summaries.
+    /// SECURITY: Limit parameter is capped at 500 to prevent resource exhaustion.
     public func loadSessions(limit: Int = 50) -> [SessionSummaryRow] {
         return queue.sync {
             guard let db = db else { return [] }
@@ -240,7 +277,7 @@ public final class SessionDatabase: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_int(stmt, 1, Int32(limit))
+            sqlite3_bind_int(stmt, 1, Int32(min(limit, 500)))
 
             var rows: [SessionSummaryRow] = []
             while sqlite3_step(stmt) == SQLITE_ROW {
@@ -269,7 +306,13 @@ public final class SessionDatabase: @unchecked Sendable {
     }
 
     /// Full-text search across commands.
+    /// SECURITY: The query is sanitized for FTS5 — special operators are stripped
+    /// and terms are quoted to prevent FTS5 query injection (e.g., column filters,
+    /// NEAR/OR/NOT abuse, or DoS via complex expressions).
     public func search(query: String, limit: Int = 50) -> [CommandSearchResult] {
+        let sanitized = Self.sanitizeFTS5Query(query)
+        guard !sanitized.isEmpty else { return [] }
+
         return queue.sync {
             guard let db = db else { return [] }
             let sql = """
@@ -284,8 +327,8 @@ public final class SessionDatabase: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (query as NSString).utf8String, -1, nil)
-            sqlite3_bind_int(stmt, 2, Int32(limit))
+            sqlite3_bind_text(stmt, 1, (sanitized as NSString).utf8String, -1, nil)
+            sqlite3_bind_int(stmt, 2, Int32(min(limit, 200)))
 
             var results: [CommandSearchResult] = []
             while sqlite3_step(stmt) == SQLITE_ROW {
@@ -343,6 +386,35 @@ public final class SessionDatabase: @unchecked Sendable {
             }
             return LifetimeStats(totalSessions: 0, totalCommands: 0, totalRawBytes: 0, totalSavedBytes: 0, totalCostSavedCents: 0)
         }
+    }
+
+    // MARK: - FTS5 Query Sanitization
+
+    /// SECURITY: Sanitize user input for FTS5 MATCH queries.
+    /// Strips FTS5 operators (OR, AND, NOT, NEAR, column filters, prefix *)
+    /// and wraps each term in double-quotes to prevent query injection.
+    /// Empty or all-whitespace input returns empty string (caller should skip query).
+    static func sanitizeFTS5Query(_ raw: String) -> String {
+        // Strip characters that have special meaning in FTS5 query syntax
+        let stripped = raw.unicodeScalars.filter { scalar in
+            // Allow alphanumerics, spaces, and basic punctuation (dash, underscore, dot)
+            // Reject: " * ^ ~ ( ) { } : + | \ and control chars
+            CharacterSet.alphanumerics.contains(scalar)
+                || scalar == " " || scalar == "-" || scalar == "_" || scalar == "."
+        }
+        let cleaned = String(stripped)
+
+        // Split into terms, remove FTS5 keywords, quote each term
+        let ftsKeywords: Set<String> = ["AND", "OR", "NOT", "NEAR"]
+        let terms = cleaned.split(separator: " ")
+            .map { String($0) }
+            .filter { !$0.isEmpty && !ftsKeywords.contains($0.uppercased()) }
+
+        guard !terms.isEmpty else { return "" }
+
+        // Each term wrapped in double-quotes prevents operator interpretation
+        // Double-quotes inside terms are already stripped above
+        return terms.map { "\"\($0)\"" }.joined(separator: " ")
     }
 
     // MARK: - Helpers

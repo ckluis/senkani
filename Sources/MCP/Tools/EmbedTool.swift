@@ -10,6 +10,12 @@ import Core
 /// Local semantic search using on-device embedding model.
 /// Indexes project files, returns most relevant files for a query.
 /// Cost: $0 (local Apple Silicon inference) vs $0.003+ per API call.
+///
+/// Thread safety: EmbedEngine is an actor, so all state mutations (modelContainer,
+/// fileEmbeddings, indexedAt) are serialized by Swift concurrency. Two concurrent
+/// `ensureModel()` calls will be serialized — the second will see the model already loaded.
+///
+/// MiniLM-L6 is ~90MB in RAM — acceptable to keep resident even as a daemon.
 actor EmbedEngine {
     private var modelContainer: MLXEmbedders.ModelContainer?
     private var fileEmbeddings: [String: [Float]] = [:]  // relative path → embedding
@@ -19,7 +25,11 @@ actor EmbedEngine {
     /// The model ID used for ModelManager tracking.
     static let modelId = "minilm-l6"
 
+    /// How long before the index is considered stale and should be rebuilt.
+    private static let indexStalenessInterval: TimeInterval = 300  // 5 minutes
+
     /// Load the embedding model. ModelManager must report ready before calling this.
+    /// Actor isolation guarantees only one caller loads at a time — no race condition.
     func ensureModel() async throws -> MLXEmbedders.ModelContainer {
         if let mc = modelContainer { return mc }
         ModelManager.shared.updateProgress(Self.modelId, progress: 0.0)
@@ -31,8 +41,26 @@ actor EmbedEngine {
         return mc
     }
 
-    /// Index all source files in the project.
+    /// Whether the index is fresh enough to skip re-indexing.
+    private func isIndexFresh(root: String, fileCount: Int) -> Bool {
+        guard let indexedAt = indexedAt,
+              projectRoot == root,
+              !fileEmbeddings.isEmpty else {
+            return false
+        }
+        // Re-index if stale or if the file count changed significantly (>10% delta)
+        let age = Date().timeIntervalSince(indexedAt)
+        if age > Self.indexStalenessInterval { return false }
+        let delta = abs(fileEmbeddings.count - fileCount)
+        if fileCount > 0 && Double(delta) / Double(fileCount) > 0.1 { return false }
+        return true
+    }
+
+    /// Index all source files in the project. Skips if index is fresh.
     func indexProject(root: String, files: [String]) async throws {
+        // Skip if we already have a fresh index for this root
+        if isIndexFresh(root: root, fileCount: files.count) { return }
+
         let mc = try await ensureModel()
         projectRoot = root
 
@@ -84,7 +112,8 @@ actor EmbedEngine {
             return results
         }
 
-        // Store embeddings
+        // Store embeddings (replace old index)
+        fileEmbeddings.removeAll()
         for (path, embedding) in zip(paths, embeddings) {
             fileEmbeddings[path] = embedding
         }
@@ -166,7 +195,7 @@ enum EmbedTool {
         let fileFilter = arguments?["file_filter"]?.stringValue
 
         do {
-            // Auto-index on first call
+            // Index project files (skips if index is still fresh)
             let walk = FileWalker.walk(projectRoot: session.projectRoot)
             var files = walk.files
             if let filter = fileFilter {

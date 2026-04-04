@@ -53,12 +53,14 @@ struct AnalyticsView: View {
                 } label: {
                     Label("Export JSON", systemImage: "doc.text")
                 }
+                .keyboardShortcut("e", modifiers: [.command])
 
                 Button {
                     exportAsReport()
                 } label: {
                     Label("Export Report", systemImage: "doc.richtext")
                 }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
 
                 Divider()
 
@@ -67,6 +69,7 @@ struct AnalyticsView: View {
                 } label: {
                     Label("Save Session", systemImage: "square.and.arrow.down")
                 }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
             } label: {
                 Label("Export", systemImage: "square.and.arrow.up")
                     .font(.system(size: 12, weight: .medium))
@@ -539,7 +542,7 @@ private struct SummaryCard: View {
                 .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
+        .padding(12)
         .background(Color(.controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }

@@ -1,6 +1,10 @@
 import SwiftUI
 
-/// Auto-tiling pane grid. Flock-style: 1=full, 2=split, 3=2+1, 4=grid.
+/// Horizontally-scrollable pane canvas.
+///
+/// Each pane occupies a fixed-width column. The canvas scrolls freely.
+/// The rightmost column is intentionally allowed to extend past the window
+/// edge, acting as a natural scroll affordance.
 struct PaneGridView: View {
     let panes: [PaneModel]
     let activePaneID: UUID?
@@ -8,46 +12,55 @@ struct PaneGridView: View {
 
     var body: some View {
         GeometryReader { geo in
-            switch panes.count {
-            case 0:
+            if panes.isEmpty {
                 EmptyView()
-            case 1:
-                paneView(panes[0])
-            case 2:
-                HSplitView {
-                    paneView(panes[0])
-                    paneView(panes[1])
-                }
-            case 3:
-                HSplitView {
-                    paneView(panes[0])
-                    VSplitView {
-                        paneView(panes[1])
-                        paneView(panes[2])
-                    }
-                }
-            default:
-                // 4+ panes: 2-column grid
-                let leftPanes = Array(panes.prefix(panes.count / 2 + panes.count % 2))
-                let rightPanes = Array(panes.suffix(panes.count / 2))
-                HSplitView {
-                    VSplitView {
-                        ForEach(leftPanes) { pane in
-                            paneView(pane)
+            } else if panes.count == 1 {
+                // Single pane: fill the entire canvas, no scroll.
+                PaneContainerView(
+                    pane: panes[0],
+                    isActive: true,
+                    workspace: workspace
+                )
+                .padding(SenkaniTheme.columnSpacing)
+            } else {
+                ScrollView(.horizontal, showsIndicators: true) {
+                    HStack(alignment: .top, spacing: SenkaniTheme.columnSpacing) {
+                        ForEach(panes) { pane in
+                            PaneContainerView(
+                                pane: pane,
+                                isActive: pane.id == activePaneID,
+                                workspace: workspace
+                            )
+                            .frame(width: columnWidth(for: geo.size))
                         }
                     }
-                    VSplitView {
-                        ForEach(rightPanes) { pane in
-                            paneView(pane)
-                        }
-                    }
+                    .padding(.horizontal, SenkaniTheme.columnSpacing)
+                    .padding(.vertical, SenkaniTheme.columnSpacing)
+                }
+                .scrollIndicators(.visible, axes: .horizontal)
+                .onTapGesture {
+                    // Tap canvas background to clear focus
+                    workspace?.activePaneID = nil
                 }
             }
         }
+        .background(SenkaniTheme.appBackground)
     }
 
-    @ViewBuilder
-    private func paneView(_ pane: PaneModel) -> some View {
-        PaneContainerView(pane: pane, isActive: pane.id == activePaneID, workspace: workspace)
+    /// Calculate column width.
+    /// With 2 panes, split evenly (minus spacing/padding).
+    /// With 3+, use the default fixed width so overflow triggers scroll.
+    private func columnWidth(for size: CGSize) -> CGFloat {
+        let totalPadding = SenkaniTheme.columnSpacing * 2 // left + right padding
+        let totalSpacing = SenkaniTheme.columnSpacing * CGFloat(panes.count - 1)
+        let availableWidth = size.width - totalPadding - totalSpacing
+
+        if panes.count == 2 {
+            let perPane = availableWidth / 2
+            return max(SenkaniTheme.minColumnWidth, perPane)
+        }
+
+        // For 3+ panes, use fixed width. Let it overflow for scroll affordance.
+        return SenkaniTheme.defaultColumnWidth
     }
 }

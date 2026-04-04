@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Wraps a pane with its savings card header and focus indicator.
+/// Wraps a pane with a Flock-inspired shell: accent line, header, inset body,
+/// focus dimming, and an inline savings bar at the bottom.
 struct PaneContainerView: View {
     @Bindable var pane: PaneModel
     let isActive: Bool
@@ -8,46 +9,134 @@ struct PaneContainerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SavingsCardView(pane: pane)
+            // Accent line at the very top, colored by pane type
+            Rectangle()
+                .fill(SenkaniTheme.accentColor(for: pane.paneType))
+                .frame(height: SenkaniTheme.accentLineHeight)
 
-            Divider()
+            // 32px header: type icon + title + close button
+            paneHeader
 
-            switch pane.paneType {
-            case .terminal:
-                TerminalViewRepresentable(
-                    shellPath: pane.shellCommand,
-                    environment: pane.features.environmentVars.merging([
-                        "SENKANI_METRICS_FILE": pane.metricsFilePath,
-                        "SENKANI_CONFIG_FILE": pane.configFilePath,
-                        "TERM": "xterm-256color",
-                    ]) { _, new in new },
-                    workingDirectory: NSHomeDirectory(),
-                    isActive: isActive,
-                    onProcessExited: { code in
-                        pane.processState = .exited(code)
-                    }
-                )
-                .onAppear {
-                    pane.processState = .running
-                }
-                .onChange(of: pane.features) { _, _ in pane.features.persist(to: pane.configFilePath) }
-            case .analytics:
-                if let workspace = workspace {
-                    AnalyticsView(workspace: workspace)
-                } else {
-                    AnalyticsPlaceholderView(pane: pane)
-                }
-            case .markdownPreview:
-                MarkdownPreviewView(pane: pane)
-            case .htmlPreview:
-                HTMLPreviewView(pane: pane)
-            }
+            // Separator between header and body
+            Rectangle()
+                .fill(SenkaniTheme.appBackground)
+                .frame(height: 1)
+
+            // Inset body (darker than shell)
+            paneBody
+                .background(SenkaniTheme.paneBody)
+
+            // Inline savings bar at the bottom
+            SavingsBarView(pane: pane)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .background(SenkaniTheme.paneShell)
+        .clipShape(RoundedRectangle(cornerRadius: SenkaniTheme.paneCornerRadius))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(isActive ? Color.accentColor.opacity(0.6) : Color.clear, lineWidth: 2)
+            RoundedRectangle(cornerRadius: SenkaniTheme.paneCornerRadius)
+                .stroke(
+                    isActive ? SenkaniTheme.focusBorder : SenkaniTheme.inactiveBorder,
+                    lineWidth: isActive ? 1.5 : 0.5
+                )
         )
+        // Focus dim overlay on inactive panes
+        .overlay(
+            Group {
+                if !isActive {
+                    RoundedRectangle(cornerRadius: SenkaniTheme.paneCornerRadius)
+                        .fill(SenkaniTheme.dimOverlay)
+                        .allowsHitTesting(false)
+                }
+            }
+        )
+        .animation(SenkaniTheme.focusAnimation, value: isActive)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            workspace?.activePaneID = pane.id
+        }
+    }
+
+    // MARK: - Header
+
+    private var paneHeader: some View {
+        HStack(spacing: 6) {
+            Image(systemName: SenkaniTheme.iconName(for: pane.paneType))
+                .font(.system(size: 10))
+                .foregroundStyle(SenkaniTheme.accentColor(for: pane.paneType))
+
+            Text(pane.title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(SenkaniTheme.textPrimary)
+                .lineLimit(1)
+
+            Spacer()
+
+            // Process state dot (terminal panes only)
+            if pane.paneType == .terminal {
+                Circle()
+                    .fill(processStateColor)
+                    .frame(width: 5, height: 5)
+            }
+
+            Button {
+                workspace?.removePane(id: pane.id)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(SenkaniTheme.textTertiary)
+            }
+            .buttonStyle(.plain)
+            .help("Close pane")
+        }
+        .padding(.horizontal, 10)
+        .frame(height: SenkaniTheme.headerHeight)
+        .background(SenkaniTheme.paneShell)
+    }
+
+    // MARK: - Body
+
+    @ViewBuilder
+    private var paneBody: some View {
+        switch pane.paneType {
+        case .terminal:
+            TerminalViewRepresentable(
+                shellPath: pane.shellCommand,
+                environment: pane.features.environmentVars.merging([
+                    "SENKANI_METRICS_FILE": pane.metricsFilePath,
+                    "SENKANI_CONFIG_FILE": pane.configFilePath,
+                    "TERM": "xterm-256color",
+                ]) { _, new in new },
+                workingDirectory: NSHomeDirectory(),
+                isActive: isActive,
+                onProcessExited: { code in
+                    pane.processState = .exited(code)
+                }
+            )
+            .onAppear {
+                pane.processState = .running
+            }
+            .onChange(of: pane.features) { _, _ in pane.features.persist(to: pane.configFilePath) }
+        case .analytics:
+            if let workspace = workspace {
+                AnalyticsView(workspace: workspace)
+            } else {
+                AnalyticsPlaceholderView(pane: pane)
+            }
+        case .markdownPreview:
+            MarkdownPreviewView(pane: pane)
+        case .htmlPreview:
+            HTMLPreviewView(pane: pane)
+        }
+    }
+
+    // MARK: - Helpers
+
+    private var processStateColor: Color {
+        switch pane.processState {
+        case .notStarted: return SenkaniTheme.textTertiary
+        case .running: return SenkaniTheme.accentTerminal
+        case .exited(0): return SenkaniTheme.accentAnalytics
+        case .exited: return .red
+        }
     }
 }
 
@@ -58,20 +147,21 @@ struct AnalyticsPlaceholderView: View {
         VStack(spacing: 12) {
             Image(systemName: "chart.bar.xaxis")
                 .font(.system(size: 36))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(SenkaniTheme.textSecondary)
             Text("Analytics")
                 .font(.headline)
+                .foregroundStyle(SenkaniTheme.textPrimary)
             Text("\(pane.metrics.commandCount) commands tracked")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(SenkaniTheme.textSecondary)
             if pane.metrics.savedBytes > 0 {
                 Text("\(pane.metrics.formattedSavings) saved (\(pane.metrics.formattedPercent))")
                     .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(.green)
+                    .foregroundStyle(SenkaniTheme.savingsGreen)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.windowBackgroundColor))
+        .background(SenkaniTheme.paneBody)
     }
 }
 
@@ -82,12 +172,12 @@ struct PreviewPlaceholderView: View {
         VStack {
             Image(systemName: "doc.richtext")
                 .font(.system(size: 36))
-                .foregroundStyle(.secondary)
-            Text("Preview pane — drop a file or select from sidebar")
+                .foregroundStyle(SenkaniTheme.textSecondary)
+            Text("Preview pane -- drop a file or select from sidebar")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(SenkaniTheme.textSecondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.windowBackgroundColor))
+        .background(SenkaniTheme.paneBody)
     }
 }

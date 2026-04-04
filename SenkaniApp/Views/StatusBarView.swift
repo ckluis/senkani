@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Global status bar at the bottom of the window.
-/// Spec: "閃 42.3K saved (72%) | $2.14 saved | 2 panes | 1h 03m"
+/// Dense 25px status bar at the bottom of the window.
+/// Left: focused pane type + title. Right: global savings, cost, session duration.
 struct StatusBarView: View {
     let workspace: WorkspaceModel
     @State private var now = Date()
@@ -9,42 +9,74 @@ struct StatusBarView: View {
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        HStack {
-            HStack(spacing: 4) {
-                Text("閃")
-                Text("\(workspace.formattedTotalSavings) saved")
-                    .fontWeight(.medium)
-                Text("(\(String(format: "%.0f", workspace.globalSavingsPercent))%)")
-                    .foregroundStyle(.secondary)
+        HStack(spacing: 0) {
+            // Left: focused pane context
+            if let pane = activePaneModel {
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(SenkaniTheme.accentColor(for: pane.paneType))
+                        .frame(width: 5, height: 5)
+
+                    Image(systemName: SenkaniTheme.iconName(for: pane.paneType))
+                        .font(.system(size: 9))
+                        .foregroundStyle(SenkaniTheme.accentColor(for: pane.paneType))
+
+                    Text(pane.title)
+                        .foregroundStyle(SenkaniTheme.textPrimary)
+                        .lineLimit(1)
+                }
+            } else {
+                Text("No focus")
+                    .foregroundStyle(SenkaniTheme.textTertiary)
             }
 
-            Divider().frame(height: 12)
-
-            Text(workspace.estimatedCostSaved)
-                .foregroundStyle(.green)
-
-            Divider().frame(height: 12)
-
-            Text("\(workspace.panes.count) pane\(workspace.panes.count == 1 ? "" : "s")")
-                .foregroundStyle(.secondary)
-
-            Divider().frame(height: 12)
-
-            Text(formattedDuration)
-                .foregroundStyle(.secondary)
-
             Spacer()
+
+            // Right: global metrics
+            HStack(spacing: 0) {
+                Text(workspace.formattedTotalSavings)
+                    .foregroundStyle(SenkaniTheme.savingsGreen)
+
+                Text(" saved")
+                    .foregroundStyle(SenkaniTheme.textTertiary)
+
+                statusSeparator
+
+                Text(workspace.estimatedCostSaved)
+                    .foregroundStyle(SenkaniTheme.textSecondary)
+
+                statusSeparator
+
+                Text("\(workspace.panes.count)")
+                    .foregroundStyle(SenkaniTheme.textSecondary)
+                Text(" pane\(workspace.panes.count == 1 ? "" : "s")")
+                    .foregroundStyle(SenkaniTheme.textTertiary)
+
+                statusSeparator
+
+                Text(formattedDuration)
+                    .foregroundStyle(SenkaniTheme.textTertiary)
+            }
         }
-        .font(.system(size: 11, design: .monospaced))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
-        .background(.ultraThinMaterial)
+        .font(.system(size: 10, design: .monospaced))
+        .padding(.horizontal, 10)
+        .frame(height: SenkaniTheme.statusBarHeight)
+        .background(SenkaniTheme.statusBarBackground)
         .onReceive(timer) { tick in
             now = tick
         }
     }
 
-    /// Live-updating session duration driven by the timer.
+    private var statusSeparator: some View {
+        Text("  |  ")
+            .foregroundStyle(SenkaniTheme.textTertiary.opacity(0.5))
+    }
+
+    private var activePaneModel: PaneModel? {
+        guard let id = workspace.activePaneID else { return nil }
+        return workspace.panes.first { $0.id == id }
+    }
+
     private var formattedDuration: String {
         let elapsed = now.timeIntervalSince(workspace.sessionStart)
         let hours = Int(elapsed) / 3600

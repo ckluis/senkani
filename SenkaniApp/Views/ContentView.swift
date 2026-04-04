@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Main application view: sidebar + pane grid + status bar.
+/// Main application view: custom HStack layout with sidebar + canvas + status bar.
+/// Replaces NavigationSplitView for full control over the horizontal canvas.
 struct ContentView: View {
     @State var workspace = WorkspaceModel()
     @State var sessions = SessionRegistry()
@@ -10,38 +11,31 @@ struct ContentView: View {
     @State var showSchedules = false
 
     var body: some View {
-        NavigationSplitView {
-            SidebarView(workspace: workspace, showModels: $showModels, showAnalytics: $showAnalytics, showSkills: $showSkills, showSchedules: $showSchedules)
-                .frame(minWidth: 160, maxWidth: 220)
-        } detail: {
-            VStack(spacing: 0) {
-                if showModels {
-                    ModelManagerView()
-                } else if showAnalytics {
-                    AnalyticsView(workspace: workspace)
-                } else if showSkills {
-                    SkillBrowserView()
-                } else if showSchedules {
-                    ScheduleView()
-                } else if workspace.panes.isEmpty {
-                    WelcomeView { title, command in
-                        addPane(title: title, command: command)
-                    }
-                } else {
-                    PaneGridView(
-                        panes: workspace.panes,
-                        activePaneID: workspace.activePaneID,
-                        workspace: workspace
-                    )
-                }
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                // Fixed-width sidebar
+                SidebarView(
+                    workspace: workspace,
+                    showModels: $showModels,
+                    showAnalytics: $showAnalytics,
+                    showSkills: $showSkills,
+                    showSchedules: $showSchedules
+                )
 
-                Divider()
+                // Thin divider between sidebar and canvas
+                Rectangle()
+                    .fill(SenkaniTheme.appBackground)
+                    .frame(width: 1)
 
-                StatusBarView(workspace: workspace)
+                // Main canvas area
+                canvasContent
             }
+
+            // Status bar at the very bottom
+            StatusBarView(workspace: workspace)
         }
+        .background(SenkaniTheme.appBackground)
         .frame(minWidth: 800, minHeight: 500)
-        .navigationTitle("Senkani")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 SessionExportMenuButton(workspace: workspace)
@@ -60,6 +54,38 @@ struct ContentView: View {
             sessions.stopAll()
         }
     }
+
+    // MARK: - Canvas content
+
+    @ViewBuilder
+    private var canvasContent: some View {
+        if showModels {
+            ModelManagerView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if showAnalytics {
+            AnalyticsView(workspace: workspace)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if showSkills {
+            SkillBrowserView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if showSchedules {
+            ScheduleView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if workspace.panes.isEmpty {
+            WelcomeView { title, command in
+                addPane(title: title, command: command)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            PaneGridView(
+                panes: workspace.panes,
+                activePaneID: workspace.activePaneID,
+                workspace: workspace
+            )
+        }
+    }
+
+    // MARK: - Actions
 
     private func addPane(title: String, command: String) {
         workspace.addPane(title: title, command: command)

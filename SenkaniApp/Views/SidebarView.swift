@@ -1,13 +1,14 @@
 import SwiftUI
 
-/// Redesigned sidebar: tools section at top, per-pane entries below
-/// with savings indicators, usage bars, and active dots.
+/// Redesigned sidebar: tools section, per-project entries with panes,
+/// and a settings gear for theme picker.
 struct SidebarView: View {
     @Bindable var workspace: WorkspaceModel
     @Binding var showModels: Bool
     @Binding var showAnalytics: Bool
     @Binding var showSkills: Bool
     @Binding var showSchedules: Bool
+    @Binding var showThemePicker: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,28 +18,35 @@ struct SidebarView: View {
                     sectionHeader("TOOLS")
 
                     toolRow(icon: "brain", label: "Models", isActive: showModels) {
-                        showModels = true; showAnalytics = false; showSkills = false; showSchedules = false
+                        showModels = true; showAnalytics = false; showSkills = false; showSchedules = false; showThemePicker = false
                         workspace.activePaneID = nil
                     }
                     toolRow(icon: "chart.bar.xaxis", label: "Analytics", isActive: showAnalytics) {
-                        showAnalytics = true; showModels = false; showSkills = false; showSchedules = false
+                        showAnalytics = true; showModels = false; showSkills = false; showSchedules = false; showThemePicker = false
                         workspace.activePaneID = nil
                     }
                     toolRow(icon: "puzzlepiece.extension", label: "Skills", isActive: showSkills) {
-                        showSkills = true; showModels = false; showAnalytics = false; showSchedules = false
+                        showSkills = true; showModels = false; showAnalytics = false; showSchedules = false; showThemePicker = false
                         workspace.activePaneID = nil
                     }
                     toolRow(icon: "calendar.badge.clock", label: "Schedules", isActive: showSchedules) {
-                        showSchedules = true; showModels = false; showAnalytics = false; showSkills = false
+                        showSchedules = true; showModels = false; showAnalytics = false; showSkills = false; showThemePicker = false
                         workspace.activePaneID = nil
                     }
 
-                    // MARK: - Panes section
-                    sectionHeader("PANES")
+                    // MARK: - Projects section
+                    sectionHeader("PROJECTS")
                         .padding(.top, 12)
 
-                    ForEach(workspace.panes) { pane in
-                        paneRow(pane)
+                    if workspace.projects.isEmpty {
+                        // No projects yet — show flat pane list (backward compat)
+                        ForEach(workspace.panes) { pane in
+                            paneRow(pane)
+                        }
+                    } else {
+                        ForEach(workspace.projects) { project in
+                            projectSection(project)
+                        }
                     }
                 }
                 .padding(.vertical, 8)
@@ -46,8 +54,20 @@ struct SidebarView: View {
 
             Spacer(minLength: 0)
 
-            // MARK: - Add pane button
-            addPaneButton
+            // MARK: - Bottom buttons
+            VStack(spacing: 0) {
+                Rectangle()
+                    .fill(SenkaniTheme.inactiveBorder.opacity(0.3))
+                    .frame(height: 1)
+
+                HStack(spacing: 0) {
+                    addPaneButton
+                    Spacer()
+                    addProjectButton
+                    themeGearButton
+                }
+                .padding(.horizontal, 4)
+            }
         }
         .frame(width: SenkaniTheme.sidebarWidth)
         .background(SenkaniTheme.sidebarBackground)
@@ -57,6 +77,7 @@ struct SidebarView: View {
                 showAnalytics = false
                 showSkills = false
                 showSchedules = false
+                showThemePicker = false
             }
         }
     }
@@ -93,6 +114,82 @@ struct SidebarView: View {
             .background(isActive ? SenkaniTheme.accentAnalytics.opacity(0.1) : Color.clear)
         }
         .buttonStyle(.plain)
+    }
+
+    // MARK: - Project section (collapsible)
+
+    private func projectSection(_ project: ProjectModel) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Project header row
+            Button {
+                workspace.switchToProject(id: project.id)
+                showModels = false; showAnalytics = false; showSkills = false; showSchedules = false; showThemePicker = false
+            } label: {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        // Active indicator
+                        Circle()
+                            .fill(project.isActive ? SenkaniTheme.accentAnalytics : SenkaniTheme.textTertiary.opacity(0.4))
+                            .frame(width: 5, height: 5)
+
+                        Image(systemName: "folder")
+                            .font(.system(size: 10))
+                            .foregroundStyle(project.isActive ? SenkaniTheme.accentAnalytics : SenkaniTheme.textTertiary)
+                            .frame(width: 14)
+
+                        Text(project.name)
+                            .font(.system(size: 11, weight: project.isActive ? .semibold : .regular))
+                            .foregroundStyle(project.isActive ? SenkaniTheme.textPrimary : SenkaniTheme.textSecondary)
+                            .lineLimit(1)
+
+                        Spacer()
+
+                        // Savings badge
+                        if project.totalSavedBytes > 0 {
+                            Text(project.formattedSavings)
+                                .font(.system(size: 8, design: .monospaced))
+                                .foregroundStyle(SenkaniTheme.savingsGreen)
+                        }
+                    }
+
+                    // Usage bar
+                    if project.totalRawBytes > 0 {
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                Rectangle()
+                                    .fill(SenkaniTheme.textTertiary.opacity(0.2))
+                                    .frame(height: 2)
+                                Rectangle()
+                                    .fill(SenkaniTheme.accentAnalytics.opacity(0.6))
+                                    .frame(
+                                        width: geo.size.width * min(project.savingsPercent / 100.0, 1.0),
+                                        height: 2
+                                    )
+                            }
+                        }
+                        .frame(height: 2)
+                        .padding(.leading, 25)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(project.isActive ? SenkaniTheme.accentAnalytics.opacity(0.06) : Color.clear)
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+                Button("Remove Project") {
+                    workspace.removeProject(id: project.id)
+                }
+            }
+
+            // Panes within this project (shown when active)
+            if project.isActive {
+                ForEach(project.panes) { pane in
+                    paneRow(pane)
+                        .padding(.leading, 8) // indent under project
+                }
+            }
+        }
     }
 
     // MARK: - Pane row
@@ -184,6 +281,22 @@ struct SidebarView: View {
             Button("HTML Preview") {
                 workspace.addPane(type: .htmlPreview, title: "HTML")
             }
+            Divider()
+            Button("Skill Library") {
+                workspace.addPane(type: .skillLibrary, title: "Skills")
+            }
+            Button("Knowledge Base") {
+                workspace.addPane(type: .knowledgeBase, title: "Knowledge")
+            }
+            Button("Analytics") {
+                workspace.addPane(type: .analytics, title: "Analytics")
+            }
+            Button("Model Manager") {
+                workspace.addPane(type: .modelManager, title: "Models")
+            }
+            Button("Schedules") {
+                workspace.addPane(type: .scheduleManager, title: "Schedules")
+            }
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: "plus")
@@ -192,12 +305,46 @@ struct SidebarView: View {
                     .font(.system(size: 10))
             }
             .foregroundStyle(SenkaniTheme.textSecondary)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 8)
             .padding(.vertical, 8)
         }
         .menuStyle(.borderlessButton)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(SenkaniTheme.sidebarBackground)
+    }
+
+    // MARK: - Add project
+
+    private var addProjectButton: some View {
+        Button {
+            openFolderPicker()
+        } label: {
+            Image(systemName: "folder.badge.plus")
+                .font(.system(size: 10))
+                .foregroundStyle(SenkaniTheme.textSecondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 8)
+        }
+        .buttonStyle(.plain)
+        .help("Add Project")
+    }
+
+    // MARK: - Theme gear
+
+    private var themeGearButton: some View {
+        Button {
+            showThemePicker.toggle()
+            if showThemePicker {
+                showModels = false; showAnalytics = false; showSkills = false; showSchedules = false
+                workspace.activePaneID = nil
+            }
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 10))
+                .foregroundStyle(showThemePicker ? SenkaniTheme.accentAnalytics : SenkaniTheme.textSecondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 8)
+        }
+        .buttonStyle(.plain)
+        .help("Theme Settings")
     }
 
     // MARK: - Helpers
@@ -208,6 +355,19 @@ struct SidebarView: View {
         case .running: return SenkaniTheme.savingsGreen.opacity(0.5)
         case .exited(0): return SenkaniTheme.accentAnalytics.opacity(0.5)
         case .exited: return .red.opacity(0.6)
+        }
+    }
+
+    private func openFolderPicker() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Select a project directory"
+        panel.prompt = "Add Project"
+
+        if panel.runModal() == .OK, let url = panel.url {
+            workspace.addProject(path: url.path)
         }
     }
 }

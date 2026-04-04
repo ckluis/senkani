@@ -48,6 +48,8 @@ struct PaneContainerView: View {
                 }
             }
         )
+        // Subtle scale for depth: focused 1.0, unfocused 0.995
+        .scaleEffect(isActive ? SenkaniTheme.focusedScale : SenkaniTheme.unfocusedScale)
         .animation(SenkaniTheme.focusAnimation, value: isActive)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -125,6 +127,14 @@ struct PaneContainerView: View {
             MarkdownPreviewView(pane: pane)
         case .htmlPreview:
             HTMLPreviewView(pane: pane)
+        case .skillLibrary:
+            SkillBrowserView()
+        case .knowledgeBase:
+            KnowledgeBaseView()
+        case .modelManager:
+            ModelManagerView()
+        case .scheduleManager:
+            ScheduleView()
         }
     }
 

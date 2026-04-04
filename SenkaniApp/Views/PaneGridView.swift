@@ -11,6 +11,17 @@ struct PaneGridView: View {
     let activePaneID: UUID?
     var workspace: WorkspaceModel?
 
+    /// Custom asymmetric transition for pane entrance/exit.
+    private var paneTransition: AnyTransition {
+        .asymmetric(
+            insertion: .opacity
+                .combined(with: .scale(scale: 0.8, anchor: .trailing))
+                .combined(with: .move(edge: .trailing)),
+            removal: .opacity
+                .combined(with: .scale(scale: 0.8, anchor: .center))
+        )
+    }
+
     var body: some View {
         GeometryReader { geo in
             if panes.isEmpty {
@@ -21,34 +32,47 @@ struct PaneGridView: View {
                     isActive: true,
                     workspace: workspace
                 )
+                .transition(paneTransition)
                 .padding(SenkaniTheme.columnSpacing)
             } else {
-                ScrollView(.horizontal, showsIndicators: true) {
-                    HStack(alignment: .top, spacing: 0) {
-                        ForEach(Array(panes.enumerated()), id: \.element.id) { index, pane in
-                            // Pane column
-                            PaneContainerView(
-                                pane: pane,
-                                isActive: pane.id == activePaneID,
-                                workspace: workspace
-                            )
-                            .frame(width: pane.columnWidth)
-
-                            // Drag handle between columns (not after the last)
-                            if index < panes.count - 1 {
-                                PaneResizeHandle(
-                                    leftPane: pane,
-                                    rightPane: panes[index + 1]
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: true) {
+                        HStack(alignment: .top, spacing: 0) {
+                            ForEach(Array(panes.enumerated()), id: \.element.id) { index, pane in
+                                // Pane column
+                                PaneContainerView(
+                                    pane: pane,
+                                    isActive: pane.id == activePaneID,
+                                    workspace: workspace
                                 )
+                                .frame(width: pane.columnWidth)
+                                .id(pane.id)
+                                .transition(paneTransition)
+
+                                // Drag handle between columns (not after the last)
+                                if index < panes.count - 1 {
+                                    PaneResizeHandle(
+                                        leftPane: pane,
+                                        rightPane: panes[index + 1]
+                                    )
+                                }
+                            }
+                        }
+                        .padding(.horizontal, SenkaniTheme.columnSpacing)
+                        .padding(.vertical, SenkaniTheme.columnSpacing)
+                    }
+                    .scrollIndicators(.visible, axes: .horizontal)
+                    .onTapGesture {
+                        workspace?.activePaneID = nil
+                    }
+                    // Auto-scroll to reveal newly added pane
+                    .onChange(of: activePaneID) { _, newID in
+                        if let newID {
+                            withAnimation(SenkaniTheme.paneEntranceAnimation) {
+                                proxy.scrollTo(newID, anchor: .trailing)
                             }
                         }
                     }
-                    .padding(.horizontal, SenkaniTheme.columnSpacing)
-                    .padding(.vertical, SenkaniTheme.columnSpacing)
-                }
-                .scrollIndicators(.visible, axes: .horizontal)
-                .onTapGesture {
-                    workspace?.activePaneID = nil
                 }
             }
         }

@@ -1,69 +1,83 @@
 import SwiftUI
 
 /// Centralized color palette for Senkani's dark, dense, tool-native UI.
-/// Inspired by Flock's design system. All colors are hardcoded dark theme
-/// defaults; eventually this could load VS Code theme JSON.
+/// All color properties now delegate to `ThemeEngine.shared` so they
+/// respond to live theme changes while keeping the familiar static API.
+/// Layout constants, animations, and helpers remain unchanged.
+@MainActor
 enum SenkaniTheme {
     // MARK: - Backgrounds (darkest to lightest)
 
-    /// App-level background behind everything. #0E0E0E
-    static let appBackground = Color(red: 0.055, green: 0.055, blue: 0.055)
+    /// App-level background behind everything.
+    static var appBackground: Color { ThemeEngine.shared.appBackground }
 
-    /// Pane shell / card background. #1A1A1A
-    static let paneShell = Color(red: 0.102, green: 0.102, blue: 0.102)
+    /// Pane shell / card background.
+    static var paneShell: Color { ThemeEngine.shared.paneShell }
 
-    /// Inset body inside a pane (darker than shell). #131313
-    static let paneBody = Color(red: 0.075, green: 0.075, blue: 0.075)
+    /// Inset body inside a pane (darker than shell).
+    static var paneBody: Color { ThemeEngine.shared.paneBody }
 
-    /// Sidebar background. #111111
-    static let sidebarBackground = Color(red: 0.067, green: 0.067, blue: 0.067)
+    /// Sidebar background.
+    static var sidebarBackground: Color { ThemeEngine.shared.sidebarBackground }
 
-    /// Status bar background. #0C0C0C
-    static let statusBarBackground = Color(red: 0.047, green: 0.047, blue: 0.047)
+    /// Status bar background.
+    static var statusBarBackground: Color { ThemeEngine.shared.statusBarBackground }
 
     // MARK: - Text
 
-    /// Primary text. #E0E0E0
-    static let textPrimary = Color(red: 0.878, green: 0.878, blue: 0.878)
+    /// Primary text.
+    static var textPrimary: Color { ThemeEngine.shared.textPrimary }
 
-    /// Secondary / muted text. #808080
-    static let textSecondary = Color(red: 0.502, green: 0.502, blue: 0.502)
+    /// Secondary / muted text.
+    static var textSecondary: Color { ThemeEngine.shared.textSecondary }
 
-    /// Tertiary / very muted text. #505050
-    static let textTertiary = Color(red: 0.314, green: 0.314, blue: 0.314)
+    /// Tertiary / very muted text.
+    static var textTertiary: Color { ThemeEngine.shared.textTertiary }
 
     // MARK: - Pane type accent colors
 
-    /// Terminal accent. #3FB068
-    static let accentTerminal = Color(red: 0.247, green: 0.690, blue: 0.408)
+    /// Terminal accent (theme ANSI green).
+    static var accentTerminal: Color { ThemeEngine.shared.accentTerminal }
 
-    /// Analytics accent. #4A9EE0
-    static let accentAnalytics = Color(red: 0.290, green: 0.620, blue: 0.878)
+    /// Analytics accent (theme ANSI blue).
+    static var accentAnalytics: Color { ThemeEngine.shared.accentAnalytics }
 
-    /// Preview accent (markdown, HTML). #D4A017
-    static let accentPreview = Color(red: 0.831, green: 0.627, blue: 0.090)
+    /// Preview accent (theme ANSI yellow).
+    static var accentPreview: Color { ThemeEngine.shared.accentPreview }
+
+    /// Skill Library accent (theme ANSI magenta).
+    static var accentSkillLibrary: Color { ThemeEngine.shared.ansiMagenta }
+
+    /// Knowledge Base accent (theme ANSI cyan).
+    static var accentKnowledgeBase: Color { ThemeEngine.shared.ansiCyan }
+
+    /// Model Manager accent (theme ANSI blue).
+    static var accentModelManager: Color { ThemeEngine.shared.ansiBlue }
+
+    /// Schedule Manager accent (theme ANSI blue).
+    static var accentScheduleManager: Color { ThemeEngine.shared.ansiBlue }
 
     // MARK: - Focus / dim
 
     /// Overlay applied to unfocused panes: black at 42% opacity (58% of content visible).
-    static let dimOverlay = Color.black.opacity(0.42)
+    static var dimOverlay: Color { ThemeEngine.shared.dimOverlay }
 
     /// Focused pane border color.
-    static let focusBorder = Color(red: 0.4, green: 0.5, blue: 0.7)
+    static var focusBorder: Color { ThemeEngine.shared.focusBorder }
 
-    /// Unfocused pane border. #2A2A2A
-    static let inactiveBorder = Color(red: 0.165, green: 0.165, blue: 0.165)
+    /// Unfocused pane border.
+    static var inactiveBorder: Color { ThemeEngine.shared.inactiveBorder }
 
     // MARK: - Feature toggle colors
 
-    static let toggleFilter = Color.blue
-    static let toggleCache = Color.green
-    static let toggleSecrets = Color.orange
-    static let toggleIndexer = Color.purple
+    static var toggleFilter: Color { ThemeEngine.shared.toggleFilter }
+    static var toggleCache: Color { ThemeEngine.shared.toggleCache }
+    static var toggleSecrets: Color { ThemeEngine.shared.toggleSecrets }
+    static var toggleIndexer: Color { ThemeEngine.shared.toggleIndexer }
 
     // MARK: - Savings
 
-    static let savingsGreen = Color(red: 0.247, green: 0.690, blue: 0.408)
+    static var savingsGreen: Color { ThemeEngine.shared.savingsGreen }
 
     // MARK: - Layout constants
 
@@ -99,6 +113,18 @@ enum SenkaniTheme {
     /// Standard dim/undim transition.
     static let focusAnimation: Animation = .easeInOut(duration: 0.15)
 
+    /// Pane entrance spring animation.
+    static let paneEntranceAnimation: Animation = .spring(response: 0.4, dampingFraction: 0.8)
+
+    /// Pane exit animation.
+    static let paneExitAnimation: Animation = .easeOut(duration: 0.2)
+
+    /// Scale for focused panes.
+    static let focusedScale: CGFloat = 1.0
+
+    /// Scale for unfocused panes (barely perceptible depth).
+    static let unfocusedScale: CGFloat = 0.995
+
     // MARK: - Helpers
 
     /// Returns the accent color for a given pane type.
@@ -107,6 +133,10 @@ enum SenkaniTheme {
         case .terminal: return accentTerminal
         case .analytics: return accentAnalytics
         case .markdownPreview, .htmlPreview: return accentPreview
+        case .skillLibrary: return accentSkillLibrary
+        case .knowledgeBase: return accentKnowledgeBase
+        case .modelManager: return accentModelManager
+        case .scheduleManager: return accentScheduleManager
         }
     }
 
@@ -117,6 +147,38 @@ enum SenkaniTheme {
         case .analytics: return "chart.bar"
         case .markdownPreview: return "doc.richtext"
         case .htmlPreview: return "globe"
+        case .skillLibrary: return "puzzlepiece.extension"
+        case .knowledgeBase: return "magnifyingglass"
+        case .modelManager: return "brain"
+        case .scheduleManager: return "calendar.badge.clock"
+        }
+    }
+
+    /// Returns a short description for a given pane type.
+    static func description(for type: PaneType) -> String {
+        switch type {
+        case .terminal: return "Run commands and AI agents"
+        case .analytics: return "Charts and cost tracking"
+        case .markdownPreview: return "Live preview .md files"
+        case .htmlPreview: return "Preview web pages"
+        case .skillLibrary: return "Browse your AI skills"
+        case .knowledgeBase: return "Search your AI history"
+        case .modelManager: return "Download and manage ML models"
+        case .scheduleManager: return "View scheduled tasks"
+        }
+    }
+
+    /// Returns a human-readable display name for a given pane type.
+    static func displayName(for type: PaneType) -> String {
+        switch type {
+        case .terminal: return "Terminal"
+        case .analytics: return "Analytics"
+        case .markdownPreview: return "Markdown Preview"
+        case .htmlPreview: return "HTML Preview"
+        case .skillLibrary: return "Skill Library"
+        case .knowledgeBase: return "Knowledge Base"
+        case .modelManager: return "Model Manager"
+        case .scheduleManager: return "Schedules"
         }
     }
 }

@@ -9,6 +9,8 @@ struct ContentView: View {
     @State var showAnalytics = false
     @State var showSkills = false
     @State var showSchedules = false
+    @State var showAddPaneSheet = false
+    @State var showThemePicker = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,7 +21,8 @@ struct ContentView: View {
                     showModels: $showModels,
                     showAnalytics: $showAnalytics,
                     showSkills: $showSkills,
-                    showSchedules: $showSchedules
+                    showSchedules: $showSchedules,
+                    showThemePicker: $showThemePicker
                 )
 
                 // Thin divider between sidebar and canvas
@@ -36,18 +39,27 @@ struct ContentView: View {
         }
         .background(SenkaniTheme.appBackground)
         .frame(minWidth: 800, minHeight: 500)
+        .environment(\.themeEngine, ThemeEngine.shared)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 SessionExportMenuButton(workspace: workspace)
 
                 Button {
-                    addPane(title: "Terminal", command: "/bin/zsh")
+                    showAddPaneSheet = true
                 } label: {
                     Image(systemName: "plus")
                 }
-                .help("New terminal pane (Cmd+N)")
+                .help("Add pane (Cmd+N)")
                 .keyboardShortcut("n")
             }
+        }
+        .sheet(isPresented: $showAddPaneSheet) {
+            AddPaneSheet { type, title, command in
+                addPane(type: type, title: title, command: command)
+            }
+        }
+        .onAppear {
+            ThemeEngine.shared.restoreLastTheme()
         }
         .onDisappear {
             SessionStore.shared.saveSession(workspace: workspace)
@@ -59,36 +71,46 @@ struct ContentView: View {
 
     @ViewBuilder
     private var canvasContent: some View {
-        if showModels {
+        if showThemePicker {
+            ThemePickerView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(.opacity.combined(with: .scale(scale: 0.98)))
+        } else if showModels {
             ModelManagerView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(.opacity.combined(with: .scale(scale: 0.98)))
         } else if showAnalytics {
             AnalyticsView(workspace: workspace)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(.opacity.combined(with: .scale(scale: 0.98)))
         } else if showSkills {
             SkillBrowserView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(.opacity.combined(with: .scale(scale: 0.98)))
         } else if showSchedules {
             ScheduleView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(.opacity.combined(with: .scale(scale: 0.98)))
         } else if workspace.panes.isEmpty {
             WelcomeView { title, command in
-                addPane(title: title, command: command)
+                addPane(type: .terminal, title: title, command: command)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .transition(.opacity.combined(with: .scale(scale: 0.95)))
         } else {
             PaneGridView(
                 panes: workspace.panes,
                 activePaneID: workspace.activePaneID,
                 workspace: workspace
             )
+            .transition(.opacity.combined(with: .scale(scale: 0.95)))
         }
     }
 
     // MARK: - Actions
 
-    private func addPane(title: String, command: String) {
-        workspace.addPane(title: title, command: command)
+    private func addPane(type: PaneType = .terminal, title: String, command: String) {
+        workspace.addPane(type: type, title: title, command: command)
         if let pane = workspace.panes.last {
             sessions.startSession(for: pane)
         }

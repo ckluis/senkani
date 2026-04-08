@@ -1,5 +1,8 @@
+import Foundation
 import MCP
 import Core
+
+private struct ToolTimeoutError: Error {}
 
 enum ToolRouter {
     static func register(on server: Server, session: MCPSession) async {
@@ -13,6 +16,7 @@ enum ToolRouter {
     }
 
     static func route(_ params: CallTool.Parameters, session: MCPSession) async -> CallTool.Result {
+        FileHandle.standardError.write(Data("🟡 TOOL CALL: \(params.name)\n".utf8))
         // SECURITY: Budget enforcement — non-bypassable gate before any tool execution.
         // This is the only routing path, so all tool calls pass through this check.
         let budgetDecision = session.checkBudget()
@@ -56,7 +60,46 @@ enum ToolRouter {
         }
     }
 
+    /// Tool execution timeout in seconds.
+    /// Set higher than ExecTool's 30s+5s process timeout so tools with their own
+    /// timeout mechanisms can clean up before the outer timeout fires.
+    private static let toolTimeoutSeconds: UInt64 = 60
+
     private static func executeRoute(_ params: CallTool.Parameters, session: MCPSession) async -> CallTool.Result {
+        let start = Date()
+        FileHandle.standardError.write(Data("🟡 [TOOL-START] \(params.name) at \(start)\n".utf8))
+
+        let result: CallTool.Result
+        do {
+            result = try await withThrowingTaskGroup(of: CallTool.Result.self) { group in
+                group.addTask {
+                    await dispatchTool(params, session: session)
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: toolTimeoutSeconds * 1_000_000_000)
+                    throw ToolTimeoutError()
+                }
+                // First to complete wins
+                let first = try await group.next()!
+                group.cancelAll()
+                return first
+            }
+        } catch is ToolTimeoutError {
+            let elapsed = Date().timeIntervalSince(start)
+            FileHandle.standardError.write(Data("🔴 [TOOL-TIMEOUT] \(params.name) after \(String(format: "%.1f", elapsed))s\n".utf8))
+            return .init(content: [.text(text: "Tool timed out after \(toolTimeoutSeconds)s: \(params.name)", annotations: nil, _meta: nil)], isError: true)
+        } catch {
+            let elapsed = Date().timeIntervalSince(start)
+            FileHandle.standardError.write(Data("🔴 [TOOL-ERROR] \(params.name) after \(String(format: "%.1f", elapsed))s: \(error)\n".utf8))
+            return .init(content: [.text(text: "Tool error: \(error.localizedDescription)", annotations: nil, _meta: nil)], isError: true)
+        }
+
+        let elapsed = Date().timeIntervalSince(start)
+        FileHandle.standardError.write(Data("🟢 [TOOL-DONE] \(params.name) in \(String(format: "%.2f", elapsed))s\n".utf8))
+        return result
+    }
+
+    private static func dispatchTool(_ params: CallTool.Parameters, session: MCPSession) async -> CallTool.Result {
         switch params.name {
         case "senkani_read":
             return ReadTool.handle(arguments: params.arguments, session: session)
@@ -78,6 +121,8 @@ enum ToolRouter {
             return await EmbedTool.handle(arguments: params.arguments, session: session)
         case "senkani_vision":
             return await VisionTool.handle(arguments: params.arguments, session: session)
+        case "senkani_pane":
+            return PaneControlTool.handle(arguments: params.arguments, session: session)
         default:
             return .init(content: [.text(text: "Unknown tool: \(params.name)", annotations: nil, _meta: nil)], isError: true)
         }
@@ -215,6 +260,23 @@ enum ToolRouter {
                     "required": .array([.string("image")]),
                 ]),
                 annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
+            ),
+            Tool(
+                name: "senkani_pane",
+                description: "Control workspace panes. List, add, remove, or focus panes. Enables orchestration: open browsers for testing, terminals for builds, markdown previews for docs.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "action": .object(["type": .string("string"), "description": .string("Action: 'list', 'add', 'remove', 'set_active'"), "enum": .array([.string("list"), .string("add"), .string("remove"), .string("set_active")])]),
+                        "type": .object(["type": .string("string"), "description": .string("Pane type for 'add': terminal, browser, markdownPreview, htmlPreview, scratchpad, logViewer, diffViewer")]),
+                        "title": .object(["type": .string("string"), "description": .string("Pane title for 'add'")]),
+                        "command": .object(["type": .string("string"), "description": .string("Initial command for terminal panes")]),
+                        "url": .object(["type": .string("string"), "description": .string("URL for browser panes")]),
+                        "pane_id": .object(["type": .string("string"), "description": .string("Pane ID for 'remove' and 'set_active'")]),
+                    ]),
+                    "required": .array([.string("action")]),
+                ]),
+                annotations: .init(readOnlyHint: false, idempotentHint: false, openWorldHint: false)
             ),
         ]
     }

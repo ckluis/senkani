@@ -83,16 +83,34 @@ enum SenkaniTheme {
     // MARK: - Layout constants
 
     /// Default pane column width in the horizontal canvas.
-    static let defaultColumnWidth: CGFloat = 360
+    static let defaultColumnWidth: CGFloat = 300
 
     /// Minimum pane column width.
-    static let minColumnWidth: CGFloat = 280
+    static let minColumnWidth: CGFloat = 220
 
     /// Maximum pane column width.
-    static let maxColumnWidth: CGFloat = 500
+    static let maxColumnWidth: CGFloat = 800
 
-    /// Gap between pane columns.
-    static let columnSpacing: CGFloat = 8
+    /// Minimum pane height.
+    static let minPaneHeight: CGFloat = 120
+
+    /// Active pane accent line height (thicker than default).
+    static let activeAccentLineHeight: CGFloat = 2.5
+
+    /// Resize handle visible width for active pane's right edge.
+    static let resizeHandleWidth: CGFloat = 12
+
+    /// Resize handle invisible hit target width.
+    static let resizeHandleHitWidth: CGFloat = 20
+
+    /// Active pane border width.
+    static let activeBorderWidth: CGFloat = 1.5
+
+    /// Inactive pane border width.
+    static let inactiveBorderWidth: CGFloat = 0.5
+
+    /// Gap between pane columns (also the hit target for resize handles).
+    static let columnSpacing: CGFloat = 4
 
     /// Pane header height.
     static let headerHeight: CGFloat = 24
@@ -103,8 +121,8 @@ enum SenkaniTheme {
     /// Accent line thickness at top of pane.
     static let accentLineHeight: CGFloat = 1.5
 
-    /// Status bar height.
-    static let statusBarHeight: CGFloat = 25
+    /// Status bar height (two-row token display).
+    static let statusBarHeight: CGFloat = 36
 
     /// Sidebar width.
     static let sidebarWidth: CGFloat = 180
@@ -156,6 +174,7 @@ enum SenkaniTheme {
         case .diffViewer: return accentDiffViewer
         case .logViewer: return accentLogViewer
         case .scratchpad: return accentScratchpad
+        case .savingsTest: return savingsGreen
         }
     }
 
@@ -174,6 +193,7 @@ enum SenkaniTheme {
         case .diffViewer: return "arrow.left.arrow.right"
         case .logViewer: return "text.line.last.and.arrowtriangle.forward"
         case .scratchpad: return "note.text"
+        case .savingsTest: return "checkmark.seal"
         }
     }
 
@@ -192,6 +212,7 @@ enum SenkaniTheme {
         case .diffViewer: return "Compare files side by side"
         case .logViewer: return "Tail and filter log files"
         case .scratchpad: return "Quick notes and scratch space"
+        case .savingsTest: return "Benchmark optimization savings"
         }
     }
 
@@ -209,6 +230,7 @@ enum SenkaniTheme {
         case .diffViewer: return "Diff Viewer"
         case .logViewer: return "Log Viewer"
         case .scratchpad: return "Scratchpad"
+        case .savingsTest: return "Savings Test"
         }
     }
 }

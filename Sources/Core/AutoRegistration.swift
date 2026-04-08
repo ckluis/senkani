@@ -1,7 +1,10 @@
 import Foundation
 
 /// Handles first-launch auto-registration of Senkani as an MCP server
-/// and installation of PreToolUse hooks for Claude Code.
+/// in ~/.claude/settings.json.
+///
+/// Does NOT register global hooks. Hooks are activated per-terminal via
+/// the SENKANI_INTERCEPT=on environment variable set in PaneContainerView.
 ///
 /// Every method is idempotent -- safe to call on every launch.
 public enum AutoRegistration {
@@ -9,53 +12,84 @@ public enum AutoRegistration {
     // MARK: - Public API
 
     /// Register Senkani as an MCP server in ~/.claude/settings.json if not already registered.
+    /// Also cleans up hooks from global AND project-level settings (legacy behavior).
     public static func registerIfNeeded() throws {
         let binaryPath = resolveBinaryPath()
         let settingsPath = NSHomeDirectory() + "/.claude/settings.json"
 
         var config = try readJSONOrEmpty(at: settingsPath)
+        var needsWrite = false
 
-        var mcpServers = config["mcpServers"] as? [String: Any] ?? [:]
-
-        // Already registered with correct path -- nothing to do
-        if let existing = mcpServers["senkani"] as? [String: Any],
-           let existingCommand = existing["command"] as? String,
-           existingCommand == binaryPath {
-            return
+        // STEP 1: Remove ALL hooks unconditionally. FIRST. Every launch. No exceptions.
+        // Senkani must never pollute the global Claude Code hook chain.
+        if config["hooks"] != nil {
+            config.removeValue(forKey: "hooks")
+            needsWrite = true
+            logWarning("Removed hooks from global settings.json")
         }
 
-        // SECURITY: Back up before first modification
-        backupIfFirstWrite(path: settingsPath)
+        // Write immediately if hooks were found — don't risk them surviving a crash
+        if needsWrite {
+            try writeJSONAtomically(config, to: settingsPath)
+            needsWrite = false
+        }
 
-        // Register both stdio mode (default) and socket mode (daemon) entries.
-        // Claude Code uses the "senkani" entry; "senkani-daemon" is available
-        // when the daemon is running (clients connect via the Unix socket).
-        mcpServers["senkani"] = [
-            "command": binaryPath,
-            "args": ["--mcp-server"],
-        ] as [String: Any]
+        // STEP 2: Clean project-level hooks in ~/.claude/projects/*/settings.json
+        cleanAllProjectHooks()
 
-        // Socket-based daemon entry -- uses nc to bridge stdio to the Unix socket.
-        // Only useful when the Senkani app (or --socket-server) is running.
-        let socketPath = NSHomeDirectory() + "/.senkani/mcp.sock"
-        mcpServers["senkani-daemon"] = [
-            "command": "/usr/bin/nc",
-            "args": ["-U", socketPath],
-        ] as [String: Any]
+        // Register MCP server entry if needed
+        var mcpServers = config["mcpServers"] as? [String: Any] ?? [:]
+        let mcpRegistered = (mcpServers["senkani"] as? [String: Any])?["command"] as? String == binaryPath
 
-        config["mcpServers"] = mcpServers
+        if !mcpRegistered {
+            backupIfFirstWrite(path: settingsPath)
 
-        try writeJSONAtomically(config, to: settingsPath)
+            mcpServers["senkani"] = [
+                "command": binaryPath,
+                "args": ["--mcp-server"],
+            ] as [String: Any]
+            config["mcpServers"] = mcpServers
+            needsWrite = true
+        }
+
+        // Clean up legacy senkani-daemon entry
+        if mcpServers["senkani-daemon"] != nil {
+            mcpServers.removeValue(forKey: "senkani-daemon")
+            config["mcpServers"] = mcpServers
+            needsWrite = true
+        }
+
+        if needsWrite {
+            try writeJSONAtomically(config, to: settingsPath)
+        }
+    }
+
+    /// Enumerate all project-level settings and remove hooks from each.
+    /// Claude Code reads ~/.claude/projects/<encoded>/settings.json per-project.
+    private static func cleanAllProjectHooks() {
+        let projectsDir = NSHomeDirectory() + "/.claude/projects"
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(atPath: projectsDir) else { return }
+
+        for entry in entries {
+            let settingsPath = projectsDir + "/" + entry + "/settings.json"
+            guard fm.fileExists(atPath: settingsPath) else { continue }
+            guard var config = try? readJSONOrEmpty(at: settingsPath) else { continue }
+
+            if config["hooks"] != nil {
+                config.removeValue(forKey: "hooks")
+                try? writeJSONAtomically(config, to: settingsPath)
+                logWarning("Removed hooks from project settings: \(entry)/settings.json")
+            }
+        }
     }
 
     /// Install the PreToolUse hook script to ~/.senkani/hooks/ for use
     /// inside Senkani's embedded terminals.
     ///
-    /// IMPORTANT: We do NOT register hooks in ~/.claude/settings.json.
-    /// Global hooks would intercept ALL tool calls in ALL projects — a scope
-    /// leak that breaks normal Claude Code usage. Instead, the hooks are
-    /// activated only inside Senkani's spawned terminals via the
-    /// SENKANI_INTERCEPT=on environment variable.
+    /// This writes the script FILE to disk only. It does NOT register
+    /// hooks in ~/.claude/settings.json. Hooks are activated per-terminal
+    /// via SENKANI_INTERCEPT=on set in PaneContainerView's environment.
     public static func installHooksIfNeeded() throws {
         let hookDir = NSHomeDirectory() + "/.senkani/hooks"
         let hookPath = hookDir + "/senkani-intercept.sh"
@@ -88,7 +122,7 @@ public enum AutoRegistration {
 
     /// Resolve the path to the Senkani binary.
     /// Prefers Bundle.main.executablePath for .app bundles, falls back to argv[0].
-    private static func resolveBinaryPath() -> String {
+    public static func resolveBinaryPath() -> String {
         // In a .app bundle, Bundle.main.executablePath points inside Contents/MacOS/
         if let bundlePath = Bundle.main.executablePath,
            bundlePath.contains(".app/") {
@@ -159,7 +193,7 @@ public enum AutoRegistration {
     /// Update this when the embedded script content changes.
     private static let embeddedHookDate: Date = {
         let formatter = ISO8601DateFormatter()
-        return formatter.date(from: "2026-04-03T00:00:00Z") ?? Date.distantPast
+        return formatter.date(from: "2026-04-05T00:00:00Z") ?? Date.distantPast
     }()
 
     /// Write the hook script to disk atomically and set executable permissions (0755).
@@ -225,7 +259,15 @@ public enum AutoRegistration {
 
 # Global kill switches
 [ "${SENKANI_MODE:-}" = "passthrough" ] && echo '{}' && exit 0
-[ "${SENKANI_INTERCEPT:-on}" = "off" ] && echo '{}' && exit 0
+
+# Activation: env var (fast path) OR .mcp.json with senkani entry (fallback).
+# The fallback handles the case where Claude Code doesn't inherit env vars
+# from the terminal shell to hook subprocesses.
+_INTERCEPT="${SENKANI_INTERCEPT:-off}"
+if [ "$_INTERCEPT" != "on" ] && [ -f ".mcp.json" ]; then
+    grep -q '"senkani"' ".mcp.json" 2>/dev/null && _INTERCEPT="on"
+fi
+[ "$_INTERCEPT" != "on" ] && echo '{}' && exit 0
 
 # Check if ANY MCP feature is still on. If all are off, pass through.
 _FILTER="${SENKANI_MCP_FILTER:-on}"

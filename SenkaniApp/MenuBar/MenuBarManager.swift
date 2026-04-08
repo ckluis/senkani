@@ -4,7 +4,7 @@ import MCPServer
 
 /// View model driving the menu bar extra's content.
 /// Polls SessionDatabase.totalStats() on a timer so the menu always shows fresh numbers.
-@Observable
+@MainActor @Observable
 final class MenuBarManager {
     private(set) var stats = LifetimeStats(
         totalSessions: 0, totalCommands: 0,
@@ -38,18 +38,16 @@ final class MenuBarManager {
         return Double(todayCostCents) / Double(limit)
     }
 
-    private var refreshTimer: Timer?
-
     init() {
         refresh()
         // Refresh every 5 seconds so the menu stays reasonably current.
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            self?.refresh()
+        // Task uses [weak self] so it naturally stops when the object deallocates.
+        Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                self?.refresh()
+            }
         }
-    }
-
-    deinit {
-        refreshTimer?.invalidate()
     }
 
     func refresh() {

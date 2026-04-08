@@ -10,6 +10,6 @@ import Foundation
 // Stub kept for compilation compatibility
 @MainActor
 class TerminalPortalManager {
-    nonisolated(unsafe) static let shared = TerminalPortalManager()
+    static let shared = TerminalPortalManager()
     func removePortal(id: UUID) {}
 }

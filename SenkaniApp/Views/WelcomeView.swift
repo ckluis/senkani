@@ -7,6 +7,7 @@ struct WelcomeView: View {
 
     @State private var claudeAvailable: Bool?
     @State private var ollamaAvailable: Bool?
+    @State private var showClaudeLaunch = false
 
     var body: some View {
         VStack(spacing: 24) {
@@ -34,7 +35,7 @@ struct WelcomeView: View {
                     detecting: claudeAvailable == nil,
                     installURL: URL(string: "https://claude.ai/download")
                 ) {
-                    onStart("claude", "claude")
+                    showClaudeLaunch = true
                 }
 
                 AgentCard(
@@ -48,7 +49,7 @@ struct WelcomeView: View {
                     detecting: ollamaAvailable == nil,
                     installURL: URL(string: "https://ollama.com")
                 ) {
-                    onStart("ollama", "ollama run llama3")
+                    onStart("Ollama", "ollama run llama3")
                 }
 
                 AgentCard(
@@ -59,7 +60,7 @@ struct WelcomeView: View {
                     available: true,
                     detecting: false
                 ) {
-                    onStart("shell", "/bin/zsh")
+                    onStart("Terminal", "")
                 }
             }
             .frame(maxWidth: 320)
@@ -69,6 +70,11 @@ struct WelcomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.windowBackgroundColor))
         .task { await detectTools() }
+        .sheet(isPresented: $showClaudeLaunch) {
+            ClaudeLaunchSheet { command in
+                onStart("Claude Code", command)
+            }
+        }
     }
 
     private func detectTools() async {
@@ -79,12 +85,25 @@ struct WelcomeView: View {
         ollamaAvailable = o
     }
 
-    /// Check if a CLI tool is on PATH via `which`.
+    /// Check if a CLI tool exists by searching common paths + PATH via login shell.
     private func detectCLI(_ name: String) async -> Bool {
-        await withCheckedContinuation { continuation in
+        // Check common install locations directly (works even in Xcode sandbox)
+        let commonPaths = [
+            "/usr/local/bin/\(name)",
+            "\(NSHomeDirectory())/.local/bin/\(name)",
+            "\(NSHomeDirectory())/Library/Application Support/Claude/bin/\(name)",
+            "/opt/homebrew/bin/\(name)",
+        ]
+        for path in commonPaths {
+            if FileManager.default.isExecutableFile(atPath: path) {
+                return true
+            }
+        }
+        // Fall back to login shell which to pick up user's PATH
+        return await withCheckedContinuation { continuation in
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-            process.arguments = [name]
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = ["-l", "-c", "which \(name)"]
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice
             do {

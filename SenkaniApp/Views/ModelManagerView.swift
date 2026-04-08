@@ -36,15 +36,15 @@ struct ModelManagerView: View {
                         Divider()
                             .padding(.horizontal, 4)
 
-                        // Vision section
+                        // Vision section — Gemma 4 tiered by RAM
                         modelSection(
                             title: "Vision (Image Understanding)",
                             icon: "eye.circle.fill",
                             color: .purple,
                             explanation: "Analyzes screenshots, diagrams, and UI mockups locally instead of $0.01/image API calls. Useful for design review, bug screenshots, and documentation images.",
                             whyLocal: "Process sensitive screenshots without uploading them. No per-image charges.",
-                            models: manager.models.filter { $0.id == "qwen2-vl-2b" || $0.id == "gemma3-4b" },
-                            recommended: "qwen2-vl-2b"
+                            models: manager.models.filter { ModelManager.visionModelIds.contains($0.id) },
+                            recommended: manager.recommendedVisionModel()?.id ?? "gemma4-e2b"
                         )
                     }
                     .padding(16)
@@ -84,6 +84,15 @@ struct ModelManagerView: View {
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
+
+            // RAM tier badge
+            Text(manager.selectedTierDescription)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.purple)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Color.purple.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 4))
 
             Spacer()
 
@@ -208,9 +217,10 @@ struct ModelManagerView: View {
 
     private func modelComparisonNote(_ id: String) -> String? {
         switch id {
-        case "qwen2-vl-2b": return "Smaller and faster -- good default for most tasks"
-        case "gemma3-4b": return "Higher quality output -- better for detailed analysis"
-        case "minilm-l6": return "Fast and lightweight -- ideal for code search"
+        case "gemma4-26b-apex": return "Frontier-class (APEX quantization) — requires ≥16GB RAM"
+        case "gemma4-e4b": return "Strong quality — requires ≥8GB RAM"
+        case "gemma4-e2b": return "Good quality, small footprint — requires ≥4GB RAM"
+        case "minilm-l6": return "Fast and lightweight — ideal for code search"
         default: return nil
         }
     }
@@ -290,6 +300,16 @@ struct ModelCardView: View {
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
                             .background(Color.orange.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+
+                    if let quant = model.quantMethod {
+                        Text(quant)
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.purple)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.purple.opacity(0.10))
                             .clipShape(RoundedRectangle(cornerRadius: 3))
                     }
                 }

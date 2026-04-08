@@ -1,25 +1,31 @@
 import Foundation
 
-/// Manages the lifecycle of a pane's metrics watcher.
-/// Created when a terminal pane starts, watches JSONL for live updates.
+/// Manages the lifecycle of a pane's session resources.
+/// Starts ClaudeSessionWatcher for terminal panes, handles cleanup on stop.
+/// Metrics are now DB-driven via MetricsRefresher (no more JSONL file watchers).
 final class PaneSession: @unchecked Sendable {
     let pane: PaneModel
-    private var watcher: MetricsWatcher?
 
     init(pane: PaneModel) {
         self.pane = pane
     }
 
     func start() {
-        watcher = MetricsWatcher(path: pane.metricsFilePath, metrics: pane.metrics)
-        watcher?.start()
+        // Start Claude session watcher for terminal panes (tracks exact token usage)
+        if pane.paneType == .terminal {
+            let watcher = ClaudeSessionWatcher(projectRoot: pane.workingDirectory, paneId: pane.id)
+            watcher.start()
+            pane.claudeSessionWatcher = watcher
+        }
     }
 
     func stop() {
-        watcher?.stop()
-        watcher = nil
-        // Clean up metrics file
+        // Stop Claude session watcher
+        pane.claudeSessionWatcher?.stop()
+        pane.claudeSessionWatcher = nil
+        // Clean up metrics file and per-project MCP config
         try? FileManager.default.removeItem(atPath: pane.metricsFilePath)
+        pane.cleanupMCPConfig()
     }
 
     deinit {
@@ -27,7 +33,7 @@ final class PaneSession: @unchecked Sendable {
     }
 }
 
-/// Registry of active pane sessions. Manages watcher lifecycle.
+/// Registry of active pane sessions. Manages session lifecycle.
 @Observable
 final class SessionRegistry {
     private var sessions: [UUID: PaneSession] = [:]

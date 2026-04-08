@@ -31,6 +31,17 @@ public struct LifetimeStats: Sendable {
     }
 }
 
+/// Aggregated token stats for a pane or project.
+public struct PaneTokenStats: Sendable {
+    public let inputTokens: Int
+    public let outputTokens: Int
+    public let savedTokens: Int
+    public let costCents: Int
+    public let commandCount: Int
+
+    public static let zero = PaneTokenStats(inputTokens: 0, outputTokens: 0, savedTokens: 0, costCents: 0, commandCount: 0)
+}
+
 /// Thread-safe SQLite+FTS5 session persistence layer.
 /// Replaces the JSON-file approach with a proper database at
 /// ~/Library/Application Support/Senkani/senkani.db
@@ -58,6 +69,7 @@ public final class SessionDatabase: @unchecked Sendable {
         }
         enableWAL()
         createTables()
+        createTokenEventsTable()
     }
 
     deinit {
@@ -152,6 +164,7 @@ public final class SessionDatabase: @unchecked Sendable {
         // Schema migrations — add columns that may not exist yet.
         let migrations = [
             "ALTER TABLE commands ADD COLUMN budget_decision TEXT;",
+            "ALTER TABLE sessions ADD COLUMN project_root TEXT;",
         ]
         queue.sync {
             for sql in stmts {
@@ -164,21 +177,55 @@ public final class SessionDatabase: @unchecked Sendable {
         }
     }
 
+    // MARK: - Token Events Table
+
+    private func createTokenEventsTable() {
+        queue.sync {
+            exec("""
+                CREATE TABLE IF NOT EXISTS token_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp REAL NOT NULL,
+                    session_id TEXT NOT NULL,
+                    pane_id TEXT,
+                    project_root TEXT,
+                    source TEXT NOT NULL,
+                    tool_name TEXT,
+                    model TEXT,
+                    input_tokens INTEGER DEFAULT 0,
+                    output_tokens INTEGER DEFAULT 0,
+                    saved_tokens INTEGER DEFAULT 0,
+                    cost_cents INTEGER DEFAULT 0,
+                    feature TEXT,
+                    command TEXT
+                );
+            """)
+            execSilent("CREATE INDEX IF NOT EXISTS idx_token_events_pane ON token_events(pane_id);")
+            execSilent("CREATE INDEX IF NOT EXISTS idx_token_events_project ON token_events(project_root);")
+            execSilent("CREATE INDEX IF NOT EXISTS idx_token_events_time ON token_events(timestamp);")
+        }
+    }
+
     // MARK: - Public API
 
     /// Create a new session and return its ID.
     @discardableResult
-    public func createSession(paneCount: Int = 0) -> String {
+    public func createSession(paneCount: Int = 0, projectRoot: String? = nil) -> String {
         let id = UUID().uuidString
+        let normalizedRoot = Self.normalizePath(projectRoot)
         let now = Date().timeIntervalSince1970
         return queue.sync {
-            let sql = "INSERT INTO sessions (id, started_at, pane_count) VALUES (?, ?, ?);"
+            let sql = "INSERT INTO sessions (id, started_at, pane_count, project_root) VALUES (?, ?, ?, ?);"
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return id }
             defer { sqlite3_finalize(stmt) }
             sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, nil)
             sqlite3_bind_double(stmt, 2, now)
             sqlite3_bind_int(stmt, 3, Int32(paneCount))
+            if let root = normalizedRoot {
+                sqlite3_bind_text(stmt, 4, (root as NSString).utf8String, -1, nil)
+            } else {
+                sqlite3_bind_null(stmt, 4)
+            }
             sqlite3_step(stmt)
             return id
         }
@@ -241,7 +288,7 @@ public final class SessionDatabase: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, updateSQL, -1, &updateStmt, nil) == SQLITE_OK else { return }
             defer { sqlite3_finalize(updateStmt) }
             let saved = rawBytes - compressedBytes
-            let costCents = Int(Double(saved) / 4.0 / 1_000_000 * 300)  // cents at $3/M tokens
+            let costCents = ModelPricing.costSavedCents(bytes: saved)
             sqlite3_bind_int64(updateStmt, 1, Int64(rawBytes))
             sqlite3_bind_int64(updateStmt, 2, Int64(saved))
             sqlite3_bind_int(updateStmt, 3, Int32(costCents))
@@ -397,6 +444,258 @@ public final class SessionDatabase: @unchecked Sendable {
         }
     }
 
+    // MARK: - Project Stats (for GUI live polling)
+
+    /// Aggregate stats for a specific project root. Used by the GUI to poll metrics.
+    public func statsForProject(_ projectRoot: String) -> LifetimeStats {
+        return queue.sync {
+            guard let db = db else {
+                return LifetimeStats(totalSessions: 0, totalCommands: 0, totalRawBytes: 0, totalSavedBytes: 0, totalCostSavedCents: 0)
+            }
+            let sql = """
+                SELECT COUNT(*), COALESCE(SUM(command_count),0), COALESCE(SUM(total_raw_bytes),0),
+                       COALESCE(SUM(total_saved_bytes),0), COALESCE(SUM(cost_saved_cents),0)
+                FROM sessions WHERE project_root = ?;
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                return LifetimeStats(totalSessions: 0, totalCommands: 0, totalRawBytes: 0, totalSavedBytes: 0, totalCostSavedCents: 0)
+            }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (projectRoot as NSString).utf8String, -1, nil)
+
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                return LifetimeStats(
+                    totalSessions: Int(sqlite3_column_int(stmt, 0)),
+                    totalCommands: Int(sqlite3_column_int64(stmt, 1)),
+                    totalRawBytes: Int(sqlite3_column_int64(stmt, 2)),
+                    totalSavedBytes: Int(sqlite3_column_int64(stmt, 3)),
+                    totalCostSavedCents: Int(sqlite3_column_int64(stmt, 4))
+                )
+            }
+            return LifetimeStats(totalSessions: 0, totalCommands: 0, totalRawBytes: 0, totalSavedBytes: 0, totalCostSavedCents: 0)
+        }
+    }
+
+    /// Aggregate stats for ALL commands in the database (for per-pane MCP sessions
+    /// that don't yet have project_root tagged). Falls back to lifetime stats.
+    public func recentStats(since: Date) -> LifetimeStats {
+        return queue.sync {
+            guard let db = db else {
+                return LifetimeStats(totalSessions: 0, totalCommands: 0, totalRawBytes: 0, totalSavedBytes: 0, totalCostSavedCents: 0)
+            }
+            let sql = """
+                SELECT COUNT(*), COALESCE(SUM(command_count),0), COALESCE(SUM(total_raw_bytes),0),
+                       COALESCE(SUM(total_saved_bytes),0), COALESCE(SUM(cost_saved_cents),0)
+                FROM sessions WHERE started_at >= ?;
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                return LifetimeStats(totalSessions: 0, totalCommands: 0, totalRawBytes: 0, totalSavedBytes: 0, totalCostSavedCents: 0)
+            }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_double(stmt, 1, since.timeIntervalSince1970)
+
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                return LifetimeStats(
+                    totalSessions: Int(sqlite3_column_int(stmt, 0)),
+                    totalCommands: Int(sqlite3_column_int64(stmt, 1)),
+                    totalRawBytes: Int(sqlite3_column_int64(stmt, 2)),
+                    totalSavedBytes: Int(sqlite3_column_int64(stmt, 3)),
+                    totalCostSavedCents: Int(sqlite3_column_int64(stmt, 4))
+                )
+            }
+            return LifetimeStats(totalSessions: 0, totalCommands: 0, totalRawBytes: 0, totalSavedBytes: 0, totalCostSavedCents: 0)
+        }
+    }
+
+    // MARK: - Path Normalization
+
+    /// Normalize a project root path for consistent DB storage and querying.
+    /// Resolves symlinks, removes trailing slashes, expands tildes.
+    public static func normalizePath(_ raw: String?) -> String? {
+        guard let raw, !raw.isEmpty else { return nil }
+        return URL(fileURLWithPath: raw).standardized.path
+    }
+
+    // MARK: - Token Events API
+
+    /// Record a token event (from MCP tool call or Claude session watcher).
+    public func recordTokenEvent(
+        sessionId: String,
+        paneId: String?,
+        projectRoot: String?,
+        source: String,
+        toolName: String?,
+        model: String?,
+        inputTokens: Int,
+        outputTokens: Int,
+        savedTokens: Int,
+        costCents: Int,
+        feature: String?,
+        command: String?
+    ) {
+        let normalizedRoot = Self.normalizePath(projectRoot)
+        let now = Date().timeIntervalSince1970
+        queue.async { [weak self] in
+            guard let self, let db = self.db else { return }
+            let sql = """
+                INSERT INTO token_events
+                (timestamp, session_id, pane_id, project_root, source, tool_name, model,
+                 input_tokens, output_tokens, saved_tokens, cost_cents, feature, command)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+
+            sqlite3_bind_double(stmt, 1, now)
+            sqlite3_bind_text(stmt, 2, (sessionId as NSString).utf8String, -1, nil)
+            Self.bindOptionalText(stmt, 3, paneId)
+            Self.bindOptionalText(stmt, 4, normalizedRoot)
+            sqlite3_bind_text(stmt, 5, (source as NSString).utf8String, -1, nil)
+            Self.bindOptionalText(stmt, 6, toolName)
+            Self.bindOptionalText(stmt, 7, model)
+            sqlite3_bind_int64(stmt, 8, Int64(inputTokens))
+            sqlite3_bind_int64(stmt, 9, Int64(outputTokens))
+            sqlite3_bind_int64(stmt, 10, Int64(savedTokens))
+            sqlite3_bind_int64(stmt, 11, Int64(costCents))
+            Self.bindOptionalText(stmt, 12, feature)
+            Self.bindOptionalText(stmt, 13, command)
+
+            sqlite3_step(stmt)
+        }
+    }
+
+    /// Aggregate stats for a single pane (footer display).
+    public func statsForPane(_ paneId: String) -> PaneTokenStats {
+        return queue.sync {
+            guard let db = db else { return .zero }
+            let sql = """
+                SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
+                       COALESCE(SUM(saved_tokens),0), COALESCE(SUM(cost_cents),0), COUNT(*)
+                FROM token_events WHERE pane_id = ?
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return .zero }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (paneId as NSString).utf8String, -1, nil)
+
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                return PaneTokenStats(
+                    inputTokens: Int(sqlite3_column_int64(stmt, 0)),
+                    outputTokens: Int(sqlite3_column_int64(stmt, 1)),
+                    savedTokens: Int(sqlite3_column_int64(stmt, 2)),
+                    costCents: Int(sqlite3_column_int64(stmt, 3)),
+                    commandCount: Int(sqlite3_column_int64(stmt, 4))
+                )
+            }
+            return .zero
+        }
+    }
+
+    /// Aggregate stats for a project (sidebar display). Optionally scoped to a start date.
+    public func tokenStatsForProject(_ projectRoot: String, since: Date? = nil) -> PaneTokenStats {
+        let normalized = Self.normalizePath(projectRoot) ?? projectRoot
+        return queue.sync {
+            guard let db = db else { return .zero }
+            let hasSince = since != nil
+            let sql = """
+                SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
+                       COALESCE(SUM(saved_tokens),0), COALESCE(SUM(cost_cents),0), COUNT(*)
+                FROM token_events WHERE project_root = ?\(hasSince ? " AND timestamp >= ?" : "")
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return .zero }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            if let since {
+                sqlite3_bind_double(stmt, 2, since.timeIntervalSince1970)
+            }
+
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                return PaneTokenStats(
+                    inputTokens: Int(sqlite3_column_int64(stmt, 0)),
+                    outputTokens: Int(sqlite3_column_int64(stmt, 1)),
+                    savedTokens: Int(sqlite3_column_int64(stmt, 2)),
+                    costCents: Int(sqlite3_column_int64(stmt, 3)),
+                    commandCount: Int(sqlite3_column_int64(stmt, 4))
+                )
+            }
+            return .zero
+        }
+    }
+
+    /// Aggregate stats across ALL projects (for app-level status bar).
+    public func tokenStatsAllProjects() -> PaneTokenStats {
+        return queue.sync {
+            guard let db = db else { return .zero }
+            let sql = """
+                SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
+                       COALESCE(SUM(saved_tokens),0), COALESCE(SUM(cost_cents),0), COUNT(*)
+                FROM token_events
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return .zero }
+            defer { sqlite3_finalize(stmt) }
+
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                return PaneTokenStats(
+                    inputTokens: Int(sqlite3_column_int64(stmt, 0)),
+                    outputTokens: Int(sqlite3_column_int64(stmt, 1)),
+                    savedTokens: Int(sqlite3_column_int64(stmt, 2)),
+                    costCents: Int(sqlite3_column_int64(stmt, 3)),
+                    commandCount: Int(sqlite3_column_int64(stmt, 4))
+                )
+            }
+            return .zero
+        }
+    }
+
+    // MARK: - Diagnostics
+
+    /// Dump token_events summary to console for debugging.
+    /// Shows per-project row counts and totals.
+    #if DEBUG
+    public func dumpTokenEvents() {
+        queue.sync {
+            guard let db = db else {
+                print("📊 [DB-DUMP] Database not open")
+                return
+            }
+            // Total row count
+            var countStmt: OpaquePointer?
+            if sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM token_events", -1, &countStmt, nil) == SQLITE_OK {
+                if sqlite3_step(countStmt) == SQLITE_ROW {
+                    print("📊 [DB-DUMP] token_events total rows: \(sqlite3_column_int64(countStmt, 0))")
+                }
+            }
+            sqlite3_finalize(countStmt)
+
+            // Per-project breakdown
+            let sql = """
+                SELECT project_root, source, COUNT(*),
+                       COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
+                       COALESCE(SUM(saved_tokens),0)
+                FROM token_events GROUP BY project_root, source ORDER BY COUNT(*) DESC LIMIT 20
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let root = sqlite3_column_type(stmt, 0) == SQLITE_NULL ? "NULL" : String(cString: sqlite3_column_text(stmt, 0))
+                let src = String(cString: sqlite3_column_text(stmt, 1))
+                let count = sqlite3_column_int64(stmt, 2)
+                let inTok = sqlite3_column_int64(stmt, 3)
+                let outTok = sqlite3_column_int64(stmt, 4)
+                let saved = sqlite3_column_int64(stmt, 5)
+                print("📊 [DB-DUMP] root=\(root) src=\(src) rows=\(count) in=\(inTok) out=\(outTok) saved=\(saved)")
+            }
+        }
+    }
+    #endif
+
     // MARK: - Budget Queries
 
     /// Total cost_saved_cents for sessions started today (UTC).
@@ -498,6 +797,14 @@ public final class SessionDatabase: @unchecked Sendable {
 
     // MARK: - Helpers
 
+    private static func bindOptionalText(_ stmt: OpaquePointer?, _ index: Int32, _ value: String?) {
+        if let val = value {
+            sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, nil)
+        } else {
+            sqlite3_bind_null(stmt, index)
+        }
+    }
+
     private func exec(_ sql: String) {
         guard let db = db else { return }
         var err: UnsafeMutablePointer<CChar>?
@@ -547,7 +854,6 @@ public struct SessionSummaryRow: Identifiable, Sendable {
     }
 
     public var estimatedCostSaved: Double {
-        let tokens = Double(totalSaved) / 4.0
-        return (tokens / 1_000_000) * 3.0
+        ModelPricing.costSaved(bytes: totalSaved)
     }
 }

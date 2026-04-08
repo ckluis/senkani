@@ -92,11 +92,21 @@ final class WorkspaceModel {
         }
     }
 
-    func addPane(type: PaneType = .terminal, title: String = "Terminal", command: String = "/bin/zsh", previewFilePath: String = "") {
+    func addPane(type: PaneType = .terminal, title: String = "Terminal", command: String = "", previewFilePath: String = "") {
         ensureDefaultProject()
-        let pane = PaneModel(title: title, paneType: type, shellCommand: command, previewFilePath: previewFilePath)
+        let projectPath = activeProject?.path ?? NSHomeDirectory()
+        let pane = PaneModel(title: title, paneType: type, initialCommand: command, workingDirectory: projectPath, previewFilePath: previewFilePath)
         activeProject?.panes.append(pane)
         activePaneID = pane.id
+    }
+
+    func movePane(id: UUID, toIndex: Int) {
+        guard let project = activeProject,
+              let fromIndex = project.panes.firstIndex(where: { $0.id == id }),
+              fromIndex != toIndex,
+              toIndex >= 0, toIndex < project.panes.count else { return }
+        let pane = project.panes.remove(at: fromIndex)
+        project.panes.insert(pane, at: toIndex)
     }
 
     func removePane(id: UUID) {
@@ -143,10 +153,9 @@ final class WorkspaceModel {
         return "\(bytes)B"
     }
 
-    /// Estimated cost saved: tokens ≈ bytes/4, cost ≈ tokens/1M × $3.00
+    /// Estimated cost saved using the active model's pricing.
     var estimatedCostSaved: String {
-        let tokens = Double(totalSavedBytes) / 4.0
-        let cost = (tokens / 1_000_000) * 3.0
+        let cost = ModelPricing.costSaved(bytes: totalSavedBytes)
         return String(format: "$%.2f saved", cost)
     }
 }

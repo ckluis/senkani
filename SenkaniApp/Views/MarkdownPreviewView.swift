@@ -198,7 +198,7 @@ struct WebViewRepresentable: NSViewRepresentable {
     /// Simple regex-based markdown-to-HTML converter.
     /// Handles: headers, bold, italic, inline code, code blocks, lists, links, blockquotes, hr, paragraphs.
     static func markdownToHTML(_ md: String) -> String {
-        var lines = md.components(separatedBy: "\n")
+        let lines = md.components(separatedBy: "\n")
         var html: [String] = []
         var inCodeBlock = false
         var codeLang = ""
@@ -250,7 +250,7 @@ struct WebViewRepresentable: NSViewRepresentable {
             }
 
             // Headers
-            if let match = trimmed.range(of: #"^(#{1,6})\s+(.+)$"#, options: .regularExpression) {
+            if trimmed.range(of: #"^(#{1,6})\s+(.+)$"#, options: .regularExpression) != nil {
                 closeList()
                 let level = trimmed.prefix(while: { $0 == "#" }).count
                 let text = String(trimmed.dropFirst(level)).trimmingCharacters(in: .whitespaces)
@@ -518,15 +518,14 @@ struct WebViewRepresentable: NSViewRepresentable {
                 guard let self, let webView = self.webView else { return }
                 guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return }
 
-                let html: String
-                switch mode {
-                case .markdown:
-                    html = WebViewRepresentable.wrapMarkdownHTML(content)
-                case .html:
-                    html = WebViewRepresentable.ensureHTMLHead(content)
-                }
-
-                DispatchQueue.main.async {
+                Task { @MainActor in
+                    let html: String
+                    switch mode {
+                    case .markdown:
+                        html = WebViewRepresentable.wrapMarkdownHTML(content)
+                    case .html:
+                        html = WebViewRepresentable.ensureHTMLHead(content)
+                    }
                     webView.loadHTMLString(html, baseURL: URL(fileURLWithPath: (path as NSString).deletingLastPathComponent))
                 }
             }

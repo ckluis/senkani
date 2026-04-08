@@ -105,7 +105,7 @@ public final class SocketServerManager: @unchecked Sendable {
                 let dest = UnsafeMutableRawPointer(sunPath)
                     .assumingMemoryBound(to: CChar.self)
                 buf.baseAddress!.withMemoryRebound(to: CChar.self, capacity: buf.count) { src in
-                    dest.assign(from: src, count: buf.count)
+                    dest.update(from: src, count: buf.count)
                 }
             }
         }

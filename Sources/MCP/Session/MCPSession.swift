@@ -31,6 +31,7 @@ final class MCPSession: @unchecked Sendable {
     let validatorRegistry: ValidatorRegistry
     let metricsFilePath: String?
     let sessionId: String?
+    let paneId: String?
     private let lock = NSLock()
 
     // Feature toggles (mutable at runtime)
@@ -52,7 +53,7 @@ final class MCPSession: @unchecked Sendable {
     init(projectRoot: String, filterEnabled: Bool = true, secretsEnabled: Bool = true,
          indexerEnabled: Bool = true, cacheEnabled: Bool = true,
          readCache: ReadCache? = nil,
-         metricsFilePath: String? = nil, sessionId: String? = nil) {
+         metricsFilePath: String? = nil, sessionId: String? = nil, paneId: String? = nil) {
         self.projectRoot = projectRoot
         self.filterEnabled = filterEnabled
         self.secretsEnabled = secretsEnabled
@@ -61,6 +62,7 @@ final class MCPSession: @unchecked Sendable {
         self.readCache = readCache ?? ReadCache()
         self.metricsFilePath = metricsFilePath
         self.sessionId = sessionId
+        self.paneId = paneId
 
         let config = FeatureConfig(filter: filterEnabled, secrets: secretsEnabled, indexer: indexerEnabled)
         self.pipeline = FilterPipeline(config: config)
@@ -69,8 +71,10 @@ final class MCPSession: @unchecked Sendable {
 
     /// Resolve session config from environment.
     static func resolve() -> MCPSession {
-        let root = ProcessInfo.processInfo.environment["SENKANI_PROJECT_ROOT"]
+        let rawRoot = ProcessInfo.processInfo.environment["SENKANI_PROJECT_ROOT"]
             ?? FileManager.default.currentDirectoryPath
+        // Normalize path for consistent DB storage/querying
+        let root = URL(fileURLWithPath: rawRoot).standardized.path
         let mode = ProcessInfo.processInfo.environment["SENKANI_MODE"]?.lowercased()
         let passthrough = mode == "passthrough"
 
@@ -83,8 +87,15 @@ final class MCPSession: @unchecked Sendable {
             }
         }
 
-        let metricsFile = ProcessInfo.processInfo.environment["SENKANI_METRICS_FILE"]
-        let sessionId: String? = metricsFile != nil ? SessionDatabase.shared.createSession() : nil
+        // Metrics file: explicit env var > fallback derived from project root.
+        // The fallback ensures metrics are always recorded even when Claude Code
+        // doesn't pass SENKANI_METRICS_FILE through to the MCP subprocess.
+        let explicitMetrics = ProcessInfo.processInfo.environment["SENKANI_METRICS_FILE"]
+        let metricsFile = explicitMetrics ?? Self.fallbackMetricsPath(projectRoot: root)
+        let sessionId: String? = SessionDatabase.shared.createSession(projectRoot: root)
+        let paneId = ProcessInfo.processInfo.environment["SENKANI_PANE_ID"]
+
+        FileHandle.standardError.write(Data("🔴 MCPSession.resolve(): rawRoot=\(rawRoot) normalized=\(root) metrics=\(metricsFile) pane=\(paneId ?? "nil") session=\(sessionId ?? "nil")\n".utf8))
 
         return MCPSession(
             projectRoot: root,
@@ -93,8 +104,19 @@ final class MCPSession: @unchecked Sendable {
             indexerEnabled: passthrough ? false : envBool("SENKANI_MCP_INDEX", fallback: true),
             cacheEnabled: passthrough ? false : envBool("SENKANI_MCP_CACHE", fallback: true),
             metricsFilePath: metricsFile,
-            sessionId: sessionId
+            sessionId: sessionId,
+            paneId: paneId
         )
+    }
+
+    /// Derive a deterministic metrics file path from the project root.
+    /// Uses the last two path components for a readable, collision-resistant name.
+    private static func fallbackMetricsPath(projectRoot: String) -> String {
+        let components = projectRoot.split(separator: "/")
+        let name = components.suffix(2).joined(separator: "-")
+        let dir = NSHomeDirectory() + "/.senkani/metrics"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        return dir + "/" + name + ".jsonl"
     }
 
     /// Lazily build or load the symbol index.
@@ -119,12 +141,15 @@ final class MCPSession: @unchecked Sendable {
         perFeatureSaved[feature, default: 0] += (rawBytes - compressedBytes)
         lock.unlock()
 
+        let savedBytes = rawBytes - compressedBytes
+        FileHandle.standardError.write(Data("🟢 RECORD METRICS: raw=\(rawBytes) compressed=\(compressedBytes) saved=\(savedBytes) feature=\(feature) command=\(command ?? "?")\n".utf8))
+
         // JSONL write — matches MetricEntry format expected by MetricsWatcher
         if let path = metricsFilePath {
-            let savedBytes = rawBytes - compressedBytes
             let savingsPercent = rawBytes > 0 ? Double(savedBytes) / Double(rawBytes) * 100.0 : 0.0
             let entry = JSONLMetricEntry(
                 command: command ?? feature,
+                feature: feature,
                 rawBytes: rawBytes,
                 filteredBytes: compressedBytes,
                 savedBytes: savedBytes,
@@ -145,9 +170,14 @@ final class MCPSession: @unchecked Sendable {
                     }
                 }
             }
+            let fSize = (try? FileManager.default.attributesOfItem(atPath: path)[.size]) ?? 0
+            FileHandle.standardError.write(Data("🔵 JSONL WRITE: path=\(path) exists=\(FileManager.default.fileExists(atPath: path)) size=\(fSize)\n".utf8))
+        } else {
+            FileHandle.standardError.write(Data("⛔ METRICS FILE PATH IS NIL — JSONL will NOT be written\n".utf8))
+            FileHandle.standardError.write(Data("⛔ SENKANI_METRICS_FILE env var was not set when the MCP server started\n".utf8))
         }
 
-        // SessionDatabase write
+        // SessionDatabase: write to legacy commands table
         if let sid = sessionId {
             SessionDatabase.shared.recordCommand(
                 sessionId: sid,
@@ -159,6 +189,29 @@ final class MCPSession: @unchecked Sendable {
                 outputPreview: outputPreview
             )
         }
+
+        // token_events: the new single source of truth for the UI
+        let inputTokens = rawBytes / 4
+        let outputTokens = compressedBytes / 4
+        let savedTokens = savedBytes / 4
+        let costCents = Int(Double(savedBytes) / 4.0 / 1_000_000.0 * 300.0)
+
+        FileHandle.standardError.write(Data("💾 [MCP-WRITE] recordTokenEvent: project=\(projectRoot) pane=\(paneId ?? "nil") in=\(inputTokens) out=\(outputTokens) saved=\(savedTokens) feature=\(feature)\n".utf8))
+
+        SessionDatabase.shared.recordTokenEvent(
+            sessionId: sessionId ?? "unknown",
+            paneId: paneId,
+            projectRoot: projectRoot,
+            source: "mcp_tool",
+            toolName: feature,
+            model: nil,
+            inputTokens: inputTokens,
+            outputTokens: outputTokens,
+            savedTokens: savedTokens,
+            costCents: costCents,
+            feature: feature,
+            command: command
+        )
     }
 
     /// Shut down the session, ending the database session record.
@@ -188,7 +241,7 @@ final class MCPSession: @unchecked Sendable {
         let raw = totalRawBytes
         let compressed = totalCompressedBytes
         lock.unlock()
-        let sessionCents = Int(Double(raw - compressed) / 4.0 / 1_000_000 * 300)
+        let sessionCents = ModelPricing.costSavedCents(bytes: raw - compressed)
 
         // Daily and weekly from database
         let todayCents = SessionDatabase.shared.costForToday()
@@ -227,8 +280,8 @@ final class MCPSession: @unchecked Sendable {
 
         let totalSaved = raw - compressed + cacheSaved
         let pct = raw > 0 ? Double(totalSaved) / Double(raw + cacheSaved) * 100 : 0
-        let estTokensSaved = totalSaved / 4  // rough: 1 token ~ 4 bytes
-        let estDollarsSaved = Double(estTokensSaved) / 1_000_000 * 3.0  // ~$3/M input tokens
+        let estTokensSaved = ModelPricing.bytesToTokens(totalSaved)
+        let estDollarsSaved = ModelPricing.costSaved(bytes: totalSaved)
 
         var lines: [String] = []
         lines.append("Senkani MCP Session Stats")
@@ -266,6 +319,7 @@ final class MCPSession: @unchecked Sendable {
 /// which matches the default JSONDecoder in MetricsWatcher.
 private struct JSONLMetricEntry: Codable {
     let command: String
+    let feature: String
     let rawBytes: Int
     let filteredBytes: Int
     let savedBytes: Int

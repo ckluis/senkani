@@ -11,7 +11,7 @@ public enum IndexEngine {
         idx.generated = Date()
 
         // Determine available backends
-        let hasCTags = CTagsBackend.isAvailable()
+        _ = CTagsBackend.isAvailable()
         let usedEngine: String
 
         // Use regex for all languages (most reliable, always available).

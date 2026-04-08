@@ -1,17 +1,16 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Horizontally-scrollable pane canvas with resizable columns.
 ///
-/// Each pane occupies a column whose width the user can drag to resize.
-/// A thin drag handle sits between adjacent columns. The canvas scrolls
-/// freely; the rightmost column extends past the window edge as a scroll
-/// affordance.
+/// Each pane occupies a column whose width the user can drag-resize from
+/// its right edge. The canvas scrolls freely — growing a pane does not
+/// shrink its neighbors.
 struct PaneGridView: View {
     let panes: [PaneModel]
     let activePaneID: UUID?
     var workspace: WorkspaceModel?
 
-    /// Custom asymmetric transition for pane entrance/exit.
     private var paneTransition: AnyTransition {
         .asymmetric(
             insertion: .opacity
@@ -24,45 +23,28 @@ struct PaneGridView: View {
 
     var body: some View {
         GeometryReader { geo in
+            let availableHeight = geo.size.height - SenkaniTheme.columnSpacing * 2
+
             if panes.isEmpty {
                 EmptyView()
-            } else if panes.count == 1 {
-                PaneContainerView(
-                    pane: panes[0],
-                    isActive: true,
-                    workspace: workspace
-                )
-                .transition(paneTransition)
-                .padding(SenkaniTheme.columnSpacing)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView(.horizontal, showsIndicators: true) {
-                        HStack(alignment: .top, spacing: 0) {
+                        HStack(alignment: .top, spacing: SenkaniTheme.columnSpacing) {
                             ForEach(Array(panes.enumerated()), id: \.element.id) { index, pane in
-                                // Pane column
-                                PaneContainerView(
-                                    pane: pane,
+                                paneColumn(
+                                    pane,
                                     isActive: pane.id == activePaneID,
-                                    workspace: workspace
+                                    availableHeight: availableHeight,
+                                    index: index
                                 )
-                                .frame(width: pane.columnWidth)
                                 .id(pane.id)
                                 .transition(paneTransition)
-
-                                // Drag handle between columns (not after the last)
-                                if index < panes.count - 1 {
-                                    PaneResizeHandle(
-                                        leftPane: pane,
-                                        rightPane: panes[index + 1]
-                                    )
-                                }
                             }
                         }
-                        .padding(.horizontal, SenkaniTheme.columnSpacing)
-                        .padding(.vertical, SenkaniTheme.columnSpacing)
+                        .padding(SenkaniTheme.columnSpacing)
                     }
                     .scrollIndicators(.visible, axes: .horizontal)
-                    // Auto-scroll to reveal newly added pane
                     .onChange(of: activePaneID) { _, newID in
                         if let newID {
                             withAnimation(SenkaniTheme.paneEntranceAnimation) {
@@ -75,40 +57,77 @@ struct PaneGridView: View {
         }
         .background(SenkaniTheme.appBackground)
     }
+
+    @ViewBuilder
+    private func paneColumn(_ pane: PaneModel, isActive: Bool, availableHeight: CGFloat, index: Int) -> some View {
+        let height = pane.paneHeight ?? availableHeight
+
+        ZStack(alignment: .trailing) {
+            VStack(spacing: 0) {
+                PaneContainerView(
+                    pane: pane,
+                    isActive: isActive,
+                    workspace: workspace
+                )
+                .frame(height: height)
+
+                Spacer(minLength: 0)
+            }
+
+            // Right-edge resize handle
+            PaneRightEdgeHandle(
+                pane: pane,
+                isActive: isActive,
+                accentColor: SenkaniTheme.accentColor(for: pane.paneType)
+            )
+        }
+        .frame(width: pane.columnWidth, height: availableHeight)
+        .clipped()
+        .animation(nil, value: pane.columnWidth)
+        // Drop target for reordering
+        .onDrop(of: [.text], isTargeted: nil) { providers in
+            guard let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: NSString.self) { string, _ in
+                guard let uuidString = string as? String,
+                      let sourceID = UUID(uuidString: uuidString) else { return }
+                DispatchQueue.main.async {
+                    workspace?.movePane(id: sourceID, toIndex: index)
+                }
+            }
+            return true
+        }
+    }
 }
 
-// MARK: - Resize Handle
+// MARK: - Right Edge Resize Handle
 
-/// A thin vertical drag handle between two pane columns.
-/// Dragging left shrinks the left pane and grows the right; dragging
-/// right does the opposite. Both panes respect `minColumnWidth`.
-private struct PaneResizeHandle: View {
-    let leftPane: PaneModel
-    let rightPane: PaneModel
+/// A right-edge resize handle overlaid on each pane.
+/// Dragging changes only this pane's width — neighbors are unaffected.
+/// The ScrollView handles overflow naturally.
+private struct PaneRightEdgeHandle: View {
+    let pane: PaneModel
+    let isActive: Bool
+    let accentColor: Color
 
     @State private var isDragging = false
-    /// Snapshot of column widths at the start of each drag so we can apply
-    /// the cumulative DragGesture translation correctly.
-    @State private var startLeftWidth: CGFloat = 0
-    @State private var startRightWidth: CGFloat = 0
-
-    private let handleWidth: CGFloat = SenkaniTheme.columnSpacing
-    private let hitTargetWidth: CGFloat = 12  // wider invisible hit area
+    @State private var startWidth: CGFloat = 0
 
     var body: some View {
-        ZStack {
-            // Visible line
-            Rectangle()
-                .fill(isDragging ? SenkaniTheme.focusBorder : SenkaniTheme.inactiveBorder)
-                .frame(width: 1)
-                .animation(SenkaniTheme.focusAnimation, value: isDragging)
-
-            // Invisible wider hit target
+        ZStack(alignment: .trailing) {
+            // Invisible hit target
             Color.clear
-                .frame(width: hitTargetWidth)
+                .frame(width: SenkaniTheme.resizeHandleHitWidth)
                 .contentShape(Rectangle())
+
+            // Visible accent bar — shown for active pane or while dragging
+            if isActive || isDragging {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(accentColor.opacity(isDragging ? 0.7 : 0.3))
+                    .frame(width: SenkaniTheme.resizeHandleWidth)
+                    .padding(.vertical, 32)
+            }
         }
-        .frame(width: handleWidth)
+        .frame(width: SenkaniTheme.resizeHandleHitWidth)
         .onHover { hovering in
             if hovering {
                 NSCursor.resizeLeftRight.push()
@@ -120,21 +139,18 @@ private struct PaneResizeHandle: View {
             DragGesture(minimumDistance: 1)
                 .onChanged { value in
                     if !isDragging {
-                        // Snapshot the starting widths on drag start
-                        startLeftWidth = leftPane.columnWidth
-                        startRightWidth = rightPane.columnWidth
+                        startWidth = pane.columnWidth
                         isDragging = true
                     }
-                    let delta = value.translation.width
-
-                    let newLeftWidth = startLeftWidth + delta
-                    let newRightWidth = startRightWidth - delta
-
-                    // Enforce minimum widths
-                    if newLeftWidth >= SenkaniTheme.minColumnWidth &&
-                       newRightWidth >= SenkaniTheme.minColumnWidth {
-                        leftPane.columnWidth = newLeftWidth
-                        rightPane.columnWidth = newRightWidth
+                    let newWidth = max(
+                        SenkaniTheme.minColumnWidth,
+                        min(SenkaniTheme.maxColumnWidth, startWidth + value.translation.width)
+                    )
+                    // Disable animations during drag to prevent jank
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        pane.columnWidth = newWidth
                     }
                 }
                 .onEnded { _ in

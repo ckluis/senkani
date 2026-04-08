@@ -181,7 +181,7 @@ extension BudgetConfig {
             }
 
             // SECURITY: Validate JSON structure before decoding
-            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            guard (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) != nil else {
                 logWarning("Budget file is not valid JSON object, ignoring: \(path)")
                 return loadFromEnv()
             }

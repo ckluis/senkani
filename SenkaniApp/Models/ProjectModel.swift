@@ -49,6 +49,26 @@ final class ProjectModel: Identifiable {
         panes.reduce(0) { $0 + $1.metrics.commandCount }
     }
 
+    /// Number of panes currently running a process.
+    var runningPaneCount: Int {
+        panes.filter { $0.processState.isRunning }.count
+    }
+
+    /// Total secrets caught across all panes.
+    var totalSecretsCaught: Int {
+        panes.reduce(0) { $0 + $1.metrics.secretsCaught }
+    }
+
+    /// Estimated cost saved using the active model's pricing.
+    var estimatedCostSaved: Double {
+        ModelPricing.costSaved(bytes: totalSavedBytes)
+    }
+
+    /// Formatted cost saved string.
+    var formattedCostSaved: String {
+        ModelPricing.formatCost(estimatedCostSaved)
+    }
+
     /// Redacted path safe for logging/display (replaces username with ~).
     var redactedPath: String {
         ProjectSecurity.redactPath(path)

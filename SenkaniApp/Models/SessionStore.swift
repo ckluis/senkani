@@ -32,8 +32,7 @@ struct SessionSummaryRecord: Codable, Identifiable {
     }
 
     var estimatedCostSaved: Double {
-        let tokens = Double(totalSaved) / 4.0
-        return (tokens / 1_000_000) * 3.0
+        ModelPricing.costSaved(bytes: totalSaved)
     }
 
     /// Create from a database row.
@@ -114,8 +113,9 @@ final class SessionStore {
         let duration = now.timeIntervalSince(workspace.sessionStart)
         let totalCommands = workspace.panes.reduce(0) { $0 + $1.metrics.commandCount }
 
-        // Create a session in the database
-        let sessionId = database.createSession(paneCount: workspace.panes.count)
+        // Create a session in the database, tagged with the active project's path
+        let activeProjectRoot = workspace.projects.first(where: { $0.isActive })?.path
+        let sessionId = database.createSession(paneCount: workspace.panes.count, projectRoot: activeProjectRoot)
 
         // Record all command-level data from each pane's breakdown
         for pane in workspace.panes {
@@ -147,8 +147,8 @@ final class SessionStore {
     }
 
     /// Begin tracking a live session — call on app launch.
-    func beginLiveSession(paneCount: Int) {
-        activeSessionId = database.createSession(paneCount: paneCount)
+    func beginLiveSession(paneCount: Int, projectRoot: String? = nil) {
+        activeSessionId = database.createSession(paneCount: paneCount, projectRoot: projectRoot)
     }
 
     /// Record a command into the active session.
@@ -238,8 +238,7 @@ final class SessionStore {
             )
         }
 
-        let tokens = Double(workspace.totalSavedBytes) / 4.0
-        let costSaved = (tokens / 1_000_000) * 3.0
+        let costSaved = ModelPricing.costSaved(bytes: workspace.totalSavedBytes)
 
         let export = ExportData(
             timestamp: now,
@@ -267,8 +266,7 @@ final class SessionStore {
         let hours = Int(duration) / 3600
         let minutes = (Int(duration) % 3600) / 60
 
-        let tokens = Double(workspace.totalSavedBytes) / 4.0
-        let costSaved = (tokens / 1_000_000) * 3.0
+        let costSaved = ModelPricing.costSaved(bytes: workspace.totalSavedBytes)
         let totalCommands = workspace.panes.reduce(0) { $0 + $1.metrics.commandCount }
 
         var lines: [String] = []

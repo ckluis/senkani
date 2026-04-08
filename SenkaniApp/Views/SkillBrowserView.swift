@@ -42,12 +42,14 @@ struct SkillBrowserView: View {
                         Divider()
                         skillList
                     }
-                    .frame(minWidth: 240, idealWidth: 280, maxWidth: 350)
+                    .frame(minWidth: 200, idealWidth: 240, maxWidth: 300)
 
-                    // Right: detail
+                    // Right: detail — constrained to prevent overflow
                     skillDetailPane
-                        .frame(minWidth: 400)
+                        .frame(minWidth: 200, maxWidth: .infinity)
+                        .clipped()
                 }
+                .clipped()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

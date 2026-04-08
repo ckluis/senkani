@@ -30,7 +30,7 @@ struct AddPaneSheet: View {
                 icon: SenkaniTheme.iconName(for: .terminal),
                 accent: SenkaniTheme.accentColor(for: .terminal),
                 defaultTitle: "Terminal",
-                defaultCommand: "/bin/zsh"
+                defaultCommand: ""
             ),
             PaneEntry(
                 id: .markdownPreview, type: .markdownPreview,
@@ -93,6 +93,51 @@ struct AddPaneSheet: View {
                 icon: SenkaniTheme.iconName(for: .scheduleManager),
                 accent: SenkaniTheme.accentColor(for: .scheduleManager),
                 defaultTitle: "Schedules",
+                defaultCommand: ""
+            ),
+            PaneEntry(
+                id: .browser, type: .browser,
+                name: "Browser",
+                description: "Browse URLs and localhost",
+                icon: SenkaniTheme.iconName(for: .browser),
+                accent: SenkaniTheme.accentColor(for: .browser),
+                defaultTitle: "Browser",
+                defaultCommand: ""
+            ),
+            PaneEntry(
+                id: .diffViewer, type: .diffViewer,
+                name: "Diff Viewer",
+                description: "Compare files side by side",
+                icon: SenkaniTheme.iconName(for: .diffViewer),
+                accent: SenkaniTheme.accentColor(for: .diffViewer),
+                defaultTitle: "Diff",
+                defaultCommand: ""
+            ),
+            PaneEntry(
+                id: .logViewer, type: .logViewer,
+                name: "Log Viewer",
+                description: "Tail and filter log files",
+                icon: SenkaniTheme.iconName(for: .logViewer),
+                accent: SenkaniTheme.accentColor(for: .logViewer),
+                defaultTitle: "Log",
+                defaultCommand: ""
+            ),
+            PaneEntry(
+                id: .scratchpad, type: .scratchpad,
+                name: "Scratchpad",
+                description: "Quick notes and scratch space",
+                icon: SenkaniTheme.iconName(for: .scratchpad),
+                accent: SenkaniTheme.accentColor(for: .scratchpad),
+                defaultTitle: "Notes",
+                defaultCommand: ""
+            ),
+            PaneEntry(
+                id: .savingsTest, type: .savingsTest,
+                name: "Savings Test",
+                description: "Benchmark optimization savings",
+                icon: SenkaniTheme.iconName(for: .savingsTest),
+                accent: SenkaniTheme.accentColor(for: .savingsTest),
+                defaultTitle: "Savings Test",
                 defaultCommand: ""
             ),
         ]

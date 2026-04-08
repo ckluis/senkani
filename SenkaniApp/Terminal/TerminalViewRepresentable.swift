@@ -19,10 +19,10 @@ class FocusableTerminalView: NSView {
 
     // Deferred shell start — set in makeNSView, executed in viewDidMoveToWindow
     struct ShellConfig {
-        let path: String       // Always an absolute path (e.g. /bin/zsh)
-        let args: [String]     // e.g. ["-c", "claude"] for non-shell commands
+        let path: String            // Always /bin/zsh
         let environment: [String]
         let workingDirectory: String
+        let initialCommand: String  // Command to auto-type after shell starts (empty = plain shell)
     }
     var shellConfig: ShellConfig?
     private var processStarted = false
@@ -67,33 +67,27 @@ class FocusableTerminalView: NSView {
         // Ensure terminal has our dimensions before starting
         tv.setFrameSize(bounds.size)
 
-        let execName = config.args.isEmpty
-            ? "-" + (config.path as NSString).lastPathComponent  // login shell
-            : (config.path as NSString).lastPathComponent
-
+        // Always start /bin/zsh as a login shell
         tv.startProcess(
             executable: config.path,
-            args: config.args,
+            args: [],
             environment: config.environment,
-            execName: execName,
+            execName: "-zsh",  // leading dash = login shell
             currentDirectory: config.workingDirectory
         )
 
-        // Give terminal keyboard focus
-        let frResult = win.makeFirstResponder(tv)
+        // If there's an initial command, send it after the shell profile loads
+        if !config.initialCommand.isEmpty {
+            let cmd = config.initialCommand
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak tv] in
+                tv?.send(txt: cmd + "\n")
+            }
+        }
 
-        // Diagnostics
-        print("[TERM] PROCESS STARTED: executable=\(config.path) args=\(config.args)")
-        print("[TERM] terminal frame=\(tv.frame) bounds=\(tv.bounds)")
-        print("[TERM] terminal rows=\(tv.getTerminal().rows) cols=\(tv.getTerminal().cols)")
-        print("[TERM] terminal fgColor=\(tv.nativeForegroundColor) bgColor=\(tv.nativeBackgroundColor)")
-        print("[TERM] terminal font=\(String(describing: tv.font))")
-        print("[TERM] makeFirstResponder result=\(frResult)")
-        print("[TERM] window.firstResponder=\(String(describing: win.firstResponder))")
-        print("[TERM] terminal.acceptsFirstResponder=\(tv.acceptsFirstResponder)")
-        print("[TERM] terminal isHidden=\(tv.isHidden) alphaValue=\(tv.alphaValue)")
-        print("[TERM] terminal superview=\(String(describing: tv.superview))")
-        print("[TERM] container superview=\(String(describing: self.superview))")
+        // Give terminal keyboard focus
+        win.makeFirstResponder(tv)
+
+        print("[TERM] STARTED: shell=\(config.path) initialCommand=\(config.initialCommand) bounds=\(bounds)")
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -121,7 +115,7 @@ class FocusableTerminalView: NSView {
 
 struct TerminalViewRepresentable: NSViewRepresentable {
     let paneId: UUID
-    let shellPath: String
+    let initialCommand: String
     let environment: [String: String]
     let workingDirectory: String
     let isActive: Bool
@@ -129,14 +123,14 @@ struct TerminalViewRepresentable: NSViewRepresentable {
     let onActivate: (() -> Void)?
 
     init(paneId: UUID = UUID(),
-         shellPath: String = "/bin/zsh",
+         initialCommand: String = "",
          environment: [String: String] = [:],
          workingDirectory: String = NSHomeDirectory(),
          isActive: Bool = true,
          onProcessExited: ((Int32) -> Void)? = nil,
          onActivate: (() -> Void)? = nil) {
         self.paneId = paneId
-        self.shellPath = shellPath
+        self.initialCommand = initialCommand
         self.environment = environment
         self.workingDirectory = workingDirectory
         self.isActive = isActive
@@ -179,31 +173,12 @@ struct TerminalViewRepresentable: NSViewRepresentable {
             env[key] = value
         }
         env["TERM"] = "xterm-256color"
-        let envArray = env.map { "\($0.key)=\($0.value)" }
-
-        // Determine executable path and args.
-        // SwiftTerm's startProcess needs an absolute path — it doesn't search PATH.
-        // For shell paths like "/bin/zsh", run directly as a login shell.
-        // For commands like "claude" or "ollama run llama3", run via /bin/zsh -c.
-        let command = shellPath.isEmpty ? "/bin/zsh" : shellPath
-        let shellExe: String
-        let shellArgs: [String]
-
-        if command.hasPrefix("/") {
-            // Absolute path — run directly (login shell)
-            shellExe = command
-            shellArgs = []
-        } else {
-            // Non-absolute command — run through shell so PATH is searched
-            shellExe = "/bin/zsh"
-            shellArgs = ["-c", "exec \(command)"]
-        }
 
         container.shellConfig = FocusableTerminalView.ShellConfig(
-            path: shellExe,
-            args: shellArgs,
-            environment: envArray,
-            workingDirectory: workingDirectory
+            path: "/bin/zsh",
+            environment: env.map { "\($0.key)=\($0.value)" },
+            workingDirectory: workingDirectory,
+            initialCommand: initialCommand
         )
 
         return container
@@ -222,7 +197,7 @@ struct TerminalViewRepresentable: NSViewRepresentable {
         Coordinator(onProcessExited: onProcessExited)
     }
 
-    class Coordinator: NSObject, @preconcurrency LocalProcessTerminalViewDelegate {
+    class Coordinator: NSObject, LocalProcessTerminalViewDelegate {
         let onProcessExited: ((Int32) -> Void)?
 
         init(onProcessExited: ((Int32) -> Void)?) {

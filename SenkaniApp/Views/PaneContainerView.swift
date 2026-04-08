@@ -1,21 +1,23 @@
 import SwiftUI
 
 /// Wraps a pane with a minimal, premium shell: thin accent line, compact 24px header,
-/// status dot, contextual info, and an 18px inline savings footer.
+/// status dot, contextual info, and FCSIT toggles.
 /// No dim overlay — focus is communicated through border color only.
+/// Token metrics are in the app-level StatusBarView, not per-pane.
 struct PaneContainerView: View {
     @Bindable var pane: PaneModel
     let isActive: Bool
     var workspace: WorkspaceModel?
+    @State private var showSettings = false
 
     var body: some View {
         VStack(spacing: 0) {
-            // 1.5px accent line at the very top, colored by pane type
+            // Accent line — thicker when active
             Rectangle()
                 .fill(accentColor.opacity(isActive ? 1.0 : 0.5))
-                .frame(height: SenkaniTheme.accentLineHeight)
+                .frame(height: isActive ? SenkaniTheme.activeAccentLineHeight : SenkaniTheme.accentLineHeight)
 
-            // 24px header: status dot + type label + context + close
+            // 24px header: status dot + title + FCSIT + gear + close
             paneHeader
 
             // 0.5px separator
@@ -23,25 +25,41 @@ struct PaneContainerView: View {
                 .fill(SenkaniTheme.appBackground)
                 .frame(height: 0.5)
 
-            // Body content
-            paneBody
-                .background(SenkaniTheme.paneBody)
+            // Body content (with settings overlay)
+            ZStack {
+                paneBody
+                    .background(SenkaniTheme.paneBody)
+                    .clipped()
 
-            // 18px compact savings footer
-            SavingsBarView(pane: pane)
+                if showSettings {
+                    PaneSettingsPanel(pane: pane, isPresented: $showSettings)
+                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                }
+            }
+            .animation(.easeInOut(duration: 0.15), value: showSettings)
+
+            // No per-pane footer — token metrics live in the app-level status bar
         }
         .background(SenkaniTheme.paneShell)
         .cornerRadius(SenkaniTheme.paneCornerRadius)
         .overlay(
             RoundedRectangle(cornerRadius: SenkaniTheme.paneCornerRadius)
                 .stroke(
-                    isActive ? accentColor.opacity(0.8) : SenkaniTheme.inactiveBorder,
-                    lineWidth: isActive ? 1.0 : 0.5
+                    isActive ? accentColor : SenkaniTheme.inactiveBorder,
+                    lineWidth: isActive ? SenkaniTheme.activeBorderWidth : SenkaniTheme.inactiveBorderWidth
                 )
                 .allowsHitTesting(false)
         )
-        // No dim overlay — it blocks child window terminal content.
-        // Focus state is communicated by accent line brightness and border color.
+        // Drop shadow on active pane for depth
+        .shadow(
+            color: isActive ? accentColor.opacity(0.25) : .clear,
+            radius: isActive ? 8 : 0
+        )
+        // Click anywhere to activate
+        .contentShape(Rectangle())
+        .onTapGesture {
+            workspace?.activePaneID = pane.id
+        }
         .animation(SenkaniTheme.focusAnimation, value: isActive)
     }
 
@@ -84,6 +102,28 @@ struct PaneContainerView: View {
                     .help("\(pane.metrics.secretsCaught) secret(s) redacted")
             }
 
+            // FCSIT feature toggles
+            HStack(spacing: 4) {
+                FeatureToggleCompact(label: "F", isOn: $pane.features.filter, color: SenkaniTheme.toggleFilter)
+                FeatureToggleCompact(label: "C", isOn: $pane.features.cache, color: SenkaniTheme.toggleCache)
+                FeatureToggleCompact(label: "S", isOn: $pane.features.secrets, color: SenkaniTheme.toggleSecrets)
+                FeatureToggleCompact(label: "I", isOn: $pane.features.indexer, color: SenkaniTheme.toggleIndexer)
+                FeatureToggleCompact(label: "T", isOn: $pane.features.terse, color: SenkaniTheme.toggleTerse)
+            }
+
+            // Gear icon → settings panel
+            Button {
+                showSettings.toggle()
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 9))
+                    .foregroundStyle(showSettings ? SenkaniTheme.textPrimary : SenkaniTheme.textTertiary)
+                    .frame(width: 14, height: 14)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Pane settings")
+
             // Close button
             Button {
                 workspace?.removePane(id: pane.id)
@@ -99,7 +139,10 @@ struct PaneContainerView: View {
         }
         .padding(.horizontal, 8)
         .frame(height: SenkaniTheme.headerHeight)
-        .background(SenkaniTheme.paneShell)
+        .background(isActive ? accentColor.opacity(0.08) : SenkaniTheme.paneShell)
+        .onDrag {
+            NSItemProvider(object: pane.id.uuidString as NSString)
+        }
     }
 
     // MARK: - Body
@@ -110,12 +153,15 @@ struct PaneContainerView: View {
         case .terminal:
             TerminalViewRepresentable(
                 paneId: pane.id,
-                shellPath: pane.shellCommand,
+                initialCommand: pane.initialCommand,
                 environment: pane.features.environmentVars.merging([
                     "SENKANI_METRICS_FILE": pane.metricsFilePath,
                     "SENKANI_CONFIG_FILE": pane.configFilePath,
+                    "SENKANI_INTERCEPT": "on",
+                    "SENKANI_PROJECT_ROOT": pane.workingDirectory,
+                    "SENKANI_PANE_ID": pane.id.uuidString,
                 ]) { _, new in new },
-                workingDirectory: NSHomeDirectory(),
+                workingDirectory: pane.workingDirectory,
                 isActive: isActive,
                 onProcessExited: { code in
                     pane.processState = .exited(code)
@@ -154,6 +200,8 @@ struct PaneContainerView: View {
             LogViewerPane(pane: pane)
         case .scratchpad:
             ScratchpadPane(pane: pane)
+        case .savingsTest:
+            SavingsTestPlaceholderView()
         }
     }
 
@@ -193,6 +241,8 @@ struct PaneContainerView: View {
             return "log"
         case .scratchpad:
             return "notes"
+        case .savingsTest:
+            return "test suite"
         }
     }
 
@@ -204,6 +254,7 @@ struct PaneContainerView: View {
         case .exited: return .red
         }
     }
+
 }
 
 struct AnalyticsPlaceholderView: View {
@@ -225,6 +276,25 @@ struct AnalyticsPlaceholderView: View {
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(SenkaniTheme.savingsGreen)
             }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(SenkaniTheme.paneBody)
+    }
+}
+
+struct SavingsTestPlaceholderView: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "checkmark.seal")
+                .font(.system(size: 36))
+                .foregroundStyle(SenkaniTheme.savingsGreen)
+            Text("Token Savings Test Suite")
+                .font(.headline)
+                .foregroundStyle(SenkaniTheme.textPrimary)
+            Text("Benchmark all optimizations against known baselines.\nImplementation coming soon.")
+                .font(.caption)
+                .foregroundStyle(SenkaniTheme.textSecondary)
+                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(SenkaniTheme.paneBody)

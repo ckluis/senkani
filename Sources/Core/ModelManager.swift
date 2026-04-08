@@ -19,6 +19,8 @@ public struct ModelInfo: Codable, Sendable, Identifiable {
     public let name: String
     public let repoId: String          // HuggingFace repo, e.g. "sentence-transformers/all-MiniLM-L6-v2"
     public let expectedSizeBytes: Int64
+    public let requiredRAM: Int        // GB minimum to run this model
+    public let quantMethod: String?    // e.g. "APEX Mini", "Q4", nil for embeddings
     public var status: ModelStatus
     public var downloadProgress: Double // 0.0 ..< 1.0
     public var downloadedAt: Date?
@@ -33,6 +35,8 @@ public struct ModelInfo: Codable, Sendable, Identifiable {
         name: String,
         repoId: String,
         expectedSizeBytes: Int64,
+        requiredRAM: Int = 1,
+        quantMethod: String? = nil,
         status: ModelStatus = .available,
         downloadProgress: Double = 0,
         downloadedAt: Date? = nil,
@@ -43,6 +47,8 @@ public struct ModelInfo: Codable, Sendable, Identifiable {
         self.name = name
         self.repoId = repoId
         self.expectedSizeBytes = expectedSizeBytes
+        self.requiredRAM = requiredRAM
+        self.quantMethod = quantMethod
         self.status = status
         self.downloadProgress = downloadProgress
         self.downloadedAt = downloadedAt
@@ -141,25 +147,72 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
     // MARK: - Default Registry
 
     private static let defaultRegistry: [ModelInfo] = [
+        // Primary: Gemma 4 — tier auto-selected by available RAM
+        ModelInfo(
+            id: "gemma4-26b-apex",
+            name: "Gemma 4 26B MoE (APEX Mini)",
+            repoId: "mudler/gemma-4-26B-A4B-it-APEX-GGUF",
+            expectedSizeBytes: 12_200_000_000,  // ~12GB
+            requiredRAM: 16,
+            quantMethod: "APEX Mini"
+        ),
+        ModelInfo(
+            id: "gemma4-e4b",
+            name: "Gemma 4 E4B (Q4)",
+            repoId: "unsloth/gemma-4-E4B-it-UD-MLX-4bit",
+            expectedSizeBytes: 2_500_000_000,   // ~2.5GB
+            requiredRAM: 8,
+            quantMethod: "Q4"
+        ),
+        ModelInfo(
+            id: "gemma4-e2b",
+            name: "Gemma 4 E2B (Q4)",
+            repoId: "unsloth/gemma-4-E2B-it-GGUF",
+            expectedSizeBytes: 1_500_000_000,   // ~1.5GB
+            requiredRAM: 4,
+            quantMethod: "Q4"
+        ),
+        // Secondary: embeddings (always downloaded, tiny)
         ModelInfo(
             id: "minilm-l6",
             name: "MiniLM-L6 Embeddings",
             repoId: "sentence-transformers/all-MiniLM-L6-v2",
-            expectedSizeBytes: 90_000_000   // ~90MB
-        ),
-        ModelInfo(
-            id: "qwen2-vl-2b",
-            name: "Qwen2-VL 2B Vision",
-            repoId: "mlx-community/Qwen2-VL-2B-Instruct-4bit",
-            expectedSizeBytes: 1_500_000_000  // ~1.5GB
-        ),
-        ModelInfo(
-            id: "gemma3-4b",
-            name: "Gemma 3 4B Vision",
-            repoId: "mlx-community/gemma-3-4b-it-qat-4bit",
-            expectedSizeBytes: 2_500_000_000  // ~2.5GB (4-bit QAT quantized)
+            expectedSizeBytes: 90_000_000,      // ~90MB
+            requiredRAM: 1
         ),
     ]
+
+    // MARK: - RAM Detection & Auto-Selection
+
+    /// Available system RAM in GB.
+    public static var availableRAMGB: Int {
+        Int(ProcessInfo.processInfo.physicalMemory / 1_073_741_824)
+    }
+
+    /// Recommend the best vision/generative model for this machine's RAM.
+    /// Returns the highest-quality Gemma 4 tier that fits.
+    public func recommendedVisionModel() -> ModelInfo? {
+        let ram = Self.availableRAMGB
+        lock.lock()
+        let visionModels = _models.filter { $0.id.hasPrefix("gemma4") }
+        lock.unlock()
+        // Pick the best tier that fits in available RAM (sorted by requiredRAM descending)
+        return visionModels
+            .sorted { $0.requiredRAM > $1.requiredRAM }
+            .first { $0.requiredRAM <= ram }
+    }
+
+    /// Human-readable description of the auto-selected tier.
+    public var selectedTierDescription: String {
+        guard let model = recommendedVisionModel() else {
+            return "No compatible model (need ≥4GB RAM)"
+        }
+        let ram = Self.availableRAMGB
+        return "\(model.name) — \(ram)GB RAM detected"
+    }
+
+    /// All Gemma 4 vision model IDs, ordered by preference (best first).
+    public static let visionModelIds = ["gemma4-26b-apex", "gemma4-e4b", "gemma4-e2b"]
 
     // MARK: - Public API
 

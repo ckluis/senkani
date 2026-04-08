@@ -25,10 +25,28 @@ enum ExecTool {
         } catch {
             return .init(content: [.text(text: "Error: failed to execute command: \(error)", annotations: nil, _meta: nil)], isError: true)
         }
+
+        // Timeout: kill the process after 30 seconds to prevent MCP server stalls
+        let timeoutWork = DispatchWorkItem {
+            if process.isRunning {
+                print("⚠️ [EXEC] Command timeout after 30s, sending SIGTERM: \(command)")
+                process.terminate() // SIGTERM
+                // If still running after 5 more seconds, SIGKILL
+                DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
+                    if process.isRunning {
+                        print("💀 [EXEC] SIGKILL: \(command)")
+                        kill(process.processIdentifier, SIGKILL)
+                    }
+                }
+            }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: timeoutWork)
+
         // Read BEFORE waitUntilExit to avoid pipe buffer deadlock on large output
         let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
         let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
+        timeoutWork.cancel() // Cancel timeout if process finished naturally
         let rawOutput = String(data: outData, encoding: .utf8) ?? ""
         let rawStderr = String(data: errData, encoding: .utf8) ?? ""
 

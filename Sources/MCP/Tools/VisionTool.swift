@@ -7,38 +7,52 @@ import Core
 /// Local vision model for screenshot analysis, OCR, and UI verification.
 /// Cost: $0 (local Apple Silicon inference) vs $0.01+ per GPT-4o vision call.
 ///
-/// Fallback chain: Gemma 3 4B (preferred, better quality) -> Qwen2-VL 2B (smaller fallback) -> error.
-/// Both models are actors, so concurrent calls are serialized safely by Swift concurrency.
+/// Fallback chain: auto-selected Gemma 4 tier (by RAM) → smaller tiers → error.
+/// The actor ensures concurrent calls are serialized safely by Swift concurrency.
 ///
 /// TODO: Memory pressure handling — when running as a daemon (Phase 5), the loaded VLM
-/// stays resident (~1.5-2.5GB). ModelContainer does not expose an unload/evict API.
-/// Consider implementing an idle timer that nil-outs `modelContainer` after e.g. 10 minutes,
-/// allowing ARC to free the MLX buffers. This requires measuring whether re-load latency
-/// (~5-15s) is acceptable for the use case.
+/// stays resident (~1.5-12GB depending on tier). ModelContainer does not expose an
+/// unload/evict API. Consider implementing an idle timer that nil-outs `modelContainer`
+/// after e.g. 10 minutes, allowing ARC to free the MLX buffers.
 actor VisionEngine {
     private var modelContainer: ModelContainer?
 
     /// Which model is currently loaded, tracked for ModelManager reporting.
-    private var loadedModelId: String?
+    private(set) var loadedModelId: String?
 
-    /// Fallback chain: try Gemma 3 first (better quality), then Qwen2-VL (smaller).
-    static let fallbackChain: [(modelId: String, configuration: ModelConfiguration)] = [
-        ("gemma3-4b", VLMRegistry.gemma3_4B_qat_4bit),
-        ("qwen2-vl-2b", VLMRegistry.qwen2VL2BInstruct4Bit),
-    ]
+    /// Build a RAM-ordered fallback chain from ModelManager's Gemma 4 tiers.
+    /// Tries the recommended (highest-quality) tier first, falls back to smaller ones.
+    static var fallbackChain: [(modelId: String, repoId: String)] {
+        let mgr = ModelManager.shared
+        let ram = ModelManager.availableRAMGB
+        // All Gemma 4 models, sorted by quality (highest RAM requirement = best quality)
+        return ModelManager.visionModelIds.compactMap { id in
+            guard let info = mgr.model(id), info.requiredRAM <= ram else { return nil }
+            return (id, info.repoId)
+        }
+    }
 
-    /// Load a VLM using the fallback chain. Tries each model in order.
+    /// Load a VLM using the RAM-based fallback chain. Tries each model in order.
     /// Returns (container, modelId) for the first model that loads successfully.
     func ensureModel() async throws -> (ModelContainer, String) {
         if let mc = modelContainer, let id = loadedModelId {
             return (mc, id)
         }
 
+        let chain = Self.fallbackChain
+        guard !chain.isEmpty else {
+            throw NSError(
+                domain: "senkani", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "No Gemma 4 model fits in \(ModelManager.availableRAMGB)GB RAM. Need at least 4GB."]
+            )
+        }
+
         var lastError: Error?
 
-        for (modelId, config) in Self.fallbackChain {
+        for (modelId, repoId) in chain {
             do {
                 ModelManager.shared.updateProgress(modelId, progress: 0.0)
+                let config = ModelConfiguration(id: repoId)
                 let mc = try await VLMModelFactory.shared.loadContainer(
                     configuration: config
                 ) { progress in
@@ -47,10 +61,10 @@ actor VisionEngine {
                 modelContainer = mc
                 loadedModelId = modelId
                 ModelManager.shared.markDownloaded(modelId)
-                fputs("senkani: vision model loaded: \(modelId) (\(config.name))\n", stderr)
+                fputs("senkani: vision model loaded: \(modelId) (\(repoId))\n", stderr)
                 return (mc, modelId)
             } catch {
-                fputs("senkani: vision model \(modelId) failed to load: \(error.localizedDescription), trying next fallback\n", stderr)
+                fputs("senkani: vision model \(modelId) failed: \(error.localizedDescription), trying next tier\n", stderr)
                 ModelManager.shared.markError(modelId, message: error.localizedDescription)
                 lastError = error
             }
@@ -59,7 +73,7 @@ actor VisionEngine {
         throw lastError ?? NSError(
             domain: "senkani",
             code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "All vision models failed to load. Tried: \(Self.fallbackChain.map(\.modelId).joined(separator: ", "))"]
+            userInfo: [NSLocalizedDescriptionKey: "All Gemma 4 tiers failed to load. Tried: \(chain.map(\.modelId).joined(separator: ", "))"]
         )
     }
 

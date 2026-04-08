@@ -101,9 +101,9 @@ struct AnalyticsView: View {
             )
 
             SummaryCard(
-                title: "Cost Saved",
+                title: "Est. Cost Saved",
                 value: workspace.estimatedCostSaved,
-                subtitle: "at $3/M tokens",
+                subtitle: "\(ModelPricing.active.displayName) $\(String(format: "%.2f", ModelPricing.active.inputPerMillion))/M",
                 color: .blue,
                 icon: "dollarsign.circle"
             )
@@ -178,7 +178,7 @@ struct AnalyticsView: View {
                 }
 
                 if let sessionLimit = budgetConfig.perSessionLimitCents {
-                    let sessionCost = Int(Double(workspace.totalSavedBytes) / 4.0 / 1_000_000 * 300)
+                    let sessionCost = ModelPricing.costSavedCents(bytes: workspace.totalSavedBytes)
                     budgetRow(
                         label: "Session",
                         spent: sessionCost,
@@ -341,7 +341,7 @@ struct AnalyticsView: View {
                 Text("Cost Projection")
                     .font(.system(size: 13, weight: .semibold))
                 Spacer()
-                Text("tokens = bytes/4, cost = tokens/1M x $3")
+                Text("\(ModelPricing.active.displayName) @ $\(String(format: "%.2f", ModelPricing.active.inputPerMillion))/M input")
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(.tertiary)
             }
@@ -551,8 +551,8 @@ struct AnalyticsView: View {
             cumulativeRaw = point.cumulativeRawBytes
             cumulativeFiltered = point.cumulativeRawBytes - point.cumulativeSavedBytes
 
-            let costWithout = (Double(cumulativeRaw) / 4.0 / 1_000_000) * 3.0
-            let costWith = (Double(cumulativeFiltered) / 4.0 / 1_000_000) * 3.0
+            let costWithout = ModelPricing.costSaved(bytes: cumulativeRaw)
+            let costWith = ModelPricing.costSaved(bytes: cumulativeFiltered)
 
             return CostDataPoint(
                 timestamp: point.timestamp,

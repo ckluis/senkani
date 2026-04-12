@@ -12,6 +12,7 @@ struct SavingsTestView: View {
     private enum BenchMode: String, CaseIterable {
         case fixture = "Fixture"
         case live = "Live"
+        case scenarios = "Scenarios"
     }
 
     // Shared
@@ -26,6 +27,9 @@ struct SavingsTestView: View {
     @State private var liveStats: PaneTokenStats = .zero
     @State private var topEvents: [SessionDatabase.TimelineEvent] = []
     @State private var liveRefreshTask: Task<Void, Never>?
+
+    // Scenario mode
+    @State private var selectedScenarioId: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -50,6 +54,7 @@ struct SavingsTestView: View {
             switch selectedMode {
             case .fixture: fixtureContent
             case .live: liveContent
+            case .scenarios: scenarioContent
             }
         }
         .onChange(of: selectedMode) { _, newMode in
@@ -364,6 +369,206 @@ struct SavingsTestView: View {
         let fmt = DateFormatter()
         fmt.dateFormat = "HH:mm"
         return fmt.string(from: date)
+    }
+
+    // MARK: - Scenario Mode
+
+    @ViewBuilder
+    private var scenarioContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("How much would you save?")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(SenkaniTheme.textSecondary)
+
+                Text("Each scenario models a typical developer task with realistic tool-call patterns. Byte counts are grounded in measured ratios from the fixture bench.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(SenkaniTheme.textTertiary)
+
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                    ForEach(BenchmarkScenarios.all) { scenario in
+                        scenarioCard(scenario)
+                    }
+                }
+
+                if let selectedId = selectedScenarioId,
+                   let scenario = BenchmarkScenarios.all.first(where: { $0.id == selectedId }) {
+                    Divider().padding(.vertical, 8)
+                    scenarioDetail(scenario)
+                }
+            }
+            .padding(12)
+        }
+        .scrollContentBackground(.hidden)
+        .background(SenkaniTheme.paneBody)
+    }
+
+    @ViewBuilder
+    private func scenarioCard(_ scenario: Scenario) -> some View {
+        let isSelected = selectedScenarioId == scenario.id
+
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: scenario.icon)
+                    .font(.system(size: 16))
+                    .foregroundStyle(isSelected ? SenkaniTheme.savingsGreen : SenkaniTheme.textTertiary)
+
+                Spacer()
+
+                Text(String(format: "%.0fx", scenario.multiplier))
+                    .font(.system(size: 18, weight: .bold, design: .monospaced))
+                    .foregroundStyle(SenkaniTheme.savingsGreen)
+            }
+
+            Text(scenario.name)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(SenkaniTheme.textSecondary)
+
+            Text(scenario.description)
+                .font(.system(size: 10))
+                .foregroundStyle(SenkaniTheme.textTertiary)
+                .lineLimit(2)
+
+            HStack(spacing: 12) {
+                Text("\(scenario.callCount) calls")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(SenkaniTheme.textTertiary)
+
+                Text(String(format: "$%.2f → $%.2f", scenario.rawCostCents / 100, scenario.optimizedCostCents / 100))
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(SenkaniTheme.savingsGreen)
+            }
+        }
+        .padding(12)
+        .background(isSelected ? SenkaniTheme.savingsGreen.opacity(0.08) : SenkaniTheme.paneBody)
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isSelected ? SenkaniTheme.savingsGreen.opacity(0.3) : SenkaniTheme.textTertiary.opacity(0.15), lineWidth: 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                selectedScenarioId = selectedScenarioId == scenario.id ? nil : scenario.id
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func scenarioDetail(_ scenario: Scenario) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(String(format: "%.1fx", scenario.multiplier))
+                        .font(.system(size: 24, weight: .bold, design: .monospaced))
+                        .foregroundStyle(SenkaniTheme.savingsGreen)
+                    Text("estimated savings")
+                        .font(.system(size: 9))
+                        .foregroundStyle(SenkaniTheme.textTertiary)
+                }
+
+                Divider().frame(height: 36)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(formatTokens(scenario.totalSaved))
+                        .font(.system(size: 16, weight: .bold, design: .monospaced))
+                        .foregroundStyle(SenkaniTheme.savingsGreen)
+                    Text("tokens saved")
+                        .font(.system(size: 9))
+                        .foregroundStyle(SenkaniTheme.textTertiary)
+                }
+
+                Divider().frame(height: 36)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(scenario.callCount) calls")
+                        .font(.system(size: 16, weight: .bold, design: .monospaced))
+                        .foregroundStyle(SenkaniTheme.textSecondary)
+                    Text("in this workflow")
+                        .font(.system(size: 9))
+                        .foregroundStyle(SenkaniTheme.textTertiary)
+                }
+
+                Spacer()
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Savings by Feature")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(SenkaniTheme.textTertiary)
+                    .padding(.bottom, 4)
+
+                ForEach(scenario.featureBreakdown, id: \.feature) { item in
+                    HStack(spacing: 8) {
+                        Text(item.feature)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(SenkaniTheme.textSecondary)
+                            .frame(width: 100, alignment: .leading)
+
+                        GeometryReader { geo in
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(SenkaniTheme.savingsGreen.opacity(0.7))
+                                .frame(width: max(2, geo.size.width * item.savedPct / 100))
+                        }
+                        .frame(height: 12)
+
+                        Text(String(format: "%.0f%%", item.savedPct))
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(SenkaniTheme.savingsGreen)
+                            .frame(width: 36, alignment: .trailing)
+
+                        Text("\(item.callCount) calls")
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(SenkaniTheme.textTertiary)
+                            .frame(width: 50, alignment: .trailing)
+                    }
+                    .frame(height: 20)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Per-Call Detail")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(SenkaniTheme.textTertiary)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
+
+                ForEach(scenario.calls) { call in
+                    HStack(spacing: 8) {
+                        Text(call.tool)
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundStyle(SenkaniTheme.textSecondary)
+                            .frame(width: 50, alignment: .leading)
+
+                        Text(call.description)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(SenkaniTheme.textSecondary)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        Text(formatBytes(call.rawBytes))
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(SenkaniTheme.textTertiary)
+                            .frame(width: 44, alignment: .trailing)
+
+                        Text("→")
+                            .font(.system(size: 8))
+                            .foregroundStyle(SenkaniTheme.textTertiary)
+
+                        Text(formatBytes(call.optimizedBytes))
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(call.savedPct > 50 ? SenkaniTheme.savingsGreen : SenkaniTheme.textSecondary)
+                            .frame(width: 44, alignment: .trailing)
+
+                        Text(String(format: "%.0f%%", call.savedPct))
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(SenkaniTheme.savingsGreen)
+                            .frame(width: 30, alignment: .trailing)
+                    }
+                    .padding(.vertical, 1)
+                }
+            }
+        }
     }
 
     // MARK: - Live Refresh

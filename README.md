@@ -15,7 +15,7 @@ Senkani is two things in one binary: a **multi-pane terminal workspace** (native
 | **Browser pane** — WKWebView embedded | ✅ Live |
 | **Analytics pane** — token/cost savings with realtime sparkline | ✅ Live |
 | **Model manager pane** — download/manage local LLMs | ✅ Live |
-| **Savings test pane** — benchmark runner UI | ✅ Live |
+| **Savings test pane** — fixture benchmark (80.37x) + live per-feature savings breakdown | ✅ Live |
 | **Diff viewer / log viewer / scratchpad panes** | ✅ Live |
 | **Agent timeline pane** — tool call history | ✅ Live |
 | **Multi-project workspace** — persistent per-project layout | ✅ Live |
@@ -28,7 +28,7 @@ Senkani is two things in one binary: a **multi-pane terminal workspace** (native
 | **Incremental indexing** — re-indexes only changed files | ✅ Live |
 | **Dependency graph** — bidirectional imports, 15+ languages | ✅ Live |
 | **Session database** — SQLite + FTS5, token tracking, cost history | ✅ Live |
-| **Hook system** — budget enforcement, tool routing, 5ms latency | ✅ Live |
+| **Hook system** — budget enforcement, tool routing, Layer 3 re-read suppression, <5ms latency | ✅ Live |
 | **Local vision** — Gemma on Apple Silicon MLX, no API cost | ✅ Live |
 | **Local embeddings** — MLX, no API cost | ✅ Live |
 | **CLI** — 13 commands: exec, search, bench, doctor, grammars, … | ✅ Live |
@@ -40,6 +40,13 @@ Senkani is two things in one binary: a **multi-pane terminal workspace** (native
 | Multi-repo git view | 🔄 Planned |
 | Command palette (⌘K) | 🔄 Planned |
 | SSH / Mosh pane | 🔄 Planned |
+| **Session continuity** — compressed brief of last session injected at session open, eliminating re-orientation turns | 🔄 Planned |
+| **Prompt injection detection** — scan MCP tool responses for embedded attack strings before they reach Claude | 🔄 Planned |
+| **AAAK structured compression** — lossless 8-10x shorthand applied after filtering; stacks for 95%+ total reduction | 🔄 Planned |
+| **`senkani_watch` tool** — FSEvents ring buffer exposed as MCP tool; eliminates re-read polling after builds/edits | 🔄 Planned |
+| **`senkani_exec` background mode** — detach long-running builds/servers, poll stdout, kill on demand; lifts 30s timeout | 🔄 Planned |
+| **Session continuity** — 170-token AAAK wake-up brief injected at session open, eliminating re-orientation turns | 🔄 Planned |
+| **Layer 3 command replay** — hook detects same Bash command with no relevant file changes, returns cached output | 🔄 Planned |
 
 ---
 
@@ -68,7 +75,7 @@ senkani bench
 senkani doctor
 ```
 
-**MCP server:** Auto-registered with Claude Code on first launch via `senkani init`. The same binary detects piped stdin and switches to MCP server mode — no flags, no config.
+**MCP server:** Auto-registered globally in `~/.claude/settings.json` on first app launch — no `senkani init` needed. The MCP server only activates in Senkani-managed terminal panes (gated by `SENKANI_PANE_ID` env var). Non-Senkani terminals never see Senkani tools, even if the app is running.
 
 ---
 
@@ -100,6 +107,8 @@ senkani doctor
 | Secrets | `SENKANI_SECRETS` | Redact secrets before they reach the AI |
 | Indexer | `SENKANI_INDEXER` | Symbol index for search/fetch/explore |
 | Terse | `SENKANI_TERSE` | Algorithmic phrase compression |
+| Injection guard | `SENKANI_INJECTION_GUARD` | Scan tool responses for embedded prompt attacks |
+| Session continuity | `SENKANI_CONTINUITY` | Inject prior-session brief at session open |
 
 ---
 
@@ -159,13 +168,14 @@ Numbers from the built-in benchmark suite (`senkani bench`):
 
 | Module | Deps | Role |
 |--------|------|------|
-| **Core** | — | Session DB, feature config, metrics, budget enforcement |
-| **Filter** | — | Token compression: 24+ cmd rules, ANSI strip, dedup, secrets, terse |
-| **Indexer** | — | Tree-sitter backends, FTS5 search, dependency graph, incremental updates |
+| **Core** | Filter | Session DB, feature config, metrics, budget enforcement, hook routing |
+| **Filter** | — | Token compression: 44 cmd rules, ANSI strip, dedup, secrets, terse |
+| **Indexer** | SwiftTreeSitter | 20 tree-sitter backends, FTS5 search, dependency graph, incremental parsing |
+| **Bench** | Core, Filter, Indexer | Token savings test suite: 10 tasks × 7 configs, quality gates, JSON export |
 | **MCP** | Core, Filter, Indexer, MLX | 13 MCP tools, socket server, vision + embedding inference |
-| **Hook** | — | Ultra-lightweight hook binary (zero non-Foundation deps, 5ms budget) |
-| **CLI** | Core, Filter, Indexer | 13 commands: exec, search, bench, doctor, grammars, init, … |
-| **SenkaniApp** | All + SwiftTerm | SwiftUI workspace: 14 pane types, multi-project, menu bar |
+| **HookRelay** | — | Zero-dep hook relay library shared by senkani-hook binary and app's --hook mode |
+| **CLI** | Core, Filter, Indexer, Bench | 14 commands: exec, search, bench, doctor, grammars, init, … |
+| **SenkaniApp** | All + SwiftTerm | SwiftUI workspace: 14 pane types, multi-project, menu bar, agent timeline |
 
 ---
 

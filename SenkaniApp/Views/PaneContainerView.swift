@@ -169,11 +169,17 @@ struct PaneContainerView: View {
                 initialCommand: pane.initialCommand,
                 environment: pane.features.environmentVars.merging([
                     "SENKANI_METRICS_FILE": pane.metricsFilePath,
-                    "SENKANI_CONFIG_FILE": pane.configFilePath,
-                    "SENKANI_INTERCEPT": "on",
-                    "SENKANI_HOOK": "on",
+                    "SENKANI_CONFIG_FILE":  pane.configFilePath,
+                    "SENKANI_INTERCEPT":    "on",
+                    "SENKANI_HOOK":         "on",
                     "SENKANI_PROJECT_ROOT": pane.workingDirectory,
-                    "SENKANI_PANE_ID": pane.id.uuidString,
+                    "SENKANI_PANE_ID":      pane.id.uuidString,
+                    // MCP-name aliases: MCPSession.resolve() reads SENKANI_MCP_*
+                    "SENKANI_MCP_FILTER":   pane.features.filter  ? "on" : "off",
+                    "SENKANI_MCP_CACHE":    pane.features.cache   ? "on" : "off",
+                    "SENKANI_MCP_SECRETS":  pane.features.secrets ? "on" : "off",
+                    "SENKANI_MCP_INDEX":    pane.features.indexer ? "on" : "off",
+                    "SENKANI_MCP_TERSE":    pane.features.terse   ? "on" : "off",
                 ]) { _, new in new },
                 workingDirectory: pane.workingDirectory,
                 isActive: isActive,
@@ -215,7 +221,7 @@ struct PaneContainerView: View {
         case .scratchpad:
             ScratchpadPane(pane: pane)
         case .savingsTest:
-            SavingsTestPlaceholderView()
+            SavingsTestView(workspace: workspace)
         case .agentTimeline:
             AgentTimelinePane(pane: pane, workspace: workspace)
         }
@@ -294,25 +300,6 @@ struct AnalyticsPlaceholderView: View {
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(SenkaniTheme.savingsGreen)
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(SenkaniTheme.paneBody)
-    }
-}
-
-struct SavingsTestPlaceholderView: View {
-    var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "checkmark.seal")
-                .font(.system(size: 36))
-                .foregroundStyle(SenkaniTheme.savingsGreen)
-            Text("Token Savings Test Suite")
-                .font(.headline)
-                .foregroundStyle(SenkaniTheme.textPrimary)
-            Text("Benchmark all optimizations against known baselines.\nImplementation coming soon.")
-                .font(.caption)
-                .foregroundStyle(SenkaniTheme.textSecondary)
-                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(SenkaniTheme.paneBody)

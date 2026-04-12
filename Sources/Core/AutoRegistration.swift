@@ -1,21 +1,20 @@
 import Foundation
 
-/// Cleans up Senkani's footprint from global Claude settings on every launch.
+/// Manages Senkani's presence in global Claude settings on every launch.
 ///
-/// Senkani does NOT register globally in ~/.claude/settings.json. MCP access
-/// is provided per-pane via .mcp.json files written by PaneModel.writeMCPConfig().
+/// Registers a single global MCP entry in ~/.claude/settings.json (no env block).
+/// The MCP server gates activation on SENKANI_PANE_ID, which is only present in
+/// Senkani-managed shells (injected via execve in PaneContainerView).
 ///
-/// This module runs defensive cleanup: removes any leftover global MCP entries,
-/// hooks, and legacy artifacts from previous versions.
+/// Also cleans up hooks and legacy artifacts from previous versions.
 ///
 /// Every method is idempotent -- safe to call on every launch.
 public enum AutoRegistration {
 
     // MARK: - Public API
 
-    /// Clean up Senkani's footprint from global ~/.claude/settings.json.
-    /// Removes: global MCP registration, hooks, legacy senkani-daemon entry.
-    /// Does NOT register anything — MCP is provided per-pane via .mcp.json.
+    /// Ensure Senkani is registered in global ~/.claude/settings.json.
+    /// Registers a single MCP entry (no env block), removes hooks and legacy entries.
     public static func cleanupGlobalSettings() throws {
         let settingsPath = NSHomeDirectory() + "/.claude/settings.json"
 
@@ -39,29 +38,20 @@ public enum AutoRegistration {
         // STEP 2: Clean project-level hooks in ~/.claude/projects/*/settings.json
         cleanAllProjectHooks()
 
-        // STEP 3: Remove global MCP registration — Senkani should not be in global settings.
-        // MCP access is provided per-pane via .mcp.json written by PaneModel.
+        // STEP 3: Ensure global MCP registration — one entry, no env block.
+        // The shell already provides SENKANI_PANE_ID and all other vars via execve()
+        // (see PaneContainerView). MCPMain.run() exits if SENKANI_PANE_ID is absent,
+        // scoping Senkani tools to Senkani-managed panes only.
         var mcpServers = config["mcpServers"] as? [String: Any] ?? [:]
-
-        if mcpServers["senkani"] != nil {
-            mcpServers.removeValue(forKey: "senkani")
-            if mcpServers.isEmpty {
-                config.removeValue(forKey: "mcpServers")
-            } else {
-                config["mcpServers"] = mcpServers
-            }
-            needsWrite = true
-            logWarning("Removed global senkani MCP registration (now per-pane via .mcp.json)")
-        }
-
-        // Clean up legacy senkani-daemon entry
-        if mcpServers["senkani-daemon"] != nil {
-            mcpServers.removeValue(forKey: "senkani-daemon")
-            if mcpServers.isEmpty {
-                config.removeValue(forKey: "mcpServers")
-            } else {
-                config["mcpServers"] = mcpServers
-            }
+        let binaryPath = resolveBinaryPath()
+        let existingEntry = mcpServers["senkani"] as? [String: Any]
+        if (existingEntry?["command"] as? String) != binaryPath {
+            mcpServers.removeValue(forKey: "senkani-daemon") // remove legacy entry
+            mcpServers["senkani"] = [
+                "command": binaryPath,
+                "args": ["--mcp-server"],
+            ] as [String: Any]
+            config["mcpServers"] = mcpServers
             needsWrite = true
         }
 

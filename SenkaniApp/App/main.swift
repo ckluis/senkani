@@ -2,17 +2,19 @@ import Foundation
 import MCPServer
 import Core
 import SwiftUI
-
-let isMCPMode = CommandLine.arguments.contains("--mcp-server")
-    || isatty(STDIN_FILENO) == 0  // stdin is a pipe
+import HookRelay
 
 let isSocketMode = CommandLine.arguments.contains("--socket-server")
 let isHookMode = CommandLine.arguments.contains("--hook")
+let isMCPMode = !isSocketMode && !isHookMode && (
+    CommandLine.arguments.contains("--mcp-server")
+    || isatty(STDIN_FILENO) == 0  // stdin is a pipe
+)
 
 if isHookMode {
     // Hook mode: act as the senkani-hook binary.
     // Reads hook event from stdin, relays to daemon socket, writes response to stdout.
-    exit(HookMain.run())
+    exit(HookRelay.run())
 } else if isMCPMode {
     try await MCPServerRunner.run()
 } else if isSocketMode {

@@ -32,7 +32,7 @@ public struct LifetimeStats: Sendable {
 }
 
 /// Aggregated token stats for a pane or project.
-public struct PaneTokenStats: Sendable {
+public struct PaneTokenStats: Sendable, Equatable {
     public let inputTokens: Int
     public let outputTokens: Int
     public let savedTokens: Int
@@ -669,6 +669,70 @@ public final class SessionDatabase: @unchecked Sendable {
         }
     }
 
+    // MARK: - Feature Savings Breakdown
+
+    /// Per-feature token savings breakdown for a project.
+    public struct FeatureSavings: Sendable, Equatable {
+        public let feature: String
+        public let savedTokens: Int
+        public let inputTokens: Int
+        public let outputTokens: Int
+        public let eventCount: Int
+
+        public init(feature: String, savedTokens: Int, inputTokens: Int, outputTokens: Int, eventCount: Int) {
+            self.feature = feature
+            self.savedTokens = savedTokens
+            self.inputTokens = inputTokens
+            self.outputTokens = outputTokens
+            self.eventCount = eventCount
+        }
+    }
+
+    /// Per-feature token savings breakdown, sorted by savedTokens descending.
+    public func tokenStatsByFeature(projectRoot: String, since: Date? = nil) -> [FeatureSavings] {
+        let normalized = Self.normalizePath(projectRoot) ?? projectRoot
+        return queue.sync {
+            guard let db = db else { return [] }
+            let hasSince = since != nil
+            let sql = """
+                SELECT COALESCE(feature, 'unknown'),
+                       COALESCE(SUM(saved_tokens), 0),
+                       COALESCE(SUM(input_tokens), 0),
+                       COALESCE(SUM(output_tokens), 0),
+                       COUNT(*)
+                FROM token_events
+                WHERE project_root = ?\(hasSince ? " AND timestamp >= ?" : "")
+                AND saved_tokens > 0
+                GROUP BY feature
+                ORDER BY SUM(saved_tokens) DESC;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            if let since {
+                sqlite3_bind_double(stmt, 2, since.timeIntervalSince1970)
+            }
+
+            var results: [FeatureSavings] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let feature = String(cString: sqlite3_column_text(stmt, 0))
+                let saved = Int(sqlite3_column_int64(stmt, 1))
+                let input = Int(sqlite3_column_int64(stmt, 2))
+                let output = Int(sqlite3_column_int64(stmt, 3))
+                let count = Int(sqlite3_column_int64(stmt, 4))
+                results.append(FeatureSavings(
+                    feature: feature,
+                    savedTokens: saved,
+                    inputTokens: input,
+                    outputTokens: output,
+                    eventCount: count
+                ))
+            }
+            return results
+        }
+    }
+
     // MARK: - Timeline Events
 
     /// A single token event row from the database, with fields the timeline pane needs to render.
@@ -775,6 +839,34 @@ public final class SessionDatabase: @unchecked Sendable {
             ))
         }
         return results
+    }
+
+    // MARK: - Re-Read Suppression
+
+    /// Return the timestamp of the most recent `senkani_read` of a specific file
+    /// within a project. Returns nil if the file has never been read in this session.
+    /// Used by HookRouter for re-read suppression (Phase I wedge).
+    public func lastReadTimestamp(filePath: String, projectRoot: String) -> Date? {
+        let normalized = Self.normalizePath(projectRoot) ?? projectRoot
+        return queue.sync {
+            guard let db = db else { return nil }
+            let sql = """
+                SELECT MAX(timestamp) FROM token_events
+                WHERE project_root = ? AND tool_name = 'read' AND source = 'mcp_tool'
+                AND command LIKE ?;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            let sanitized = filePath.replacingOccurrences(of: "%", with: "").replacingOccurrences(of: "_", with: "\\_")
+            let pathPattern = "%" + sanitized
+            sqlite3_bind_text(stmt, 2, (pathPattern as NSString).utf8String, -1, nil)
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+            guard sqlite3_column_type(stmt, 0) != SQLITE_NULL else { return nil }
+            let ts = sqlite3_column_double(stmt, 0)
+            return Date(timeIntervalSince1970: ts)
+        }
     }
 
     // MARK: - Diagnostics

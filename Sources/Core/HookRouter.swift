@@ -52,7 +52,7 @@ public enum HookRouter {
         // Route the tool call
         switch toolName {
         case "Read":
-            return handleRead(eventName: eventName)
+            return handleRead(toolInput: toolInput, eventName: eventName, projectRoot: projectRoot, sessionId: sessionId)
         case "Bash":
             let command = toolInput["command"] as? String ?? ""
             return handleBash(command: command, eventName: eventName)
@@ -66,7 +66,55 @@ public enum HookRouter {
 
     // MARK: - Tool Handlers
 
-    private static func handleRead(eventName: String) -> Data {
+    private static func handleRead(toolInput: [String: Any], eventName: String, projectRoot: String?, sessionId: String?) -> Data {
+        let filePath = toolInput["file_path"] as? String ?? ""
+
+        // Phase I wedge: Re-read suppression
+        // If this file was already served by senkani_read AND the file hasn't changed,
+        // tell the agent it already has the content — eliminates the tool call entirely.
+        if !filePath.isEmpty, let root = projectRoot {
+            if let lastRead = SessionDatabase.shared.lastReadTimestamp(filePath: filePath, projectRoot: root) {
+                let age = Date().timeIntervalSince(lastRead)
+
+                // Only suppress if the read was recent (within 5 minutes) and the file is unchanged
+                if age < 300 {
+                    let fullPath = filePath.hasPrefix("/") ? filePath : root + "/" + filePath
+
+                    if let attrs = try? FileManager.default.attributesOfItem(atPath: fullPath),
+                       let mtime = attrs[.modificationDate] as? Date,
+                       mtime < lastRead {
+
+                        let ageStr = age < 60 ? "\(Int(age))s" : "\(Int(age / 60))m"
+
+                        if let sid = sessionId {
+                            SessionDatabase.shared.recordTokenEvent(
+                                sessionId: sid,
+                                paneId: nil,
+                                projectRoot: root,
+                                source: "intercept",
+                                toolName: "Read",
+                                model: nil,
+                                inputTokens: 0,
+                                outputTokens: 0,
+                                savedTokens: estimateFileTokens(at: fullPath),
+                                costCents: 0,
+                                feature: "reread_suppression",
+                                command: filePath
+                            )
+                        }
+
+                        return blockResponse(
+                            "This file was already read \(ageStr) ago via senkani and hasn't changed (mtime unchanged). "
+                            + "Use your existing knowledge of this file's content. "
+                            + "If you need to re-read it (e.g., after context compaction), call mcp__senkani__read — it returns from cache instantly (0 tokens).",
+                            eventName: eventName
+                        )
+                    }
+                }
+            }
+        }
+
+        // Default: first Read of this file (or file changed since last read)
         let features = "session caching (re-reads free), compression, secret detection"
         return blockResponse(
             "Use mcp__senkani__read instead of Read. "
@@ -74,6 +122,13 @@ public enum HookRouter {
             + "Pass the same file_path as the 'path' argument.",
             eventName: eventName
         )
+    }
+
+    /// Estimate token count for a file based on size (rough: 1 token per 4 bytes).
+    private static func estimateFileTokens(at path: String) -> Int {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let size = attrs[.size] as? Int else { return 0 }
+        return size / 4
     }
 
     private static func handleBash(command: String, eventName: String) -> Data {

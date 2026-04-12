@@ -26,7 +26,6 @@ final class PaneSession: @unchecked Sendable {
         pane.claudeSessionWatcher = nil
         // Clean up metrics file and per-project MCP config
         try? FileManager.default.removeItem(atPath: pane.metricsFilePath)
-        pane.cleanupMCPConfig()
         // Unregister hook from project settings
         try? HookRegistration.unregisterForProject(
             at: pane.workingDirectory,

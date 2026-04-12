@@ -1,17 +1,21 @@
+// Sources/HookRelay/HookRelay.swift
+//
+// Canonical implementation of the hook relay binary logic.
+// Shared by the standalone senkani-hook executable AND the app's --hook mode.
+// MUST have ZERO dependencies beyond Foundation + Darwin.POSIX (Lesson #12).
+
 import Foundation
 #if canImport(Darwin)
 import Darwin.POSIX
 #endif
 
-/// Hook entry point — runs the same logic as the standalone senkani-hook binary.
-/// Called when the app binary is invoked with --hook.
-/// Reads hook event JSON from stdin, relays to daemon via Unix socket,
-/// writes response to stdout. Passthrough on any failure.
-public enum HookMain {
+public enum HookRelay {
 
     private static let socketPath = NSHomeDirectory() + "/.senkani/hook.sock"
     private static let timeoutMs: UInt32 = 5 // 5ms — hooks must be imperceptible
 
+    /// Relay a hook event from stdin to the daemon socket and write the response to stdout.
+    /// On ANY failure, emits `{}` (passthrough — never block the agent).
     public static func run() -> Int32 {
         // Check activation env vars
         let intercept = ProcessInfo.processInfo.environment["SENKANI_INTERCEPT"] ?? "off"

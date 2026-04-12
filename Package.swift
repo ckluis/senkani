@@ -235,6 +235,11 @@ let package = Package(
             path: "Sources/Indexer"
         ),
         .target(
+            name: "HookRelay",
+            dependencies: [],
+            path: "Sources/HookRelay"
+        ),
+        .target(
             name: "Core",
             dependencies: ["Filter"],
             path: "Sources/Core"
@@ -281,7 +286,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "SenkaniHook",
-            dependencies: [],
+            dependencies: ["HookRelay"],
             path: "Sources/Hook"
         ),
         .executableTarget(
@@ -290,7 +295,9 @@ let package = Package(
                 "Core",
                 "Filter",
                 "Indexer",
+                "Bench",
                 "MCPServer",
+                "HookRelay",
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
                 .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "MLXEmbedders", package: "mlx-swift-lm"),

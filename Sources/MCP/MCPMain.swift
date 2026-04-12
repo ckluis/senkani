@@ -12,6 +12,16 @@ public struct MCPServerRunner {
         FileHandle.standardError.write(Data("🔴 [MCP-SERVER] SENKANI_METRICS_FILE = \(ProcessInfo.processInfo.environment["SENKANI_METRICS_FILE"] ?? "NOT SET")\n".utf8))
         FileHandle.standardError.write(Data("🔴 [MCP-SERVER] SENKANI_PROJECT_ROOT = \(ProcessInfo.processInfo.environment["SENKANI_PROJECT_ROOT"] ?? "NOT SET")\n".utf8))
         FileHandle.standardError.write(Data("🔴 [MCP-SERVER] SENKANI_PANE_ID = \(ProcessInfo.processInfo.environment["SENKANI_PANE_ID"] ?? "NOT SET")\n".utf8))
+        // Access gate: only activate in Senkani-managed panes.
+        // SENKANI_PANE_ID is injected by PaneContainerView into Senkani-spawned shells
+        // via execve() and inherited by claude → MCP server. It is never present in
+        // a shell opened outside the Senkani app.
+        guard ProcessInfo.processInfo.environment["SENKANI_PANE_ID"] != nil else {
+            FileHandle.standardError.write(
+                Data("[MCP] SENKANI_PANE_ID absent — not a Senkani pane, exiting\n".utf8))
+            exit(0)
+        }
+
         let session = MCPSession.resolve()
 
         // Register download handler so ModelManager.download(modelId:) works from the UI.

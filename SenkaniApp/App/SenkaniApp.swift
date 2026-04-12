@@ -3,6 +3,7 @@ import Core
 import MCPServer
 
 struct SenkaniGUI: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var menuBarManager = MenuBarManager()
 
     init() {
@@ -14,6 +15,7 @@ struct SenkaniGUI: App {
         }
         AutoRegistration.installHookWrapper()
         Self.cleanupStaleMCPProcesses()
+        Self.cleanupStaleMCPFiles()
 
         // Start hook socket listener so senkani-hook binary can connect
         SocketServerManager.shared.hookHandler = { HookRouter.handle(eventJSON: $0) }
@@ -49,6 +51,61 @@ struct SenkaniGUI: App {
             for pid in pids {
                 kill(pid, SIGTERM)
             }
+        }
+    }
+
+    /// One-time migration: find every .mcp.json on disk (via Spotlight) that
+    /// has a senkani entry and remove it. Runs on every launch; is a no-op
+    /// once all stale files are cleaned. Does not touch non-senkani entries.
+    private static func cleanupStaleMCPFiles() {
+        // mdfind uses the Spotlight index — fast, finds all .mcp.json files
+        let pipe = Pipe()
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/mdfind")
+        proc.arguments = ["-name", ".mcp.json"]
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        do { try proc.run() } catch { return }
+        proc.waitUntilExit()
+
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
+                            encoding: .utf8) ?? ""
+        let paths = output.split(separator: "\n")
+                          .map(String.init)
+                          .filter { !$0.isEmpty }
+
+        let fm = FileManager.default
+        var cleaned = 0
+
+        for path in paths {
+            guard let data = fm.contents(atPath: path),
+                  var cfg = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  var servers = cfg["mcpServers"] as? [String: Any],
+                  servers["senkani"] != nil
+            else { continue }
+
+            servers.removeValue(forKey: "senkani")
+
+            if servers.isEmpty {
+                cfg.removeValue(forKey: "mcpServers")
+            } else {
+                cfg["mcpServers"] = servers
+            }
+
+            if cfg.isEmpty {
+                try? fm.removeItem(atPath: path)
+            } else if let updated = try? JSONSerialization.data(
+                withJSONObject: cfg,
+                options: [.prettyPrinted, .sortedKeys]
+            ) {
+                try? updated.write(to: URL(fileURLWithPath: path))
+            }
+
+            cleaned += 1
+        }
+
+        if cleaned > 0 {
+            print("[SENKANI] Removed stale MCP entries from \(cleaned) .mcp.json file(s)")
         }
     }
 

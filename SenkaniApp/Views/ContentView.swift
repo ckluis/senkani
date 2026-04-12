@@ -124,7 +124,6 @@ struct ContentView: View {
             // Start sessions (metrics watchers) for all restored panes
             for pane in workspace.allPanes {
                 if pane.paneType == .terminal {
-                    pane.writeMCPConfig()
                     try? HookRegistration.registerForProject(
                         at: pane.workingDirectory,
                         hookBinaryPath: AutoRegistration.hookWrapperPath)
@@ -184,7 +183,6 @@ struct ContentView: View {
                               previewFilePath: command.params["url"] ?? "")
             if let pane = workspace.panes.last {
                 if pane.paneType == .terminal {
-                    pane.writeMCPConfig()
                     try? HookRegistration.registerForProject(
                         at: pane.workingDirectory,
                         hookBinaryPath: AutoRegistration.hookWrapperPath)
@@ -217,9 +215,7 @@ struct ContentView: View {
     private func addPane(type: PaneType = .terminal, title: String, command: String) {
         workspace.addPane(type: type, title: title, command: command)
         if let pane = workspace.panes.last {
-            // Write per-project .mcp.json so the MCP subprocess gets SENKANI_METRICS_FILE
             if pane.paneType == .terminal {
-                pane.writeMCPConfig()
                 try? HookRegistration.registerForProject(
                     at: pane.workingDirectory,
                     hookBinaryPath: AutoRegistration.hookWrapperPath)

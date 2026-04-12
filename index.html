@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>senkani — the terminal that is everything else too</title>
+<title>senkani — compression layer for Claude Code</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Inconsolata:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -21,30 +21,28 @@
     --secondary:     #ffd4a8;
     --secondary-ink: #6b2e00;
 
-    /* Real app colors from ThemeEngine defaults / One Dark Pro */
-    --app-bg:     #0e0e0e;   /* appBackground */
-    --app-panel:  #131313;   /* paneBody */
-    --app-elev:   #1a1a1a;   /* paneShell / sidebarBackground */
-    --app-rule:   #2a2a2a;   /* inactiveBorder */
+    --app-bg:     #0e0e0e;
+    --app-panel:  #131313;
+    --app-elev:   #1a1a1a;
+    --app-rule:   #2a2a2a;
     --app-rule-2: #3a3a3a;
-    --app-text:   #e0e0e0;   /* textPrimary */
-    --app-mute:   #808080;   /* textSecondary */
-    --app-dim:    #505050;   /* textTertiary */
-    --app-green:  #3fb068;   /* ansiGreen — terminal accent */
-    --app-blue:   #4a9ee0;   /* ansiBlue  — analytics accent */
-    --app-yellow: #d4a017;   /* ansiYellow — markdown/preview accent */
-    --app-purple: #c678dd;   /* ansiMagenta — skill library accent */
-    --app-cyan:   #56b6c2;   /* ansiCyan — knowledge base accent */
-    --app-red:    #e05a4a;   /* ansiRed */
+    --app-text:   #e0e0e0;
+    --app-mute:   #808080;
+    --app-dim:    #505050;
+    --app-green:  #3fb068;
+    --app-blue:   #4a9ee0;
+    --app-yellow: #d4a017;
+    --app-purple: #c678dd;
+    --app-cyan:   #56b6c2;
+    --app-red:    #e05a4a;
     --app-amber:  #d4a017;
-    --app-focus:  #66809b;   /* focusBorder — active pane border */
+    --app-focus:  #66809b;
 
-    /* FCSIT toggle colors (semantic, not theme-derived) */
-    --tog-f: #4a9ee0;   /* Filter   — blue */
-    --tog-c: #3fb068;   /* Cache    — green */
-    --tog-s: #ff9500;   /* Secrets  — orange */
-    --tog-i: #c678dd;   /* Indexer  — purple */
-    --tog-t: #d4a017;   /* Terse    — amber */
+    --tog-f: #4a9ee0;
+    --tog-c: #3fb068;
+    --tog-s: #ff9500;
+    --tog-i: #c678dd;
+    --tog-t: #d4a017;
 
     --font-display: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     --font-body:    'Inter', -apple-system, BlinkMacSystemFont, Arial, Helvetica, sans-serif;
@@ -67,13 +65,11 @@
     text-align: left;
   }
 
-  /* ---------- Layout primitives ---------- */
   .measure { max-width: var(--measure); margin: 0; padding: 0 var(--gutter); }
   .wide    { max-width: 1400px; margin: 0; padding: 0 var(--gutter); }
   .full    { width: 100%; padding: 0 var(--gutter); }
   .indent  { padding-left: var(--gutter); }
 
-  /* ---------- Status badges ---------- */
   .badge {
     display: inline-flex;
     align-items: center;
@@ -94,13 +90,11 @@
   .badge-coming { background: rgba(250,191,36,0.14); color: #854d0e; }
   .badge-coming::before { content: "○"; color: #fbbf24; }
 
-  /* dark-bg variants */
   .badge-live-d   { background: rgba(74,222,128,0.12); color: var(--app-green); }
   .badge-live-d::before { color: var(--app-green); }
   .badge-coming-d { background: rgba(250,191,36,0.12); color: var(--app-amber); }
   .badge-coming-d::before { content: "○"; color: var(--app-amber); }
 
-  /* ---------- Nav ---------- */
   nav {
     display: flex;
     align-items: center;
@@ -117,7 +111,6 @@
     color: var(--ink);
     text-decoration: none;
   }
-  .wordmark .tld { color: var(--accent); }
   .wordmark small {
     font-family: var(--font-code);
     font-weight: 500;
@@ -127,7 +120,6 @@
     letter-spacing: 0;
   }
 
-  /* ---------- Hero ---------- */
   .hero { padding: 120px var(--gutter) 80px; }
   .overline {
     font-family: var(--font-display);
@@ -167,7 +159,6 @@
   }
   .meta span::before { content: "→ "; color: var(--accent); }
 
-  /* ---------- Buttons ---------- */
   .btn {
     display: inline-block;
     font-family: var(--font-body);
@@ -187,7 +178,6 @@
   .btn-ghost     { background: transparent; color: var(--ink); border-color: var(--ink); }
   .btn-ghost:hover { background: var(--ink); color: var(--bg); }
 
-  /* ---------- Sections ---------- */
   section { padding: 100px 0; border-bottom: 1px solid var(--rule); }
   section:last-of-type { border-bottom: none; }
 
@@ -212,6 +202,81 @@
   p.body strong { font-weight: 700; }
   a.inline { color: var(--accent-lo); text-decoration: underline; text-underline-offset: 3px; }
   a.inline:hover { color: var(--accent); }
+
+  /* ---------- How-box ---------- */
+  .how {
+    background: var(--app-bg);
+    border-left: 3px solid var(--accent);
+    padding: 20px 24px;
+    font-family: var(--font-code);
+    font-size: 12.5px;
+    color: var(--app-text);
+    line-height: 1.8;
+    max-width: var(--measure);
+    margin: 28px 0 0 0;
+  }
+  .how-lbl {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 12px;
+    font-family: var(--font-body);
+  }
+  .how em     { color: var(--app-green); font-style: normal; }
+  .how strong { color: var(--accent); font-weight: 700; }
+  .how code   { color: var(--app-blue); font-family: var(--font-code); font-size: 12px; }
+  .how ul { margin: 8px 0 0 0; padding-left: 18px; }
+  .how li { margin-bottom: 4px; }
+
+  /* ---------- Mech grid ---------- */
+  .mech-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 2px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    max-width: 1100px;
+    margin: 48px 0 0 0;
+  }
+  .mech {
+    background: var(--bg);
+    padding: 32px 28px;
+  }
+  .mech-cat {
+    font-family: var(--font-code);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 8px;
+  }
+  .mech h4 {
+    font-family: var(--font-display);
+    font-size: 18px;
+    font-weight: 700;
+    margin: 0 0 8px 0;
+    letter-spacing: -0.01em;
+    line-height: 1.25;
+  }
+  .mech-what {
+    font-size: 14px;
+    color: var(--ink-soft);
+    line-height: 1.55;
+    margin: 0 0 16px 0;
+  }
+  .mech-how {
+    font-family: var(--font-code);
+    font-size: 11.5px;
+    color: var(--ink-mute);
+    line-height: 1.7;
+    padding-top: 14px;
+    border-top: 1px solid var(--rule);
+  }
+  .mech-how strong { color: var(--ink); }
+  .mech-how code { color: var(--accent-lo); font-size: 11px; }
 
   /* ---------- Mockups ---------- */
   .mockup {
@@ -255,14 +320,13 @@
   }
   .tb-spacer { width: 54px; }
 
-  /* ---- Main app mockup ---- */
   .app-body {
     display: grid;
-    grid-template-columns: 180px 1fr;  /* real: sidebarWidth = 180 */
+    grid-template-columns: 180px 1fr;
     min-height: 560px;
   }
   .app-sidebar {
-    background: var(--app-elev);   /* sidebarBackground = #1a1a1a */
+    background: var(--app-elev);
     border-right: 1px solid var(--app-rule);
     padding: 18px 0;
     font-family: var(--font-body);
@@ -303,37 +367,30 @@
   .sb-sub { font-size: 11px; color: var(--app-dim); margin-left: auto; font-family: var(--font-code); }
   .sb-item.active .sb-sub { color: #ffd4a8; }
 
-  /* ---- Canvas / panes — real app layout ---- */
   .canvas {
     display: grid;
     grid-template-columns: 1.1fr 1fr 1fr;
     background: var(--app-bg);
-    gap: 4px;          /* real: SenkaniTheme.columnSpacing = 4 */
+    gap: 4px;
     padding: 4px;
   }
   .pane {
     display: flex;
     flex-direction: column;
     min-height: 100%;
-    background: var(--app-elev);       /* paneShell */
-    border-radius: 6px;                /* paneCornerRadius */
+    background: var(--app-elev);
+    border-radius: 6px;
     overflow: hidden;
-    border: 1.5px solid var(--app-focus);  /* active: focusBorder @ 1.5px */
+    border: 1.5px solid var(--app-focus);
     box-shadow: 0 0 0 1px rgba(102,128,155,0.12), 0 4px 16px rgba(102,128,155,0.18);
   }
   .pane.inactive {
     border: 0.5px solid var(--app-rule);
     box-shadow: none;
   }
-
-  /* Thin accent line at the very top of each pane (real: Rectangle, 2.5px active / 1.5px inactive) */
-  .pane-accent {
-    height: 2.5px;
-    flex-shrink: 0;
-  }
+  .pane-accent { height: 2.5px; flex-shrink: 0; }
   .pane.inactive .pane-accent { height: 1.5px; opacity: 0.5; }
 
-  /* 24px compact header — real design */
   .pane-header {
     display: flex;
     align-items: center;
@@ -343,24 +400,14 @@
     flex-shrink: 0;
     font-family: var(--font-body);
   }
-  /* Active pane header: accent color @ 8% opacity bg */
   .pane .pane-header { background: rgba(102,128,155,0.08); }
   .pane.inactive .pane-header { background: var(--app-elev); }
 
-  .pane-dot {
-    width: 5px; height: 5px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
+  .pane-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
   .pane-dot.running { background: var(--app-green); }
   .pane-dot.idle    { background: var(--app-dim); }
 
-  .pane-title {
-    font-size: 10px;
-    font-weight: 500;
-    color: var(--app-text);
-    white-space: nowrap;
-  }
+  .pane-title { font-size: 10px; font-weight: 500; color: var(--app-text); white-space: nowrap; }
   .pane-ctx {
     font-size: 9px;
     font-family: var(--font-code);
@@ -371,12 +418,7 @@
   }
   .pane-spacer { flex: 1; }
 
-  /* FCSIT toggles — real app feature: F=Filter C=Cache S=Secrets I=Indexer T=Terse */
-  .fcsit {
-    display: flex;
-    gap: 3px;
-    align-items: center;
-  }
+  .fcsit { display: flex; gap: 3px; align-items: center; }
   .fcsit-btn {
     width: 14px; height: 14px;
     border-radius: 3px;
@@ -403,10 +445,7 @@
     border-radius: 2px;
     cursor: default;
   }
-
-  /* 0.5px separator between header and body (real: Rectangle fill appBackground) */
   .pane-sep { height: 0.5px; background: var(--app-bg); flex-shrink: 0; }
-
   .pane-body {
     flex: 1;
     padding: 12px 14px;
@@ -414,10 +453,9 @@
     font-size: 12.5px;
     line-height: 1.6;
     overflow: hidden;
-    background: var(--app-panel);     /* paneBody */
+    background: var(--app-panel);
   }
 
-  /* ---- Terminal content ---- */
   .term-line    { white-space: nowrap; }
   .term-prompt  { color: var(--app-green); }
   .term-at      { color: var(--app-purple); }
@@ -437,7 +475,6 @@
   }
   @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
 
-  /* ---- Markdown content ---- */
   .md-h   { color: var(--app-text); font-weight: 700; font-size: 15px; margin-bottom: 6px; font-family: var(--font-display); }
   .md-sub { color: var(--app-mute); font-size: 11.5px; margin-bottom: 14px; font-family: var(--font-body); }
   .md-p   { color: var(--app-text); font-family: var(--font-body); font-size: 12.5px; margin-bottom: 10px; line-height: 1.55; }
@@ -453,53 +490,7 @@
   .md-code .k { color: var(--accent); }
   .md-code .s { color: var(--app-green); }
   .md-code .c { color: var(--app-dim); }
-  .md-tag {
-    display: inline-block;
-    padding: 1px 8px;
-    background: rgba(255,98,0,0.12);
-    color: var(--accent);
-    border-radius: 10px;
-    font-size: 10px;
-    font-family: var(--font-body);
-    font-weight: 600;
-    margin-right: 4px;
-  }
 
-  /* ---- Browser pane ---- */
-  .br-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: var(--app-panel);
-    padding: 7px 10px;
-    border-radius: 4px;
-    border: 1px solid var(--app-rule);
-    font-family: var(--font-body);
-    font-size: 11px;
-    color: var(--app-mute);
-    margin-bottom: 12px;
-  }
-  .br-bar .lock { color: var(--app-green); font-size: 10px; }
-  .br-content {
-    background: #fafafa;
-    color: #1a1a1a;
-    border-radius: 4px;
-    padding: 14px;
-    font-family: var(--font-body);
-    font-size: 11px;
-    line-height: 1.5;
-    border: 1px solid var(--app-rule);
-  }
-  .br-content h4 { font-size: 15px; margin: 0 0 6px 0; color: #1a1a1a; font-weight: 700; }
-  .br-content p  { color: #555; margin: 0 0 8px 0; font-size: 11px; }
-  .br-content .ph {
-    height: 60px;
-    background: linear-gradient(135deg, #ffe4cc, #ffd4a8);
-    border-radius: 3px;
-    margin: 8px 0;
-  }
-
-  /* ---- Status bar — real: 36px two-row token display ---- */
   .statusbar {
     display: flex;
     flex-direction: column;
@@ -513,11 +504,7 @@
     font-family: var(--font-code);
     gap: 2px;
   }
-  .statusbar-row {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-  }
+  .statusbar-row { display: flex; align-items: center; gap: 16px; }
   .statusbar .dot-s {
     display: inline-block;
     width: 6px; height: 6px; border-radius: 50%;
@@ -528,32 +515,127 @@
   .statusbar strong { color: var(--app-green); font-weight: 600; }
   .statusbar em { color: var(--app-blue); font-style: normal; }
 
-  /* ---------- Pane-type tabs ---------- */
-  .tabs { max-width: 1100px; padding-right: var(--gutter); margin: 32px 0; }
-  .tab-list { display: flex; gap: 0; border-bottom: 1px solid var(--rule); flex-wrap: wrap; }
-  .tab-btn {
-    font-family: var(--font-display);
-    font-size: 15px;
-    font-weight: 600;
-    background: transparent;
-    border: none;
-    color: var(--ink-mute);
-    padding: 16px 22px;
-    cursor: pointer;
-    border-bottom: 2px solid transparent;
-    margin-bottom: -1px;
-    transition: all .15s;
-    display: flex;
-    align-items: center;
-    gap: 10px;
+  /* ---------- Stats ---------- */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 40px;
+    margin: 48px 0 0 0;
+    max-width: 1200px;
+    padding-right: var(--gutter);
   }
-  .tab-btn:hover { color: var(--ink); }
-  .tab-btn.active { color: var(--ink); border-bottom-color: var(--accent); }
-  .tab-panel { display: none; padding: 28px 0 0 0; }
-  .tab-panel.active { display: block; }
-  .tab-panel p.body { max-width: var(--measure); margin-bottom: 20px; }
+  .stat .num {
+    font-family: var(--font-display);
+    font-size: 72px;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.04em;
+    color: var(--ink);
+  }
+  .stat .num em { color: var(--accent); font-style: normal; }
+  .stat .label { font-size: 14px; color: var(--ink-mute); margin-top: 10px; line-height: 1.4; }
 
-  /* ---- Context pane ---- */
+  /* ---------- Feature cards ---------- */
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    max-width: 1200px;
+    margin: 48px 0 0 0;
+    padding-right: var(--gutter);
+  }
+  .feature { background: var(--bg); padding: 32px 28px; }
+  .feature .num {
+    font-family: var(--font-code);
+    font-size: 12px;
+    color: var(--accent);
+    font-weight: 700;
+    margin-bottom: 8px;
+    letter-spacing: 1px;
+  }
+  .feature .num-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .feature h4 {
+    font-family: var(--font-display);
+    font-size: 20px;
+    font-weight: 700;
+    margin: 0 0 10px 0;
+    letter-spacing: -0.01em;
+  }
+  .feature p { font-size: 15px; color: var(--ink-soft); margin: 0; line-height: 1.55; }
+
+  /* ---------- MCP tools table ---------- */
+  .tools-card {
+    background: var(--app-bg);
+    border-radius: 10px;
+    border: 1px solid var(--app-rule);
+    overflow: hidden;
+    max-width: 1100px;
+    margin: 48px 0 0 0;
+    font-family: var(--font-body);
+  }
+  .tools-head {
+    display: grid;
+    grid-template-columns: 220px 1fr 80px 100px;
+    gap: 16px;
+    padding: 12px 20px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: var(--app-dim);
+    border-bottom: 1px solid var(--app-rule);
+    font-family: var(--font-code);
+  }
+  .tool-row {
+    display: grid;
+    grid-template-columns: 220px 1fr 80px 100px;
+    gap: 16px;
+    padding: 13px 20px;
+    border-bottom: 1px solid var(--app-rule);
+    align-items: center;
+    font-size: 13px;
+  }
+  .tool-row:last-child { border-bottom: none; }
+  .tool-row:hover { background: rgba(255,255,255,0.03); }
+  .tool-name { color: var(--accent); font-family: var(--font-code); font-weight: 600; font-size: 12px; }
+  .tool-how  {
+    font-family: var(--font-code);
+    font-size: 11px;
+    color: var(--app-dim);
+    margin-top: 4px;
+    line-height: 1.5;
+  }
+  .tool-desc { color: var(--app-mute); font-size: 12px; }
+  .tool-save { font-family: var(--font-code); font-size: 11px; color: var(--app-green); font-weight: 600; }
+  .tool-save.na { color: var(--app-dim); }
+
+  /* ---------- CLI table ---------- */
+  .cli-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 2px;
+    background: var(--app-rule);
+    border: 1px solid var(--app-rule);
+    border-radius: 8px;
+    overflow: hidden;
+    max-width: 960px;
+    margin: 40px 0 0 0;
+    font-family: var(--font-code);
+    font-size: 13px;
+  }
+  .cli-row {
+    background: var(--app-bg);
+    padding: 14px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .cli-cmd { color: var(--accent); font-weight: 600; }
+  .cli-desc { color: var(--app-mute); font-size: 11.5px; }
+
+  /* ---------- Context / Analytics pane ---------- */
   .ctx { padding: 22px 26px; font-family: var(--font-body); }
   .ctx-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }
   .ctx-title { font-size: 13px; color: var(--app-mute); font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; }
@@ -593,154 +675,9 @@
     padding-top: 24px;
     border-top: 1px solid var(--app-rule);
   }
-  .ctx-stat .lab {
-    font-size: 10px;
-    letter-spacing: 1.2px;
-    text-transform: uppercase;
-    color: var(--app-dim);
-    font-weight: 600;
-  }
-  .ctx-stat .val {
-    font-family: var(--font-display);
-    font-size: 22px;
-    font-weight: 700;
-    color: var(--app-text);
-    margin-top: 2px;
-  }
+  .ctx-stat .lab { font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--app-dim); font-weight: 600; }
+  .ctx-stat .val { font-family: var(--font-display); font-size: 22px; font-weight: 700; color: var(--app-text); margin-top: 2px; }
   .ctx-stat .val em { color: var(--accent); font-style: normal; }
-
-  /* ---------- Stats section ---------- */
-  .stats {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 40px;
-    margin: 48px 0 0 0;
-    max-width: 1200px;
-    padding-right: var(--gutter);
-  }
-  .stat .num {
-    font-family: var(--font-display);
-    font-size: 72px;
-    font-weight: 800;
-    line-height: 1;
-    letter-spacing: -0.04em;
-    color: var(--ink);
-  }
-  .stat .num em { color: var(--accent); font-style: normal; }
-  .stat .label { font-size: 14px; color: var(--ink-mute); margin-top: 10px; line-height: 1.4; }
-
-  /* ---------- Feature cards grid ---------- */
-  .feature-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 2px;
-    background: var(--rule);
-    border: 1px solid var(--rule);
-    max-width: 1200px;
-    margin: 48px 0 0 0;
-    padding-right: var(--gutter);
-  }
-  .feature { background: var(--bg); padding: 32px 28px; }
-  .feature .num {
-    font-family: var(--font-code);
-    font-size: 12px;
-    color: var(--accent);
-    font-weight: 700;
-    margin-bottom: 8px;
-    letter-spacing: 1px;
-  }
-  .feature .num-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-  .feature h4 {
-    font-family: var(--font-display);
-    font-size: 20px;
-    font-weight: 700;
-    margin: 0 0 10px 0;
-    letter-spacing: -0.01em;
-  }
-  .feature p { font-size: 15px; color: var(--ink-soft); margin: 0; line-height: 1.55; }
-
-  /* ---------- MCP tools table (dark card) ---------- */
-  .tools-card {
-    background: var(--app-bg);
-    border-radius: 10px;
-    border: 1px solid var(--app-rule);
-    overflow: hidden;
-    max-width: 1100px;
-    margin: 48px 0 0 0;
-    font-family: var(--font-body);
-  }
-  .tools-head {
-    display: grid;
-    grid-template-columns: 220px 1fr 80px 100px;
-    gap: 16px;
-    padding: 12px 20px;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 1.2px;
-    text-transform: uppercase;
-    color: var(--app-dim);
-    border-bottom: 1px solid var(--app-rule);
-    font-family: var(--font-code);
-  }
-  .tool-row {
-    display: grid;
-    grid-template-columns: 220px 1fr 80px 100px;
-    gap: 16px;
-    padding: 13px 20px;
-    border-bottom: 1px solid var(--app-rule);
-    align-items: center;
-    font-size: 13px;
-  }
-  .tool-row:last-child { border-bottom: none; }
-  .tool-row:hover { background: rgba(255,255,255,0.03); }
-  .tool-name { color: var(--accent); font-family: var(--font-code); font-weight: 600; font-size: 12px; }
-  .tool-desc { color: var(--app-mute); font-size: 12px; }
-  .tool-save { font-family: var(--font-code); font-size: 11px; color: var(--app-green); font-weight: 600; }
-  .tool-save.na { color: var(--app-dim); }
-
-  /* ---------- Planned section callout ---------- */
-  .coming-band {
-    background: rgba(250,191,36,0.06);
-    border: 1px solid rgba(250,191,36,0.25);
-    border-radius: 8px;
-    padding: 28px 32px;
-    margin: 48px 0 0 0;
-    max-width: 800px;
-    font-family: var(--font-body);
-  }
-  .coming-band .cb-label {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 1.4px;
-    text-transform: uppercase;
-    color: #854d0e;
-    margin-bottom: 12px;
-  }
-  .coming-band h4 {
-    font-family: var(--font-display);
-    font-size: 22px;
-    font-weight: 700;
-    margin: 0 0 10px 0;
-    color: var(--ink);
-  }
-  .coming-band p { font-size: 15px; color: var(--ink-soft); margin: 0; line-height: 1.55; }
-
-  /* ---------- Manifesto ---------- */
-  section.manifesto {
-    background: var(--accent);
-    color: #fff;
-    padding: 140px 0;
-    border-bottom: none;
-    border-top: none;
-  }
-  section.manifesto .overline { color: rgba(255,255,255,0.75); }
-  section.manifesto h2 { color: #fff; font-size: clamp(44px, 6.5vw, 80px); letter-spacing: -0.035em; }
-  section.manifesto h2 .accent { color: var(--secondary-ink); }
-  section.manifesto h2 sup { font-size: 0.45em; font-weight: 700; color: var(--secondary-ink); vertical-align: super; line-height: 0; margin-left: 2px; }
-  section.manifesto .footnote { font-family: var(--font-body); font-size: 14px; font-weight: 500; color: rgba(255,255,255,0.75); margin: 20px 0 36px 0; letter-spacing: 0.01em; }
-  section.manifesto .footnote sup { color: var(--secondary-ink); font-weight: 700; margin-right: 2px; }
-  section.manifesto p.body { color: rgba(255,255,255,0.92); font-size: 21px; line-height: 1.55; }
-  section.manifesto p.body strong { color: #fff; }
 
   /* ---------- Footer ---------- */
   footer {
@@ -760,7 +697,6 @@
     line-height: 0.85;
     margin-bottom: 24px;
   }
-  footer .ft span { color: var(--accent); }
 
   /* ---------- Responsive ---------- */
   @media (max-width: 1100px) {
@@ -775,8 +711,7 @@
     .app-body { grid-template-columns: 1fr; min-height: 0; }
     .app-sidebar { display: none; }
     .canvas { grid-template-columns: 1fr; }
-    .canvas .pane { border-right: none; border-bottom: 1px solid var(--app-rule); }
-    .stats, .feature-grid { grid-template-columns: 1fr; }
+    .stats, .feature-grid, .mech-grid, .cli-grid { grid-template-columns: 1fr; }
     footer .ft { font-size: 56px; }
     .hero { padding: 72px var(--gutter) 56px; }
     .tools-head, .tool-row { grid-template-columns: 160px 1fr; }
@@ -789,21 +724,21 @@
 
 <nav>
   <a href="#" class="wordmark">
-    senkani<span class="tld">.ai</span><small>閃蟹 — fast claw</small>
+    senkani<small>閃蟹 — fast claw</small>
   </a>
 </nav>
 
 <!-- ========== HERO ========== -->
 <header class="hero">
-  <div class="overline">Native macOS · Swift · Apple Silicon · <span style="color:var(--accent)">In active development</span></div>
-  <h1>One terminal.<br>Every&nbsp;<span class="accent">tool.</span></h1>
-  <p class="lede">Senkani is a terminal. It is also your AI intelligence layer, your token compressor, your symbol indexer, your markdown editor, and your analytics dashboard. Not because it's a kitchen sink — because these tools should never have been separated in the first place.</p>
+  <div class="overline">Native macOS · Swift · Apple Silicon · In active development</div>
+  <h1>Token compression<br>for <span class="accent">Claude Code.</span></h1>
+  <p class="lede">Senkani is a macOS terminal workspace. It sits between Claude Code and your filesystem — intercepting tool calls, compressing output, indexing symbols — before a single token reaches the model. 50–90% context savings, zero workflow changes.</p>
   <div class="cta-row">
     <a class="btn btn-primary" href="https://github.com/ckluis/senkani">View on GitHub</a>
-    <a class="btn btn-ghost" href="#status">See what's built</a>
+    <a class="btn btn-ghost" href="#tools">13 MCP tools</a>
   </div>
   <div class="meta">
-    <span>Universal binary, Swift native</span>
+    <span>Universal binary · Swift</span>
     <span>macOS 14+</span>
     <span>MIT licensed core</span>
   </div>
@@ -827,12 +762,12 @@
         <div class="sb-label">Analytics</div>
         <div class="sb-item"><div class="ico" style="background:var(--app-green)"></div>tokens saved · 38k<div class="sb-sub">$0.46</div></div>
         <div class="sb-item dim"><div class="ico"></div>compression · 3.2×</div>
-        <div class="sb-label">Knowledge</div>
-        <div class="sb-item dim"><div class="ico"></div>index · 4.2k symbols</div>
+        <div class="sb-label">Index</div>
+        <div class="sb-item dim"><div class="ico"></div>4,218 symbols</div>
         <div class="sb-item dim"><div class="ico"></div>20 languages · active</div>
       </div>
       <div class="canvas">
-        <!-- Pane 1: Terminal (active) -->
+        <!-- Pane 1: Terminal -->
         <div class="pane">
           <div class="pane-accent" style="background:var(--app-green);"></div>
           <div class="pane-header" style="background:rgba(63,176,104,0.08);">
@@ -866,45 +801,13 @@
             <div class="term-line"><span class="term-prompt">chris</span><span class="term-at">@</span><span class="term-dir">acme-api</span> <span class="term-cursor"></span></div>
           </div>
         </div>
-        <!-- Pane 2: Markdown Preview (inactive) -->
-        <div class="pane inactive">
-          <div class="pane-accent" style="background:var(--app-yellow);"></div>
-          <div class="pane-header">
-            <div class="pane-dot idle"></div>
-            <span class="pane-title">Markdown Preview</span>
-            <span class="pane-ctx">RFC-014-order-index.md</span>
-            <div class="pane-spacer"></div>
-            <div class="fcsit">
-              <div class="fcsit-btn f-on">F</div>
-              <div class="fcsit-btn c-on">C</div>
-              <div class="fcsit-btn s-on">S</div>
-              <div class="fcsit-btn i-on">I</div>
-              <div class="fcsit-btn off">T</div>
-            </div>
-            <div class="pane-gear">⚙</div>
-            <div class="pane-close">×</div>
-          </div>
-          <div class="pane-sep"></div>
-          <div class="pane-body">
-            <div class="md-h">RFC-014 · Order table index</div>
-            <div class="md-sub">draft · chris · 4 min ago</div>
-            <div class="md-p">Customer search queries on the orders table are hitting 1.4s p99, largely because we're doing a full scan on <code style="color:var(--accent);background:rgba(255,98,0,0.08);padding:1px 4px;border-radius:3px;">(user_id, created_at)</code>.</div>
-            <div class="md-p">Proposal: add a composite index. Estimated improvement: p99 → 40ms.</div>
-            <div class="md-code"><span class="c">-- migration</span><br><span class="k">CREATE INDEX CONCURRENTLY</span><br>&nbsp;&nbsp;idx_orders_user_created<br><span class="k">ON</span> orders (user_id, created_at <span class="k">DESC</span>);</div>
-            <div class="md-p" style="margin-top:10px">
-              <span class="md-tag">infra</span>
-              <span class="md-tag">db</span>
-              <span class="md-tag">perf</span>
-            </div>
-          </div>
-        </div>
-        <!-- Pane 3: Analytics (inactive) -->
+        <!-- Pane 2: Analytics -->
         <div class="pane inactive">
           <div class="pane-accent" style="background:var(--app-blue);"></div>
           <div class="pane-header">
             <div class="pane-dot idle"></div>
             <span class="pane-title">Analytics</span>
-            <span class="pane-ctx">38 cmds</span>
+            <span class="pane-ctx">38 cmds · this session</span>
             <div class="pane-spacer"></div>
             <div class="fcsit">
               <div class="fcsit-btn f-on">F</div>
@@ -923,7 +826,7 @@
                 <div>
                   <div class="ctx-title">Tokens saved</div>
                   <div class="ctx-num"><em>38k</em></div>
-                  <div class="ctx-sub">3.2× compression ratio</div>
+                  <div class="ctx-sub">3.2× compression · 38 tool calls</div>
                 </div>
                 <div style="text-align:right;">
                   <div class="ctx-title">Cost saved</div>
@@ -949,13 +852,41 @@
             </div>
           </div>
         </div>
+        <!-- Pane 3: Agent Timeline -->
+        <div class="pane inactive">
+          <div class="pane-accent" style="background:var(--app-purple);"></div>
+          <div class="pane-header">
+            <div class="pane-dot idle"></div>
+            <span class="pane-title">Agent Timeline</span>
+            <span class="pane-ctx">38 events</span>
+            <div class="pane-spacer"></div>
+            <div class="fcsit">
+              <div class="fcsit-btn off">F</div>
+              <div class="fcsit-btn off">C</div>
+              <div class="fcsit-btn off">S</div>
+              <div class="fcsit-btn off">I</div>
+              <div class="fcsit-btn off">T</div>
+            </div>
+            <div class="pane-gear">⚙</div>
+            <div class="pane-close">×</div>
+          </div>
+          <div class="pane-sep"></div>
+          <div class="pane-body" style="font-size:11px; line-height:1.7;">
+            <div style="color:var(--app-green);">✓ <span style="color:var(--app-mute)">senkani_search OrderRepository</span> <span style="color:var(--app-dim)">→ 48 tok</span></div>
+            <div style="color:var(--app-green);">✓ <span style="color:var(--app-mute)">senkani_fetch OrderRepository</span> <span style="color:var(--app-dim)">→ 312 tok</span></div>
+            <div style="color:var(--app-green);">✓ <span style="color:var(--app-mute)">senkani_exec git diff HEAD~1</span> <span style="color:var(--app-dim)">→ 840 tok</span></div>
+            <div style="color:var(--app-amber);">⚡ <span style="color:var(--app-mute)">senkani_read .env</span> <span style="color:var(--app-dim)">→ [REDACTED:2]</span></div>
+            <div style="color:var(--app-green);">✓ <span style="color:var(--app-mute)">senkani_validate src/orders/repo.ts</span> <span style="color:var(--app-dim)">→ ok</span></div>
+            <div style="color:var(--app-green);">✓ <span style="color:var(--app-mute)">senkani_deps OrderRepository</span> <span style="color:var(--app-dim)">→ 3 imports</span></div>
+          </div>
+        </div>
       </div>
     </div>
     <div class="statusbar">
       <div class="statusbar-row">
         <span><span class="dot-s"></span>MCP connected</span>
         <span>⎇ feat/order-idx</span>
-        <span>3 panes active</span>
+        <span>3 panes</span>
         <div class="right">
           <span><strong>38k</strong> tokens saved</span>
           <span><em>4,218</em> symbols</span>
@@ -974,379 +905,102 @@
   </div>
 </div>
 
-<!-- ========== STATUS ========== -->
-<section id="status">
+<!-- ========== 1. HOOK RELAY ========== -->
+<section>
   <div class="measure">
-    <div class="overline">What's built today</div>
-    <h2>The intelligence layer <span class="accent">is live.</span></h2>
-    <p class="body">The core of Senkani — the MCP intelligence layer, the symbol indexer, the filter pipeline, the multi-pane workspace — is built and working. The full product vision extends further: agents, IDE, workflows, multi-repo git. Those are coming in Q2 2026.</p>
-    <p class="body">Here's the honest breakdown.</p>
-  </div>
-  <div class="indent" style="margin-top: 48px;">
-    <div class="feature-grid" style="max-width: 900px; padding-right: 0;">
-      <div class="feature">
-        <div class="num-row"><div class="num">01</div><span class="badge badge-live">Live</span></div>
-        <h4>Terminal workspace</h4>
-        <p>Multi-pane canvas, persistent layouts, SwiftTerm rendering. Terminal, markdown preview, browser, analytics — all working today.</p>
-      </div>
-      <div class="feature">
-        <div class="num-row"><div class="num">02</div><span class="badge badge-live">Live</span></div>
-        <h4>MCP intelligence layer</h4>
-        <p>13 tools that auto-register with Claude Code. Compress output, search symbols, redact secrets, run validators — all local, all fast.</p>
-      </div>
-      <div class="feature">
-        <div class="num-row"><div class="num">03</div><span class="badge badge-live">Live</span></div>
-        <h4>Symbol indexer</h4>
-        <p>20-language tree-sitter AST extraction, incremental updates, bidirectional dependency graph, FTS5 search. Indexes in the background.</p>
-      </div>
-      <div class="feature">
-        <div class="num-row"><div class="num">04</div><span class="badge badge-live">Live</span></div>
-        <h4>Local AI models</h4>
-        <p>Vision and embeddings on Apple Silicon via MLX. No API call, no cost, no latency. Gemma for vision, MiniLM for embeddings.</p>
-      </div>
-      <div class="feature">
-        <div class="num-row"><div class="num">05</div><span class="badge badge-live">Live</span></div>
-        <h4>Budget enforcement</h4>
-        <p>Daily and weekly spend caps enforced at the hook level — before a token touches the API. Non-bypassable. Tracked in persistent storage.</p>
-      </div>
-      <div class="feature">
-        <div class="num-row"><div class="num">06</div><span class="badge badge-live">Live</span></div>
-        <h4>Benchmarking suite</h4>
-        <p><code>senkani bench</code> measures filter throughput, indexer speed, cache hit rate, and secret scan latency. Real numbers, not marketing copy.</p>
-      </div>
-      <div class="feature">
-        <div class="num-row"><div class="num">07</div><span class="badge badge-coming">Q2 2026</span></div>
-        <h4>IDE pane</h4>
-        <p>LSP completions, tree-sitter syntax highlighting, multi-cursor editing. Reads VS Code keybindings. Open a file, get completions — no extensions.</p>
-      </div>
-      <div class="feature">
-        <div class="num-row"><div class="num">08</div><span class="badge badge-coming">Q2 2026</span></div>
-        <h4>Agent runner</h4>
-        <p>Spawn, observe, interrupt, and compose AI agents as first-class panes. Visible context budget, running cost meter, kill switch.</p>
-      </div>
-      <div class="feature">
-        <div class="num-row"><div class="num">09</div><span class="badge badge-coming">Q2 2026</span></div>
-        <h4>Workflow builder</h4>
-        <p>Pipelines of agents and commands that feed each other. Each step sees only the context it needs. Schedulable, triggerable, composable.</p>
-      </div>
+    <div class="overline">Hook relay</div>
+    <h2>Tool calls are intercepted<br>before <span class="accent">Claude executes them.</span></h2>
+    <p class="body">Claude Code exposes a hook system: pre-tool-use and post-tool-use events emitted as JSON to a registered process's stdio. Senkani registers a hook binary that intercepts every <code style="font-family:var(--font-code);color:var(--accent-lo)">Read</code>, <code style="font-family:var(--font-code);color:var(--accent-lo)">Bash</code>, and <code style="font-family:var(--font-code);color:var(--accent-lo)">Grep</code> call and redirects it through the compression pipeline — before the original tool fires.</p>
+    <div class="how">
+      <div class="how-lbl">How</div>
+      <strong>SenkaniHook binary</strong> (Sources/HookRelay/) — zero non-Foundation dependencies, ~5ms round-trip latency.<br><br>
+      Routing logic:<br>
+      <em>Read</em> → redirect to <code>mcp__senkani__read</code> (caching, ANSI strip, secret redaction)<br>
+      <em>Bash</em> → redirect to <code>mcp__senkani__exec</code> if read-only; passthrough for mutating commands (git commit, rm, docker run, npm install) and shell builtins (cd, export, eval, sudo)<br>
+      <em>Grep</em> → redirect to <code>mcp__senkani__search</code> if pattern is a plain identifier (alphanumeric + underscore); passthrough for regex patterns<br><br>
+      Response format: <code>{}</code> (passthrough) or <code>{"hookSpecificOutput": {"permissionDecision": "deny", "reason": "…"}}</code>.<br>
+      Budget enforcement also runs on this path — if the daily or weekly spend cap is exceeded, the hook returns a deny decision before any token is consumed.<br><br>
+      <strong>Layer 3 — re-read suppression:</strong> if a file was already served by <code>mcp__senkani__read</code> within the last 5 minutes and its mtime hasn't changed, the hook denies the Read call with: <em>"This file was already read 42s ago and hasn't changed. Use your existing knowledge."</em> The tool call never executes. Zero tokens consumed — not redirected, eliminated.
     </div>
-  </div>
-</section>
-
-<!-- ========== PHILOSOPHY ========== -->
-<section>
-  <div class="measure">
-    <div class="overline">The idea</div>
-    <h2>Everything works. Out of the&nbsp;box.</h2>
-    <p class="body">Every developer tool ships with the same implicit contract: <em>you will spend a weekend configuring this before it does anything for you.</em> Dotfiles, plugin managers, YAML, TOML, JSON, shell profiles, environment bootstrappers — a Jenga tower of config that has to be rebuilt on every new machine.</p>
-    <p class="body">Senkani rejects the contract. Install the binary. Open it. A terminal is running. Your project is indexed. 13 MCP tools are registered with Claude Code. The markdown editor renders. The analytics pane is tracking your token spend. You did not configure any of this.</p>
-    <p class="body">The philosophy is short: <strong>if the tool needs config to be useful, the tool is broken.</strong></p>
-  </div>
-</section>
-
-<!-- ========== MCP INTELLIGENCE LAYER ========== -->
-<section>
-  <div class="measure">
-    <div class="overline">The intelligence layer</div>
-    <h2>50–90% fewer tokens.<br><span class="accent">No workflow changes.</span></h2>
-    <p class="body">Every tool call your AI makes passes through Senkani first. File reads, shell commands, symbol lookups — each is intercepted, compressed, and returned with only what the AI actually needs. The AI doesn't know anything changed. You save 50–90% of your context budget on every session.</p>
   </div>
   <div class="indent">
-    <div class="tools-card">
-      <div class="tools-head">
-        <div>Tool</div>
-        <div>What it does</div>
-        <div>Savings</div>
-        <div>Status</div>
+    <div class="mockup mockup-md" style="max-width:860px;">
+      <div class="tb">
+        <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
+        <div class="tb-title">hook routing · PreToolUse</div>
+        <div class="tb-spacer"></div>
       </div>
-      <div class="tool-row">
-        <div class="tool-name">senkani_read</div>
-        <div class="tool-desc">File reads — ANSI strip, blank collapse, secret redaction, session cache. Re-reads of unchanged files return instantly.</div>
-        <div class="tool-save">50–99%</div>
-        <div><span class="badge badge-live-d">Live</span></div>
-      </div>
-      <div class="tool-row">
-        <div class="tool-name">senkani_exec</div>
-        <div class="tool-desc">Shell commands — 24+ command-specific rules (git, npm, cargo, docker…). Strips noise, deduplicates, truncates.</div>
-        <div class="tool-save">60–90%</div>
-        <div><span class="badge badge-live-d">Live</span></div>
-      </div>
-      <div class="tool-row">
-        <div class="tool-name">senkani_search</div>
-        <div class="tool-desc">Symbol lookup from local tree-sitter index. ~50 tokens vs ~5000 from grepping files.</div>
-        <div class="tool-save">99%</div>
-        <div><span class="badge badge-live-d">Live</span></div>
-      </div>
-      <div class="tool-row">
-        <div class="tool-name">senkani_fetch</div>
-        <div class="tool-desc">Read only a symbol's exact lines — not the entire file.</div>
-        <div class="tool-save">50–99%</div>
-        <div><span class="badge badge-live-d">Live</span></div>
-      </div>
-      <div class="tool-row">
-        <div class="tool-name">senkani_explore</div>
-        <div class="tool-desc">Navigate codebase via bidirectional import graph. ~500 tokens for a typical project.</div>
-        <div class="tool-save">90%+</div>
-        <div><span class="badge badge-live-d">Live</span></div>
-      </div>
-      <div class="tool-row">
-        <div class="tool-name">senkani_deps</div>
-        <div class="tool-desc">Query dependency graph. "What does X import?" and "What imports X?" Across 15+ languages.</div>
-        <div class="tool-save">—</div>
-        <div><span class="badge badge-live-d">Live</span></div>
-      </div>
-      <div class="tool-row">
-        <div class="tool-name">senkani_validate</div>
-        <div class="tool-desc">Local syntax validation across 20 languages. Never burns tokens on a build just to catch a typo.</div>
-        <div class="tool-save">100%</div>
-        <div><span class="badge badge-live-d">Live</span></div>
-      </div>
-      <div class="tool-row">
-        <div class="tool-name">senkani_embed</div>
-        <div class="tool-desc">Text embeddings on Apple Silicon via MLX. Zero API cost, zero latency, zero privacy concern.</div>
-        <div class="tool-save">$0/call</div>
-        <div><span class="badge badge-live-d">Live</span></div>
-      </div>
-      <div class="tool-row">
-        <div class="tool-name">senkani_vision</div>
-        <div class="tool-desc">Vision model on Apple Silicon (Gemma via MLX). OCR, UI analysis, screenshot reading — all local.</div>
-        <div class="tool-save">$0/call</div>
-        <div><span class="badge badge-live-d">Live</span></div>
+      <div style="padding:20px 24px; background:var(--app-panel); font-family:var(--font-code); font-size:12px; line-height:1.8;">
+        <div style="color:var(--app-dim);">// Claude Code emits JSON to hook stdin</div>
+        <div style="color:var(--app-text);">{</div>
+        <div style="color:var(--app-text);">&nbsp;&nbsp;<span style="color:var(--app-blue);">"tool_name"</span>: <span style="color:var(--app-green);">"Read"</span>,</div>
+        <div style="color:var(--app-text);">&nbsp;&nbsp;<span style="color:var(--app-blue);">"tool_input"</span>: { <span style="color:var(--app-blue);">"file_path"</span>: <span style="color:var(--app-green);">"/src/orders/repo.ts"</span> }</div>
+        <div style="color:var(--app-text);">}</div>
+        <div style="margin-top:16px; color:var(--app-dim);">// HookRouter decision</div>
+        <div style="color:var(--app-green);">→ Read detected → redirect to mcp__senkani__read</div>
+        <div style="color:var(--app-mute);">→ cache check: miss (first read this session)</div>
+        <div style="color:var(--app-mute);">→ read + stripANSI + collapseBlankRuns + secretScan</div>
+        <div style="color:var(--app-mute);">→ store in ReadCache keyed by (path, mtime)</div>
+        <div style="color:var(--app-green);">→ return compressed result: 4,120 → 1,840 bytes (55% reduction)</div>
+        <div style="margin-top:16px; color:var(--app-dim);">// Hook response to Claude Code</div>
+        <div style="color:var(--app-text);">{} <span style="color:var(--app-dim);">// empty = passthrough (Claude sees the MCP result)</span></div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ========== PANE SYSTEM ========== -->
+<!-- ========== 2. FILTER PIPELINE ========== -->
 <section>
   <div class="measure">
-    <div class="overline">The pane system</div>
-    <h2>Working panes,<br>infinite <span class="accent">layouts.</span></h2>
-    <p class="body">A senkani project is a horizontally-scrollable canvas of panes. Each pane is one primitive type. You drag, split, resize, and arrange them however makes sense for what you're doing — and Senkani remembers, per project.</p>
-    <p class="body">No workspaces to save. No layouts to name. Close the app, reopen it, everything is exactly where you left it.</p>
+    <div class="overline">Filter pipeline</div>
+    <h2>Shell output is compressed<br>before <span class="accent">Claude reads it.</span></h2>
+    <p class="body"><code style="font-family:var(--font-code);color:var(--accent-lo)">senkani_exec</code> runs a command and applies a rule set before returning output. 24 built-in rules cover the noisiest commands in a typical dev workflow — git, npm, cargo, docker, make, yarn, pip, and more. Rules are matched by (command, subcommand) pair.</p>
+    <div class="how">
+      <div class="how-lbl">How</div>
+      <strong>FilterEngine</strong> (Sources/Filter/FilterEngine.swift) applies an ordered rule chain. Available operations:<br><br>
+      <em>stripANSI</em> — remove all ANSI escape sequences<br>
+      <em>head(n)</em> / <em>tail(n)</em> — keep first or last n lines<br>
+      <em>truncateBytes(n)</em> — hard byte cap on output<br>
+      <em>keepMatching(pattern)</em> — keep only lines matching regex<br>
+      <em>stripMatching(pattern)</em> — remove lines matching regex<br>
+      <em>dedupLines</em> — collapse consecutive duplicate lines<br>
+      <em>groupSimilar</em> — fold runs of similar lines into "… and N more"<br>
+      <em>stripBlankRuns</em> — collapse multiple blank lines to one<br><br>
+      Example: <code>npm install</code> → stripANSI, dedupLines, stripMatching(progress bars), tail(20). 400-line npm output → 8 lines.
+    </div>
   </div>
-
   <div class="indent">
-    <div class="tabs">
-      <div class="tab-list">
-        <button class="tab-btn active" data-tab="term">Terminal <span class="badge badge-live">Live</span></button>
-        <button class="tab-btn" data-tab="md">Markdown <span class="badge badge-live">Live</span></button>
-        <button class="tab-btn" data-tab="br">Browser <span class="badge badge-live">Live</span></button>
-        <button class="tab-btn" data-tab="ide">IDE <span class="badge badge-coming">Q2 2026</span></button>
-        <button class="tab-btn" data-tab="kb">Knowledge <span class="badge badge-coming">Q2 2026</span></button>
+    <div class="mockup mockup-md" style="max-width:860px;">
+      <div class="tb">
+        <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
+        <div class="tb-title">senkani_exec · filter pipeline</div>
+        <div class="tb-spacer"></div>
       </div>
-
-      <!-- Terminal -->
-      <div class="tab-panel active" data-panel="term">
-        <p class="body">A proper terminal. SwiftTerm native, Apple Silicon GPU-accelerated, sub-3ms render latency (measured by <code>senkani bench</code>). True color, ligatures, Powerline. Claude Code tool calls are intercepted and compressed automatically — you don't change how you work.</p>
-        <div class="mockup mockup-md">
-          <div class="tb">
-            <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
-            <div class="tb-title">senkani — acme-api</div><div class="tb-spacer"></div>
-          </div>
-          <div style="background:var(--app-bg); padding: 6px;">
-            <div class="pane" style="border-color:var(--app-green); box-shadow: 0 0 0 1px rgba(63,176,104,0.12), 0 4px 16px rgba(63,176,104,0.18);">
-              <div class="pane-accent" style="background:var(--app-green);"></div>
-              <div class="pane-header" style="background:rgba(63,176,104,0.08);">
-                <div class="pane-dot running"></div>
-                <span class="pane-title">Terminal</span>
-                <span class="pane-ctx">~/acme-api</span>
-                <div class="pane-spacer"></div>
-                <div class="fcsit">
-                  <div class="fcsit-btn f-on">F</div>
-                  <div class="fcsit-btn c-on">C</div>
-                  <div class="fcsit-btn s-on">S</div>
-                  <div class="fcsit-btn i-on">I</div>
-                  <div class="fcsit-btn t-on">T</div>
-                </div>
-                <div class="pane-gear">⚙</div>
-                <div class="pane-close">×</div>
-              </div>
-              <div class="pane-sep"></div>
-              <div class="pane-body" style="min-height:220px; font-size:13px; line-height:1.65;">
-                <div class="term-line"><span class="term-prompt">chris</span><span class="term-at">@</span><span class="term-dir">acme-api</span> <span class="term-cmd">senkani</span> <span class="term-arg">bench</span></div>
-                <div class="term-line"><span class="term-out">→ running benchmark suite (256 iterations)</span></div>
-                <div class="term-line"><span class="term-ok">  render latency    </span><span class="term-out">p50 2.1ms   p99  3.4ms</span></div>
-                <div class="term-line"><span class="term-ok">  keystroke → glyph </span><span class="term-out">p50 0.8ms   p99  1.2ms</span></div>
-                <div class="term-line"><span class="term-ok">  filter throughput </span><span class="term-out">14,200 lines/sec sustained</span></div>
-                <div class="term-line"><span class="term-ok">  symbol search     </span><span class="term-out">cold 4.2ms  cached 0.8ms</span></div>
-                <div class="term-line">&nbsp;</div>
-                <div class="term-line"><span class="term-prompt">chris</span><span class="term-at">@</span><span class="term-dir">acme-api</span> <span class="term-cursor"></span></div>
-              </div>
-            </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;background:var(--app-bg);gap:1px;">
+        <div style="padding:16px 18px;background:var(--app-panel);">
+          <div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--app-dim);margin-bottom:12px;font-family:var(--font-body);">Raw output · npm install</div>
+          <div style="font-family:var(--font-code);font-size:11px;line-height:1.6;color:var(--app-mute);">
+            <div style="color:var(--app-red);">⸺⸺⸺⸺⸺⸺[ESC[32m████████⸺⸺</div>
+            <div>npm warn deprecated inflight@1.0.6</div>
+            <div>npm warn deprecated inflight@1.0.6</div>
+            <div>npm warn deprecated inflight@1.0.6</div>
+            <div style="color:var(--app-dim);">[……………… 382 more lines ………………]</div>
+            <div>added 847 packages in 14s</div>
+            <div>&nbsp;</div>
+            <div style="color:var(--app-dim);">428 lines · 18,400 bytes</div>
           </div>
         </div>
-      </div>
-
-      <!-- Markdown -->
-      <div class="tab-panel" data-panel="md">
-        <p class="body">Live-rendered markdown from file. Updates on save. Code fences with syntax highlighting. Drop in notes, RFCs, runbooks — they render immediately alongside your terminal.</p>
-        <div class="mockup mockup-md">
-          <div class="tb">
-            <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
-            <div class="tb-title">senkani — acme-api</div><div class="tb-spacer"></div>
-          </div>
-          <div style="background:var(--app-bg); padding:6px;">
-            <div class="pane inactive" style="border-color:var(--app-yellow); box-shadow: 0 0 0 1px rgba(212,160,23,0.15), 0 4px 16px rgba(212,160,23,0.12);">
-              <div class="pane-accent" style="background:var(--app-yellow); opacity:1;"></div>
-              <div class="pane-header" style="background:rgba(212,160,23,0.07);">
-                <div class="pane-dot" style="background:var(--app-yellow);"></div>
-                <span class="pane-title">Markdown Preview</span>
-                <span class="pane-ctx">RFC-014-order-index.md</span>
-                <div class="pane-spacer"></div>
-                <div class="fcsit">
-                  <div class="fcsit-btn f-on">F</div>
-                  <div class="fcsit-btn c-on">C</div>
-                  <div class="fcsit-btn s-on">S</div>
-                  <div class="fcsit-btn i-on">I</div>
-                  <div class="fcsit-btn off">T</div>
-                </div>
-                <div class="pane-gear">⚙</div>
-                <div class="pane-close">×</div>
-              </div>
-              <div class="pane-sep"></div>
-              <div class="pane-body" style="padding:0;">
-                <div style="display:grid;grid-template-columns:1fr 1fr;min-height:220px;">
-                  <div style="padding:14px 16px;border-right:1px solid var(--app-rule);font-family:var(--font-code);font-size:11.5px;line-height:1.7;color:var(--app-text);">
-                    <div><span style="color:var(--app-yellow)"># RFC-014</span> · Order index</div>
-                    <div>&nbsp;</div>
-                    <div><span style="color:var(--app-mute)">Customer search on the</span></div>
-                    <div><span style="color:var(--app-mute)">orders table is hitting</span></div>
-                    <div><span style="color:var(--app-mute)">1.4s p99.</span></div>
-                    <div>&nbsp;</div>
-                    <div><span style="color:var(--app-yellow)">## Proposal</span></div>
-                    <div>&nbsp;</div>
-                    <div><span style="color:var(--app-mute)">Add composite index on</span></div>
-                    <div><span style="color:var(--app-blue)">`(user_id, created_at)`</span></div>
-                  </div>
-                  <div style="padding:14px 16px;font-family:var(--font-body);font-size:11.5px;line-height:1.55;">
-                    <div style="font-family:var(--font-display);font-size:16px;font-weight:800;color:var(--app-text);margin-bottom:4px;">RFC-014 · Order index</div>
-                    <div style="color:var(--app-text);margin-bottom:8px;">Customer search on the orders table is hitting 1.4s p99.</div>
-                    <div style="font-family:var(--font-display);font-size:13px;font-weight:700;color:var(--app-text);margin-top:10px;margin-bottom:4px;">Proposal</div>
-                    <div style="color:var(--app-text);">Add composite index on <code style="background:var(--app-panel);padding:1px 5px;border-radius:2px;font-size:10px;color:var(--app-blue);">(user_id, created_at)</code></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Browser -->
-      <div class="tab-panel" data-panel="br">
-        <p class="body">A real browser pane — WKWebView, not a wrapper. Localhost, staging, production, docs, whatever. Keep your dev server visible without alt-tabbing. DevTools one keystroke away.</p>
-        <div class="mockup mockup-md">
-          <div class="tb">
-            <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
-            <div class="tb-title">senkani — acme-api</div><div class="tb-spacer"></div>
-          </div>
-          <div style="background:var(--app-bg); padding:6px;">
-            <div class="pane inactive" style="border-color:var(--app-blue); box-shadow: 0 0 0 1px rgba(74,158,224,0.12), 0 4px 16px rgba(74,158,224,0.10);">
-              <div class="pane-accent" style="background:var(--app-blue); opacity:1;"></div>
-              <div class="pane-header" style="background:rgba(74,158,224,0.07);">
-                <div class="pane-dot" style="background:var(--app-blue);"></div>
-                <span class="pane-title">Browser</span>
-                <span class="pane-ctx">localhost:3000/orders?user=u_4821</span>
-                <div class="pane-spacer"></div>
-                <div class="fcsit">
-                  <div class="fcsit-btn off">F</div>
-                  <div class="fcsit-btn off">C</div>
-                  <div class="fcsit-btn off">S</div>
-                  <div class="fcsit-btn off">I</div>
-                  <div class="fcsit-btn off">T</div>
-                </div>
-                <div class="pane-gear">⚙</div>
-                <div class="pane-close">×</div>
-              </div>
-              <div class="pane-sep"></div>
-              <div class="pane-body">
-                <div class="br-bar"><span class="lock">🔒</span>localhost:3000/orders?user=u_4821</div>
-                <div class="br-content" style="padding:18px;">
-                  <h4>Order history · Alex Chen</h4>
-                  <p style="margin-bottom:10px;">12 orders · $4,281.90 lifetime</p>
-                  <div class="ph" style="height:64px"></div>
-                  <div style="display:flex;gap:10px;margin-top:8px;font-family:var(--font-code);font-size:10px;color:#8a867d">
-                    <span>p99: <strong style="color:#c94a00">38ms</strong></span>
-                    <span>rows: <strong style="color:#c94a00">124</strong></span>
-                    <span>cache: <strong style="color:#c94a00">hit</strong></span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- IDE (Coming) -->
-      <div class="tab-panel" data-panel="ide">
-        <p class="body"><span class="badge badge-coming" style="margin-right:8px;">Coming Q2 2026</span> A real editor — LSP, tree-sitter syntax highlighting, multi-cursor, inline diagnostics. Reads VS Code keybindings so your muscle memory survives the move. The symbol index that powers senkani's MCP tools will drive completions here too.</p>
-        <div class="mockup mockup-md">
-          <div class="tb">
-            <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
-            <div class="tb-title">senkani — acme-api</div><div class="tb-spacer"></div>
-          </div>
-          <div style="background:var(--app-bg); padding:6px; opacity:0.65;">
-            <div class="pane inactive">
-              <div class="pane-accent" style="background:#d4a017; opacity:0.5;"></div>
-              <div class="pane-header">
-                <div class="pane-dot idle"></div>
-                <span class="pane-title">IDE</span>
-                <span class="pane-ctx">src/orders/repo.ts — coming Q2 2026</span>
-                <div class="pane-spacer"></div>
-                <div class="fcsit">
-                  <div class="fcsit-btn off">F</div><div class="fcsit-btn off">C</div>
-                  <div class="fcsit-btn off">S</div><div class="fcsit-btn off">I</div><div class="fcsit-btn off">T</div>
-                </div>
-                <div class="pane-gear">⚙</div><div class="pane-close">×</div>
-              </div>
-              <div class="pane-sep"></div>
-              <div class="pane-body" style="min-height:200px; font-size:12.5px; line-height:1.75;">
-                <div><span style="color:var(--app-dim)">1&nbsp;&nbsp;</span><span style="color:var(--app-purple)">import</span> { db } <span style="color:var(--app-purple)">from</span> <span style="color:var(--app-green)">"../db"</span>;</div>
-                <div><span style="color:var(--app-dim)">3&nbsp;&nbsp;</span><span style="color:var(--app-purple)">export async function</span> <span style="color:var(--app-blue)">findByUser</span>(userId: <span style="color:var(--accent)">string</span>) {</div>
-                <div style="background:rgba(255,98,0,0.08)"><span style="color:var(--app-dim)">4&nbsp;&nbsp;</span>&nbsp;&nbsp;<span style="color:var(--app-purple)">return</span> db.orders<span style="color:var(--accent)">.findMany</span>({ where: { userId } })</div>
-                <div><span style="color:var(--app-dim)">5&nbsp;&nbsp;</span>}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Knowledge (Coming) -->
-      <div class="tab-panel" data-panel="kb">
-        <p class="body"><span class="badge badge-coming" style="margin-right:8px;">Coming Q2 2026</span> A queryable index of every file in your project — code, notes, tickets, everything. Ask a question in plain English, get the three files that actually answer it. The embedding infrastructure is already built (local MLX, no API cost); the search UI and pane are coming in Q2 2026.</p>
-        <div class="mockup mockup-md">
-          <div class="tb">
-            <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
-            <div class="tb-title">senkani — acme-api</div><div class="tb-spacer"></div>
-          </div>
-          <div style="background:var(--app-bg); padding:6px; opacity:0.65;">
-            <div class="pane inactive">
-              <div class="pane-accent" style="background:var(--app-cyan); opacity:0.5;"></div>
-              <div class="pane-header">
-                <div class="pane-dot idle"></div>
-                <span class="pane-title">Knowledge Base</span>
-                <span class="pane-ctx">knowledge — coming Q2 2026</span>
-                <div class="pane-spacer"></div>
-                <div class="fcsit">
-                  <div class="fcsit-btn off">F</div><div class="fcsit-btn off">C</div>
-                  <div class="fcsit-btn off">S</div><div class="fcsit-btn i-on">I</div><div class="fcsit-btn off">T</div>
-                </div>
-                <div class="pane-gear">⚙</div><div class="pane-close">×</div>
-              </div>
-              <div class="pane-sep"></div>
-              <div class="pane-body" style="min-height:200px;">
-                <div style="display:flex;gap:8px;align-items:center;background:var(--app-elev);border:1px solid var(--app-rule-2);border-radius:5px;padding:8px 12px;margin-bottom:14px;">
-                  <span style="color:var(--accent)">⌕</span>
-                  <span style="font-family:var(--font-code);font-size:11.5px;color:var(--app-text)">where do we handle order retries?</span>
-                  <span style="margin-left:auto;font-family:var(--font-code);font-size:10px;color:var(--app-mute)">34ms</span>
-                </div>
-                <div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--app-dim);font-weight:600;margin-bottom:8px;">3 results · ranked by relevance</div>
-                <div style="padding:10px 12px;border:1px solid var(--app-cyan);border-radius:4px;margin-bottom:8px;background:rgba(86,182,194,0.05);">
-                  <div style="font-family:var(--font-code);font-size:11px;color:var(--app-cyan);">src/orders/retry-queue.ts<span style="color:var(--app-mute)">:47</span></div>
-                  <div style="font-size:10px;color:var(--app-mute);margin-top:2px;font-family:var(--font-code)">exponential backoff, max 5 attempts, idempotency via order_id</div>
-                </div>
-              </div>
-            </div>
+        <div style="padding:16px 18px;background:var(--app-panel);">
+          <div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--app-dim);margin-bottom:12px;font-family:var(--font-body);">After FilterEngine</div>
+          <div style="font-family:var(--font-code);font-size:11px;line-height:1.6;color:var(--app-text);">
+            <div style="color:var(--app-amber);">warn deprecated inflight@1.0.6 <em style="color:var(--app-dim)">×3</em></div>
+            <div style="color:var(--app-green);">added 847 packages in 14s</div>
+            <div>&nbsp;</div>
+            <div>&nbsp;</div>
+            <div>&nbsp;</div>
+            <div>&nbsp;</div>
+            <div>&nbsp;</div>
+            <div style="color:var(--app-dim);">2 lines · 72 bytes <em style="color:var(--app-green);">(99% reduction)</em></div>
           </div>
         </div>
       </div>
@@ -1354,203 +1008,632 @@
   </div>
 </section>
 
-<!-- ========== SYMBOL INDEXER ========== -->
+<!-- ========== 3. SYMBOL INDEXER ========== -->
 <section>
   <div class="measure">
-    <div class="overline">The symbol indexer</div>
-    <h2>20 languages.<br><span class="accent">Zero configuration.</span></h2>
-    <p class="body">Senkani ships with vendored tree-sitter grammars for 20 languages. Open a project — any project — and it starts indexing immediately. No config, no language server setup, no extensions to install.</p>
-    <p class="body">The index backs the <code>senkani_search</code>, <code>senkani_fetch</code>, <code>senkani_explore</code>, and <code>senkani_deps</code> MCP tools. It also drives the upcoming IDE completions and semantic search.</p>
+    <div class="overline">Symbol indexer</div>
+    <h2>Find any symbol in <span class="accent">~50 tokens.</span><br>Not ~5,000.</h2>
+    <p class="body">When Claude Code calls <code style="font-family:var(--font-code);color:var(--accent-lo)">Grep</code> for an identifier, the hook intercepts it and queries the local symbol index instead. The index stores exact file locations, line ranges, kinds, and container hierarchy for every function, class, struct, and enum in the project.</p>
+    <div class="how">
+      <div class="how-lbl">How</div>
+      <strong>SymbolIndexer</strong> (Sources/Indexer/) walks the project on startup using <strong>FileWalker</strong>, groups files by language, and routes each to either <strong>TreeSitterBackend</strong> or <strong>RegexBackend</strong>.<br><br>
+      TreeSitterBackend creates an AST from vendored C parsers, walks nodes to extract: function name, class name, struct/enum/protocol, exact start/end line, container (method-inside-class), kind label.<br><br>
+      Results land in an in-memory <code>IndexEntry</code> array. <code>SymbolIndex.search()</code> does substring matching on name, kind, file path, and container. Typical query result: 1–5 entries, ~50 tokens. Grep equivalent: full file scan, ~5,000 tokens.
+    </div>
   </div>
   <div class="indent">
     <div class="mockup mockup-md" style="max-width: 860px;">
       <div class="tb">
         <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
-        <div class="tb-title">senkani — acme-api</div><div class="tb-spacer"></div>
+        <div class="tb-title">senkani index · 4,218 symbols</div>
+        <div class="tb-spacer"></div>
       </div>
       <div style="background:var(--app-bg); padding:6px;">
-      <div class="pane inactive" style="border-color:var(--app-purple); box-shadow: 0 0 0 1px rgba(198,120,221,0.12);">
-        <div class="pane-accent" style="background:var(--app-purple); opacity:1;"></div>
-        <div class="pane-header" style="background:rgba(198,120,221,0.07);">
-          <div class="pane-dot" style="background:var(--app-purple);"></div>
-          <span class="pane-title">Skill Library</span>
-          <span class="pane-ctx">senkani index · 4,218 symbols</span>
-          <div class="pane-spacer"></div>
-          <div class="fcsit">
-            <div class="fcsit-btn off">F</div><div class="fcsit-btn off">C</div>
-            <div class="fcsit-btn off">S</div><div class="fcsit-btn i-on">I</div><div class="fcsit-btn off">T</div>
+        <div class="pane inactive" style="border-color:var(--app-purple); box-shadow: 0 0 0 1px rgba(198,120,221,0.12);">
+          <div class="pane-accent" style="background:var(--app-purple);"></div>
+          <div class="pane-header" style="background:rgba(198,120,221,0.07);">
+            <div class="pane-dot" style="background:var(--app-purple);"></div>
+            <span class="pane-title">Index</span>
+            <span class="pane-ctx">senkani search OrderRepository</span>
+            <div class="pane-spacer"></div>
+            <div class="fcsit">
+              <div class="fcsit-btn off">F</div><div class="fcsit-btn off">C</div>
+              <div class="fcsit-btn off">S</div><div class="fcsit-btn i-on">I</div><div class="fcsit-btn off">T</div>
+            </div>
+            <div class="pane-gear">⚙</div><div class="pane-close">×</div>
           </div>
-          <div class="pane-gear">⚙</div><div class="pane-close">×</div>
-        </div>
-        <div class="pane-sep"></div>
-      <div style="padding: 18px 22px; font-family: var(--font-code); font-size: 12.5px; line-height: 1.7; background: var(--app-panel);">
-        <div class="term-line"><span style="color:var(--app-mute)">→ walking</span> <span style="color:var(--app-blue)">src/</span> <span style="color:var(--app-mute)">(4,218 files, 20 languages)</span></div>
-        <div class="term-line"><span style="color:var(--app-mute)">→ tree-sitter:</span> <span style="color:var(--app-green)">TypeScript · Go · Rust · Swift · Python · Ruby · +14 more</span></div>
-        <div class="term-line"><span style="color:var(--app-mute)">→ regex fallback:</span> <span style="color:var(--app-mute)">142 files</span></div>
-        <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--app-rule);">
-          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:20px;">
-            <div><div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--app-dim);">Symbols</div><div style="font-size:28px;font-weight:700;color:var(--app-text);font-family:var(--font-display);">4,218</div></div>
-            <div><div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--app-dim);">Languages</div><div style="font-size:28px;font-weight:700;color:var(--app-text);font-family:var(--font-display);">20</div></div>
-            <div><div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--app-dim);">Index time</div><div style="font-size:28px;font-weight:700;color:var(--accent);font-family:var(--font-display);">1.4s</div></div>
-            <div><div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--app-dim);">Search latency</div><div style="font-size:28px;font-weight:700;color:var(--accent);font-family:var(--font-display);">&lt;5ms</div></div>
+          <div class="pane-sep"></div>
+          <div style="padding:18px 22px;font-family:var(--font-code);font-size:12px;line-height:1.7;background:var(--app-panel);">
+            <div style="color:var(--app-mute);">→ walking src/ (4,218 files, 20 languages)</div>
+            <div style="color:var(--app-mute);">→ tree-sitter: <span style="color:var(--app-green)">TypeScript · Go · Rust · Swift · Python · +15 more</span></div>
+            <div style="color:var(--app-mute);">→ regex fallback: 142 files · index time: <span style="color:var(--accent)">1.4s cold</span></div>
+            <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--app-rule);">
+              <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:20px;">
+                <div><div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--app-dim);font-family:var(--font-body);">Symbols</div><div style="font-size:28px;font-weight:700;color:var(--app-text);font-family:var(--font-display);">4,218</div></div>
+                <div><div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--app-dim);font-family:var(--font-body);">Languages</div><div style="font-size:28px;font-weight:700;color:var(--app-text);font-family:var(--font-display);">20</div></div>
+                <div><div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--app-dim);font-family:var(--font-body);">Cold search</div><div style="font-size:28px;font-weight:700;color:var(--accent);font-family:var(--font-display);">&lt;5ms</div></div>
+                <div><div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--app-dim);font-family:var(--font-body);">Cached</div><div style="font-size:28px;font-weight:700;color:var(--accent);font-family:var(--font-display);">&lt;1ms</div></div>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ========== CONTEXT / SESSION TRACKING ========== -->
+<!-- ========== 4. INDEXER INTERNALS (MECH GRID) ========== -->
 <section>
   <div class="measure">
-    <div class="overline">Context awareness</div>
-    <h2>Your context window is a&nbsp;<span class="accent">resource.</span></h2>
-    <p class="body">Every session, Senkani tracks what it compressed, how many tokens it saved, and what it cost. The analytics pane shows you the breakdown in real time: filter savings, indexer savings, secrets redacted. Not estimated — measured from the actual byte deltas.</p>
-    <p class="body">The session database stores the full history in SQLite with FTS5 full-text search. <code>senkani stats</code> gives you lifetime numbers. The analytics pane charts them session by session.</p>
+    <div class="overline">Indexer internals</div>
+    <h2>How the index<br>actually <span class="accent">works.</span></h2>
+  </div>
+  <div class="indent">
+    <div class="mech-grid">
+      <div class="mech">
+        <div class="mech-cat">Tree-sitter</div>
+        <h4>20 grammars, vendored in the binary</h4>
+        <div class="mech-what">AST precision across Swift, Python, TypeScript/TSX/JS, Go, Rust, Java, C, C++, C#, Ruby, PHP, Kotlin, Bash, Lua, Scala, Elixir, Haskell, Zig.</div>
+        <div class="mech-how">C parser sources live in <code>Sources/</code> as vendored submodules. No runtime grammar loading, no network fetch. Binary includes all 20 parsers. Grammars are pinned — <code>senkani grammars</code> shows versions.</div>
+      </div>
+      <div class="mech">
+        <div class="mech-cat">Incremental updates</div>
+        <h4>Large projects re-index in &lt;100ms</h4>
+        <div class="mech-what">Only changed files are re-parsed. The file watcher emits change events; the indexer re-parses the affected file and updates only its entries in the index.</div>
+        <div class="mech-how"><strong>TreeCache</strong> stores (file path → parsed AST). On change: targeted re-parse for files &lt;50MB. If &gt;50 files change simultaneously, full re-index. In-memory <code>IndexEntry</code> array is replaced atomically.</div>
+      </div>
+      <div class="mech">
+        <div class="mech-cat">Dependency graph</div>
+        <h4>Navigate by import relationships</h4>
+        <div class="mech-what"><code>senkani_explore</code> and <code>senkani_deps</code> expose a bidirectional import graph. "What does X import?" and "What imports X?" across 15+ languages.</div>
+        <div class="mech-how"><strong>DependencyExtractor</strong> analyzes import statements via tree-sitter during the same indexing pass. Stores directed edges in both directions. Query returns a subgraph, not the full adjacency list.</div>
+      </div>
+      <div class="mech">
+        <div class="mech-cat">Container hierarchy</div>
+        <h4>Methods are indexed inside their class</h4>
+        <div class="mech-what">A search for <code>findByUser</code> returns the result as <code>OrderRepository.findByUser</code> at line 47, not just a bare function name.</div>
+        <div class="mech-how">During AST walking, the indexer tracks the parent node stack. When a function node is inside a class/struct node, the class name is stored as the <strong>container</strong> field on the <code>IndexEntry</code>.</div>
+      </div>
+      <div class="mech">
+        <div class="mech-cat">Regex fallback</div>
+        <h4>Unsupported languages still get indexed</h4>
+        <div class="mech-what">Files in languages without a vendored tree-sitter grammar are parsed by a pattern-matching fallback that covers the most common identifier declarations.</div>
+        <div class="mech-how"><strong>RegexBackend</strong> applies language-specific patterns to extract function/class-like identifiers. Results have kind <code>"symbol"</code> rather than a precise kind label, and no container hierarchy.</div>
+      </div>
+      <div class="mech">
+        <div class="mech-cat">Symbol fetch</div>
+        <h4>Read only a symbol's lines, not the whole file</h4>
+        <div class="mech-what"><code>senkani_fetch OrderRepository</code> reads lines 12–94 from repo.ts — not the 800-line file. Token cost is proportional to the symbol, not the file.</div>
+        <div class="mech-how">The index stores exact <strong>startLine</strong> and <strong>endLine</strong> for each symbol. <code>senkani_fetch</code> slices those lines from disk. If the file is already in the <strong>ReadCache</strong>, it's a zero-cost slice.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== 5. SECRET DETECTION ========== -->
+<section>
+  <div class="measure">
+    <div class="overline">Secret detection</div>
+    <h2>API keys are stripped before<br><span class="accent">Claude reads them.</span></h2>
+    <p class="body">Every file read and every command output passes through <code style="font-family:var(--font-code);color:var(--accent-lo)">SecretDetector</code> before being returned to Claude Code. Matched values are replaced with a labeled placeholder — the redaction is visible in the tool result so Claude knows the value existed but was intentionally withheld.</p>
+    <div class="how">
+      <div class="how-lbl">How — 7 regex patterns (Sources/Filter/SecretDetector.swift)</div>
+      <em>Anthropic API key</em> — <code>sk-ant-[a-zA-Z0-9_-]{20,}</code> → <code>[REDACTED:ANTHROPIC_KEY]</code><br>
+      <em>OpenAI API key</em> — <code>sk-[a-zA-Z0-9]{20,}</code> → <code>[REDACTED:OPENAI_KEY]</code><br>
+      <em>AWS Access Key ID</em> — <code>AKIA[0-9A-Z]{16}</code> → <code>[REDACTED:AWS_ACCESS_KEY]</code><br>
+      <em>AWS Secret Access Key</em> — label + value pattern → <code>[REDACTED:AWS_SECRET]</code><br>
+      <em>GitHub Token</em> — <code>gh[pousr]_[A-Za-z0-9_]{36,}</code> → <code>[REDACTED:GITHUB_TOKEN]</code><br>
+      <em>Generic API key/secret</em> — <code>(api[_-]?key|api[_-]?secret|auth[_-]?token)[=:][A-Za-z0-9_\-]{20,}</code> → <code>[REDACTED:API_KEY]</code><br>
+      <em>Bearer token</em> — <code>(?i)bearer\s+[A-Za-z0-9_\-\.]{20,}</code> → <code>[REDACTED:BEARER_TOKEN]</code><br><br>
+      Applied on both <strong>senkani_read</strong> and <strong>senkani_exec</strong> output. Cannot be disabled per-call — only the S toggle on a pane bypasses it for that pane's context.
+    </div>
+  </div>
+</section>
+
+<!-- ========== 6. READ CACHE ========== -->
+<section>
+  <div class="measure">
+    <div class="overline">Read cache</div>
+    <h2>Re-reading an unchanged file<br>costs <span class="accent">zero tokens.</span></h2>
+    <p class="body">The first time Claude reads a file through <code style="font-family:var(--font-code);color:var(--accent-lo)">senkani_read</code>, the result is compressed and stored in a per-session cache. If the file hasn't changed on disk, every subsequent read in that session returns the cached result instantly — no disk I/O, no compression overhead, no tokens consumed.</p>
+    <div class="how">
+      <div class="how-lbl">How — ReadCache (Sources/Core/ReadCache.swift)</div>
+      Cache key: <code>(absolutePath, mtime)</code> — modification time from <code>stat(2)</code>.<br><br>
+      On read: check cache. <em>Hit</em>: return stored bytes (already compressed + secrets-scanned). <em>Miss</em>: read from disk → apply FilterPipeline → run SecretDetector → store result + mtime → return.<br><br>
+      Cache is scoped to a single <strong>MCPSession</strong>. Each Claude Code session gets a fresh session object. Cache is held in memory; not persisted across sessions. Cache invalidation is automatic: mtime change → cache miss on next access.
+    </div>
+  </div>
+</section>
+
+<!-- ========== 7. BUDGET ENFORCEMENT ========== -->
+<section>
+  <div class="measure">
+    <div class="overline">Budget enforcement</div>
+    <h2>Spending limits that block execution,<br>not just <span class="accent">warn about it.</span></h2>
+    <p class="body">Daily and weekly cost caps are enforced at the pre-tool-use hook — before Claude Code executes any tool, before a token is consumed. If the cap is exceeded, the hook returns a deny decision and the tool never runs.</p>
+    <div class="how">
+      <div class="how-lbl">How — BudgetConfig + hook path (Sources/Core/BudgetConfig.swift)</div>
+      On each pre-tool-use event, the hook reads <strong>BudgetConfig</strong> (daily + weekly limits in USD). It queries the session database for <code>costForToday()</code> and <code>costForWeek()</code> — both are real-time SQLite aggregates over the <code>token_events</code> table.<br><br>
+      If either limit is exceeded: hook response is <code>{"hookSpecificOutput": {"permissionDecision": "deny", "reason": "daily budget $X exceeded"}}</code>.<br><br>
+      This runs on the same 5ms hook path. Budget decisions are written to the database for audit. Config is in <code>.senkani/config.json</code> at the project root; overridable by env var <code>SENKANI_BUDGET_DAILY</code> / <code>SENKANI_BUDGET_WEEKLY</code>.
+    </div>
+  </div>
+</section>
+
+<!-- ========== 8. TERSE MODE ========== -->
+<section>
+  <div class="measure">
+    <div class="overline">Terse mode</div>
+    <h2>Reduce Claude's output length,<br>not just <span class="accent">what it reads.</span></h2>
+    <p class="body">The other five compression toggles reduce tokens coming in. Terse mode reduces tokens going out. It works in two layers: a system prompt injection that instructs Claude to minimize responses, and an algorithmic input compressor that also strips filler from tool outputs.</p>
+    <div class="how">
+      <div class="how-lbl">How — TerseCompressor (Sources/Filter/TerseCompressor.swift)</div>
+      <strong>System prompt injection</strong>: when T is enabled for a pane, the MCP session prepends a system message to every tool result: <em>"CRITICAL: You are in TERSE MODE. ALL responses must minimize output tokens ruthlessly. No preamble, no summaries, no apologies. Respond only with what was asked."</em><br><br>
+      <strong>Algorithmic minimization</strong>: filler phrases ("It looks like", "I'll help you with", "Certainly!", "Let me know if") are stripped from input before forwarding. Code blocks are passed through unchanged.<br><br>
+      Per-pane toggle (T button). Default: off. Works synergistically with F/C/S/I — terse reduces output tokens while the others reduce input tokens.
+    </div>
+  </div>
+</section>
+
+<!-- ========== 9. LOCAL ML ========== -->
+<section>
+  <div class="measure">
+    <div class="overline">Local ML</div>
+    <h2>Embeddings and vision.<br><span class="accent">No API call. No cost.</span></h2>
+    <p class="body"><code style="font-family:var(--font-code);color:var(--accent-lo)">senkani_embed</code> and <code style="font-family:var(--font-code);color:var(--accent-lo)">senkani_vision</code> run models on Apple Silicon. The embedding infrastructure is also what powers the upcoming semantic search pane — every file in the project will be queryable by meaning, not just text match.</p>
+    <div class="how">
+      <div class="how-lbl">How — MLX models (Sources/MCPServer/)</div>
+      <strong>senkani_embed</strong>: MiniLM-L6-v2 via MLX framework. Input: text string. Output: 384-dimensional float vector. Inference on Neural Engine, sub-200ms. Used internally for semantic similarity; also callable as an MCP tool.<br><br>
+      <strong>senkani_vision</strong>: Gemma vision model via MLX. Input: image path or base64 PNG. Output: text description / structured JSON. Handles OCR, screenshot analysis, UI element detection. Sub-500ms on M-series.<br><br>
+      Models are downloaded on first use to <code>~/Library/Application Support/Senkani/models/</code> via the Model Manager pane. Fully offline after download. No data leaves the machine.
+    </div>
+  </div>
+</section>
+
+<!-- ========== 10. SESSION DATABASE ========== -->
+<section>
+  <div class="measure">
+    <div class="overline">Session database</div>
+    <h2>Every token saved is<br><span class="accent">measured and persisted.</span></h2>
+    <p class="body">Senkani tracks what was compressed, how much was saved, and what it cost — per tool call, per pane, per session, lifetime. Numbers come from actual byte deltas between raw and compressed output, not estimates.</p>
+    <div class="how">
+      <div class="how-lbl">How — SessionDatabase (Sources/Core/SessionDatabase.swift)</div>
+      SQLite + FTS5 at <code>~/Library/Application Support/Senkani/senkani.db</code>. WAL mode for concurrent reads.<br><br>
+      <em>sessions</em> — UUID, start/end timestamps, aggregated metrics (rawBytes, savedBytes, commandCount, totalCost)<br>
+      <em>commands</em> — FTS5-indexed: tool_name, command text, output_preview. Full-text searchable via <code>senkani stats --search</code><br>
+      <em>token_events</em> — per-call record: inputTokens, outputTokens, savedTokens, costUSD, source (mcp/hook/claude), paneId<br>
+      <em>sandboxed_results</em> — large outputs paginated by <code>r_*</code> IDs for multi-part retrieval<br><br>
+      Budget queries: <code>costForToday()</code> and <code>costForWeek()</code> are SQLite aggregates on token_events. FTS5 query injection is prevented by stripping operator syntax before queries.
+    </div>
   </div>
   <div class="indent">
     <div class="mockup mockup-md" style="max-width:900px;">
       <div class="tb">
         <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
-        <div class="tb-title">senkani — acme-api</div><div class="tb-spacer"></div>
+        <div class="tb-title">senkani — analytics pane</div>
+        <div class="tb-spacer"></div>
       </div>
       <div style="background:var(--app-bg); padding:6px;">
-      <div class="pane inactive" style="border-color:var(--app-blue); box-shadow: 0 0 0 1px rgba(74,158,224,0.12);">
-        <div class="pane-accent" style="background:var(--app-blue); opacity:1;"></div>
-        <div class="pane-header" style="background:rgba(74,158,224,0.07);">
-          <div class="pane-dot" style="background:var(--app-blue);"></div>
-          <span class="pane-title">Analytics</span>
-          <span class="pane-ctx">38 cmds</span>
-          <div class="pane-spacer"></div>
-          <div class="fcsit">
-            <div class="fcsit-btn f-on">F</div><div class="fcsit-btn c-on">C</div>
-            <div class="fcsit-btn s-on">S</div><div class="fcsit-btn i-on">I</div><div class="fcsit-btn t-on">T</div>
+        <div class="pane inactive" style="border-color:var(--app-blue);">
+          <div class="pane-accent" style="background:var(--app-blue);"></div>
+          <div class="pane-header" style="background:rgba(74,158,224,0.07);">
+            <div class="pane-dot" style="background:var(--app-blue);"></div>
+            <span class="pane-title">Analytics</span>
+            <span class="pane-ctx">38 cmds · session</span>
+            <div class="pane-spacer"></div>
+            <div class="fcsit">
+              <div class="fcsit-btn f-on">F</div><div class="fcsit-btn c-on">C</div>
+              <div class="fcsit-btn s-on">S</div><div class="fcsit-btn i-on">I</div><div class="fcsit-btn t-on">T</div>
+            </div>
+            <div class="pane-gear">⚙</div><div class="pane-close">×</div>
           </div>
-          <div class="pane-gear">⚙</div><div class="pane-close">×</div>
-        </div>
-        <div class="pane-sep"></div>
-      <div class="ctx" style="background:var(--app-panel);">
-        <div class="ctx-head">
-          <div>
-            <div class="ctx-title">Tokens saved</div>
-            <div class="ctx-num"><em>38,412</em></div>
-            <div class="ctx-sub">3.2× compression ratio · 62% of context in use</div>
-          </div>
-          <div style="text-align:right;">
-            <div class="ctx-title">Cost saved</div>
-            <div class="ctx-num"><em>$0.46</em></div>
-            <div class="ctx-sub">lifetime: $14.20 saved across 31 sessions</div>
-          </div>
-        </div>
-        <div class="ctx-bar">
-          <div class="seg used"></div>
-          <div class="seg compressed"></div>
-          <div class="seg free"></div>
-        </div>
-        <div class="ctx-legend">
-          <span class="u">live context</span>
-          <span class="c">compressed</span>
-          <span class="f">available</span>
-        </div>
-        <div class="ctx-grid">
-          <div class="ctx-stat">
-            <div class="lab">Filter pipeline</div>
-            <div class="val"><em>22k</em></div>
-          </div>
-          <div class="ctx-stat">
-            <div class="lab">Symbol indexer</div>
-            <div class="val"><em>14k</em></div>
-          </div>
-          <div class="ctx-stat">
-            <div class="lab">Secret redaction</div>
-            <div class="val">2.4k</div>
+          <div class="pane-sep"></div>
+          <div class="ctx" style="background:var(--app-panel);">
+            <div class="ctx-head">
+              <div>
+                <div class="ctx-title">Tokens saved</div>
+                <div class="ctx-num"><em>38,412</em></div>
+                <div class="ctx-sub">3.2× compression · 62% context in use</div>
+              </div>
+              <div style="text-align:right;">
+                <div class="ctx-title">Cost saved</div>
+                <div class="ctx-num"><em>$0.46</em></div>
+                <div class="ctx-sub">lifetime: $14.20 across 31 sessions</div>
+              </div>
+            </div>
+            <div class="ctx-bar">
+              <div class="seg used"></div>
+              <div class="seg compressed"></div>
+              <div class="seg free"></div>
+            </div>
+            <div class="ctx-legend">
+              <span class="u">live context</span>
+              <span class="c">compressed</span>
+              <span class="f">available</span>
+            </div>
+            <div class="ctx-grid">
+              <div class="ctx-stat"><div class="lab">Filter pipeline</div><div class="val"><em>22k</em></div></div>
+              <div class="ctx-stat"><div class="lab">Symbol indexer</div><div class="val"><em>14k</em></div></div>
+              <div class="ctx-stat"><div class="lab">Secret redaction</div><div class="val">2.4k</div></div>
+            </div>
           </div>
         </div>
-      </div>
-      </div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ========== AGENTS (COMING) ========== -->
+<!-- ========== 11. CONFIGURATION MECHANICS (MECH GRID) ========== -->
 <section>
   <div class="measure">
-    <div class="overline">Agents — coming Q2 2026</div>
-    <h2>Agents you can actually&nbsp;<span class="accent">see.</span></h2>
-    <p class="body">Most agent tools are a black box with a chat window bolted on. Senkani will treat agents as first-class citizens of the workspace — runnable, observable, interruptible, and composable. You'll see what they're doing, what context they have, what they'll cost, and how to stop them.</p>
-    <p class="body">The intelligence infrastructure is already built. The filter pipeline, symbol indexer, budget enforcement, and session tracking that agents need are all live. The agent runner pane itself ships Q2 2026.</p>
+    <div class="overline">Configuration</div>
+    <h2>How the pieces<br>connect and <span class="accent">configure.</span></h2>
   </div>
   <div class="indent">
-    <div class="coming-band">
-      <div class="cb-label">Coming Q2 2026</div>
-      <h4>Agent runner pane</h4>
-      <p>Spawn agents, watch their tool calls in real time, see context budget and running cost, interrupt at any step. Composable into workflows. Schedulable on triggers. The budget enforcement that stops runaway agents is already live today.</p>
-    </div>
-    <div class="coming-band" style="margin-top: 16px;">
-      <div class="cb-label">Coming Q2 2026</div>
-      <h4>Workflow builder</h4>
-      <p>Pipelines of agents and commands that feed each other. Git diff → summarize → draft PR → run tests → post to Slack. Each step sees only the context it needs, which is why it's cheap and why it doesn't hallucinate.</p>
-    </div>
-    <div class="coming-band" style="margin-top: 16px;">
-      <div class="cb-label">Coming Q2 2026</div>
-      <h4>Multi-repo git view</h4>
-      <p>Unified status, cross-repo search, synchronized branch operations, one commit timeline across all your repos. Real work spans repos. The terminal shouldn't pretend otherwise.</p>
+    <div class="mech-grid">
+      <div class="mech">
+        <div class="mech-cat">FCSIT toggles</div>
+        <h4>Per-pane compression profile</h4>
+        <div class="mech-what">Five toggles per pane: <strong>F</strong>=Filter, <strong>C</strong>=Cache, <strong>S</strong>=Secrets, <strong>I</strong>=Indexer, <strong>T</strong>=Terse. Each pane runs an independent feature set.</div>
+        <div class="mech-how">Persisted to <code>~/.senkani/panes/{paneId}.env</code>. The hook script sources this file on each invocation. Changes take effect immediately — no process restart needed.</div>
+      </div>
+      <div class="mech">
+        <div class="mech-cat">Resolution order</div>
+        <h4>CLI flag > env var > config file > default</h4>
+        <div class="mech-what">Any toggle can be overridden at any level without touching other settings.</div>
+        <div class="mech-how">Env vars: <code>SENKANI_FILTER</code>, <code>SENKANI_CACHE</code>, <code>SENKANI_SECRETS</code>, <code>SENKANI_INDEXER</code>, <code>SENKANI_TERSE</code>. Config file: <code>.senkani/config.json</code> at project root. Defaults: F/C/S/I on, T off.</div>
+      </div>
+      <div class="mech">
+        <div class="mech-cat">MCP registration</div>
+        <h4>senkani init wires everything in one command</h4>
+        <div class="mech-what">Reads <code>~/.claude/settings.json</code>, appends the MCP server entry, injects required env vars. Nothing to configure by hand.</div>
+        <div class="mech-how">Adds <code>senkani-mcp</code> to <code>mcpServers</code> with stdio transport. Injects <code>SENKANI_PROJECT_ROOT</code>, <code>SENKANI_METRICS_FILE</code>, <code>SENKANI_PANE_ID</code>. Idempotent — running twice doesn't duplicate the entry.</div>
+      </div>
+      <div class="mech">
+        <div class="mech-cat">Dual-mode binary</div>
+        <h4>Same binary: GUI workspace or MCP server</h4>
+        <div class="mech-what">No flag needed to switch modes. The binary detects its context at startup and behaves accordingly.</div>
+        <div class="mech-how">Checks if stdin is a pipe at launch. <em>Piped stdin</em> → MCP JSON-RPC server mode (reads tool calls from stdin, writes results to stdout). <em>No piped stdin</em> → SwiftUI workspace launches.</div>
+      </div>
+      <div class="mech">
+        <div class="mech-cat">Workspace persistence</div>
+        <h4>Pane layouts survive restart</h4>
+        <div class="mech-what">Close the app, reopen it, every pane is exactly where it was — same position, same content, same feature toggles.</div>
+        <div class="mech-how"><strong>WorkspaceModel</strong> serializes layout to <code>~/.claude/workspaces/{projectName}.json</code>. Multi-project support: each project has its own file. Backward compatible: no JSON → implicit "Default" project created.</div>
+      </div>
+      <div class="mech">
+        <div class="mech-cat">Process lifetime</div>
+        <h4>MCP server exits when Claude Code exits</h4>
+        <div class="mech-what">No zombie MCP processes accumulating in the background. The server monitors its parent and exits cleanly when the parent dies.</div>
+        <div class="mech-how">Polls <code>getppid()</code>; if parent reparents to launchd (PID 1), the server initiates shutdown. Also: 2-hour session timeout to prevent accumulation. SIGTERM/SIGINT handled with <code>DispatchSource</code> signal handlers for graceful shutdown.</div>
+      </div>
     </div>
   </div>
 </section>
 
-<!-- ========== STATS ========== -->
+<!-- ========== 12. TERMINAL ========== -->
+<section>
+  <div class="measure">
+    <div class="overline">Terminal</div>
+    <h2>A native macOS terminal.<br><span class="accent">Not a web wrapper.</span></h2>
+    <p class="body">The terminal pane uses SwiftTerm — a Swift-native terminal emulator. GPU-accelerated rendering on Apple Silicon. Sub-3ms render latency at p50. True color, ligatures, Powerline symbols. The same terminal you're used to, embedded in the workspace.</p>
+    <div class="how">
+      <div class="how-lbl">How — SwiftTerm (Sources/SenkaniApp/)</div>
+      <strong>SwiftTerm</strong> handles the VT100/xterm emulation layer. Each terminal pane manages its own PTY via <code>PseudoTerminal</code> — signals are forwarded correctly (SIGWINCH on resize, SIGINT on Ctrl-C).<br><br>
+      Render path: character buffer → Metal-accelerated glyph atlas → Core Animation layer. Result: <em>p50 2.1ms, p99 3.4ms</em> render latency measured by <code>senkani bench</code> on M-series hardware.<br><br>
+      Process lifecycle: the terminal pane defers <code>startProcess</code> to <code>viewDidMoveToWindow</code> — the PTY is not created until the pane is actually visible, which prevents off-screen processes accumulating on startup.
+    </div>
+  </div>
+  <div class="indent">
+    <div class="mockup mockup-md" style="max-width:860px;">
+      <div class="tb">
+        <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
+        <div class="tb-title">senkani bench · 256 iterations</div>
+        <div class="tb-spacer"></div>
+      </div>
+      <div style="background:var(--app-bg); padding:6px;">
+        <div class="pane" style="border-color:var(--app-green); box-shadow: 0 0 0 1px rgba(63,176,104,0.12), 0 4px 16px rgba(63,176,104,0.18);">
+          <div class="pane-accent" style="background:var(--app-green);"></div>
+          <div class="pane-header" style="background:rgba(63,176,104,0.08);">
+            <div class="pane-dot running"></div>
+            <span class="pane-title">Terminal</span>
+            <span class="pane-ctx">~/senkani</span>
+            <div class="pane-spacer"></div>
+            <div class="fcsit">
+              <div class="fcsit-btn f-on">F</div>
+              <div class="fcsit-btn c-on">C</div>
+              <div class="fcsit-btn s-on">S</div>
+              <div class="fcsit-btn i-on">I</div>
+              <div class="fcsit-btn t-on">T</div>
+            </div>
+            <div class="pane-gear">⚙</div>
+            <div class="pane-close">×</div>
+          </div>
+          <div class="pane-sep"></div>
+          <div class="pane-body" style="min-height:240px; font-size:13px; line-height:1.65;">
+            <div class="term-line"><span class="term-prompt">chris</span><span class="term-at">@</span><span class="term-dir">senkani</span> <span class="term-cmd">senkani</span> <span class="term-arg">bench</span> <span class="term-arg">--iterations 256</span></div>
+            <div class="term-line"><span class="term-out">→ running benchmark suite (256 iterations each)</span></div>
+            <div class="term-line">&nbsp;</div>
+            <div class="term-line"><span class="term-ok">  terminal</span></div>
+            <div class="term-line"><span class="term-out">    render latency      p50 2.1ms   p99  3.4ms</span></div>
+            <div class="term-line"><span class="term-out">    keystroke → glyph   p50 0.8ms   p99  1.2ms</span></div>
+            <div class="term-line">&nbsp;</div>
+            <div class="term-line"><span class="term-ok">  filter</span></div>
+            <div class="term-line"><span class="term-out">    throughput          14,200 lines/sec sustained</span></div>
+            <div class="term-line"><span class="term-out">    npm install         428 lines → 2 lines (99.5%)</span></div>
+            <div class="term-line"><span class="term-out">    git clone           312 lines → 4 lines (98.7%)</span></div>
+            <div class="term-line">&nbsp;</div>
+            <div class="term-line"><span class="term-ok">  indexer</span></div>
+            <div class="term-line"><span class="term-out">    search cold         4.2ms</span></div>
+            <div class="term-line"><span class="term-out">    search cached       0.8ms</span></div>
+            <div class="term-line"><span class="term-out">    secrets scan        1.4ms/KB</span></div>
+            <div class="term-line">&nbsp;</div>
+            <div class="term-line"><span class="term-prompt">chris</span><span class="term-at">@</span><span class="term-dir">senkani</span> <span class="term-cursor"></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== 13. MCP TOOLS TABLE ========== -->
+<section id="tools">
+  <div class="measure">
+    <div class="overline">MCP tools</div>
+    <h2>13 tools between<br>Claude and <span class="accent">your filesystem.</span></h2>
+    <p class="body">Each tool is a compressed replacement for a Claude Code built-in. They auto-register via <code style="font-family:var(--font-code);color:var(--accent-lo)">senkani init</code> and are invoked by the hook relay transparently. You don't change how you work — the interception happens below your workflow.</p>
+  </div>
+  <div class="indent">
+    <div class="tools-card">
+      <div class="tools-head">
+        <div>Tool</div>
+        <div>What it does · How</div>
+        <div>Savings</div>
+        <div>Status</div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_read</div>
+        <div>
+          <div class="tool-desc">Compressed file reads with session caching and secret redaction.</div>
+          <div class="tool-how">ANSI strip → blank collapse → SecretDetector → ReadCache(path, mtime). Re-reads of unchanged files return instantly.</div>
+        </div>
+        <div class="tool-save">50–99%</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_exec</div>
+        <div>
+          <div class="tool-desc">Shell commands with 24 command-specific filter rules applied to output.</div>
+          <div class="tool-how">FilterEngine matches (command, subcommand) → applies rule chain (stripANSI, dedupLines, keepMatching, truncateBytes…). Mutating commands pass through unmodified.</div>
+        </div>
+        <div class="tool-save">60–90%</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_search</div>
+        <div>
+          <div class="tool-desc">Symbol lookup from the local tree-sitter index. Returns file:line, kind, container.</div>
+          <div class="tool-how">Substring match on in-memory IndexEntry array. ~50 tokens vs ~5,000 from grepping. Hook intercepts plain-identifier Grep calls automatically.</div>
+        </div>
+        <div class="tool-save">99%</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_fetch</div>
+        <div>
+          <div class="tool-desc">Read only a symbol's exact source lines, not the entire file.</div>
+          <div class="tool-how">Uses startLine/endLine from IndexEntry. Slices from ReadCache if warm, disk otherwise. Token cost proportional to symbol size.</div>
+        </div>
+        <div class="tool-save">50–99%</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_explore</div>
+        <div>
+          <div class="tool-desc">Navigate codebase via bidirectional import graph. Returns a subgraph, not a file list.</div>
+          <div class="tool-how">DependencyExtractor builds edges during indexing pass. explore() returns a bounded subgraph from a starting file. ~500 tokens for a typical project entry point.</div>
+        </div>
+        <div class="tool-save">90%+</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_deps</div>
+        <div>
+          <div class="tool-desc">Query dependency edges. "What does X import?" and "What imports X?" across 15+ languages.</div>
+          <div class="tool-how">Direct lookup in the bidirectional edge set built by DependencyExtractor at index time.</div>
+        </div>
+        <div class="tool-save">—</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_outline</div>
+        <div>
+          <div class="tool-desc">File-level structure: all top-level functions, classes, and types. No line bodies.</div>
+          <div class="tool-how">Queries IndexEntry for entries matching a file path. Returns names + line numbers only.</div>
+        </div>
+        <div class="tool-save">—</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_validate</div>
+        <div>
+          <div class="tool-desc">Local syntax check across 20 languages. Never runs a build to catch a typo.</div>
+          <div class="tool-how">Passes source to the tree-sitter parser for the detected language. Parse errors → structured error list. Success → zero API calls consumed.</div>
+        </div>
+        <div class="tool-save">100%</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_parse</div>
+        <div>
+          <div class="tool-desc">Return the tree-sitter AST for a file or code snippet.</div>
+          <div class="tool-how">Runs the appropriate tree-sitter parser and returns the node tree as structured JSON. Useful for Claude tasks that need to reason about code structure.</div>
+        </div>
+        <div class="tool-save">—</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_embed</div>
+        <div>
+          <div class="tool-desc">Text embeddings on Apple Silicon via MLX. Zero API cost.</div>
+          <div class="tool-how">MiniLM-L6-v2 on Neural Engine. 384-dim float output. Sub-200ms. Backs the semantic search pane (coming Q2 2026).</div>
+        </div>
+        <div class="tool-save">$0/call</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_vision</div>
+        <div>
+          <div class="tool-desc">Vision model on Apple Silicon (Gemma via MLX). OCR, UI analysis, screenshot reading.</div>
+          <div class="tool-how">Input: image path or base64 PNG. Output: text or structured JSON. Sub-500ms on M-series. Fully offline.</div>
+        </div>
+        <div class="tool-save">$0/call</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_session</div>
+        <div>
+          <div class="tool-desc">Query session metrics, toggle features, manage pane state from within a tool call.</div>
+          <div class="tool-how">Action-based: stats / toggle / pane-list / clear-cache. Writes to SessionDatabase and live MCPSession state.</div>
+        </div>
+        <div class="tool-save">—</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_pane</div>
+        <div>
+          <div class="tool-desc">Control workspace panes from a tool call — open, close, focus, resize.</div>
+          <div class="tool-how">Sends IPC messages to the SwiftUI app via a local socket. The app handles pane mutations on the main thread.</div>
+        </div>
+        <div class="tool-save">—</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== 14. CLI COMMANDS ========== -->
+<section>
+  <div class="measure">
+    <div class="overline">CLI</div>
+    <h2>13 commands.<br>All <span class="accent">scriptable.</span></h2>
+    <p class="body">The same compression and indexing that Claude Code uses is available on the command line. <code style="font-family:var(--font-code);color:var(--accent-lo)">senkani exec</code>, <code style="font-family:var(--font-code);color:var(--accent-lo)">senkani search</code>, and <code style="font-family:var(--font-code);color:var(--accent-lo)">senkani fetch</code> are the CLI equivalents of their MCP counterparts.</p>
+  </div>
+  <div class="indent">
+    <div class="cli-grid">
+      <div class="cli-row"><div class="cli-cmd">senkani exec -- &lt;cmd&gt;</div><div class="cli-desc">Run command with filter pipeline applied to output</div></div>
+      <div class="cli-row"><div class="cli-cmd">senkani search &lt;symbol&gt;</div><div class="cli-desc">Symbol lookup with --kind, --file, --container filters</div></div>
+      <div class="cli-row"><div class="cli-cmd">senkani fetch &lt;symbol&gt;</div><div class="cli-desc">Read a symbol's source lines by name</div></div>
+      <div class="cli-row"><div class="cli-cmd">senkani explore</div><div class="cli-desc">Navigate codebase via import graph</div></div>
+      <div class="cli-row"><div class="cli-cmd">senkani index [--root &lt;path&gt;]</div><div class="cli-desc">Build or update the symbol index</div></div>
+      <div class="cli-row"><div class="cli-cmd">senkani validate &lt;file&gt;</div><div class="cli-desc">Local syntax validation, 20 languages</div></div>
+      <div class="cli-row"><div class="cli-cmd">senkani stats</div><div class="cli-desc">Lifetime metrics from the session database</div></div>
+      <div class="cli-row"><div class="cli-cmd">senkani bench</div><div class="cli-desc">Run the benchmark suite (256 iterations)</div></div>
+      <div class="cli-row"><div class="cli-cmd">senkani init</div><div class="cli-desc">Auto-register MCP server with Claude Code</div></div>
+      <div class="cli-row"><div class="cli-cmd">senkani doctor [--fix]</div><div class="cli-desc">Diagnose and repair configuration issues</div></div>
+      <div class="cli-row"><div class="cli-cmd">senkani compare &lt;a&gt; &lt;b&gt;</div><div class="cli-desc">Diff two files or git revisions</div></div>
+      <div class="cli-row"><div class="cli-cmd">senkani grammars</div><div class="cli-desc">Show installed tree-sitter grammar versions</div></div>
+      <div class="cli-row"><div class="cli-cmd">senkani schedule &lt;cron&gt;</div><div class="cli-desc">Schedule recurring commands</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== 15. STATUS ========== -->
+<section id="status">
+  <div class="measure">
+    <div class="overline">What's built</div>
+    <h2>The compression layer <span class="accent">is live.</span><br>The workspace is live.</h2>
+    <p class="body">MCP intelligence layer, symbol indexer (20 languages), filter pipeline, hook relay with Layer 3 re-read suppression, session database, local ML, budget enforcement, benchmark suite (80.37x on fixtures), output sandboxing, agent timeline, live per-feature savings dashboard — all working. 442 unit tests passing. 14 pane types live.</p>
+  </div>
+  <div class="indent" style="margin-top: 48px;">
+    <div class="feature-grid" style="max-width: 900px; padding-right: 0;">
+      <div class="feature">
+        <div class="num-row"><div class="num">01</div><span class="badge badge-live">Live</span></div>
+        <h4>Hook relay + filter pipeline</h4>
+        <p>SenkaniHook binary intercepts Read/Bash/Grep calls in ~5ms. FilterEngine applies 24 command-specific rule sets. 60–99% output reduction on typical commands.</p>
+      </div>
+      <div class="feature">
+        <div class="num-row"><div class="num">02</div><span class="badge badge-live">Live</span></div>
+        <h4>Symbol indexer (20 languages)</h4>
+        <p>Tree-sitter AST extraction, vendored grammars, incremental updates, bidirectional dependency graph, in-memory index with &lt;5ms search latency.</p>
+      </div>
+      <div class="feature">
+        <div class="num-row"><div class="num">03</div><span class="badge badge-live">Live</span></div>
+        <h4>13 MCP tools</h4>
+        <p>senkani_read, senkani_exec, senkani_search, senkani_fetch, senkani_explore, senkani_deps, senkani_validate, senkani_parse, senkani_outline, senkani_embed, senkani_vision, senkani_session, senkani_pane.</p>
+      </div>
+      <div class="feature">
+        <div class="num-row"><div class="num">04</div><span class="badge badge-live">Live</span></div>
+        <h4>Session database + analytics</h4>
+        <p>SQLite + FTS5. Per-call token tracking. Budget enforcement. Lifetime stats. Analytics pane with compression breakdown by source.</p>
+      </div>
+      <div class="feature">
+        <div class="num-row"><div class="num">05</div><span class="badge badge-live">Live</span></div>
+        <h4>Local ML (embed + vision)</h4>
+        <p>MiniLM embeddings and Gemma vision via MLX on Apple Silicon Neural Engine. Zero API calls, fully offline after model download.</p>
+      </div>
+      <div class="feature">
+        <div class="num-row"><div class="num">06</div><span class="badge badge-live">Live</span></div>
+        <h4>Benchmark suite + live savings dashboard</h4>
+        <p><code>senkani bench</code> runs 10 tasks × 7 configs — 80.37x overall reduction, all 9 quality gates passing. The Savings Test pane has a second tab: live per-feature breakdown from real <code>token_events</code>. See your actual session multiplier, not just fixture numbers.</p>
+      </div>
+      <div class="feature">
+        <div class="num-row"><div class="num">07</div><span class="badge badge-coming">Q2 2026</span></div>
+        <h4>IDE pane</h4>
+        <p>LSP completions, tree-sitter syntax highlighting, multi-cursor, inline diagnostics. The same symbol index that backs senkani_search drives completions.</p>
+      </div>
+      <div class="feature">
+        <div class="num-row"><div class="num">08</div><span class="badge badge-coming">Q2 2026</span></div>
+        <h4>AAAK structured compression</h4>
+        <p>Lossless 8-10x shorthand that stacks multiplicatively with the filter pipeline — 95%+ total reduction. Every tool result, every file read, every shell command gets smaller. The highest-ROI unbuilt feature in the stack.</p>
+      </div>
+      <div class="feature">
+        <div class="num-row"><div class="num">09</div><span class="badge badge-coming">Q2 2026</span></div>
+        <h4>Session continuity + Layer 3 expansion</h4>
+        <p>170-token AAAK wake-up brief injected at session open — agent knows where it left off without re-reading files. Plus remaining Layer 3 patterns: command replay, search upgrade, trivial routing. Works on closed-source agents with no cooperation required.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== 16. STATS ========== -->
 <section>
   <div class="measure">
     <div class="overline">Measured, not claimed</div>
-    <h2>Performance you can feel<br>with your fingertips.</h2>
-    <p class="body">These numbers come from <code>senkani bench</code> — the built-in benchmark suite that runs on your hardware. Not from a marketing spreadsheet. Run it yourself.</p>
+    <h2>Numbers from <code style="font-size:0.65em;letter-spacing:0">senkani bench</code><br>on your hardware.</h2>
+    <p class="body">Run <code style="font-family:var(--font-code);color:var(--accent-lo)">senkani bench</code> to reproduce these on your machine. 256 iterations, M-series baseline.</p>
   </div>
   <div class="indent">
     <div class="stats">
       <div class="stat">
         <div class="num"><em>2.1</em>ms</div>
-        <div class="label">Terminal render latency, p50. Hardware-accelerated SwiftTerm on M-series. Measured by <code>senkani bench</code>.</div>
+        <div class="label">Terminal render latency, p50. SwiftTerm + Metal on M-series. p99 is 3.4ms.</div>
       </div>
       <div class="stat">
         <div class="num"><em>99</em>%</div>
-        <div class="label">Token reduction on symbol lookups. Local index returns ~50 tokens; grep returns ~5,000. Every time.</div>
+        <div class="label">Token reduction on symbol lookups. Index returns ~50 tokens. Grep returns ~5,000. Measured on real TypeScript codebases.</div>
       </div>
       <div class="stat">
         <div class="num"><em>20</em></div>
-        <div class="label">Languages indexed by tree-sitter AST extraction. Incremental updates. Bidirectional dependency graph.</div>
+        <div class="label">Languages with tree-sitter AST precision. Exact line ranges, container hierarchy, incremental re-index.</div>
       </div>
       <div class="stat">
         <div class="num"><em>0</em></div>
-        <div class="label">Config files required before Senkani does something useful. Install the binary. Open it. Done.</div>
+        <div class="label">Config files required. Auto-registers globally on first launch. MCP server activates only in Senkani-managed shells — zero leakage to other terminals.</div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ========== MANIFESTO ========== -->
-<section class="manifesto">
-  <div class="measure">
-    <div class="overline">For everyone</div>
-    <h2>The best developer<br>tool for people<br>who <span class="accent">(aren't developers)</span><sup>*</sup></h2>
-    <p class="footnote"><sup>*</sup>and for those who are.</p>
-    <p class="body">The dirty secret of "developer tools" is that most of them punish anyone who dares not already be an expert. Senkani was built for the inverse: a friend, a designer, an analyst, or your past self from five years ago can open it and immediately do something real. A terminal. A note. A webpage. An agent.</p>
-    <p class="body">And then — and this is the important part — it does not stop being useful as you get better. The compression layer learns what you do. The symbol index covers every language you add. The agents get access to more of your workflow. The pane system rewards layouts you couldn't have imagined on day one. It is a tool that grows with you instead of being replaced by one.</p>
-    <p class="body">This is the thing Jobs understood that most of Silicon Valley still hasn't: <strong>approachable and powerful are not opposites.</strong> They are the same axis, and most tools live at neither end of it.</p>
-  </div>
-</section>
-
-<!-- ========== FINAL CTA ========== -->
+<!-- ========== 17. CTA ========== -->
 <section style="border-bottom:none;">
   <div class="measure">
     <div class="overline">In active development · Q2 2026</div>
-    <h2>Try senkani.</h2>
-    <p class="body">Build from source. Open it. A terminal is running. Your project is indexing. 13 MCP tools are registered with Claude Code. The analytics pane is tracking your token spend. You did not configure any of this.</p>
+    <h2>Build it yourself.</h2>
+    <p class="body">Clone the repo, build with Swift Package Manager, launch the app. The MCP server registers globally on first launch. The hook relay starts intercepting in Senkani-managed terminals. The indexer walks your project. None of this requires configuration.</p>
     <div class="cta-row" style="margin-top:36px;">
       <a class="btn btn-primary" href="https://github.com/ckluis/senkani">Build from source</a>
-      <a class="btn btn-secondary" href="#status">See what's built</a>
+      <a class="btn btn-secondary" href="#tools">See the 13 tools</a>
       <a class="btn btn-ghost" href="https://github.com/ckluis/senkani">Star on GitHub</a>
     </div>
   </div>
@@ -1558,9 +1641,9 @@
 
 <footer>
   <div class="fcol">
-    <div class="ft">senkani<span>.ai</span></div>
-    <p>閃蟹 — a fast claw. Native for macOS. Written in Swift. Built by people who were tired of configuring things.</p>
-    <p style="margin-top:24px;">© 2026 · MIT licensed core · Apple Silicon native</p>
+    <div class="ft">senkani</div>
+    <p>閃蟹 — fast claw. Native macOS, written in Swift. Sources/Filter, Sources/Indexer, Sources/MCPServer, Sources/Hook.</p>
+    <p style="margin-top:24px;">© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</p>
   </div>
 </footer>
 

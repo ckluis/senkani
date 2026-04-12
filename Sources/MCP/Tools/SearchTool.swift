@@ -8,7 +8,9 @@ enum SearchTool {
             return .init(content: [.text(text: "Error: 'query' is required", annotations: nil, _meta: nil)], isError: true)
         }
 
-        let index = session.ensureIndex()
+        guard let index = session.indexIfReady() else {
+            return .init(content: [.text(text: "Symbol index is building (first run). Try again in a few seconds.", annotations: nil, _meta: nil)])
+        }
 
         let kindStr = arguments?["kind"]?.stringValue
         let kind: SymbolKind? = kindStr.flatMap { SymbolKind(rawValue: $0) }

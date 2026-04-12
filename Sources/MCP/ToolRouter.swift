@@ -17,6 +17,8 @@ enum ToolRouter {
 
     static func route(_ params: CallTool.Parameters, session: MCPSession) async -> CallTool.Result {
         FileHandle.standardError.write(Data("🟡 TOOL CALL: \(params.name)\n".utf8))
+        // Re-read feature toggles from pane config file (GUI may have changed them)
+        session.refreshConfig()
         // SECURITY: Budget enforcement — non-bypassable gate before any tool execution.
         // This is the only routing path, so all tool calls pass through this check.
         let budgetDecision = session.checkBudget()
@@ -99,30 +101,58 @@ enum ToolRouter {
         return result
     }
 
+    /// Dedicated queue for tools that do heavy synchronous I/O.
+    /// Prevents blocking tool handlers (file reads, index builds, process spawns)
+    /// from starving Swift's cooperative async thread pool.
+    private static let toolQueue = DispatchQueue(
+        label: "com.senkani.tool-execution",
+        qos: .userInitiated,
+        attributes: .concurrent
+    )
+
     private static func dispatchTool(_ params: CallTool.Parameters, session: MCPSession) async -> CallTool.Result {
         switch params.name {
-        case "senkani_read":
-            return ReadTool.handle(arguments: params.arguments, session: session)
-        case "senkani_exec":
-            return ExecTool.handle(arguments: params.arguments, session: session)
-        case "senkani_search":
-            return SearchTool.handle(arguments: params.arguments, session: session)
-        case "senkani_fetch":
-            return FetchTool.handle(arguments: params.arguments, session: session)
-        case "senkani_explore":
-            return ExploreTool.handle(arguments: params.arguments, session: session)
-        case "senkani_session":
-            return SessionTool.handle(arguments: params.arguments, session: session)
-        case "senkani_validate":
-            return ValidateTool.handle(arguments: params.arguments, session: session)
-        case "senkani_parse":
-            return ParseTool.handle(arguments: params.arguments, session: session)
-        case "senkani_embed":
+        // Async tools — already non-blocking, run directly in cooperative pool
+        case "embed":
             return await EmbedTool.handle(arguments: params.arguments, session: session)
-        case "senkani_vision":
+        case "vision":
             return await VisionTool.handle(arguments: params.arguments, session: session)
-        case "senkani_pane":
+        // All other tools — potentially blocking, run off cooperative pool
+        default:
+            return await withCheckedContinuation { continuation in
+                toolQueue.async {
+                    let result = syncDispatch(params, session: session)
+                    continuation.resume(returning: result)
+                }
+            }
+        }
+    }
+
+    /// Synchronous tool dispatch. Runs on toolQueue, never on the cooperative pool.
+    private static func syncDispatch(_ params: CallTool.Parameters, session: MCPSession) -> CallTool.Result {
+        switch params.name {
+        case "read":
+            return ReadTool.handle(arguments: params.arguments, session: session)
+        case "exec":
+            return ExecTool.handle(arguments: params.arguments, session: session)
+        case "search":
+            return SearchTool.handle(arguments: params.arguments, session: session)
+        case "fetch":
+            return FetchTool.handle(arguments: params.arguments, session: session)
+        case "explore":
+            return ExploreTool.handle(arguments: params.arguments, session: session)
+        case "outline":
+            return OutlineTool.handle(arguments: params.arguments, session: session)
+        case "session":
+            return SessionTool.handle(arguments: params.arguments, session: session)
+        case "validate":
+            return ValidateTool.handle(arguments: params.arguments, session: session)
+        case "parse":
+            return ParseTool.handle(arguments: params.arguments, session: session)
+        case "pane":
             return PaneControlTool.handle(arguments: params.arguments, session: session)
+        case "deps":
+            return DepsTool.handle(arguments: params.arguments, session: session)
         default:
             return .init(content: [.text(text: "Unknown tool: \(params.name)", annotations: nil, _meta: nil)], isError: true)
         }
@@ -131,7 +161,7 @@ enum ToolRouter {
     static func allTools() -> [Tool] {
         [
             Tool(
-                name: "senkani_read",
+                name: "read",
                 description: "Read a file with compression (ANSI strip, blank collapse, secret detection) and session caching. Re-reads of unchanged files return instantly. 50-99% token savings.",
                 inputSchema: .object([
                     "type": .string("object"),
@@ -145,19 +175,20 @@ enum ToolRouter {
                 annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
             ),
             Tool(
-                name: "senkani_exec",
+                name: "exec",
                 description: "Execute a shell command with output filtering. Applies 24 command-specific rules (git, npm, cargo, docker, etc.), strips ANSI, deduplicates, truncates. 60-90% savings on build/test output.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "command": .object(["type": .string("string"), "description": .string("Shell command to execute")]),
+                        "sandbox": .object(["type": .string("string"), "description": .string("Output sandbox mode: 'auto' (sandbox if >20 lines, default), 'always', or 'never'")]),
                     ]),
                     "required": .array([.string("command")]),
                 ]),
                 annotations: .init(readOnlyHint: false, destructiveHint: true, openWorldHint: false)
             ),
             Tool(
-                name: "senkani_search",
+                name: "search",
                 description: "Search the project's symbol index by name, kind, file, or container. Returns compact results (~50 tokens) instead of grepping files (~5000 tokens). Auto-indexes on first call.",
                 inputSchema: .object([
                     "type": .string("object"),
@@ -172,7 +203,7 @@ enum ToolRouter {
                 annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
             ),
             Tool(
-                name: "senkani_fetch",
+                name: "fetch",
                 description: "Fetch a specific symbol's source code. Reads only the symbol's lines, not the entire file. 50-99% savings vs full file reads.",
                 inputSchema: .object([
                     "type": .string("object"),
@@ -184,7 +215,7 @@ enum ToolRouter {
                 annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
             ),
             Tool(
-                name: "senkani_explore",
+                name: "explore",
                 description: "Show the project's symbol tree structure. Symbols grouped by file with type hierarchy. ~500 tokens for a typical project.",
                 inputSchema: .object([
                     "type": .string("object"),
@@ -195,22 +226,35 @@ enum ToolRouter {
                 annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
             ),
             Tool(
-                name: "senkani_session",
+                name: "outline",
+                description: "Show a file's structure without reading it. Returns functions, classes, types with line numbers. ~90% savings vs reading the whole file.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "file": .object(["type": .string("string"), "description": .string("File path or name (substring match, e.g. 'PaneModel.swift')")]),
+                    ]),
+                    "required": .array([.string("file")]),
+                ]),
+                annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
+            ),
+            Tool(
+                name: "session",
                 description: "Session intelligence: view stats, toggle features, manage validators, or reset. Actions: 'stats' (savings), 'config' (feature toggles), 'validators' (list/enable/disable validators), 'reset' (clear cache).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
-                        "action": .object(["type": .string("string"), "description": .string("Action: 'stats', 'reset', 'config', or 'validators'"), "enum": .array([.string("stats"), .string("reset"), .string("config"), .string("validators")])]),
+                        "action": .object(["type": .string("string"), "description": .string("Action: 'stats', 'reset', 'config', 'validators', or 'result'"), "enum": .array([.string("stats"), .string("reset"), .string("config"), .string("validators"), .string("result")])]),
                         "features": .object(["type": .string("object"), "description": .string("For 'config': {filter?: bool, secrets?: bool, indexer?: bool, cache?: bool, all?: bool}")]),
                         "name": .object(["type": .string("string"), "description": .string("For 'validators': validator name to enable/disable")]),
                         "enabled": .object(["type": .string("boolean"), "description": .string("For 'validators': set enabled state")]),
+                        "result_id": .object(["type": .string("string"), "description": .string("For 'result': the sandboxed result ID to retrieve (e.g. 'r_abc123def456')")]),
                     ]),
                 ]),
                 annotations: .init(readOnlyHint: false, idempotentHint: true, openWorldHint: false)
             ),
             Tool(
-                name: "senkani_validate",
-                description: "Validate code using local compilers/linters. Auto-detects installed tools. Runs ALL enabled validators for the file type (syntax, type, lint, security, format). Config-driven: 30+ validators across 15+ languages. Use senkani_session(action: 'validators') to see/toggle available validators.",
+                name: "validate",
+                description: "Validate code using local compilers/linters. Auto-detects installed tools. Runs ALL enabled validators for the file type (syntax, type, lint, security, format). Config-driven: 30+ validators across 15+ languages. Use session(action: 'validators') to see/toggle available validators.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -222,7 +266,7 @@ enum ToolRouter {
                 annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
             ),
             Tool(
-                name: "senkani_parse",
+                name: "parse",
                 description: "Extract structured results from build/test/lint/error output. Returns a concise summary (test pass/fail counts, error locations, stack trace categories) instead of raw output. ~90% token reduction on typical build output.",
                 inputSchema: .object([
                     "type": .string("object"),
@@ -235,7 +279,7 @@ enum ToolRouter {
                 annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
             ),
             Tool(
-                name: "senkani_embed",
+                name: "embed",
                 description: "Semantic code search using local embeddings on Apple Silicon. Find relevant files by meaning, not just text matching. Returns top matches with similarity scores. Auto-indexes on first call (~90MB model). $0/call.",
                 inputSchema: .object([
                     "type": .string("object"),
@@ -249,7 +293,7 @@ enum ToolRouter {
                 annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
             ),
             Tool(
-                name: "senkani_vision",
+                name: "vision",
                 description: "Analyze images using a local vision model on Apple Silicon. OCR, UI element detection, screenshot analysis. $0/call vs $0.01+ per GPT-4o vision call. ~1.5GB model, downloads on first use.",
                 inputSchema: .object([
                     "type": .string("object"),
@@ -262,7 +306,20 @@ enum ToolRouter {
                 annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
             ),
             Tool(
-                name: "senkani_pane",
+                name: "deps",
+                description: "Query the project's dependency graph. 'What imports this module?' and 'What does this file import?' in ~50 tokens instead of reading 20 files.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "target": .object(["type": .string("string"), "description": .string("Module name or file path to query (e.g. 'Core', 'SessionDatabase.swift')")]),
+                        "direction": .object(["type": .string("string"), "description": .string("'imports' (what does target import), 'importedBy' (what imports target), or 'both' (default)")]),
+                    ]),
+                    "required": .array([.string("target")]),
+                ]),
+                annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
+            ),
+            Tool(
+                name: "pane",
                 description: "Control workspace panes. List, add, remove, or focus panes. Enables orchestration: open browsers for testing, terminals for builds, markdown previews for docs.",
                 inputSchema: .object([
                     "type": .string("object"),

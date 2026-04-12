@@ -21,11 +21,12 @@ enum SessionTool {
                     let secrets = dict["secrets"]?.boolValue
                     let indexer = dict["indexer"]?.boolValue
                     let cache = dict["cache"]?.boolValue
+                    let terse = dict["terse"]?.boolValue
 
                     if let all = dict["all"]?.boolValue {
-                        session.updateConfig(filter: all, secrets: all, indexer: all, cache: all)
+                        session.updateConfig(filter: all, secrets: all, indexer: all, cache: all, terse: all)
                     } else {
-                        session.updateConfig(filter: filter, secrets: secrets, indexer: indexer, cache: cache)
+                        session.updateConfig(filter: filter, secrets: secrets, indexer: indexer, cache: cache, terse: terse)
                     }
                 }
             }
@@ -45,8 +46,21 @@ enum SessionTool {
 
             return .init(content: [.text(text: output, annotations: nil, _meta: nil)])
 
+        case "result":
+            guard let resultId = arguments?["result_id"]?.stringValue else {
+                return .init(content: [.text(text: "Error: 'result_id' is required for action 'result'.", annotations: nil, _meta: nil)], isError: true)
+            }
+            guard let result = SessionDatabase.shared.retrieveSandboxedResult(resultId: resultId) else {
+                return .init(content: [.text(text: "Error: result '\(resultId)' not found (may have expired after 24h).", annotations: nil, _meta: nil)], isError: true)
+            }
+            var output = "// sandboxed result: \(resultId)\n"
+            output += "// command: \(result.command)\n"
+            output += "// \(result.lineCount) lines, \(result.byteCount) bytes\n"
+            output += result.output
+            return .init(content: [.text(text: output, annotations: nil, _meta: nil)])
+
         default:
-            return .init(content: [.text(text: "Unknown action: \(action). Use 'stats', 'reset', 'config', or 'validators'.", annotations: nil, _meta: nil)], isError: true)
+            return .init(content: [.text(text: "Unknown action: \(action). Use 'stats', 'reset', 'config', 'validators', or 'result'.", annotations: nil, _meta: nil)], isError: true)
         }
     }
 }

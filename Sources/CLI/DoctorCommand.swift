@@ -1,5 +1,7 @@
 import ArgumentParser
+import Core
 import Foundation
+import Indexer
 
 struct Doctor: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -48,6 +50,9 @@ struct Doctor: ParsableCommand {
 
         // 8. Budget config
         checkBudget(&results)
+
+        // 9. Grammar versions
+        checkGrammars(&results)
 
         print("")
         var parts: [String] = []
@@ -271,34 +276,49 @@ struct Doctor: ParsableCommand {
         }
     }
 
-    // MARK: - Check 4: Hook Script
+    // MARK: - Check 4: Hook Binary
 
     private func checkHookScript(_ results: inout Results) {
-        let hookPath = NSHomeDirectory() + "/.senkani/hooks/senkani-intercept.sh"
+        let hookPath = AutoRegistration.hookWrapperPath  // ~/.senkani/bin/senkani-hook
         let fm = FileManager.default
 
-        if fm.fileExists(atPath: hookPath) {
-            if fm.isExecutableFile(atPath: hookPath) {
-                printStatus(.pass, "Hook script installed (~/.senkani/hooks/senkani-intercept.sh)")
-                results.passed += 1
+        guard fm.fileExists(atPath: hookPath) else {
+            printStatus(.fail, "Hook binary not found (~/.senkani/bin/senkani-hook). Run the Senkani app once to install it")
+            results.failed += 1
+            return
+        }
+
+        guard fm.isExecutableFile(atPath: hookPath) else {
+            if fix {
+                chmod(hookPath, 0o755)
+                printStatus(.fixed, "Hook binary — set executable permission")
+                results.fixed += 1
             } else {
-                if fix {
-                    do {
-                        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hookPath)
-                        printStatus(.fixed, "Hook script — set executable permission")
-                        results.fixed += 1
-                    } catch {
-                        printStatus(.fail, "Hook script exists but is not executable")
-                        results.failed += 1
-                    }
+                printStatus(.fail, "Hook binary exists but is not executable. Run with --fix to repair")
+                results.failed += 1
+            }
+            return
+        }
+
+        // Check if it's a compiled Mach-O binary or a bash wrapper
+        if AutoRegistration.isMachOBinary(at: hookPath) {
+            printStatus(.pass, "Hook binary installed (compiled, <5ms latency)")
+            results.passed += 1
+        } else {
+            // It's the bash wrapper — functional but slow
+            if fix {
+                AutoRegistration.installHookWrapper()
+                if AutoRegistration.isMachOBinary(at: hookPath) {
+                    printStatus(.fixed, "Hook binary — deployed compiled binary (was bash wrapper)")
+                    results.fixed += 1
                 } else {
-                    printStatus(.fail, "Hook script exists but is not executable. Run with --fix to repair")
+                    printStatus(.fail, "Hook binary is a bash wrapper (~300ms overhead). Build compiled binary: swift build -c release --product senkani-hook && cp .build/release/senkani-hook ~/.senkani/bin/")
                     results.failed += 1
                 }
+            } else {
+                printStatus(.fail, "Hook binary is a bash wrapper (~300ms overhead per tool call). Run with --fix or: swift build -c release --product senkani-hook && cp .build/release/senkani-hook ~/.senkani/bin/")
+                results.failed += 1
             }
-        } else {
-            printStatus(.fail, "Hook script not found. Run the Senkani app once to install it")
-            results.failed += 1
         }
     }
 
@@ -433,6 +453,29 @@ struct Doctor: ParsableCommand {
         } else {
             printStatus(.fail, "Budget config contains invalid JSON")
             results.failed += 1
+        }
+    }
+
+    // MARK: - Check 9: Grammars
+
+    private func checkGrammars(_ results: inout Results) {
+        let count = GrammarManifest.grammars.count
+        let languages = GrammarManifest.sorted.map { "\($0.language) v\($0.version)" }.joined(separator: ", ")
+
+        // Use cached results only — no network calls in doctor
+        if let cached = GrammarVersionChecker.cachedResults() {
+            let outdated = cached.filter { $0.isOutdated }
+            if outdated.isEmpty {
+                printStatus(.pass, "Grammars: \(count) vendored (\(languages)), all up to date")
+                results.passed += 1
+            } else {
+                let names = outdated.map { "\($0.grammar.language) v\($0.grammar.version) \u{2192} v\($0.latestVersion ?? "?")" }
+                printStatus(.fail, "Grammars: \(names.joined(separator: ", ")) outdated. Run: senkani grammars check")
+                results.failed += 1
+            }
+        } else {
+            printStatus(.pass, "Grammars: \(count) vendored (\(languages)). Run 'senkani grammars check' for updates")
+            results.passed += 1
         }
     }
 

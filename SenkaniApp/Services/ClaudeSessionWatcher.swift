@@ -5,15 +5,27 @@ import Core
 /// Parses assistant messages with usage.input_tokens / output_tokens.
 /// Writes to token_events DB table — MetricsRefresher picks it up on its next poll.
 ///
+/// Watches the DIRECTORY for new .jsonl files (one per conversation) and tails
+/// the active file for new lines. Handles conversation rotation automatically.
+///
 /// Source: ~/.claude/projects/<encoded-cwd>/*.jsonl
 class ClaudeSessionWatcher {
     private let projectRoot: String
     private let paneId: UUID
-    private var source: DispatchSourceFileSystemObject?
+
+    // Directory watching — detects new conversation files
+    private var dirSource: DispatchSourceFileSystemObject?
+    private var dirFD: Int32 = -1
+
+    // Current file tailing — reads new JSONL lines
+    private var fileSource: DispatchSourceFileSystemObject?
+    private var fileFD: Int32 = -1
     private var fileHandle: FileHandle?
     private var lastReadOffset: UInt64 = 0
     private var watchedFile: String?
-    private var retryTimer: Timer?
+
+    // Track files we've already started reading to avoid double-counting
+    private var processedFiles: Set<String> = []
 
     /// Compute the Claude Code session directory for a project path.
     /// Claude encodes paths by replacing / with -, keeping the leading dash.
@@ -34,56 +46,109 @@ class ClaudeSessionWatcher {
         print("🔵 [CLAUDE-WATCHER] Encoded dir: \(dir)")
         print("🔵 [CLAUDE-WATCHER] Dir exists: \(FileManager.default.fileExists(atPath: dir))")
 
-        // Try immediately, then retry every 5 seconds until a session file appears.
-        // Claude Code creates its session file when the first conversation starts,
-        // which may be after the watcher is initialized.
-        if let sessionFile = findLatestSession(in: dir) {
-            startWatching(file: sessionFile)
-        } else {
-            print("🔵 [CLAUDE-WATCHER] No session yet in \(dir), will retry every 5s...")
-            retryTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] timer in
-                guard let self else { timer.invalidate(); return }
-                let dir = Self.claudeProjectDir(for: self.projectRoot)
-                if let sessionFile = self.findLatestSession(in: dir) {
-                    print("🔵 [CLAUDE-WATCHER] Found session: \(sessionFile)")
-                    timer.invalidate()
-                    self.retryTimer = nil
-                    self.startWatching(file: sessionFile)
-                } else {
-                    print("🔵 [CLAUDE-WATCHER] No session yet in \(dir), retrying...")
-                }
-            }
-        }
+        // Ensure the directory exists (Claude Code may not have created it yet)
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+
+        // Start directory watcher — fires when new .jsonl files appear
+        startDirectoryWatcher(dir: dir)
+
+        // Check for existing session files immediately
+        checkForNewSession()
     }
 
-    private func startWatching(file sessionFile: String) {
-        print("🔵 [CLAUDE-WATCHER] Watching: \(sessionFile)")
-        watchedFile = sessionFile
+    // MARK: - Directory Watching
 
-        guard let fh = FileHandle(forReadingAtPath: sessionFile) else {
-            print("🔵 [CLAUDE-WATCHER] Cannot open: \(sessionFile)")
+    private func startDirectoryWatcher(dir: String) {
+        dirFD = open(dir, O_RDONLY | O_EVTONLY)
+        guard dirFD >= 0 else {
+            print("🔵 [CLAUDE-WATCHER] Cannot open dir for watching: \(dir)")
             return
         }
-        fh.seekToEndOfFile()
+
+        let src = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: dirFD,
+            eventMask: [.write],
+            queue: .global(qos: .utility)
+        )
+        src.setEventHandler { [weak self] in
+            self?.checkForNewSession()
+        }
+        src.setCancelHandler { [weak self] in
+            guard let self, self.dirFD >= 0 else { return }
+            close(self.dirFD)
+            self.dirFD = -1
+        }
+        src.resume()
+        dirSource = src
+        print("🔵 [CLAUDE-WATCHER] Directory watcher active on: \(dir)")
+    }
+
+    private func checkForNewSession() {
+        let dir = Self.claudeProjectDir(for: projectRoot)
+        guard let latest = findLatestSession(in: dir) else { return }
+
+        // Same file we're already watching — no switch needed
+        if latest == watchedFile { return }
+
+        print("🔵 [CLAUDE-WATCHER] New session detected: \(latest)")
+
+        // Finish reading remaining lines from old file before switching
+        if watchedFile != nil {
+            readNewMessages()
+        }
+
+        // If we've seen this file before, seek to end to avoid double-counting.
+        // If it's brand new, read from the beginning — every line is unprocessed.
+        let seekToEnd = processedFiles.contains(latest)
+        startWatchingFile(latest, seekToEnd: seekToEnd)
+        processedFiles.insert(latest)
+    }
+
+    // MARK: - File Tailing
+
+    private func startWatchingFile(_ path: String, seekToEnd: Bool) {
+        // Clean up old file watcher
+        fileSource?.cancel()
+        fileSource = nil
+        fileHandle?.closeFile()
+        fileHandle = nil
+        if fileFD >= 0 { close(fileFD); fileFD = -1 }
+
+        watchedFile = path
+
+        guard let fh = FileHandle(forReadingAtPath: path) else {
+            print("🔵 [CLAUDE-WATCHER] Cannot open: \(path)")
+            return
+        }
+        if seekToEnd {
+            fh.seekToEndOfFile()
+        }
         lastReadOffset = fh.offsetInFile
         fileHandle = fh
 
-        let fd = open(sessionFile, O_RDONLY)
-        guard fd >= 0 else { return }
+        fileFD = open(path, O_RDONLY | O_EVTONLY)
+        guard fileFD >= 0 else { return }
 
         let src = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fd,
+            fileDescriptor: fileFD,
             eventMask: [.write, .extend],
             queue: .global(qos: .utility)
         )
-
         src.setEventHandler { [weak self] in
             self?.readNewMessages()
         }
-
-        src.setCancelHandler { close(fd) }
+        src.setCancelHandler { [weak self] in
+            guard let self, self.fileFD >= 0 else { return }
+            close(self.fileFD)
+            self.fileFD = -1
+        }
         src.resume()
-        source = src
+        fileSource = src
+
+        print("🔵 [CLAUDE-WATCHER] Watching: \(path) (seekToEnd=\(seekToEnd), offset=\(lastReadOffset))")
+
+        // Read any existing content (for new files, this reads from the beginning)
+        readNewMessages()
     }
 
     private func readNewMessages() {
@@ -163,10 +228,10 @@ class ClaudeSessionWatcher {
     }
 
     func stop() {
-        retryTimer?.invalidate()
-        retryTimer = nil
-        source?.cancel()
-        source = nil
+        dirSource?.cancel()
+        dirSource = nil
+        fileSource?.cancel()
+        fileSource = nil
         fileHandle?.closeFile()
         fileHandle = nil
     }

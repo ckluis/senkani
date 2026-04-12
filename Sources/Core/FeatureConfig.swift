@@ -5,6 +5,7 @@ public enum Feature: String, Codable, Sendable, CaseIterable {
     case filter   // FilterEngine command rules
     case secrets  // SecretDetector redaction
     case indexer  // Symbol indexer
+    case terse    // TerseCompressor word/phrase compression
 }
 
 /// Per-feature byte savings tracking.
@@ -28,11 +29,13 @@ public struct FeatureConfig: Sendable {
     public let filter: Bool
     public let secrets: Bool
     public let indexer: Bool
+    public let terse: Bool
 
-    public init(filter: Bool = true, secrets: Bool = true, indexer: Bool = true) {
+    public init(filter: Bool = true, secrets: Bool = true, indexer: Bool = true, terse: Bool = false) {
         self.filter = filter
         self.secrets = secrets
         self.indexer = indexer
+        self.terse = terse
     }
 
     /// Check if a specific feature is enabled.
@@ -41,6 +44,7 @@ public struct FeatureConfig: Sendable {
         case .filter: return filter
         case .secrets: return secrets
         case .indexer: return indexer
+        case .terse: return terse
         }
     }
 
@@ -50,6 +54,7 @@ public struct FeatureConfig: Sendable {
         filterFlag: Bool? = nil,
         secretsFlag: Bool? = nil,
         indexerFlag: Bool? = nil,
+        terseFlag: Bool? = nil,
         projectRoot: String? = nil
     ) -> FeatureConfig {
         // Layer 1: config file
@@ -59,12 +64,14 @@ public struct FeatureConfig: Sendable {
         let envFilter = envBool("SENKANI_FILTER")
         let envSecrets = envBool("SENKANI_SECRETS")
         let envIndexer = envBool("SENKANI_INDEXER")
+        let envTerse = envBool("SENKANI_TERSE")
 
-        // Resolution: flag > env > file > default(true)
+        // Resolution: flag > env > file > default (terse defaults to off)
         return FeatureConfig(
             filter: filterFlag ?? envFilter ?? fileConfig?.filter ?? true,
             secrets: secretsFlag ?? envSecrets ?? fileConfig?.secrets ?? true,
-            indexer: indexerFlag ?? envIndexer ?? fileConfig?.indexer ?? true
+            indexer: indexerFlag ?? envIndexer ?? fileConfig?.indexer ?? true,
+            terse: terseFlag ?? envTerse ?? fileConfig?.terse ?? false
         )
     }
 
@@ -90,10 +97,12 @@ public struct FeatureConfig: Sendable {
             let filter: Bool?
             let secrets: Bool?
             let indexer: Bool?
+            let terse: Bool?
         }
 
         var filter: Bool? { features?.filter }
         var secrets: Bool? { features?.secrets }
         var indexer: Bool? { features?.indexer }
+        var terse: Bool? { features?.terse }
     }
 }

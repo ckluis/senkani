@@ -3,7 +3,7 @@ import Foundation
 /// Walks a project directory and returns source files grouped by language.
 public enum FileWalker {
     /// Directories to always skip.
-    static let skipDirs: Set<String> = [
+    public static let skipDirs: Set<String> = [
         ".git", ".build", ".senkani", "node_modules", "__pycache__",
         ".swiftpm", "build", "DerivedData", ".cache", "vendor",
         "Pods", ".gradle", "target", "dist", ".next",
@@ -12,20 +12,24 @@ public enum FileWalker {
     /// File extension to language mapping.
     public static let languageMap: [String: String] = [
         "swift": "swift",
-        "ts": "typescript", "tsx": "typescript",
-        "js": "javascript", "jsx": "javascript", "mjs": "javascript",
+        "ts": "typescript", "tsx": "tsx",
+        "js": "javascript", "jsx": "javascript", "mjs": "javascript", "cjs": "javascript",
         "py": "python",
         "go": "go",
         "rs": "rust",
         "java": "java",
         "kt": "kotlin", "kts": "kotlin",
         "c": "c", "h": "c",
-        "cpp": "cpp", "cc": "cpp", "cxx": "cpp", "hpp": "cpp",
+        "cpp": "cpp", "cc": "cpp", "cxx": "cpp", "hpp": "cpp", "hh": "cpp", "hxx": "cpp",
+        "cs": "csharp",
         "rb": "ruby",
         "php": "php",
         "zig": "zig",
         "lua": "lua",
         "sh": "bash", "bash": "bash", "zsh": "bash",
+        "scala": "scala", "sc": "scala",
+        "ex": "elixir", "exs": "elixir",
+        "hs": "haskell", "lhs": "haskell",
     ]
 
     public struct WalkResult: Sendable {

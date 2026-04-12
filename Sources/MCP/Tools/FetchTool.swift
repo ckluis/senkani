@@ -9,7 +9,9 @@ enum FetchTool {
             return .init(content: [.text(text: "Error: 'name' is required", annotations: nil, _meta: nil)], isError: true)
         }
 
-        let index = session.ensureIndex()
+        guard let index = session.indexIfReady() else {
+            return .init(content: [.text(text: "Symbol index is building (first run). Try again in a few seconds.", annotations: nil, _meta: nil)])
+        }
 
         guard let entry = index.find(name: name) else {
             let candidates = index.search(name: name).prefix(5)

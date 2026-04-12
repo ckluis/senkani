@@ -1,16 +1,23 @@
 import Foundation
 import MCPServer
+import Core
 import SwiftUI
 
 let isMCPMode = CommandLine.arguments.contains("--mcp-server")
     || isatty(STDIN_FILENO) == 0  // stdin is a pipe
 
 let isSocketMode = CommandLine.arguments.contains("--socket-server")
+let isHookMode = CommandLine.arguments.contains("--hook")
 
-if isMCPMode {
+if isHookMode {
+    // Hook mode: act as the senkani-hook binary.
+    // Reads hook event from stdin, relays to daemon socket, writes response to stdout.
+    exit(HookMain.run())
+} else if isMCPMode {
     try await MCPServerRunner.run()
 } else if isSocketMode {
     // Headless socket server mode -- run until terminated
+    SocketServerManager.shared.hookHandler = { HookRouter.handle(eventJSON: $0) }
     SocketServerManager.shared.start()
     // Block forever (the socket server runs on GCD)
     dispatchMain()

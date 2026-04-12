@@ -34,14 +34,26 @@ final class MCPSession: @unchecked Sendable {
     let paneId: String?
     private let lock = NSLock()
 
-    // Feature toggles (mutable at runtime)
+    // Feature toggles (mutable at runtime — refreshed from config file on each tool call)
     private(set) var filterEnabled: Bool
     private(set) var secretsEnabled: Bool
     private(set) var indexerEnabled: Bool
     private(set) var cacheEnabled: Bool
+    private(set) var terseEnabled: Bool
+    private let configFilePath: String?
 
-    // Lazy symbol index
+    // Tree cache for incremental re-parsing
+    let treeCache = TreeCache()
+
+    // Symbol index (eagerly warmed in background)
     private var _symbolIndex: SymbolIndex?
+    private var _indexBuilding = false
+
+    // FSEvents file watcher for auto re-indexing
+    private var fileWatcher: FileWatcher?
+
+    // Dependency graph (lazily built on first use)
+    private var _dependencyGraph: DependencyGraph?
 
     // Running metrics
     private(set) var totalRawBytes = 0
@@ -51,22 +63,30 @@ final class MCPSession: @unchecked Sendable {
     private(set) var perFeatureSaved: [String: Int] = [:]  // feature name -> bytes saved
 
     init(projectRoot: String, filterEnabled: Bool = true, secretsEnabled: Bool = true,
-         indexerEnabled: Bool = true, cacheEnabled: Bool = true,
+         indexerEnabled: Bool = true, cacheEnabled: Bool = true, terseEnabled: Bool = false,
          readCache: ReadCache? = nil,
-         metricsFilePath: String? = nil, sessionId: String? = nil, paneId: String? = nil) {
+         metricsFilePath: String? = nil, sessionId: String? = nil, paneId: String? = nil,
+         configFilePath: String? = nil) {
         self.projectRoot = projectRoot
         self.filterEnabled = filterEnabled
         self.secretsEnabled = secretsEnabled
         self.indexerEnabled = indexerEnabled
         self.cacheEnabled = cacheEnabled
+        self.terseEnabled = terseEnabled
         self.readCache = readCache ?? ReadCache()
         self.metricsFilePath = metricsFilePath
         self.sessionId = sessionId
         self.paneId = paneId
+        self.configFilePath = configFilePath
 
-        let config = FeatureConfig(filter: filterEnabled, secrets: secretsEnabled, indexer: indexerEnabled)
+        let config = FeatureConfig(filter: filterEnabled, secrets: secretsEnabled, indexer: indexerEnabled, terse: terseEnabled)
         self.pipeline = FilterPipeline(config: config)
         self.validatorRegistry = ValidatorRegistry.load(projectRoot: projectRoot)
+
+        // Start background index warmup so first tool call doesn't block
+        if indexerEnabled {
+            warmIndex()
+        }
     }
 
     /// Resolve session config from environment.
@@ -92,10 +112,15 @@ final class MCPSession: @unchecked Sendable {
         // doesn't pass SENKANI_METRICS_FILE through to the MCP subprocess.
         let explicitMetrics = ProcessInfo.processInfo.environment["SENKANI_METRICS_FILE"]
         let metricsFile = explicitMetrics ?? Self.fallbackMetricsPath(projectRoot: root)
+        // Prune expired sandboxed results (>24h) on session startup
+        SessionDatabase.shared.pruneSandboxedResults()
+
         let sessionId: String? = SessionDatabase.shared.createSession(projectRoot: root)
         let paneId = ProcessInfo.processInfo.environment["SENKANI_PANE_ID"]
 
         FileHandle.standardError.write(Data("🔴 MCPSession.resolve(): rawRoot=\(rawRoot) normalized=\(root) metrics=\(metricsFile) pane=\(paneId ?? "nil") session=\(sessionId ?? "nil")\n".utf8))
+
+        let configFile = ProcessInfo.processInfo.environment["SENKANI_CONFIG_FILE"]
 
         return MCPSession(
             projectRoot: root,
@@ -103,9 +128,11 @@ final class MCPSession: @unchecked Sendable {
             secretsEnabled: passthrough ? false : envBool("SENKANI_MCP_SECRETS", fallback: true),
             indexerEnabled: passthrough ? false : envBool("SENKANI_MCP_INDEX", fallback: true),
             cacheEnabled: passthrough ? false : envBool("SENKANI_MCP_CACHE", fallback: true),
+            terseEnabled: passthrough ? false : envBool("SENKANI_MCP_TERSE", fallback: false),
             metricsFilePath: metricsFile,
             sessionId: sessionId,
-            paneId: paneId
+            paneId: paneId,
+            configFilePath: configFile
         )
     }
 
@@ -119,15 +146,186 @@ final class MCPSession: @unchecked Sendable {
         return dir + "/" + name + ".jsonl"
     }
 
-    /// Lazily build or load the symbol index.
-    func ensureIndex() -> SymbolIndex {
+    /// Re-read feature toggles from the pane's config file.
+    /// Called at the start of each tool call so GUI toggle changes take effect immediately.
+    /// Cost: one file stat per tool call — negligible.
+    func refreshConfig() {
+        guard let path = configFilePath else { return }
+        guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+
+        // Parse KEY=VALUE lines from the .env file
+        var env: [String: String] = [:]
+        for line in content.split(separator: "\n") {
+            let parts = line.split(separator: "=", maxSplits: 1)
+            if parts.count == 2 {
+                env[String(parts[0])] = String(parts[1])
+            }
+        }
+
+        lock.lock()
+        // Map pane env var names (SENKANI_FILTER) to session properties
+        if let val = env["SENKANI_FILTER"] { filterEnabled = val == "on" }
+        if let val = env["SENKANI_CACHE"] { cacheEnabled = val == "on" }
+        if let val = env["SENKANI_SECRETS"] { secretsEnabled = val == "on" }
+        if let val = env["SENKANI_INDEXER"] { indexerEnabled = val == "on" }
+        if let val = env["SENKANI_TERSE"] { terseEnabled = val == "on" }
+        lock.unlock()
+    }
+
+    /// Kick off background index build. Non-blocking.
+    /// If an index exists on disk, loads it immediately (fast), then refreshes in background.
+    /// If no index exists, does a full build in background.
+    func warmIndex() {
+        lock.lock()
+        guard _symbolIndex == nil, !_indexBuilding else {
+            lock.unlock()
+            return
+        }
+        // Try fast disk load first (synchronous, <50ms)
+        if let cached = IndexStore.load(projectRoot: projectRoot) {
+            _symbolIndex = cached
+            _indexBuilding = true
+            lock.unlock()
+            // Incremental update in background (populate tree cache for incremental re-parsing)
+            DispatchQueue.global(qos: .utility).async { [projectRoot, treeCache] in
+                let updated = IndexEngine.incrementalUpdate(existing: cached, projectRoot: projectRoot, treeCache: treeCache)
+                try? IndexStore.save(updated, projectRoot: projectRoot)
+                self.lock.lock()
+                self._symbolIndex = updated
+                self._indexBuilding = false
+                self.lock.unlock()
+                self.startFileWatcher()
+            }
+        } else {
+            _indexBuilding = true
+            lock.unlock()
+            // Full build in background (populate tree cache for incremental re-parsing)
+            DispatchQueue.global(qos: .utility).async { [projectRoot, treeCache] in
+                let idx = IndexEngine.index(projectRoot: projectRoot, treeCache: treeCache)
+                try? IndexStore.save(idx, projectRoot: projectRoot)
+                self.lock.lock()
+                self._symbolIndex = idx
+                self._indexBuilding = false
+                self.lock.unlock()
+                self.startFileWatcher()
+            }
+        }
+    }
+
+    /// Return the index if available, nil if still building. Thread-safe.
+    func indexIfReady() -> SymbolIndex? {
         lock.lock()
         defer { lock.unlock() }
-        if let idx = _symbolIndex { return idx }
+        return _symbolIndex
+    }
+
+    /// Blocking index build for CLI commands. Checks if background build finished first.
+    func ensureIndex() -> SymbolIndex {
+        lock.lock()
+        if let idx = _symbolIndex {
+            lock.unlock()
+            return idx
+        }
+        lock.unlock()
+        // Background build may be in progress — just do a synchronous build
         let idx = IndexStore.buildOrUpdate(projectRoot: projectRoot)
         try? IndexStore.save(idx, projectRoot: projectRoot)
+        lock.lock()
         _symbolIndex = idx
+        _indexBuilding = false
+        lock.unlock()
         return idx
+    }
+
+    /// Lazily build the dependency graph. Cached after first call.
+    func ensureDependencyGraph() -> DependencyGraph {
+        lock.lock()
+        if let graph = _dependencyGraph {
+            lock.unlock()
+            return graph
+        }
+        lock.unlock()
+        let graph = IndexEngine.buildDependencyGraph(projectRoot: projectRoot)
+        lock.lock()
+        _dependencyGraph = graph
+        lock.unlock()
+        return graph
+    }
+
+    /// Non-blocking access to the dependency graph.
+    func dependencyGraphIfReady() -> DependencyGraph? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _dependencyGraph
+    }
+
+    // MARK: - File Watcher
+
+    /// Start watching the project directory for file changes.
+    /// Called after the initial index is built. Idempotent.
+    func startFileWatcher() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard fileWatcher == nil else { return }
+
+        let watcher = FileWatcher(projectRoot: projectRoot) { [weak self] changedFiles in
+            guard let self else { return }
+            self.handleFileChanges(changedFiles)
+        }
+        watcher.start()
+        fileWatcher = watcher
+    }
+
+    /// Stop watching. Called on session teardown. Idempotent.
+    func stopFileWatcher() {
+        lock.lock()
+        defer { lock.unlock() }
+        fileWatcher?.stop()
+        fileWatcher = nil
+    }
+
+    /// Handle a batch of changed files from the FileWatcher.
+    /// Re-indexes each file incrementally, then updates the in-memory symbol index.
+    private func handleFileChanges(_ changedFiles: [String]) {
+        let prefix = projectRoot + "/"
+        let relativePaths = changedFiles.compactMap { absPath -> String? in
+            guard absPath.hasPrefix(prefix) else { return nil }
+            return String(absPath.dropFirst(prefix.count))
+        }
+        guard !relativePaths.isEmpty else { return }
+
+        var newEntries: [IndexEntry] = []
+        var affectedFiles: Set<String> = []
+
+        for relativePath in relativePaths {
+            let fullPath = projectRoot + "/" + relativePath
+            affectedFiles.insert(relativePath)
+
+            if !FileManager.default.fileExists(atPath: fullPath) {
+                treeCache.remove(file: relativePath)
+                continue
+            }
+
+            let entries = IndexEngine.indexFileIncremental(
+                relativePath: relativePath,
+                projectRoot: projectRoot,
+                treeCache: treeCache
+            )
+            newEntries.append(contentsOf: entries)
+        }
+
+        lock.lock()
+        guard var idx = _symbolIndex else {
+            lock.unlock()
+            return
+        }
+        idx.removeSymbols(forFiles: affectedFiles)
+        idx.symbols.append(contentsOf: newEntries)
+        idx.generated = Date()
+        _symbolIndex = idx
+        lock.unlock()
+
+        fputs("[senkani] Re-indexed \(relativePaths.count) changed files (\(newEntries.count) symbols)\n", stderr)
     }
 
     /// Record metrics for a tool call.
@@ -216,6 +414,7 @@ final class MCPSession: @unchecked Sendable {
 
     /// Shut down the session, ending the database session record.
     func shutdown() {
+        stopFileWatcher()
         if let sid = sessionId {
             SessionDatabase.shared.endSession(sessionId: sid)
         }
@@ -259,12 +458,13 @@ final class MCPSession: @unchecked Sendable {
     }
 
     /// Update feature toggles at runtime.
-    func updateConfig(filter: Bool? = nil, secrets: Bool? = nil, indexer: Bool? = nil, cache: Bool? = nil) {
+    func updateConfig(filter: Bool? = nil, secrets: Bool? = nil, indexer: Bool? = nil, cache: Bool? = nil, terse: Bool? = nil) {
         lock.lock()
         if let f = filter { filterEnabled = f }
         if let s = secrets { secretsEnabled = s }
         if let i = indexer { indexerEnabled = i }
         if let c = cache { cacheEnabled = c }
+        if let t = terse { terseEnabled = t }
         lock.unlock()
     }
 
@@ -299,12 +499,12 @@ final class MCPSession: @unchecked Sendable {
         lines.append("  Est. tokens saved: \(estTokensSaved)")
         lines.append("  Est. cost saved: $\(String(format: "%.2f", estDollarsSaved))")
         lines.append("")
-        lines.append("  Toggles: filter=\(filterEnabled) secrets=\(secretsEnabled) indexer=\(indexerEnabled) cache=\(cacheEnabled)")
+        lines.append("  Toggles: filter=\(filterEnabled) secrets=\(secretsEnabled) indexer=\(indexerEnabled) cache=\(cacheEnabled) terse=\(terseEnabled)")
         return lines.joined(separator: "\n")
     }
 
     func configString() -> String {
-        "filter=\(filterEnabled) secrets=\(secretsEnabled) indexer=\(indexerEnabled) cache=\(cacheEnabled)"
+        "filter=\(filterEnabled) secrets=\(secretsEnabled) indexer=\(indexerEnabled) cache=\(cacheEnabled) terse=\(terseEnabled)"
     }
 
     private func formatBytes(_ bytes: Int) -> String {

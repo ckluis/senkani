@@ -102,6 +102,19 @@ struct PaneContainerView: View {
                     .help("\(pane.metrics.secretsCaught) secret(s) redacted")
             }
 
+            // Passthrough toggle — left of FCSIT, visually distinct
+            Button {
+                pane.features.passthrough.toggle()
+            } label: {
+                Image(systemName: pane.features.passthrough ? "arrow.right.circle.fill" : "arrow.right.circle")
+                    .font(.system(size: 9))
+                    .foregroundStyle(pane.features.passthrough ? .red : SenkaniTheme.textTertiary.opacity(0.5))
+                    .frame(width: 14, height: 14)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(pane.features.passthrough ? "Passthrough ON — hooks disabled" : "Passthrough OFF — hooks active")
+
             // FCSIT feature toggles
             HStack(spacing: 4) {
                 FeatureToggleCompact(label: "F", isOn: $pane.features.filter, color: SenkaniTheme.toggleFilter)
@@ -158,6 +171,7 @@ struct PaneContainerView: View {
                     "SENKANI_METRICS_FILE": pane.metricsFilePath,
                     "SENKANI_CONFIG_FILE": pane.configFilePath,
                     "SENKANI_INTERCEPT": "on",
+                    "SENKANI_HOOK": "on",
                     "SENKANI_PROJECT_ROOT": pane.workingDirectory,
                     "SENKANI_PANE_ID": pane.id.uuidString,
                 ]) { _, new in new },
@@ -202,6 +216,8 @@ struct PaneContainerView: View {
             ScratchpadPane(pane: pane)
         case .savingsTest:
             SavingsTestPlaceholderView()
+        case .agentTimeline:
+            AgentTimelinePane(pane: pane, workspace: workspace)
         }
     }
 
@@ -243,6 +259,8 @@ struct PaneContainerView: View {
             return "notes"
         case .savingsTest:
             return "test suite"
+        case .agentTimeline:
+            return "\(pane.metrics.commandCount) events"
         }
     }
 

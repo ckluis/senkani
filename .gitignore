@@ -3,4 +3,10 @@
 .senkani/
 .mcp.json
 SPEC.md
+specOld.md
+spec/
 charter.md
+.claude/settings.json
+*.xcuserstate
+*.profraw
+.swiftpm/xcode/xcuserdata/

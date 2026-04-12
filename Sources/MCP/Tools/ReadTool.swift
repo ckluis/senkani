@@ -46,6 +46,11 @@ enum ReadTool {
             output = SecretDetector.scan(output).redacted
         }
 
+        // Terse compression
+        if session.terseEnabled {
+            output = TerseCompressor.compress(output)
+        }
+
         let compressedBytes = output.utf8.count
         let savedPct = rawBytes > 0 ? Int(Double(rawBytes - compressedBytes) / Double(rawBytes) * 100) : 0
 

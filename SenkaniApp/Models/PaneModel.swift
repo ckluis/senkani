@@ -16,6 +16,7 @@ enum PaneType: String, CaseIterable {
     case logViewer
     case scratchpad
     case savingsTest
+    case agentTimeline
 }
 
 /// State of the process running in a terminal pane.
@@ -40,6 +41,7 @@ struct PaneFeatureConfig: Equatable {
     var secrets: Bool = true
     var indexer: Bool = true
     var terse: Bool = false
+    var passthrough: Bool = false
 
     /// Convert to environment variables for the subprocess.
     var environmentVars: [String: String] {
@@ -49,6 +51,9 @@ struct PaneFeatureConfig: Equatable {
         env["SENKANI_SECRETS"] = secrets ? "on" : "off"
         env["SENKANI_INDEXER"] = indexer ? "on" : "off"
         env["SENKANI_TERSE"] = terse ? "on" : "off"
+        if passthrough {
+            env["SENKANI_MODE"] = "passthrough"
+        }
         return env
     }
 
@@ -64,7 +69,7 @@ struct PaneFeatureConfig: Equatable {
     }
 
     /// All features off (passthrough mode).
-    static let passthrough = PaneFeatureConfig(filter: false, cache: false, secrets: false, indexer: false, terse: false)
+    static let passthrough = PaneFeatureConfig(filter: false, cache: false, secrets: false, indexer: false, terse: false, passthrough: true)
 }
 
 /// Model for a single pane in the workspace.
@@ -124,6 +129,7 @@ final class PaneModel: Identifiable {
         case .scratchpad:         self.columnWidth = 300
         case .terminal:           self.columnWidth = 300
         case .savingsTest:        self.columnWidth = 480
+        case .agentTimeline:      self.columnWidth = 420
         default:                  self.columnWidth = 300
         }
         // Write initial toggle state so the hook script has it from the start
@@ -166,6 +172,12 @@ final class PaneModel: Identifiable {
                 "SENKANI_METRICS_FILE": metricsFilePath,
                 "SENKANI_PROJECT_ROOT": workingDirectory,
                 "SENKANI_PANE_ID": id.uuidString,
+                "SENKANI_CONFIG_FILE": configFilePath,
+                // Feature toggles — MCPSession reads SENKANI_MCP_* names
+                "SENKANI_MCP_FILTER": features.filter ? "on" : "off",
+                "SENKANI_MCP_CACHE": features.cache ? "on" : "off",
+                "SENKANI_MCP_SECRETS": features.secrets ? "on" : "off",
+                "SENKANI_MCP_INDEX": features.indexer ? "on" : "off",
             ],
         ] as [String: Any]
         config["mcpServers"] = mcpServers

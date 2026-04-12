@@ -44,6 +44,18 @@ public struct FilterPipeline: Sendable {
             secretsFound = detection.patterns
         }
 
+        // Stage 3: TerseCompressor
+        if config.isEnabled(.terse) {
+            let beforeBytes = currentOutput.utf8.count
+            currentOutput = TerseCompressor.compress(currentOutput)
+            let afterBytes = currentOutput.utf8.count
+            breakdown.append(FeatureContribution(
+                feature: .terse,
+                inputBytes: beforeBytes,
+                outputBytes: afterBytes
+            ))
+        }
+
         let filteredBytes = currentOutput.utf8.count
         return PipelineResult(
             output: currentOutput,

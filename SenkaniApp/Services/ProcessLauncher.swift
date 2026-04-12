@@ -1,4 +1,5 @@
 import Foundation
+import Core
 
 /// Manages the lifecycle of a pane's session resources.
 /// Starts ClaudeSessionWatcher for terminal panes, handles cleanup on stop.
@@ -26,6 +27,10 @@ final class PaneSession: @unchecked Sendable {
         // Clean up metrics file and per-project MCP config
         try? FileManager.default.removeItem(atPath: pane.metricsFilePath)
         pane.cleanupMCPConfig()
+        // Unregister hook from project settings
+        try? HookRegistration.unregisterForProject(
+            at: pane.workingDirectory,
+            hookBinaryPath: AutoRegistration.hookWrapperPath)
     }
 
     deinit {

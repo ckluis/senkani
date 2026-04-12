@@ -70,6 +70,23 @@ public final class SessionDatabase: @unchecked Sendable {
         enableWAL()
         createTables()
         createTokenEventsTable()
+        createSandboxedResultsTable()
+    }
+
+    /// Testable initializer — opens a DB at a custom path (use a temp file).
+    public init(path: String) {
+        let dir = (path as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+
+        if sqlite3_open(path, &db) != SQLITE_OK {
+            let err = db.flatMap { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
+            print("[SessionDatabase] Failed to open test DB: \(err)")
+            db = nil
+        }
+        enableWAL()
+        createTables()
+        createTokenEventsTable()
+        createSandboxedResultsTable()
     }
 
     deinit {
@@ -652,6 +669,114 @@ public final class SessionDatabase: @unchecked Sendable {
         }
     }
 
+    // MARK: - Timeline Events
+
+    /// A single token event row from the database, with fields the timeline pane needs to render.
+    public struct TimelineEvent: Sendable, Equatable, Identifiable {
+        public let id: Int64
+        public let timestamp: Date
+        public let source: String
+        public let toolName: String?
+        public let feature: String?
+        public let command: String?
+        public let inputTokens: Int
+        public let outputTokens: Int
+        public let savedTokens: Int
+        public let costCents: Int
+
+        public init(id: Int64, timestamp: Date, source: String, toolName: String?,
+                    feature: String?, command: String?, inputTokens: Int,
+                    outputTokens: Int, savedTokens: Int, costCents: Int) {
+            self.id = id
+            self.timestamp = timestamp
+            self.source = source
+            self.toolName = toolName
+            self.feature = feature
+            self.command = command
+            self.inputTokens = inputTokens
+            self.outputTokens = outputTokens
+            self.savedTokens = savedTokens
+            self.costCents = costCents
+        }
+    }
+
+    /// Fetch the most recent token events for a project, newest first.
+    /// Used by the Agent Timeline pane. The `limit` bounds memory; 100 is a reasonable default.
+    public func recentTokenEvents(projectRoot: String, limit: Int = 100) -> [TimelineEvent] {
+        let normalized = Self.normalizePath(projectRoot) ?? projectRoot
+        return queue.sync {
+            guard let db = db else { return [] }
+            let sql = """
+                SELECT id, timestamp, source, tool_name, feature, command,
+                       input_tokens, output_tokens, saved_tokens, cost_cents
+                FROM token_events
+                WHERE project_root = ?
+                ORDER BY timestamp DESC
+                LIMIT ?;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_int(stmt, 2, Int32(limit))
+            return parseTimelineRows(stmt)
+        }
+    }
+
+    /// Fetch the most recent token events across ALL projects.
+    /// Used when the timeline pane has no associated project.
+    public func recentTokenEventsAllProjects(limit: Int = 100) -> [TimelineEvent] {
+        return queue.sync {
+            guard let db = db else { return [] }
+            let sql = """
+                SELECT id, timestamp, source, tool_name, feature, command,
+                       input_tokens, output_tokens, saved_tokens, cost_cents
+                FROM token_events
+                ORDER BY timestamp DESC
+                LIMIT ?;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_int(stmt, 1, Int32(limit))
+            return parseTimelineRows(stmt)
+        }
+    }
+
+    /// Shared row parser for timeline event queries.
+    private func parseTimelineRows(_ stmt: OpaquePointer?) -> [TimelineEvent] {
+        var results: [TimelineEvent] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let id = sqlite3_column_int64(stmt, 0)
+            let ts = sqlite3_column_double(stmt, 1)
+            let source = String(cString: sqlite3_column_text(stmt, 2))
+            let toolName: String? = sqlite3_column_type(stmt, 3) == SQLITE_NULL
+                ? nil : String(cString: sqlite3_column_text(stmt, 3))
+            let feature: String? = sqlite3_column_type(stmt, 4) == SQLITE_NULL
+                ? nil : String(cString: sqlite3_column_text(stmt, 4))
+            let command: String? = sqlite3_column_type(stmt, 5) == SQLITE_NULL
+                ? nil : String(cString: sqlite3_column_text(stmt, 5))
+            let input = Int(sqlite3_column_int64(stmt, 6))
+            let output = Int(sqlite3_column_int64(stmt, 7))
+            let saved = Int(sqlite3_column_int64(stmt, 8))
+            let cost = Int(sqlite3_column_int64(stmt, 9))
+
+            results.append(TimelineEvent(
+                id: id,
+                timestamp: Date(timeIntervalSince1970: ts),
+                source: source,
+                toolName: toolName,
+                feature: feature,
+                command: command,
+                inputTokens: input,
+                outputTokens: output,
+                savedTokens: saved,
+                costCents: cost
+            ))
+        }
+        return results
+    }
+
     // MARK: - Diagnostics
 
     /// Dump token_events summary to console for debugging.
@@ -763,6 +888,185 @@ public final class SessionDatabase: @unchecked Sendable {
             sqlite3_bind_int64(stmt, 5, Int64(compressedBytes))
             sqlite3_bind_text(stmt, 6, (decision as NSString).utf8String, -1, nil)
             sqlite3_step(stmt)
+        }
+    }
+
+    // MARK: - Hook Event Recording
+
+    /// Record a hook event from the senkani-hook binary.
+    /// Stores tool_name, event_type (PreToolUse/PostToolUse), and project_root.
+    public func recordHookEvent(
+        sessionId: String,
+        toolName: String,
+        eventType: String,
+        projectRoot: String?
+    ) {
+        let normalizedRoot = Self.normalizePath(projectRoot)
+        recordTokenEvent(
+            sessionId: sessionId,
+            paneId: nil,
+            projectRoot: normalizedRoot,
+            source: "hook",
+            toolName: toolName,
+            model: nil,
+            inputTokens: 0,
+            outputTokens: 0,
+            savedTokens: 0,
+            costCents: 0,
+            feature: eventType,
+            command: nil
+        )
+    }
+
+    // MARK: - Compliance Rate
+
+    /// Calculate hook compliance rate: percentage of tool calls that went through
+    /// senkani (either MCP tools or hook events) vs total tool calls.
+    /// Returns a value between 0.0 and 1.0, or nil if no data.
+    public func complianceRate(projectRoot: String? = nil, since: Date? = nil) -> Double? {
+        return queue.sync {
+            guard let db = db else { return nil }
+
+            var conditions: [String] = []
+            var bindValues: [(Int32, Any)] = []
+            var bindIndex: Int32 = 1
+
+            if let root = Self.normalizePath(projectRoot) {
+                conditions.append("project_root = ?")
+                bindValues.append((bindIndex, root))
+                bindIndex += 1
+            }
+            if let since {
+                conditions.append("timestamp >= ?")
+                bindValues.append((bindIndex, since.timeIntervalSince1970))
+                bindIndex += 1
+            }
+
+            let whereClause = conditions.isEmpty ? "" : " WHERE " + conditions.joined(separator: " AND ")
+
+            // Total events
+            let totalSQL = "SELECT COUNT(*) FROM token_events" + whereClause
+            var totalStmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, totalSQL, -1, &totalStmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(totalStmt) }
+            for (idx, val) in bindValues {
+                if let s = val as? String {
+                    sqlite3_bind_text(totalStmt, idx, (s as NSString).utf8String, -1, nil)
+                } else if let d = val as? Double {
+                    sqlite3_bind_double(totalStmt, idx, d)
+                }
+            }
+            guard sqlite3_step(totalStmt) == SQLITE_ROW else { return nil }
+            let total = sqlite3_column_int64(totalStmt, 0)
+            guard total > 0 else { return nil }
+
+            // Senkani events (source = 'mcp' or source = 'hook')
+            let senkaniSQL = "SELECT COUNT(*) FROM token_events" + whereClause
+                + (conditions.isEmpty ? " WHERE " : " AND ")
+                + "(source = 'mcp' OR source = 'hook')"
+            var senkaniStmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, senkaniSQL, -1, &senkaniStmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(senkaniStmt) }
+            for (idx, val) in bindValues {
+                if let s = val as? String {
+                    sqlite3_bind_text(senkaniStmt, idx, (s as NSString).utf8String, -1, nil)
+                } else if let d = val as? Double {
+                    sqlite3_bind_double(senkaniStmt, idx, d)
+                }
+            }
+            guard sqlite3_step(senkaniStmt) == SQLITE_ROW else { return nil }
+            let senkani = sqlite3_column_int64(senkaniStmt, 0)
+
+            return Double(senkani) / Double(total)
+        }
+    }
+
+    // MARK: - Sandboxed Results Table
+
+    private func createSandboxedResultsTable() {
+        queue.sync {
+            exec("""
+                CREATE TABLE IF NOT EXISTS sandboxed_results (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    command TEXT NOT NULL,
+                    full_output TEXT NOT NULL,
+                    line_count INTEGER NOT NULL,
+                    byte_count INTEGER NOT NULL
+                );
+            """)
+            execSilent("CREATE INDEX IF NOT EXISTS idx_sandboxed_results_session ON sandboxed_results(session_id);")
+            execSilent("CREATE INDEX IF NOT EXISTS idx_sandboxed_results_time ON sandboxed_results(created_at);")
+        }
+    }
+
+    // MARK: - Sandboxed Results API
+
+    /// Store a large command output and return a retrieve ID.
+    /// The ID uses a `r_` prefix + 12-char UUID segment for compactness.
+    public func storeSandboxedResult(sessionId: String, command: String, output: String) -> String {
+        let resultId = "r_" + UUID().uuidString.prefix(12).lowercased()
+        let now = Date().timeIntervalSince1970
+        let lineCount = output.components(separatedBy: "\n").count
+        let byteCount = output.utf8.count
+
+        queue.sync {
+            guard let db = db else { return }
+            let sql = """
+                INSERT INTO sandboxed_results (id, session_id, created_at, command, full_output, line_count, byte_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?);
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (resultId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 2, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_double(stmt, 3, now)
+            sqlite3_bind_text(stmt, 4, (command as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 5, (output as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(stmt, 6, Int64(lineCount))
+            sqlite3_bind_int64(stmt, 7, Int64(byteCount))
+            sqlite3_step(stmt)
+        }
+
+        return resultId
+    }
+
+    /// Retrieve a sandboxed result by its ID.
+    /// Returns nil if not found (expired or invalid ID).
+    public func retrieveSandboxedResult(resultId: String) -> (command: String, output: String, lineCount: Int, byteCount: Int)? {
+        return queue.sync {
+            guard let db = db else { return nil }
+            let sql = "SELECT command, full_output, line_count, byte_count FROM sandboxed_results WHERE id = ?;"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (resultId as NSString).utf8String, -1, nil)
+
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+            let command = String(cString: sqlite3_column_text(stmt, 0))
+            let output = String(cString: sqlite3_column_text(stmt, 1))
+            let lineCount = Int(sqlite3_column_int64(stmt, 2))
+            let byteCount = Int(sqlite3_column_int64(stmt, 3))
+            return (command, output, lineCount, byteCount)
+        }
+    }
+
+    /// Delete sandboxed results older than a given interval (default: 24 hours).
+    /// Call on session startup to prevent unbounded growth.
+    @discardableResult
+    public func pruneSandboxedResults(olderThan interval: TimeInterval = 86400) -> Int {
+        let cutoff = Date().timeIntervalSince1970 - interval
+        return queue.sync {
+            guard let db = db else { return 0 }
+            let sql = "DELETE FROM sandboxed_results WHERE created_at < ?;"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_double(stmt, 1, cutoff)
+            sqlite3_step(stmt)
+            return Int(sqlite3_changes(db))
         }
     }
 

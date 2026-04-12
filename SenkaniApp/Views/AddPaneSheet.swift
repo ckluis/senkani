@@ -140,6 +140,15 @@ struct AddPaneSheet: View {
                 defaultTitle: "Savings Test",
                 defaultCommand: ""
             ),
+            PaneEntry(
+                id: .agentTimeline, type: .agentTimeline,
+                name: "Agent Timeline",
+                description: "Live feed of optimization events",
+                icon: SenkaniTheme.iconName(for: .agentTimeline),
+                accent: SenkaniTheme.accentColor(for: .agentTimeline),
+                defaultTitle: "Timeline",
+                defaultCommand: ""
+            ),
         ]
 
         if searchText.isEmpty { return all }

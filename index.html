@@ -1,0 +1,1581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>senkani — the terminal that is everything else too</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Inconsolata:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:        #f5f1e8;
+    --bg-elev:   #ebe6d8;
+    --ink:       #1a1a1a;
+    --ink-soft:  #4a4a47;
+    --ink-mute:  #8a867d;
+    --rule:      rgba(26,26,26,0.14);
+    --accent:    #ff6200;
+    --accent-hi: #ff8534;
+    --accent-lo: #c94a00;
+    --secondary:     #ffd4a8;
+    --secondary-ink: #6b2e00;
+
+    /* Real app colors from ThemeEngine defaults / One Dark Pro */
+    --app-bg:     #0e0e0e;   /* appBackground */
+    --app-panel:  #131313;   /* paneBody */
+    --app-elev:   #1a1a1a;   /* paneShell / sidebarBackground */
+    --app-rule:   #2a2a2a;   /* inactiveBorder */
+    --app-rule-2: #3a3a3a;
+    --app-text:   #e0e0e0;   /* textPrimary */
+    --app-mute:   #808080;   /* textSecondary */
+    --app-dim:    #505050;   /* textTertiary */
+    --app-green:  #3fb068;   /* ansiGreen — terminal accent */
+    --app-blue:   #4a9ee0;   /* ansiBlue  — analytics accent */
+    --app-yellow: #d4a017;   /* ansiYellow — markdown/preview accent */
+    --app-purple: #c678dd;   /* ansiMagenta — skill library accent */
+    --app-cyan:   #56b6c2;   /* ansiCyan — knowledge base accent */
+    --app-red:    #e05a4a;   /* ansiRed */
+    --app-amber:  #d4a017;
+    --app-focus:  #66809b;   /* focusBorder — active pane border */
+
+    /* FCSIT toggle colors (semantic, not theme-derived) */
+    --tog-f: #4a9ee0;   /* Filter   — blue */
+    --tog-c: #3fb068;   /* Cache    — green */
+    --tog-s: #ff9500;   /* Secrets  — orange */
+    --tog-i: #c678dd;   /* Indexer  — purple */
+    --tog-t: #d4a017;   /* Terse    — amber */
+
+    --font-display: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-body:    'Inter', -apple-system, BlinkMacSystemFont, Arial, Helvetica, sans-serif;
+    --font-code:    'Inconsolata', ui-monospace, 'SF Mono', Menlo, monospace;
+
+    --measure: 62ch;
+    --gutter: 48px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 19px;
+    line-height: 1.6;
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+    text-align: left;
+  }
+
+  /* ---------- Layout primitives ---------- */
+  .measure { max-width: var(--measure); margin: 0; padding: 0 var(--gutter); }
+  .wide    { max-width: 1400px; margin: 0; padding: 0 var(--gutter); }
+  .full    { width: 100%; padding: 0 var(--gutter); }
+  .indent  { padding-left: var(--gutter); }
+
+  /* ---------- Status badges ---------- */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--font-code);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 3px;
+    vertical-align: middle;
+    line-height: 1;
+  }
+  .badge::before { content: "●"; font-size: 7px; }
+  .badge-live   { background: rgba(74,222,128,0.14); color: #166534; }
+  .badge-live::before { color: #4ade80; }
+  .badge-coming { background: rgba(250,191,36,0.14); color: #854d0e; }
+  .badge-coming::before { content: "○"; color: #fbbf24; }
+
+  /* dark-bg variants */
+  .badge-live-d   { background: rgba(74,222,128,0.12); color: var(--app-green); }
+  .badge-live-d::before { color: var(--app-green); }
+  .badge-coming-d { background: rgba(250,191,36,0.12); color: var(--app-amber); }
+  .badge-coming-d::before { content: "○"; color: var(--app-amber); }
+
+  /* ---------- Nav ---------- */
+  nav {
+    display: flex;
+    align-items: center;
+    padding: 28px var(--gutter);
+    border-bottom: 1px solid var(--rule);
+  }
+  .wordmark {
+    display: flex;
+    align-items: baseline;
+    font-family: var(--font-display);
+    font-weight: 900;
+    font-size: 22px;
+    letter-spacing: -0.025em;
+    color: var(--ink);
+    text-decoration: none;
+  }
+  .wordmark .tld { color: var(--accent); }
+  .wordmark small {
+    font-family: var(--font-code);
+    font-weight: 500;
+    font-size: 12px;
+    color: var(--ink-mute);
+    margin-left: 14px;
+    letter-spacing: 0;
+  }
+
+  /* ---------- Hero ---------- */
+  .hero { padding: 120px var(--gutter) 80px; }
+  .overline {
+    font-family: var(--font-display);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 1.6px;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+    margin-bottom: 28px;
+  }
+  h1 {
+    font-family: var(--font-display);
+    font-size: clamp(48px, 9.5vw, 136px);
+    font-weight: 800;
+    line-height: 0.93;
+    letter-spacing: -0.04em;
+    margin: 0 0 36px 0;
+    max-width: 13ch;
+  }
+  h1 .accent { color: var(--accent); }
+  .hero p.lede {
+    font-size: 23px;
+    line-height: 1.45;
+    color: var(--ink-soft);
+    max-width: var(--measure);
+    margin: 0 0 44px 0;
+    font-weight: 400;
+  }
+  .cta-row { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+  .meta {
+    display: flex;
+    gap: 24px;
+    margin-top: 32px;
+    font-size: 14px;
+    color: var(--ink-mute);
+    font-family: var(--font-code);
+  }
+  .meta span::before { content: "→ "; color: var(--accent); }
+
+  /* ---------- Buttons ---------- */
+  .btn {
+    display: inline-block;
+    font-family: var(--font-body);
+    font-size: 16px;
+    font-weight: 600;
+    padding: 15px 26px;
+    border-radius: 4px;
+    text-decoration: none;
+    border: 1px solid transparent;
+    transition: all .15s ease;
+    cursor: pointer;
+  }
+  .btn-primary   { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btn-primary:hover { background: var(--accent-hi); border-color: var(--accent-hi); }
+  .btn-secondary { background: var(--secondary); color: var(--secondary-ink); border-color: var(--secondary); }
+  .btn-secondary:hover { background: #ffc38a; }
+  .btn-ghost     { background: transparent; color: var(--ink); border-color: var(--ink); }
+  .btn-ghost:hover { background: var(--ink); color: var(--bg); }
+
+  /* ---------- Sections ---------- */
+  section { padding: 100px 0; border-bottom: 1px solid var(--rule); }
+  section:last-of-type { border-bottom: none; }
+
+  h2 {
+    font-family: var(--font-display);
+    font-size: clamp(36px, 5vw, 56px);
+    font-weight: 700;
+    line-height: 1.02;
+    letter-spacing: -0.03em;
+    margin: 0 0 24px 0;
+  }
+  h2 .accent { color: var(--accent); }
+  h3 {
+    font-family: var(--font-display);
+    font-size: 24px;
+    font-weight: 700;
+    line-height: 1.25;
+    margin: 40px 0 12px 0;
+  }
+  p { margin: 0 0 20px 0; }
+  p.body { font-size: 19px; line-height: 1.6; color: var(--ink); }
+  p.body strong { font-weight: 700; }
+  a.inline { color: var(--accent-lo); text-decoration: underline; text-underline-offset: 3px; }
+  a.inline:hover { color: var(--accent); }
+
+  /* ---------- Mockups ---------- */
+  .mockup {
+    background: var(--app-bg);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow:
+      0 40px 80px -24px rgba(26,26,26,0.30),
+      0 16px 32px -12px rgba(26,26,26,0.18),
+      0 2px 4px rgba(26,26,26,0.08);
+    border: 1px solid rgba(26,26,26,0.18);
+    font-family: var(--font-code);
+    color: var(--app-text);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .mockup-lg { max-width: 1260px; margin: 64px 0 0 0; }
+  .mockup-md { max-width: 900px; margin: 32px 0; }
+  .mockup-sm { max-width: 640px; margin: 24px 0; }
+
+  .tb {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    background: var(--app-elev);
+    border-bottom: 1px solid var(--app-rule);
+    user-select: none;
+  }
+  .dots { display: flex; gap: 8px; }
+  .dot  { width: 12px; height: 12px; border-radius: 50%; }
+  .dot-r { background: #ff5f56; }
+  .dot-y { background: #ffbd2e; }
+  .dot-g { background: #27c93f; }
+  .tb-title {
+    flex: 1;
+    text-align: center;
+    font-family: var(--font-body);
+    font-size: 12px;
+    color: var(--app-mute);
+    font-weight: 500;
+  }
+  .tb-spacer { width: 54px; }
+
+  /* ---- Main app mockup ---- */
+  .app-body {
+    display: grid;
+    grid-template-columns: 180px 1fr;  /* real: sidebarWidth = 180 */
+    min-height: 560px;
+  }
+  .app-sidebar {
+    background: var(--app-elev);   /* sidebarBackground = #1a1a1a */
+    border-right: 1px solid var(--app-rule);
+    padding: 18px 0;
+    font-family: var(--font-body);
+  }
+  .sb-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    color: var(--app-dim);
+    padding: 0 18px;
+    margin: 12px 0 6px;
+  }
+  .sb-label:first-child { margin-top: 0; }
+  .sb-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 18px;
+    font-size: 13px;
+    color: var(--app-text);
+    cursor: default;
+  }
+  .sb-item .ico {
+    width: 14px; height: 14px;
+    border-radius: 3px;
+    background: var(--app-rule-2);
+    flex-shrink: 0;
+  }
+  .sb-item.active {
+    background: rgba(255,98,0,0.12);
+    border-left: 2px solid var(--accent);
+    padding-left: 16px;
+  }
+  .sb-item.active .ico { background: var(--accent); }
+  .sb-item.active { color: #fff; font-weight: 600; }
+  .sb-item.dim { color: var(--app-mute); }
+  .sb-sub { font-size: 11px; color: var(--app-dim); margin-left: auto; font-family: var(--font-code); }
+  .sb-item.active .sb-sub { color: #ffd4a8; }
+
+  /* ---- Canvas / panes — real app layout ---- */
+  .canvas {
+    display: grid;
+    grid-template-columns: 1.1fr 1fr 1fr;
+    background: var(--app-bg);
+    gap: 4px;          /* real: SenkaniTheme.columnSpacing = 4 */
+    padding: 4px;
+  }
+  .pane {
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+    background: var(--app-elev);       /* paneShell */
+    border-radius: 6px;                /* paneCornerRadius */
+    overflow: hidden;
+    border: 1.5px solid var(--app-focus);  /* active: focusBorder @ 1.5px */
+    box-shadow: 0 0 0 1px rgba(102,128,155,0.12), 0 4px 16px rgba(102,128,155,0.18);
+  }
+  .pane.inactive {
+    border: 0.5px solid var(--app-rule);
+    box-shadow: none;
+  }
+
+  /* Thin accent line at the very top of each pane (real: Rectangle, 2.5px active / 1.5px inactive) */
+  .pane-accent {
+    height: 2.5px;
+    flex-shrink: 0;
+  }
+  .pane.inactive .pane-accent { height: 1.5px; opacity: 0.5; }
+
+  /* 24px compact header — real design */
+  .pane-header {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 8px;
+    height: 24px;
+    flex-shrink: 0;
+    font-family: var(--font-body);
+  }
+  /* Active pane header: accent color @ 8% opacity bg */
+  .pane .pane-header { background: rgba(102,128,155,0.08); }
+  .pane.inactive .pane-header { background: var(--app-elev); }
+
+  .pane-dot {
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .pane-dot.running { background: var(--app-green); }
+  .pane-dot.idle    { background: var(--app-dim); }
+
+  .pane-title {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--app-text);
+    white-space: nowrap;
+  }
+  .pane-ctx {
+    font-size: 9px;
+    font-family: var(--font-code);
+    color: var(--app-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .pane-spacer { flex: 1; }
+
+  /* FCSIT toggles — real app feature: F=Filter C=Cache S=Secrets I=Indexer T=Terse */
+  .fcsit {
+    display: flex;
+    gap: 3px;
+    align-items: center;
+  }
+  .fcsit-btn {
+    width: 14px; height: 14px;
+    border-radius: 3px;
+    font-size: 7.5px;
+    font-weight: 700;
+    font-family: var(--font-code);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+  }
+  .fcsit-btn.f-on  { background: rgba(74,158,224,0.20); color: var(--tog-f); }
+  .fcsit-btn.c-on  { background: rgba(63,176,104,0.20); color: var(--tog-c); }
+  .fcsit-btn.s-on  { background: rgba(255,149,0,0.20);  color: var(--tog-s); }
+  .fcsit-btn.i-on  { background: rgba(198,120,221,0.20);color: var(--tog-i); }
+  .fcsit-btn.t-on  { background: rgba(212,160,23,0.20); color: var(--tog-t); }
+  .fcsit-btn.off   { background: rgba(80,80,80,0.15); color: var(--app-dim); opacity: 0.5; }
+
+  .pane-gear, .pane-close {
+    font-size: 9px;
+    color: var(--app-dim);
+    width: 14px; height: 14px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 2px;
+    cursor: default;
+  }
+
+  /* 0.5px separator between header and body (real: Rectangle fill appBackground) */
+  .pane-sep { height: 0.5px; background: var(--app-bg); flex-shrink: 0; }
+
+  .pane-body {
+    flex: 1;
+    padding: 12px 14px;
+    font-family: var(--font-code);
+    font-size: 12.5px;
+    line-height: 1.6;
+    overflow: hidden;
+    background: var(--app-panel);     /* paneBody */
+  }
+
+  /* ---- Terminal content ---- */
+  .term-line    { white-space: nowrap; }
+  .term-prompt  { color: var(--app-green); }
+  .term-at      { color: var(--app-purple); }
+  .term-dir     { color: var(--app-blue); }
+  .term-cmd     { color: var(--app-text); }
+  .term-arg     { color: var(--accent); }
+  .term-out     { color: var(--app-mute); }
+  .term-ok      { color: var(--app-green); }
+  .term-warn    { color: #fbbf24; }
+  .term-err     { color: var(--app-red); }
+  .term-cursor  {
+    display: inline-block;
+    width: 7px; height: 14px;
+    background: var(--app-text);
+    vertical-align: text-bottom;
+    animation: blink 1.1s step-end infinite;
+  }
+  @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+
+  /* ---- Markdown content ---- */
+  .md-h   { color: var(--app-text); font-weight: 700; font-size: 15px; margin-bottom: 6px; font-family: var(--font-display); }
+  .md-sub { color: var(--app-mute); font-size: 11.5px; margin-bottom: 14px; font-family: var(--font-body); }
+  .md-p   { color: var(--app-text); font-family: var(--font-body); font-size: 12.5px; margin-bottom: 10px; line-height: 1.55; }
+  .md-code {
+    background: var(--app-panel);
+    border: 1px solid var(--app-rule);
+    border-radius: 4px;
+    padding: 10px 12px;
+    font-size: 11.5px;
+    color: var(--app-blue);
+    margin: 10px 0;
+  }
+  .md-code .k { color: var(--accent); }
+  .md-code .s { color: var(--app-green); }
+  .md-code .c { color: var(--app-dim); }
+  .md-tag {
+    display: inline-block;
+    padding: 1px 8px;
+    background: rgba(255,98,0,0.12);
+    color: var(--accent);
+    border-radius: 10px;
+    font-size: 10px;
+    font-family: var(--font-body);
+    font-weight: 600;
+    margin-right: 4px;
+  }
+
+  /* ---- Browser pane ---- */
+  .br-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--app-panel);
+    padding: 7px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--app-rule);
+    font-family: var(--font-body);
+    font-size: 11px;
+    color: var(--app-mute);
+    margin-bottom: 12px;
+  }
+  .br-bar .lock { color: var(--app-green); font-size: 10px; }
+  .br-content {
+    background: #fafafa;
+    color: #1a1a1a;
+    border-radius: 4px;
+    padding: 14px;
+    font-family: var(--font-body);
+    font-size: 11px;
+    line-height: 1.5;
+    border: 1px solid var(--app-rule);
+  }
+  .br-content h4 { font-size: 15px; margin: 0 0 6px 0; color: #1a1a1a; font-weight: 700; }
+  .br-content p  { color: #555; margin: 0 0 8px 0; font-size: 11px; }
+  .br-content .ph {
+    height: 60px;
+    background: linear-gradient(135deg, #ffe4cc, #ffd4a8);
+    border-radius: 3px;
+    margin: 8px 0;
+  }
+
+  /* ---- Status bar — real: 36px two-row token display ---- */
+  .statusbar {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 0 14px;
+    height: 36px;
+    background: var(--app-elev);
+    border-top: 1px solid var(--app-rule);
+    font-size: 10px;
+    color: var(--app-mute);
+    font-family: var(--font-code);
+    gap: 2px;
+  }
+  .statusbar-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .statusbar .dot-s {
+    display: inline-block;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--app-green);
+    margin-right: 5px;
+  }
+  .statusbar .right { margin-left: auto; display: flex; gap: 14px; }
+  .statusbar strong { color: var(--app-green); font-weight: 600; }
+  .statusbar em { color: var(--app-blue); font-style: normal; }
+
+  /* ---------- Pane-type tabs ---------- */
+  .tabs { max-width: 1100px; padding-right: var(--gutter); margin: 32px 0; }
+  .tab-list { display: flex; gap: 0; border-bottom: 1px solid var(--rule); flex-wrap: wrap; }
+  .tab-btn {
+    font-family: var(--font-display);
+    font-size: 15px;
+    font-weight: 600;
+    background: transparent;
+    border: none;
+    color: var(--ink-mute);
+    padding: 16px 22px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: all .15s;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .tab-btn:hover { color: var(--ink); }
+  .tab-btn.active { color: var(--ink); border-bottom-color: var(--accent); }
+  .tab-panel { display: none; padding: 28px 0 0 0; }
+  .tab-panel.active { display: block; }
+  .tab-panel p.body { max-width: var(--measure); margin-bottom: 20px; }
+
+  /* ---- Context pane ---- */
+  .ctx { padding: 22px 26px; font-family: var(--font-body); }
+  .ctx-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }
+  .ctx-title { font-size: 13px; color: var(--app-mute); font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; }
+  .ctx-num {
+    font-family: var(--font-display);
+    font-size: 42px;
+    font-weight: 800;
+    color: var(--app-text);
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+  }
+  .ctx-num em { color: var(--accent); font-style: normal; }
+  .ctx-sub { font-size: 12px; color: var(--app-mute); font-family: var(--font-code); margin-top: 4px; }
+  .ctx-bar {
+    height: 10px;
+    background: var(--app-panel);
+    border: 1px solid var(--app-rule);
+    border-radius: 5px;
+    margin: 18px 0 8px;
+    overflow: hidden;
+    display: flex;
+  }
+  .ctx-bar .seg { height: 100%; }
+  .ctx-bar .seg.used       { background: var(--accent); width: 38%; }
+  .ctx-bar .seg.compressed { background: rgba(255,98,0,0.35); width: 24%; }
+  .ctx-bar .seg.free       { background: transparent; flex: 1; }
+  .ctx-legend { display: flex; gap: 20px; font-size: 11px; color: var(--app-mute); font-family: var(--font-code); }
+  .ctx-legend span::before { content: "■"; margin-right: 6px; }
+  .ctx-legend .u::before { color: var(--accent); }
+  .ctx-legend .c::before { color: rgba(255,98,0,0.5); }
+  .ctx-legend .f::before { color: var(--app-rule-2); }
+  .ctx-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+    margin-top: 28px;
+    padding-top: 24px;
+    border-top: 1px solid var(--app-rule);
+  }
+  .ctx-stat .lab {
+    font-size: 10px;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: var(--app-dim);
+    font-weight: 600;
+  }
+  .ctx-stat .val {
+    font-family: var(--font-display);
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--app-text);
+    margin-top: 2px;
+  }
+  .ctx-stat .val em { color: var(--accent); font-style: normal; }
+
+  /* ---------- Stats section ---------- */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 40px;
+    margin: 48px 0 0 0;
+    max-width: 1200px;
+    padding-right: var(--gutter);
+  }
+  .stat .num {
+    font-family: var(--font-display);
+    font-size: 72px;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.04em;
+    color: var(--ink);
+  }
+  .stat .num em { color: var(--accent); font-style: normal; }
+  .stat .label { font-size: 14px; color: var(--ink-mute); margin-top: 10px; line-height: 1.4; }
+
+  /* ---------- Feature cards grid ---------- */
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    max-width: 1200px;
+    margin: 48px 0 0 0;
+    padding-right: var(--gutter);
+  }
+  .feature { background: var(--bg); padding: 32px 28px; }
+  .feature .num {
+    font-family: var(--font-code);
+    font-size: 12px;
+    color: var(--accent);
+    font-weight: 700;
+    margin-bottom: 8px;
+    letter-spacing: 1px;
+  }
+  .feature .num-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .feature h4 {
+    font-family: var(--font-display);
+    font-size: 20px;
+    font-weight: 700;
+    margin: 0 0 10px 0;
+    letter-spacing: -0.01em;
+  }
+  .feature p { font-size: 15px; color: var(--ink-soft); margin: 0; line-height: 1.55; }
+
+  /* ---------- MCP tools table (dark card) ---------- */
+  .tools-card {
+    background: var(--app-bg);
+    border-radius: 10px;
+    border: 1px solid var(--app-rule);
+    overflow: hidden;
+    max-width: 1100px;
+    margin: 48px 0 0 0;
+    font-family: var(--font-body);
+  }
+  .tools-head {
+    display: grid;
+    grid-template-columns: 220px 1fr 80px 100px;
+    gap: 16px;
+    padding: 12px 20px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: var(--app-dim);
+    border-bottom: 1px solid var(--app-rule);
+    font-family: var(--font-code);
+  }
+  .tool-row {
+    display: grid;
+    grid-template-columns: 220px 1fr 80px 100px;
+    gap: 16px;
+    padding: 13px 20px;
+    border-bottom: 1px solid var(--app-rule);
+    align-items: center;
+    font-size: 13px;
+  }
+  .tool-row:last-child { border-bottom: none; }
+  .tool-row:hover { background: rgba(255,255,255,0.03); }
+  .tool-name { color: var(--accent); font-family: var(--font-code); font-weight: 600; font-size: 12px; }
+  .tool-desc { color: var(--app-mute); font-size: 12px; }
+  .tool-save { font-family: var(--font-code); font-size: 11px; color: var(--app-green); font-weight: 600; }
+  .tool-save.na { color: var(--app-dim); }
+
+  /* ---------- Planned section callout ---------- */
+  .coming-band {
+    background: rgba(250,191,36,0.06);
+    border: 1px solid rgba(250,191,36,0.25);
+    border-radius: 8px;
+    padding: 28px 32px;
+    margin: 48px 0 0 0;
+    max-width: 800px;
+    font-family: var(--font-body);
+  }
+  .coming-band .cb-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    color: #854d0e;
+    margin-bottom: 12px;
+  }
+  .coming-band h4 {
+    font-family: var(--font-display);
+    font-size: 22px;
+    font-weight: 700;
+    margin: 0 0 10px 0;
+    color: var(--ink);
+  }
+  .coming-band p { font-size: 15px; color: var(--ink-soft); margin: 0; line-height: 1.55; }
+
+  /* ---------- Manifesto ---------- */
+  section.manifesto {
+    background: var(--accent);
+    color: #fff;
+    padding: 140px 0;
+    border-bottom: none;
+    border-top: none;
+  }
+  section.manifesto .overline { color: rgba(255,255,255,0.75); }
+  section.manifesto h2 { color: #fff; font-size: clamp(44px, 6.5vw, 80px); letter-spacing: -0.035em; }
+  section.manifesto h2 .accent { color: var(--secondary-ink); }
+  section.manifesto h2 sup { font-size: 0.45em; font-weight: 700; color: var(--secondary-ink); vertical-align: super; line-height: 0; margin-left: 2px; }
+  section.manifesto .footnote { font-family: var(--font-body); font-size: 14px; font-weight: 500; color: rgba(255,255,255,0.75); margin: 20px 0 36px 0; letter-spacing: 0.01em; }
+  section.manifesto .footnote sup { color: var(--secondary-ink); font-weight: 700; margin-right: 2px; }
+  section.manifesto p.body { color: rgba(255,255,255,0.92); font-size: 21px; line-height: 1.55; }
+  section.manifesto p.body strong { color: #fff; }
+
+  /* ---------- Footer ---------- */
+  footer {
+    padding: 64px var(--gutter) 48px;
+    border-top: 1px solid var(--rule);
+    color: var(--ink-mute);
+    font-size: 14px;
+    font-family: var(--font-code);
+  }
+  footer .fcol { max-width: 1100px; }
+  footer .ft {
+    font-family: var(--font-display);
+    font-size: 96px;
+    font-weight: 900;
+    letter-spacing: -0.04em;
+    color: var(--ink);
+    line-height: 0.85;
+    margin-bottom: 24px;
+  }
+  footer .ft span { color: var(--accent); }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 1100px) {
+    .canvas { grid-template-columns: 1fr 1fr; }
+    .canvas .pane:nth-child(3) { display: none; }
+    .tools-head, .tool-row { grid-template-columns: 180px 1fr 80px; }
+    .tools-head > *:last-child, .tool-row > *:last-child { display: none; }
+  }
+  @media (max-width: 900px) {
+    :root { --gutter: 24px; --measure: 100%; }
+    body { font-size: 18px; }
+    .app-body { grid-template-columns: 1fr; min-height: 0; }
+    .app-sidebar { display: none; }
+    .canvas { grid-template-columns: 1fr; }
+    .canvas .pane { border-right: none; border-bottom: 1px solid var(--app-rule); }
+    .stats, .feature-grid { grid-template-columns: 1fr; }
+    footer .ft { font-size: 56px; }
+    .hero { padding: 72px var(--gutter) 56px; }
+    .tools-head, .tool-row { grid-template-columns: 160px 1fr; }
+    .tools-head > *:nth-child(3), .tool-row > *:nth-child(3),
+    .tools-head > *:nth-child(4), .tool-row > *:nth-child(4) { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="#" class="wordmark">
+    senkani<span class="tld">.ai</span><small>閃蟹 — fast claw</small>
+  </a>
+</nav>
+
+<!-- ========== HERO ========== -->
+<header class="hero">
+  <div class="overline">Native macOS · Swift · Apple Silicon · <span style="color:var(--accent)">In active development</span></div>
+  <h1>One terminal.<br>Every&nbsp;<span class="accent">tool.</span></h1>
+  <p class="lede">Senkani is a terminal. It is also your AI intelligence layer, your token compressor, your symbol indexer, your markdown editor, and your analytics dashboard. Not because it's a kitchen sink — because these tools should never have been separated in the first place.</p>
+  <div class="cta-row">
+    <a class="btn btn-primary" href="https://github.com/ckluis/senkani">View on GitHub</a>
+    <a class="btn btn-ghost" href="#status">See what's built</a>
+  </div>
+  <div class="meta">
+    <span>Universal binary, Swift native</span>
+    <span>macOS 14+</span>
+    <span>MIT licensed core</span>
+  </div>
+</header>
+
+<!-- ========== HERO MOCKUP ========== -->
+<div class="full" style="padding-bottom: 100px; border-bottom: 1px solid var(--rule);">
+  <div class="mockup mockup-lg">
+    <div class="tb">
+      <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
+      <div class="tb-title">senkani — acme-api</div>
+      <div class="tb-spacer"></div>
+    </div>
+    <div class="app-body">
+      <div class="app-sidebar">
+        <div class="sb-label">Projects</div>
+        <div class="sb-item active"><div class="ico"></div>acme-api<div class="sb-sub">3</div></div>
+        <div class="sb-item"><div class="ico"></div>dashboard-web<div class="sb-sub">2</div></div>
+        <div class="sb-item"><div class="ico"></div>infra-terraform<div class="sb-sub">1</div></div>
+        <div class="sb-item dim"><div class="ico"></div>personal-site</div>
+        <div class="sb-label">Analytics</div>
+        <div class="sb-item"><div class="ico" style="background:var(--app-green)"></div>tokens saved · 38k<div class="sb-sub">$0.46</div></div>
+        <div class="sb-item dim"><div class="ico"></div>compression · 3.2×</div>
+        <div class="sb-label">Knowledge</div>
+        <div class="sb-item dim"><div class="ico"></div>index · 4.2k symbols</div>
+        <div class="sb-item dim"><div class="ico"></div>20 languages · active</div>
+      </div>
+      <div class="canvas">
+        <!-- Pane 1: Terminal (active) -->
+        <div class="pane">
+          <div class="pane-accent" style="background:var(--app-green);"></div>
+          <div class="pane-header" style="background:rgba(63,176,104,0.08);">
+            <div class="pane-dot running"></div>
+            <span class="pane-title">Terminal</span>
+            <span class="pane-ctx">~/acme-api</span>
+            <div class="pane-spacer"></div>
+            <div class="fcsit">
+              <div class="fcsit-btn f-on">F</div>
+              <div class="fcsit-btn c-on">C</div>
+              <div class="fcsit-btn s-on">S</div>
+              <div class="fcsit-btn i-on">I</div>
+              <div class="fcsit-btn t-on">T</div>
+            </div>
+            <div class="pane-gear">⚙</div>
+            <div class="pane-close">×</div>
+          </div>
+          <div class="pane-sep"></div>
+          <div class="pane-body">
+            <div class="term-line"><span class="term-prompt">chris</span><span class="term-at">@</span><span class="term-dir">acme-api</span> <span class="term-cmd">senkani</span> <span class="term-arg">bench</span></div>
+            <div class="term-line"><span class="term-out">→ running benchmark suite (256 iterations)</span></div>
+            <div class="term-line"><span class="term-ok">  render latency    </span><span class="term-out">p50 2.1ms   p99  3.4ms</span></div>
+            <div class="term-line"><span class="term-ok">  filter throughput </span><span class="term-out">14,200 lines/sec</span></div>
+            <div class="term-line"><span class="term-ok">  symbol search     </span><span class="term-out">cold 4.2ms  cached 0.8ms</span></div>
+            <div class="term-line"><span class="term-ok">  secrets scan      </span><span class="term-out">1.4ms/KB</span></div>
+            <div class="term-line">&nbsp;</div>
+            <div class="term-line"><span class="term-prompt">chris</span><span class="term-at">@</span><span class="term-dir">acme-api</span> <span class="term-cmd">senkani</span> <span class="term-arg">search</span> <span class="term-arg">OrderRepository</span></div>
+            <div class="term-line"><span class="term-ok">  src/orders/repo.ts:12</span><span class="term-out"> class OrderRepository</span></div>
+            <div class="term-line"><span class="term-ok">  src/orders/repo.ts:47</span><span class="term-out"> findByUser(userId, limit)</span></div>
+            <div class="term-line">&nbsp;</div>
+            <div class="term-line"><span class="term-prompt">chris</span><span class="term-at">@</span><span class="term-dir">acme-api</span> <span class="term-cursor"></span></div>
+          </div>
+        </div>
+        <!-- Pane 2: Markdown Preview (inactive) -->
+        <div class="pane inactive">
+          <div class="pane-accent" style="background:var(--app-yellow);"></div>
+          <div class="pane-header">
+            <div class="pane-dot idle"></div>
+            <span class="pane-title">Markdown Preview</span>
+            <span class="pane-ctx">RFC-014-order-index.md</span>
+            <div class="pane-spacer"></div>
+            <div class="fcsit">
+              <div class="fcsit-btn f-on">F</div>
+              <div class="fcsit-btn c-on">C</div>
+              <div class="fcsit-btn s-on">S</div>
+              <div class="fcsit-btn i-on">I</div>
+              <div class="fcsit-btn off">T</div>
+            </div>
+            <div class="pane-gear">⚙</div>
+            <div class="pane-close">×</div>
+          </div>
+          <div class="pane-sep"></div>
+          <div class="pane-body">
+            <div class="md-h">RFC-014 · Order table index</div>
+            <div class="md-sub">draft · chris · 4 min ago</div>
+            <div class="md-p">Customer search queries on the orders table are hitting 1.4s p99, largely because we're doing a full scan on <code style="color:var(--accent);background:rgba(255,98,0,0.08);padding:1px 4px;border-radius:3px;">(user_id, created_at)</code>.</div>
+            <div class="md-p">Proposal: add a composite index. Estimated improvement: p99 → 40ms.</div>
+            <div class="md-code"><span class="c">-- migration</span><br><span class="k">CREATE INDEX CONCURRENTLY</span><br>&nbsp;&nbsp;idx_orders_user_created<br><span class="k">ON</span> orders (user_id, created_at <span class="k">DESC</span>);</div>
+            <div class="md-p" style="margin-top:10px">
+              <span class="md-tag">infra</span>
+              <span class="md-tag">db</span>
+              <span class="md-tag">perf</span>
+            </div>
+          </div>
+        </div>
+        <!-- Pane 3: Analytics (inactive) -->
+        <div class="pane inactive">
+          <div class="pane-accent" style="background:var(--app-blue);"></div>
+          <div class="pane-header">
+            <div class="pane-dot idle"></div>
+            <span class="pane-title">Analytics</span>
+            <span class="pane-ctx">38 cmds</span>
+            <div class="pane-spacer"></div>
+            <div class="fcsit">
+              <div class="fcsit-btn f-on">F</div>
+              <div class="fcsit-btn c-on">C</div>
+              <div class="fcsit-btn s-on">S</div>
+              <div class="fcsit-btn i-on">I</div>
+              <div class="fcsit-btn t-on">T</div>
+            </div>
+            <div class="pane-gear">⚙</div>
+            <div class="pane-close">×</div>
+          </div>
+          <div class="pane-sep"></div>
+          <div class="pane-body">
+            <div class="ctx">
+              <div class="ctx-head">
+                <div>
+                  <div class="ctx-title">Tokens saved</div>
+                  <div class="ctx-num"><em>38k</em></div>
+                  <div class="ctx-sub">3.2× compression ratio</div>
+                </div>
+                <div style="text-align:right;">
+                  <div class="ctx-title">Cost saved</div>
+                  <div class="ctx-num"><em>$0.46</em></div>
+                  <div class="ctx-sub">this session</div>
+                </div>
+              </div>
+              <div class="ctx-bar">
+                <div class="seg used"></div>
+                <div class="seg compressed"></div>
+                <div class="seg free"></div>
+              </div>
+              <div class="ctx-legend">
+                <span class="u">live context</span>
+                <span class="c">compressed</span>
+                <span class="f">available</span>
+              </div>
+              <div class="ctx-grid">
+                <div class="ctx-stat"><div class="lab">Filter</div><div class="val"><em>22k</em></div></div>
+                <div class="ctx-stat"><div class="lab">Indexer</div><div class="val"><em>14k</em></div></div>
+                <div class="ctx-stat"><div class="lab">Secrets</div><div class="val">2k</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="statusbar">
+      <div class="statusbar-row">
+        <span><span class="dot-s"></span>MCP connected</span>
+        <span>⎇ feat/order-idx</span>
+        <span>3 panes active</span>
+        <div class="right">
+          <span><strong>38k</strong> tokens saved</span>
+          <span><em>4,218</em> symbols</span>
+          <span>20 langs</span>
+        </div>
+      </div>
+      <div class="statusbar-row" style="font-size:9px; color:var(--app-dim);">
+        <span>filter: on</span>
+        <span>cache: on</span>
+        <span>secrets: on</span>
+        <span>indexer: on</span>
+        <span>terse: on</span>
+        <div class="right"><span>v0.9 · senkani</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== STATUS ========== -->
+<section id="status">
+  <div class="measure">
+    <div class="overline">What's built today</div>
+    <h2>The intelligence layer <span class="accent">is live.</span></h2>
+    <p class="body">The core of Senkani — the MCP intelligence layer, the symbol indexer, the filter pipeline, the multi-pane workspace — is built and working. The full product vision extends further: agents, IDE, workflows, multi-repo git. Those are coming in Q2 2026.</p>
+    <p class="body">Here's the honest breakdown.</p>
+  </div>
+  <div class="indent" style="margin-top: 48px;">
+    <div class="feature-grid" style="max-width: 900px; padding-right: 0;">
+      <div class="feature">
+        <div class="num-row"><div class="num">01</div><span class="badge badge-live">Live</span></div>
+        <h4>Terminal workspace</h4>
+        <p>Multi-pane canvas, persistent layouts, SwiftTerm rendering. Terminal, markdown preview, browser, analytics — all working today.</p>
+      </div>
+      <div class="feature">
+        <div class="num-row"><div class="num">02</div><span class="badge badge-live">Live</span></div>
+        <h4>MCP intelligence layer</h4>
+        <p>13 tools that auto-register with Claude Code. Compress output, search symbols, redact secrets, run validators — all local, all fast.</p>
+      </div>
+      <div class="feature">
+        <div class="num-row"><div class="num">03</div><span class="badge badge-live">Live</span></div>
+        <h4>Symbol indexer</h4>
+        <p>20-language tree-sitter AST extraction, incremental updates, bidirectional dependency graph, FTS5 search. Indexes in the background.</p>
+      </div>
+      <div class="feature">
+        <div class="num-row"><div class="num">04</div><span class="badge badge-live">Live</span></div>
+        <h4>Local AI models</h4>
+        <p>Vision and embeddings on Apple Silicon via MLX. No API call, no cost, no latency. Gemma for vision, MiniLM for embeddings.</p>
+      </div>
+      <div class="feature">
+        <div class="num-row"><div class="num">05</div><span class="badge badge-live">Live</span></div>
+        <h4>Budget enforcement</h4>
+        <p>Daily and weekly spend caps enforced at the hook level — before a token touches the API. Non-bypassable. Tracked in persistent storage.</p>
+      </div>
+      <div class="feature">
+        <div class="num-row"><div class="num">06</div><span class="badge badge-live">Live</span></div>
+        <h4>Benchmarking suite</h4>
+        <p><code>senkani bench</code> measures filter throughput, indexer speed, cache hit rate, and secret scan latency. Real numbers, not marketing copy.</p>
+      </div>
+      <div class="feature">
+        <div class="num-row"><div class="num">07</div><span class="badge badge-coming">Q2 2026</span></div>
+        <h4>IDE pane</h4>
+        <p>LSP completions, tree-sitter syntax highlighting, multi-cursor editing. Reads VS Code keybindings. Open a file, get completions — no extensions.</p>
+      </div>
+      <div class="feature">
+        <div class="num-row"><div class="num">08</div><span class="badge badge-coming">Q2 2026</span></div>
+        <h4>Agent runner</h4>
+        <p>Spawn, observe, interrupt, and compose AI agents as first-class panes. Visible context budget, running cost meter, kill switch.</p>
+      </div>
+      <div class="feature">
+        <div class="num-row"><div class="num">09</div><span class="badge badge-coming">Q2 2026</span></div>
+        <h4>Workflow builder</h4>
+        <p>Pipelines of agents and commands that feed each other. Each step sees only the context it needs. Schedulable, triggerable, composable.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== PHILOSOPHY ========== -->
+<section>
+  <div class="measure">
+    <div class="overline">The idea</div>
+    <h2>Everything works. Out of the&nbsp;box.</h2>
+    <p class="body">Every developer tool ships with the same implicit contract: <em>you will spend a weekend configuring this before it does anything for you.</em> Dotfiles, plugin managers, YAML, TOML, JSON, shell profiles, environment bootstrappers — a Jenga tower of config that has to be rebuilt on every new machine.</p>
+    <p class="body">Senkani rejects the contract. Install the binary. Open it. A terminal is running. Your project is indexed. 13 MCP tools are registered with Claude Code. The markdown editor renders. The analytics pane is tracking your token spend. You did not configure any of this.</p>
+    <p class="body">The philosophy is short: <strong>if the tool needs config to be useful, the tool is broken.</strong></p>
+  </div>
+</section>
+
+<!-- ========== MCP INTELLIGENCE LAYER ========== -->
+<section>
+  <div class="measure">
+    <div class="overline">The intelligence layer</div>
+    <h2>50–90% fewer tokens.<br><span class="accent">No workflow changes.</span></h2>
+    <p class="body">Every tool call your AI makes passes through Senkani first. File reads, shell commands, symbol lookups — each is intercepted, compressed, and returned with only what the AI actually needs. The AI doesn't know anything changed. You save 50–90% of your context budget on every session.</p>
+  </div>
+  <div class="indent">
+    <div class="tools-card">
+      <div class="tools-head">
+        <div>Tool</div>
+        <div>What it does</div>
+        <div>Savings</div>
+        <div>Status</div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_read</div>
+        <div class="tool-desc">File reads — ANSI strip, blank collapse, secret redaction, session cache. Re-reads of unchanged files return instantly.</div>
+        <div class="tool-save">50–99%</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_exec</div>
+        <div class="tool-desc">Shell commands — 24+ command-specific rules (git, npm, cargo, docker…). Strips noise, deduplicates, truncates.</div>
+        <div class="tool-save">60–90%</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_search</div>
+        <div class="tool-desc">Symbol lookup from local tree-sitter index. ~50 tokens vs ~5000 from grepping files.</div>
+        <div class="tool-save">99%</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_fetch</div>
+        <div class="tool-desc">Read only a symbol's exact lines — not the entire file.</div>
+        <div class="tool-save">50–99%</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_explore</div>
+        <div class="tool-desc">Navigate codebase via bidirectional import graph. ~500 tokens for a typical project.</div>
+        <div class="tool-save">90%+</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_deps</div>
+        <div class="tool-desc">Query dependency graph. "What does X import?" and "What imports X?" Across 15+ languages.</div>
+        <div class="tool-save">—</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_validate</div>
+        <div class="tool-desc">Local syntax validation across 20 languages. Never burns tokens on a build just to catch a typo.</div>
+        <div class="tool-save">100%</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_embed</div>
+        <div class="tool-desc">Text embeddings on Apple Silicon via MLX. Zero API cost, zero latency, zero privacy concern.</div>
+        <div class="tool-save">$0/call</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-name">senkani_vision</div>
+        <div class="tool-desc">Vision model on Apple Silicon (Gemma via MLX). OCR, UI analysis, screenshot reading — all local.</div>
+        <div class="tool-save">$0/call</div>
+        <div><span class="badge badge-live-d">Live</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== PANE SYSTEM ========== -->
+<section>
+  <div class="measure">
+    <div class="overline">The pane system</div>
+    <h2>Working panes,<br>infinite <span class="accent">layouts.</span></h2>
+    <p class="body">A senkani project is a horizontally-scrollable canvas of panes. Each pane is one primitive type. You drag, split, resize, and arrange them however makes sense for what you're doing — and Senkani remembers, per project.</p>
+    <p class="body">No workspaces to save. No layouts to name. Close the app, reopen it, everything is exactly where you left it.</p>
+  </div>
+
+  <div class="indent">
+    <div class="tabs">
+      <div class="tab-list">
+        <button class="tab-btn active" data-tab="term">Terminal <span class="badge badge-live">Live</span></button>
+        <button class="tab-btn" data-tab="md">Markdown <span class="badge badge-live">Live</span></button>
+        <button class="tab-btn" data-tab="br">Browser <span class="badge badge-live">Live</span></button>
+        <button class="tab-btn" data-tab="ide">IDE <span class="badge badge-coming">Q2 2026</span></button>
+        <button class="tab-btn" data-tab="kb">Knowledge <span class="badge badge-coming">Q2 2026</span></button>
+      </div>
+
+      <!-- Terminal -->
+      <div class="tab-panel active" data-panel="term">
+        <p class="body">A proper terminal. SwiftTerm native, Apple Silicon GPU-accelerated, sub-3ms render latency (measured by <code>senkani bench</code>). True color, ligatures, Powerline. Claude Code tool calls are intercepted and compressed automatically — you don't change how you work.</p>
+        <div class="mockup mockup-md">
+          <div class="tb">
+            <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
+            <div class="tb-title">senkani — acme-api</div><div class="tb-spacer"></div>
+          </div>
+          <div style="background:var(--app-bg); padding: 6px;">
+            <div class="pane" style="border-color:var(--app-green); box-shadow: 0 0 0 1px rgba(63,176,104,0.12), 0 4px 16px rgba(63,176,104,0.18);">
+              <div class="pane-accent" style="background:var(--app-green);"></div>
+              <div class="pane-header" style="background:rgba(63,176,104,0.08);">
+                <div class="pane-dot running"></div>
+                <span class="pane-title">Terminal</span>
+                <span class="pane-ctx">~/acme-api</span>
+                <div class="pane-spacer"></div>
+                <div class="fcsit">
+                  <div class="fcsit-btn f-on">F</div>
+                  <div class="fcsit-btn c-on">C</div>
+                  <div class="fcsit-btn s-on">S</div>
+                  <div class="fcsit-btn i-on">I</div>
+                  <div class="fcsit-btn t-on">T</div>
+                </div>
+                <div class="pane-gear">⚙</div>
+                <div class="pane-close">×</div>
+              </div>
+              <div class="pane-sep"></div>
+              <div class="pane-body" style="min-height:220px; font-size:13px; line-height:1.65;">
+                <div class="term-line"><span class="term-prompt">chris</span><span class="term-at">@</span><span class="term-dir">acme-api</span> <span class="term-cmd">senkani</span> <span class="term-arg">bench</span></div>
+                <div class="term-line"><span class="term-out">→ running benchmark suite (256 iterations)</span></div>
+                <div class="term-line"><span class="term-ok">  render latency    </span><span class="term-out">p50 2.1ms   p99  3.4ms</span></div>
+                <div class="term-line"><span class="term-ok">  keystroke → glyph </span><span class="term-out">p50 0.8ms   p99  1.2ms</span></div>
+                <div class="term-line"><span class="term-ok">  filter throughput </span><span class="term-out">14,200 lines/sec sustained</span></div>
+                <div class="term-line"><span class="term-ok">  symbol search     </span><span class="term-out">cold 4.2ms  cached 0.8ms</span></div>
+                <div class="term-line">&nbsp;</div>
+                <div class="term-line"><span class="term-prompt">chris</span><span class="term-at">@</span><span class="term-dir">acme-api</span> <span class="term-cursor"></span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Markdown -->
+      <div class="tab-panel" data-panel="md">
+        <p class="body">Live-rendered markdown from file. Updates on save. Code fences with syntax highlighting. Drop in notes, RFCs, runbooks — they render immediately alongside your terminal.</p>
+        <div class="mockup mockup-md">
+          <div class="tb">
+            <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
+            <div class="tb-title">senkani — acme-api</div><div class="tb-spacer"></div>
+          </div>
+          <div style="background:var(--app-bg); padding:6px;">
+            <div class="pane inactive" style="border-color:var(--app-yellow); box-shadow: 0 0 0 1px rgba(212,160,23,0.15), 0 4px 16px rgba(212,160,23,0.12);">
+              <div class="pane-accent" style="background:var(--app-yellow); opacity:1;"></div>
+              <div class="pane-header" style="background:rgba(212,160,23,0.07);">
+                <div class="pane-dot" style="background:var(--app-yellow);"></div>
+                <span class="pane-title">Markdown Preview</span>
+                <span class="pane-ctx">RFC-014-order-index.md</span>
+                <div class="pane-spacer"></div>
+                <div class="fcsit">
+                  <div class="fcsit-btn f-on">F</div>
+                  <div class="fcsit-btn c-on">C</div>
+                  <div class="fcsit-btn s-on">S</div>
+                  <div class="fcsit-btn i-on">I</div>
+                  <div class="fcsit-btn off">T</div>
+                </div>
+                <div class="pane-gear">⚙</div>
+                <div class="pane-close">×</div>
+              </div>
+              <div class="pane-sep"></div>
+              <div class="pane-body" style="padding:0;">
+                <div style="display:grid;grid-template-columns:1fr 1fr;min-height:220px;">
+                  <div style="padding:14px 16px;border-right:1px solid var(--app-rule);font-family:var(--font-code);font-size:11.5px;line-height:1.7;color:var(--app-text);">
+                    <div><span style="color:var(--app-yellow)"># RFC-014</span> · Order index</div>
+                    <div>&nbsp;</div>
+                    <div><span style="color:var(--app-mute)">Customer search on the</span></div>
+                    <div><span style="color:var(--app-mute)">orders table is hitting</span></div>
+                    <div><span style="color:var(--app-mute)">1.4s p99.</span></div>
+                    <div>&nbsp;</div>
+                    <div><span style="color:var(--app-yellow)">## Proposal</span></div>
+                    <div>&nbsp;</div>
+                    <div><span style="color:var(--app-mute)">Add composite index on</span></div>
+                    <div><span style="color:var(--app-blue)">`(user_id, created_at)`</span></div>
+                  </div>
+                  <div style="padding:14px 16px;font-family:var(--font-body);font-size:11.5px;line-height:1.55;">
+                    <div style="font-family:var(--font-display);font-size:16px;font-weight:800;color:var(--app-text);margin-bottom:4px;">RFC-014 · Order index</div>
+                    <div style="color:var(--app-text);margin-bottom:8px;">Customer search on the orders table is hitting 1.4s p99.</div>
+                    <div style="font-family:var(--font-display);font-size:13px;font-weight:700;color:var(--app-text);margin-top:10px;margin-bottom:4px;">Proposal</div>
+                    <div style="color:var(--app-text);">Add composite index on <code style="background:var(--app-panel);padding:1px 5px;border-radius:2px;font-size:10px;color:var(--app-blue);">(user_id, created_at)</code></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Browser -->
+      <div class="tab-panel" data-panel="br">
+        <p class="body">A real browser pane — WKWebView, not a wrapper. Localhost, staging, production, docs, whatever. Keep your dev server visible without alt-tabbing. DevTools one keystroke away.</p>
+        <div class="mockup mockup-md">
+          <div class="tb">
+            <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
+            <div class="tb-title">senkani — acme-api</div><div class="tb-spacer"></div>
+          </div>
+          <div style="background:var(--app-bg); padding:6px;">
+            <div class="pane inactive" style="border-color:var(--app-blue); box-shadow: 0 0 0 1px rgba(74,158,224,0.12), 0 4px 16px rgba(74,158,224,0.10);">
+              <div class="pane-accent" style="background:var(--app-blue); opacity:1;"></div>
+              <div class="pane-header" style="background:rgba(74,158,224,0.07);">
+                <div class="pane-dot" style="background:var(--app-blue);"></div>
+                <span class="pane-title">Browser</span>
+                <span class="pane-ctx">localhost:3000/orders?user=u_4821</span>
+                <div class="pane-spacer"></div>
+                <div class="fcsit">
+                  <div class="fcsit-btn off">F</div>
+                  <div class="fcsit-btn off">C</div>
+                  <div class="fcsit-btn off">S</div>
+                  <div class="fcsit-btn off">I</div>
+                  <div class="fcsit-btn off">T</div>
+                </div>
+                <div class="pane-gear">⚙</div>
+                <div class="pane-close">×</div>
+              </div>
+              <div class="pane-sep"></div>
+              <div class="pane-body">
+                <div class="br-bar"><span class="lock">🔒</span>localhost:3000/orders?user=u_4821</div>
+                <div class="br-content" style="padding:18px;">
+                  <h4>Order history · Alex Chen</h4>
+                  <p style="margin-bottom:10px;">12 orders · $4,281.90 lifetime</p>
+                  <div class="ph" style="height:64px"></div>
+                  <div style="display:flex;gap:10px;margin-top:8px;font-family:var(--font-code);font-size:10px;color:#8a867d">
+                    <span>p99: <strong style="color:#c94a00">38ms</strong></span>
+                    <span>rows: <strong style="color:#c94a00">124</strong></span>
+                    <span>cache: <strong style="color:#c94a00">hit</strong></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- IDE (Coming) -->
+      <div class="tab-panel" data-panel="ide">
+        <p class="body"><span class="badge badge-coming" style="margin-right:8px;">Coming Q2 2026</span> A real editor — LSP, tree-sitter syntax highlighting, multi-cursor, inline diagnostics. Reads VS Code keybindings so your muscle memory survives the move. The symbol index that powers senkani's MCP tools will drive completions here too.</p>
+        <div class="mockup mockup-md">
+          <div class="tb">
+            <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
+            <div class="tb-title">senkani — acme-api</div><div class="tb-spacer"></div>
+          </div>
+          <div style="background:var(--app-bg); padding:6px; opacity:0.65;">
+            <div class="pane inactive">
+              <div class="pane-accent" style="background:#d4a017; opacity:0.5;"></div>
+              <div class="pane-header">
+                <div class="pane-dot idle"></div>
+                <span class="pane-title">IDE</span>
+                <span class="pane-ctx">src/orders/repo.ts — coming Q2 2026</span>
+                <div class="pane-spacer"></div>
+                <div class="fcsit">
+                  <div class="fcsit-btn off">F</div><div class="fcsit-btn off">C</div>
+                  <div class="fcsit-btn off">S</div><div class="fcsit-btn off">I</div><div class="fcsit-btn off">T</div>
+                </div>
+                <div class="pane-gear">⚙</div><div class="pane-close">×</div>
+              </div>
+              <div class="pane-sep"></div>
+              <div class="pane-body" style="min-height:200px; font-size:12.5px; line-height:1.75;">
+                <div><span style="color:var(--app-dim)">1&nbsp;&nbsp;</span><span style="color:var(--app-purple)">import</span> { db } <span style="color:var(--app-purple)">from</span> <span style="color:var(--app-green)">"../db"</span>;</div>
+                <div><span style="color:var(--app-dim)">3&nbsp;&nbsp;</span><span style="color:var(--app-purple)">export async function</span> <span style="color:var(--app-blue)">findByUser</span>(userId: <span style="color:var(--accent)">string</span>) {</div>
+                <div style="background:rgba(255,98,0,0.08)"><span style="color:var(--app-dim)">4&nbsp;&nbsp;</span>&nbsp;&nbsp;<span style="color:var(--app-purple)">return</span> db.orders<span style="color:var(--accent)">.findMany</span>({ where: { userId } })</div>
+                <div><span style="color:var(--app-dim)">5&nbsp;&nbsp;</span>}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Knowledge (Coming) -->
+      <div class="tab-panel" data-panel="kb">
+        <p class="body"><span class="badge badge-coming" style="margin-right:8px;">Coming Q2 2026</span> A queryable index of every file in your project — code, notes, tickets, everything. Ask a question in plain English, get the three files that actually answer it. The embedding infrastructure is already built (local MLX, no API cost); the search UI and pane are coming in Q2 2026.</p>
+        <div class="mockup mockup-md">
+          <div class="tb">
+            <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
+            <div class="tb-title">senkani — acme-api</div><div class="tb-spacer"></div>
+          </div>
+          <div style="background:var(--app-bg); padding:6px; opacity:0.65;">
+            <div class="pane inactive">
+              <div class="pane-accent" style="background:var(--app-cyan); opacity:0.5;"></div>
+              <div class="pane-header">
+                <div class="pane-dot idle"></div>
+                <span class="pane-title">Knowledge Base</span>
+                <span class="pane-ctx">knowledge — coming Q2 2026</span>
+                <div class="pane-spacer"></div>
+                <div class="fcsit">
+                  <div class="fcsit-btn off">F</div><div class="fcsit-btn off">C</div>
+                  <div class="fcsit-btn off">S</div><div class="fcsit-btn i-on">I</div><div class="fcsit-btn off">T</div>
+                </div>
+                <div class="pane-gear">⚙</div><div class="pane-close">×</div>
+              </div>
+              <div class="pane-sep"></div>
+              <div class="pane-body" style="min-height:200px;">
+                <div style="display:flex;gap:8px;align-items:center;background:var(--app-elev);border:1px solid var(--app-rule-2);border-radius:5px;padding:8px 12px;margin-bottom:14px;">
+                  <span style="color:var(--accent)">⌕</span>
+                  <span style="font-family:var(--font-code);font-size:11.5px;color:var(--app-text)">where do we handle order retries?</span>
+                  <span style="margin-left:auto;font-family:var(--font-code);font-size:10px;color:var(--app-mute)">34ms</span>
+                </div>
+                <div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--app-dim);font-weight:600;margin-bottom:8px;">3 results · ranked by relevance</div>
+                <div style="padding:10px 12px;border:1px solid var(--app-cyan);border-radius:4px;margin-bottom:8px;background:rgba(86,182,194,0.05);">
+                  <div style="font-family:var(--font-code);font-size:11px;color:var(--app-cyan);">src/orders/retry-queue.ts<span style="color:var(--app-mute)">:47</span></div>
+                  <div style="font-size:10px;color:var(--app-mute);margin-top:2px;font-family:var(--font-code)">exponential backoff, max 5 attempts, idempotency via order_id</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== SYMBOL INDEXER ========== -->
+<section>
+  <div class="measure">
+    <div class="overline">The symbol indexer</div>
+    <h2>20 languages.<br><span class="accent">Zero configuration.</span></h2>
+    <p class="body">Senkani ships with vendored tree-sitter grammars for 20 languages. Open a project — any project — and it starts indexing immediately. No config, no language server setup, no extensions to install.</p>
+    <p class="body">The index backs the <code>senkani_search</code>, <code>senkani_fetch</code>, <code>senkani_explore</code>, and <code>senkani_deps</code> MCP tools. It also drives the upcoming IDE completions and semantic search.</p>
+  </div>
+  <div class="indent">
+    <div class="mockup mockup-md" style="max-width: 860px;">
+      <div class="tb">
+        <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
+        <div class="tb-title">senkani — acme-api</div><div class="tb-spacer"></div>
+      </div>
+      <div style="background:var(--app-bg); padding:6px;">
+      <div class="pane inactive" style="border-color:var(--app-purple); box-shadow: 0 0 0 1px rgba(198,120,221,0.12);">
+        <div class="pane-accent" style="background:var(--app-purple); opacity:1;"></div>
+        <div class="pane-header" style="background:rgba(198,120,221,0.07);">
+          <div class="pane-dot" style="background:var(--app-purple);"></div>
+          <span class="pane-title">Skill Library</span>
+          <span class="pane-ctx">senkani index · 4,218 symbols</span>
+          <div class="pane-spacer"></div>
+          <div class="fcsit">
+            <div class="fcsit-btn off">F</div><div class="fcsit-btn off">C</div>
+            <div class="fcsit-btn off">S</div><div class="fcsit-btn i-on">I</div><div class="fcsit-btn off">T</div>
+          </div>
+          <div class="pane-gear">⚙</div><div class="pane-close">×</div>
+        </div>
+        <div class="pane-sep"></div>
+      <div style="padding: 18px 22px; font-family: var(--font-code); font-size: 12.5px; line-height: 1.7; background: var(--app-panel);">
+        <div class="term-line"><span style="color:var(--app-mute)">→ walking</span> <span style="color:var(--app-blue)">src/</span> <span style="color:var(--app-mute)">(4,218 files, 20 languages)</span></div>
+        <div class="term-line"><span style="color:var(--app-mute)">→ tree-sitter:</span> <span style="color:var(--app-green)">TypeScript · Go · Rust · Swift · Python · Ruby · +14 more</span></div>
+        <div class="term-line"><span style="color:var(--app-mute)">→ regex fallback:</span> <span style="color:var(--app-mute)">142 files</span></div>
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--app-rule);">
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:20px;">
+            <div><div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--app-dim);">Symbols</div><div style="font-size:28px;font-weight:700;color:var(--app-text);font-family:var(--font-display);">4,218</div></div>
+            <div><div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--app-dim);">Languages</div><div style="font-size:28px;font-weight:700;color:var(--app-text);font-family:var(--font-display);">20</div></div>
+            <div><div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--app-dim);">Index time</div><div style="font-size:28px;font-weight:700;color:var(--accent);font-family:var(--font-display);">1.4s</div></div>
+            <div><div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--app-dim);">Search latency</div><div style="font-size:28px;font-weight:700;color:var(--accent);font-family:var(--font-display);">&lt;5ms</div></div>
+          </div>
+        </div>
+      </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== CONTEXT / SESSION TRACKING ========== -->
+<section>
+  <div class="measure">
+    <div class="overline">Context awareness</div>
+    <h2>Your context window is a&nbsp;<span class="accent">resource.</span></h2>
+    <p class="body">Every session, Senkani tracks what it compressed, how many tokens it saved, and what it cost. The analytics pane shows you the breakdown in real time: filter savings, indexer savings, secrets redacted. Not estimated — measured from the actual byte deltas.</p>
+    <p class="body">The session database stores the full history in SQLite with FTS5 full-text search. <code>senkani stats</code> gives you lifetime numbers. The analytics pane charts them session by session.</p>
+  </div>
+  <div class="indent">
+    <div class="mockup mockup-md" style="max-width:900px;">
+      <div class="tb">
+        <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
+        <div class="tb-title">senkani — acme-api</div><div class="tb-spacer"></div>
+      </div>
+      <div style="background:var(--app-bg); padding:6px;">
+      <div class="pane inactive" style="border-color:var(--app-blue); box-shadow: 0 0 0 1px rgba(74,158,224,0.12);">
+        <div class="pane-accent" style="background:var(--app-blue); opacity:1;"></div>
+        <div class="pane-header" style="background:rgba(74,158,224,0.07);">
+          <div class="pane-dot" style="background:var(--app-blue);"></div>
+          <span class="pane-title">Analytics</span>
+          <span class="pane-ctx">38 cmds</span>
+          <div class="pane-spacer"></div>
+          <div class="fcsit">
+            <div class="fcsit-btn f-on">F</div><div class="fcsit-btn c-on">C</div>
+            <div class="fcsit-btn s-on">S</div><div class="fcsit-btn i-on">I</div><div class="fcsit-btn t-on">T</div>
+          </div>
+          <div class="pane-gear">⚙</div><div class="pane-close">×</div>
+        </div>
+        <div class="pane-sep"></div>
+      <div class="ctx" style="background:var(--app-panel);">
+        <div class="ctx-head">
+          <div>
+            <div class="ctx-title">Tokens saved</div>
+            <div class="ctx-num"><em>38,412</em></div>
+            <div class="ctx-sub">3.2× compression ratio · 62% of context in use</div>
+          </div>
+          <div style="text-align:right;">
+            <div class="ctx-title">Cost saved</div>
+            <div class="ctx-num"><em>$0.46</em></div>
+            <div class="ctx-sub">lifetime: $14.20 saved across 31 sessions</div>
+          </div>
+        </div>
+        <div class="ctx-bar">
+          <div class="seg used"></div>
+          <div class="seg compressed"></div>
+          <div class="seg free"></div>
+        </div>
+        <div class="ctx-legend">
+          <span class="u">live context</span>
+          <span class="c">compressed</span>
+          <span class="f">available</span>
+        </div>
+        <div class="ctx-grid">
+          <div class="ctx-stat">
+            <div class="lab">Filter pipeline</div>
+            <div class="val"><em>22k</em></div>
+          </div>
+          <div class="ctx-stat">
+            <div class="lab">Symbol indexer</div>
+            <div class="val"><em>14k</em></div>
+          </div>
+          <div class="ctx-stat">
+            <div class="lab">Secret redaction</div>
+            <div class="val">2.4k</div>
+          </div>
+        </div>
+      </div>
+      </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== AGENTS (COMING) ========== -->
+<section>
+  <div class="measure">
+    <div class="overline">Agents — coming Q2 2026</div>
+    <h2>Agents you can actually&nbsp;<span class="accent">see.</span></h2>
+    <p class="body">Most agent tools are a black box with a chat window bolted on. Senkani will treat agents as first-class citizens of the workspace — runnable, observable, interruptible, and composable. You'll see what they're doing, what context they have, what they'll cost, and how to stop them.</p>
+    <p class="body">The intelligence infrastructure is already built. The filter pipeline, symbol indexer, budget enforcement, and session tracking that agents need are all live. The agent runner pane itself ships Q2 2026.</p>
+  </div>
+  <div class="indent">
+    <div class="coming-band">
+      <div class="cb-label">Coming Q2 2026</div>
+      <h4>Agent runner pane</h4>
+      <p>Spawn agents, watch their tool calls in real time, see context budget and running cost, interrupt at any step. Composable into workflows. Schedulable on triggers. The budget enforcement that stops runaway agents is already live today.</p>
+    </div>
+    <div class="coming-band" style="margin-top: 16px;">
+      <div class="cb-label">Coming Q2 2026</div>
+      <h4>Workflow builder</h4>
+      <p>Pipelines of agents and commands that feed each other. Git diff → summarize → draft PR → run tests → post to Slack. Each step sees only the context it needs, which is why it's cheap and why it doesn't hallucinate.</p>
+    </div>
+    <div class="coming-band" style="margin-top: 16px;">
+      <div class="cb-label">Coming Q2 2026</div>
+      <h4>Multi-repo git view</h4>
+      <p>Unified status, cross-repo search, synchronized branch operations, one commit timeline across all your repos. Real work spans repos. The terminal shouldn't pretend otherwise.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ========== STATS ========== -->
+<section>
+  <div class="measure">
+    <div class="overline">Measured, not claimed</div>
+    <h2>Performance you can feel<br>with your fingertips.</h2>
+    <p class="body">These numbers come from <code>senkani bench</code> — the built-in benchmark suite that runs on your hardware. Not from a marketing spreadsheet. Run it yourself.</p>
+  </div>
+  <div class="indent">
+    <div class="stats">
+      <div class="stat">
+        <div class="num"><em>2.1</em>ms</div>
+        <div class="label">Terminal render latency, p50. Hardware-accelerated SwiftTerm on M-series. Measured by <code>senkani bench</code>.</div>
+      </div>
+      <div class="stat">
+        <div class="num"><em>99</em>%</div>
+        <div class="label">Token reduction on symbol lookups. Local index returns ~50 tokens; grep returns ~5,000. Every time.</div>
+      </div>
+      <div class="stat">
+        <div class="num"><em>20</em></div>
+        <div class="label">Languages indexed by tree-sitter AST extraction. Incremental updates. Bidirectional dependency graph.</div>
+      </div>
+      <div class="stat">
+        <div class="num"><em>0</em></div>
+        <div class="label">Config files required before Senkani does something useful. Install the binary. Open it. Done.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== MANIFESTO ========== -->
+<section class="manifesto">
+  <div class="measure">
+    <div class="overline">For everyone</div>
+    <h2>The best developer<br>tool for people<br>who <span class="accent">(aren't developers)</span><sup>*</sup></h2>
+    <p class="footnote"><sup>*</sup>and for those who are.</p>
+    <p class="body">The dirty secret of "developer tools" is that most of them punish anyone who dares not already be an expert. Senkani was built for the inverse: a friend, a designer, an analyst, or your past self from five years ago can open it and immediately do something real. A terminal. A note. A webpage. An agent.</p>
+    <p class="body">And then — and this is the important part — it does not stop being useful as you get better. The compression layer learns what you do. The symbol index covers every language you add. The agents get access to more of your workflow. The pane system rewards layouts you couldn't have imagined on day one. It is a tool that grows with you instead of being replaced by one.</p>
+    <p class="body">This is the thing Jobs understood that most of Silicon Valley still hasn't: <strong>approachable and powerful are not opposites.</strong> They are the same axis, and most tools live at neither end of it.</p>
+  </div>
+</section>
+
+<!-- ========== FINAL CTA ========== -->
+<section style="border-bottom:none;">
+  <div class="measure">
+    <div class="overline">In active development · Q2 2026</div>
+    <h2>Try senkani.</h2>
+    <p class="body">Build from source. Open it. A terminal is running. Your project is indexing. 13 MCP tools are registered with Claude Code. The analytics pane is tracking your token spend. You did not configure any of this.</p>
+    <div class="cta-row" style="margin-top:36px;">
+      <a class="btn btn-primary" href="https://github.com/ckluis/senkani">Build from source</a>
+      <a class="btn btn-secondary" href="#status">See what's built</a>
+      <a class="btn btn-ghost" href="https://github.com/ckluis/senkani">Star on GitHub</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="fcol">
+    <div class="ft">senkani<span>.ai</span></div>
+    <p>閃蟹 — a fast claw. Native for macOS. Written in Swift. Built by people who were tired of configuring things.</p>
+    <p style="margin-top:24px;">© 2026 · MIT licensed core · Apple Silicon native</p>
+  </div>
+</footer>
+
+<script>
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab;
+      const container = btn.closest('.tabs');
+      container.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+      container.querySelectorAll('.tab-panel').forEach(p => {
+        p.classList.toggle('active', p.dataset.panel === tab);
+      });
+    });
+  });
+</script>
+
+</body>
+</html>

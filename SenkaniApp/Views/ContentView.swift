@@ -21,7 +21,8 @@ struct ContentView: View {
                 // Fixed-width sidebar
                 SidebarView(
                     workspace: workspace,
-                    activeToolView: $activeToolView
+                    activeToolView: $activeToolView,
+                    onRequestAddPane: { showAddPaneSheet = true }
                 )
 
                 // Thin divider between sidebar and canvas
@@ -124,6 +125,9 @@ struct ContentView: View {
             for pane in workspace.allPanes {
                 if pane.paneType == .terminal {
                     pane.writeMCPConfig()
+                    try? HookRegistration.registerForProject(
+                        at: pane.workingDirectory,
+                        hookBinaryPath: AutoRegistration.hookWrapperPath)
                 }
                 sessions.startSession(for: pane)
             }
@@ -181,6 +185,9 @@ struct ContentView: View {
             if let pane = workspace.panes.last {
                 if pane.paneType == .terminal {
                     pane.writeMCPConfig()
+                    try? HookRegistration.registerForProject(
+                        at: pane.workingDirectory,
+                        hookBinaryPath: AutoRegistration.hookWrapperPath)
                 }
                 sessions.startSession(for: pane)
                 return PaneIPCResponse(id: command.id, success: true,
@@ -213,6 +220,9 @@ struct ContentView: View {
             // Write per-project .mcp.json so the MCP subprocess gets SENKANI_METRICS_FILE
             if pane.paneType == .terminal {
                 pane.writeMCPConfig()
+                try? HookRegistration.registerForProject(
+                    at: pane.workingDirectory,
+                    hookBinaryPath: AutoRegistration.hookWrapperPath)
             }
             sessions.startSession(for: pane)
         }

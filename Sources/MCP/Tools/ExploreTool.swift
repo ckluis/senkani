@@ -5,7 +5,9 @@ import Indexer
 enum ExploreTool {
     static func handle(arguments: [String: Value]?, session: MCPSession) -> CallTool.Result {
         let path = arguments?["path"]?.stringValue
-        let index = session.ensureIndex()
+        guard let index = session.indexIfReady() else {
+            return .init(content: [.text(text: "Symbol index is building (first run). Try again in a few seconds.", annotations: nil, _meta: nil)])
+        }
         let grouped = index.groupedByFile(under: path)
 
         guard !grouped.isEmpty else {

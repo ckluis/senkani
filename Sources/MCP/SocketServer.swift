@@ -12,19 +12,29 @@ public final class SocketServerManager: @unchecked Sendable {
     public static let shared = SocketServerManager()
 
     private let socketPath: String
+    private let hookSocketPath: String
     private var listenFD: Int32 = -1
+    private var hookListenFD: Int32 = -1
     private var running = false
     private let queue = DispatchQueue(label: "com.senkani.socket-server", qos: .utility)
+    private let hookQueue = DispatchQueue(label: "com.senkani.hook-server", qos: .userInteractive)
     private var acceptSource: DispatchSourceRead?
+    private var hookAcceptSource: DispatchSourceRead?
     private var activeTasks: [Task<Void, Never>] = []
     private let lock = NSLock()
+
+    /// Hook event handler. Set this before calling start().
+    /// Called on hookQueue for each incoming hook event.
+    /// Returns the JSON response bytes to send back to the hook binary.
+    public var hookHandler: ((_ eventJSON: Data) -> Data)?
 
     private init() {
         let senkaniDir = NSHomeDirectory() + "/.senkani"
         self.socketPath = senkaniDir + "/mcp.sock"
+        self.hookSocketPath = senkaniDir + "/hook.sock"
     }
 
-    /// Start listening for connections.
+    /// Start listening for MCP connections and hook events.
     public func start() {
         lock.lock()
         guard !running else { lock.unlock(); return }
@@ -42,9 +52,19 @@ public final class SocketServerManager: @unchecked Sendable {
                 lock.unlock()
             }
         }
+
+        // Start hook listener on separate queue (lightweight, short-lived connections)
+        hookQueue.async { [self] in
+            do {
+                try startHookListening()
+            } catch {
+                FileHandle.standardError.write(
+                    Data("[senkani] Hook socket server failed to start: \(error)\n".utf8))
+            }
+        }
     }
 
-    /// Stop accepting new connections and close the listener.
+    /// Stop accepting new connections and close both listeners.
     public func stop() {
         lock.lock()
         guard running else { lock.unlock(); return }
@@ -52,14 +72,21 @@ public final class SocketServerManager: @unchecked Sendable {
 
         acceptSource?.cancel()
         acceptSource = nil
+        hookAcceptSource?.cancel()
+        hookAcceptSource = nil
 
         if listenFD >= 0 {
             Darwin.close(listenFD)
             listenFD = -1
         }
+        if hookListenFD >= 0 {
+            Darwin.close(hookListenFD)
+            hookListenFD = -1
+        }
 
-        // Clean up socket file
+        // Clean up socket files
         unlink(socketPath)
+        unlink(hookSocketPath)
 
         // Cancel all active connection tasks
         let tasks = activeTasks
@@ -162,6 +189,20 @@ public final class SocketServerManager: @unchecked Sendable {
 
         guard clientFD >= 0 else { return }
 
+        lock.lock()
+        // Sweep completed tasks
+        activeTasks.removeAll { $0.isCancelled }
+
+        // Enforce connection limit
+        if activeTasks.count >= Self.maxConnections {
+            lock.unlock()
+            Darwin.close(clientFD)
+            FileHandle.standardError.write(
+                Data("[senkani] Connection limit reached (\(Self.maxConnections)), rejecting fd=\(clientFD)\n".utf8))
+            return
+        }
+        lock.unlock()
+
         FileHandle.standardError.write(
             Data("[senkani] Socket client connected (fd=\(clientFD))\n".utf8))
 
@@ -173,6 +214,9 @@ public final class SocketServerManager: @unchecked Sendable {
         activeTasks.append(task)
         lock.unlock()
     }
+
+    /// Maximum concurrent MCP connections. Rejects beyond this limit.
+    private static let maxConnections = 20
 
     private func handleConnection(fd: Int32) async {
         // Each connection uses the shared session (shared cache, index, etc.)
@@ -195,13 +239,165 @@ public final class SocketServerManager: @unchecked Sendable {
         let transport = SocketTransport(fd: fd)
         do {
             try await server.start(transport: transport)
-            // Keep alive until transport closes
-            try await Task.sleep(for: .seconds(315_360_000))
+
+            // Non-blocking connection monitoring via GCD.
+            // Uses DispatchSource instead of blocking poll() to avoid starving
+            // Swift's cooperative thread pool.
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                var resumed = false
+                let resumeOnce = {
+                    guard !resumed else { return }
+                    resumed = true
+                    cont.resume()
+                }
+
+                let src = DispatchSource.makeReadSource(fileDescriptor: fd, queue: self.queue)
+                src.setEventHandler {
+                    // Non-blocking check: is the connection dead?
+                    var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                    let r = poll(&pfd, 1, 0) // instant, non-blocking
+                    if r < 0 || pfd.revents & Int16(POLLHUP | POLLERR | POLLNVAL) != 0 {
+                        src.cancel()
+                    }
+                }
+                src.setCancelHandler { resumeOnce() }
+                src.resume()
+            }
         } catch {
             if !Task.isCancelled {
                 FileHandle.standardError.write(
                     Data("[senkani] Socket connection error: \(error)\n".utf8))
             }
+        }
+
+        // Ensure transport is disconnected
+        await transport.disconnect()
+
+        FileHandle.standardError.write(
+            Data("[senkani] Socket client disconnected (fd=\(fd))\n".utf8))
+    }
+
+    // MARK: - Hook Listener
+
+    /// Start a lightweight socket listener for hook events.
+    /// Hook connections are short-lived: one request → one response → close.
+    /// Uses length-prefixed binary protocol (4-byte big-endian length + JSON payload).
+    private func startHookListening() throws {
+        let dir = (hookSocketPath as NSString).deletingLastPathComponent
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+
+        // Remove stale socket file
+        unlink(hookSocketPath)
+
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            throw SocketError.createFailed(errno)
+        }
+
+        // Bind
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = hookSocketPath.utf8CString
+        guard pathBytes.count <= MemoryLayout.size(ofValue: addr.sun_path) else {
+            Darwin.close(fd)
+            throw SocketError.pathTooLong
+        }
+        withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
+            pathBytes.withUnsafeBufferPointer { buf in
+                let dest = UnsafeMutableRawPointer(sunPath).assumingMemoryBound(to: CChar.self)
+                buf.baseAddress!.withMemoryRebound(to: CChar.self, capacity: buf.count) { src in
+                    dest.update(from: src, count: buf.count)
+                }
+            }
+        }
+
+        let bindResult = withUnsafePointer(to: &addr) { addrPtr in
+            addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
+                bind(fd, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard bindResult == 0 else {
+            Darwin.close(fd)
+            throw SocketError.bindFailed(errno)
+        }
+
+        chmod(hookSocketPath, 0o600)
+
+        guard Darwin.listen(fd, 16) == 0 else {
+            Darwin.close(fd)
+            throw SocketError.listenFailed(errno)
+        }
+
+        hookListenFD = fd
+
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: hookQueue)
+        source.setEventHandler { [weak self] in
+            self?.acceptHookConnection()
+        }
+        source.setCancelHandler { [weak self] in
+            guard let self else { return }
+            if self.hookListenFD >= 0 {
+                Darwin.close(self.hookListenFD)
+                self.hookListenFD = -1
+            }
+        }
+        hookAcceptSource = source
+        source.resume()
+
+        FileHandle.standardError.write(
+            Data("[senkani] Hook socket server listening on \(hookSocketPath)\n".utf8))
+    }
+
+    private func acceptHookConnection() {
+        var clientAddr = sockaddr_un()
+        var addrLen = socklen_t(MemoryLayout<sockaddr_un>.size)
+
+        let clientFD = withUnsafeMutablePointer(to: &clientAddr) { addrPtr in
+            addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
+                Darwin.accept(hookListenFD, sockaddrPtr, &addrLen)
+            }
+        }
+        guard clientFD >= 0 else { return }
+
+        // Handle on hookQueue — fast, synchronous, no async overhead
+        hookQueue.async { [self] in
+            defer { Darwin.close(clientFD) }
+
+            // Read 4-byte length prefix
+            var lengthBytes = [UInt8](repeating: 0, count: 4)
+            let readLen = Darwin.read(clientFD, &lengthBytes, 4)
+            guard readLen == 4 else { return }
+
+            let payloadLength = Int(UInt32(bigEndian: Data(lengthBytes).withUnsafeBytes { $0.load(as: UInt32.self) }))
+            guard payloadLength > 0, payloadLength < 65536 else { return }
+
+            // Read payload
+            var payload = Data(count: payloadLength)
+            var totalRead = 0
+            while totalRead < payloadLength {
+                let n = payload.withUnsafeMutableBytes { buf in
+                    Darwin.read(clientFD, buf.baseAddress! + totalRead, payloadLength - totalRead)
+                }
+                if n <= 0 { break }
+                totalRead += n
+            }
+            guard totalRead == payloadLength else { return }
+
+            let eventData = payload
+
+            // Call handler
+            let response: Data
+            if let handler = self.hookHandler {
+                response = handler(eventData)
+            } else {
+                response = Data("{}".utf8)
+            }
+
+            // Send response: 4-byte length prefix + JSON
+            var respLength = UInt32(response.count).bigEndian
+            let respLengthData = Data(bytes: &respLength, count: 4)
+            _ = respLengthData.withUnsafeBytes { Darwin.write(clientFD, $0.baseAddress!, 4) }
+            _ = response.withUnsafeBytes { Darwin.write(clientFD, $0.baseAddress!, response.count) }
         }
     }
 

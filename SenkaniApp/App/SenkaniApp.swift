@@ -1,17 +1,23 @@
 import SwiftUI
 import Core
+import MCPServer
 
 struct SenkaniGUI: App {
     @State private var menuBarManager = MenuBarManager()
 
     init() {
         do {
-            try AutoRegistration.registerIfNeeded()
+            try AutoRegistration.cleanupGlobalSettings()
         } catch {
-            // Non-fatal -- log and continue. The app works without auto-registration.
-            FileHandle.standardError.write(Data("[senkani] Auto-registration failed: \(error.localizedDescription)\n".utf8))
+            // Non-fatal -- log and continue. The app works without cleanup.
+            FileHandle.standardError.write(Data("[senkani] Cleanup failed: \(error.localizedDescription)\n".utf8))
         }
+        AutoRegistration.installHookWrapper()
         Self.cleanupStaleMCPProcesses()
+
+        // Start hook socket listener so senkani-hook binary can connect
+        SocketServerManager.shared.hookHandler = { HookRouter.handle(eventJSON: $0) }
+        SocketServerManager.shared.start()
     }
 
     /// Kill stale MCP server processes left over from previous sessions.

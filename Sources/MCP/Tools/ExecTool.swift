@@ -4,10 +4,40 @@ import Core
 import Filter
 
 enum ExecTool {
+
+    // MARK: - Helpers
+
+    /// Read up to `limit` bytes from a file handle. Returns the data and whether it was truncated.
+    private static func readCapped(from handle: FileHandle, limit: Int) -> (Data, Bool) {
+        var result = Data()
+        while result.count < limit {
+            let chunk = handle.availableData
+            if chunk.isEmpty { break } // EOF
+            result.append(chunk)
+        }
+        let truncated = result.count > limit
+        if truncated { result = result.prefix(limit) }
+        // Drain remaining data to avoid broken pipe
+        if truncated {
+            while true {
+                let discard = handle.availableData
+                if discard.isEmpty { break }
+            }
+        }
+        return (result, truncated)
+    }
+
+    // MARK: - Handler
+
     static func handle(arguments: [String: Value]?, session: MCPSession) -> CallTool.Result {
         guard let command = arguments?["command"]?.stringValue else {
             return .init(content: [.text(text: "Error: 'command' is required", annotations: nil, _meta: nil)], isError: true)
         }
+
+        let sandboxMode: Core.SandboxMode = {
+            guard let raw = arguments?["sandbox"]?.stringValue else { return .auto }
+            return Core.SandboxMode(rawValue: raw) ?? .auto
+        }()
 
         // Run the command
         let process = Process()
@@ -29,12 +59,12 @@ enum ExecTool {
         // Timeout: kill the process after 30 seconds to prevent MCP server stalls
         let timeoutWork = DispatchWorkItem {
             if process.isRunning {
-                print("⚠️ [EXEC] Command timeout after 30s, sending SIGTERM: \(command)")
+                print("[EXEC] Command timeout after 30s, sending SIGTERM: \(command)")
                 process.terminate() // SIGTERM
                 // If still running after 5 more seconds, SIGKILL
                 DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
                     if process.isRunning {
-                        print("💀 [EXEC] SIGKILL: \(command)")
+                        print("[EXEC] SIGKILL: \(command)")
                         kill(process.processIdentifier, SIGKILL)
                     }
                 }
@@ -42,19 +72,23 @@ enum ExecTool {
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: timeoutWork)
 
-        // Read BEFORE waitUntilExit to avoid pipe buffer deadlock on large output
-        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        // Read BEFORE waitUntilExit to avoid pipe buffer deadlock on large output.
+        // Cap at 1MB to prevent OOM on commands that produce massive output.
+        let maxBytes = 1_048_576 // 1MB
+        let (outData, outTruncated) = Self.readCapped(from: outPipe.fileHandleForReading, limit: maxBytes)
+        let (errData, errTruncated) = Self.readCapped(from: errPipe.fileHandleForReading, limit: maxBytes)
         process.waitUntilExit()
         timeoutWork.cancel() // Cancel timeout if process finished naturally
-        let rawOutput = String(data: outData, encoding: .utf8) ?? ""
-        let rawStderr = String(data: errData, encoding: .utf8) ?? ""
+        var rawOutput = String(data: outData, encoding: .utf8) ?? ""
+        var rawStderr = String(data: errData, encoding: .utf8) ?? ""
+        if outTruncated { rawOutput += "\n// [senkani: output truncated at 1MB — full output was larger]" }
+        if errTruncated { rawStderr += "\n// [senkani: stderr truncated at 1MB — full output was larger]" }
 
         let rawBytes = rawOutput.utf8.count
         var output: String
 
-        if session.filterEnabled || session.secretsEnabled {
-            let config = FeatureConfig(filter: session.filterEnabled, secrets: session.secretsEnabled, indexer: false)
+        if session.filterEnabled || session.secretsEnabled || session.terseEnabled {
+            let config = FeatureConfig(filter: session.filterEnabled, secrets: session.secretsEnabled, indexer: false, terse: session.terseEnabled)
             let pipeline = FilterPipeline(config: config)
             let result = pipeline.process(command: command, output: rawOutput)
             output = result.output
@@ -69,8 +103,34 @@ enum ExecTool {
         let exitCode = process.terminationStatus
         let savedPct = rawBytes > 0 ? Int(Double(rawBytes - compressedBytes) / Double(rawBytes) * 100) : 0
 
+        // Sandbox decision
+        let lineCount = output.components(separatedBy: "\n").count
+        let shouldSandbox: Bool = {
+            switch sandboxMode {
+            case .always: return true
+            case .never: return false
+            case .auto: return lineCount > sandboxLineThreshold
+            }
+        }()
+
         var text = "// senkani exec: \(rawBytes) → \(compressedBytes) bytes (\(savedPct)% saved), exit \(exitCode)\n"
-        text += output
+
+        if shouldSandbox, let sid = session.sessionId {
+            let resultId = SessionDatabase.shared.storeSandboxedResult(
+                sessionId: sid,
+                command: command,
+                output: output
+            )
+            text += Core.buildSandboxSummary(
+                output: output,
+                lineCount: lineCount,
+                byteCount: compressedBytes,
+                resultId: resultId
+            )
+        } else {
+            text += output
+        }
+
         if !rawStderr.isEmpty {
             text += "\n--- stderr ---\n" + rawStderr
         }

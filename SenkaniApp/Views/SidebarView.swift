@@ -6,6 +6,7 @@ import Core
 struct SidebarView: View {
     @Bindable var workspace: WorkspaceModel
     @Binding var activeToolView: ToolView?
+    let onRequestAddPane: () -> Void
     @State private var showClaudeLaunch = false
 
     var body: some View {
@@ -251,34 +252,11 @@ struct SidebarView: View {
 
     private var addPaneButton: some View {
         Menu {
-            Button("Claude Code") {
+            Button("Claude Code...") {
                 showClaudeLaunch = true
             }
-            Button("Shell") {
-                workspace.addPane(title: "Terminal", command: "")
-            }
-            Divider()
-            Button("Markdown Preview") {
-                workspace.addPane(type: .markdownPreview, title: "Markdown")
-            }
-            Button("HTML Preview") {
-                workspace.addPane(type: .htmlPreview, title: "HTML")
-            }
-            Divider()
-            Button("Skill Library") {
-                workspace.addPane(type: .skillLibrary, title: "Skills")
-            }
-            Button("Knowledge Base") {
-                workspace.addPane(type: .knowledgeBase, title: "Knowledge")
-            }
-            Button("Analytics") {
-                workspace.addPane(type: .analytics, title: "Analytics")
-            }
-            Button("Model Manager") {
-                workspace.addPane(type: .modelManager, title: "Models")
-            }
-            Button("Schedules") {
-                workspace.addPane(type: .scheduleManager, title: "Schedules")
+            Button("New Pane...") {
+                onRequestAddPane()
             }
         } label: {
             HStack(spacing: 4) {

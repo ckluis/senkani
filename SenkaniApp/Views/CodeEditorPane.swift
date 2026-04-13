@@ -150,7 +150,7 @@ struct HighlightedCodeView: NSViewRepresentable {
             return result
         }
 
-        guard let queryString = highlightQuery(for: languageId),
+        guard let queryString = HighlightQueries.query(for: languageId),
               let queryData = queryString.data(using: .utf8) else {
             return result
         }
@@ -159,7 +159,22 @@ struct HighlightedCodeView: NSViewRepresentable {
         do { try parser.setLanguage(tsLanguage) } catch { return result }
         guard let tree = parser.parse(content) else { return result }
         guard let rootNode = tree.rootNode else { return result }
-        guard let query = try? Query(language: tsLanguage, data: queryData) else { return result }
+
+        // Try the full query first; if it fails (unsupported predicates), strip predicates and retry
+        let query: Query
+        if let q = try? Query(language: tsLanguage, data: queryData) {
+            query = q
+        } else {
+            let stripped = queryString
+                .components(separatedBy: "\n")
+                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("(#") }
+                .joined(separator: "\n")
+            guard let strippedData = stripped.data(using: .utf8),
+                  let q = try? Query(language: tsLanguage, data: strippedData) else {
+                return result
+            }
+            query = q
+        }
 
         let cursor = query.execute(node: rootNode, in: tree)
         let contentLength = (content as NSString).length
@@ -186,111 +201,80 @@ private let defaultTextColor = NSColor(red: 0.878, green: 0.878, blue: 0.878, al
 private let gutterBgColor = NSColor(red: 0.065, green: 0.065, blue: 0.065, alpha: 1.0)
 private let gutterTextColor = NSColor(red: 0.361, green: 0.388, blue: 0.424, alpha: 1.0)
 
-/// One Dark inspired palette, keyed by tree-sitter capture name prefix.
+/// One Dark inspired palette. Looks up by exact name, then falls back to parent scope.
 private func captureColor(for name: String) -> NSColor {
-    let base = name.split(separator: ".").first.map(String.init) ?? name
-    switch base {
-    case "keyword":     return NSColor(red: 0.776, green: 0.471, blue: 0.867, alpha: 1.0)  // purple
-    case "string":      return NSColor(red: 0.596, green: 0.765, blue: 0.475, alpha: 1.0)  // green
-    case "comment":     return NSColor(red: 0.361, green: 0.388, blue: 0.424, alpha: 1.0)  // gray
-    case "function", "method":
-                        return NSColor(red: 0.380, green: 0.686, blue: 0.878, alpha: 1.0)  // blue
-    case "type":        return NSColor(red: 0.898, green: 0.753, blue: 0.424, alpha: 1.0)  // yellow
-    case "number", "float":
-                        return NSColor(red: 0.820, green: 0.604, blue: 0.400, alpha: 1.0)  // orange
-    case "variable":    return NSColor(red: 0.878, green: 0.376, blue: 0.290, alpha: 1.0)  // red
-    case "constant":    return NSColor(red: 0.820, green: 0.604, blue: 0.400, alpha: 1.0)  // orange
-    case "operator":    return NSColor(red: 0.671, green: 0.698, blue: 0.745, alpha: 1.0)  // light gray
-    case "property":    return NSColor(red: 0.878, green: 0.376, blue: 0.290, alpha: 1.0)  // red
-    case "punctuation": return NSColor(red: 0.671, green: 0.698, blue: 0.745, alpha: 1.0)  // light gray
-    case "include", "import":
-                        return NSColor(red: 0.776, green: 0.471, blue: 0.867, alpha: 1.0)  // purple
-    case "boolean":     return NSColor(red: 0.820, green: 0.604, blue: 0.400, alpha: 1.0)  // orange
-    case "label":       return NSColor(red: 0.380, green: 0.686, blue: 0.878, alpha: 1.0)  // blue
-    default:            return defaultTextColor
+    if let color = captureColors[name] { return color }
+    // Fall back to parent scope: "keyword.return" → "keyword"
+    if let dot = name.lastIndex(of: ".") {
+        let parent = String(name[name.startIndex..<dot])
+        if let color = captureColors[parent] { return color }
     }
+    return defaultTextColor
 }
 
-// MARK: - Highlight Queries
+private let purple    = NSColor(red: 0.776, green: 0.471, blue: 0.867, alpha: 1.0)
+private let green     = NSColor(red: 0.596, green: 0.765, blue: 0.475, alpha: 1.0)
+private let gray      = NSColor(red: 0.361, green: 0.388, blue: 0.424, alpha: 1.0)
+private let blue      = NSColor(red: 0.380, green: 0.686, blue: 0.878, alpha: 1.0)
+private let yellow    = NSColor(red: 0.898, green: 0.753, blue: 0.424, alpha: 1.0)
+private let orange    = NSColor(red: 0.820, green: 0.604, blue: 0.400, alpha: 1.0)
+private let red       = NSColor(red: 0.878, green: 0.376, blue: 0.290, alpha: 1.0)
+private let lightGray = NSColor(red: 0.671, green: 0.698, blue: 0.745, alpha: 1.0)
 
-private func highlightQuery(for language: String) -> String? {
-    switch language {
-    case "swift": return swiftHighlightsQuery
-    default: return nil
-    }
-}
-
-/// Minimal Swift highlights.scm compatible with tree-sitter-swift grammar.
-private let swiftHighlightsQuery = """
-"func" @keyword
-"var" @keyword
-"let" @keyword
-"class" @keyword
-"struct" @keyword
-"enum" @keyword
-"protocol" @keyword
-"extension" @keyword
-"import" @keyword
-"return" @keyword
-"if" @keyword
-"else" @keyword
-"guard" @keyword
-"switch" @keyword
-"case" @keyword
-"default" @keyword
-"for" @keyword
-"while" @keyword
-"repeat" @keyword
-"in" @keyword
-"where" @keyword
-"throw" @keyword
-"throws" @keyword
-"try" @keyword
-"catch" @keyword
-"do" @keyword
-"as" @keyword
-"is" @keyword
-"nil" @constant
-"true" @boolean
-"false" @boolean
-"self" @variable
-"Self" @type
-"super" @variable
-"init" @keyword
-"deinit" @keyword
-"typealias" @keyword
-"associatedtype" @keyword
-"static" @keyword
-"private" @keyword
-"fileprivate" @keyword
-"internal" @keyword
-"public" @keyword
-"open" @keyword
-"override" @keyword
-"mutating" @keyword
-"nonmutating" @keyword
-"indirect" @keyword
-"convenience" @keyword
-"required" @keyword
-"lazy" @keyword
-"weak" @keyword
-"unowned" @keyword
-"async" @keyword
-"await" @keyword
-"some" @keyword
-"any" @keyword
-"inout" @keyword
-"defer" @keyword
-"break" @keyword
-"continue" @keyword
-"fallthrough" @keyword
-(comment) @comment
-(line_string_literal) @string
-(multi_line_string_literal) @string
-(integer_literal) @number
-(real_literal) @number
-(type_identifier) @type
-"""
+private let captureColors: [String: NSColor] = [
+    "keyword": purple,
+    "keyword.return": purple,
+    "keyword.function": purple,
+    "keyword.import": purple,
+    "keyword.operator": purple,
+    "keyword.exception": purple,
+    "keyword.debug": purple,
+    "string": green,
+    "string.special": green,
+    "string.escape": orange,
+    "comment": gray,
+    "comment.doc": gray,
+    "function": blue,
+    "function.builtin": blue,
+    "function.call": blue,
+    "function.method": blue,
+    "method": blue,
+    "type": yellow,
+    "type.builtin": yellow,
+    "type.definition": yellow,
+    "number": orange,
+    "float": orange,
+    "variable": red,
+    "variable.builtin": orange,
+    "variable.parameter": red,
+    "constant": orange,
+    "constant.builtin": orange,
+    "operator": lightGray,
+    "property": red,
+    "punctuation": lightGray,
+    "punctuation.bracket": lightGray,
+    "punctuation.delimiter": lightGray,
+    "punctuation.special": lightGray,
+    "include": purple,
+    "import": purple,
+    "boolean": orange,
+    "constructor": yellow,
+    "tag": red,
+    "attribute": purple,
+    "module": yellow,
+    "namespace": yellow,
+    "conditional": purple,
+    "repeat": purple,
+    "exception": purple,
+    "label": blue,
+    "parameter": red,
+    "field": red,
+    "character": green,
+    "character.special": orange,
+    "storageclass": purple,
+    "define": purple,
+    "preproc": purple,
+]
 
 // MARK: - Line Number Ruler
 

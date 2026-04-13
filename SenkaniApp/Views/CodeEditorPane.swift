@@ -7,11 +7,20 @@ struct CodeEditorPane: View {
     @Bindable var pane: PaneModel
     @State private var fileContent: String = ""
     @State private var filePath: String = ""
+    @State private var isModified: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
             // File bar
             HStack(spacing: 6) {
+                // Modified indicator
+                if isModified {
+                    Circle()
+                        .fill(Color.orange)
+                        .frame(width: 6, height: 6)
+                        .help("Unsaved changes")
+                }
+
                 TextField("File path...", text: $filePath)
                     .textFieldStyle(.plain)
                     .font(.system(size: 11, design: .monospaced))
@@ -32,6 +41,13 @@ struct CodeEditorPane: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .help("Browse files...")
+
+                if isModified {
+                    Button("Save") { saveFile() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .keyboardShortcut("s", modifiers: .command)
+                }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -39,7 +55,7 @@ struct CodeEditorPane: View {
 
             Divider()
 
-            if fileContent.isEmpty {
+            if fileContent.isEmpty && !isModified {
                 VStack {
                     Spacer()
                     Image(systemName: "chevron.left.forwardslash.chevron.right")
@@ -55,8 +71,12 @@ struct CodeEditorPane: View {
                 .background(SenkaniTheme.paneBody)
             } else {
                 HighlightedCodeView(
-                    content: fileContent,
-                    filePath: filePath
+                    content: $fileContent,
+                    filePath: filePath,
+                    isModified: $isModified,
+                    projectRoot: pane.workingDirectory,
+                    onSave: { saveFile() },
+                    onNavigate: { entry in navigateToSymbol(entry) }
                 )
             }
         }
@@ -70,6 +90,7 @@ struct CodeEditorPane: View {
             return
         }
         fileContent = content
+        isModified = false
         pane.previewFilePath = path
     }
 
@@ -84,29 +105,160 @@ struct CodeEditorPane: View {
             openFile()
         }
     }
+
+    private func saveFile() {
+        let path = filePath.hasPrefix("/") ? filePath : (pane.workingDirectory + "/" + filePath)
+        guard !path.isEmpty else { return }
+        do {
+            try fileContent.write(toFile: path, atomically: true, encoding: .utf8)
+            isModified = false
+        } catch {
+            // Save failed silently — file bar still shows modified dot
+        }
+    }
+
+    private func navigateToSymbol(_ entry: IndexEntry) {
+        let absPath = entry.file.hasPrefix("/")
+            ? entry.file
+            : (pane.workingDirectory + "/" + entry.file)
+        filePath = absPath
+        guard let content = try? String(contentsOfFile: absPath, encoding: .utf8) else { return }
+        fileContent = content
+        isModified = false
+        pane.previewFilePath = absPath
+
+        // Post notification to scroll to the target line
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            NotificationCenter.default.post(
+                name: .codeEditorScrollToLine,
+                object: nil,
+                userInfo: ["line": entry.startLine]
+            )
+        }
+    }
+}
+
+// MARK: - Notification for scroll-to-line
+
+extension Notification.Name {
+    static let codeEditorScrollToLine = Notification.Name("codeEditorScrollToLine")
+}
+
+// MARK: - Clickable Text View (Cmd+click support)
+
+final class ClickableTextView: NSTextView {
+    var onSymbolClick: ((String) -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.command) {
+            let point = convert(event.locationInWindow, from: nil)
+            let charIndex = characterIndexForInsertion(at: point)
+            if let word = wordAt(index: charIndex) {
+                onSymbolClick?(word)
+                return
+            }
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        if event.modifierFlags.contains(.command) {
+            let point = convert(event.locationInWindow, from: nil)
+            let charIndex = characterIndexForInsertion(at: point)
+            if wordAt(index: charIndex) != nil {
+                NSCursor.pointingHand.set()
+                return
+            }
+        }
+        NSCursor.iBeam.set()
+        super.mouseMoved(with: event)
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        if !event.modifierFlags.contains(.command) {
+            NSCursor.iBeam.set()
+        }
+        super.flagsChanged(with: event)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+    }
+
+    private func wordAt(index: Int) -> String? {
+        let str = string as NSString
+        guard index >= 0, index < str.length else { return nil }
+        let range = str.rangeOfComposedCharacterSequence(at: index)
+        guard range.length > 0 else { return nil }
+
+        // Expand to word boundary (identifier chars)
+        var start = index
+        while start > 0 {
+            let c = str.character(at: start - 1)
+            guard let scalar = Unicode.Scalar(c),
+                  CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_")).contains(scalar) else { break }
+            start -= 1
+        }
+        var end = index
+        while end < str.length {
+            let c = str.character(at: end)
+            guard let scalar = Unicode.Scalar(c),
+                  CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_")).contains(scalar) else { break }
+            end += 1
+        }
+        guard end > start else { return nil }
+        let word = str.substring(with: NSRange(location: start, length: end - start))
+        return word.isEmpty ? nil : word
+    }
 }
 
 // MARK: - Highlighted Code View (NSTextView + tree-sitter)
 
 struct HighlightedCodeView: NSViewRepresentable {
-    let content: String
+    @Binding var content: String
     let filePath: String
+    @Binding var isModified: Bool
+    let projectRoot: String
+    let onSave: () -> Void
+    let onNavigate: (IndexEntry) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSTextView.scrollableTextView()
-        let textView = scrollView.documentView as! NSTextView
+        let scrollView = ClickableTextView.makeScrollableTextView()
+        let textView = scrollView.documentView as! ClickableTextView
 
         textView.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
         textView.textColor = defaultTextColor
         textView.backgroundColor = bgColor
         textView.insertionPointColor = .white
-        textView.isEditable = false
+        textView.isEditable = true
         textView.isSelectable = true
+        textView.isRichText = false
+        textView.allowsUndo = true
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isAutomaticTextCompletionEnabled = false
         textView.usesFindBar = true
         textView.textContainerInset = NSSize(width: 4, height: 8)
+        textView.delegate = context.coordinator
+
+        textView.onSymbolClick = { [weak textView] symbolName in
+            guard textView != nil else { return }
+            context.coordinator.lookupSymbol(symbolName)
+        }
 
         // Line numbers
         scrollView.hasVerticalRuler = true
@@ -118,19 +270,31 @@ struct HighlightedCodeView: NSViewRepresentable {
         scrollView.backgroundColor = bgColor
         scrollView.scrollerStyle = .overlay
 
-        applyContent(to: textView)
+        context.coordinator.textView = textView
+        applyHighlighting(to: textView)
+
+        // Listen for scroll-to-line notifications
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.scrollToLine(_:)),
+            name: .codeEditorScrollToLine,
+            object: nil
+        )
 
         return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        guard let textView = scrollView.documentView as? NSTextView else { return }
-        if textView.string != content {
-            applyContent(to: textView)
+        guard let textView = scrollView.documentView as? ClickableTextView else { return }
+        // Only update if content changed externally (not from editing)
+        if !context.coordinator.isEditing && textView.string != content {
+            context.coordinator.suppressTextDidChange = true
+            applyHighlighting(to: textView)
+            context.coordinator.suppressTextDidChange = false
         }
     }
 
-    private func applyContent(to textView: NSTextView) {
+    private func applyHighlighting(to textView: NSTextView) {
         let attributed = buildHighlightedString()
         textView.textStorage?.setAttributedString(attributed)
     }
@@ -191,6 +355,124 @@ struct HighlightedCodeView: NSViewRepresentable {
         }
 
         return result
+    }
+
+    // MARK: - Coordinator
+
+    @MainActor
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        let parent: HighlightedCodeView
+        weak var textView: ClickableTextView?
+        var isEditing = false
+        var suppressTextDidChange = false
+        private var rehighlightTask: DispatchWorkItem?
+
+        init(parent: HighlightedCodeView) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard !suppressTextDidChange else { return }
+            guard let textView = notification.object as? NSTextView else { return }
+
+            isEditing = true
+            parent.content = textView.string
+            parent.isModified = true
+
+            // Debounced re-highlighting (300ms)
+            rehighlightTask?.cancel()
+            let task = DispatchWorkItem { [weak self] in
+                DispatchQueue.main.async {
+                    self?.applyRehighlight()
+                }
+            }
+            rehighlightTask = task
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: task)
+        }
+
+        private func applyRehighlight() {
+            guard let textView = textView else { return }
+            let selectedRanges = textView.selectedRanges
+            let scrollPos = textView.enclosingScrollView?.contentView.bounds.origin
+
+            suppressTextDidChange = true
+            let highlighted = parent.buildHighlightedString()
+            textView.textStorage?.setAttributedString(highlighted)
+
+            // Restore selection and scroll position
+            textView.selectedRanges = selectedRanges
+            if let scrollPos = scrollPos {
+                textView.enclosingScrollView?.contentView.scroll(to: scrollPos)
+            }
+            suppressTextDidChange = false
+            isEditing = false
+        }
+
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            // Cmd+S save
+            if commandSelector == NSSelectorFromString("saveDocument:") {
+                parent.onSave()
+                return true
+            }
+            return false
+        }
+
+        func lookupSymbol(_ name: String) {
+            guard let index = IndexStore.load(projectRoot: parent.projectRoot) else { return }
+            guard let entry = index.find(name: name) else { return }
+            parent.onNavigate(entry)
+        }
+
+        @objc func scrollToLine(_ notification: Notification) {
+            guard let line = notification.userInfo?["line"] as? Int,
+                  let textView = textView else { return }
+            let string = textView.string as NSString
+            var currentLine = 1
+            var charIndex = 0
+            while currentLine < line && charIndex < string.length {
+                let lineRange = string.lineRange(for: NSRange(location: charIndex, length: 0))
+                charIndex = NSMaxRange(lineRange)
+                currentLine += 1
+            }
+            let targetRange = string.lineRange(for: NSRange(location: charIndex, length: 0))
+            textView.scrollRangeToVisible(targetRange)
+            textView.setSelectedRange(targetRange)
+            textView.showFindIndicator(for: targetRange)
+        }
+    }
+}
+
+// MARK: - Scrollable text view factory override
+
+extension ClickableTextView {
+    override class var isCompatibleWithResponsiveScrolling: Bool { true }
+
+    /// Factory to create a scrollable ClickableTextView (mirrors NSTextView.scrollableTextView()).
+    static func makeScrollableTextView() -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autoresizingMask = [.width, .height]
+
+        let contentSize = scrollView.contentSize
+        let textContainer = NSTextContainer(size: NSSize(width: contentSize.width, height: CGFloat.greatestFiniteMagnitude))
+        textContainer.widthTracksTextView = true
+
+        let layoutManager = NSLayoutManager()
+        layoutManager.addTextContainer(textContainer)
+
+        let textStorage = NSTextStorage()
+        textStorage.addLayoutManager(layoutManager)
+
+        let textView = ClickableTextView(frame: NSRect(origin: .zero, size: contentSize), textContainer: textContainer)
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+
+        scrollView.documentView = textView
+        return scrollView
     }
 }
 

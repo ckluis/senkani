@@ -306,7 +306,7 @@ let package = Package(
             ],
             path: "SenkaniApp",
             exclude: ["SenkaniApp.xcodeproj", "Info.plist", "Senkani.entitlements"],
-            resources: [.copy("Themes")]
+            resources: [.copy("Themes"), .process("Assets.xcassets")]
         ),
         .testTarget(
             name: "SenkaniTests",

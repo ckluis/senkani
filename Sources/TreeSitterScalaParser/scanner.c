@@ -8,7 +8,6 @@
 
 // LOG silenced — was flooding Xcode console with hundreds of scanner debug lines
 #define LOG(...)
-#endif
 
 enum TokenType {
   AUTOMATIC_SEMICOLON,

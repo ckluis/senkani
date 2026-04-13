@@ -33,76 +33,6 @@ enum HighlightQueries {
     // MARK: - Swift
 
     static let swift = """
-; Keywords
-[
-  "import"
-  "let"
-  "var"
-  "func"
-  "class"
-  "struct"
-  "enum"
-  "protocol"
-  "extension"
-  "return"
-  "if"
-  "else"
-  "guard"
-  "switch"
-  "case"
-  "default"
-  "for"
-  "while"
-  "in"
-  "where"
-  "do"
-  "try"
-  "catch"
-  "throw"
-  "throws"
-  "async"
-  "await"
-  "break"
-  "continue"
-  "defer"
-  "repeat"
-  "nil"
-  "true"
-  "false"
-  "self"
-  "Self"
-  "super"
-  "init"
-  "deinit"
-  "typealias"
-  "associatedtype"
-  "public"
-  "private"
-  "internal"
-  "open"
-  "fileprivate"
-  "static"
-  "final"
-  "override"
-  "mutating"
-  "nonmutating"
-  "weak"
-  "unowned"
-  "lazy"
-  "some"
-  "any"
-  "as"
-  "is"
-  "inout"
-  "operator"
-  "precedencegroup"
-  "indirect"
-  "convenience"
-  "required"
-  "optional"
-  "dynamic"
-] @keyword
-
 (comment) @comment
 (multiline_comment) @comment
 
@@ -115,6 +45,12 @@ enum HighlightQueries {
 (boolean_literal) @constant
 
 (type_identifier) @type
+
+(import_declaration) @keyword
+(function_declaration) @keyword
+(class_declaration) @keyword
+(protocol_declaration) @keyword
+
 (simple_identifier) @variable
 """
 

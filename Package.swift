@@ -299,6 +299,7 @@ let package = Package(
                 "MCPServer",
                 "HookRelay",
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
+                .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
                 .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "MLXEmbedders", package: "mlx-swift-lm"),
                 .product(name: "MLXVLM", package: "mlx-swift-lm"),

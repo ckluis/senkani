@@ -176,6 +176,7 @@ enum SenkaniTheme {
         case .scratchpad: return accentScratchpad
         case .savingsTest: return savingsGreen
         case .agentTimeline: return accentAnalytics
+        case .codeEditor: return accentAnalytics
         }
     }
 
@@ -196,6 +197,7 @@ enum SenkaniTheme {
         case .scratchpad: return "note.text"
         case .savingsTest: return "checkmark.seal"
         case .agentTimeline: return "waveform.path"
+        case .codeEditor: return "chevron.left.forwardslash.chevron.right"
         }
     }
 
@@ -216,6 +218,7 @@ enum SenkaniTheme {
         case .scratchpad: return "Quick notes and scratch space"
         case .savingsTest: return "Benchmark optimization savings"
         case .agentTimeline: return "Live feed of optimization events"
+        case .codeEditor: return "View code with syntax highlighting"
         }
     }
 
@@ -235,6 +238,7 @@ enum SenkaniTheme {
         case .scratchpad: return "Scratchpad"
         case .savingsTest: return "Savings Test"
         case .agentTimeline: return "Agent Timeline"
+        case .codeEditor: return "Code Editor"
         }
     }
 }

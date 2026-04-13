@@ -224,6 +224,8 @@ struct PaneContainerView: View {
             SavingsTestView(workspace: workspace)
         case .agentTimeline:
             AgentTimelinePane(pane: pane, workspace: workspace)
+        case .codeEditor:
+            CodeEditorPane(pane: pane)
         }
     }
 
@@ -267,6 +269,9 @@ struct PaneContainerView: View {
             return "test suite"
         case .agentTimeline:
             return "\(pane.metrics.commandCount) events"
+        case .codeEditor:
+            let file = (pane.previewFilePath as NSString).lastPathComponent
+            return file.isEmpty ? "code" : file
         }
     }
 

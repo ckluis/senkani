@@ -17,6 +17,7 @@ enum PaneType: String, CaseIterable {
     case scratchpad
     case savingsTest
     case agentTimeline
+    case codeEditor
 }
 
 /// State of the process running in a terminal pane.
@@ -130,6 +131,7 @@ final class PaneModel: Identifiable {
         case .terminal:           self.columnWidth = 300
         case .savingsTest:        self.columnWidth = 480
         case .agentTimeline:      self.columnWidth = 420
+        case .codeEditor:         self.columnWidth = 480
         default:                  self.columnWidth = 300
         }
         // Write initial toggle state so the hook script has it from the start

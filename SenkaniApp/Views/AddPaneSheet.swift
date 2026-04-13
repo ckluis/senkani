@@ -141,6 +141,15 @@ struct AddPaneSheet: View {
                 defaultCommand: ""
             ),
             PaneEntry(
+                id: .codeEditor, type: .codeEditor,
+                name: "Code Editor",
+                description: "View code with syntax highlighting",
+                icon: SenkaniTheme.iconName(for: .codeEditor),
+                accent: SenkaniTheme.accentColor(for: .codeEditor),
+                defaultTitle: "Code",
+                defaultCommand: ""
+            ),
+            PaneEntry(
                 id: .agentTimeline, type: .agentTimeline,
                 name: "Agent Timeline",
                 description: "Live feed of optimization events",

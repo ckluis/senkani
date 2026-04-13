@@ -52,6 +52,9 @@ final class MCPSession: @unchecked Sendable {
     // FSEvents file watcher for auto re-indexing
     private var fileWatcher: FileWatcher?
 
+    // Cached repo map for MCP instruction injection (invalidated on index change)
+    private var _repoMap: String?
+
     // Dependency graph (lazily built on first use)
     private var _dependencyGraph: DependencyGraph?
 
@@ -184,6 +187,7 @@ final class MCPSession: @unchecked Sendable {
         // Try fast disk load first (synchronous, <50ms)
         if let cached = IndexStore.load(projectRoot: projectRoot) {
             _symbolIndex = cached
+            _repoMap = nil
             _indexBuilding = true
             lock.unlock()
             // Incremental update in background (populate tree cache for incremental re-parsing)
@@ -192,6 +196,7 @@ final class MCPSession: @unchecked Sendable {
                 try? IndexStore.save(updated, projectRoot: projectRoot)
                 self.lock.lock()
                 self._symbolIndex = updated
+                self._repoMap = nil
                 self._indexBuilding = false
                 self.lock.unlock()
                 self.startFileWatcher()
@@ -205,6 +210,7 @@ final class MCPSession: @unchecked Sendable {
                 try? IndexStore.save(idx, projectRoot: projectRoot)
                 self.lock.lock()
                 self._symbolIndex = idx
+                self._repoMap = nil
                 self._indexBuilding = false
                 self.lock.unlock()
                 self.startFileWatcher()
@@ -217,6 +223,19 @@ final class MCPSession: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return _symbolIndex
+    }
+
+    /// Get the repo map for MCP instruction injection.
+    /// Generated from the symbol index, cached until the index changes.
+    /// Returns empty string if the index isn't ready yet.
+    func repoMap() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = _repoMap { return cached }
+        guard let index = _symbolIndex else { return "" }
+        let map = index.repoMap(maxTokens: 2000)
+        _repoMap = map
+        return map
     }
 
     /// Blocking index build for CLI commands. Checks if background build finished first.
@@ -232,6 +251,7 @@ final class MCPSession: @unchecked Sendable {
         try? IndexStore.save(idx, projectRoot: projectRoot)
         lock.lock()
         _symbolIndex = idx
+        _repoMap = nil
         _indexBuilding = false
         lock.unlock()
         return idx
@@ -323,6 +343,7 @@ final class MCPSession: @unchecked Sendable {
         idx.symbols.append(contentsOf: newEntries)
         idx.generated = Date()
         _symbolIndex = idx
+        _repoMap = nil
         lock.unlock()
 
         fputs("[senkani] Re-indexed \(relativePaths.count) changed files (\(newEntries.count) symbols)\n", stderr)

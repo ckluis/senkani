@@ -94,4 +94,56 @@ public struct SymbolIndex: Codable, Sendable {
         return grouped.sorted { $0.key < $1.key }
             .map { (file: $0.key, symbols: $0.value.sorted { $0.startLine < $1.startLine }) }
     }
+
+    // MARK: - Repo Map
+
+    /// Generate a compact repo map for MCP instruction injection.
+    /// Shows every file with its top-level symbols and nested members.
+    /// Capped at `maxTokens` estimated tokens (~4 chars per token).
+    public func repoMap(maxTokens: Int = 2000) -> String {
+        let grouped = groupedByFile()
+        guard !grouped.isEmpty else { return "" }
+
+        let maxChars = maxTokens * 4
+        var lines: [String] = []
+        let projectName = projectRoot.split(separator: "/").last.map(String.init) ?? "unknown"
+        lines.append("Project: \(projectName) (\(grouped.count) files, \(symbols.count) symbols)")
+        lines.append("")
+
+        var filesIncluded = 0
+        for (file, fileSymbols) in grouped {
+            let shortFile = file.components(separatedBy: "/").suffix(3).joined(separator: "/")
+            var fileLines: [String] = [shortFile]
+
+            var topLevel: [IndexEntry] = []
+            var contained: [String: [IndexEntry]] = [:]
+
+            for sym in fileSymbols {
+                if let c = sym.container { contained[c, default: []].append(sym) }
+                else { topLevel.append(sym) }
+            }
+
+            for sym in topLevel {
+                fileLines.append("  \(sym.kind) \(sym.name) L\(sym.startLine)")
+                if let members = contained[sym.name] {
+                    for m in members {
+                        fileLines.append("    \(m.kind) \(m.name) L\(m.startLine)")
+                    }
+                }
+            }
+
+            let fileBlock = fileLines.joined(separator: "\n")
+            let totalSoFar = lines.joined(separator: "\n").count
+            if totalSoFar + fileBlock.count + 1 > maxChars {
+                let remaining = grouped.count - filesIncluded
+                lines.append("... \(remaining) more files (use senkani_explore for full tree)")
+                break
+            }
+
+            lines.append(contentsOf: fileLines)
+            filesIncluded += 1
+        }
+
+        return lines.joined(separator: "\n")
+    }
 }

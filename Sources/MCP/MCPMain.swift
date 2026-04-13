@@ -49,11 +49,15 @@ public struct MCPServerRunner {
             execution. Call senkani_session with action 'stats' to see savings.
             """
 
+        // Append repo map if the index is already warm (loaded from disk cache)
+        let repoMap = session.repoMap()
+        let mapSection = repoMap.isEmpty ? "" : "\n\nProject structure:\n\(repoMap)"
+
         let instructions: String
         if TerseMode.isEnabled {
-            instructions = TerseMode.systemPrompt + "\n\n" + baseInstructions
+            instructions = TerseMode.systemPrompt + "\n\n" + baseInstructions + mapSection
         } else {
-            instructions = baseInstructions
+            instructions = baseInstructions + mapSection
         }
 
         let server = Server(

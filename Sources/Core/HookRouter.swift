@@ -55,7 +55,7 @@ public enum HookRouter {
             return handleRead(toolInput: toolInput, eventName: eventName, projectRoot: projectRoot, sessionId: sessionId)
         case "Bash":
             let command = toolInput["command"] as? String ?? ""
-            return handleBash(command: command, eventName: eventName)
+            return handleBash(command: command, eventName: eventName, projectRoot: projectRoot, sessionId: sessionId)
         case "Grep":
             let pattern = toolInput["pattern"] as? String ?? ""
             return handleGrep(pattern: pattern, eventName: eventName)
@@ -131,8 +131,16 @@ public enum HookRouter {
         return size / 4
     }
 
-    private static func handleBash(command: String, eventName: String) -> Data {
+    private static func handleBash(command: String, eventName: String, projectRoot: String?, sessionId: String?) -> Data {
         guard !command.isEmpty else { return passthroughResponse }
+
+        // Phase I: Command replay — check BEFORE passthrough.
+        // If a replayable command was recently run and no files changed, deny with cached result.
+        if let root = projectRoot {
+            if let replayDeny = checkCommandReplay(command: command, projectRoot: root, sessionId: sessionId, eventName: eventName, db: .shared) {
+                return replayDeny
+            }
+        }
 
         // Allowlist: commands that must pass through natively
         if isBashPassthrough(command) {
@@ -145,6 +153,71 @@ public enum HookRouter {
             + "Pass command: \"\(command)\"",
             eventName: eventName
         )
+    }
+
+    /// Check if a command can be replayed from a recent cached result.
+    /// Extracted as internal static for testability — tests pass a temp DB.
+    /// Returns a deny response if replay conditions are met, nil otherwise.
+    static func checkCommandReplay(command: String, projectRoot: String, sessionId: String?, eventName: String, db: SessionDatabase) -> Data? {
+        guard isReplayable(command) else { return nil }
+
+        guard let lastExec = db.lastExecResult(command: command, projectRoot: projectRoot) else { return nil }
+
+        let age = Date().timeIntervalSince(lastExec.timestamp)
+        guard age < 300 else { return nil }
+
+        // Check if any files in the project changed since the last exec.
+        // macOS updates parent directory mtime when any child file changes.
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: projectRoot),
+              let dirMtime = attrs[.modificationDate] as? Date,
+              dirMtime < lastExec.timestamp else { return nil }
+
+        let ageStr = age < 60 ? "\(Int(age))s" : "\(Int(age / 60))m"
+        let preview = lastExec.outputPreview ?? "(no output preview available)"
+
+        // Record the replay intercept event
+        if let sid = sessionId {
+            let estimatedSaved = (lastExec.outputPreview?.utf8.count ?? 500) / 4
+            db.recordTokenEvent(
+                sessionId: sid,
+                paneId: nil,
+                projectRoot: projectRoot,
+                source: "intercept",
+                toolName: "Bash",
+                model: nil,
+                inputTokens: 0,
+                outputTokens: 0,
+                savedTokens: estimatedSaved,
+                costCents: 0,
+                feature: "command_replay",
+                command: command
+            )
+        }
+
+        return blockResponse(
+            "This command was already run \(ageStr) ago and no source files have changed since. "
+            + "Previous result: \(preview). "
+            + "Run it again only if you've made changes since the last run.",
+            eventName: eventName
+        )
+    }
+
+    /// Commands eligible for replay — deterministic, read-only, no side effects.
+    static func isReplayable(_ command: String) -> Bool {
+        let prefixes = [
+            "swift test", "swift build",
+            "npm test", "npm run test", "npx jest", "npx vitest", "npx tsc",
+            "cargo test", "cargo build", "cargo check", "cargo clippy",
+            "go test", "go build", "go vet",
+            "pytest", "python -m pytest", "python -m unittest",
+            "make test", "make build", "make check",
+            "tsc", "tsc --noEmit",
+            "eslint", "ruff", "flake8", "mypy", "pylint", "swiftlint", "rubocop",
+        ]
+        for prefix in prefixes {
+            if command.hasPrefix(prefix) { return true }
+        }
+        return false
     }
 
     private static func handleGrep(pattern: String, eventName: String) -> Data {

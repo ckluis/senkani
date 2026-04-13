@@ -869,6 +869,52 @@ public final class SessionDatabase: @unchecked Sendable {
         }
     }
 
+    /// Return the timestamp and output preview of the most recent exec of a specific command.
+    /// Queries token_events for timing (has project_root) and commands for output_preview.
+    /// Used by HookRouter for command replay.
+    public func lastExecResult(command: String, projectRoot: String) -> (timestamp: Date, outputPreview: String?)? {
+        let normalized = Self.normalizePath(projectRoot) ?? projectRoot
+        return queue.sync {
+            guard let db = db else { return nil }
+
+            // Get timestamp from token_events (has project_root filter)
+            let tsSql = """
+                SELECT MAX(timestamp) FROM token_events
+                WHERE project_root = ? AND tool_name = 'exec' AND source = 'mcp_tool'
+                AND command = ?;
+            """
+            var tsStmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, tsSql, -1, &tsStmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(tsStmt) }
+            sqlite3_bind_text(tsStmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(tsStmt, 2, (command as NSString).utf8String, -1, nil)
+            guard sqlite3_step(tsStmt) == SQLITE_ROW else { return nil }
+            guard sqlite3_column_type(tsStmt, 0) != SQLITE_NULL else { return nil }
+            let ts = sqlite3_column_double(tsStmt, 0)
+            let timestamp = Date(timeIntervalSince1970: ts)
+
+            // Get output_preview from commands table (closest match by command + timestamp)
+            let previewSql = """
+                SELECT output_preview FROM commands
+                WHERE tool_name = 'exec' AND command = ?
+                AND ABS(timestamp - ?) < 2.0
+                ORDER BY timestamp DESC LIMIT 1;
+            """
+            var prevStmt: OpaquePointer?
+            var preview: String?
+            if sqlite3_prepare_v2(db, previewSql, -1, &prevStmt, nil) == SQLITE_OK {
+                defer { sqlite3_finalize(prevStmt) }
+                sqlite3_bind_text(prevStmt, 1, (command as NSString).utf8String, -1, nil)
+                sqlite3_bind_double(prevStmt, 2, ts)
+                if sqlite3_step(prevStmt) == SQLITE_ROW && sqlite3_column_type(prevStmt, 0) != SQLITE_NULL {
+                    preview = String(cString: sqlite3_column_text(prevStmt, 0))
+                }
+            }
+
+            return (timestamp, preview)
+        }
+    }
+
     // MARK: - Diagnostics
 
     /// Dump token_events summary to console for debugging.

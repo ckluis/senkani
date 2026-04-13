@@ -527,11 +527,6 @@ struct HighlightedCodeView: View {
             return []
         }
 
-        guard let queryData = queryString.data(using: .utf8) else {
-            print("[HL] Could not encode query string")
-            return []
-        }
-
         let parser = Parser()
         do { try parser.setLanguage(tsLanguage) } catch {
             print("[HL] Failed to set language: \(error)")
@@ -548,34 +543,46 @@ struct HighlightedCodeView: View {
             return []
         }
 
-        let query: Query?
-        if let q = try? Query(language: tsLanguage, data: queryData) {
-            query = q
-            print("[HL] Query compiled OK for \(languageId)")
-        } else {
-            print("[HL] Query failed, trying stripped version for \(languageId)")
-            let stripped = queryString
-                .components(separatedBy: "\n")
-                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("(#") }
-                .joined(separator: "\n")
-            query = try? Query(language: tsLanguage, data: stripped.data(using: .utf8)!)
-            if query != nil {
-                print("[HL] Stripped query: OK")
-            } else {
-                do {
-                    _ = try Query(language: tsLanguage, data: stripped.data(using: .utf8)!)
-                } catch {
-                    print("[HL] Stripped query FAILED: \(error)")
-                }
-                print("[HL] First 200 chars of stripped query: \(String(stripped.prefix(200)))")
+        // Always strip predicates and comments — they cause compilation failures
+        let cleanedQuery = queryString
+            .components(separatedBy: "\n")
+            .filter { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                return !trimmed.hasPrefix("(#") && !trimmed.hasPrefix("#")
+            }
+            .joined(separator: "\n")
+
+        guard let cleanedData = cleanedQuery.data(using: .utf8) else { return [] }
+
+        if let query = try? Query(language: tsLanguage, data: cleanedData) {
+            print("[HL] Query compiled for \(languageId)")
+            return extractCaptures(query: query, rootNode: rootNode, tree: tree, sourceContent: sourceContent, languageId: languageId)
+        }
+
+        // Fallback: try each line individually, keep only the ones that compile
+        print("[HL] Full query failed for \(languageId), trying line-by-line fallback")
+        let lines = cleanedQuery.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        var workingLines: [String] = []
+        for line in lines {
+            let testQuery = (workingLines + [line]).joined(separator: "\n")
+            if let testData = testQuery.data(using: .utf8),
+               let _ = try? Query(language: tsLanguage, data: testData) {
+                workingLines.append(line)
             }
         }
 
-        guard let query else {
-            print("[HL] No query available")
+        guard !workingLines.isEmpty,
+              let fallbackData = workingLines.joined(separator: "\n").data(using: .utf8),
+              let query = try? Query(language: tsLanguage, data: fallbackData) else {
+            print("[HL] No query lines compile for \(languageId)")
             return []
         }
 
+        print("[HL] \(workingLines.count)/\(lines.count) query lines compile for \(languageId)")
+        return extractCaptures(query: query, rootNode: rootNode, tree: tree, sourceContent: sourceContent, languageId: languageId)
+    }
+
+    private func extractCaptures(query: Query, rootNode: Node, tree: MutableTree, sourceContent: String, languageId: String) -> [CaptureInfo] {
         let cursor = query.execute(node: rootNode, in: tree)
         var captures: [CaptureInfo] = []
 

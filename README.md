@@ -13,7 +13,7 @@ Senkani is two things in one binary: a **multi-pane terminal workspace** (native
 | **Terminal pane** — SwiftTerm, Apple Silicon native | ✅ Live |
 | **Markdown preview pane** — live-rendered from file | ✅ Live |
 | **Browser pane** — WKWebView embedded | ✅ Live |
-| **Code Editor pane** — NSTextView, tree-sitter syntax highlighting (20 languages), symbol navigation (Cmd+click → definition), token intelligence overlays | ✅ Live |
+| **Code Editor pane** — pure SwiftUI, tree-sitter syntax highlighting (22 languages), file tree sidebar, symbol navigation (Cmd+click → definition), token intelligence overlays | ✅ Live |
 | **Analytics pane** — token/cost savings with realtime sparkline | ✅ Live |
 | **Model manager pane** — download/manage local LLMs | ✅ Live |
 | **Savings test pane** — fixture benchmark (80.37x) + live per-feature savings breakdown | ✅ Live |
@@ -25,7 +25,7 @@ Senkani is two things in one binary: a **multi-pane terminal workspace** (native
 | **Filter pipeline** — 24+ command-specific rules, ANSI stripping, dedup | ✅ Live |
 | **Secret redaction** — API keys, AWS tokens, GitHub PATs, Bearer tokens | ✅ Live |
 | **Terse compression** — algorithmic word/phrase minimization | ✅ Live |
-| **Symbol indexer** — 20 languages, tree-sitter AST + regex fallback | ✅ Live |
+| **Symbol indexer** — 22 languages (incl. HTML/CSS), tree-sitter AST + regex fallback | ✅ Live |
 | **Incremental indexing** — re-indexes only changed files | ✅ Live |
 | **Dependency graph** — bidirectional imports, 15+ languages | ✅ Live |
 | **Session database** — SQLite + FTS5, token tracking, cost history | ✅ Live |
@@ -140,9 +140,9 @@ A horizontal canvas of panes. Each pane is a primitive type; you arrange them ho
 
 ## Symbol Indexer
 
-Tree-sitter AST extraction across 20 languages with incremental updates:
+Tree-sitter AST extraction across 22 languages with incremental updates:
 
-**Languages:** Swift, Python, TypeScript/JavaScript, Go, Rust, Java, C, C++, C#, Ruby, PHP, Kotlin, Bash, Lua, Scala, Elixir, Haskell, Zig + regex fallback for everything else.
+**Languages:** Swift, Python, TypeScript/JavaScript, Go, Rust, Java, C, C++, C#, Ruby, PHP, Kotlin, Bash, Lua, Scala, Elixir, Haskell, Zig, HTML, CSS + regex fallback for everything else.
 
 **Dependency graph:** Bidirectional import tracking — "what does X import?" and "what imports X?" — across 15+ languages.
 

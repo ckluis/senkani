@@ -383,8 +383,8 @@ struct HighlightedCodeView: View {
     private let lineHeight: CGFloat = 18
 
     private var lineCount: Int {
-        let allLines = content.components(separatedBy: "\n")
-        return min(max(allLines.count, 1), 2000)
+        let display = content.count > 50_000 ? String(content.prefix(50_000)) : content
+        return max(display.components(separatedBy: "\n").count, 1)
     }
 
     private static let bgColor = Color(red: 0.055, green: 0.055, blue: 0.055)
@@ -453,13 +453,16 @@ struct HighlightedCodeView: View {
     private func buildAttributedContent() {
         print("[HL] buildAttributedContent: \(content.count) chars, filePath=\(filePath)")
 
-        // Cap at 2000 lines to prevent SwiftUI Text rendering failure on large files
+        // Cap at 50,000 characters to prevent SwiftUI layer size crash
+        // (macOS rejects backing layers taller than ~16K points)
         var displayContent = content
-        let allLines = content.components(separatedBy: "\n")
-        if allLines.count > 2000 {
-            displayContent = allLines.prefix(2000).joined(separator: "\n")
-                + "\n\n// ... \(allLines.count - 2000) more lines (file truncated for display)"
-            print("[HL] Truncated from \(allLines.count) to 2000 lines")
+        if displayContent.count > 50_000 {
+            let truncIndex = displayContent.index(displayContent.startIndex, offsetBy: 50_000)
+            displayContent = String(displayContent[..<truncIndex])
+            let totalLines = content.components(separatedBy: "\n").count
+            let shownLines = displayContent.components(separatedBy: "\n").count
+            displayContent += "\n\n// [\(shownLines) of \(totalLines) lines shown — file too large for inline display]"
+            print("[HL] Truncated from \(content.count) to 50000 chars")
         }
 
         // Start with default-styled display content
@@ -495,15 +498,6 @@ struct HighlightedCodeView: View {
         }
 
         print("[HL] Applied \(appliedCount) color ranges")
-
-        // DEBUG: Force-color first 20 characters red to verify AttributedString coloring works
-        if result.characters.count > 20 {
-            let testStart = result.startIndex
-            let testEnd = result.index(testStart, offsetByCharacters: 20)
-            result[testStart..<testEnd].foregroundColor = .red
-            print("🧪 [HL] Force-colored first 20 chars red as test")
-        }
-
         attributedContent = result
     }
 

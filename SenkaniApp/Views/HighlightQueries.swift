@@ -168,7 +168,6 @@ enum HighlightQueries {
     (true) @constant
     (false) @constant
     (null) @constant
-    (nullptr) @constant
     (type_identifier) @type
     (namespace_identifier) @module
     (identifier) @variable
@@ -186,7 +185,7 @@ enum HighlightQueries {
     (real_literal) @number
     (boolean_literal) @constant
     (null_literal) @constant
-    (type_identifier) @type
+    (predefined_type) @type
     (identifier) @variable
     """
 
@@ -220,10 +219,9 @@ enum HighlightQueries {
 
     // MARK: - Kotlin
     static let kotlin = """
-    (comment) @comment
+    (line_comment) @comment
     (multiline_comment) @comment
-    (line_string_literal) @string
-    (multi_line_string_literal) @string
+    (string_literal) @string
     (integer_literal) @number
     (real_literal) @number
     (boolean_literal) @constant
@@ -289,18 +287,15 @@ enum HighlightQueries {
     (float) @number
     (variable) @variable
     (constructor) @type
-    (type_variable) @type
     """
 
     // MARK: - Zig
     static let zig = """
     (comment) @comment
-    (string_literal) @string
-    (char_literal) @string
+    (string) @string
     (integer) @number
     (float) @number
     (identifier) @variable
-    (builtin_type) @type
     """
 
     // MARK: - HTML

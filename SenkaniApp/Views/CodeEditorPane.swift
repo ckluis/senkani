@@ -387,11 +387,11 @@ struct HighlightedCodeView: View {
         return max(display.components(separatedBy: "\n").count, 1)
     }
 
-    private static let bgColor = Color(red: 0.055, green: 0.055, blue: 0.055)
-    private static let gutterBg = Color(red: 0.065, green: 0.065, blue: 0.065)
-    private static let gutterText = Color(red: 0.36, green: 0.39, blue: 0.42)
-    private static let defaultText = Color(red: 0.88, green: 0.88, blue: 0.88)
-    private static let tokenCostColor = Color(red: 0.25, green: 0.69, blue: 0.41)
+    private var bgColor: Color { ThemeEngine.shared.paneBody }
+    private var gutterBg: Color { ThemeEngine.shared.sidebarBackground }
+    private var gutterText: Color { ThemeEngine.shared.textTertiary }
+    private var defaultTextColor: Color { ThemeEngine.shared.textPrimary }
+    private var tokenCostColor: Color { ThemeEngine.shared.ansiGreen }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -402,14 +402,14 @@ struct HighlightedCodeView: View {
                         ForEach(1...lineCount, id: \.self) { num in
                             Text("\(num)")
                                 .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(Self.gutterText)
+                                .foregroundStyle(gutterText)
                                 .frame(height: lineHeight, alignment: .trailing)
                                 .id(num)
                         }
                     }
                     .frame(width: showTokenCosts ? 72 : 40, alignment: .trailing)
                     .padding(.trailing, 8)
-                    .background(Self.gutterBg)
+                    .background(gutterBg)
 
                     // Separator
                     Rectangle()
@@ -428,7 +428,7 @@ struct HighlightedCodeView: View {
                 }
                 .padding(.top, 0)
             }
-            .background(Self.bgColor)
+            .background(bgColor)
             .accentColor(Color(red: 0.2, green: 0.3, blue: 0.5))
             .onChange(of: scrollTarget) { _, target in
                 if let target {
@@ -467,7 +467,7 @@ struct HighlightedCodeView: View {
 
         // Start with default-styled display content
         var result = AttributedString(displayContent)
-        result.foregroundColor = Self.defaultText
+        result.foregroundColor = defaultTextColor
         result.font = .system(size: 13, design: .monospaced)
 
         // Apply syntax highlighting
@@ -568,6 +568,8 @@ struct HighlightedCodeView: View {
             if let testData = testQuery.data(using: .utf8),
                let _ = try? Query(language: tsLanguage, data: testData) {
                 workingLines.append(line)
+            } else {
+                print("[HL] Line failed for \(languageId): \(line.trimmingCharacters(in: .whitespaces))")
             }
         }
 
@@ -607,64 +609,51 @@ struct HighlightedCodeView: View {
 
     // MARK: - Color mapping
 
-    private func swiftUIColor(for captureName: String) -> Color {
-        let name = captureName.hasPrefix("@") ? String(captureName.dropFirst()) : captureName
-        if let color = Self.captureColorMap[name] { return color }
-        if let dot = name.lastIndex(of: ".") {
-            let parent = String(name[name.startIndex..<dot])
-            if let color = Self.captureColorMap[parent] { return color }
-        }
-        return Self.defaultText
+    private var captureColorMap: [String: Color] {
+        let engine = ThemeEngine.shared
+        return [
+            "keyword":      engine.ansiMagenta,
+            "string":       engine.ansiGreen,
+            "comment":      engine.ansiBrightBlack,
+            "function":     engine.ansiBlue,
+            "type":         engine.ansiYellow,
+            "number":       engine.ansiYellow,
+            "variable":     engine.textPrimary,
+            "constant":     engine.ansiCyan,
+            "property":     engine.ansiRed,
+            "tag":          engine.ansiRed,
+            "attribute":    engine.ansiMagenta,
+            "module":       engine.ansiYellow,
+            "namespace":    engine.ansiYellow,
+            "operator":     engine.textSecondary,
+            "punctuation":  engine.textSecondary,
+            "boolean":      engine.ansiCyan,
+            "constructor":  engine.ansiYellow,
+            "label":        engine.ansiBlue,
+            "parameter":    engine.ansiRed,
+            "field":        engine.ansiRed,
+            "character":    engine.ansiGreen,
+            "method":       engine.ansiBlue,
+            "float":        engine.ansiYellow,
+            "include":      engine.ansiMagenta,
+            "import":       engine.ansiMagenta,
+            "conditional":  engine.ansiMagenta,
+            "repeat":       engine.ansiMagenta,
+            "exception":    engine.ansiMagenta,
+            "preproc":      engine.ansiMagenta,
+            "define":       engine.ansiMagenta,
+            "storageclass": engine.ansiMagenta,
+        ]
     }
 
-    private static let captureColorMap: [String: Color] = [
-        "keyword":      Color(red: 0.776, green: 0.471, blue: 0.867),
-        "keyword.return": Color(red: 0.776, green: 0.471, blue: 0.867),
-        "keyword.function": Color(red: 0.776, green: 0.471, blue: 0.867),
-        "keyword.import": Color(red: 0.776, green: 0.471, blue: 0.867),
-        "keyword.operator": Color(red: 0.776, green: 0.471, blue: 0.867),
-        "string":       Color(red: 0.596, green: 0.765, blue: 0.475),
-        "string.special": Color(red: 0.596, green: 0.765, blue: 0.475),
-        "string.escape": Color(red: 0.820, green: 0.604, blue: 0.400),
-        "comment":      Color(red: 0.361, green: 0.388, blue: 0.424),
-        "comment.doc":  Color(red: 0.361, green: 0.388, blue: 0.424),
-        "function":     Color(red: 0.380, green: 0.686, blue: 0.878),
-        "function.builtin": Color(red: 0.380, green: 0.686, blue: 0.878),
-        "function.call": Color(red: 0.380, green: 0.686, blue: 0.878),
-        "function.method": Color(red: 0.380, green: 0.686, blue: 0.878),
-        "method":       Color(red: 0.380, green: 0.686, blue: 0.878),
-        "type":         Color(red: 0.898, green: 0.753, blue: 0.424),
-        "type.builtin": Color(red: 0.898, green: 0.753, blue: 0.424),
-        "type.definition": Color(red: 0.898, green: 0.753, blue: 0.424),
-        "number":       Color(red: 0.820, green: 0.604, blue: 0.400),
-        "float":        Color(red: 0.820, green: 0.604, blue: 0.400),
-        "variable":     Color(red: 0.878, green: 0.376, blue: 0.290),
-        "variable.builtin": Color(red: 0.820, green: 0.604, blue: 0.400),
-        "variable.parameter": Color(red: 0.878, green: 0.376, blue: 0.290),
-        "constant":     Color(red: 0.820, green: 0.604, blue: 0.400),
-        "constant.builtin": Color(red: 0.820, green: 0.604, blue: 0.400),
-        "operator":     Color(red: 0.671, green: 0.698, blue: 0.745),
-        "property":     Color(red: 0.878, green: 0.376, blue: 0.290),
-        "punctuation":  Color(red: 0.671, green: 0.698, blue: 0.745),
-        "punctuation.bracket": Color(red: 0.671, green: 0.698, blue: 0.745),
-        "punctuation.delimiter": Color(red: 0.671, green: 0.698, blue: 0.745),
-        "boolean":      Color(red: 0.820, green: 0.604, blue: 0.400),
-        "constructor":  Color(red: 0.898, green: 0.753, blue: 0.424),
-        "tag":          Color(red: 0.878, green: 0.376, blue: 0.290),
-        "attribute":    Color(red: 0.776, green: 0.471, blue: 0.867),
-        "module":       Color(red: 0.898, green: 0.753, blue: 0.424),
-        "namespace":    Color(red: 0.898, green: 0.753, blue: 0.424),
-        "include":      Color(red: 0.776, green: 0.471, blue: 0.867),
-        "import":       Color(red: 0.776, green: 0.471, blue: 0.867),
-        "conditional":  Color(red: 0.776, green: 0.471, blue: 0.867),
-        "repeat":       Color(red: 0.776, green: 0.471, blue: 0.867),
-        "exception":    Color(red: 0.776, green: 0.471, blue: 0.867),
-        "label":        Color(red: 0.380, green: 0.686, blue: 0.878),
-        "parameter":    Color(red: 0.878, green: 0.376, blue: 0.290),
-        "field":        Color(red: 0.878, green: 0.376, blue: 0.290),
-        "character":    Color(red: 0.596, green: 0.765, blue: 0.475),
-        "preproc":      Color(red: 0.776, green: 0.471, blue: 0.867),
-        "define":       Color(red: 0.776, green: 0.471, blue: 0.867),
-        "storageclass": Color(red: 0.776, green: 0.471, blue: 0.867),
-    ]
+    private func swiftUIColor(for captureName: String) -> Color {
+        let name = captureName.hasPrefix("@") ? String(captureName.dropFirst()) : captureName
+        let map = captureColorMap
+        if let color = map[name] { return color }
+        if let dot = name.lastIndex(of: ".") {
+            let parent = String(name[name.startIndex..<dot])
+            if let color = map[parent] { return color }
+        }
+        return defaultTextColor
+    }
 }

@@ -315,6 +315,7 @@ let package = Package(
                 "Core",
                 "Indexer",
                 "Bench",
+                "MCPServer",
                 .product(name: "Testing", package: "swift-testing"),
             ],
             path: "Tests/SenkaniTests"

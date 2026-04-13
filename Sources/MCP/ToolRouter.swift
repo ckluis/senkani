@@ -162,13 +162,14 @@ enum ToolRouter {
         [
             Tool(
                 name: "read",
-                description: "Read a file with compression (ANSI strip, blank collapse, secret detection) and session caching. Re-reads of unchanged files return instantly. 50-99% token savings.",
+                description: "Read a file. Returns a compact outline (symbols + line numbers) by default — pass full: true to get the complete file content. Outlines are ~90% smaller than full reads. Re-reads of unchanged files return instantly from cache.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "path": .object(["type": .string("string"), "description": .string("File path (absolute or relative to project root)")]),
-                        "offset": .object(["type": .string("integer"), "description": .string("Start line number (1-based)")]),
-                        "limit": .object(["type": .string("integer"), "description": .string("Maximum lines to read")]),
+                        "full": .object(["type": .string("boolean"), "description": .string("Return full file content instead of outline (default: false)")]),
+                        "offset": .object(["type": .string("integer"), "description": .string("Start line number (1-based). Implies full read.")]),
+                        "limit": .object(["type": .string("integer"), "description": .string("Maximum lines to read. Implies full read.")]),
                     ]),
                     "required": .array([.string("path")]),
                 ]),

@@ -1,0 +1,16 @@
+/* This is a comment */
+body {
+    background-color: #f5f1e8;
+    color: #1a1a1a;
+    font-size: 16px;
+}
+
+.title {
+    font-weight: 700;
+    margin: 0 0 20px 0;
+}
+
+#greeting {
+    color: rgba(26, 26, 26, 0.14);
+    padding: 10px;
+}

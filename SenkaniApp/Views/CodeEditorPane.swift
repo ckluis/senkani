@@ -2,12 +2,20 @@ import SwiftUI
 import AppKit
 import SwiftTreeSitter
 import Indexer
+import Core
 
 struct CodeEditorPane: View {
     @Bindable var pane: PaneModel
     @State private var fileContent: String = ""
     @State private var filePath: String = ""
     @State private var isModified: Bool = false
+    @State private var showTokenCosts: Bool = false
+
+    // Cached intelligence data (refreshed on file open, not every render)
+    @State private var cachedDepCount: Int?
+    @State private var cachedLastAccess: String?
+    @State private var cachedSymbols: [IndexEntry] = []
+    @State private var cachedDepGraph: DependencyGraph?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -48,6 +56,22 @@ struct CodeEditorPane: View {
                         .controlSize(.small)
                         .keyboardShortcut("s", modifiers: .command)
                 }
+
+                Spacer()
+
+                // File intelligence badges (only when a file is loaded)
+                if !filePath.isEmpty && !fileContent.isEmpty {
+                    fileIntelligenceBadges
+                }
+
+                // Gutter token cost toggle
+                Button(action: { showTokenCosts.toggle() }) {
+                    Image(systemName: showTokenCosts ? "dollarsign.circle.fill" : "dollarsign.circle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(showTokenCosts ? SenkaniTheme.savingsGreen : SenkaniTheme.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .help(showTokenCosts ? "Hide token cost annotations" : "Show token cost per function")
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -75,12 +99,67 @@ struct CodeEditorPane: View {
                     filePath: filePath,
                     isModified: $isModified,
                     projectRoot: pane.workingDirectory,
+                    showTokenCosts: showTokenCosts,
+                    symbolEntries: cachedSymbols,
+                    depGraph: cachedDepGraph,
                     onSave: { saveFile() },
                     onNavigate: { entry in navigateToSymbol(entry) }
                 )
             }
         }
     }
+
+    // MARK: - File intelligence badges
+
+    @ViewBuilder
+    private var fileIntelligenceBadges: some View {
+        HStack(spacing: 10) {
+            // Token cost estimate for the whole file
+            let tokens = fileContent.utf8.count / 4
+            HStack(spacing: 3) {
+                Image(systemName: "number")
+                    .font(.system(size: 8))
+                    .foregroundStyle(SenkaniTheme.textTertiary)
+                Text(formatTokenCount(tokens))
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(SenkaniTheme.textTertiary)
+            }
+            .help("Estimated token cost to read this file: ~\(tokens) tokens")
+
+            // Dependency count
+            if let depCount = cachedDepCount {
+                HStack(spacing: 3) {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 8))
+                        .foregroundStyle(SenkaniTheme.textTertiary)
+                    Text("\(depCount)")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(SenkaniTheme.textTertiary)
+                }
+                .help("\(depCount) file(s) import this module")
+            }
+
+            // Last AI access time
+            if let lastAccess = cachedLastAccess {
+                HStack(spacing: 3) {
+                    Circle()
+                        .fill(SenkaniTheme.savingsGreen.opacity(0.6))
+                        .frame(width: 5, height: 5)
+                    Text(lastAccess)
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(SenkaniTheme.textTertiary)
+                }
+                .help("Last accessed by senkani MCP tools")
+            }
+        }
+    }
+
+    private func formatTokenCount(_ tokens: Int) -> String {
+        if tokens >= 1000 { return String(format: "%.1fKt", Double(tokens) / 1000) }
+        return "~\(tokens)t"
+    }
+
+    // MARK: - File operations
 
     private func openFile() {
         guard !filePath.isEmpty else { return }
@@ -92,6 +171,7 @@ struct CodeEditorPane: View {
         fileContent = content
         isModified = false
         pane.previewFilePath = path
+        refreshIntelligence()
     }
 
     private func openFileDialog() {
@@ -126,6 +206,7 @@ struct CodeEditorPane: View {
         fileContent = content
         isModified = false
         pane.previewFilePath = absPath
+        refreshIntelligence()
 
         // Post notification to scroll to the target line
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -136,6 +217,47 @@ struct CodeEditorPane: View {
             )
         }
     }
+
+    // MARK: - Async intelligence refresh
+
+    private func refreshIntelligence() {
+        let projectRoot = pane.workingDirectory
+        let currentPath = filePath
+
+        Task.detached {
+            let graph = IndexEngine.buildDependencyGraph(projectRoot: projectRoot)
+            let index = IndexStore.load(projectRoot: projectRoot)
+
+            let relativePath = currentPath.hasPrefix(projectRoot + "/")
+                ? String(currentPath.dropFirst(projectRoot.count + 1))
+                : (currentPath as NSString).lastPathComponent
+
+            let symbols = index?.search(file: relativePath).sorted { $0.startLine < $1.startLine } ?? []
+
+            // Module name for dependency lookup — use the file's basename without extension
+            let moduleName = ((currentPath as NSString).lastPathComponent as NSString).deletingPathExtension
+            let dependents = graph.dependents(of: moduleName)
+            let depCount = dependents.isEmpty ? nil : dependents.count
+
+            // Last AI access
+            let db = SessionDatabase.shared
+            let lastRead = db.lastReadTimestamp(filePath: currentPath, projectRoot: projectRoot)
+            var accessLabel: String?
+            if let lastRead = lastRead {
+                let age = Date().timeIntervalSince(lastRead)
+                if age < 60 { accessLabel = "\(Int(age))s ago" }
+                else if age < 3600 { accessLabel = "\(Int(age / 60))m ago" }
+                else if age < 86400 { accessLabel = "\(Int(age / 3600))h ago" }
+            }
+
+            await MainActor.run {
+                cachedDepGraph = graph
+                cachedSymbols = symbols
+                cachedDepCount = depCount
+                cachedLastAccess = accessLabel
+            }
+        }
+    }
 }
 
 // MARK: - Notification for scroll-to-line
@@ -144,10 +266,11 @@ extension Notification.Name {
     static let codeEditorScrollToLine = Notification.Name("codeEditorScrollToLine")
 }
 
-// MARK: - Clickable Text View (Cmd+click support)
+// MARK: - Clickable Text View (Cmd+click + import tooltips)
 
 final class ClickableTextView: NSTextView {
     var onSymbolClick: ((String) -> Void)?
+    var depGraph: DependencyGraph?
 
     override func mouseDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command) {
@@ -159,19 +282,6 @@ final class ClickableTextView: NSTextView {
             }
         }
         super.mouseDown(with: event)
-    }
-
-    override func mouseMoved(with event: NSEvent) {
-        if event.modifierFlags.contains(.command) {
-            let point = convert(event.locationInWindow, from: nil)
-            let charIndex = characterIndexForInsertion(at: point)
-            if wordAt(index: charIndex) != nil {
-                NSCursor.pointingHand.set()
-                return
-            }
-        }
-        NSCursor.iBeam.set()
-        super.mouseMoved(with: event)
     }
 
     override func flagsChanged(with event: NSEvent) {
@@ -193,13 +303,64 @@ final class ClickableTextView: NSTextView {
         addTrackingArea(area)
     }
 
-    private func wordAt(index: Int) -> String? {
+    // MARK: - Import line tooltip
+
+    func importTooltip(at point: NSPoint) -> String? {
+        let charIndex = characterIndexForInsertion(at: point)
+        let nsString = string as NSString
+        guard charIndex >= 0, charIndex < nsString.length else { return nil }
+
+        let lineRange = nsString.lineRange(for: NSRange(location: charIndex, length: 0))
+        let line = nsString.substring(with: lineRange).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let importPatterns = ["import ", "from ", "require(", "use ", "#include ", "using "]
+        guard importPatterns.contains(where: { line.hasPrefix($0) || line.contains($0) }) else {
+            return nil
+        }
+
+        let words = line.components(separatedBy: .whitespaces)
+            .flatMap { $0.components(separatedBy: CharacterSet(charactersIn: "\"'();{}<>")) }
+            .filter { !$0.isEmpty && !["import", "from", "use", "#include", "using", "require", "@testable"].contains($0) }
+        guard let moduleName = words.last, !moduleName.isEmpty else { return nil }
+
+        guard let graph = depGraph else { return nil }
+        let dependents = graph.dependents(of: moduleName)
+        guard !dependents.isEmpty else { return nil }
+
+        let preview = dependents.prefix(5).joined(separator: "\n  ")
+        let more = dependents.count > 5 ? "\n  ... and \(dependents.count - 5) more" : ""
+        return "\(dependents.count) file(s) import \(moduleName):\n  \(preview)\(more)"
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+
+        // Show import tooltip
+        if let tooltip = importTooltip(at: point) {
+            self.toolTip = tooltip
+        } else {
+            self.toolTip = nil
+        }
+
+        // Cmd+hover cursor
+        if event.modifierFlags.contains(.command) {
+            let charIndex = characterIndexForInsertion(at: point)
+            if wordAt(index: charIndex) != nil {
+                NSCursor.pointingHand.set()
+                return
+            }
+        }
+        NSCursor.iBeam.set()
+    }
+
+    // MARK: - Word extraction
+
+    func wordAt(index: Int) -> String? {
         let str = string as NSString
         guard index >= 0, index < str.length else { return nil }
         let range = str.rangeOfComposedCharacterSequence(at: index)
         guard range.length > 0 else { return nil }
 
-        // Expand to word boundary (identifier chars)
         var start = index
         while start > 0 {
             let c = str.character(at: start - 1)
@@ -227,6 +388,9 @@ struct HighlightedCodeView: NSViewRepresentable {
     let filePath: String
     @Binding var isModified: Bool
     let projectRoot: String
+    let showTokenCosts: Bool
+    let symbolEntries: [IndexEntry]
+    let depGraph: DependencyGraph?
     let onSave: () -> Void
     let onNavigate: (IndexEntry) -> Void
 
@@ -260,10 +424,14 @@ struct HighlightedCodeView: NSViewRepresentable {
             context.coordinator.lookupSymbol(symbolName)
         }
 
+        textView.depGraph = depGraph
+
         // Line numbers
         scrollView.hasVerticalRuler = true
         scrollView.rulersVisible = true
         let ruler = LineNumberRulerView(textView: textView)
+        ruler.showTokenCosts = showTokenCosts
+        ruler.symbolEntries = symbolEntries
         scrollView.verticalRulerView = ruler
 
         scrollView.drawsBackground = true
@@ -286,7 +454,19 @@ struct HighlightedCodeView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? ClickableTextView else { return }
-        // Only update if content changed externally (not from editing)
+
+        // Update dependency graph for tooltips
+        textView.depGraph = depGraph
+
+        // Update ruler state
+        if let ruler = scrollView.verticalRulerView as? LineNumberRulerView {
+            ruler.showTokenCosts = showTokenCosts
+            ruler.symbolEntries = symbolEntries
+            ruler.ruleThickness = showTokenCosts ? 64 : 40
+            ruler.needsDisplay = true
+        }
+
+        // Only update text if content changed externally (not from editing)
         if !context.coordinator.isEditing && textView.string != content {
             context.coordinator.suppressTextDidChange = true
             applyHighlighting(to: textView)
@@ -300,7 +480,7 @@ struct HighlightedCodeView: NSViewRepresentable {
     }
 
     /// Parse with tree-sitter and build an NSAttributedString with syntax colors.
-    private func buildHighlightedString() -> NSAttributedString {
+    func buildHighlightedString() -> NSAttributedString {
         let defaultAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
             .foregroundColor: defaultTextColor,
@@ -324,7 +504,6 @@ struct HighlightedCodeView: NSViewRepresentable {
         guard let tree = parser.parse(content) else { return result }
         guard let rootNode = tree.rootNode else { return result }
 
-        // Try the full query first; if it fails (unsupported predicates), strip predicates and retry
         let query: Query
         if let q = try? Query(language: tsLanguage, data: queryData) {
             query = q
@@ -399,7 +578,6 @@ struct HighlightedCodeView: NSViewRepresentable {
             let highlighted = parent.buildHighlightedString()
             textView.textStorage?.setAttributedString(highlighted)
 
-            // Restore selection and scroll position
             textView.selectedRanges = selectedRanges
             if let scrollPos = scrollPos {
                 textView.enclosingScrollView?.contentView.scroll(to: scrollPos)
@@ -409,7 +587,6 @@ struct HighlightedCodeView: NSViewRepresentable {
         }
 
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            // Cmd+S save
             if commandSelector == NSSelectorFromString("saveDocument:") {
                 parent.onSave()
                 return true
@@ -442,12 +619,11 @@ struct HighlightedCodeView: NSViewRepresentable {
     }
 }
 
-// MARK: - Scrollable text view factory override
+// MARK: - Scrollable text view factory
 
 extension ClickableTextView {
     override class var isCompatibleWithResponsiveScrolling: Bool { true }
 
-    /// Factory to create a scrollable ClickableTextView (mirrors NSTextView.scrollableTextView()).
     static func makeScrollableTextView() -> NSScrollView {
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
@@ -482,11 +658,10 @@ private let bgColor = NSColor(red: 0.055, green: 0.055, blue: 0.055, alpha: 1.0)
 private let defaultTextColor = NSColor(red: 0.878, green: 0.878, blue: 0.878, alpha: 1.0)
 private let gutterBgColor = NSColor(red: 0.065, green: 0.065, blue: 0.065, alpha: 1.0)
 private let gutterTextColor = NSColor(red: 0.361, green: 0.388, blue: 0.424, alpha: 1.0)
+private let tokenCostColor = NSColor(red: 0.286, green: 0.714, blue: 0.529, alpha: 0.5)
 
-/// One Dark inspired palette. Looks up by exact name, then falls back to parent scope.
 private func captureColor(for name: String) -> NSColor {
     if let color = captureColors[name] { return color }
-    // Fall back to parent scope: "keyword.return" → "keyword"
     if let dot = name.lastIndex(of: ".") {
         let parent = String(name[name.startIndex..<dot])
         if let color = captureColors[parent] { return color }
@@ -558,10 +733,12 @@ private let captureColors: [String: NSColor] = [
     "preproc": purple,
 ]
 
-// MARK: - Line Number Ruler
+// MARK: - Line Number Ruler (with optional token cost annotations)
 
 final class LineNumberRulerView: NSRulerView {
     private weak var textView: NSTextView?
+    var showTokenCosts: Bool = false
+    var symbolEntries: [IndexEntry] = []
 
     init(textView: NSTextView) {
         self.textView = textView
@@ -598,10 +775,26 @@ final class LineNumberRulerView: NSRulerView {
         let visibleCharRange = layoutManager.characterRange(forGlyphRange: visibleGlyphRange, actualGlyphRange: nil)
 
         let string = textView.string as NSString
-        let attrs: [NSAttributedString.Key: Any] = [
+        let lineNumAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular),
             .foregroundColor: gutterTextColor,
         ]
+
+        let costAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 8, weight: .regular),
+            .foregroundColor: tokenCostColor,
+        ]
+
+        // Build a lookup for symbol start lines when token costs are shown
+        let symbolStartLines: [Int: IndexEntry]
+        if showTokenCosts {
+            symbolStartLines = Dictionary(symbolEntries.map { ($0.startLine, $0) }, uniquingKeysWith: { first, _ in first })
+        } else {
+            symbolStartLines = [:]
+        }
+
+        // Line number column width (for positioning)
+        let lineNumColumnWidth: CGFloat = showTokenCosts ? 36 : ruleThickness
 
         // Count lines before visible range
         var lineNumber = 1
@@ -619,13 +812,37 @@ final class LineNumberRulerView: NSRulerView {
             lineRect.origin.y -= visibleRect.origin.y
             lineRect.origin.y += textView.textContainerInset.height
 
+            // Draw line number
             let label = "\(lineNumber)" as NSString
-            let labelSize = label.size(withAttributes: attrs)
+            let labelSize = label.size(withAttributes: lineNumAttrs)
             let drawPoint = NSPoint(
-                x: ruleThickness - labelSize.width - 6,
+                x: lineNumColumnWidth - labelSize.width - 6,
                 y: lineRect.origin.y + (lineRect.height - labelSize.height) / 2
             )
-            label.draw(at: drawPoint, withAttributes: attrs)
+            label.draw(at: drawPoint, withAttributes: lineNumAttrs)
+
+            // Draw token cost annotation if this line starts a symbol
+            if showTokenCosts, let symbol = symbolStartLines[lineNumber] {
+                let startLine = symbol.startLine
+                let endLine = symbol.endLine ?? (startLine + 10)
+                let lineCount = max(1, endLine - startLine)
+                let estimatedTokens = lineCount * 10
+
+                let costLabel: String
+                if estimatedTokens >= 1000 {
+                    costLabel = String(format: "%.1fK", Double(estimatedTokens) / 1000)
+                } else {
+                    costLabel = "~\(estimatedTokens)"
+                }
+
+                let costStr = costLabel as NSString
+                let costSize = costStr.size(withAttributes: costAttrs)
+                let costPoint = NSPoint(
+                    x: ruleThickness - costSize.width - 4,
+                    y: lineRect.origin.y + (lineRect.height - costSize.height) / 2
+                )
+                costStr.draw(at: costPoint, withAttributes: costAttrs)
+            }
 
             lineNumber += 1
             charIndex = NSMaxRange(lineRange)

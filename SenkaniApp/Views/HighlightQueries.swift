@@ -1,4 +1,4 @@
-/// Tree-sitter highlight queries for all 20 vendored languages.
+/// Tree-sitter highlight queries for all 22 vendored languages.
 /// Each query is sourced from the grammar's upstream queries/highlights.scm.
 /// Backslashes are escaped for Swift multiline string literals.
 enum HighlightQueries {
@@ -24,6 +24,8 @@ enum HighlightQueries {
         case "elixir":     return elixir
         case "haskell":    return haskell
         case "zig":        return zig
+        case "html":       return html
+        case "css":        return css
         default:           return nil
         }
     }
@@ -3573,5 +3575,99 @@ enum HighlightQueries {
   "override"
   "satisfies"
 ] @keyword
+"""
+
+    // MARK: - HTML
+
+    static let html = """
+(tag_name) @tag
+(erroneous_end_tag_name) @tag
+(doctype) @constant
+(attribute_name) @attribute
+(attribute_value) @string
+(comment) @comment
+
+[
+  "<"
+  ">"
+  "</"
+  "/>"
+] @punctuation.bracket
+"""
+
+    // MARK: - CSS
+
+    static let css = """
+(comment) @comment
+
+(tag_name) @tag
+(nesting_selector) @tag
+(universal_selector) @tag
+
+"~" @operator
+">" @operator
+"+" @operator
+"-" @operator
+"*" @operator
+"/" @operator
+"=" @operator
+"^=" @operator
+"|=" @operator
+"~=" @operator
+"$=" @operator
+"*=" @operator
+
+"and" @operator
+"or" @operator
+"not" @operator
+"only" @operator
+
+(attribute_selector (plain_value) @string)
+
+(class_name) @property
+(id_name) @property
+(namespace_name) @property
+(property_name) @property
+(feature_name) @property
+
+(pseudo_element_selector (tag_name) @attribute)
+(pseudo_class_selector (class_name) @attribute)
+(attribute_name) @attribute
+
+(function_name) @function
+
+"@media" @keyword
+"@import" @keyword
+"@charset" @keyword
+"@namespace" @keyword
+"@supports" @keyword
+"@keyframes" @keyword
+(at_keyword) @keyword
+(to) @keyword
+(from) @keyword
+(important) @keyword
+
+(string_value) @string
+(color_value) @string.special
+
+(integer_value) @number
+(float_value) @number
+(unit) @type
+
+[
+  "#"
+  ","
+  "."
+  ":"
+  "::"
+  ";"
+] @punctuation.delimiter
+
+[
+  "{"
+  ")"
+  "("
+  "}"
+] @punctuation.bracket
 """
 }

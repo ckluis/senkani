@@ -13,6 +13,7 @@ Senkani is two things in one binary: a **multi-pane terminal workspace** (native
 | **Terminal pane** — SwiftTerm, Apple Silicon native | ✅ Live |
 | **Markdown preview pane** — live-rendered from file | ✅ Live |
 | **Browser pane** — WKWebView embedded | ✅ Live |
+| **Code Editor pane** — NSTextView, tree-sitter syntax highlighting (20 languages), symbol navigation (Cmd+click → definition), token intelligence overlays | ✅ Live |
 | **Analytics pane** — token/cost savings with realtime sparkline | ✅ Live |
 | **Model manager pane** — download/manage local LLMs | ✅ Live |
 | **Savings test pane** — fixture benchmark (80.37x) + live per-feature savings breakdown | ✅ Live |
@@ -33,20 +34,19 @@ Senkani is two things in one binary: a **multi-pane terminal workspace** (native
 | **Local embeddings** — MLX, no API cost | ✅ Live |
 | **CLI** — 13 commands: exec, search, bench, doctor, grammars, … | ✅ Live |
 | **Benchmarking suite** — filter, indexer, cache, terse, with reporters | ✅ Live |
-| IDE pane (LSP, tree-sitter editor) | 🔄 Planned |
-| Knowledge base pane (semantic search UI) | 🔄 Planned |
+| **Knowledge base pane** — project knowledge entities, freshness indicators, decision records | ✅ Live |
+| IDE pane (LSP completions, inline diagnostics, multi-cursor) | 🔄 Planned |
 | Agent runner pane (spawn, observe, interrupt) | 🔄 Planned |
 | Workflow builder (pipeline graph UI) | 🔄 Planned |
 | Multi-repo git view | 🔄 Planned |
 | Command palette (⌘K) | 🔄 Planned |
 | SSH / Mosh pane | 🔄 Planned |
-| **Session continuity** — compressed brief of last session injected at session open, eliminating re-orientation turns | 🔄 Planned |
+| **Session continuity** — session context brief injected at session open, agent knows where it left off without re-reading files | 🔄 Planned |
 | **Prompt injection detection** — scan MCP tool responses for embedded attack strings before they reach Claude | 🔄 Planned |
 | **Smart first-read selection** — outline-first reads return symbol structure by default, full content on demand | ✅ Live |
 | **`senkani_watch` tool** — FSEvents ring buffer exposed as MCP tool; eliminates re-read polling after builds/edits | 🔄 Planned |
 | **`senkani_exec` background mode** — detach long-running builds/servers, poll stdout, kill on demand; lifts 30s timeout | 🔄 Planned |
-| **Session continuity** — 170-token AAAK wake-up brief injected at session open, eliminating re-orientation turns | 🔄 Planned |
-| **Layer 3 command replay** — hook detects same Bash command with no relevant file changes, returns cached output | 🔄 Planned |
+| **Layer 3 command replay** — hook detects repeated Bash commands with no file changes, denies and re-uses prior output | ✅ Live |
 
 ---
 
@@ -96,7 +96,7 @@ senkani doctor
 | `senkani_parse` | AST dump via tree-sitter | — |
 | `senkani_embed` | Text embeddings on Apple Silicon (no API cost) | $0/call |
 | `senkani_vision` | Vision model on Apple Silicon (no API cost) | $0/call |
-| `senkani_exec` | Shell commands with per-command filter rules applied | 60–90% |
+| `senkani_pane` | Control workspace panes — open, close, focus, resize | — |
 | `senkani_session` | View stats, toggle features, manage panes | — |
 
 **Feature toggles** — all on by default, configurable per-pane or globally:
@@ -119,20 +119,21 @@ A horizontal canvas of panes. Each pane is a primitive type; you arrange them ho
 **Pane types available today:**
 
 - **Terminal** — SwiftTerm, Apple Silicon native, sub-3ms render, full color/ligature support
-- **Markdown Preview** — live render from file, updates on save
+- **Code Editor** — tree-sitter syntax highlighting (20 languages), symbol navigation (Cmd+click → definition), token intelligence overlays
 - **Browser** — WKWebView embedded, localhost or any URL
+- **Markdown Preview** — live render from file, updates on save
 - **Analytics** — token/cost savings per session with sparkline charts
 - **Model Manager** — download, verify, and delete local LLMs (Gemma, MiniLM)
 - **Savings Test** — run the benchmark suite from the UI
 - **Agent Timeline** — timeline of agent tool calls and decisions
+- **Knowledge Base** — project knowledge entities, freshness indicators, decision records
 - **Diff Viewer** — side-by-side diff
 - **Log Viewer** — searchable log output
-- **Scratchpad** — rich text notes
+- **Scratchpad** — auto-saving markdown notepad
 
 **Pane types coming:**
 
-- IDE (LSP completions, tree-sitter highlighting, multi-cursor)
-- Knowledge Base (semantic search across code + notes)
+- IDE (LSP completions, inline diagnostics, multi-cursor)
 - Agent Runner (spawn, observe, interrupt, compose agents)
 
 ---

@@ -173,6 +173,20 @@ public enum GrammarManifest {
             vendoredDate: "2026-04-11",
             targetName: "TreeSitterZigParser"
         ),
+        "html": GrammarInfo(
+            language: "html",
+            version: "0.23.2",
+            repo: "tree-sitter/tree-sitter-html",
+            vendoredDate: "2026-04-13",
+            targetName: "TreeSitterHtmlParser"
+        ),
+        "css": GrammarInfo(
+            language: "css",
+            version: "0.25.0",
+            repo: "tree-sitter/tree-sitter-css",
+            vendoredDate: "2026-04-13",
+            targetName: "TreeSitterCssParser"
+        ),
     ]
 
     /// Sorted list of all grammar infos for display.

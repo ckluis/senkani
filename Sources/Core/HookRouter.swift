@@ -37,7 +37,7 @@ public enum HookRouter {
         }
 
         // Budget enforcement on the hook path
-        if let root = projectRoot {
+        if projectRoot != nil {
             let budget = BudgetConfig.load()
             if budget.dailyLimitCents != nil || budget.weeklyLimitCents != nil {
                 let todayCents = SessionDatabase.shared.costForToday()

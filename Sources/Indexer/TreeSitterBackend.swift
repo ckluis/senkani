@@ -20,6 +20,8 @@ import TreeSitterScalaParser
 import TreeSitterElixirParser
 import TreeSitterHaskellParser
 import TreeSitterZigParser
+import TreeSitterHtmlParser
+import TreeSitterCssParser
 
 /// AST-based indexer using tree-sitter for supported languages.
 /// Provides accurate symbol extraction with proper container tracking
@@ -27,7 +29,7 @@ import TreeSitterZigParser
 public enum TreeSitterBackend {
 
     /// Languages with vendored tree-sitter grammars.
-    public static let supportedLanguages: Set<String> = ["swift", "python", "typescript", "tsx", "javascript", "go", "rust", "java", "c", "cpp", "csharp", "ruby", "php", "kotlin", "bash", "lua", "scala", "elixir", "haskell", "zig"]
+    public static let supportedLanguages: Set<String> = ["swift", "python", "typescript", "tsx", "javascript", "go", "rust", "java", "c", "cpp", "csharp", "ruby", "php", "kotlin", "bash", "lua", "scala", "elixir", "haskell", "zig", "html", "css"]
 
     /// Whether tree-sitter supports the given language.
     public static func supports(_ language: String) -> Bool {
@@ -58,6 +60,8 @@ public enum TreeSitterBackend {
         case "elixir":     return Language(language: tree_sitter_elixir())
         case "haskell":    return Language(language: tree_sitter_haskell())
         case "zig":        return Language(language: tree_sitter_zig())
+        case "html":       return Language(language: tree_sitter_html())
+        case "css":        return Language(language: tree_sitter_css())
         default:           return nil
         }
     }
@@ -123,6 +127,10 @@ public enum TreeSitterBackend {
             tsLanguage = Language(language: tree_sitter_haskell())
         case "zig":
             tsLanguage = Language(language: tree_sitter_zig())
+        case "html":
+            tsLanguage = Language(language: tree_sitter_html())
+        case "css":
+            tsLanguage = Language(language: tree_sitter_css())
         default:
             return []
         }

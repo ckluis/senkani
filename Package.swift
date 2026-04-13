@@ -208,6 +208,24 @@ let package = Package(
             cSettings: [.headerSearchPath("."), .headerSearchPath("include")]
         ),
         .target(
+            name: "TreeSitterHtmlParser",
+            dependencies: [],
+            path: "Sources/TreeSitterHtmlParser",
+            exclude: ["VERSION"],
+            sources: ["parser.c", "scanner.c"],
+            publicHeadersPath: "include",
+            cSettings: [.headerSearchPath("."), .headerSearchPath("include")]
+        ),
+        .target(
+            name: "TreeSitterCssParser",
+            dependencies: [],
+            path: "Sources/TreeSitterCssParser",
+            exclude: ["VERSION"],
+            sources: ["parser.c", "scanner.c"],
+            publicHeadersPath: "include",
+            cSettings: [.headerSearchPath("."), .headerSearchPath("include")]
+        ),
+        .target(
             name: "Indexer",
             dependencies: [
                 .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
@@ -231,6 +249,8 @@ let package = Package(
                 "TreeSitterElixirParser",
                 "TreeSitterHaskellParser",
                 "TreeSitterZigParser",
+                "TreeSitterHtmlParser",
+                "TreeSitterCssParser",
             ],
             path: "Sources/Indexer"
         ),
@@ -306,7 +326,7 @@ let package = Package(
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
             ],
             path: "SenkaniApp",
-            exclude: ["SenkaniApp.xcodeproj", "Info.plist", "Senkani.entitlements"],
+            exclude: ["Info.plist", "Senkani.entitlements"],
             resources: [.copy("Themes"), .process("Assets.xcassets")]
         ),
         .testTarget(

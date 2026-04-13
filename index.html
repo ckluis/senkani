@@ -698,12 +698,32 @@
     margin-bottom: 24px;
   }
 
+  /* ---------- Pane preview grid ---------- */
+  .pane-grid-preview {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    max-width: 1100px;
+    margin: 48px 0 0 0;
+  }
+
+  /* ---------- Scenario | Before | After grid ---------- */
+  .scenario-grid {
+    display: grid;
+    grid-template-columns: 200px 1fr 1fr;
+    background: var(--app-bg);
+    gap: 1px;
+  }
+
   /* ---------- Responsive ---------- */
   @media (max-width: 1100px) {
     .canvas { grid-template-columns: 1fr 1fr; }
     .canvas .pane:nth-child(3) { display: none; }
     .tools-head, .tool-row { grid-template-columns: 180px 1fr 80px; }
     .tools-head > *:last-child, .tool-row > *:last-child { display: none; }
+    .pane-grid-preview { grid-template-columns: repeat(2, 1fr); }
+    .scenario-grid { grid-template-columns: 1fr 1fr; }
+    .scenario-grid > *:first-child { display: none; }
   }
   @media (max-width: 900px) {
     :root { --gutter: 24px; --measure: 100%; }
@@ -711,7 +731,8 @@
     .app-body { grid-template-columns: 1fr; min-height: 0; }
     .app-sidebar { display: none; }
     .canvas { grid-template-columns: 1fr; }
-    .stats, .feature-grid, .mech-grid, .cli-grid { grid-template-columns: 1fr; }
+    .stats, .feature-grid, .mech-grid, .cli-grid, .pane-grid-preview { grid-template-columns: 1fr; }
+    .scenario-grid { grid-template-columns: 1fr; }
     footer .ft { font-size: 56px; }
     .hero { padding: 72px var(--gutter) 56px; }
     .tools-head, .tool-row { grid-template-columns: 160px 1fr; }
@@ -976,7 +997,14 @@
         <div class="tb-title">senkani_exec · filter pipeline</div>
         <div class="tb-spacer"></div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;background:var(--app-bg);gap:1px;">
+      <div class="scenario-grid">
+        <div style="padding:16px 18px;background:var(--app-panel);">
+          <div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--app-dim);margin-bottom:12px;font-family:var(--font-body);">Scenario</div>
+          <div style="font-family:var(--font-body);font-size:12.5px;line-height:1.65;color:var(--app-mute);">
+            <div style="color:var(--app-text);margin-bottom:8px;">Agent checks if dependencies installed correctly.</div>
+            <div>Runs <code style="font-family:var(--font-code);color:var(--accent);">npm install</code> expecting a one-line confirmation. Without Senkani, 428 lines of ANSI noise reach the model.</div>
+          </div>
+        </div>
         <div style="padding:16px 18px;background:var(--app-panel);">
           <div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--app-dim);margin-bottom:12px;font-family:var(--font-body);">Raw output · npm install</div>
           <div style="font-family:var(--font-code);font-size:11px;line-height:1.6;color:var(--app-mute);">
@@ -1512,7 +1540,286 @@
   </div>
 </section>
 
-<!-- ========== 14. CLI COMMANDS ========== -->
+<!-- ========== 14. PANE PREVIEWS ========== -->
+<section>
+  <div class="measure">
+    <div class="overline">The workspace</div>
+    <h2>15 pane types.<br>One <span class="accent">canvas.</span></h2>
+    <p class="body">Each pane is a first-class primitive with its own accent color, FCSIT feature toggles, and layout persistence. Arrange any combination per project — terminal next to analytics, code editor next to diff viewer, browser next to notes.</p>
+  </div>
+  <div class="indent">
+    <div class="pane-grid-preview">
+
+      <!-- Terminal -->
+      <div class="pane inactive">
+        <div class="pane-accent" style="background:var(--app-green);"></div>
+        <div class="pane-header">
+          <div class="pane-dot running"></div>
+          <span class="pane-title">Terminal</span>
+          <div class="pane-spacer"></div>
+          <div class="fcsit">
+            <div class="fcsit-btn f-on">F</div><div class="fcsit-btn c-on">C</div>
+            <div class="fcsit-btn s-on">S</div><div class="fcsit-btn i-on">I</div><div class="fcsit-btn t-on">T</div>
+          </div>
+        </div>
+        <div class="pane-sep"></div>
+        <div class="pane-body" style="min-height:110px;font-size:11.5px;">
+          <div class="term-line"><span class="term-prompt">chris</span><span class="term-at">@</span><span class="term-dir">acme-api</span> <span class="term-cmd">claude</span></div>
+          <div class="term-line" style="color:var(--app-green);">&gt; Running senkani_search…</div>
+          <div class="term-line" style="color:var(--app-mute);">&nbsp;&nbsp;→ OrderRepository src/orders/repo.ts:12</div>
+          <div class="term-line"><span class="term-cursor"></span></div>
+        </div>
+      </div>
+
+      <!-- Code Editor -->
+      <div class="pane inactive">
+        <div class="pane-accent" style="background:var(--app-amber);"></div>
+        <div class="pane-header">
+          <div class="pane-dot idle"></div>
+          <span class="pane-title">Code Editor</span>
+          <span class="pane-ctx">repo.ts</span>
+          <div class="pane-spacer"></div>
+          <div class="fcsit">
+            <div class="fcsit-btn f-on">F</div><div class="fcsit-btn c-on">C</div>
+            <div class="fcsit-btn s-on">S</div><div class="fcsit-btn i-on">I</div><div class="fcsit-btn off">T</div>
+          </div>
+        </div>
+        <div class="pane-sep"></div>
+        <div class="pane-body" style="min-height:110px;font-size:11px;line-height:1.7;">
+          <div><span style="color:var(--app-purple);">func</span> <span style="color:var(--app-blue);">findByUser</span>(<span style="color:var(--app-text);">userId</span>: <span style="color:var(--app-cyan);">String</span>) {</div>
+          <div>&nbsp;&nbsp;<span style="color:var(--app-purple);">return</span> <span style="color:var(--app-text);">db.</span><span style="color:var(--accent);">query</span>(</div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--app-green);">"SELECT * FROM orders"</span></div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;.<span style="color:var(--accent);">where</span>(<span style="color:var(--app-text);">"user_id = ?"</span>, userId))</div>
+          <div>}</div>
+        </div>
+      </div>
+
+      <!-- Browser -->
+      <div class="pane inactive">
+        <div class="pane-accent" style="background:var(--app-blue);"></div>
+        <div class="pane-header">
+          <div class="pane-dot idle"></div>
+          <span class="pane-title">Browser</span>
+          <span class="pane-ctx">localhost:3000</span>
+          <div class="pane-spacer"></div>
+          <div class="fcsit">
+            <div class="fcsit-btn off">F</div><div class="fcsit-btn off">C</div>
+            <div class="fcsit-btn off">S</div><div class="fcsit-btn off">I</div><div class="fcsit-btn off">T</div>
+          </div>
+        </div>
+        <div class="pane-sep"></div>
+        <div class="pane-body" style="min-height:110px;font-size:11px;line-height:1.7;">
+          <div style="background:var(--app-elev);border-radius:3px;padding:4px 8px;margin-bottom:8px;font-size:10px;color:var(--app-mute);">http://localhost:3000/orders</div>
+          <div style="color:var(--app-text);">Orders · 14 items</div>
+          <div style="color:var(--app-mute);margin-top:4px;">GET /api/orders → 200 · 42ms</div>
+        </div>
+      </div>
+
+      <!-- Markdown Preview -->
+      <div class="pane inactive">
+        <div class="pane-accent" style="background:var(--app-cyan);"></div>
+        <div class="pane-header">
+          <div class="pane-dot idle"></div>
+          <span class="pane-title">Markdown</span>
+          <span class="pane-ctx">README.md</span>
+          <div class="pane-spacer"></div>
+          <div class="fcsit">
+            <div class="fcsit-btn off">F</div><div class="fcsit-btn off">C</div>
+            <div class="fcsit-btn off">S</div><div class="fcsit-btn off">I</div><div class="fcsit-btn off">T</div>
+          </div>
+        </div>
+        <div class="pane-sep"></div>
+        <div class="pane-body" style="min-height:110px;">
+          <div class="md-h">OrderRepository</div>
+          <div class="md-sub">src/orders/repo.ts · modified 4m ago</div>
+          <div class="md-p">Manages order persistence and retrieval.</div>
+          <div style="font-family:var(--font-code);font-size:11px;color:var(--app-mute);">findByUser(userId, limit) → [Order]</div>
+        </div>
+      </div>
+
+      <!-- Analytics -->
+      <div class="pane inactive">
+        <div class="pane-accent" style="background:var(--app-blue);"></div>
+        <div class="pane-header">
+          <div class="pane-dot idle"></div>
+          <span class="pane-title">Analytics</span>
+          <span class="pane-ctx">this session</span>
+          <div class="pane-spacer"></div>
+          <div class="fcsit">
+            <div class="fcsit-btn off">F</div><div class="fcsit-btn off">C</div>
+            <div class="fcsit-btn off">S</div><div class="fcsit-btn off">I</div><div class="fcsit-btn off">T</div>
+          </div>
+        </div>
+        <div class="pane-sep"></div>
+        <div class="pane-body" style="min-height:110px;padding:10px 12px;font-family:var(--font-body);">
+          <div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--app-dim);">Tokens saved</div>
+          <div style="font-family:var(--font-display);font-size:30px;font-weight:800;color:var(--accent);letter-spacing:-0.02em;line-height:1.1;">38k</div>
+          <div style="font-size:10px;color:var(--app-mute);font-family:var(--font-code);margin-bottom:8px;">3.2× compression · $0.46 saved</div>
+          <div style="display:flex;gap:10px;font-size:10px;font-family:var(--font-code);">
+            <span style="color:var(--app-blue);">Filter 22k</span>
+            <span style="color:var(--app-green);">Index 14k</span>
+            <span style="color:var(--app-amber);">Secrets 2k</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Agent Timeline -->
+      <div class="pane inactive">
+        <div class="pane-accent" style="background:var(--app-purple);"></div>
+        <div class="pane-header">
+          <div class="pane-dot idle"></div>
+          <span class="pane-title">Agent Timeline</span>
+          <span class="pane-ctx">38 events</span>
+          <div class="pane-spacer"></div>
+          <div class="fcsit">
+            <div class="fcsit-btn off">F</div><div class="fcsit-btn off">C</div>
+            <div class="fcsit-btn off">S</div><div class="fcsit-btn off">I</div><div class="fcsit-btn off">T</div>
+          </div>
+        </div>
+        <div class="pane-sep"></div>
+        <div class="pane-body" style="min-height:110px;font-size:11px;line-height:1.8;">
+          <div><span style="color:var(--app-green);">✓</span> <span style="color:var(--app-mute);">senkani_search OrderRepo</span> <span style="color:var(--app-dim);">48 tok</span></div>
+          <div><span style="color:var(--app-green);">✓</span> <span style="color:var(--app-mute);">senkani_fetch findByUser</span> <span style="color:var(--app-dim);">312 tok</span></div>
+          <div><span style="color:var(--app-amber);">⚡</span> <span style="color:var(--app-mute);">senkani_read .env</span> <span style="color:var(--app-dim);">[REDACTED:2]</span></div>
+          <div><span style="color:var(--app-green);">✓</span> <span style="color:var(--app-mute);">senkani_validate repo.ts</span> <span style="color:var(--app-dim);">ok</span></div>
+        </div>
+      </div>
+
+      <!-- Model Manager -->
+      <div class="pane inactive">
+        <div class="pane-accent" style="background:var(--app-yellow);"></div>
+        <div class="pane-header">
+          <div class="pane-dot idle"></div>
+          <span class="pane-title">Model Manager</span>
+          <div class="pane-spacer"></div>
+          <div class="fcsit">
+            <div class="fcsit-btn off">F</div><div class="fcsit-btn off">C</div>
+            <div class="fcsit-btn off">S</div><div class="fcsit-btn off">I</div><div class="fcsit-btn off">T</div>
+          </div>
+        </div>
+        <div class="pane-sep"></div>
+        <div class="pane-body" style="min-height:110px;font-size:11px;line-height:1.9;">
+          <div style="display:grid;grid-template-columns:1fr auto;gap:4px;align-items:center;">
+            <span style="color:var(--app-text);">Gemma 4 (MLX)</span><span style="color:var(--app-green);">✓ Ready</span>
+            <span style="color:var(--app-text);">MiniLM-L6-v2</span><span style="color:var(--app-green);">✓ Ready</span>
+            <span style="color:var(--app-mute);">Qwen2.5-7B</span><span style="color:var(--app-blue);">↓ 4.1 GB</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Savings Test -->
+      <div class="pane inactive">
+        <div class="pane-accent" style="background:var(--accent);"></div>
+        <div class="pane-header">
+          <div class="pane-dot idle"></div>
+          <span class="pane-title">Savings Test</span>
+          <div class="pane-spacer"></div>
+          <div class="fcsit">
+            <div class="fcsit-btn off">F</div><div class="fcsit-btn off">C</div>
+            <div class="fcsit-btn off">S</div><div class="fcsit-btn off">I</div><div class="fcsit-btn off">T</div>
+          </div>
+        </div>
+        <div class="pane-sep"></div>
+        <div class="pane-body" style="min-height:110px;font-size:11px;line-height:1.8;">
+          <div style="color:var(--app-green);">senkani bench · 256 iterations</div>
+          <div style="color:var(--app-mute);margin-top:4px;">npm install &nbsp;428→2 lines <span style="color:var(--app-green);">99%</span></div>
+          <div style="color:var(--app-mute);">symbol search &nbsp;5k→48 tok &nbsp;<span style="color:var(--app-green);">99%</span></div>
+          <div style="color:var(--accent);margin-top:4px;font-weight:600;">overall: 80.37× &nbsp;✓ 9/9 gates</div>
+        </div>
+      </div>
+
+      <!-- Diff Viewer -->
+      <div class="pane inactive">
+        <div class="pane-accent" style="background:var(--app-cyan);"></div>
+        <div class="pane-header">
+          <div class="pane-dot idle"></div>
+          <span class="pane-title">Diff Viewer</span>
+          <span class="pane-ctx">HEAD~1</span>
+          <div class="pane-spacer"></div>
+          <div class="fcsit">
+            <div class="fcsit-btn off">F</div><div class="fcsit-btn off">C</div>
+            <div class="fcsit-btn off">S</div><div class="fcsit-btn off">I</div><div class="fcsit-btn off">T</div>
+          </div>
+        </div>
+        <div class="pane-sep"></div>
+        <div class="pane-body" style="min-height:110px;font-size:11px;line-height:1.7;">
+          <div style="color:var(--app-dim);">src/orders/handler.ts</div>
+          <div style="color:var(--app-red);margin-top:4px;">- const h = (req, res) =&gt; {</div>
+          <div style="color:var(--app-green);">+ const h = async (req, res) =&gt; {</div>
+          <div style="color:var(--app-green);">+&nbsp;&nbsp;const r = await process(req);</div>
+          <div style="color:var(--app-mute);">&nbsp;&nbsp;res.json(result);</div>
+        </div>
+      </div>
+
+      <!-- Log Viewer -->
+      <div class="pane inactive">
+        <div class="pane-accent" style="background:var(--app-mute);"></div>
+        <div class="pane-header">
+          <div class="pane-dot idle"></div>
+          <span class="pane-title">Log Viewer</span>
+          <span class="pane-ctx">server.log</span>
+          <div class="pane-spacer"></div>
+          <div class="fcsit">
+            <div class="fcsit-btn off">F</div><div class="fcsit-btn off">C</div>
+            <div class="fcsit-btn off">S</div><div class="fcsit-btn off">I</div><div class="fcsit-btn off">T</div>
+          </div>
+        </div>
+        <div class="pane-sep"></div>
+        <div class="pane-body" style="min-height:110px;font-size:11px;line-height:1.7;">
+          <div><span style="color:var(--app-dim);">10:24:31</span> <span style="color:var(--app-blue);">INFO</span> <span style="color:var(--app-mute);">Server :8080</span></div>
+          <div><span style="color:var(--app-dim);">10:24:45</span> <span style="color:var(--app-amber);">WARN</span> <span style="color:var(--app-mute);">Memory 84%</span></div>
+          <div><span style="color:var(--app-dim);">10:24:51</span> <span style="color:var(--app-blue);">INFO</span> <span style="color:var(--app-mute);">GET /orders 200</span></div>
+          <div><span style="color:var(--app-dim);">10:24:55</span> <span style="color:var(--app-red);">ERR</span> <span style="color:var(--app-mute);">DB timeout</span></div>
+        </div>
+      </div>
+
+      <!-- Knowledge Base -->
+      <div class="pane inactive">
+        <div class="pane-accent" style="background:var(--app-purple);"></div>
+        <div class="pane-header">
+          <div class="pane-dot idle"></div>
+          <span class="pane-title">Knowledge Base</span>
+          <div class="pane-spacer"></div>
+          <div class="fcsit">
+            <div class="fcsit-btn off">F</div><div class="fcsit-btn off">C</div>
+            <div class="fcsit-btn off">S</div><div class="fcsit-btn off">I</div><div class="fcsit-btn off">T</div>
+          </div>
+        </div>
+        <div class="pane-sep"></div>
+        <div class="pane-body" style="min-height:110px;font-size:11px;line-height:1.9;">
+          <div><span style="color:var(--app-text);">OrderRepository</span> <span style="color:var(--app-green);font-size:10px;margin-left:6px;">● current</span></div>
+          <div style="color:var(--app-dim);font-size:10px;margin-bottom:6px;">repo.ts · 2 min ago</div>
+          <div><span style="color:var(--app-text);">AuthMiddleware</span> <span style="color:var(--app-amber);font-size:10px;margin-left:6px;">⚠ stale</span></div>
+          <div style="color:var(--app-dim);font-size:10px;">auth.ts · 2h ago</div>
+        </div>
+      </div>
+
+      <!-- Scratchpad -->
+      <div class="pane inactive">
+        <div class="pane-accent" style="background:var(--app-yellow);"></div>
+        <div class="pane-header">
+          <div class="pane-dot idle"></div>
+          <span class="pane-title">Scratchpad</span>
+          <div class="pane-spacer"></div>
+          <div class="fcsit">
+            <div class="fcsit-btn off">F</div><div class="fcsit-btn off">C</div>
+            <div class="fcsit-btn off">S</div><div class="fcsit-btn off">I</div><div class="fcsit-btn off">T</div>
+          </div>
+        </div>
+        <div class="pane-sep"></div>
+        <div class="pane-body" style="min-height:110px;font-size:11px;line-height:1.7;">
+          <div style="color:var(--app-text);font-weight:700;margin-bottom:4px;"># Session notes</div>
+          <div style="color:var(--app-mute);">- OrderRepo needs pagination</div>
+          <div style="color:var(--app-mute);">- Fix N+1 in findByUser</div>
+          <div style="color:var(--app-mute);">- Check rate limit middleware</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ========== 15. CLI COMMANDS ========== -->
 <section>
   <div class="measure">
     <div class="overline">CLI</div>
@@ -1543,7 +1850,7 @@
   <div class="measure">
     <div class="overline">What's built</div>
     <h2>The compression layer <span class="accent">is live.</span><br>The workspace is live.</h2>
-    <p class="body">MCP intelligence layer, symbol indexer (20 languages), filter pipeline, hook relay with Layer 3 re-read suppression, session database, local ML, budget enforcement, benchmark suite (80.37x on fixtures), output sandboxing, agent timeline, live per-feature savings dashboard — all working. 442 unit tests passing. 14 pane types live.</p>
+    <p class="body">MCP intelligence layer, symbol indexer (20 languages), filter pipeline, hook relay with Layer 3 re-read suppression, session database, local ML, budget enforcement, benchmark suite (80.37x on fixtures), output sandboxing, agent timeline, live per-feature savings dashboard — all working. 442 unit tests passing. 15 pane types live.</p>
   </div>
   <div class="indent" style="margin-top: 48px;">
     <div class="feature-grid" style="max-width: 900px; padding-right: 0;">
@@ -1583,14 +1890,14 @@
         <p>LSP completions, tree-sitter syntax highlighting, multi-cursor, inline diagnostics. The same symbol index that backs senkani_search drives completions.</p>
       </div>
       <div class="feature">
-        <div class="num-row"><div class="num">08</div><span class="badge badge-coming">Q2 2026</span></div>
-        <h4>AAAK structured compression</h4>
-        <p>Lossless 8-10x shorthand that stacks multiplicatively with the filter pipeline — 95%+ total reduction. Every tool result, every file read, every shell command gets smaller. The highest-ROI unbuilt feature in the stack.</p>
+        <div class="num-row"><div class="num">08</div><span class="badge badge-live">Live</span></div>
+        <h4>Code Editor pane</h4>
+        <p>NSTextView with tree-sitter syntax highlighting across 20 languages, Cmd+click symbol navigation to definition, and token intelligence overlays showing live compression counts per file.</p>
       </div>
       <div class="feature">
         <div class="num-row"><div class="num">09</div><span class="badge badge-coming">Q2 2026</span></div>
         <h4>Session continuity + Layer 3 expansion</h4>
-        <p>170-token AAAK wake-up brief injected at session open — agent knows where it left off without re-reading files. Plus remaining Layer 3 patterns: command replay, search upgrade, trivial routing. Works on closed-source agents with no cooperation required.</p>
+        <p>Session context brief injected at session open — agent knows where it left off without re-reading files. Plus remaining Layer 3 patterns: search upgrade, trivial routing. Works on closed-source agents with no cooperation required.</p>
       </div>
     </div>
   </div>

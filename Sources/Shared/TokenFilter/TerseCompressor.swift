@@ -104,8 +104,8 @@ public enum TerseCompressor {
 
         // Protect URLs and paths from modification
         // URLs and paths won't match word-boundary patterns, but be safe
-        let urlPattern = try! NSRegularExpression(pattern: "https?://\\S+")
-        let pathPattern = try! NSRegularExpression(pattern: "(?:^|\\s)(/[\\w./-]+)")
+        let _ = try! NSRegularExpression(pattern: "https?://\\S+")
+        let _ = try! NSRegularExpression(pattern: "(?:^|\\s)(/[\\w./-]+)")
 
         // Phase 1: Delete filler phrases (longer phrases first to avoid partial matches)
         for phrase in deletionPhrases {

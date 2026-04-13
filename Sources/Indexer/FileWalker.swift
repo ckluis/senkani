@@ -30,6 +30,8 @@ public enum FileWalker {
         "scala": "scala", "sc": "scala",
         "ex": "elixir", "exs": "elixir",
         "hs": "haskell", "lhs": "haskell",
+        "html": "html", "htm": "html",
+        "css": "css",
     ]
 
     public struct WalkResult: Sendable {

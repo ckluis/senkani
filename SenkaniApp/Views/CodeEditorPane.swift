@@ -383,7 +383,7 @@ struct HighlightedCodeView: View {
     private let lineHeight: CGFloat = 18
 
     private var lineCount: Int {
-        let display = content.count > 50_000 ? String(content.prefix(50_000)) : content
+        let display = content.count > 30_000 ? String(content.prefix(30_000)) : content
         return max(display.components(separatedBy: "\n").count, 1)
     }
 
@@ -456,8 +456,8 @@ struct HighlightedCodeView: View {
         // Cap at 50,000 characters to prevent SwiftUI layer size crash
         // (macOS rejects backing layers taller than ~16K points)
         var displayContent = content
-        if displayContent.count > 50_000 {
-            let truncIndex = displayContent.index(displayContent.startIndex, offsetBy: 50_000)
+        if displayContent.count > 30_000 {
+            let truncIndex = displayContent.index(displayContent.startIndex, offsetBy: 30_000)
             displayContent = String(displayContent[..<truncIndex])
             let totalLines = content.components(separatedBy: "\n").count
             let shownLines = displayContent.components(separatedBy: "\n").count
@@ -497,7 +497,7 @@ struct HighlightedCodeView: View {
             appliedCount += 1
         }
 
-        print("[HL] Applied \(appliedCount) color ranges")
+        print("[HL] Applied \(appliedCount) color ranges, result has \(result.characters.count) attributed chars")
         attributedContent = result
     }
 
@@ -559,7 +559,16 @@ struct HighlightedCodeView: View {
                 .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("(#") }
                 .joined(separator: "\n")
             query = try? Query(language: tsLanguage, data: stripped.data(using: .utf8)!)
-            print("[HL] Stripped query: \(query != nil ? "OK" : "FAILED")")
+            if query != nil {
+                print("[HL] Stripped query: OK")
+            } else {
+                do {
+                    _ = try Query(language: tsLanguage, data: stripped.data(using: .utf8)!)
+                } catch {
+                    print("[HL] Stripped query FAILED: \(error)")
+                }
+                print("[HL] First 200 chars of stripped query: \(String(stripped.prefix(200)))")
+            }
         }
 
         guard let query else {
@@ -574,6 +583,9 @@ struct HighlightedCodeView: View {
             for capture in match.captures {
                 guard let name = capture.name else { continue }
                 let range = capture.range
+                if captures.count < 5 {
+                    print("[HL] capture: name='\(name)' range=\(range.location):\(range.length)")
+                }
                 captures.append(CaptureInfo(
                     location: range.location,
                     length: range.length,
@@ -589,9 +601,10 @@ struct HighlightedCodeView: View {
     // MARK: - Color mapping
 
     private func swiftUIColor(for captureName: String) -> Color {
-        if let color = Self.captureColorMap[captureName] { return color }
-        if let dot = captureName.lastIndex(of: ".") {
-            let parent = String(captureName[captureName.startIndex..<dot])
+        let name = captureName.hasPrefix("@") ? String(captureName.dropFirst()) : captureName
+        if let color = Self.captureColorMap[name] { return color }
+        if let dot = name.lastIndex(of: ".") {
+            let parent = String(name[name.startIndex..<dot])
             if let color = Self.captureColorMap[parent] { return color }
         }
         return Self.defaultText

@@ -453,7 +453,7 @@ struct HighlightedCodeView: View {
     private func buildAttributedContent() {
         print("[HL] buildAttributedContent: \(content.count) chars, filePath=\(filePath)")
 
-        // Cap at 50,000 characters to prevent SwiftUI layer size crash
+        // Cap at 30,000 characters to prevent SwiftUI layer size crash
         // (macOS rejects backing layers taller than ~16K points)
         var displayContent = content
         if displayContent.count > 30_000 {
@@ -462,7 +462,7 @@ struct HighlightedCodeView: View {
             let totalLines = content.components(separatedBy: "\n").count
             let shownLines = displayContent.components(separatedBy: "\n").count
             displayContent += "\n\n// [\(shownLines) of \(totalLines) lines shown — file too large for inline display]"
-            print("[HL] Truncated from \(content.count) to 50000 chars")
+            print("[HL] Truncated from \(content.count) to \(displayContent.count) chars")
         }
 
         // Start with default-styled display content

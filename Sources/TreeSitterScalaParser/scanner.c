@@ -6,9 +6,7 @@
 
 // #define DEBUG
 
-#ifdef DEBUG
-#define LOG(...) fprintf(stderr, __VA_ARGS__)
-#else
+// LOG silenced — was flooding Xcode console with hundreds of scanner debug lines
 #define LOG(...)
 #endif
 

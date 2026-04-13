@@ -74,6 +74,8 @@ public struct Scenario: Sendable, Codable, Identifiable {
 /// - Sandbox: ~97% (150 bytes summary vs 5000 bytes)
 /// - Re-read suppression: 100% (tool call eliminated entirely)
 ///
+/// - Outline-first read: ~90% (300 bytes outline vs 3000 bytes full file)
+///
 /// File sizes: small ~2KB, medium ~3-5KB, large ~10KB
 public enum BenchmarkScenarios {
 
@@ -91,8 +93,8 @@ public enum BenchmarkScenarios {
         calls: {
             var c: [SimulatedCall] = []
             for i in 0..<12 {
-                c.append(SimulatedCall(id: "read_\(i)", tool: "read", description: "Read source file #\(i+1) (~3KB)",
-                                       rawBytes: 3000, optimizedBytes: 3000, feature: "read"))
+                c.append(SimulatedCall(id: "read_\(i)", tool: "read", description: "Read source file #\(i+1) (~3KB) → outline",
+                                       rawBytes: 3000, optimizedBytes: 300, feature: "outline_read"))
             }
             for i in 0..<3 {
                 c.append(SimulatedCall(id: "reread_\(i)", tool: "read", description: "Re-read file #\(i+1) (cache hit)",
@@ -122,8 +124,8 @@ public enum BenchmarkScenarios {
         calls: {
             var c: [SimulatedCall] = []
             for i in 0..<7 {
-                c.append(SimulatedCall(id: "read_\(i)", tool: "read", description: "Read source file #\(i+1) (~3KB)",
-                                       rawBytes: 3000, optimizedBytes: 3000, feature: "read"))
+                c.append(SimulatedCall(id: "read_\(i)", tool: "read", description: "Read source file #\(i+1) (~3KB) → outline",
+                                       rawBytes: 3000, optimizedBytes: 300, feature: "outline_read"))
             }
             for i in 0..<3 {
                 c.append(SimulatedCall(id: "reread_\(i)", tool: "read", description: "Re-read file #\(i+1) during debugging (cache hit)",
@@ -159,8 +161,8 @@ public enum BenchmarkScenarios {
         calls: {
             var c: [SimulatedCall] = []
             for i in 0..<8 {
-                c.append(SimulatedCall(id: "read_\(i)", tool: "read", description: "Read file #\(i+1) (~4KB)",
-                                       rawBytes: 4000, optimizedBytes: 4000, feature: "read"))
+                c.append(SimulatedCall(id: "read_\(i)", tool: "read", description: "Read file #\(i+1) (~4KB) → outline",
+                                       rawBytes: 4000, optimizedBytes: 300, feature: "outline_read"))
             }
             for i in 0..<4 {
                 c.append(SimulatedCall(id: "cache_\(i)", tool: "read", description: "Re-read after edit #\(i+1) (cache hit)",
@@ -194,8 +196,8 @@ public enum BenchmarkScenarios {
         calls: {
             var c: [SimulatedCall] = []
             for i in 0..<8 {
-                c.append(SimulatedCall(id: "read_\(i)", tool: "read", description: "Read existing file #\(i+1) (~3KB)",
-                                       rawBytes: 3000, optimizedBytes: 3000, feature: "read"))
+                c.append(SimulatedCall(id: "read_\(i)", tool: "read", description: "Read existing file #\(i+1) (~3KB) → outline",
+                                       rawBytes: 3000, optimizedBytes: 300, feature: "outline_read"))
             }
             for i in 0..<3 {
                 c.append(SimulatedCall(id: "search_\(i)", tool: "search", description: "Find similar patterns in codebase",
@@ -229,8 +231,8 @@ public enum BenchmarkScenarios {
         calls: {
             var c: [SimulatedCall] = []
             for i in 0..<12 {
-                c.append(SimulatedCall(id: "read_\(i)", tool: "read", description: "Read changed file #\(i+1) (~3KB)",
-                                       rawBytes: 3000, optimizedBytes: 3000, feature: "read"))
+                c.append(SimulatedCall(id: "read_\(i)", tool: "read", description: "Read changed file #\(i+1) (~3KB) → outline",
+                                       rawBytes: 3000, optimizedBytes: 300, feature: "outline_read"))
             }
             c.append(SimulatedCall(id: "reread_0", tool: "read", description: "Re-read key file (cache hit)",
                                    rawBytes: 3000, optimizedBytes: 0, feature: "cache", isReRead: true))

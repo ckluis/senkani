@@ -42,7 +42,7 @@ Senkani is two things in one binary: a **multi-pane terminal workspace** (native
 | SSH / Mosh pane | 🔄 Planned |
 | **Session continuity** — compressed brief of last session injected at session open, eliminating re-orientation turns | 🔄 Planned |
 | **Prompt injection detection** — scan MCP tool responses for embedded attack strings before they reach Claude | 🔄 Planned |
-| **AAAK structured compression** — lossless 8-10x shorthand applied after filtering; stacks for 95%+ total reduction | 🔄 Planned |
+| **Smart first-read selection** — outline-first reads return symbol structure by default, full content on demand | ✅ Live |
 | **`senkani_watch` tool** — FSEvents ring buffer exposed as MCP tool; eliminates re-read polling after builds/edits | 🔄 Planned |
 | **`senkani_exec` background mode** — detach long-running builds/servers, poll stdout, kill on demand; lifts 30s timeout | 🔄 Planned |
 | **Session continuity** — 170-token AAAK wake-up brief injected at session open, eliminating re-orientation turns | 🔄 Planned |
@@ -85,7 +85,7 @@ senkani doctor
 
 | Tool | What it does | Savings |
 |------|-------------|---------|
-| `senkani_read` | File reads: ANSI strip, blank collapse, secret detection, session cache | 50–99% |
+| `senkani_read` | File reads: returns outline by default (symbols + line numbers), full content via `full: true`. Cache, secrets, filter on full reads. | 80–99% |
 | `senkani_exec` | Shell commands: 24+ command-specific filter rules (git, npm, cargo, docker…) | 60–90% |
 | `senkani_search` | Symbol lookup from local index: ~50 tokens vs ~5000 from grep | 99% |
 | `senkani_fetch` | Read only a symbol's lines, not the entire file | 50–99% |
@@ -146,6 +146,8 @@ Tree-sitter AST extraction across 20 languages with incremental updates:
 **Dependency graph:** Bidirectional import tracking — "what does X import?" and "what imports X?" — across 15+ languages.
 
 **Incremental:** Files are re-indexed only when changed. Parsed trees are cached (TreeCache) for fast re-parses. Projects under 50 files trigger targeted updates; larger projects use full re-index when needed.
+
+**Outline-first:** `senkani_read` returns a file's symbol outline (~300 bytes) by default instead of full content (~3-20KB). Call `senkani_fetch` for specific symbols, or pass `full: true` for the complete file. First reads of code files save ~80-90%.
 
 ---
 

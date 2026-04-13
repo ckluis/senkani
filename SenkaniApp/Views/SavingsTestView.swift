@@ -670,11 +670,11 @@ struct SavingsTestView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                     let unit = gate.category == "overall" && gate.name.contains("multiplier") ? "x" : "%"
-                    Text(String(format: "%.1f\(unit)", gate.actual))
+                    Text(String(format: "%.1f", gate.actual) + unit)
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(gate.passed ? SenkaniTheme.savingsGreen : .red)
 
-                    Text("≥ \(String(format: "%.0f\(unit)", gate.threshold))")
+                    Text("≥ " + String(format: "%.0f", gate.threshold) + unit)
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(SenkaniTheme.textTertiary)
                         .frame(width: 60, alignment: .trailing)

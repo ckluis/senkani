@@ -17,10 +17,10 @@ struct ScenarioSimulatorTests {
 
     @Test func scenarioMultipliersInExpectedRange() {
         for scenario in BenchmarkScenarios.all {
-            #expect(scenario.multiplier >= 1.5,
-                    "\(scenario.id) multiplier \(scenario.multiplier) is below minimum 1.5x")
-            #expect(scenario.multiplier <= 20.0,
-                    "\(scenario.id) multiplier \(scenario.multiplier) exceeds maximum 20.0x")
+            #expect(scenario.multiplier >= 4.0,
+                    "\(scenario.id) multiplier \(scenario.multiplier) is below minimum 4.0x")
+            #expect(scenario.multiplier <= 25.0,
+                    "\(scenario.id) multiplier \(scenario.multiplier) exceeds maximum 25.0x")
         }
     }
 

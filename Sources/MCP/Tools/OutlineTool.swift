@@ -16,6 +16,11 @@ enum OutlineTool {
         let symbols = index.search(file: file)
             .sorted { $0.startLine < $1.startLine }
 
+        // Track queried file for staleness detection
+        if let firstFile = symbols.first?.file {
+            session.trackQueriedSymbol(file: firstFile)
+        }
+
         guard !symbols.isEmpty else {
             return .init(content: [.text(text: "No symbols found in \"\(file)\". File may not be indexed or may not exist.", annotations: nil, _meta: nil)])
         }

@@ -18,6 +18,7 @@ enum PaneType: String, CaseIterable {
     case savingsTest
     case agentTimeline
     case codeEditor
+    case dashboard
 }
 
 /// State of the process running in a terminal pane.
@@ -82,6 +83,7 @@ final class PaneModel: Identifiable {
     var features: PaneFeatureConfig
     var metrics: PaneMetrics
     var processState: ProcessState
+    var shellPid: pid_t?
     var metricsFilePath: String
     var configFilePath: String
     var shellCommand: String
@@ -97,6 +99,12 @@ final class PaneModel: Identifiable {
     var columnWidth: CGFloat = 300
     /// User-resizable height. nil = fill available height (default).
     var paneHeight: CGFloat? = nil
+    /// Model routing preset. Controls CLAUDE_MODEL env var for this pane.
+    var modelPreset: ModelPreset = .auto
+    /// Terminal font size (points). Adjustable via Display settings.
+    var fontSize: CGFloat = 12.0
+    /// Whether this pane has unread output since last focused.
+    var hasUnreadOutput: Bool = false
 
     init(title: String = "Terminal",
          paneType: PaneType = .terminal,
@@ -132,6 +140,7 @@ final class PaneModel: Identifiable {
         case .savingsTest:        self.columnWidth = 480
         case .agentTimeline:      self.columnWidth = 420
         case .codeEditor:         self.columnWidth = 480
+        case .dashboard:          self.columnWidth = 600
         default:                  self.columnWidth = 300
         }
         // Write initial toggle state so the hook script has it from the start

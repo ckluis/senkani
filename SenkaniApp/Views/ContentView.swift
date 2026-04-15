@@ -13,9 +13,13 @@ struct ContentView: View {
     @State var sessions = SessionRegistry()
     @State var activeToolView: ToolView?
     @State var showAddPaneSheet = false
+    @State var showCommandPalette = false
     @State private var paneCommandWatcher = PaneCommandWatcher()
+    @State private var broadcastEnabled = false
+    @State private var broadcastText = ""
 
     var body: some View {
+        ZStack {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 // Fixed-width sidebar
@@ -30,8 +34,50 @@ struct ContentView: View {
                     .fill(SenkaniTheme.appBackground)
                     .frame(width: 1)
 
+                // Workstream sidebar (conditional — only when 2+ workstreams)
+                if let project = workspace.activeProject, project.workstreams.count > 1 {
+                    WorkstreamSidebarView(project: project, workspace: workspace)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+
+                    Rectangle()
+                        .fill(SenkaniTheme.appBackground)
+                        .frame(width: 1)
+                }
+
                 // Main canvas area
                 canvasContent
+            }
+
+            // Broadcast bar (visible when broadcast mode is on)
+            if broadcastEnabled {
+                HStack(spacing: 8) {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.orange)
+                    TextField("Broadcast to all terminals...", text: $broadcastText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11, design: .monospaced))
+                        .onSubmit {
+                            if !broadcastText.isEmpty {
+                                NotificationCenter.default.post(
+                                    name: .senkaniSendBroadcast,
+                                    object: broadcastText + "\n"
+                                )
+                                broadcastText = ""
+                            }
+                        }
+                    Button {
+                        broadcastEnabled = false
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.orange.opacity(0.08))
             }
 
             // Status bar at the very bottom
@@ -68,6 +114,31 @@ struct ContentView: View {
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
             saveWorkspace()
         }
+
+            // ⌘K command palette overlay
+            if showCommandPalette {
+                CommandPaletteView(
+                    isVisible: $showCommandPalette,
+                    workspace: workspace,
+                    onAddPane: { typeId in
+                        addPaneByTypeId(typeId)
+                    }
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                .zIndex(100)
+            }
+        }  // ZStack
+        .animation(.spring(response: 0.2, dampingFraction: 0.85), value: showCommandPalette)
+        .onAppear {
+            // Install ⌘K monitor — catches the shortcut before terminal NSViews
+            NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "k" {
+                    showCommandPalette.toggle()
+                    return nil  // consumed
+                }
+                return event
+            }
+        }
     }
 
     // MARK: - Canvas content (ZStack keeps ALL project panes alive)
@@ -75,18 +146,20 @@ struct ContentView: View {
     @ViewBuilder
     private var canvasContent: some View {
         ZStack {
-            // One PaneGridView PER PROJECT, all always in the view tree.
+            // One PaneGridView PER WORKSTREAM PER PROJECT, all always in the view tree.
             // This keeps terminal NSViews alive when switching between
-            // projects or navigating to tool views.
+            // projects, workstreams, or navigating to tool views.
             ForEach(workspace.projects) { project in
-                if !project.panes.isEmpty {
-                    PaneGridView(
-                        panes: project.panes,
-                        activePaneID: workspace.activePaneID,
-                        workspace: workspace
-                    )
-                    .opacity(project.isActive && activeToolView == nil ? 1 : 0)
-                    .allowsHitTesting(project.isActive && activeToolView == nil)
+                ForEach(project.workstreams) { workstream in
+                    if !workstream.panes.isEmpty {
+                        PaneGridView(
+                            panes: workstream.panes,
+                            activePaneID: workspace.activePaneID,
+                            workspace: workspace
+                        )
+                        .opacity(project.isActive && workstream.isActive && activeToolView == nil ? 1 : 0)
+                        .allowsHitTesting(project.isActive && workstream.isActive && activeToolView == nil)
+                    }
                 }
             }
 
@@ -223,5 +296,22 @@ struct ContentView: View {
             sessions.startSession(for: pane)
         }
         saveWorkspace()
+    }
+
+    /// Add a pane by type ID string (from command palette).
+    private func addPaneByTypeId(_ typeId: String) {
+        let typeMap: [String: PaneType] = [
+            "terminal": .terminal, "browser": .browser,
+            "markdownPreview": .markdownPreview, "htmlPreview": .htmlPreview,
+            "scratchpad": .scratchpad, "logViewer": .logViewer,
+            "diffViewer": .diffViewer, "analytics": .analytics,
+            "skillLibrary": .skillLibrary, "knowledgeBase": .knowledgeBase,
+            "modelManager": .modelManager, "schedules": .scheduleManager,
+            "savingsTest": .savingsTest, "codeEditor": .codeEditor,
+            "agentTimeline": .agentTimeline,
+            "dashboard": .dashboard,
+        ]
+        guard let type = typeMap[typeId] else { return }
+        addPane(type: type, title: type == .terminal ? "Terminal" : typeId.capitalized, command: "")
     }
 }

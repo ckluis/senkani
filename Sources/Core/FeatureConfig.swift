@@ -2,10 +2,11 @@ import Foundation
 
 /// Features that can be independently toggled.
 public enum Feature: String, Codable, Sendable, CaseIterable {
-    case filter   // FilterEngine command rules
-    case secrets  // SecretDetector redaction
-    case indexer  // Symbol indexer
-    case terse    // TerseCompressor word/phrase compression
+    case filter         // FilterEngine command rules
+    case secrets        // SecretDetector redaction
+    case indexer        // Symbol indexer
+    case terse          // TerseCompressor word/phrase compression
+    case injectionGuard // InjectionGuard prompt attack detection
 }
 
 /// Per-feature byte savings tracking.
@@ -30,12 +31,14 @@ public struct FeatureConfig: Sendable {
     public let secrets: Bool
     public let indexer: Bool
     public let terse: Bool
+    public let injectionGuard: Bool
 
-    public init(filter: Bool = true, secrets: Bool = true, indexer: Bool = true, terse: Bool = false) {
+    public init(filter: Bool = true, secrets: Bool = true, indexer: Bool = true, terse: Bool = false, injectionGuard: Bool = false) {
         self.filter = filter
         self.secrets = secrets
         self.indexer = indexer
         self.terse = terse
+        self.injectionGuard = injectionGuard
     }
 
     /// Check if a specific feature is enabled.
@@ -45,6 +48,7 @@ public struct FeatureConfig: Sendable {
         case .secrets: return secrets
         case .indexer: return indexer
         case .terse: return terse
+        case .injectionGuard: return injectionGuard
         }
     }
 

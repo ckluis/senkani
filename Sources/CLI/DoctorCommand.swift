@@ -54,6 +54,9 @@ struct Doctor: ParsableCommand {
         // 9. Grammar versions
         checkGrammars(&results)
 
+        // 10. Daemon health (socket responsiveness)
+        checkDaemonHealth(&results)
+
         print("")
         var parts: [String] = []
         if results.passed > 0 { parts.append("\(results.passed) passed") }
@@ -325,27 +328,18 @@ struct Doctor: ParsableCommand {
     // MARK: - Check 5: Models
 
     private func checkModels(_ results: inout Results) {
-        let modelsDir = NSHomeDirectory() + "/Documents/huggingface/models"
-        let fm = FileManager.default
+        let mgr = ModelManager.shared
 
-        let knownModels: [(id: String, name: String, dirPattern: String)] = [
-            ("minilm-l6", "MiniLM-L6", "all-MiniLM-L6"),
-            ("qwen2-vl-2b", "Qwen2-VL", "Qwen2-VL"),
-        ]
-
-        var statuses: [String] = []
-
-        for model in knownModels {
-            var downloaded = false
-            if fm.fileExists(atPath: modelsDir),
-               let contents = try? fm.contentsOfDirectory(atPath: modelsDir) {
-                downloaded = contents.contains { $0.contains(model.dirPattern) }
+        for model in mgr.models {
+            let ready = mgr.isReady(model.id)
+            if ready {
+                printStatus(.pass, "\(model.name): downloaded")
+                results.passed += 1
+            } else {
+                printStatus(.skip, "\(model.name): not downloaded")
+                results.skipped += 1
             }
-            statuses.append("\(model.name) (\(downloaded ? "downloaded" : "not downloaded"))")
         }
-
-        printStatus(.pass, "Models: \(statuses.joined(separator: ", "))")
-        results.passed += 1
     }
 
     // MARK: - Check 6: Database
@@ -494,5 +488,30 @@ struct Doctor: ParsableCommand {
         case .skip:  prefix = "-"
         }
         print("\(prefix) \(message)")
+    }
+
+    // MARK: - Check 10: Daemon Health
+
+    private func checkDaemonHealth(_ results: inout Results) {
+        let hookSock = NSHomeDirectory() + "/.senkani/hook.sock"
+        let paneSock = NSHomeDirectory() + "/.senkani/pane.sock"
+
+        checkOneSocket(path: hookSock, name: "Hook daemon", results: &results)
+        checkOneSocket(path: paneSock, name: "Pane daemon", results: &results)
+    }
+
+    private func checkOneSocket(path: String, name: String, results: inout Results) {
+        let result = DaemonHealthCheck.check(socketPath: path, timeoutMs: 1000)
+        switch result {
+        case .pass:
+            printStatus(.pass, "\(name): responsive (\((path as NSString).lastPathComponent))")
+            results.passed += 1
+        case .fail:
+            printStatus(.skip, "\(name): not running (\((path as NSString).lastPathComponent))")
+            results.skipped += 1
+        case .warn:
+            printStatus(.skip, "\(name): socket exists but timed out (\((path as NSString).lastPathComponent))")
+            results.skipped += 1
+        }
     }
 }

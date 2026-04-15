@@ -1,4 +1,5 @@
 import SwiftUI
+import Core
 
 /// Settings panel that overlays the pane body when the gear icon is clicked.
 /// Uses a list-detail pattern for scalability.
@@ -9,6 +10,7 @@ struct PaneSettingsPanel: View {
 
     enum SettingsSection: String, CaseIterable {
         case optimization = "Optimization"
+        case model = "Model"
         case display = "Display"
         case sizing = "Sizing"
         case advanced = "Advanced"
@@ -58,6 +60,8 @@ struct PaneSettingsPanel: View {
                     switch selectedSection {
                     case .optimization:
                         optimizationSettings
+                    case .model:
+                        modelSettings
                     case .display:
                         displaySettings
                     case .sizing:
@@ -114,10 +118,52 @@ struct PaneSettingsPanel: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(SenkaniTheme.textPrimary)
 
-            Text("Font size, color overrides, and terminal appearance")
+            Text("Terminal font and appearance settings.")
                 .font(.system(size: 11))
                 .foregroundStyle(SenkaniTheme.textSecondary)
+
+            // Font size slider
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Font size")
+                        .font(.system(size: 11))
+                        .foregroundStyle(SenkaniTheme.textPrimary)
+                    Spacer()
+                    Text("\(Int(pane.fontSize))pt")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(SenkaniTheme.textSecondary)
+                }
+                Slider(value: $pane.fontSize, in: 8...24, step: 1)
+            }
+
+            // Font size presets
+            HStack(spacing: 6) {
+                fontPresetButton("Small", size: 10)
+                fontPresetButton("Default", size: 12)
+                fontPresetButton("Medium", size: 14)
+                fontPresetButton("Large", size: 16)
+                fontPresetButton("XL", size: 20)
+            }
         }
+    }
+
+    private func fontPresetButton(_ label: String, size: CGFloat) -> some View {
+        Button {
+            pane.fontSize = size
+        } label: {
+            Text(label)
+                .font(.system(size: 10, weight: pane.fontSize == size ? .semibold : .regular))
+                .foregroundStyle(pane.fontSize == size ? SenkaniTheme.textPrimary : SenkaniTheme.textSecondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    pane.fontSize == size
+                        ? SenkaniTheme.accentColor(for: pane.paneType).opacity(0.15)
+                        : SenkaniTheme.textTertiary.opacity(0.08)
+                )
+                .cornerRadius(4)
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Sizing Section
@@ -195,9 +241,72 @@ struct PaneSettingsPanel: View {
         }
     }
 
+    // MARK: - Model Section
+
+    private var modelSettings: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Model Routing")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(SenkaniTheme.textPrimary)
+
+            Text("Controls which Claude model handles tasks in this pane. Takes effect on next Claude session.")
+                .font(.system(size: 11))
+                .foregroundStyle(SenkaniTheme.textSecondary)
+
+            ForEach(ModelPreset.allCases, id: \.self) { preset in
+                Button {
+                    pane.modelPreset = preset
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: preset.icon)
+                            .font(.system(size: 12))
+                            .frame(width: 20)
+                            .foregroundStyle(pane.modelPreset == preset ? SenkaniTheme.textPrimary : SenkaniTheme.textSecondary)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text(preset.displayName)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(SenkaniTheme.textPrimary)
+                                let tier = ModelRouter.resolve(prompt: "", preset: preset).tier
+                                Text(String(format: "~$%.2f/hr", tier.estimatedCostPerHour))
+                                    .font(.system(size: 9, design: .monospaced))
+                                    .foregroundStyle(SenkaniTheme.textTertiary)
+                            }
+                            Text(preset.description)
+                                .font(.system(size: 9))
+                                .foregroundStyle(SenkaniTheme.textTertiary)
+                        }
+
+                        Spacer()
+
+                        if pane.modelPreset == preset {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 14))
+                                .foregroundStyle(SenkaniTheme.savingsGreen)
+                        } else {
+                            Image(systemName: "circle")
+                                .font(.system(size: 14))
+                                .foregroundStyle(SenkaniTheme.textTertiary.opacity(0.3))
+                        }
+                    }
+                    .padding(8)
+                    .background(
+                        pane.modelPreset == preset
+                            ? SenkaniTheme.savingsGreen.opacity(0.08)
+                            : Color.clear
+                    )
+                    .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
     private func iconForSection(_ section: SettingsSection) -> String {
         switch section {
         case .optimization: return "slider.horizontal.3"
+        case .model: return "brain"
         case .display: return "paintbrush"
         case .sizing: return "arrow.left.and.right"
         case .advanced: return "wrench"

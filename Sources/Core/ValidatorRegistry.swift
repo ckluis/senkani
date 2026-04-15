@@ -33,6 +33,14 @@ public final class ValidatorRegistry: @unchecked Sendable {
         self.validators = validators
     }
 
+    /// Process-global shared registry for the hook path.
+    /// Lazily initialized with auto-detection of installed validators.
+    public static let shared: ValidatorRegistry = {
+        let r = ValidatorRegistry()
+        r.detectInstalled()
+        return r
+    }()
+
     // MARK: - Query
 
     /// Get all validators for a file extension, filtered to enabled + installed.

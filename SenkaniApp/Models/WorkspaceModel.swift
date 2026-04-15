@@ -65,6 +65,13 @@ final class WorkspaceModel {
         }
     }
 
+    /// Switch to a specific workstream within the active project.
+    func switchWorkstream(to workstreamID: UUID) {
+        guard let project = activeProject else { return }
+        project.switchWorkstream(to: workstreamID)
+        activePaneID = project.activeWorkstream?.panes.first?.id
+    }
+
     /// Remove a project and all its panes.
     func removeProject(id: UUID) {
         projects.removeAll { $0.id == id }
@@ -95,9 +102,51 @@ final class WorkspaceModel {
     func addPane(type: PaneType = .terminal, title: String = "Terminal", command: String = "", previewFilePath: String = "") {
         ensureDefaultProject()
         let projectPath = activeProject?.path ?? NSHomeDirectory()
-        let pane = PaneModel(title: title, paneType: type, initialCommand: command, workingDirectory: projectPath, previewFilePath: previewFilePath)
+        // Use the active workstream's effective root (worktree path or project path)
+        let effectiveRoot = activeProject?.activeWorkstream?.effectiveRoot(projectPath: projectPath) ?? projectPath
+        let pane = PaneModel(title: title, paneType: type, initialCommand: command, workingDirectory: effectiveRoot, previewFilePath: previewFilePath)
         activeProject?.panes.append(pane)
         activePaneID = pane.id
+    }
+
+    /// Create a new workstream with git worktree. Full-auto: creates worktree + terminal pane.
+    /// Returns the created WorkstreamModel on success, or a GitError on failure.
+    @discardableResult
+    func addWorkstream(name: String, to project: ProjectModel) -> Result<WorkstreamModel, GitWorktreeManager.GitError> {
+        let slug = GitWorktreeManager.slugify(name)
+
+        let result = GitWorktreeManager.createWorktree(
+            projectRoot: project.path,
+            slug: slug,
+            branch: nil
+        )
+
+        switch result {
+        case .success(let worktreePath):
+            let fmt = DateFormatter()
+            fmt.dateFormat = "yyyyMMdd"
+            let branchName = "feature/\(fmt.string(from: Date()))-\(slug)"
+
+            let ws = WorkstreamModel(
+                name: name,
+                isDefault: false,
+                branch: branchName,
+                worktreePath: worktreePath
+            )
+            // Auto-create a terminal pane in the worktree
+            let pane = PaneModel(
+                title: "Terminal",
+                paneType: .terminal,
+                workingDirectory: worktreePath
+            )
+            ws.panes.append(pane)
+            project.addWorkstream(ws)
+            activePaneID = pane.id
+            return .success(ws)
+
+        case .failure(let error):
+            return .failure(error)
+        }
     }
 
     func movePane(id: UUID, toIndex: Int) {

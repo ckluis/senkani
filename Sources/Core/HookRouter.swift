@@ -1,5 +1,29 @@
 import Foundation
 
+/// Tracks recent Read denials for search upgrade hint detection.
+/// Thread-safe via NSLock. Entries older than the window are pruned on each check.
+final class ReadDenialTracker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var entries: [(path: String, timestamp: Date)] = []
+
+    /// Record a denied Read and return the count of distinct file paths in the window.
+    func recordAndCount(filePath: String, windowSeconds: TimeInterval = 30) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        let cutoff = Date().addingTimeInterval(-windowSeconds)
+        entries.removeAll { $0.timestamp < cutoff }
+        entries.append((path: filePath, timestamp: Date()))
+        return Set(entries.map(\.path)).count
+    }
+
+    /// Reset tracker — called after hint fires and by tests.
+    func reset() {
+        lock.lock()
+        entries.removeAll()
+        lock.unlock()
+    }
+}
+
 /// Processes hook events from the senkani-hook binary and returns
 /// routing decisions (block/passthrough) for Claude Code tool calls.
 ///
@@ -31,9 +55,21 @@ public enum HookRouter {
             )
         }
 
-        // PostToolUse: record only, never block (tool already executed)
-        guard eventName == "PreToolUse" else {
+        // PostToolUse: record + enqueue auto-validation if Edit/Write
+        if eventName == "PostToolUse" {
+            if toolName == "Edit" || toolName == "Write" {
+                handlePostEditWrite(toolInput: toolInput, sessionId: sessionId, projectRoot: projectRoot)
+            }
             return passthroughResponse
+        }
+
+        // Fetch pending validation advisories (atomic: marks delivered)
+        var validationAdvisory = ""
+        if let sid = sessionId {
+            let results = SessionDatabase.shared.fetchAndMarkDelivered(sessionId: sid)
+            if !results.isEmpty {
+                validationAdvisory = formatValidationAdvisory(results)
+            }
         }
 
         // Budget enforcement on the hook path
@@ -50,18 +86,41 @@ public enum HookRouter {
         }
 
         // Route the tool call
+        var response: Data
         switch toolName {
         case "Read":
-            return handleRead(toolInput: toolInput, eventName: eventName, projectRoot: projectRoot, sessionId: sessionId)
+            response = handleRead(toolInput: toolInput, eventName: eventName, projectRoot: projectRoot, sessionId: sessionId)
         case "Bash":
             let command = toolInput["command"] as? String ?? ""
-            return handleBash(command: command, eventName: eventName, projectRoot: projectRoot, sessionId: sessionId)
+            response = handleBash(command: command, eventName: eventName, projectRoot: projectRoot, sessionId: sessionId)
         case "Grep":
             let pattern = toolInput["pattern"] as? String ?? ""
-            return handleGrep(pattern: pattern, eventName: eventName)
+            response = handleGrep(pattern: pattern, eventName: eventName)
         default:
-            return passthroughResponse
+            response = passthroughResponse
         }
+
+        // Phase J: Append validation advisory to deny responses
+        if !validationAdvisory.isEmpty, response != passthroughResponse {
+            response = appendAdvisoryToResponse(response, advisory: validationAdvisory)
+        }
+
+        return response
+    }
+
+    // MARK: - Search Upgrade (Phase I)
+
+    /// Tracks Read denials to detect search-like behavior.
+    static let readDenialTracker = ReadDenialTracker()
+
+    /// Returns a search hint if 3+ distinct files denied in 30s, empty string otherwise.
+    /// Resets the tracker after firing to prevent repeat hints.
+    static func searchUpgradeHint(filePath: String) -> String {
+        guard !filePath.isEmpty else { return "" }
+        let count = readDenialTracker.recordAndCount(filePath: filePath)
+        guard count >= 3 else { return "" }
+        readDenialTracker.reset()
+        return " You've read \(count) different files recently — if you're searching for a symbol, try mcp__senkani__search instead (~50 tokens vs reading each file)."
     }
 
     // MARK: - Tool Handlers
@@ -106,7 +165,8 @@ public enum HookRouter {
                         return blockResponse(
                             "This file was already read \(ageStr) ago via senkani and hasn't changed (mtime unchanged). "
                             + "Use your existing knowledge of this file's content. "
-                            + "If you need to re-read it (e.g., after context compaction), call mcp__senkani__read — it returns from cache instantly (0 tokens).",
+                            + "If you need to re-read it (e.g., after context compaction), call mcp__senkani__read — it returns from cache instantly (0 tokens)."
+                            + searchUpgradeHint(filePath: filePath),
                             eventName: eventName
                         )
                     }
@@ -119,7 +179,8 @@ public enum HookRouter {
         return blockResponse(
             "Use mcp__senkani__read instead of Read. "
             + "Active features: \(features). "
-            + "Pass the same file_path as the 'path' argument.",
+            + "Pass the same file_path as the 'path' argument."
+            + searchUpgradeHint(filePath: filePath),
             eventName: eventName
         )
     }
@@ -140,6 +201,12 @@ public enum HookRouter {
             if let replayDeny = checkCommandReplay(command: command, projectRoot: root, sessionId: sessionId, eventName: eventName, db: .shared) {
                 return replayDeny
             }
+        }
+
+        // Phase I: Trivial routing — answer ls, pwd, echo etc. directly in deny reason.
+        // Saves a full tool call round-trip for commands with known local answers.
+        if let trivialDeny = checkTrivialRouting(command: command, projectRoot: projectRoot, sessionId: sessionId, eventName: eventName) {
+            return trivialDeny
         }
 
         // Allowlist: commands that must pass through natively
@@ -241,6 +308,94 @@ public enum HookRouter {
         )
     }
 
+    // MARK: - Trivial Routing (Phase I)
+
+    /// Commands that can be answered locally without any tool call.
+    /// Returns a deny with the answer embedded, saving a full round-trip.
+    static func checkTrivialRouting(command: String, projectRoot: String?, sessionId: String?, eventName: String, db: SessionDatabase = .shared) -> Data? {
+        let trimmed = command.trimmingCharacters(in: .whitespaces)
+
+        // Don't handle commands with pipes, semicolons, redirects, or subshells
+        if trimmed.contains("|") || trimmed.contains(";") || trimmed.contains("$(") || trimmed.contains("`") || trimmed.contains(">") {
+            return nil
+        }
+
+        var answer: String?
+
+        if trimmed == "pwd" {
+            answer = projectRoot ?? FileManager.default.currentDirectoryPath
+        } else if trimmed == "whoami" {
+            answer = NSUserName()
+        } else if trimmed == "hostname" {
+            answer = ProcessInfo.processInfo.hostName
+        } else if trimmed == "date" {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .full
+            formatter.timeStyle = .medium
+            answer = formatter.string(from: Date())
+        } else if trimmed == "echo" {
+            answer = ""  // bare echo prints empty line
+        } else if trimmed.hasPrefix("echo ") {
+            let text = String(trimmed.dropFirst(5))
+            // Don't route if there are variable expansions
+            if text.contains("$") { return nil }
+            // Strip simple surrounding quotes
+            var unquoted = text
+            if (unquoted.hasPrefix("\"") && unquoted.hasSuffix("\"")) ||
+               (unquoted.hasPrefix("'") && unquoted.hasSuffix("'")) {
+                unquoted = String(unquoted.dropFirst().dropLast())
+            }
+            answer = unquoted
+        } else if trimmed == "ls" || trimmed.hasPrefix("ls ") {
+            let args = trimmed == "ls" ? "" : String(trimmed.dropFirst(3))
+            // Only handle bare ls or ls <simple-path> — no flags
+            if !args.isEmpty && args.hasPrefix("-") { return nil }
+
+            let dir: String
+            if args.isEmpty {
+                dir = projectRoot ?? FileManager.default.currentDirectoryPath
+            } else if args.hasPrefix("/") {
+                dir = args
+            } else {
+                dir = (projectRoot ?? FileManager.default.currentDirectoryPath) + "/" + args
+            }
+
+            if let entries = try? FileManager.default.contentsOfDirectory(atPath: dir) {
+                let visible = entries.filter { !$0.hasPrefix(".") }.sorted()
+                if visible.count <= 50 {
+                    answer = visible.isEmpty ? "(empty directory)" : visible.joined(separator: "  ")
+                } else {
+                    answer = visible.prefix(50).joined(separator: "  ") + "\n... and \(visible.count - 50) more entries"
+                }
+            }
+        }
+
+        guard let result = answer else { return nil }
+
+        // Record the intercept event
+        if let sid = sessionId, let root = projectRoot {
+            db.recordTokenEvent(
+                sessionId: sid,
+                paneId: nil,
+                projectRoot: root,
+                source: "intercept",
+                toolName: "Bash",
+                model: nil,
+                inputTokens: 0,
+                outputTokens: 0,
+                savedTokens: max(10, result.utf8.count / 4),
+                costCents: 0,
+                feature: "trivial_routing",
+                command: trimmed
+            )
+        }
+
+        return blockResponse(
+            "Result: \(result)",
+            eventName: eventName
+        )
+    }
+
     // MARK: - Bash Allowlist
 
     /// Commands that must pass through to native Bash (destructive, build, or shell builtins).
@@ -271,6 +426,57 @@ public enum HookRouter {
         if command.contains(">") { return true }
 
         return false
+    }
+
+    // MARK: - Auto-Validate (Phase J)
+
+    /// Handle PostToolUse for Edit/Write — enqueue background validation.
+    /// Returns immediately (<1ms). Validation runs asynchronously.
+    private static func handlePostEditWrite(
+        toolInput: [String: Any],
+        sessionId: String?,
+        projectRoot: String?
+    ) {
+        guard let sid = sessionId, let root = projectRoot else { return }
+
+        let filePath = toolInput["file_path"] as? String
+            ?? toolInput["path"] as? String
+            ?? ""
+        guard !filePath.isEmpty else { return }
+
+        let absPath = filePath.hasPrefix("/") ? filePath : root + "/" + filePath
+
+        Task {
+            await AutoValidateQueue.shared.enqueue(
+                path: absPath,
+                sessionId: sid,
+                projectRoot: root
+            )
+        }
+    }
+
+    /// Format validation results into an advisory string for the deny reason.
+    private static func formatValidationAdvisory(_ results: [SessionDatabase.ValidationResultRow]) -> String {
+        var lines = ["\n\n--- Validation Results ---"]
+        for result in results.prefix(5) {
+            lines.append(result.advisory)
+        }
+        if results.count > 5 {
+            lines.append("... and \(results.count - 5) more. Run senkani_validate for full output.")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Append advisory text to an existing deny response JSON.
+    private static func appendAdvisoryToResponse(_ response: Data, advisory: String) -> Data {
+        guard var json = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
+              var hookOutput = json["hookSpecificOutput"] as? [String: Any],
+              let reason = hookOutput["permissionDecisionReason"] as? String
+        else { return response }
+
+        hookOutput["permissionDecisionReason"] = reason + advisory
+        json["hookSpecificOutput"] = hookOutput
+        return (try? JSONSerialization.data(withJSONObject: json)) ?? response
     }
 
     // MARK: - Response Builders

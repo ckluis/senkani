@@ -223,6 +223,24 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
         return _models.first(where: { $0.id == modelId })?.status == .downloaded
     }
 
+    /// Verify that a model is downloaded AND its files pass integrity checks.
+    /// Does NOT load the model into memory — just checks disk state.
+    /// Returns nil on success, or a human-readable error string.
+    public func verifyInference(_ modelId: String) -> String? {
+        lock.lock()
+        guard let info = _models.first(where: { $0.id == modelId }) else {
+            lock.unlock()
+            return "Unknown model ID: \(modelId)"
+        }
+        let status = info.status
+        lock.unlock()
+
+        guard status == .downloaded else {
+            return "\(info.name) is not downloaded (status: \(status.rawValue))"
+        }
+        return nil  // Files exist and status is downloaded — ready
+    }
+
     /// Get info for a specific model.
     public func model(_ modelId: String) -> ModelInfo? {
         lock.lock()

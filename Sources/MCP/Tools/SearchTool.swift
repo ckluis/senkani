@@ -19,6 +19,11 @@ enum SearchTool {
 
         let results = index.search(name: query, kind: kind, file: file, container: container)
 
+        // Track queried files for staleness detection
+        for entry in results.prefix(30) {
+            session.trackQueriedSymbol(file: entry.file)
+        }
+
         guard !results.isEmpty else {
             return .init(content: [.text(text: "No symbols matching \"\(query)\"", annotations: nil, _meta: nil)])
         }

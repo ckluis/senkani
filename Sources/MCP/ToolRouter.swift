@@ -44,10 +44,9 @@ enum ToolRouter {
                 )
             }
             let result = await executeRoute(params, session: session)
-            // Prepend budget warning to the result content
             var content = result.content
             content.insert(.text(text: "[Budget Warning] \(warning)", annotations: nil, _meta: nil), at: 0)
-            return .init(content: content, isError: result.isError)
+            return prependStaleNotices(.init(content: content, isError: result.isError), session: session)
 
         case .allow:
             // Log allowed (only if session tracking is active)
@@ -58,7 +57,8 @@ enum ToolRouter {
                     decision: "allowed"
                 )
             }
-            return await executeRoute(params, session: session)
+            let result = await executeRoute(params, session: session)
+            return prependStaleNotices(result, session: session)
         }
     }
 
@@ -153,9 +153,21 @@ enum ToolRouter {
             return PaneControlTool.handle(arguments: params.arguments, session: session)
         case "deps":
             return DepsTool.handle(arguments: params.arguments, session: session)
+        case "watch":
+            return WatchTool.handle(arguments: params.arguments, session: session)
         default:
             return .init(content: [.text(text: "Unknown tool: \(params.name)", annotations: nil, _meta: nil)], isError: true)
         }
+    }
+
+    /// Prepend any pending symbol staleness notices to the tool result.
+    private static func prependStaleNotices(_ result: CallTool.Result, session: MCPSession) -> CallTool.Result {
+        let notices = session.drainStaleNotices()
+        guard !notices.isEmpty else { return result }
+        var content = result.content
+        let noticeText = notices.joined(separator: "\n")
+        content.insert(.text(text: noticeText, annotations: nil, _meta: nil), at: 0)
+        return .init(content: content, isError: result.isError)
     }
 
     static func allTools() -> [Tool] {
@@ -177,14 +189,16 @@ enum ToolRouter {
             ),
             Tool(
                 name: "exec",
-                description: "Execute a shell command with output filtering. Applies 24 command-specific rules (git, npm, cargo, docker, etc.), strips ANSI, deduplicates, truncates. 60-90% savings on build/test output.",
+                description: "Execute a shell command with output filtering. Applies 24 command-specific rules. Supports background mode for long builds: pass background:true to get a job_id, then poll with job_id to check status.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "command": .object(["type": .string("string"), "description": .string("Shell command to execute")]),
-                        "sandbox": .object(["type": .string("string"), "description": .string("Output sandbox mode: 'auto' (sandbox if >20 lines, default), 'always', or 'never'")]),
+                        "sandbox": .object(["type": .string("string"), "description": .string("Output sandbox mode: 'auto' (default), 'always', or 'never'")]),
+                        "background": .object(["type": .string("boolean"), "description": .string("Run in background, return job_id immediately (default: false)")]),
+                        "job_id": .object(["type": .string("string"), "description": .string("Poll or kill an existing background job by ID")]),
+                        "kill": .object(["type": .string("boolean"), "description": .string("Send SIGTERM to a background job (use with job_id)")]),
                     ]),
-                    "required": .array([.string("command")]),
                 ]),
                 annotations: .init(readOnlyHint: false, destructiveHint: true, openWorldHint: false)
             ),
@@ -335,6 +349,18 @@ enum ToolRouter {
                     "required": .array([.string("action")]),
                 ]),
                 annotations: .init(readOnlyHint: false, idempotentHint: false, openWorldHint: false)
+            ),
+            Tool(
+                name: "watch",
+                description: "Query file changes detected by FSEvents. Returns changed files since a cursor timestamp. Use instead of re-reading files to check what changed after builds/edits.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "since": .object(["type": .string("string"), "description": .string("ISO8601 timestamp cursor — returns changes after this time. Omit for all recent changes.")]),
+                        "glob": .object(["type": .string("string"), "description": .string("Glob pattern to filter paths (e.g. 'Sources/**/*.swift')")]),
+                    ]),
+                ]),
+                annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
             ),
         ]
     }

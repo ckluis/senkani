@@ -71,6 +71,7 @@ public final class SessionDatabase: @unchecked Sendable {
         createTables()
         createTokenEventsTable()
         createSandboxedResultsTable()
+        createValidationResultsTable()
     }
 
     /// Testable initializer — opens a DB at a custom path (use a temp file).
@@ -87,6 +88,7 @@ public final class SessionDatabase: @unchecked Sendable {
         createTables()
         createTokenEventsTable()
         createSandboxedResultsTable()
+        createValidationResultsTable()
     }
 
     deinit {
@@ -219,6 +221,11 @@ public final class SessionDatabase: @unchecked Sendable {
             execSilent("CREATE INDEX IF NOT EXISTS idx_token_events_pane ON token_events(pane_id);")
             execSilent("CREATE INDEX IF NOT EXISTS idx_token_events_project ON token_events(project_root);")
             execSilent("CREATE INDEX IF NOT EXISTS idx_token_events_time ON token_events(timestamp);")
+            // Migration: add model_tier column for model routing tracking
+            execSilent("ALTER TABLE token_events ADD COLUMN model_tier TEXT;")
+            // Indexes for session continuity queries
+            execSilent("CREATE INDEX IF NOT EXISTS idx_token_events_session ON token_events(session_id);")
+            execSilent("CREATE INDEX IF NOT EXISTS idx_sessions_project_ended ON sessions(project_root, ended_at);")
         }
     }
 
@@ -584,33 +591,6 @@ public final class SessionDatabase: @unchecked Sendable {
         }
     }
 
-    /// Aggregate stats for a single pane (footer display).
-    public func statsForPane(_ paneId: String) -> PaneTokenStats {
-        return queue.sync {
-            guard let db = db else { return .zero }
-            let sql = """
-                SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
-                       COALESCE(SUM(saved_tokens),0), COALESCE(SUM(cost_cents),0), COUNT(*)
-                FROM token_events WHERE pane_id = ?
-            """
-            var stmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return .zero }
-            defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (paneId as NSString).utf8String, -1, nil)
-
-            if sqlite3_step(stmt) == SQLITE_ROW {
-                return PaneTokenStats(
-                    inputTokens: Int(sqlite3_column_int64(stmt, 0)),
-                    outputTokens: Int(sqlite3_column_int64(stmt, 1)),
-                    savedTokens: Int(sqlite3_column_int64(stmt, 2)),
-                    costCents: Int(sqlite3_column_int64(stmt, 3)),
-                    commandCount: Int(sqlite3_column_int64(stmt, 4))
-                )
-            }
-            return .zero
-        }
-    }
-
     /// Aggregate stats for a project (sidebar display). Optionally scoped to a start date.
     public func tokenStatsForProject(_ projectRoot: String, since: Date? = nil) -> PaneTokenStats {
         let normalized = Self.normalizePath(projectRoot) ?? projectRoot
@@ -728,6 +708,79 @@ public final class SessionDatabase: @unchecked Sendable {
                     outputTokens: output,
                     eventCount: count
                 ))
+            }
+            return results
+        }
+    }
+
+    // MARK: - Analytics (Chart Data)
+
+    /// Time-series data for the savings-over-time chart.
+    /// Returns (timestamp, cumulativeRawBytes, cumulativeSavedBytes) tuples sorted by time.
+    /// Survives app restart because it reads from the persistent DB.
+    public func savingsTimeSeries(projectRoot: String, since: Date? = nil) -> [(timestamp: Date, cumulativeRaw: Int, cumulativeSaved: Int)] {
+        let normalized = Self.normalizePath(projectRoot) ?? projectRoot
+        return queue.sync {
+            guard let db = db else { return [] }
+            var sql = """
+                SELECT timestamp, input_tokens, saved_tokens
+                FROM token_events
+                WHERE project_root = ?
+            """
+            if since != nil { sql += " AND timestamp >= ?" }
+            sql += " ORDER BY timestamp ASC"
+
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            if let since { sqlite3_bind_double(stmt, 2, since.timeIntervalSince1970) }
+
+            var results: [(timestamp: Date, cumulativeRaw: Int, cumulativeSaved: Int)] = []
+            var cumRaw = 0
+            var cumSaved = 0
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let ts = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 0))
+                let input = Int(sqlite3_column_int64(stmt, 1))
+                let saved = Int(sqlite3_column_int64(stmt, 2))
+                // raw ≈ input tokens × 4 bytes/token; saved is already in tokens
+                cumRaw += input * 4
+                cumSaved += saved * 4
+                results.append((timestamp: ts, cumulativeRaw: cumRaw, cumulativeSaved: cumSaved))
+            }
+            return results
+        }
+    }
+
+    /// Per-command breakdown for bar charts. Groups by command family, sums raw + compressed bytes.
+    /// Reads from the commands table. Survives app restart.
+    public func commandBreakdown(projectRoot: String) -> [(command: String, rawBytes: Int, compressedBytes: Int)] {
+        let normalized = Self.normalizePath(projectRoot) ?? projectRoot
+        return queue.sync {
+            guard let db = db else { return [] }
+            // Join to get project_root filtering via the session
+            let sql = """
+                SELECT c.command, SUM(c.raw_bytes), SUM(c.compressed_bytes)
+                FROM commands c
+                JOIN sessions s ON c.session_id = s.id
+                WHERE s.project_root = ?
+                AND c.command IS NOT NULL AND c.command != ''
+                GROUP BY c.command
+                ORDER BY SUM(c.raw_bytes) - SUM(c.compressed_bytes) DESC
+                LIMIT 20;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+
+            var results: [(command: String, rawBytes: Int, compressedBytes: Int)] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                guard sqlite3_column_type(stmt, 0) != SQLITE_NULL else { continue }
+                let cmd = String(cString: sqlite3_column_text(stmt, 0))
+                let raw = Int(sqlite3_column_int64(stmt, 1))
+                let compressed = Int(sqlite3_column_int64(stmt, 2))
+                results.append((command: cmd, rawBytes: raw, compressedBytes: compressed))
             }
             return results
         }
@@ -958,6 +1011,261 @@ public final class SessionDatabase: @unchecked Sendable {
         }
     }
     #endif
+
+    /// Per-feature savings across ALL projects (no project filter).
+    /// Used by the Dashboard pane for portfolio-level feature breakdown.
+    public func tokenStatsByFeatureAllProjects(since: Date? = nil) -> [FeatureSavings] {
+        return queue.sync {
+            guard let db = db else { return [] }
+            var sql = """
+                SELECT feature, COALESCE(SUM(saved_tokens),0),
+                       COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COUNT(*)
+                FROM token_events
+                WHERE feature IS NOT NULL AND feature != ''
+            """
+            if since != nil { sql += " AND timestamp >= ?" }
+            sql += " GROUP BY feature ORDER BY SUM(saved_tokens) DESC"
+
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            if let since { sqlite3_bind_double(stmt, 1, since.timeIntervalSince1970) }
+
+            var results: [FeatureSavings] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                results.append(FeatureSavings(
+                    feature: String(cString: sqlite3_column_text(stmt, 0)),
+                    savedTokens: Int(sqlite3_column_int64(stmt, 1)),
+                    inputTokens: Int(sqlite3_column_int64(stmt, 2)),
+                    outputTokens: Int(sqlite3_column_int64(stmt, 3)),
+                    eventCount: Int(sqlite3_column_int64(stmt, 4))
+                ))
+            }
+            return results
+        }
+    }
+
+    /// Time-series data across ALL projects (no project filter).
+    /// Used by the Dashboard pane for the cross-project savings chart.
+    public func savingsTimeSeriesAllProjects(since: Date? = nil) -> [(timestamp: Date, cumulativeRaw: Int, cumulativeSaved: Int)] {
+        return queue.sync {
+            guard let db = db else { return [] }
+            var sql = """
+                SELECT timestamp, input_tokens, saved_tokens
+                FROM token_events
+                WHERE 1=1
+            """
+            if since != nil { sql += " AND timestamp >= ?" }
+            sql += " ORDER BY timestamp ASC"
+
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            if let since { sqlite3_bind_double(stmt, 1, since.timeIntervalSince1970) }
+
+            var results: [(timestamp: Date, cumulativeRaw: Int, cumulativeSaved: Int)] = []
+            var cumRaw = 0
+            var cumSaved = 0
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let ts = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 0))
+                cumRaw += Int(sqlite3_column_int64(stmt, 1)) * 4
+                cumSaved += Int(sqlite3_column_int64(stmt, 2)) * 4
+                results.append((timestamp: ts, cumulativeRaw: cumRaw, cumulativeSaved: cumSaved))
+            }
+            return results
+        }
+    }
+
+    /// Top N most-accessed file paths for a project, ranked by frequency.
+    /// Used for hot file pre-caching on session start.
+    public func hotFiles(projectRoot: String, limit: Int = 20, sinceDaysAgo: Int = 7) -> [String] {
+        let normalized = Self.normalizePath(projectRoot) ?? projectRoot
+        let cutoff = Date().addingTimeInterval(-Double(sinceDaysAgo) * 86400).timeIntervalSince1970
+        return queue.sync {
+            guard let db = db else { return [] }
+            let sql = """
+                SELECT command, COUNT(*) as freq
+                FROM token_events
+                WHERE project_root = ?
+                AND timestamp >= ?
+                AND command IS NOT NULL AND command != ''
+                AND (tool_name IN ('read', 'exec', 'senkani_read') OR feature IN ('cache', 'reread_suppression'))
+                GROUP BY command
+                ORDER BY freq DESC
+                LIMIT ?;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_double(stmt, 2, cutoff)
+            sqlite3_bind_int(stmt, 3, Int32(limit))
+
+            var results: [String] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                guard sqlite3_column_type(stmt, 0) != SQLITE_NULL else { continue }
+                results.append(String(cString: sqlite3_column_text(stmt, 0)))
+            }
+            return results
+        }
+    }
+
+    /// Per-session savings summary: total raw, total saved, multiplier.
+    /// Returns one entry per session, sorted newest first.
+    public struct SessionSummary: Sendable {
+        public let sessionId: String
+        public let startedAt: Date
+        public let totalRawTokens: Int
+        public let totalSavedTokens: Int
+        public var multiplier: Double {
+            let compressed = totalRawTokens - totalSavedTokens
+            return compressed > 0 ? Double(totalRawTokens) / Double(compressed) : 1.0
+        }
+    }
+
+    public func sessionSummaries(projectRoot: String, limit: Int = 20) -> [SessionSummary] {
+        let normalized = Self.normalizePath(projectRoot) ?? projectRoot
+        return queue.sync {
+            guard let db = db else { return [] }
+            let sql = """
+                SELECT te.session_id,
+                       MIN(te.timestamp) as started,
+                       SUM(te.input_tokens + te.output_tokens + te.saved_tokens) as raw_total,
+                       SUM(te.saved_tokens) as saved_total
+                FROM token_events te
+                WHERE te.project_root = ?
+                AND te.source IN ('mcp_tool', 'intercept')
+                GROUP BY te.session_id
+                HAVING raw_total > 0
+                ORDER BY started DESC
+                LIMIT ?;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_int(stmt, 2, Int32(limit))
+
+            var results: [SessionSummary] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let sid = String(cString: sqlite3_column_text(stmt, 0))
+                let ts = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 1))
+                let raw = Int(sqlite3_column_int64(stmt, 2))
+                let saved = Int(sqlite3_column_int64(stmt, 3))
+                results.append(SessionSummary(sessionId: sid, startedAt: ts, totalRawTokens: raw, totalSavedTokens: saved))
+            }
+            return results
+        }
+    }
+
+    // MARK: - Session Continuity
+
+    /// Structured data about the most recently completed session for a project.
+    public struct LastSessionActivity: Sendable {
+        public let sessionId: String
+        public let startedAt: Date
+        public let endedAt: Date
+        public let durationSeconds: TimeInterval
+        public let commandCount: Int
+        public let totalSavedTokens: Int
+        public let totalRawTokens: Int
+        public let lastCommand: String?
+        public let recentSearchQueries: [String]
+        public let topHotFiles: [String]
+    }
+
+    /// Return structured data about the most recently completed session for a project.
+    /// "Completed" = ended_at IS NOT NULL (session shut down cleanly).
+    /// Returns nil if no completed sessions exist.
+    public func lastSessionActivity(projectRoot: String) -> LastSessionActivity? {
+        let normalized = Self.normalizePath(projectRoot) ?? projectRoot
+        return queue.sync {
+            guard let db = db else { return nil }
+
+            // Query 1: Get last completed session metadata
+            let sessionSql = """
+                SELECT id, started_at, ended_at, duration_seconds, command_count,
+                       total_saved_bytes, total_raw_bytes
+                FROM sessions
+                WHERE project_root = ? AND ended_at IS NOT NULL
+                ORDER BY ended_at DESC
+                LIMIT 1;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sessionSql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+
+            let sid = String(cString: sqlite3_column_text(stmt, 0))
+            let startedAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 1))
+            let endedAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 2))
+            let duration = sqlite3_column_double(stmt, 3)
+            let cmdCount = Int(sqlite3_column_int64(stmt, 4))
+            let savedBytes = Int(sqlite3_column_int64(stmt, 5))
+            let rawBytes = Int(sqlite3_column_int64(stmt, 6))
+
+            // Query 2: Get recent activity from token_events for that session
+            let eventSql = """
+                SELECT tool_name, command
+                FROM token_events
+                WHERE session_id = ? AND command IS NOT NULL AND command != ''
+                ORDER BY timestamp DESC
+                LIMIT 20;
+            """
+            var eventStmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, eventSql, -1, &eventStmt, nil) == SQLITE_OK else {
+                return LastSessionActivity(
+                    sessionId: sid, startedAt: startedAt, endedAt: endedAt,
+                    durationSeconds: duration, commandCount: cmdCount,
+                    totalSavedTokens: savedBytes / 4, totalRawTokens: rawBytes / 4,
+                    lastCommand: nil, recentSearchQueries: [], topHotFiles: []
+                )
+            }
+            defer { sqlite3_finalize(eventStmt) }
+            sqlite3_bind_text(eventStmt, 1, (sid as NSString).utf8String, -1, nil)
+
+            var lastCommand: String?
+            var searches: [String] = []
+            var readFiles: [String] = []
+            var seenFiles: Set<String> = []
+
+            while sqlite3_step(eventStmt) == SQLITE_ROW {
+                let toolName = sqlite3_column_type(eventStmt, 0) != SQLITE_NULL
+                    ? String(cString: sqlite3_column_text(eventStmt, 0)) : nil
+                let command = String(cString: sqlite3_column_text(eventStmt, 1))
+
+                if lastCommand == nil { lastCommand = command }
+
+                if toolName == "search" && searches.count < 3 {
+                    searches.append(command)
+                }
+
+                if (toolName == "read" || toolName == "senkani_read" || toolName == "exec") {
+                    let filename = (command as NSString).lastPathComponent
+                    if !filename.isEmpty && !seenFiles.contains(filename) && readFiles.count < 5 {
+                        seenFiles.insert(filename)
+                        readFiles.append(command)
+                    }
+                }
+            }
+
+            return LastSessionActivity(
+                sessionId: sid, startedAt: startedAt, endedAt: endedAt,
+                durationSeconds: duration, commandCount: cmdCount,
+                totalSavedTokens: savedBytes / 4, totalRawTokens: rawBytes / 4,
+                lastCommand: lastCommand, recentSearchQueries: searches, topHotFiles: readFiles
+            )
+        }
+    }
+
+    /// Execute a raw SQL statement (for testing only — e.g., backdating timestamps).
+    public func executeRawSQL(_ sql: String) {
+        queue.sync {
+            guard let db = db else { return }
+            sqlite3_exec(db, sql, nil, nil, nil)
+        }
+    }
 
     // MARK: - Budget Queries
 
@@ -1235,6 +1543,139 @@ public final class SessionDatabase: @unchecked Sendable {
         // Each term wrapped in double-quotes prevents operator interpretation
         // Double-quotes inside terms are already stripped above
         return terms.map { "\"\($0)\"" }.joined(separator: " ")
+    }
+
+    // MARK: - Validation Results Table
+
+    private func createValidationResultsTable() {
+        queue.sync {
+            exec("""
+                CREATE TABLE IF NOT EXISTS validation_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    validator_name TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    exit_code INTEGER NOT NULL,
+                    raw_output TEXT,
+                    advisory TEXT NOT NULL,
+                    duration_ms INTEGER NOT NULL,
+                    created_at REAL NOT NULL,
+                    delivered INTEGER DEFAULT 0
+                );
+            """)
+            execSilent("CREATE INDEX IF NOT EXISTS idx_validation_session_delivered ON validation_results(session_id, delivered);")
+            execSilent("CREATE INDEX IF NOT EXISTS idx_validation_file ON validation_results(file_path);")
+        }
+    }
+
+    // MARK: - Validation Results API
+
+    /// A stored validation result row.
+    public struct ValidationResultRow: Sendable {
+        public let id: Int64
+        public let filePath: String
+        public let validatorName: String
+        public let category: String
+        public let exitCode: Int32
+        public let advisory: String
+        public let durationMs: Int
+        public let createdAt: Date
+    }
+
+    /// Store a validation result from auto-validate.
+    public func insertValidationResult(
+        sessionId: String,
+        filePath: String,
+        validatorName: String,
+        category: String,
+        exitCode: Int32,
+        rawOutput: String?,
+        advisory: String,
+        durationMs: Int
+    ) {
+        let now = Date().timeIntervalSince1970
+        queue.async { [weak self] in
+            guard let self, let db = self.db else { return }
+            let sql = """
+                INSERT INTO validation_results
+                (session_id, file_path, validator_name, category, exit_code, raw_output, advisory, duration_ms, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 2, (filePath as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, (validatorName as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 4, (category as NSString).utf8String, -1, nil)
+            sqlite3_bind_int(stmt, 5, exitCode)
+            Self.bindOptionalText(stmt, 6, rawOutput)
+            sqlite3_bind_text(stmt, 7, (advisory as NSString).utf8String, -1, nil)
+            sqlite3_bind_int(stmt, 8, Int32(durationMs))
+            sqlite3_bind_double(stmt, 9, now)
+            sqlite3_step(stmt)
+        }
+    }
+
+    /// Fetch undelivered validation results with errors for a session.
+    /// Atomically marks them as delivered to prevent repeat advisories.
+    public func fetchAndMarkDelivered(sessionId: String) -> [ValidationResultRow] {
+        return queue.sync {
+            guard let db = db else { return [] }
+
+            // SELECT undelivered errors
+            let selectSql = """
+                SELECT id, file_path, validator_name, category, exit_code, advisory, duration_ms, created_at
+                FROM validation_results
+                WHERE session_id = ? AND delivered = 0 AND exit_code != 0
+                ORDER BY created_at DESC
+                LIMIT 10;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, selectSql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+
+            var results: [ValidationResultRow] = []
+            var ids: [Int64] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let id = sqlite3_column_int64(stmt, 0)
+                ids.append(id)
+                results.append(ValidationResultRow(
+                    id: id,
+                    filePath: String(cString: sqlite3_column_text(stmt, 1)),
+                    validatorName: String(cString: sqlite3_column_text(stmt, 2)),
+                    category: String(cString: sqlite3_column_text(stmt, 3)),
+                    exitCode: sqlite3_column_int(stmt, 4),
+                    advisory: String(cString: sqlite3_column_text(stmt, 5)),
+                    durationMs: Int(sqlite3_column_int(stmt, 6)),
+                    createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 7))
+                ))
+            }
+
+            // Mark as delivered atomically (same queue.sync block)
+            if !ids.isEmpty {
+                let idList = ids.map(String.init).joined(separator: ",")
+                exec("UPDATE validation_results SET delivered = 1 WHERE id IN (\(idList));")
+            }
+
+            return results
+        }
+    }
+
+    /// Prune old validation results.
+    public func pruneValidationResults(olderThanHours: Int = 24) {
+        let cutoff = Date().addingTimeInterval(-Double(olderThanHours) * 3600).timeIntervalSince1970
+        queue.async { [weak self] in
+            guard let self, let db = self.db else { return }
+            let sql = "DELETE FROM validation_results WHERE created_at < ?;"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_double(stmt, 1, cutoff)
+            sqlite3_step(stmt)
+        }
     }
 
     // MARK: - Helpers

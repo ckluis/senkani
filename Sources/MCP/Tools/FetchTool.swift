@@ -25,6 +25,9 @@ enum FetchTool {
             return .init(content: [.text(text: msg, annotations: nil, _meta: nil)], isError: true)
         }
 
+        // Track queried symbol file for staleness detection
+        session.trackQueriedSymbol(file: entry.file)
+
         let fullPath = session.projectRoot + "/" + entry.file
         guard let content = try? String(contentsOfFile: fullPath, encoding: .utf8) else {
             return .init(content: [.text(text: "Could not read \(entry.file)", annotations: nil, _meta: nil)], isError: true)

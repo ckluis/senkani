@@ -197,20 +197,10 @@ class ClaudeSessionWatcher {
     }
 
     private static func estimateCost(input: Int, output: Int, model: String?) -> Int {
-        let inputRate: Double
-        let outputRate: Double
-        switch model {
-        case let m where m?.contains("opus") == true:
-            inputRate = 15.0; outputRate = 75.0
-        case let m where m?.contains("sonnet") == true:
-            inputRate = 3.0; outputRate = 15.0
-        case let m where m?.contains("haiku") == true:
-            inputRate = 0.25; outputRate = 1.25
-        default:
-            inputRate = 3.0; outputRate = 15.0
-        }
-        let cents = (Double(input) / 1_000_000.0 * inputRate + Double(output) / 1_000_000.0 * outputRate) * 100.0
-        return Int(cents)
+        let pricing = ModelPricing.find(model ?? "sonnet")
+        let dollars = Double(input) / 1_000_000.0 * pricing.inputPerMillion
+                    + Double(output) / 1_000_000.0 * pricing.outputPerMillion
+        return Int(dollars * 100.0)
     }
 
     private func findLatestSession(in dir: String) -> String? {

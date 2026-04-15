@@ -30,6 +30,7 @@ struct SavingsTestView: View {
 
     // Scenario mode
     @State private var selectedScenarioId: String?
+    @State private var sessionHistory: [SessionDatabase.SessionSummary] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -201,10 +202,13 @@ struct SavingsTestView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     liveSummaryBar
+                    pairedNumbersBanner
                     Divider()
                     liveFeatureBreakdown
                     Divider()
                     liveTopEvents
+                    Divider()
+                    sessionHistorySection
                 }
                 .padding(12)
             }
@@ -571,6 +575,132 @@ struct SavingsTestView: View {
         }
     }
 
+    // MARK: - Paired Numbers Banner
+
+    /// Shows fixture bench multiplier alongside the live session multiplier.
+    /// This is the honest paired display that gates any marketing use of the 80x figure.
+    @ViewBuilder
+    private var pairedNumbersBanner: some View {
+        let totalRaw = liveStats.inputTokens + liveStats.outputTokens + liveStats.savedTokens
+        let totalCompressed = liveStats.inputTokens + liveStats.outputTokens
+        let liveMultiplier = totalCompressed > 0 ? Double(totalRaw) / Double(totalCompressed) : 0
+
+        if liveMultiplier > 0 {
+            HStack(spacing: 0) {
+                // Fixture number
+                VStack(spacing: 2) {
+                    Text("80.4x")
+                        .font(.system(size: 14, weight: .bold, design: .monospaced))
+                        .foregroundStyle(SenkaniTheme.textSecondary)
+                    Text("fixture bench")
+                        .font(.system(size: 8))
+                        .foregroundStyle(SenkaniTheme.textTertiary)
+                }
+                .frame(maxWidth: .infinity)
+
+                Rectangle()
+                    .fill(SenkaniTheme.textTertiary.opacity(0.2))
+                    .frame(width: 1, height: 30)
+
+                // Live number
+                VStack(spacing: 2) {
+                    Text(String(format: "%.1fx", liveMultiplier))
+                        .font(.system(size: 14, weight: .bold, design: .monospaced))
+                        .foregroundStyle(SenkaniTheme.savingsGreen)
+                    Text("live session")
+                        .font(.system(size: 8))
+                        .foregroundStyle(SenkaniTheme.textTertiary)
+                }
+                .frame(maxWidth: .infinity)
+
+                // Median across sessions (if history exists)
+                if sessionHistory.count > 1 {
+                    Rectangle()
+                        .fill(SenkaniTheme.textTertiary.opacity(0.2))
+                        .frame(width: 1, height: 30)
+
+                    let median = medianMultiplier
+                    VStack(spacing: 2) {
+                        Text(String(format: "%.1fx", median))
+                            .font(.system(size: 14, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.blue)
+                        Text("median (\(sessionHistory.count) sessions)")
+                            .font(.system(size: 8))
+                            .foregroundStyle(SenkaniTheme.textTertiary)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(.vertical, 8)
+            .background(SenkaniTheme.paneBody.opacity(0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(SenkaniTheme.textTertiary.opacity(0.15), lineWidth: 1)
+            )
+        }
+    }
+
+    private var medianMultiplier: Double {
+        let sorted = sessionHistory.map(\.multiplier).sorted()
+        guard !sorted.isEmpty else { return 0 }
+        let mid = sorted.count / 2
+        return sorted.count % 2 == 0
+            ? (sorted[mid - 1] + sorted[mid]) / 2.0
+            : sorted[mid]
+    }
+
+    // MARK: - Session History
+
+    @ViewBuilder
+    private var sessionHistorySection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Session History")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(SenkaniTheme.textTertiary)
+                .padding(.bottom, 4)
+
+            if sessionHistory.isEmpty {
+                Text("Session history will appear after MCP tool calls are recorded.")
+                    .font(.system(size: 9))
+                    .foregroundStyle(SenkaniTheme.textTertiary)
+            } else {
+                ForEach(sessionHistory.prefix(10), id: \.sessionId) { session in
+                    HStack(spacing: 8) {
+                        Text(sessionDateLabel(session.startedAt))
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(SenkaniTheme.textTertiary)
+                            .frame(width: 80, alignment: .leading)
+
+                        Text(String(format: "%.1fx", session.multiplier))
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(SenkaniTheme.savingsGreen)
+                            .frame(width: 40, alignment: .trailing)
+
+                        GeometryReader { geo in
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(SenkaniTheme.savingsGreen.opacity(0.5))
+                                .frame(width: max(2, geo.size.width * min(1, session.multiplier / 20)))
+                        }
+                        .frame(height: 12)
+
+                        Text(formatTokens(session.totalSavedTokens))
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(SenkaniTheme.textSecondary)
+                            .frame(width: 48, alignment: .trailing)
+                    }
+                    .frame(height: 20)
+                }
+            }
+        }
+    }
+
+    private func sessionDateLabel(_ date: Date) -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "MMM d HH:mm"
+        return fmt.string(from: date)
+    }
+
     // MARK: - Live Refresh
 
     private func startLiveRefresh() {
@@ -603,6 +733,8 @@ struct SavingsTestView: View {
         if newStats != liveStats { liveStats = newStats }
         if newBreakdown != featureBreakdown { featureBreakdown = newBreakdown }
         if newTopEvents != topEvents { topEvents = newTopEvents }
+
+        sessionHistory = db.sessionSummaries(projectRoot: projectPath)
     }
 
     // MARK: - Fixture Actions

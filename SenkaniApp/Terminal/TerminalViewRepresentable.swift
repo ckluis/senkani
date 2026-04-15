@@ -2,6 +2,10 @@ import SwiftUI
 import AppKit
 import SwiftTerm
 
+extension Notification.Name {
+    static let senkaniSendBroadcast = Notification.Name("senkaniSendBroadcast")
+}
+
 // MARK: - FocusableTerminalView
 
 /// Container NSView that bridges SwiftUI's responder chain to SwiftTerm.
@@ -16,6 +20,7 @@ import SwiftTerm
 class FocusableTerminalView: NSView {
     var terminalView: LocalProcessTerminalView?
     var onActivate: (() -> Void)?
+    var onProcessStarted: ((pid_t) -> Void)?
 
     // Deferred shell start — set in makeNSView, executed in viewDidMoveToWindow
     struct ShellConfig {
@@ -35,6 +40,19 @@ class FocusableTerminalView: NSView {
         super.viewDidMoveToWindow()
         print("[TERM] viewDidMoveToWindow fired, window=\(String(describing: window)), bounds=\(bounds)")
         startProcessIfReady()
+
+        // Listen for broadcast messages
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleBroadcast(_:)),
+            name: .senkaniSendBroadcast,
+            object: nil
+        )
+    }
+
+    @objc private func handleBroadcast(_ notification: Notification) {
+        guard let text = notification.object as? String else { return }
+        terminalView?.send(txt: text)
     }
 
     override func layout() {
@@ -87,7 +105,13 @@ class FocusableTerminalView: NSView {
         // Give terminal keyboard focus
         win.makeFirstResponder(tv)
 
-        print("[TERM] STARTED: shell=\(config.path) initialCommand=\(config.initialCommand) bounds=\(bounds)")
+        // Report the PID back to the pane model
+        let pid = tv.process?.shellPid ?? 0
+        if pid > 0 {
+            onProcessStarted?(pid)
+        }
+
+        print("[TERM] STARTED: shell=\(config.path) pid=\(pid) initialCommand=\(config.initialCommand) bounds=\(bounds)")
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -119,7 +143,9 @@ struct TerminalViewRepresentable: NSViewRepresentable {
     let environment: [String: String]
     let workingDirectory: String
     let isActive: Bool
+    var fontSize: CGFloat = 12
     let onProcessExited: ((Int32) -> Void)?
+    let onProcessStarted: ((pid_t) -> Void)?
     let onActivate: (() -> Void)?
 
     init(paneId: UUID = UUID(),
@@ -127,14 +153,18 @@ struct TerminalViewRepresentable: NSViewRepresentable {
          environment: [String: String] = [:],
          workingDirectory: String = NSHomeDirectory(),
          isActive: Bool = true,
+         fontSize: CGFloat = 12,
          onProcessExited: ((Int32) -> Void)? = nil,
+         onProcessStarted: ((pid_t) -> Void)? = nil,
          onActivate: (() -> Void)? = nil) {
         self.paneId = paneId
         self.initialCommand = initialCommand
         self.environment = environment
         self.workingDirectory = workingDirectory
         self.isActive = isActive
+        self.fontSize = fontSize
         self.onProcessExited = onProcessExited
+        self.onProcessStarted = onProcessStarted
         self.onActivate = onActivate
     }
 
@@ -142,6 +172,7 @@ struct TerminalViewRepresentable: NSViewRepresentable {
         let container = FocusableTerminalView()
         container.wantsLayer = true
         container.onActivate = onActivate
+        container.onProcessStarted = onProcessStarted
 
         let tv = LocalProcessTerminalView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
 
@@ -190,6 +221,13 @@ struct TerminalViewRepresentable: NSViewRepresentable {
         if isActive, let tv = nsView.terminalView,
            nsView.window?.firstResponder !== tv {
             nsView.window?.makeFirstResponder(tv)
+        }
+        // Apply font size changes from display settings
+        if let tv = nsView.terminalView {
+            let currentSize = tv.font.pointSize
+            if abs(currentSize - fontSize) > 0.5 {
+                tv.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+            }
         }
     }
 

@@ -40,6 +40,7 @@ final class MCPSession: @unchecked Sendable {
     private(set) var indexerEnabled: Bool
     private(set) var cacheEnabled: Bool
     private(set) var terseEnabled: Bool
+    private(set) var injectionGuardEnabled: Bool
     private let configFilePath: String?
 
     // Tree cache for incremental re-parsing
@@ -55,8 +56,15 @@ final class MCPSession: @unchecked Sendable {
     // Cached repo map for MCP instruction injection (invalidated on index change)
     private var _repoMap: String?
 
+    // Cached session continuity brief (generated once per session)
+    private var _sessionBrief: String?
+
     // Dependency graph (lazily built on first use)
     private var _dependencyGraph: DependencyGraph?
+
+    // Symbol staleness tracking
+    private var queriedSymbols: Set<String> = []
+    private var staleNotices: [String] = []
 
     // Running metrics
     private(set) var totalRawBytes = 0
@@ -67,6 +75,7 @@ final class MCPSession: @unchecked Sendable {
 
     init(projectRoot: String, filterEnabled: Bool = true, secretsEnabled: Bool = true,
          indexerEnabled: Bool = true, cacheEnabled: Bool = true, terseEnabled: Bool = false,
+         injectionGuardEnabled: Bool = false,
          readCache: ReadCache? = nil,
          metricsFilePath: String? = nil, sessionId: String? = nil, paneId: String? = nil,
          configFilePath: String? = nil) {
@@ -76,6 +85,7 @@ final class MCPSession: @unchecked Sendable {
         self.indexerEnabled = indexerEnabled
         self.cacheEnabled = cacheEnabled
         self.terseEnabled = terseEnabled
+        self.injectionGuardEnabled = injectionGuardEnabled
         self.readCache = readCache ?? ReadCache()
         self.metricsFilePath = metricsFilePath
         self.sessionId = sessionId
@@ -90,6 +100,8 @@ final class MCPSession: @unchecked Sendable {
         if indexerEnabled {
             warmIndex()
         }
+        // Pre-cache hot files from prior sessions (non-blocking)
+        preCacheHotFiles()
     }
 
     /// Resolve session config from environment.
@@ -132,6 +144,7 @@ final class MCPSession: @unchecked Sendable {
             indexerEnabled: passthrough ? false : envBool("SENKANI_MCP_INDEX", fallback: true),
             cacheEnabled: passthrough ? false : envBool("SENKANI_MCP_CACHE", fallback: true),
             terseEnabled: passthrough ? false : envBool("SENKANI_MCP_TERSE", fallback: false),
+            injectionGuardEnabled: passthrough ? false : envBool("SENKANI_MCP_INJECTION_GUARD", fallback: false),
             metricsFilePath: metricsFile,
             sessionId: sessionId,
             paneId: paneId,
@@ -238,6 +251,79 @@ final class MCPSession: @unchecked Sendable {
         return map
     }
 
+    /// Generate the session continuity brief. Cached after first call.
+    /// Returns empty string if continuity is disabled or no prior session exists.
+    func sessionBrief() -> String {
+        lock.lock()
+        if let cached = _sessionBrief {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+
+        // Check feature toggle (default: on)
+        guard Self.continuityEnabled() else {
+            lock.lock()
+            _sessionBrief = ""
+            lock.unlock()
+            return ""
+        }
+
+        let lastActivity = SessionDatabase.shared.lastSessionActivity(projectRoot: projectRoot)
+
+        let changedFiles: [String]
+        if let activity = lastActivity {
+            changedFiles = SessionBriefGenerator.filesChangedSince(
+                files: activity.topHotFiles,
+                since: activity.endedAt,
+                projectRoot: projectRoot
+            )
+        } else {
+            changedFiles = []
+        }
+
+        let brief = SessionBriefGenerator.generate(
+            lastActivity: lastActivity,
+            changedFilesSinceLastSession: changedFiles
+        )
+        let section = brief.isEmpty ? "" : "\n\nSession context:\n" + brief
+
+        lock.lock()
+        _sessionBrief = section
+        lock.unlock()
+        return section
+    }
+
+    private static func continuityEnabled() -> Bool {
+        let val = ProcessInfo.processInfo.environment["SENKANI_CONTINUITY"]?.lowercased()
+        switch val {
+        case "false", "off", "0", "no": return false
+        default: return true  // on by default
+        }
+    }
+
+    /// Pre-populate ReadCache with hot files from the session database.
+    /// Non-blocking (utility queue). Only when cacheEnabled.
+    func preCacheHotFiles() {
+        guard cacheEnabled else { return }
+        DispatchQueue.global(qos: .utility).async { [projectRoot, readCache] in
+            let hotPaths = SessionDatabase.shared.hotFiles(projectRoot: projectRoot, limit: 20)
+            for path in hotPaths {
+                let absPath = path.hasPrefix("/") ? path : projectRoot + "/" + path
+                guard FileManager.default.fileExists(atPath: absPath),
+                      let content = try? String(contentsOfFile: absPath, encoding: .utf8),
+                      content.utf8.count <= 500_000  // 500KB cap per file
+                else { continue }
+                let attrs = try? FileManager.default.attributesOfItem(atPath: absPath)
+                let mtime = (attrs?[.modificationDate] as? Date) ?? Date()
+                readCache.store(path: absPath, mtime: mtime, content: content, rawBytes: content.utf8.count)
+            }
+            if !hotPaths.isEmpty {
+                fputs("[senkani] Pre-cached \(hotPaths.count) hot files\n", stderr)
+            }
+        }
+    }
+
     /// Blocking index build for CLI commands. Checks if background build finished first.
     func ensureIndex() -> SymbolIndex {
         lock.lock()
@@ -304,6 +390,177 @@ final class MCPSession: @unchecked Sendable {
         fileWatcher = nil
     }
 
+    // MARK: - Change Event Ring Buffer (senkani_watch)
+
+    /// A file change event for the ring buffer.
+    struct ChangeEvent: Sendable, Codable {
+        let path: String          // relative to projectRoot
+        let eventType: String     // "modified", "created", "deleted"
+        let timestamp: Date
+    }
+
+    private var recentChanges: [ChangeEvent] = []
+    private let changeBufferCapacity = 500
+
+    /// Append change events to the ring buffer. O(1) amortized.
+    func appendChangeEvents(_ events: [ChangeEvent]) {
+        lock.lock()
+        defer { lock.unlock() }
+        recentChanges.append(contentsOf: events)
+        if recentChanges.count > changeBufferCapacity {
+            recentChanges.removeFirst(recentChanges.count - changeBufferCapacity)
+        }
+    }
+
+    /// Query changes since a cursor timestamp, optionally filtered by glob.
+    /// Non-destructive — the agent manages its own cursor.
+    func changesSince(_ since: Date?, glob: String?) -> [ChangeEvent] {
+        lock.lock()
+        let snapshot = recentChanges
+        lock.unlock()
+
+        var result = snapshot
+        if let since = since {
+            result = result.filter { $0.timestamp > since }
+        }
+        if let glob = glob {
+            result = result.filter { fnmatch(glob, $0.path, FNM_PATHNAME) == 0 }
+        }
+        return result
+    }
+
+    // MARK: - Symbol Staleness Tracking
+
+    /// Track a file path that was queried via search/fetch/outline.
+    /// If the file later changes, a staleness notice will be generated.
+    func trackQueriedSymbol(file: String) {
+        lock.lock()
+        queriedSymbols.insert(file)
+        lock.unlock()
+    }
+
+    /// Check changed files against queried symbols and generate notices.
+    /// Called from handleFileChanges() after re-indexing.
+    func checkStaleness(changedFiles: Set<String>) {
+        lock.lock()
+        let staleFiles = changedFiles.intersection(queriedSymbols)
+        if !staleFiles.isEmpty {
+            let notice = "[stale] Symbols may have changed in: \(staleFiles.sorted().joined(separator: ", "))"
+            staleNotices.append(notice)
+            queriedSymbols.subtract(staleFiles)
+        }
+        lock.unlock()
+    }
+
+    /// Return and clear pending stale notices. Thread-safe.
+    func drainStaleNotices() -> [String] {
+        lock.lock()
+        let notices = staleNotices
+        staleNotices.removeAll()
+        lock.unlock()
+        return notices
+    }
+
+    // MARK: - Background Jobs (senkani_exec background mode)
+
+    /// A long-running background process managed by senkani_exec.
+    final class BackgroundJob: @unchecked Sendable {
+        let id: String
+        let process: Process
+        let startTime: Date
+        let command: String
+        private let outputLock = NSLock()
+        private var _outputBuffer = Data()
+        private var _exitCode: Int32? = nil
+        private var _killed = false
+        private let maxOutputBytes = 1_048_576  // 1MB
+
+        init(id: String, process: Process, command: String) {
+            self.id = id
+            self.process = process
+            self.command = command
+            self.startTime = Date()
+        }
+
+        var pid: Int32 { process.processIdentifier }
+
+        func appendOutput(_ data: Data) {
+            outputLock.lock()
+            defer { outputLock.unlock() }
+            let remaining = maxOutputBytes - _outputBuffer.count
+            if remaining > 0 { _outputBuffer.append(data.prefix(remaining)) }
+        }
+
+        func setExitCode(_ code: Int32) {
+            outputLock.lock()
+            _exitCode = code
+            outputLock.unlock()
+        }
+
+        var exitCode: Int32? {
+            outputLock.lock()
+            defer { outputLock.unlock() }
+            return _exitCode
+        }
+
+        var isRunning: Bool { process.isRunning }
+
+        var output: String {
+            outputLock.lock()
+            defer { outputLock.unlock() }
+            return String(data: _outputBuffer, encoding: .utf8) ?? ""
+        }
+
+        var killed: Bool {
+            outputLock.lock()
+            defer { outputLock.unlock() }
+            return _killed
+        }
+
+        func markKilled() {
+            outputLock.lock()
+            _killed = true
+            outputLock.unlock()
+        }
+    }
+
+    private var backgroundJobs: [String: BackgroundJob] = [:]
+    static let autoKillCeiling: TimeInterval = 600  // 10 minutes
+
+    func registerBackgroundJob(_ job: BackgroundJob) {
+        lock.lock()
+        backgroundJobs[job.id] = job
+        lock.unlock()
+        scheduleAutoKill(jobId: job.id)
+    }
+
+    func backgroundJob(id: String) -> BackgroundJob? {
+        lock.lock()
+        defer { lock.unlock() }
+        return backgroundJobs[id]
+    }
+
+    func removeBackgroundJob(id: String) {
+        lock.lock()
+        backgroundJobs.removeValue(forKey: id)
+        lock.unlock()
+    }
+
+    private func scheduleAutoKill(jobId: String) {
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + Self.autoKillCeiling) { [weak self] in
+            guard let self, let job = self.backgroundJob(id: jobId) else { return }
+            if job.isRunning {
+                job.process.terminate()
+                DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
+                    if job.isRunning { kill(job.pid, SIGKILL) }
+                }
+                job.markKilled()
+            }
+        }
+    }
+
+    // MARK: - File Change Handling
+
     /// Handle a batch of changed files from the FileWatcher.
     /// Re-indexes each file incrementally, then updates the in-memory symbol index.
     private func handleFileChanges(_ changedFiles: [String]) {
@@ -313,6 +570,11 @@ final class MCPSession: @unchecked Sendable {
             return String(absPath.dropFirst(prefix.count))
         }
         guard !relativePaths.isEmpty else { return }
+
+        // Append to ring buffer for senkani_watch
+        let now = Date()
+        let events = relativePaths.map { ChangeEvent(path: $0, eventType: "modified", timestamp: now) }
+        appendChangeEvents(events)
 
         var newEntries: [IndexEntry] = []
         var affectedFiles: Set<String> = []
@@ -345,6 +607,9 @@ final class MCPSession: @unchecked Sendable {
         _symbolIndex = idx
         _repoMap = nil
         lock.unlock()
+
+        // Check for symbol staleness (files the agent previously queried)
+        checkStaleness(changedFiles: affectedFiles)
 
         fputs("[senkani] Re-indexed \(relativePaths.count) changed files (\(newEntries.count) symbols)\n", stderr)
     }
@@ -436,6 +701,13 @@ final class MCPSession: @unchecked Sendable {
     /// Shut down the session, ending the database session record.
     func shutdown() {
         stopFileWatcher()
+        // Kill all background jobs
+        lock.lock()
+        let jobs = Array(backgroundJobs.values)
+        lock.unlock()
+        for job in jobs where job.isRunning {
+            job.process.terminate()
+        }
         if let sid = sessionId {
             SessionDatabase.shared.endSession(sessionId: sid)
         }
@@ -468,6 +740,33 @@ final class MCPSession: @unchecked Sendable {
         let weekCents = SessionDatabase.shared.costForWeek()
 
         return config.check(sessionCents: sessionCents, todayCents: todayCents, weekCents: weekCents)
+    }
+
+    /// Budget remaining as a fraction (0.0...1.0). Returns 1.0 if no budget configured.
+    /// Used by AdaptiveTruncation to scale output caps.
+    func budgetRemainingPercent() -> Double {
+        let config = BudgetConfig.load()
+        guard config.perSessionLimitCents != nil
+            || config.dailyLimitCents != nil
+            || config.weeklyLimitCents != nil else {
+            return 1.0  // No budget = unlimited
+        }
+
+        lock.lock()
+        let raw = totalRawBytes
+        let compressed = totalCompressedBytes
+        lock.unlock()
+        let sessionCents = ModelPricing.costSavedCents(bytes: raw - compressed)
+        let todayCents = SessionDatabase.shared.costForToday()
+
+        var minRemaining = 1.0
+        if let limit = config.perSessionLimitCents, limit > 0 {
+            minRemaining = min(minRemaining, max(0, 1.0 - Double(sessionCents) / Double(limit)))
+        }
+        if let limit = config.dailyLimitCents, limit > 0 {
+            minRemaining = min(minRemaining, max(0, 1.0 - Double(todayCents) / Double(limit)))
+        }
+        return minRemaining
     }
 
     func recordCacheSaving(bytes: Int) {

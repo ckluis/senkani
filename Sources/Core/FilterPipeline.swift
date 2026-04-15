@@ -56,14 +56,30 @@ public struct FilterPipeline: Sendable {
             ))
         }
 
+        // Stage 4: InjectionGuard
+        var injectionsFound: [String] = []
+        if config.isEnabled(.injectionGuard) {
+            let beforeBytes = currentOutput.utf8.count
+            let detection = InjectionGuard.scan(currentOutput)
+            let afterBytes = detection.sanitized.utf8.count
+            breakdown.append(FeatureContribution(
+                feature: .injectionGuard,
+                inputBytes: beforeBytes,
+                outputBytes: afterBytes
+            ))
+            currentOutput = detection.sanitized
+            injectionsFound = detection.detections
+        }
+
         let filteredBytes = currentOutput.utf8.count
         return PipelineResult(
             output: currentOutput,
-            wasFiltered: filteredBytes != rawBytes || !secretsFound.isEmpty,
+            wasFiltered: filteredBytes != rawBytes || !secretsFound.isEmpty || !injectionsFound.isEmpty,
             rawBytes: rawBytes,
             filteredBytes: filteredBytes,
             command: command,
             secretsFound: secretsFound,
+            injectionsFound: injectionsFound,
             featureBreakdown: breakdown
         )
     }
@@ -76,6 +92,7 @@ public struct PipelineResult: Sendable {
     public let filteredBytes: Int
     public let command: String
     public let secretsFound: [String]
+    public let injectionsFound: [String]
     public let featureBreakdown: [FeatureContribution]
 
     public var savedBytes: Int { rawBytes - filteredBytes }

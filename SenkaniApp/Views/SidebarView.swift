@@ -126,11 +126,23 @@ struct SidebarView: View {
             clearToolSelection()
         } label: {
             VStack(alignment: .leading, spacing: 4) {
-                // Row 1: project name
-                Text(project.name)
-                    .font(.system(size: 11, weight: project.isActive ? .semibold : .regular))
-                    .foregroundStyle(project.isActive ? SenkaniTheme.textPrimary : SenkaniTheme.textSecondary)
-                    .lineLimit(1)
+                // Row 1: project name + git branch
+                HStack(spacing: 4) {
+                    Text(project.name)
+                        .font(.system(size: 11, weight: project.isActive ? .semibold : .regular))
+                        .foregroundStyle(project.isActive ? SenkaniTheme.textPrimary : SenkaniTheme.textSecondary)
+                        .lineLimit(1)
+
+                    if let branch = project.gitBranch {
+                        Text(branch)
+                            .font(.system(size: 8, design: .monospaced))
+                            .foregroundStyle(.cyan.opacity(0.7))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(.cyan.opacity(0.1)))
+                            .lineLimit(1)
+                    }
+                }
 
                 // Row 2–3: metrics grid
                 HStack(spacing: 0) {

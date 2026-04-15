@@ -10,43 +10,55 @@ Senkani is two things in one binary: a **multi-pane terminal workspace** (native
 
 | Feature | Status |
 |---------|--------|
-| **Terminal pane** — SwiftTerm, Apple Silicon native | ✅ Live |
+| **Terminal pane** — SwiftTerm, Apple Silicon native, configurable font size | ✅ Live |
 | **Markdown preview pane** — live-rendered from file | ✅ Live |
 | **Browser pane** — WKWebView embedded | ✅ Live |
 | **Code Editor pane** — pure SwiftUI, tree-sitter syntax highlighting (22 languages), file tree sidebar, symbol navigation (Cmd+click → definition), token intelligence overlays | ✅ Live |
-| **Analytics pane** — token/cost savings with realtime sparkline | ✅ Live |
+| **Analytics pane** — token/cost savings with charts, persistent across restarts | ✅ Live |
+| **Dashboard pane** — multi-project portfolio: hero savings card, project breakdown table, feature charts, auto-generated insights | ✅ Live |
 | **Model manager pane** — download/manage local LLMs | ✅ Live |
-| **Savings test pane** — fixture benchmark (80.37x) + live per-feature savings breakdown | ✅ Live |
+| **Savings test pane** — fixture benchmark (80.37x) + live per-feature breakdown + session history with paired fixture/live multipliers | ✅ Live |
 | **Diff viewer / log viewer / scratchpad panes** | ✅ Live |
-| **Agent timeline pane** — tool call history | ✅ Live |
+| **Agent timeline pane** — tool call history with optimization events | ✅ Live |
+| **Knowledge base pane** — project knowledge entities, freshness indicators, decision records | ✅ Live |
 | **Multi-project workspace** — persistent per-project layout | ✅ Live |
 | **Menu bar integration** — lifetime stats, socket toggle, launch-at-login | ✅ Live |
-| **MCP intelligence layer** — 13 tools, auto-registers with Claude Code | ✅ Live |
-| **Filter pipeline** — 24+ command-specific rules, ANSI stripping, dedup | ✅ Live |
+| **⌘K command palette** — search-as-you-type for panes, themes, actions | ✅ Live |
+| **MCP intelligence layer** — 14 tools, auto-registers with Claude Code | ✅ Live |
+| **Filter pipeline** — 44 command-specific rules, ANSI stripping, dedup | ✅ Live |
 | **Secret redaction** — API keys, AWS tokens, GitHub PATs, Bearer tokens | ✅ Live |
 | **Terse compression** — algorithmic word/phrase minimization | ✅ Live |
 | **Symbol indexer** — 22 languages (incl. HTML/CSS), tree-sitter AST + regex fallback | ✅ Live |
-| **Incremental indexing** — re-indexes only changed files | ✅ Live |
+| **Incremental indexing** — re-indexes only changed files, symbol staleness notifications | ✅ Live |
 | **Dependency graph** — bidirectional imports, 15+ languages | ✅ Live |
-| **Session database** — SQLite + FTS5, token tracking, cost history | ✅ Live |
-| **Hook system** — budget enforcement, tool routing, Layer 3 re-read suppression, <5ms latency | ✅ Live |
+| **Session database** — SQLite + FTS5, token tracking, cost history, metrics persistence | ✅ Live |
+| **Hook system** — budget enforcement, tool routing, Layer 3 interception (5 patterns), auto-validate reactions, <5ms latency | ✅ Live |
+| **Layer 3 interception** — re-read suppression, command replay, trivial routing, search upgrade, redundant validation | ✅ Live |
+| **Auto-validate** — PostToolUse → background syntax/type check → advisory on next tool call | ✅ Live |
+| **Model routing** — per-pane presets (Auto/Build/Research/Quick/Local), difficulty scoring, CLAUDE_MODEL env injection | ✅ Live |
 | **Local vision** — Gemma on Apple Silicon MLX, no API cost | ✅ Live |
 | **Local embeddings** — MLX, no API cost | ✅ Live |
-| **CLI** — 13 commands: exec, search, bench, doctor, grammars, … | ✅ Live |
+| **`senkani_watch` tool** — FSEvents ring buffer; query changed files by cursor + glob | ✅ Live |
+| **`senkani_exec` background mode** — detach long builds, poll stdout, kill on demand | ✅ Live |
+| **Process lifecycle controls** — kill/restart buttons in pane header, PID tracking | ✅ Live |
+| **Metrics persistence** — all savings data survives app restart via SQLite | ✅ Live |
+| **Smart first-read selection** — outline-first reads return symbol structure by default | ✅ Live |
+| **Adaptive truncation** — output caps scale with budget remaining | ✅ Live |
+| **Broadcast mode** — type once, all terminal panes hear | ✅ Live |
+| **Notification rings** — blue ring on panes with unread output | ✅ Live |
+| **Sidebar metadata** — git branch per project | ✅ Live |
+| **Display settings** — font size slider + presets per pane | ✅ Live |
+| **CLI** — 15 commands: exec, search, bench, doctor, grammars, uninstall, … | ✅ Live |
 | **Benchmarking suite** — filter, indexer, cache, terse, with reporters | ✅ Live |
-| **Knowledge base pane** — project knowledge entities, freshness indicators, decision records | ✅ Live |
+| **Pane socket IPC** — instant pane control via Unix socket (<10ms vs 5s polling) | ✅ Live |
+| **Socket health check** — senkani doctor verifies daemon responsiveness | ✅ Live |
 | IDE pane (LSP completions, inline diagnostics, multi-cursor) | 🔄 Planned |
 | Agent runner pane (spawn, observe, interrupt) | 🔄 Planned |
 | Workflow builder (pipeline graph UI) | 🔄 Planned |
-| Multi-repo git view | 🔄 Planned |
-| Command palette (⌘K) | 🔄 Planned |
 | SSH / Mosh pane | 🔄 Planned |
-| **Session continuity** — session context brief injected at session open, agent knows where it left off without re-reading files | 🔄 Planned |
-| **Prompt injection detection** — scan MCP tool responses for embedded attack strings before they reach Claude | 🔄 Planned |
-| **Smart first-read selection** — outline-first reads return symbol structure by default, full content on demand | ✅ Live |
-| **`senkani_watch` tool** — FSEvents ring buffer exposed as MCP tool; eliminates re-read polling after builds/edits | 🔄 Planned |
-| **`senkani_exec` background mode** — detach long-running builds/servers, poll stdout, kill on demand; lifts 30s timeout | 🔄 Planned |
-| **Layer 3 command replay** — hook detects repeated Bash commands with no file changes, denies and re-uses prior output | ✅ Live |
+| **Session continuity** — context brief injected at session open, agent resumes from prior session | ✅ Live |
+| **Prompt injection detection** — scans tool responses for embedded attack strings, 4 categories, anti-evasion normalization | ✅ Live |
+| Workstream isolation — git worktree + pane pair | 🔄 Planned |
 
 ---
 
@@ -81,12 +93,12 @@ senkani doctor
 
 ## The MCP Intelligence Layer
 
-13 tools that sit between Claude and your filesystem, compressing everything before it hits your token budget.
+15 tools that sit between Claude and your filesystem, compressing everything before it hits your token budget.
 
 | Tool | What it does | Savings |
 |------|-------------|---------|
 | `senkani_read` | File reads: returns outline by default (symbols + line numbers), full content via `full: true`. Cache, secrets, filter on full reads. | 80–99% |
-| `senkani_exec` | Shell commands: 24+ command-specific filter rules (git, npm, cargo, docker…) | 60–90% |
+| `senkani_exec` | Shell commands: 24+ filter rules. Background mode for long builds (poll, kill). Adaptive truncation. | 60–90% |
 | `senkani_search` | Symbol lookup from local index: ~50 tokens vs ~5000 from grep | 99% |
 | `senkani_fetch` | Read only a symbol's lines, not the entire file | 50–99% |
 | `senkani_explore` | Navigate codebase via import/dependency graph | 90%+ |
@@ -96,19 +108,9 @@ senkani doctor
 | `senkani_parse` | AST dump via tree-sitter | — |
 | `senkani_embed` | Text embeddings on Apple Silicon (no API cost) | $0/call |
 | `senkani_vision` | Vision model on Apple Silicon (no API cost) | $0/call |
-| `senkani_pane` | Control workspace panes — open, close, focus, resize | — |
+| `senkani_watch` | FSEvents ring buffer — query changed files by cursor + glob | near-zero |
+| `senkani_pane` | Control workspace panes — open, close, focus, resize (via Unix socket) | — |
 | `senkani_session` | View stats, toggle features, manage panes | — |
-
-**Feature toggles** — all on by default, configurable per-pane or globally:
-
-| Toggle | Env var | Effect |
-|--------|---------|--------|
-| Filter | `SENKANI_FILTER` | Command-specific output rules |
-| Secrets | `SENKANI_SECRETS` | Redact secrets before they reach the AI |
-| Indexer | `SENKANI_INDEXER` | Symbol index for search/fetch/explore |
-| Terse | `SENKANI_TERSE` | Algorithmic phrase compression |
-| Injection guard | `SENKANI_INJECTION_GUARD` | Scan tool responses for embedded prompt attacks |
-| Session continuity | `SENKANI_CONTINUITY` | Inject prior-session brief at session open |
 
 ---
 
@@ -116,39 +118,53 @@ senkani doctor
 
 A horizontal canvas of panes. Each pane is a primitive type; you arrange them however makes sense for what you're doing right now, and Senkani persists the layout per project.
 
-**Pane types available today:**
+**16 pane types:**
 
-- **Terminal** — SwiftTerm, Apple Silicon native, sub-3ms render, full color/ligature support
-- **Code Editor** — tree-sitter syntax highlighting (20 languages), symbol navigation (Cmd+click → definition), token intelligence overlays
+- **Terminal** — SwiftTerm, configurable font size, kill/restart buttons, broadcast mode
+- **Dashboard** — multi-project portfolio: total savings, project table, feature charts, insights
+- **Code Editor** — tree-sitter syntax highlighting (22 languages), symbol navigation, file tree
 - **Browser** — WKWebView embedded, localhost or any URL
 - **Markdown Preview** — live render from file, updates on save
-- **Analytics** — token/cost savings per session with sparkline charts
+- **Analytics** — token/cost savings with charts, persistent across restarts
 - **Model Manager** — download, verify, and delete local LLMs (Gemma, MiniLM)
-- **Savings Test** — run the benchmark suite from the UI
-- **Agent Timeline** — timeline of agent tool calls and decisions
-- **Knowledge Base** — project knowledge entities, freshness indicators, decision records
+- **Savings Test** — fixture bench + live session replay + scenario simulator
+- **Agent Timeline** — timeline of optimization events
+- **Knowledge Base** — project knowledge entities, freshness indicators
 - **Diff Viewer** — side-by-side diff
 - **Log Viewer** — searchable log output
 - **Scratchpad** — auto-saving markdown notepad
+- **Schedules** — manage recurring tasks via launchd
 
-**Pane types coming:**
-
-- IDE (LSP completions, inline diagnostics, multi-cursor)
-- Agent Runner (spawn, observe, interrupt, compose agents)
+**⌘K command palette** opens everything: new panes, themes, actions. Search-as-you-type with category grouping.
 
 ---
 
-## Symbol Indexer
+## Three-Layer Optimization
 
-Tree-sitter AST extraction across 22 languages with incremental updates:
+**Layer 1 — MCP Tools:** The agent calls `senkani_read` instead of `Read`. Cached, compressed, secret-redacted.
 
-**Languages:** Swift, Python, TypeScript/JavaScript, Go, Rust, Java, C, C++, C#, Ruby, PHP, Kotlin, Bash, Lua, Scala, Elixir, Haskell, Zig, HTML, CSS + regex fallback for everything else.
+**Layer 2 — Smart Hooks:** Budget enforcement, metrics, compliance tracking, auto-validate reactions. PostToolUse triggers background syntax/type checking.
 
-**Dependency graph:** Bidirectional import tracking — "what does X import?" and "what imports X?" — across 15+ languages.
+**Layer 3 — Preemptive Interception:** 5 patterns that work with agents that can't cooperate:
+- Re-read suppression (file already served + unchanged → deny)
+- Command replay (deterministic test/build + no file changes → deny with cached result)
+- Trivial routing (ls/pwd/echo → answer in deny reason, saves round-trip)
+- Search upgrade (3+ sequential reads → hint to use senkani_search)
+- Redundant validation (covered by command replay for build/lint/check commands)
 
-**Incremental:** Files are re-indexed only when changed. Parsed trees are cached (TreeCache) for fast re-parses. Projects under 50 files trigger targeted updates; larger projects use full re-index when needed.
+---
 
-**Outline-first:** `senkani_read` returns a file's symbol outline (~300 bytes) by default instead of full content (~3-20KB). Call `senkani_fetch` for specific symbols, or pass `full: true` for the complete file. First reads of code files save ~80-90%.
+## Model Routing
+
+Per-pane model presets control which Claude model handles tasks:
+
+| Preset | Model | Est. Cost |
+|--------|-------|-----------|
+| **Auto** | Difficulty-scored routing | ~$0.30/hr |
+| **Build** | Sonnet 4 | ~$0.45/hr |
+| **Research** | Opus 4 | ~$2.25/hr |
+| **Quick** | Haiku 3.5 | ~$0.12/hr |
+| **Local** | Gemma 4 on-device | $0/hr |
 
 ---
 
@@ -158,12 +174,17 @@ Numbers from the built-in benchmark suite (`senkani bench`):
 
 | Metric | Value |
 |--------|-------|
+| Fixture bench multiplier | **80.37x** (synthetic, controlled conditions) |
+| Live session multiplier | **Varies by workflow** — see Savings Test pane |
 | Terminal render latency | p50 ~2ms, p99 ~3.4ms |
-| Filter throughput (git clone output) | >10k lines/sec |
+| Filter throughput | >10k lines/sec |
 | Symbol search | <5ms cold, <1ms cached |
 | Secret scan | <2ms per KB |
+| Hook latency | <5ms active, <1ms passthrough |
+| Unit tests | **626 passing** |
 | Binary size | ~28 MB universal |
-| RAM (10 panes open) | ~180 MB |
+
+**About the numbers:** The 80.37x figure is from the fixture benchmark — synthetic tasks designed to exercise each optimization layer. Real sessions produce a lower multiplier. The Savings Test pane shows both numbers side by side: fixture ceiling and live floor. The live number is the honest one.
 
 ---
 
@@ -171,14 +192,14 @@ Numbers from the built-in benchmark suite (`senkani bench`):
 
 | Module | Deps | Role |
 |--------|------|------|
-| **Core** | Filter | Session DB, feature config, metrics, budget enforcement, hook routing |
+| **Core** | Filter | Session DB, feature config, metrics, budget, hook routing, model routing, auto-validate, adaptive truncation |
 | **Filter** | — | Token compression: 44 cmd rules, ANSI strip, dedup, secrets, terse |
-| **Indexer** | SwiftTreeSitter | 20 tree-sitter backends, FTS5 search, dependency graph, incremental parsing |
+| **Indexer** | SwiftTreeSitter | 22 tree-sitter backends, FTS5 search, dependency graph, incremental parsing, FSEvents |
 | **Bench** | Core, Filter, Indexer | Token savings test suite: 10 tasks × 7 configs, quality gates, JSON export |
-| **MCP** | Core, Filter, Indexer, MLX | 13 MCP tools, socket server, vision + embedding inference |
+| **MCP** | Core, Filter, Indexer, MLX | 14 MCP tools, socket server (mcp + hook + pane), vision + embedding inference |
 | **HookRelay** | — | Zero-dep hook relay library shared by senkani-hook binary and app's --hook mode |
 | **CLI** | Core, Filter, Indexer, Bench | 14 commands: exec, search, bench, doctor, grammars, init, … |
-| **SenkaniApp** | All + SwiftTerm | SwiftUI workspace: 14 pane types, multi-project, menu bar, agent timeline |
+| **SenkaniApp** | All + SwiftTerm | SwiftUI workspace: 16 pane types, multi-project, ⌘K palette, dashboard, menu bar |
 
 ---
 
@@ -189,7 +210,7 @@ Prerequisites: macOS 14+, Swift 6.0+, Xcode 15+
 ```bash
 swift build          # debug
 swift build -c release
-swift test
+swift test           # 626 tests
 senkani doctor       # verify grammar and database setup
 ```
 

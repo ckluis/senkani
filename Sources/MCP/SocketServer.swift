@@ -13,13 +13,17 @@ public final class SocketServerManager: @unchecked Sendable {
 
     private let socketPath: String
     private let hookSocketPath: String
+    private let paneSocketPath: String
     private var listenFD: Int32 = -1
     private var hookListenFD: Int32 = -1
+    private var paneListenFD: Int32 = -1
     private var running = false
     private let queue = DispatchQueue(label: "com.senkani.socket-server", qos: .utility)
     private let hookQueue = DispatchQueue(label: "com.senkani.hook-server", qos: .userInteractive)
+    private let paneQueue = DispatchQueue(label: "com.senkani.pane-server", qos: .userInitiated)
     private var acceptSource: DispatchSourceRead?
     private var hookAcceptSource: DispatchSourceRead?
+    private var paneAcceptSource: DispatchSourceRead?
     private var activeTasks: [Task<Void, Never>] = []
     private let lock = NSLock()
 
@@ -28,10 +32,16 @@ public final class SocketServerManager: @unchecked Sendable {
     /// Returns the JSON response bytes to send back to the hook binary.
     public var hookHandler: ((_ eventJSON: Data) -> Data)?
 
+    /// Pane command handler. Set this before calling start().
+    /// Called on paneQueue for each incoming pane IPC command.
+    /// Returns the JSON response bytes to send back to the MCP tool.
+    public var paneHandler: ((_ commandJSON: Data) -> Data)?
+
     private init() {
         let senkaniDir = NSHomeDirectory() + "/.senkani"
         self.socketPath = senkaniDir + "/mcp.sock"
         self.hookSocketPath = senkaniDir + "/hook.sock"
+        self.paneSocketPath = senkaniDir + "/pane.sock"
     }
 
     /// Start listening for MCP connections and hook events.
@@ -62,6 +72,16 @@ public final class SocketServerManager: @unchecked Sendable {
                     Data("[senkani] Hook socket server failed to start: \(error)\n".utf8))
             }
         }
+
+        // Start pane listener on separate queue (pane control IPC)
+        paneQueue.async { [self] in
+            do {
+                try startPaneListening()
+            } catch {
+                FileHandle.standardError.write(
+                    Data("[senkani] Pane socket server failed to start: \(error)\n".utf8))
+            }
+        }
     }
 
     /// Stop accepting new connections and close both listeners.
@@ -74,6 +94,8 @@ public final class SocketServerManager: @unchecked Sendable {
         acceptSource = nil
         hookAcceptSource?.cancel()
         hookAcceptSource = nil
+        paneAcceptSource?.cancel()
+        paneAcceptSource = nil
 
         if listenFD >= 0 {
             Darwin.close(listenFD)
@@ -83,10 +105,15 @@ public final class SocketServerManager: @unchecked Sendable {
             Darwin.close(hookListenFD)
             hookListenFD = -1
         }
+        if paneListenFD >= 0 {
+            Darwin.close(paneListenFD)
+            paneListenFD = -1
+        }
 
         // Clean up socket files
         unlink(socketPath)
         unlink(hookSocketPath)
+        unlink(paneSocketPath)
 
         // Cancel all active connection tasks
         let tasks = activeTasks
@@ -232,11 +259,12 @@ public final class SocketServerManager: @unchecked Sendable {
 
         let repoMap = session.repoMap()
         let mapSection = repoMap.isEmpty ? "" : "\n\nProject structure:\n\(repoMap)"
+        let briefSection = session.sessionBrief()
 
         let server = Server(
             name: "senkani",
             version: "0.1.0",
-            instructions: baseInstructions + mapSection,
+            instructions: baseInstructions + mapSection + briefSection,
             capabilities: .init(tools: .init(listChanged: false))
         )
 
@@ -397,6 +425,119 @@ public final class SocketServerManager: @unchecked Sendable {
                 response = handler(eventData)
             } else {
                 response = Data("{}".utf8)
+            }
+
+            // Send response: 4-byte length prefix + JSON
+            var respLength = UInt32(response.count).bigEndian
+            let respLengthData = Data(bytes: &respLength, count: 4)
+            _ = respLengthData.withUnsafeBytes { Darwin.write(clientFD, $0.baseAddress!, 4) }
+            _ = response.withUnsafeBytes { Darwin.write(clientFD, $0.baseAddress!, response.count) }
+        }
+    }
+
+    // MARK: - Pane Listener (socket-based IPC for pane control)
+
+    /// Start listening for pane control commands on pane.sock.
+    /// Same length-prefixed protocol as hook.sock, separate queue.
+    private func startPaneListening() throws {
+        let dir = (paneSocketPath as NSString).deletingLastPathComponent
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        unlink(paneSocketPath)
+
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw SocketError.createFailed(errno) }
+
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = paneSocketPath.utf8CString
+        guard pathBytes.count <= MemoryLayout.size(ofValue: addr.sun_path) else {
+            Darwin.close(fd)
+            throw SocketError.pathTooLong
+        }
+        withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
+            pathBytes.withUnsafeBufferPointer { buf in
+                let dest = UnsafeMutableRawPointer(sunPath).assumingMemoryBound(to: CChar.self)
+                buf.baseAddress!.withMemoryRebound(to: CChar.self, capacity: buf.count) { src in
+                    dest.update(from: src, count: buf.count)
+                }
+            }
+        }
+
+        let bindResult = withUnsafePointer(to: &addr) { addrPtr in
+            addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
+                bind(fd, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard bindResult == 0 else {
+            Darwin.close(fd)
+            throw SocketError.bindFailed(errno)
+        }
+
+        chmod(paneSocketPath, 0o600)
+
+        guard Darwin.listen(fd, 8) == 0 else {
+            Darwin.close(fd)
+            throw SocketError.listenFailed(errno)
+        }
+
+        paneListenFD = fd
+
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: paneQueue)
+        source.setEventHandler { [weak self] in self?.acceptPaneConnection() }
+        source.setCancelHandler { [weak self] in
+            guard let self else { return }
+            if self.paneListenFD >= 0 {
+                Darwin.close(self.paneListenFD)
+                self.paneListenFD = -1
+            }
+        }
+        paneAcceptSource = source
+        source.resume()
+
+        FileHandle.standardError.write(
+            Data("[senkani] Pane socket server listening on \(paneSocketPath)\n".utf8))
+    }
+
+    private func acceptPaneConnection() {
+        var clientAddr = sockaddr_un()
+        var addrLen = socklen_t(MemoryLayout<sockaddr_un>.size)
+
+        let clientFD = withUnsafeMutablePointer(to: &clientAddr) { addrPtr in
+            addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
+                Darwin.accept(paneListenFD, sockaddrPtr, &addrLen)
+            }
+        }
+        guard clientFD >= 0 else { return }
+
+        paneQueue.async { [self] in
+            defer { Darwin.close(clientFD) }
+
+            // Read 4-byte length prefix
+            var lengthBytes = [UInt8](repeating: 0, count: 4)
+            let readLen = Darwin.read(clientFD, &lengthBytes, 4)
+            guard readLen == 4 else { return }
+
+            let payloadLength = Int(UInt32(bigEndian: Data(lengthBytes).withUnsafeBytes { $0.load(as: UInt32.self) }))
+            guard payloadLength > 0, payloadLength < 65536 else { return }
+
+            // Read payload
+            var payload = Data(count: payloadLength)
+            var totalRead = 0
+            while totalRead < payloadLength {
+                let n = payload.withUnsafeMutableBytes { buf in
+                    Darwin.read(clientFD, buf.baseAddress! + totalRead, payloadLength - totalRead)
+                }
+                if n <= 0 { break }
+                totalRead += n
+            }
+            guard totalRead == payloadLength else { return }
+
+            // Call handler
+            let response: Data
+            if let handler = self.paneHandler {
+                response = handler(payload)
+            } else {
+                response = Data("{\"id\":\"unknown\",\"success\":false,\"error\":\"No pane handler registered\"}".utf8)
             }
 
             // Send response: 4-byte length prefix + JSON

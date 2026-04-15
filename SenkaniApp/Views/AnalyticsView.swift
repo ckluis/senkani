@@ -36,7 +36,9 @@ struct AnalyticsView: View {
             now = tick
             budgetConfig = BudgetConfig.load()
             todayCostCents = SessionDatabase.shared.costForToday()
+            refreshChartData()
         }
+        .onAppear { refreshChartData() }
     }
 
     // MARK: - Header
@@ -520,26 +522,35 @@ struct AnalyticsView: View {
         workspace.panes.reduce(0) { $0 + $1.metrics.secretsCaught }
     }
 
-    /// Merge time-series from all panes, sorted by time.
-    private var allTimeSeries: [MetricsDataPoint] {
-        workspace.panes
-            .flatMap { $0.metrics.timeSeries }
-            .sorted { $0.timestamp < $1.timestamp }
-    }
+    /// Time-series data from the persistent DB — survives app restart.
+    @State private var cachedTimeSeries: [MetricsDataPoint] = []
+    @State private var cachedBreakdown: [CommandBreakdownEntry] = []
 
-    /// Global command breakdown across all panes.
-    private var globalBreakdownEntries: [CommandBreakdownEntry] {
-        var combined: [String: (raw: Int, filtered: Int)] = [:]
-        for pane in workspace.panes {
-            for (cmd, values) in pane.metrics.commandBreakdown {
-                let existing = combined[cmd, default: (raw: 0, filtered: 0)]
-                combined[cmd] = (raw: existing.raw + values.raw, filtered: existing.filtered + values.filtered)
-            }
+    private var allTimeSeries: [MetricsDataPoint] { cachedTimeSeries }
+    private var globalBreakdownEntries: [CommandBreakdownEntry] { cachedBreakdown }
+
+    /// Reload chart data from the DB. Called on timer tick.
+    private func refreshChartData() {
+        let projectPath = workspace.activeProject?.path ?? NSHomeDirectory()
+        let db = SessionDatabase.shared
+
+        let series = db.savingsTimeSeries(projectRoot: projectPath)
+        cachedTimeSeries = series.map { point in
+            MetricsDataPoint(
+                timestamp: point.timestamp,
+                cumulativeSavedBytes: point.cumulativeSaved,
+                cumulativeRawBytes: point.cumulativeRaw
+            )
         }
-        return combined.map { key, value in
-            CommandBreakdownEntry(command: key, rawBytes: value.raw, filteredBytes: value.filtered)
+
+        let breakdown = db.commandBreakdown(projectRoot: projectPath)
+        cachedBreakdown = breakdown.map { entry in
+            CommandBreakdownEntry(
+                command: entry.command,
+                rawBytes: entry.rawBytes,
+                filteredBytes: entry.compressedBytes
+            )
         }
-        .sorted { $0.savedBytes > $1.savedBytes }
     }
 
     /// Cost projection data points.

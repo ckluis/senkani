@@ -28,15 +28,15 @@ public struct MCPServerRunner {
         // This bridges Core (no MLX dependency) to the MCP layer (has MLX).
         ModelManager.shared.registerDownloadHandler { modelId in
             switch modelId {
-            case "minilm-l6":
+            case EmbedEngine.modelId:
                 _ = try await EmbedTool.engine.ensureModel()
-            case "qwen2-vl-2b", "gemma3-4b":
+            case let id where ModelManager.visionModelIds.contains(id):
                 _ = try await VisionTool.engine.ensureModel()
             default:
                 throw NSError(
                     domain: "dev.senkani.MCPServer",
                     code: 2,
-                    userInfo: [NSLocalizedDescriptionKey: "Unknown model ID: \(modelId)"]
+                    userInfo: [NSLocalizedDescriptionKey: "Unknown model ID: \(modelId). Known: \(ModelManager.shared.models.map(\.id))"]
                 )
             }
         }
@@ -53,11 +53,14 @@ public struct MCPServerRunner {
         let repoMap = session.repoMap()
         let mapSection = repoMap.isEmpty ? "" : "\n\nProject structure:\n\(repoMap)"
 
+        // Session continuity: inject brief about prior session activity
+        let briefSection = session.sessionBrief()
+
         let instructions: String
         if TerseMode.isEnabled {
-            instructions = TerseMode.systemPrompt + "\n\n" + baseInstructions + mapSection
+            instructions = TerseMode.systemPrompt + "\n\n" + baseInstructions + mapSection + briefSection
         } else {
-            instructions = baseInstructions + mapSection
+            instructions = baseInstructions + mapSection + briefSection
         }
 
         let server = Server(

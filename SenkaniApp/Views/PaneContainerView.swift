@@ -1,4 +1,5 @@
 import SwiftUI
+import Core
 
 /// Wraps a pane with a minimal, premium shell: thin accent line, compact 24px header,
 /// status dot, contextual info, and FCSIT toggles.
@@ -9,6 +10,8 @@ struct PaneContainerView: View {
     let isActive: Bool
     var workspace: WorkspaceModel?
     @State private var showSettings = false
+    @State private var showFeatureDrawer = false
+    @State private var selectedFeature: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,6 +27,16 @@ struct PaneContainerView: View {
             Rectangle()
                 .fill(SenkaniTheme.appBackground)
                 .frame(height: 0.5)
+
+            // FCSIT detail drawer — expandable per-feature breakdown
+            if showFeatureDrawer, let feature = selectedFeature {
+                FeatureDetailDrawer(featureKey: feature, pane: pane)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+
+                Rectangle()
+                    .fill(SenkaniTheme.appBackground)
+                    .frame(height: 0.5)
+            }
 
             // Body content (with settings overlay)
             ZStack {
@@ -67,17 +80,30 @@ struct PaneContainerView: View {
 
     private var paneHeader: some View {
         HStack(spacing: 5) {
-            // Process state dot — pulses gently when running
-            Circle()
-                .fill(processStateColor)
-                .frame(width: 5, height: 5)
-                .opacity(pane.processState.isRunning ? 1.0 : 0.7)
-                .animation(
-                    pane.processState.isRunning
-                        ? .easeInOut(duration: 1.2).repeatForever(autoreverses: true)
-                        : .default,
-                    value: pane.processState.isRunning
-                )
+            // Process state dot — pulses when running, blue ring when unread output
+            ZStack {
+                Circle()
+                    .fill(processStateColor)
+                    .frame(width: 5, height: 5)
+                    .opacity(pane.processState.isRunning ? 1.0 : 0.7)
+                    .animation(
+                        pane.processState.isRunning
+                            ? .easeInOut(duration: 1.2).repeatForever(autoreverses: true)
+                            : .default,
+                        value: pane.processState.isRunning
+                    )
+
+                if pane.hasUnreadOutput && !isActive {
+                    Circle()
+                        .stroke(Color.blue, lineWidth: 1.5)
+                        .frame(width: 9, height: 9)
+                        .transition(.scale)
+                }
+            }
+            .frame(width: 10, height: 10)
+            .onChange(of: isActive) { _, newActive in
+                if newActive { pane.hasUnreadOutput = false }
+            }
 
             // Type label
             Text(pane.title)
@@ -93,6 +119,82 @@ struct PaneContainerView: View {
                 .truncationMode(.middle)
 
             Spacer()
+
+            // Model routing preset — terminal panes only
+            if pane.paneType == .terminal {
+                Menu {
+                    ForEach(ModelPreset.allCases, id: \.self) { preset in
+                        Button {
+                            pane.modelPreset = preset
+                        } label: {
+                            HStack {
+                                Image(systemName: preset.icon)
+                                Text(preset.displayName)
+                                if preset != .local {
+                                    let tier = ModelRouter.resolve(prompt: "", preset: preset).tier
+                                    Text(String(format: "~$%.2f/hr", tier.estimatedCostPerHour))
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    Text("$0/hr").foregroundStyle(.secondary)
+                                }
+                                if pane.modelPreset == preset {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    Text(pane.modelPreset.displayName)
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(presetColor(pane.modelPreset))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(
+                            RoundedRectangle(cornerRadius: 3)
+                                .fill(presetColor(pane.modelPreset).opacity(0.1))
+                        )
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Model routing: \(pane.modelPreset.description)")
+            }
+
+            // Process lifecycle controls — terminal panes only
+            if pane.paneType == .terminal {
+                if pane.processState.isRunning, let pid = pane.shellPid, pid > 0 {
+                    Button {
+                        kill(pid, SIGTERM)
+                        // SIGKILL fallback after 3 seconds if still alive
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                            if pane.processState.isRunning { kill(pid, SIGKILL) }
+                        }
+                    } label: {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 7))
+                            .foregroundStyle(.red.opacity(0.7))
+                            .frame(width: 14, height: 14)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stop process (PID \(pid))")
+                }
+
+                if case .exited = pane.processState {
+                    Button {
+                        // Reset state — the terminal view will restart on next layout
+                        pane.processState = .notStarted
+                        pane.shellPid = nil
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 8))
+                            .foregroundStyle(SenkaniTheme.textSecondary)
+                            .frame(width: 14, height: 14)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Restart shell")
+                }
+            }
 
             // Secret detection indicator
             if pane.features.secrets && pane.metrics.secretsCaught > 0 {
@@ -115,14 +217,34 @@ struct PaneContainerView: View {
             .buttonStyle(.plain)
             .help(pane.features.passthrough ? "Passthrough ON — hooks disabled" : "Passthrough OFF — hooks active")
 
-            // FCSIT feature toggles
+            // FCSIT feature toggles — tap letter to toggle, long-press to show detail drawer
             HStack(spacing: 4) {
-                FeatureToggleCompact(label: "F", isOn: $pane.features.filter, color: SenkaniTheme.toggleFilter)
-                FeatureToggleCompact(label: "C", isOn: $pane.features.cache, color: SenkaniTheme.toggleCache)
-                FeatureToggleCompact(label: "S", isOn: $pane.features.secrets, color: SenkaniTheme.toggleSecrets)
-                FeatureToggleCompact(label: "I", isOn: $pane.features.indexer, color: SenkaniTheme.toggleIndexer)
-                FeatureToggleCompact(label: "T", isOn: $pane.features.terse, color: SenkaniTheme.toggleTerse)
+                featureButton("F", key: "filter", isOn: $pane.features.filter, color: SenkaniTheme.toggleFilter)
+                featureButton("C", key: "cache", isOn: $pane.features.cache, color: SenkaniTheme.toggleCache)
+                featureButton("S", key: "secrets", isOn: $pane.features.secrets, color: SenkaniTheme.toggleSecrets)
+                featureButton("I", key: "indexer", isOn: $pane.features.indexer, color: SenkaniTheme.toggleIndexer)
+                featureButton("T", key: "terse", isOn: $pane.features.terse, color: SenkaniTheme.toggleTerse)
             }
+
+            // Disclosure chevron for feature drawer
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    if showFeatureDrawer {
+                        showFeatureDrawer = false
+                    } else {
+                        selectedFeature = selectedFeature ?? "filter"
+                        showFeatureDrawer = true
+                    }
+                }
+            } label: {
+                Image(systemName: showFeatureDrawer ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 7, weight: .semibold))
+                    .foregroundStyle(showFeatureDrawer ? SenkaniTheme.textPrimary : SenkaniTheme.textTertiary)
+                    .frame(width: 12, height: 14)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Feature detail drawer")
 
             // Gear icon → settings panel
             Button {
@@ -180,11 +302,20 @@ struct PaneContainerView: View {
                     "SENKANI_MCP_SECRETS":  pane.features.secrets ? "on" : "off",
                     "SENKANI_MCP_INDEX":    pane.features.indexer ? "on" : "off",
                     "SENKANI_MCP_TERSE":    pane.features.terse   ? "on" : "off",
+                    // Model routing
+                    "CLAUDE_MODEL":          resolvedClaudeModel,
+                    "SENKANI_MODEL_PRESET":  pane.modelPreset.rawValue,
                 ]) { _, new in new },
                 workingDirectory: pane.workingDirectory,
                 isActive: isActive,
+                fontSize: pane.fontSize,
                 onProcessExited: { code in
                     pane.processState = .exited(code)
+                    pane.shellPid = nil
+                },
+                onProcessStarted: { pid in
+                    pane.shellPid = pid
+                    pane.processState = .running
                 },
                 onActivate: {
                     workspace?.activePaneID = pane.id
@@ -226,10 +357,65 @@ struct PaneContainerView: View {
             AgentTimelinePane(pane: pane, workspace: workspace)
         case .codeEditor:
             CodeEditorPane(pane: pane)
+        case .dashboard:
+            DashboardView(workspace: workspace)
         }
     }
 
+    // MARK: - Feature Button
+
+    /// Feature toggle that also selects the feature for the detail drawer.
+    /// Tap toggles the feature. Option-click opens the detail drawer for that feature.
+    private func featureButton(_ label: String, key: String, isOn: Binding<Bool>, color: Color) -> some View {
+        Text(label)
+            .font(.system(size: 9, weight: .bold, design: .monospaced))
+            .foregroundStyle(isOn.wrappedValue ? color : SenkaniTheme.textTertiary.opacity(0.5))
+            .padding(.horizontal, 2)
+            .padding(.vertical, 1)
+            .background(
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(isOn.wrappedValue ? color.opacity(0.1) : Color.clear)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 2)
+                            .stroke(selectedFeature == key && showFeatureDrawer ? color.opacity(0.4) : Color.clear, lineWidth: 1)
+                    )
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
+                isOn.wrappedValue.toggle()
+            }
+            .simultaneousGesture(
+                TapGesture(count: 2).onEnded {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        if selectedFeature == key && showFeatureDrawer {
+                            showFeatureDrawer = false
+                        } else {
+                            selectedFeature = key
+                            showFeatureDrawer = true
+                        }
+                    }
+                }
+            )
+            .help("Tap to toggle \(key). Double-click for details.")
+    }
+
     // MARK: - Helpers
+
+    private func presetColor(_ preset: ModelPreset) -> Color {
+        switch preset {
+        case .auto: return .cyan
+        case .build: return .orange
+        case .research: return .purple
+        case .quick: return .green
+        case .local: return .blue
+        }
+    }
+
+    private var resolvedClaudeModel: String {
+        let gemma4Available = false // TODO: check ModelManager when accessible from app target
+        let result = ModelRouter.resolve(prompt: "", preset: pane.modelPreset, gemma4Downloaded: gemma4Available)
+        return result.tier.claudeModelValue
+    }
 
     private var accentColor: Color {
         SenkaniTheme.accentColor(for: pane.paneType)
@@ -272,6 +458,8 @@ struct PaneContainerView: View {
         case .codeEditor:
             let file = (pane.previewFilePath as NSString).lastPathComponent
             return file.isEmpty ? "code" : file
+        case .dashboard:
+            return "\(workspace?.projects.count ?? 0) projects"
         }
     }
 

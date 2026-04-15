@@ -182,9 +182,14 @@ struct CommandReplayTests {
         let dir = makeTempDir()
         defer { cleanupDB(dbPath); try? FileManager.default.removeItem(atPath: dir) }
 
-        // Insert exec from 10 minutes ago (beyond 300s window)
-        insertExecEvent(db: db, command: "swift test", projectRoot: dir,
-                        timestamp: Date().addingTimeInterval(-600))
+        // Insert exec event, then backdate it to 10 minutes ago via raw SQL.
+        // recordTokenEvent always uses Date() internally, so we must update after insert.
+        insertExecEvent(db: db, command: "swift test", projectRoot: dir)
+
+        let oldTimestamp = Date().addingTimeInterval(-600).timeIntervalSince1970
+        db.executeRawSQL("UPDATE token_events SET timestamp = \(oldTimestamp) WHERE command = 'swift test'")
+        db.executeRawSQL("UPDATE commands SET timestamp = \(oldTimestamp) WHERE command = 'swift test'")
+
         setDirMtime(dir, to: Date().addingTimeInterval(-700))
 
         let result = HookRouter.checkCommandReplay(

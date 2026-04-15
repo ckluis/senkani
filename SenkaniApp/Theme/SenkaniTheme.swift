@@ -177,6 +177,7 @@ enum SenkaniTheme {
         case .savingsTest: return savingsGreen
         case .agentTimeline: return accentAnalytics
         case .codeEditor: return accentAnalytics
+        case .dashboard: return savingsGreen
         }
     }
 
@@ -198,6 +199,7 @@ enum SenkaniTheme {
         case .savingsTest: return "checkmark.seal"
         case .agentTimeline: return "waveform.path"
         case .codeEditor: return "chevron.left.forwardslash.chevron.right"
+        case .dashboard: return "chart.bar.doc.horizontal"
         }
     }
 
@@ -219,6 +221,7 @@ enum SenkaniTheme {
         case .savingsTest: return "Benchmark optimization savings"
         case .agentTimeline: return "Live feed of optimization events"
         case .codeEditor: return "View code with syntax highlighting"
+        case .dashboard: return "Multi-project portfolio overview"
         }
     }
 
@@ -239,6 +242,7 @@ enum SenkaniTheme {
         case .savingsTest: return "Savings Test"
         case .agentTimeline: return "Agent Timeline"
         case .codeEditor: return "Code Editor"
+        case .dashboard: return "Dashboard"
         }
     }
 }

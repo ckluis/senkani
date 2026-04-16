@@ -1,0 +1,129 @@
+import Foundation
+
+/// P2-9: Typed-field structured log value.
+///
+/// The `log` API accepts a dictionary of these so callers don't pass
+/// stringly-typed numbers. Four cases cover every field we currently emit;
+/// add cases if a future event needs e.g. `[String]` or `Data`.
+public enum LogValue: Sendable {
+    case string(String)
+    case int(Int)
+    case double(Double)
+    case bool(Bool)
+
+    /// JSON literal — quoted + escaped for strings, bare for numerics.
+    var jsonLiteral: String {
+        switch self {
+        case .string(let s): return "\"\(Logger.jsonEscape(s))\""
+        case .int(let i):    return "\(i)"
+        case .double(let d): return "\(d)"
+        case .bool(let b):   return b ? "true" : "false"
+        }
+    }
+
+    /// Plain `key=value` literal for human-readable mode.
+    var textLiteral: String {
+        switch self {
+        case .string(let s): return s
+        case .int(let i):    return "\(i)"
+        case .double(let d): return "\(d)"
+        case .bool(let b):   return b ? "true" : "false"
+        }
+    }
+}
+
+/// P2-9: Structured logger for senkani server events.
+///
+/// Default mode matches the existing `[event] key=value` style — eyeball-
+/// friendly, grep-friendly, backward-compatible with current stderr readers.
+/// Setting `SENKANI_LOG_JSON=1` (or `"true"`) emits one JSON object per line
+/// for structured ingestion.
+///
+/// Minimum useful fields (documented for callers, not enforced):
+///   - `session_id`: String — caller's MCP session UUID when available.
+///   - `tool`: String — MCP tool name for tool-lifecycle events.
+///   - `duration_ms`: Int — wall-clock latency.
+///   - `outcome`: String — "success" | "error" | "blocked" | "skipped".
+/// For ratios, emit both numerator and denominator (e.g. `cache_hits`
+/// AND `cache_total`) — ratios computed downstream stay truthful (Gelman).
+///
+/// Thread-safety: a single `write(2)` up to PIPE_BUF (512 bytes) is atomic
+/// on macOS, so short concurrent log lines don't interleave bytes. No lock
+/// required here. Cached `isJSON` flag uses nonisolated(unsafe) + NSLock
+/// because it's set once and read from many threads.
+public enum Logger {
+
+    nonisolated(unsafe) private static var _isJSON: Bool?
+    nonisolated(unsafe) private static let isJSONLock = NSLock()
+
+    /// Cached result of `SENKANI_LOG_JSON` env lookup. Env is read once on
+    /// first access then memoized for the process lifetime.
+    internal static var isJSON: Bool {
+        isJSONLock.lock(); defer { isJSONLock.unlock() }
+        if let cached = _isJSON { return cached }
+        let raw = ProcessInfo.processInfo.environment["SENKANI_LOG_JSON"]?.lowercased() ?? ""
+        let v = (raw == "1" || raw == "true" || raw == "on" || raw == "yes")
+        _isJSON = v
+        return v
+    }
+
+    /// Reset the cached `isJSON` flag — test-only helper.
+    internal static func _resetCacheForTesting() {
+        isJSONLock.lock(); defer { isJSONLock.unlock() }
+        _isJSON = nil
+    }
+
+    /// Emit an event. Pass fields via `[String: LogValue]` so types are preserved
+    /// in JSON mode. The written line always ends with `\n`.
+    public static func log(_ event: String, fields: [String: LogValue] = [:]) {
+        let line = format(event: event, fields: fields) + "\n"
+        FileHandle.standardError.write(Data(line.utf8))
+    }
+
+    /// Build a log line in the currently-configured format. Pass `asJSON` to
+    /// override the env-derived default — tests rely on this to check both
+    /// formats without mutating process env.
+    internal static func format(
+        event: String,
+        fields: [String: LogValue],
+        asJSON: Bool? = nil
+    ) -> String {
+        let json = asJSON ?? isJSON
+        if json {
+            // Stable ordering: ts, event, then fields alphabetized by key so
+            // a log stream has deterministic column order.
+            var parts: [String] = []
+            parts.append("\"ts\":\(Date().timeIntervalSince1970)")
+            parts.append("\"event\":\"\(jsonEscape(event))\"")
+            for (k, v) in fields.sorted(by: { $0.key < $1.key }) {
+                parts.append("\"\(jsonEscape(k))\":\(v.jsonLiteral)")
+            }
+            return "{" + parts.joined(separator: ",") + "}"
+        } else {
+            // Human-readable. Key=value pairs alphabetized for determinism.
+            var parts = ["[\(event)]"]
+            for (k, v) in fields.sorted(by: { $0.key < $1.key }) {
+                parts.append("\(k)=\(v.textLiteral)")
+            }
+            return parts.joined(separator: " ")
+        }
+    }
+
+    /// JSON string escape. Only the characters JSON requires — `\`, `"`, the
+    /// ASCII control whitespace. Unicode passes through.
+    internal static func jsonEscape(_ s: String) -> String {
+        var out = ""
+        out.reserveCapacity(s.count)
+        for ch in s {
+            switch ch {
+            case "\\": out += "\\\\"
+            case "\"": out += "\\\""
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
+            default:   out.append(ch)
+            }
+        }
+        return out
+    }
+}

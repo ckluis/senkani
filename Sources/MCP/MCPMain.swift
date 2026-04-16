@@ -77,7 +77,7 @@ public struct MCPServerRunner {
         // Handle SIGTERM/SIGINT for clean shutdown
         let sigTermSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
         sigTermSource.setEventHandler {
-            FileHandle.standardError.write(Data("🔴 [MCP] Received SIGTERM — shutting down\n".utf8))
+            Logger.log("mcp.signal.received", fields: ["signal": .string("SIGTERM"), "outcome": .string("shutdown")])
             RetentionScheduler.shared.stop()
             session.shutdown()
             SessionDatabase.shared.close()
@@ -88,7 +88,7 @@ public struct MCPServerRunner {
 
         let sigIntSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
         sigIntSource.setEventHandler {
-            FileHandle.standardError.write(Data("🔴 [MCP] Received SIGINT — shutting down\n".utf8))
+            Logger.log("mcp.signal.received", fields: ["signal": .string("SIGINT"), "outcome": .string("shutdown")])
             RetentionScheduler.shared.stop()
             session.shutdown()
             SessionDatabase.shared.close()
@@ -107,20 +107,27 @@ public struct MCPServerRunner {
         let startTime = Date()
         let maxLifetime: TimeInterval = 7200 // 2 hours
 
-        FileHandle.standardError.write(Data("🔴 [MCP] Parent PID=\(parentPID). Monitoring for disconnect...\n".utf8))
+        Logger.log("mcp.started", fields: ["parent_pid": .int(Int(parentPID))])
 
         while true {
             try await Task.sleep(for: .seconds(2))
 
             // Parent died — Claude Code disconnected
             if getppid() != parentPID {
-                FileHandle.standardError.write(Data("🔴 [MCP] Parent process exited (was PID \(parentPID), now \(getppid())). Shutting down.\n".utf8))
+                Logger.log("mcp.parent.exited", fields: [
+                    "was_pid": .int(Int(parentPID)),
+                    "now_pid": .int(Int(getppid())),
+                    "outcome": .string("shutdown")
+                ])
                 break
             }
 
             // Safety timeout — prevent zombie accumulation
             if Date().timeIntervalSince(startTime) > maxLifetime {
-                FileHandle.standardError.write(Data("🔴 [MCP] Safety timeout — 2 hour max session reached. Shutting down.\n".utf8))
+                Logger.log("mcp.safety.timeout", fields: [
+                    "max_lifetime_seconds": .int(Int(maxLifetime)),
+                    "outcome": .string("shutdown")
+                ])
                 break
             }
         }
@@ -129,7 +136,7 @@ public struct MCPServerRunner {
         RetentionScheduler.shared.stop()
         session.shutdown()
         SessionDatabase.shared.close()
-        FileHandle.standardError.write(Data("🔴 [MCP] Process exiting cleanly.\n".utf8))
+        Logger.log("mcp.exited", fields: ["outcome": .string("clean")])
 
         // Keep signal sources alive until exit
         withExtendedLifetime((sigTermSource, sigIntSource)) {}

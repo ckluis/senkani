@@ -1,5 +1,6 @@
 import Foundation
 import MCP
+import Core
 
 #if canImport(Darwin)
 import Darwin.POSIX
@@ -44,12 +45,33 @@ public final class SocketServerManager: @unchecked Sendable {
         self.paneSocketPath = senkaniDir + "/pane.sock"
     }
 
+    /// P2-12: cached auth token for this server's lifetime, non-nil when
+    /// `SENKANI_SOCKET_AUTH=on`. Rotated on every `start()`.
+    private var authToken: String?
+
     /// Start listening for MCP connections and hook events.
     public func start() {
         lock.lock()
         guard !running else { lock.unlock(); return }
         running = true
         lock.unlock()
+
+        // P2-12: generate socket auth token if enabled. On failure, log and
+        // proceed with auth disabled — better than failing to start entirely.
+        if SocketAuthToken.isEnabled {
+            do {
+                let token = try SocketAuthToken.generate()
+                lock.lock()
+                authToken = token
+                lock.unlock()
+                Logger.log("socket.auth.enabled", fields: ["outcome": .string("ready")])
+            } catch {
+                Logger.log("socket.auth.failed", fields: [
+                    "error": .string("\(error)"),
+                    "outcome": .string("auth_disabled")
+                ])
+            }
+        }
 
         queue.async { [self] in
             do {
@@ -89,6 +111,12 @@ public final class SocketServerManager: @unchecked Sendable {
         lock.lock()
         guard running else { lock.unlock(); return }
         running = false
+        // P2-12: clear token on clean shutdown so next start rotates a fresh
+        // secret. No-op if auth wasn't enabled.
+        if authToken != nil {
+            SocketAuthToken.clear()
+            authToken = nil
+        }
 
         acceptSource?.cancel()
         acceptSource = nil
@@ -245,7 +273,48 @@ public final class SocketServerManager: @unchecked Sendable {
     /// Maximum concurrent MCP connections. Rejects beyond this limit.
     private static let maxConnections = 20
 
+    /// P2-12: read the handshake frame on a freshly-accepted fd and validate.
+    /// Returns true iff auth is disabled OR handshake matches the active token.
+    /// Blocking read up to `maxFrameBytes`; closes the fd and returns false on
+    /// protocol violation so the caller can abandon the connection.
+    private func validateHandshakeIfRequired(fd: Int32) -> Bool {
+        lock.lock()
+        let expected = authToken
+        lock.unlock()
+        guard let expected else { return true } // auth disabled → passthrough
+
+        var lengthBytes = [UInt8](repeating: 0, count: 4)
+        let readLen = Darwin.read(fd, &lengthBytes, 4)
+        guard readLen == 4 else { return false }
+
+        let len = Int(UInt32(bigEndian: Data(lengthBytes).withUnsafeBytes { $0.load(as: UInt32.self) }))
+        guard len > 0, len <= SocketAuthToken.maxFrameBytes else { return false }
+
+        var payload = Data(count: len)
+        var total = 0
+        while total < len {
+            let n = payload.withUnsafeMutableBytes { buf in
+                Darwin.read(fd, buf.baseAddress! + total, len - total)
+            }
+            if n <= 0 { return false }
+            total += n
+        }
+        guard total == len else { return false }
+
+        return SocketAuthToken.validateHandshakePayload(payload, expectedToken: expected)
+    }
+
     private func handleConnection(fd: Int32) async {
+        // P2-12: handshake gate before we wire up the MCP server.
+        guard validateHandshakeIfRequired(fd: fd) else {
+            Logger.log("socket.handshake.rejected", fields: [
+                "socket": .string("mcp"),
+                "outcome": .string("closed")
+            ])
+            Darwin.close(fd)
+            return
+        }
+
         // Each connection uses the shared session (shared cache, index, etc.)
         let session = MCPSession.shared
 
@@ -396,6 +465,15 @@ public final class SocketServerManager: @unchecked Sendable {
         hookQueue.async { [self] in
             defer { Darwin.close(clientFD) }
 
+            // P2-12: handshake gate before normal frame read.
+            guard self.validateHandshakeIfRequired(fd: clientFD) else {
+                Logger.log("socket.handshake.rejected", fields: [
+                    "socket": .string("hook"),
+                    "outcome": .string("closed")
+                ])
+                return
+            }
+
             // Read 4-byte length prefix
             var lengthBytes = [UInt8](repeating: 0, count: 4)
             let readLen = Darwin.read(clientFD, &lengthBytes, 4)
@@ -510,6 +588,15 @@ public final class SocketServerManager: @unchecked Sendable {
 
         paneQueue.async { [self] in
             defer { Darwin.close(clientFD) }
+
+            // P2-12: handshake gate before normal frame read.
+            guard self.validateHandshakeIfRequired(fd: clientFD) else {
+                Logger.log("socket.handshake.rejected", fields: [
+                    "socket": .string("pane"),
+                    "outcome": .string("closed")
+                ])
+                return
+            }
 
             // Read 4-byte length prefix
             var lengthBytes = [UInt8](repeating: 0, count: 4)

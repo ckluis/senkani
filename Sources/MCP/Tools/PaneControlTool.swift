@@ -69,6 +69,12 @@ enum PaneControlTool {
             )
         }
 
+        // P2-12: send handshake frame first when a token file exists. Server
+        // rejects unauthenticated clients when SENKANI_SOCKET_AUTH=on.
+        if let token = SocketAuthToken.load(), let frame = SocketAuthToken.handshakeFrame(token: token) {
+            _ = frame.withUnsafeBytes { Darwin.write(fd, $0.baseAddress!, frame.count) }
+        }
+
         // Send: 4-byte length + JSON
         var length = UInt32(data.count).bigEndian
         let lengthData = Data(bytes: &length, count: 4)

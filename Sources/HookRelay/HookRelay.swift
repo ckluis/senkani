@@ -12,7 +12,42 @@ import Darwin.POSIX
 public enum HookRelay {
 
     private static let socketPath = NSHomeDirectory() + "/.senkani/hook.sock"
+    private static let tokenPath  = NSHomeDirectory() + "/.senkani/.token"
     private static let timeoutMs: UInt32 = 5 // 5ms — hooks must be imperceptible
+
+    /// P2-12: read a same-UID-only token file. Returns nil if absent or
+    /// insecure. Inlined (not imported from Core) to preserve HookRelay's
+    /// zero-dependency contract — see Lesson #12 in the file header.
+    private static func loadAuthToken() -> String? {
+        guard FileManager.default.fileExists(atPath: tokenPath) else { return nil }
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: tokenPath),
+           let posix = attrs[.posixPermissions] as? NSNumber,
+           (posix.uint16Value & 0o177) != 0 {
+            return nil
+        }
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: tokenPath)),
+              let hex = String(data: data, encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+              !hex.isEmpty
+        else { return nil }
+        return hex
+    }
+
+    /// P2-12: send length-prefixed handshake frame on the given fd.
+    /// Returns true on successful write, false on short-write / I/O error.
+    /// No-op (returns true) when no token file is present — server-side
+    /// enforcement is gated by SENKANI_SOCKET_AUTH on the server.
+    private static func sendHandshake(fd: Int32) -> Bool {
+        guard let token = loadAuthToken() else { return true }
+        let body = "{\"handshake\":{\"token\":\"\(token)\"}}"
+        let payload = Data(body.utf8)
+        var length = UInt32(payload.count).bigEndian
+        let lengthData = Data(bytes: &length, count: 4)
+        let w1 = lengthData.withUnsafeBytes { Darwin.write(fd, $0.baseAddress!, 4) }
+        guard w1 == 4 else { return false }
+        let w2 = payload.withUnsafeBytes { Darwin.write(fd, $0.baseAddress!, payload.count) }
+        return w2 == payload.count
+    }
 
     /// Relay a hook event from stdin to the daemon socket and write the response to stdout.
     /// On ANY failure, emits `{}` (passthrough — never block the agent).
@@ -83,6 +118,10 @@ public enum HookRelay {
 
         // Switch back to blocking for write/read
         _ = fcntl(fd, F_SETFL, flags)
+
+        // P2-12: send handshake first if a token file exists. Server rejects
+        // when auth is enabled and the handshake is missing/wrong.
+        guard sendHandshake(fd: fd) else { passthrough(); return 0 }
 
         // Send: 4-byte length prefix + JSON payload
         var length = UInt32(inputData.count).bigEndian

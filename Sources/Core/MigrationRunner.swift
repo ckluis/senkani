@@ -93,6 +93,11 @@ public enum MigrationRunner {
                 try exec(db, "PRAGMA user_version = \(mig.version);")
                 try exec(db, "COMMIT;")
                 justApplied.append(mig.version)
+                Logger.log("schema.migration.applied", fields: [
+                    "version": .int(mig.version),
+                    "description": .string(mig.description),
+                    "outcome": .string("success")
+                ])
             } catch {
                 _ = try? exec(db, "ROLLBACK;")
                 let underlying = (error as? MigrationError)?.description ?? "\(error)"
@@ -101,6 +106,12 @@ public enum MigrationRunner {
                     let body = "version=\(mig.version)\ndescription=\(mig.description)\nerror=\(underlying)\nts=\(Date().timeIntervalSince1970)\n"
                     try? body.data(using: .utf8)?.write(to: URL(fileURLWithPath: lockfilePath))
                 }
+                Logger.log("schema.migration.failed", fields: [
+                    "version": .int(mig.version),
+                    "description": .string(mig.description),
+                    "error": .string(underlying),
+                    "outcome": .string("error")
+                ])
                 throw MigrationError.migrationFailed(
                     version: mig.version,
                     description: mig.description,

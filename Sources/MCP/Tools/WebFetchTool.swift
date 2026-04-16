@@ -530,6 +530,11 @@ enum WebFetchTool {
         // Set SENKANI_WEB_ALLOW_PRIVATE=on to bypass (e.g. internal docs servers).
         let allowPrivate = ProcessInfo.processInfo.environment["SENKANI_WEB_ALLOW_PRIVATE"]?.lowercased() == "on"
         if !allowPrivate, let host = url.host, hostResolvesToPrivate(host) {
+            Logger.log("web.ssrf.blocked", fields: [
+                "tool": .string("web"),
+                "host": .string(host),
+                "outcome": .string("blocked")
+            ])
             return .init(
                 content: [.text(
                     text: WebFetchError.privateAddressBlocked.errorDescription!,

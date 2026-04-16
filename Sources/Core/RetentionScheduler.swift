@@ -114,6 +114,12 @@ public final class RetentionScheduler: @unchecked Sendable {
         )
         SessionDatabase.shared.pruneValidationResults(olderThanHours: config.validationResultsHours)
 
+        Logger.log("retention.tick", fields: [
+            "token_events_days": .int(config.tokenEventsDays),
+            "sandbox_results_hours": .int(config.sandboxResultsHours),
+            "validation_results_hours": .int(config.validationResultsHours)
+        ])
+
         let report = TickReport(
             tokenEventsDays: config.tokenEventsDays,
             sandboxResultsHours: config.sandboxResultsHours,

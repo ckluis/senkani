@@ -70,6 +70,42 @@ struct WebFetchFormatterTests {
     }
 }
 
+// MARK: - SSRF Guard Tests
+
+@Suite("WebFetch — SSRF Private IP Guard")
+struct WebFetchSSRFTests {
+
+    // RFC 1918 addresses must be blocked
+    @Test func rfc1918ClassABlocked() { #expect(isPrivateHost("10.0.0.1")) }
+    @Test func rfc1918ClassBBlocked() { #expect(isPrivateHost("172.16.0.1")) }
+    @Test func rfc1918ClassBUpperBlocked() { #expect(isPrivateHost("172.31.255.255")) }
+    @Test func rfc1918ClassCBlocked() { #expect(isPrivateHost("192.168.1.1")) }
+
+    // Link-local
+    @Test func linkLocalBlocked() { #expect(isPrivateHost("169.254.169.254")) }  // AWS metadata
+
+    // CGNAT
+    @Test func cgnatBlocked() { #expect(isPrivateHost("100.64.0.1")) }
+
+    // IPv6 ULA / link-local
+    @Test func ipv6ULABlocked() { #expect(isPrivateHost("fd00::1")) }
+    @Test func ipv6LinkLocalBlocked() { #expect(isPrivateHost("fe80::1")) }
+
+    // Localhost must NOT be blocked (developer use case)
+    @Test func localhostAllowed() { #expect(!isPrivateHost("127.0.0.1")) }
+    @Test func ipv6LoopbackAllowed() { #expect(!isPrivateHost("::1")) }
+
+    // Public IPs must not be blocked
+    @Test func publicIPAllowed() { #expect(!isPrivateHost("8.8.8.8")) }
+    @Test func publicIPv6Allowed() { #expect(!isPrivateHost("2606:4700:4700::1111")) }
+
+    // Hostnames are not resolved (DNS not done in the guard) — must pass through
+    @Test func hostnamePassThrough() { #expect(!isPrivateHost("internal.example.com")) }
+
+    // Edge: IPv6 bracket notation (URL.host strips brackets, but verify no crash)
+    @Test func bracketedIPv6Loopback() { #expect(!isPrivateHost("[::1]")) }
+}
+
 // MARK: - XCTestCase — WKWebView integration (requires RunLoop, uses XCTestExpectation)
 
 final class WebFetchIntegrationTests: XCTestCase {

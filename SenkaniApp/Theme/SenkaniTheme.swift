@@ -86,10 +86,10 @@ enum SenkaniTheme {
     static let defaultColumnWidth: CGFloat = 300
 
     /// Minimum pane column width.
-    static let minColumnWidth: CGFloat = 220
+    static let minColumnWidth: CGFloat = 180
 
     /// Maximum pane column width.
-    static let maxColumnWidth: CGFloat = 800
+    static let maxColumnWidth: CGFloat = 900
 
     /// Minimum pane height.
     static let minPaneHeight: CGFloat = 120
@@ -101,7 +101,7 @@ enum SenkaniTheme {
     static let resizeHandleWidth: CGFloat = 12
 
     /// Resize handle invisible hit target width.
-    static let resizeHandleHitWidth: CGFloat = 20
+    static let resizeHandleHitWidth: CGFloat = 28
 
     /// Active pane border width.
     static let activeBorderWidth: CGFloat = 1.5

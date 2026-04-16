@@ -298,6 +298,35 @@ final class WebFetchEngine {
     }
 }
 
+// MARK: - SSRF Helper
+
+/// Returns true if the host resolves to a private / link-local range that should
+/// be blocked to prevent Server-Side Request Forgery attacks.
+/// Localhost (127.x, ::1) is intentionally NOT blocked — developer use case.
+func isPrivateHost(_ host: String) -> Bool {
+    // Strip IPv6 brackets if present
+    let h = host.hasPrefix("[") && host.hasSuffix("]")
+        ? String(host.dropFirst().dropLast())
+        : host
+
+    // IPv6 loopback is allowed; site-local fc/fd and link-local fe80 are not
+    if h == "::1" { return false }
+    if h.lowercased().hasPrefix("fe80") { return true }   // link-local
+    if h.lowercased().hasPrefix("fc") || h.lowercased().hasPrefix("fd") { return true }  // ULA
+
+    // Parse dotted-decimal IPv4
+    let parts = h.split(separator: ".").compactMap { UInt8($0) }
+    guard parts.count == 4 else { return false }  // hostname — DNS lookup not done here
+
+    let a = parts[0], b = parts[1]
+    if a == 10 { return true }                         // 10.0.0.0/8
+    if a == 172 && (16...31).contains(b) { return true } // 172.16.0.0/12
+    if a == 192 && b == 168 { return true }            // 192.168.0.0/16
+    if a == 169 && b == 254 { return true }            // 169.254.0.0/16 link-local
+    if a == 100 && (64...127).contains(b) { return true } // 100.64.0.0/10 CGNAT
+    return false
+}
+
 // MARK: - Tool Handler
 
 enum WebFetchTool {
@@ -320,6 +349,21 @@ enum WebFetchTool {
                 content: [.text(text: WebFetchError.invalidURL.errorDescription!, annotations: nil, _meta: nil)],
                 isError: true
             )
+        }
+
+        // SSRF guard: block RFC 1918 + link-local ranges by default.
+        // Localhost (127.x / ::1) is allowed for developer use.
+        // Set SENKANI_WEB_ALLOW_PRIVATE=on to bypass (e.g. internal docs servers).
+        let allowPrivate = ProcessInfo.processInfo.environment["SENKANI_WEB_ALLOW_PRIVATE"]?.lowercased() == "on"
+        if !allowPrivate, let host = url.host {
+            if isPrivateHost(host) {
+                return .init(
+                    content: [.text(
+                        text: "Private network addresses are blocked by default (SENKANI_WEB_ALLOW_PRIVATE=on to override).",
+                        annotations: nil, _meta: nil)],
+                    isError: true
+                )
+            }
         }
 
         let timeout = min(60, max(5, arguments?["timeout"]?.intValue ?? 15))

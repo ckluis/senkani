@@ -291,7 +291,9 @@ struct PaneContainerView: View {
                     .font(.system(size: 7, weight: .semibold))
                     .foregroundStyle(SenkaniTheme.textTertiary)
                     .frame(width: 14, height: 14)
+                    .padding(15)
                     .contentShape(Rectangle())
+                    .padding(-15)
             }
             .buttonStyle(.plain)
             .help("Close pane")

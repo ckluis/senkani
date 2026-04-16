@@ -111,6 +111,7 @@ private struct PaneRightEdgeHandle: View {
 
     @State private var isDragging = false
     @State private var startWidth: CGFloat = 0
+    @State private var isHovering = false
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -119,16 +120,28 @@ private struct PaneRightEdgeHandle: View {
                 .frame(width: SenkaniTheme.resizeHandleHitWidth)
                 .contentShape(Rectangle())
 
-            // Visible accent bar — shown for active pane or while dragging
-            if isActive || isDragging {
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(accentColor.opacity(isDragging ? 0.7 : 0.3))
-                    .frame(width: SenkaniTheme.resizeHandleWidth)
-                    .padding(.vertical, 32)
+            // Visible accent bar — shown for active pane, while dragging, or on hover
+            if isActive || isDragging || isHovering {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(accentColor.opacity(isDragging ? 0.7 : 0.3))
+                        .frame(width: SenkaniTheme.resizeHandleWidth)
+                        .padding(.vertical, 32)
+
+                    // Grip dots — 3 stacked circles centered on the bar
+                    VStack(spacing: 3) {
+                        ForEach(0..<3, id: \.self) { _ in
+                            Circle()
+                                .fill(accentColor.opacity(isDragging ? 0.9 : 0.5))
+                                .frame(width: 3, height: 3)
+                        }
+                    }
+                }
             }
         }
         .frame(width: SenkaniTheme.resizeHandleHitWidth)
         .onHover { hovering in
+            isHovering = hovering
             if hovering {
                 NSCursor.resizeLeftRight.push()
             } else {

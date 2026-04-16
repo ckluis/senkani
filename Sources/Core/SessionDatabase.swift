@@ -120,6 +120,8 @@ public final class SessionDatabase: @unchecked Sendable {
             sqlite3_step(stmt)
         }
         sqlite3_finalize(stmt)
+        // Update query planner statistics for better index selection
+        sqlite3_exec(db, "PRAGMA optimize;", nil, nil, nil)
     }
 
     // MARK: - Schema
@@ -646,17 +648,21 @@ public final class SessionDatabase: @unchecked Sendable {
     }
 
     /// Aggregate stats across ALL projects (for app-level status bar).
+    /// Windowed to the last 90 days to prevent full-table scans on large DBs.
     public func tokenStatsAllProjects() -> PaneTokenStats {
         return queue.sync {
             guard let db = db else { return .zero }
+            let cutoff = Date().addingTimeInterval(-90 * 86400).timeIntervalSince1970
             let sql = """
                 SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
                        COALESCE(SUM(saved_tokens),0), COALESCE(SUM(cost_cents),0), COUNT(*)
                 FROM token_events
+                WHERE timestamp >= ?
             """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return .zero }
             defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_double(stmt, 1, cutoff)
 
             if sqlite3_step(stmt) == SQLITE_ROW {
                 return PaneTokenStats(
@@ -1884,6 +1890,21 @@ public final class SessionDatabase: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self, let db = self.db else { return }
             let sql = "DELETE FROM validation_results WHERE created_at < ?;"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_double(stmt, 1, cutoff)
+            sqlite3_step(stmt)
+        }
+    }
+
+    /// Prune token_events older than N days (default: 90) to prevent unbounded growth.
+    /// The index on (project_root, tool_name, timestamp) makes the WHERE clause efficient.
+    public func pruneTokenEvents(olderThanDays: Int = 90) {
+        let cutoff = Date().addingTimeInterval(-Double(olderThanDays) * 86400).timeIntervalSince1970
+        queue.async { [weak self] in
+            guard let self, let db = self.db else { return }
+            let sql = "DELETE FROM token_events WHERE timestamp < ?;"
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
             defer { sqlite3_finalize(stmt) }

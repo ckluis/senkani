@@ -138,8 +138,8 @@ final class PaneModel: Identifiable {
         self.previewFilePath = previewFilePath
         // Set default column width based on pane type
         switch paneType {
-        case .skillLibrary:       self.columnWidth = 420
-        case .knowledgeBase:      self.columnWidth = 400
+        case .skillLibrary:       self.columnWidth = 560
+        case .knowledgeBase:      self.columnWidth = 520
         case .analytics:          self.columnWidth = 560
         case .browser:            self.columnWidth = 480
         case .markdownPreview:    self.columnWidth = 440
@@ -150,7 +150,7 @@ final class PaneModel: Identifiable {
         case .terminal:           self.columnWidth = 300
         case .savingsTest:        self.columnWidth = 480
         case .agentTimeline:      self.columnWidth = 420
-        case .codeEditor:         self.columnWidth = 480
+        case .codeEditor:         self.columnWidth = 560
         case .dashboard:          self.columnWidth = 600
         default:                  self.columnWidth = 300
         }

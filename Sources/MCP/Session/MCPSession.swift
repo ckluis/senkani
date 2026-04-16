@@ -163,6 +163,8 @@ final class MCPSession: @unchecked Sendable {
         let metricsFile = explicitMetrics ?? Self.fallbackMetricsPath(projectRoot: root)
         // Prune expired sandboxed results (>24h) on session startup
         SessionDatabase.shared.pruneSandboxedResults()
+        // Prune token_events older than 90 days to prevent unbounded table growth
+        SessionDatabase.shared.pruneTokenEvents()
 
         let agentType = AgentDetector.detect(environment: ProcessInfo.processInfo.environment)
         let sessionId: String? = SessionDatabase.shared.createSession(projectRoot: root, agentType: agentType)

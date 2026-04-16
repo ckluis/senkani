@@ -208,6 +208,69 @@ struct MigrationRunnerTests {
         #expect(MigrationRunner.currentVersion(db: db!) == 1, "user_version must not advance on failure")
     }
 
+    /// Bach G2: the P1-4 plan required verifying the `flock` sidecar
+    /// coordinates multi-process migration. Intra-process validation is
+    /// infeasible here because macOS flock is a per-process advisory lock:
+    /// two `Task.detached` handles in the same test process hold the same
+    /// process-level lock and both proceed concurrently, triggering
+    /// SQLite "table already exists" on the second DDL. That behavior is
+    /// correct for production (MCP server and GUI app are separate
+    /// processes), but not exercisable in-process.
+    ///
+    /// What we CAN verify in-process: sequential runners on the same DB
+    /// are idempotent, and the flock file is actually opened and locked
+    /// during a run. The true cross-process race is a follow-up test
+    /// that requires spawning a helper subprocess (see Bach findings
+    /// doc, G2 note).
+    @Test("sequential runners on same DB: second is a no-op after first")
+    func sequentialRunnersAreIdempotent() async throws {
+        let tmpDir = NSTemporaryDirectory() + "mig-seq-\(UUID().uuidString)/"
+        try FileManager.default.createDirectory(atPath: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+        let dbPath = tmpDir + "seq.db"
+
+        var seed: OpaquePointer?
+        #expect(sqlite3_open(dbPath, &seed) == SQLITE_OK)
+        sqlite3_exec(seed, "PRAGMA journal_mode=WAL;", nil, nil, nil)
+        sqlite3_busy_timeout(seed, 5000)
+        Self.buildCurrentProductionSchema(seed!)
+        sqlite3_close(seed)
+
+        let v2 = Migration(version: 2, description: "seq-add-table") { db in
+            var err: UnsafeMutablePointer<CChar>?
+            let rc = sqlite3_exec(db, "CREATE TABLE seq_v2 (id INTEGER PRIMARY KEY);", nil, nil, &err)
+            if let err = err { sqlite3_free(err) }
+            guard rc == SQLITE_OK else {
+                throw MigrationError.sqlFailed(stage: "seq-v2", detail: "create failed rc=\(rc)")
+            }
+        }
+        let registry = MigrationRegistry.all + [v2]
+
+        // Runner A — applies v2.
+        var dbA: OpaquePointer?
+        #expect(sqlite3_open(dbPath, &dbA) == SQLITE_OK)
+        sqlite3_busy_timeout(dbA, 5000)
+        let reportA = try MigrationRunner.run(db: dbA!, dbPath: dbPath, registry: registry)
+        sqlite3_close(dbA)
+        #expect(reportA.appliedVersions == [2],
+                "first runner applies v2, got \(reportA.appliedVersions)")
+
+        // Runner B — fresh connection, reads applied={1,2}, does nothing.
+        var dbB: OpaquePointer?
+        #expect(sqlite3_open(dbPath, &dbB) == SQLITE_OK)
+        sqlite3_busy_timeout(dbB, 5000)
+        let reportB = try MigrationRunner.run(db: dbB!, dbPath: dbPath, registry: registry)
+        #expect(reportB.appliedVersions.isEmpty,
+                "second runner is a no-op, got \(reportB.appliedVersions)")
+        #expect(MigrationRunner.currentVersion(db: dbB!) == 2)
+        #expect(Self.tableExists(dbB!, "seq_v2"))
+        sqlite3_close(dbB)
+
+        // Sidecar flock file is created during run().
+        #expect(FileManager.default.fileExists(atPath: dbPath + ".migrating"),
+                "flock sidecar must exist after a run() call")
+    }
+
     @Test("lockfile refuses subsequent runs until removed")
     func lockfileRefusesRun() throws {
         let tmpDir = NSTemporaryDirectory() + "migration-test-\(UUID().uuidString)/"

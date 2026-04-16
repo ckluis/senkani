@@ -135,9 +135,61 @@ enum AXTreeFormatter {
     }
 }
 
+// MARK: - Redirect policy (Bach G4)
+
+/// Pure, testable decision function for `WKNavigationDelegate.decidePolicyFor`.
+///
+/// The SSRF defense-in-depth has three phases (plus the pre-fetch DNS check in
+/// `WebFetchTool.handle`):
+///   1. Depth cap — max 5 redirects after the initial navigation.
+///   2. Scheme allowlist on redirects — http/https only. Blocks `file://`,
+///      `data:`, `javascript:` redirect bypass attempts.
+///   3. DNS-resolved host check on redirects — blocks public-URL → private-IP
+///      rebind (e.g. 3xx Location: http://10.0.0.1/).
+///
+/// The first navigation is trusted because `WebFetchTool.handle` already ran
+/// the equivalent checks, AND integration tests use the engine directly with
+/// `file://` fixtures which we intentionally allow at nav index 1.
+enum RedirectPolicy {
+    static let maxRedirects = 5
+
+    enum Decision: Sendable, Equatable {
+        case allow
+        case cancel(WebFetchError)
+    }
+
+    static func decide(
+        url: URL?,
+        navigationIndex: Int,
+        allowPrivate: Bool
+    ) -> Decision {
+        guard let url = url else { return .cancel(.invalidURL) }
+
+        if navigationIndex > maxRedirects + 1 {
+            return .cancel(.tooManyRedirects)
+        }
+
+        // First navigation is pre-validated by WebFetchTool.handle and may legitimately
+        // be any scheme the caller supplied (integration test uses file:// fixtures).
+        if navigationIndex == 1 {
+            return .allow
+        }
+
+        guard let scheme = url.scheme, scheme == "http" || scheme == "https" else {
+            return .cancel(.invalidURL)
+        }
+
+        if !allowPrivate, let host = url.host, hostResolvesToPrivate(host) {
+            return .cancel(.privateAddressBlocked)
+        }
+
+        return .allow
+    }
+}
+
 // MARK: - Errors
 
-enum WebFetchError: Error, LocalizedError {
+enum WebFetchError: Error, LocalizedError, Equatable, Sendable {
     case timeout
     case invalidURL
     case disabled
@@ -199,45 +251,29 @@ private final class NavigationHandler: NSObject, WKNavigationDelegate {
     /// SSRF defense-in-depth: validate every navigation (including 3xx redirects).
     /// The initial URL was already validated by WebFetchTool.handle before we got here,
     /// but redirects can switch scheme (https → file://) or host (public → private IP).
+    ///
+    /// Bach G4: the policy logic is extracted into `RedirectPolicy.decide` so tests
+    /// can exercise it without mocking WKNavigationAction. This method is now a thin
+    /// adapter: compute decision, propagate failure into the completion, hand result
+    /// back to WebKit.
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
     ) {
         navigationCount += 1
-
-        guard let url = navigationAction.request.url else {
-            resumeOnce(.failure(WebFetchError.invalidURL))
-            decisionHandler(.cancel); return
+        let url = navigationAction.request.url
+        switch RedirectPolicy.decide(
+            url: url,
+            navigationIndex: navigationCount,
+            allowPrivate: allowPrivate
+        ) {
+        case .allow:
+            decisionHandler(.allow)
+        case .cancel(let err):
+            resumeOnce(.failure(err))
+            decisionHandler(.cancel)
         }
-
-        // Redirect depth cap (initial nav counts as 1).
-        if navigationCount > Self.maxRedirects + 1 {
-            resumeOnce(.failure(WebFetchError.tooManyRedirects))
-            decisionHandler(.cancel); return
-        }
-
-        // First navigation: scheme was already validated by handle(); allow any
-        // scheme the engine caller supplied. WebFetchEngine.fetch is also used
-        // directly by the integration test (file:// fixture) — do not block it.
-        if navigationCount == 1 {
-            decisionHandler(.allow); return
-        }
-
-        // Redirect: enforce strict http/https allowlist. Blocks 3xx → file:// exfil.
-        guard let scheme = url.scheme, scheme == "http" || scheme == "https" else {
-            resumeOnce(.failure(WebFetchError.invalidURL))
-            decisionHandler(.cancel); return
-        }
-
-        // Redirect: re-resolve host. Blocks public-site → private-IP rebind and
-        // 3xx Location headers pointing at 169.254.169.254 (cloud metadata).
-        if !allowPrivate, let host = url.host, hostResolvesToPrivate(host) {
-            resumeOnce(.failure(WebFetchError.privateAddressBlocked))
-            decisionHandler(.cancel); return
-        }
-
-        decisionHandler(.allow)
     }
 
     func webView(_ webView: WKWebView, didFinish _: WKNavigation?) {

@@ -133,4 +133,93 @@ struct SocketAuthTokenTests {
     @Test func constantTimeEqualsDifferentLength() {
         #expect(!SocketAuthToken.constantTimeEquals("abc", "abcd"))
     }
+
+    // MARK: - F1 fix: bounded readAndValidate
+
+    /// Build a connected Unix-domain socket pair and return the fds.
+    /// fds[0] is the client side (we write here), fds[1] is the server side
+    /// (we pass to readAndValidate). Caller closes both.
+    private static func makeSocketPair() -> (Int32, Int32) {
+        var fds: [Int32] = [0, 0]
+        let rc = fds.withUnsafeMutableBufferPointer { buf in
+            Darwin.socketpair(AF_UNIX, SOCK_STREAM, 0, buf.baseAddress)
+        }
+        precondition(rc == 0, "socketpair failed: \(rc)")
+        return (fds[0], fds[1])
+    }
+
+    @Test func readAndValidateTimesOutOnSilentClient() {
+        let (client, server) = Self.makeSocketPair()
+        defer { Darwin.close(client); Darwin.close(server) }
+
+        let start = Date()
+        let ok = SocketAuthToken.readAndValidate(
+            fd: server, expectedToken: "tok", timeoutMs: 300)
+        let elapsed = Date().timeIntervalSince(start)
+
+        #expect(!ok, "silent client must not be accepted")
+        #expect(elapsed < 1.0,
+                "must time out within ~1s when client sends nothing, took \(elapsed)s")
+    }
+
+    @Test func readAndValidateAcceptsGoodFrame() throws {
+        let (client, server) = Self.makeSocketPair()
+        defer { Darwin.close(client); Darwin.close(server) }
+
+        let token = "abc123"
+        let frame = try #require(SocketAuthToken.handshakeFrame(token: token))
+        let w = frame.withUnsafeBytes { Darwin.write(client, $0.baseAddress!, frame.count) }
+        #expect(w == frame.count)
+
+        let ok = SocketAuthToken.readAndValidate(
+            fd: server, expectedToken: token, timeoutMs: 2000)
+        #expect(ok)
+    }
+
+    @Test func readAndValidateRejectsWrongToken() throws {
+        let (client, server) = Self.makeSocketPair()
+        defer { Darwin.close(client); Darwin.close(server) }
+
+        let frame = try #require(SocketAuthToken.handshakeFrame(token: "wrong"))
+        _ = frame.withUnsafeBytes { Darwin.write(client, $0.baseAddress!, frame.count) }
+
+        let ok = SocketAuthToken.readAndValidate(
+            fd: server, expectedToken: "right", timeoutMs: 2000)
+        #expect(!ok)
+    }
+
+    @Test func readAndValidateTimesOutOnPartialFrame() {
+        // Client sends the 4-byte length prefix but withholds the payload.
+        // The helper must time out on the payload read rather than hang.
+        let (client, server) = Self.makeSocketPair()
+        defer { Darwin.close(client); Darwin.close(server) }
+
+        var length = UInt32(100).bigEndian
+        let lenData = Data(bytes: &length, count: 4)
+        _ = lenData.withUnsafeBytes { Darwin.write(client, $0.baseAddress!, 4) }
+        // Intentionally no payload write.
+
+        let start = Date()
+        let ok = SocketAuthToken.readAndValidate(
+            fd: server, expectedToken: "tok", timeoutMs: 300)
+        let elapsed = Date().timeIntervalSince(start)
+
+        #expect(!ok)
+        #expect(elapsed < 1.0,
+                "partial-frame client must time out within ~1s, took \(elapsed)s")
+    }
+
+    @Test func readAndValidateRejectsOversizeLength() {
+        // Client claims a payload larger than maxFrameBytes.
+        let (client, server) = Self.makeSocketPair()
+        defer { Darwin.close(client); Darwin.close(server) }
+
+        var length = UInt32(SocketAuthToken.maxFrameBytes + 1).bigEndian
+        let lenData = Data(bytes: &length, count: 4)
+        _ = lenData.withUnsafeBytes { Darwin.write(client, $0.baseAddress!, 4) }
+
+        let ok = SocketAuthToken.readAndValidate(
+            fd: server, expectedToken: "tok", timeoutMs: 2000)
+        #expect(!ok, "oversize length must be rejected without reading payload")
+    }
 }

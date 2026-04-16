@@ -145,4 +145,67 @@ public enum SocketAuthToken {
         for i in 0..<ab.count { diff |= ab[i] ^ bb[i] }
         return diff == 0
     }
+
+    /// F1 fix (Schneier re-audit, 2026-04-16): read the length-prefixed
+    /// handshake frame from `fd` with a bounded wait, then validate.
+    ///
+    /// Callers previously issued a raw `read(2)` that blocked indefinitely.
+    /// A same-UID attacker could open `maxConnections` sockets without
+    /// sending any bytes and starve legitimate clients on the MCP listener.
+    /// This helper uses `poll(2)` with `timeoutMs` before every read, so a
+    /// silent client is dropped within the configured window instead of
+    /// holding a task slot forever.
+    ///
+    /// Returns `true` iff a valid handshake was received within the
+    /// timeout budget. Does NOT close `fd` — the caller owns the fd and
+    /// will close on rejection.
+    public static func readAndValidate(
+        fd: Int32,
+        expectedToken: String,
+        timeoutMs: Int32 = 5000
+    ) -> Bool {
+        // Wait for the 4-byte length prefix.
+        guard waitReadable(fd: fd, timeoutMs: timeoutMs) else { return false }
+
+        var lengthBytes = [UInt8](repeating: 0, count: 4)
+        let readLen = Darwin.read(fd, &lengthBytes, 4)
+        guard readLen == 4 else { return false }
+
+        let len = Int(UInt32(bigEndian:
+            Data(lengthBytes).withUnsafeBytes { $0.load(as: UInt32.self) }))
+        guard len > 0, len <= maxFrameBytes else { return false }
+
+        // Read the payload with a timeout on every continuation read, so a
+        // client that sends the length prefix but stalls on the body also
+        // times out instead of hanging.
+        var payload = Data(count: len)
+        var total = 0
+        while total < len {
+            guard waitReadable(fd: fd, timeoutMs: timeoutMs) else { return false }
+            let n = payload.withUnsafeMutableBytes { buf in
+                Darwin.read(fd, buf.baseAddress! + total, len - total)
+            }
+            if n <= 0 { return false }
+            total += n
+        }
+        guard total == len else { return false }
+
+        return validateHandshakePayload(payload, expectedToken: expectedToken)
+    }
+
+    /// Poll the fd for readability with a millisecond timeout. Returns true
+    /// only if POLLIN fired within the window; false on timeout, error, or
+    /// POLLHUP/POLLERR/POLLNVAL.
+    private static func waitReadable(fd: Int32, timeoutMs: Int32) -> Bool {
+        var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        while true {
+            let rc = Darwin.poll(&pfd, 1, timeoutMs)
+            if rc > 0 {
+                return (pfd.revents & Int16(POLLIN)) != 0
+            }
+            if rc == 0 { return false } // timeout
+            // rc < 0 — interrupted syscall retries; other errors fail closed.
+            if errno != EINTR { return false }
+        }
+    }
 }

@@ -273,35 +273,18 @@ public final class SocketServerManager: @unchecked Sendable {
     /// Maximum concurrent MCP connections. Rejects beyond this limit.
     private static let maxConnections = 20
 
-    /// P2-12: read the handshake frame on a freshly-accepted fd and validate.
-    /// Returns true iff auth is disabled OR handshake matches the active token.
-    /// Blocking read up to `maxFrameBytes`; closes the fd and returns false on
-    /// protocol violation so the caller can abandon the connection.
+    /// P2-12 + F1 fix (Schneier re-audit 2026-04-16): read the handshake
+    /// frame on a freshly-accepted fd and validate, with a bounded wait.
+    /// Returns true iff auth is disabled OR the handshake matches the active
+    /// token within the timeout. The bounded wait is the defense against a
+    /// same-UID DoS where a connected-but-silent attacker would otherwise
+    /// hold a task slot indefinitely.
     private func validateHandshakeIfRequired(fd: Int32) -> Bool {
         lock.lock()
         let expected = authToken
         lock.unlock()
         guard let expected else { return true } // auth disabled → passthrough
-
-        var lengthBytes = [UInt8](repeating: 0, count: 4)
-        let readLen = Darwin.read(fd, &lengthBytes, 4)
-        guard readLen == 4 else { return false }
-
-        let len = Int(UInt32(bigEndian: Data(lengthBytes).withUnsafeBytes { $0.load(as: UInt32.self) }))
-        guard len > 0, len <= SocketAuthToken.maxFrameBytes else { return false }
-
-        var payload = Data(count: len)
-        var total = 0
-        while total < len {
-            let n = payload.withUnsafeMutableBytes { buf in
-                Darwin.read(fd, buf.baseAddress! + total, len - total)
-            }
-            if n <= 0 { return false }
-            total += n
-        }
-        guard total == len else { return false }
-
-        return SocketAuthToken.validateHandshakePayload(payload, expectedToken: expected)
+        return SocketAuthToken.readAndValidate(fd: fd, expectedToken: expected)
     }
 
     private func handleConnection(fd: Int32) async {

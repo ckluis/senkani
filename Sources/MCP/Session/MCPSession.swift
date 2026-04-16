@@ -181,7 +181,7 @@ final class MCPSession: @unchecked Sendable {
             indexerEnabled: passthrough ? false : envBool("SENKANI_MCP_INDEX", fallback: true),
             cacheEnabled: passthrough ? false : envBool("SENKANI_MCP_CACHE", fallback: true),
             terseEnabled: passthrough ? false : envBool("SENKANI_MCP_TERSE", fallback: false),
-            injectionGuardEnabled: passthrough ? false : envBool("SENKANI_MCP_INJECTION_GUARD", fallback: false),
+            injectionGuardEnabled: passthrough ? false : envBool("SENKANI_MCP_INJECTION_GUARD", fallback: true),
             metricsFilePath: metricsFile,
             sessionId: sessionId,
             paneId: paneId,
@@ -284,14 +284,76 @@ final class MCPSession: @unchecked Sendable {
     /// Get the repo map for MCP instruction injection.
     /// Generated from the symbol index, cached until the index changes.
     /// Returns empty string if the index isn't ready yet.
-    func repoMap() -> String {
+    /// Tightened default (200 tokens ≈ 800 bytes) vs. previous 2000 tokens so the
+    /// per-server-start instruction tax stays bounded; large repos overflow upstream
+    /// in `instructionsPayload(budgetBytes:)` which truncates with a hint to call
+    /// `senkani_explore` for the rest.
+    func repoMap(maxTokens: Int = 200) -> String {
         lock.lock()
         defer { lock.unlock() }
-        if let cached = _repoMap { return cached }
+        if let cached = _repoMap, maxTokens == 200 { return cached }
         guard let index = _symbolIndex else { return "" }
-        let map = index.repoMap(maxTokens: 2000)
-        _repoMap = map
+        let map = index.repoMap(maxTokens: maxTokens)
+        if maxTokens == 200 { _repoMap = map }
         return map
+    }
+
+    /// Assemble the instructions payload injected into the MCP `Server(instructions:)`.
+    /// Capped at `budgetBytes` across all three sections (sessionBrief > repoMap > skills,
+    /// in priority order). The old path concatenated unbounded strings and taxed every
+    /// MCP server start with ~8 KB on large repos. Override with
+    /// `SENKANI_INSTRUCTIONS_BUDGET_BYTES`.
+    func instructionsPayload(base: String, budgetBytes: Int? = nil) -> String {
+        let envBudget = ProcessInfo.processInfo.environment["SENKANI_INSTRUCTIONS_BUDGET_BYTES"]
+            .flatMap { Int($0) }
+        let budget = budgetBytes ?? envBudget ?? 2048
+
+        let briefBudget  = min(700, budget / 3)
+        let skillsBudget = min(400, budget / 5)
+        let repoBudget   = max(0, budget - briefBudget - skillsBudget)
+
+        let brief = MCPSession.truncate(
+            sessionBrief(),
+            to: briefBudget,
+            marker: "\n[session context truncated]"
+        )
+
+        let repoMapText: String = {
+            guard repoBudget > 0 else { return "" }
+            let raw = repoMap(maxTokens: max(50, repoBudget / 4))
+            let capped = MCPSession.truncate(
+                raw, to: repoBudget,
+                marker: "\n... (repo map truncated — call senkani_explore for full tree)"
+            )
+            return capped.isEmpty ? "" : "\n\nProject structure:\n" + capped
+        }()
+
+        let skills = MCPSession.truncate(
+            skillsPrompt(),
+            to: skillsBudget,
+            marker: "\n[skills truncated — call senkani_knowledge for details]"
+        )
+
+        return base + repoMapText + brief + skills
+    }
+
+    /// Truncate `text` to fit in `maxBytes` of UTF-8, appending `marker` when cut.
+    /// Returns the empty string (not the marker) for empty input.
+    static func truncate(_ text: String, to maxBytes: Int, marker: String) -> String {
+        if text.isEmpty { return "" }
+        if text.utf8.count <= maxBytes { return text }
+        // Byte-safe truncation: find a valid scalar boundary at or below maxBytes.
+        let slice = text.utf8.prefix(max(0, maxBytes - marker.utf8.count))
+        guard let headStr = String(slice) else {
+            // Rare: the prefix sliced mid-scalar. Fall back to character-wise cut.
+            var out = ""
+            for ch in text {
+                if out.utf8.count + ch.utf8.count + marker.utf8.count > maxBytes { break }
+                out.append(ch)
+            }
+            return out + marker
+        }
+        return headStr + marker
     }
 
     /// Generate the session continuity brief. Cached after first call.

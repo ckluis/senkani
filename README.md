@@ -24,7 +24,7 @@ Senkani is two things in one binary: a **multi-pane terminal workspace** (native
 | **Multi-project workspace** — persistent per-project layout | ✅ Live |
 | **Menu bar integration** — lifetime stats, socket toggle, launch-at-login | ✅ Live |
 | **⌘K command palette** — search-as-you-type for panes, themes, actions | ✅ Live |
-| **MCP intelligence layer** — 15 tools, auto-registers with Claude Code | ✅ Live |
+| **MCP intelligence layer** — 17 tools, auto-registers with Claude Code | ✅ Live |
 | **Filter pipeline** — 44 command-specific rules, ANSI stripping, dedup | ✅ Live |
 | **Secret redaction** — API keys, AWS tokens, GitHub PATs, Bearer tokens | ✅ Live |
 | **Terse compression** — algorithmic word/phrase minimization | ✅ Live |
@@ -96,7 +96,7 @@ senkani doctor
 
 ## The MCP Intelligence Layer
 
-15 tools that sit between Claude and your filesystem, compressing everything before it hits your token budget.
+17 tools that sit between Claude and your filesystem, compressing everything before it hits your token budget.
 
 | Tool | What it does | Savings |
 |------|-------------|---------|
@@ -112,9 +112,11 @@ senkani doctor
 | `senkani_embed` | Text embeddings on Apple Silicon (no API cost) | $0/call |
 | `senkani_vision` | Vision model on Apple Silicon (no API cost) | $0/call |
 | `senkani_watch` | FSEvents ring buffer — query changed files by cursor + glob | near-zero |
+| `senkani_web` | Render `http://`/`https://` page with full JS, return AXTree markdown. DNS-resolved SSRF guard + redirect re-validation; `file://` not accepted (use `senkani_read`). | ~99% vs raw HTML |
 | `senkani_pane` | Control workspace panes — open, close, focus, resize (via Unix socket) | — |
 | `senkani_session` | View stats, toggle features, pin/unpin symbol context (`pin`/`unpin`/`pins`) | — |
 | `senkani_knowledge` | Query/update the project knowledge graph — entities, links, decisions, FTS5 search | near-zero |
+| `senkani_version` | Version negotiation: `server_version`, `tool_schemas_version`, `schema_db_version`, list of exposed tools. Cache client schemas keyed on `tool_schemas_version`. | — |
 
 ---
 
@@ -141,6 +143,21 @@ A horizontal canvas of panes. Each pane is a primitive type; you arrange them ho
 - **Skill Library** — browse, install, and manage AI agent skills
 
 **⌘K command palette** opens everything: new panes, themes, actions. Search-as-you-type with category grouping.
+
+---
+
+## Security Defaults (v0.2.0)
+
+Senkani is a trust boundary for LLM-driven tool calls. Security-sensitive features default to **on**; opt-outs are explicit env vars, not hidden flags.
+
+- **Prompt injection guard — on by default.** `InjectionGuard` scans every MCP tool response for instruction-override, tool-call injection, context-manipulation, and exfiltration patterns, with anti-evasion normalization (lowercase, zero-width strip, Cyrillic→Latin homoglyphs). Runs in a single linear pass. Override: `SENKANI_INJECTION_GUARD=off`.
+- **Web fetch SSRF hardening.** `senkani_web` resolves the target host via `getaddrinfo` before fetch and blocks any address in private/link-local/CGNAT/multicast ranges (including IPv4-mapped IPv6, octal/hex IPv4, and IPv4-compatible IPv6). Redirects are re-validated via `WKNavigationDelegate.decidePolicyFor` — a 3xx Location header to `10.x`/`169.254.169.254`/`::ffff:…` is cancelled. `file://` scheme is not accepted — read local files with `senkani_read`. Override for internal docs servers: `SENKANI_WEB_ALLOW_PRIVATE=on`.
+- **Secret redaction — on by default.** `SecretDetector` now short-circuits with `firstMatch` so no-match inputs don't pay the full regex cost (1 MB benign input scans in ~25 ms).
+- **Schema migrations — versioned + crash-safe.** Session DB uses `PRAGMA user_version` + a `schema_migrations` audit log. Cross-process coordination via `flock` sidecar. On failed migration, a kill-switch lockfile is written and subsequent boots refuse to run migrations until the operator inspects the DB.
+- **Retention — scheduled.** `RetentionScheduler` prunes `token_events` (90 d), `sandboxed_results` (24 h), and `validation_results` (24 h) on an hourly tick. Tune via `~/.senkani/config.json` → `"retention": { "token_events_days": 30, ... }`.
+- **Instruction-payload byte cap.** The `instructions` string injected at MCP server start (repo map + session brief + skills) is capped at 2 KB by default. Tune via `SENKANI_INSTRUCTIONS_BUDGET_BYTES`. Prevents the per-session-start token tax from growing with project size.
+
+Call `senkani_version` (tool) or `senkani doctor` to confirm the active security posture.
 
 ---
 
@@ -186,7 +203,7 @@ Numbers from the built-in benchmark suite (`senkani bench`):
 | Symbol search | <5ms cold, <1ms cached |
 | Secret scan | <2ms per KB |
 | Hook latency | <5ms active, <1ms passthrough |
-| Unit tests | **870 passing** |
+| Unit tests | **915 passing** |
 | Binary size | ~28 MB universal |
 
 **About the numbers:** The 80.37x figure is from the fixture benchmark — synthetic tasks designed to exercise each optimization layer. Real sessions produce a lower multiplier. The Savings Test pane shows both numbers side by side: fixture ceiling and live floor. The live number is the honest one.
@@ -201,7 +218,7 @@ Numbers from the built-in benchmark suite (`senkani bench`):
 | **Filter** | — | Token compression: 44 cmd rules, ANSI strip, dedup, secrets, terse |
 | **Indexer** | SwiftTreeSitter | 22 tree-sitter backends, FTS5 search, dependency graph, incremental parsing, FSEvents |
 | **Bench** | Core, Filter, Indexer | Token savings test suite: 10 tasks × 7 configs, quality gates, JSON export |
-| **MCP** | Core, Filter, Indexer, MLX | 15 MCP tools, socket server (mcp + hook + pane), vision + embedding inference |
+| **MCP** | Core, Filter, Indexer, MLX | 17 MCP tools, socket server (mcp + hook + pane), vision + embedding inference |
 | **HookRelay** | — | Zero-dep hook relay library shared by senkani-hook binary and app's --hook mode |
 | **CLI** | Core, Filter, Indexer, Bench | 18 commands: exec, search, bench, doctor, grammars, kb, eval, learn, init, … |
 | **SenkaniApp** | All + SwiftTerm | SwiftUI workspace: 16 pane types, multi-project, ⌘K palette, dashboard, menu bar |
@@ -215,7 +232,7 @@ Prerequisites: macOS 14+, Swift 6.0+, Xcode 15+
 ```bash
 swift build          # debug
 swift build -c release
-swift test           # 870 tests
+swift test           # 915 tests
 senkani doctor       # verify grammar and database setup
 ```
 

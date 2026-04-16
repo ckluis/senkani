@@ -106,6 +106,44 @@ struct WebFetchSSRFTests {
     @Test func bracketedIPv6Loopback() { #expect(!isPrivateHost("[::1]")) }
 }
 
+// MARK: - SSRF Hardening (P0-1)
+
+@Suite("WebFetch — SSRF Hardening")
+struct WebFetchSSRFHardeningTests {
+
+    // IPv4-mapped IPv6 must be detected as the underlying IPv4 address.
+    @Test func ipv4MappedIPv6Private() { #expect(isPrivateHost("::ffff:10.0.0.1")) }
+    @Test func ipv4MappedIPv6MetaBlocked() { #expect(isPrivateHost("::ffff:169.254.169.254")) }
+    @Test func ipv4MappedIPv6LoopbackAllowed() { #expect(!isPrivateHost("::ffff:127.0.0.1")) }
+    @Test func ipv4MappedIPv6PublicAllowed() { #expect(!isPrivateHost("::ffff:8.8.8.8")) }
+
+    // IPv4-compatible IPv6 (deprecated) — treat as private/block except ::1.
+    @Test func ipv4CompatIPv6Blocked() { #expect(isPrivateHost("::10.0.0.1")) }
+    @Test func ipv6UnspecifiedBlocked() { #expect(isPrivateHost("::")) }
+
+    // IPv6 multicast must be blocked.
+    @Test func ipv6MulticastBlocked() { #expect(isPrivateHost("ff02::1")) }
+
+    // IPv4 literal fast path still works through inet_pton-based rewrite.
+    @Test func inetPtonDottedDecimalStillWorks() { #expect(isPrivateHost("192.168.0.1")) }
+    @Test func inetPtonPublicStillPasses() { #expect(!isPrivateHost("1.1.1.1")) }
+
+    // IPv4 multicast/reserved should block — 224.0.0.0/4 + 240.0.0.0/4.
+    @Test func ipv4MulticastBlocked() { #expect(isPrivateHost("224.0.0.1")) }
+    @Test func ipv4ReservedBlocked() { #expect(isPrivateHost("255.255.255.255")) }
+    @Test func ipv4UnspecifiedBlocked() { #expect(isPrivateHost("0.0.0.0")) }
+
+    // hostResolvesToPrivate: IP literals are fast-path and don't touch DNS.
+    @Test func resolverFastPathPrivate() { #expect(hostResolvesToPrivate("10.0.0.1")) }
+    @Test func resolverFastPathPublic() { #expect(!hostResolvesToPrivate("8.8.8.8")) }
+    @Test func resolverFastPathLoopbackAllowed() { #expect(!hostResolvesToPrivate("127.0.0.1")) }
+
+    // Hostname that cannot resolve — fail closed.
+    @Test func resolverUnresolvableHostFailsClosed() {
+        #expect(hostResolvesToPrivate("this-hostname-should-not-exist.invalid"))
+    }
+}
+
 // MARK: - XCTestCase — WKWebView integration (requires RunLoop, uses XCTestExpectation)
 
 final class WebFetchIntegrationTests: XCTestCase {

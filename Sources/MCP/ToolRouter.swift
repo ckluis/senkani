@@ -174,6 +174,8 @@ enum ToolRouter {
             return WatchTool.handle(arguments: params.arguments, session: session)
         case "knowledge":
             return KnowledgeTool.handle(arguments: params.arguments, session: session)
+        case "version":
+            return VersionTool.handle(arguments: params.arguments, session: session)
         default:
             return .init(content: [.text(text: "Unknown tool: \(params.name)", annotations: nil, _meta: nil)], isError: true)
         }
@@ -265,7 +267,7 @@ enum ToolRouter {
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
-                        "url":     .object(["type": .string("string"),  "description": .string("HTTP, HTTPS, or file:// URL to render")]),
+                        "url":     .object(["type": .string("string"),  "description": .string("HTTP or HTTPS URL to render. file:// is not allowed — read local files via senkani_read.")]),
                         "timeout": .object(["type": .string("integer"), "description": .string("Load timeout in seconds, 5–60 (default: 15)")]),
                         "format":  .object(["type": .string("string"),  "description": .string("Output: 'tree' (semantic AXTree, default), 'text' (plain text), 'html' (raw HTML, always sandboxed)")]),
                     ]),
@@ -407,6 +409,15 @@ enum ToolRouter {
                         "since": .object(["type": .string("string"), "description": .string("ISO8601 timestamp cursor — returns changes after this time. Omit for all recent changes.")]),
                         "glob": .object(["type": .string("string"), "description": .string("Glob pattern to filter paths (e.g. 'Sources/**/*.swift')")]),
                     ]),
+                ]),
+                annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
+            ),
+            Tool(
+                name: "version",
+                description: "Return senkani server/tool-schemas/DB-schema versions + list of exposed tools. Use for version negotiation: cache tool schemas keyed on tool_schemas_version.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([:]),
                 ]),
                 annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
             ),

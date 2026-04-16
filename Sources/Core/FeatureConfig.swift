@@ -33,7 +33,7 @@ public struct FeatureConfig: Sendable {
     public let terse: Bool
     public let injectionGuard: Bool
 
-    public init(filter: Bool = true, secrets: Bool = true, indexer: Bool = true, terse: Bool = false, injectionGuard: Bool = false) {
+    public init(filter: Bool = true, secrets: Bool = true, indexer: Bool = true, terse: Bool = false, injectionGuard: Bool = true) {
         self.filter = filter
         self.secrets = secrets
         self.indexer = indexer
@@ -59,6 +59,7 @@ public struct FeatureConfig: Sendable {
         secretsFlag: Bool? = nil,
         indexerFlag: Bool? = nil,
         terseFlag: Bool? = nil,
+        injectionGuardFlag: Bool? = nil,
         projectRoot: String? = nil
     ) -> FeatureConfig {
         // Layer 1: config file
@@ -69,13 +70,15 @@ public struct FeatureConfig: Sendable {
         let envSecrets = envBool("SENKANI_SECRETS")
         let envIndexer = envBool("SENKANI_INDEXER")
         let envTerse = envBool("SENKANI_TERSE")
+        let envInjection = envBool("SENKANI_INJECTION_GUARD")
 
-        // Resolution: flag > env > file > default (terse defaults to off)
+        // Resolution: flag > env > file > default (terse defaults to off; injectionGuard on)
         return FeatureConfig(
             filter: filterFlag ?? envFilter ?? fileConfig?.filter ?? true,
             secrets: secretsFlag ?? envSecrets ?? fileConfig?.secrets ?? true,
             indexer: indexerFlag ?? envIndexer ?? fileConfig?.indexer ?? true,
-            terse: terseFlag ?? envTerse ?? fileConfig?.terse ?? false
+            terse: terseFlag ?? envTerse ?? fileConfig?.terse ?? false,
+            injectionGuard: injectionGuardFlag ?? envInjection ?? fileConfig?.injectionGuard ?? true
         )
     }
 
@@ -102,11 +105,13 @@ public struct FeatureConfig: Sendable {
             let secrets: Bool?
             let indexer: Bool?
             let terse: Bool?
+            let injectionGuard: Bool?
         }
 
         var filter: Bool? { features?.filter }
         var secrets: Bool? { features?.secrets }
         var indexer: Bool? { features?.indexer }
         var terse: Bool? { features?.terse }
+        var injectionGuard: Bool? { features?.injectionGuard }
     }
 }

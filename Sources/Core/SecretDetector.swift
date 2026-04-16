@@ -25,20 +25,23 @@ public enum SecretDetector {
     }
 
     /// Scan text for secrets. Returns redacted text and list of pattern names found.
+    /// Hot path optimization: use firstMatch for early exit instead of allocating the
+    /// full [NSTextCheckingResult] matches array. The common case (no secrets) was
+    /// previously doing 7 full match-array allocations per response; now it's 7 cheap
+    /// scans with no allocation on miss.
     public static func scan(_ input: String) -> ScanResult {
         var result = input
         var found: [String] = []
 
         for (name, regex) in patterns {
-            let matches = regex.matches(in: result, range: NSRange(result.startIndex..., in: result))
-            if !matches.isEmpty {
-                found.append(name)
-                result = regex.stringByReplacingMatches(
-                    in: result,
-                    range: NSRange(result.startIndex..., in: result),
-                    withTemplate: "[REDACTED:\(name)]"
-                )
-            }
+            let range = NSRange(result.startIndex..., in: result)
+            guard regex.firstMatch(in: result, range: range) != nil else { continue }
+            found.append(name)
+            result = regex.stringByReplacingMatches(
+                in: result,
+                range: NSRange(result.startIndex..., in: result),
+                withTemplate: "[REDACTED:\(name)]"
+            )
         }
 
         return ScanResult(redacted: result, patterns: found)

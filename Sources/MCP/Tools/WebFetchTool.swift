@@ -141,6 +141,8 @@ enum WebFetchError: Error, LocalizedError {
     case timeout
     case invalidURL
     case disabled
+    case privateAddressBlocked
+    case tooManyRedirects
 
     var errorDescription: String? {
         switch self {
@@ -148,9 +150,13 @@ enum WebFetchError: Error, LocalizedError {
             return "Page load timed out. The site may require auth or block automation. " +
                    "For REST APIs try: senkani_exec(\"curl -s <url>\")"
         case .invalidURL:
-            return "URL must begin with http:// or https://. For local files use file:// prefix."
+            return "URL must begin with http:// or https://. For local files use senkani_read."
         case .disabled:
             return "senkani_web is disabled (SENKANI_WEB=off)."
+        case .privateAddressBlocked:
+            return "Private/link-local address blocked by SSRF guard (set SENKANI_WEB_ALLOW_PRIVATE=on to override for trusted internal docs servers)."
+        case .tooManyRedirects:
+            return "Redirect chain exceeded 5 hops — aborting to avoid loops and SSRF bypass via redirect."
         }
     }
 }
@@ -169,15 +175,69 @@ private final class NavigationHandler: NSObject, WKNavigationDelegate {
     let completion: (Result<String, Error>) -> Void
 
     private let format: String
+    private let allowPrivate: Bool
+    private var navigationCount = 0
+    /// Initial URL + up to 5 redirects = 6 total navigations permitted.
+    private static let maxRedirects = 5
 
-    init(timeout: TimeInterval, format: String = "tree", completion: @escaping (Result<String, Error>) -> Void) {
+    init(
+        timeout: TimeInterval,
+        format: String = "tree",
+        allowPrivate: Bool = false,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
         self.format = format
+        self.allowPrivate = allowPrivate
         self.completion = completion
         super.init()
         // Schedule timeout on the RunLoop (we're always on the main thread here)
         timer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
             self?.resumeOnce(.failure(WebFetchError.timeout))
         }
+    }
+
+    /// SSRF defense-in-depth: validate every navigation (including 3xx redirects).
+    /// The initial URL was already validated by WebFetchTool.handle before we got here,
+    /// but redirects can switch scheme (https → file://) or host (public → private IP).
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
+    ) {
+        navigationCount += 1
+
+        guard let url = navigationAction.request.url else {
+            resumeOnce(.failure(WebFetchError.invalidURL))
+            decisionHandler(.cancel); return
+        }
+
+        // Redirect depth cap (initial nav counts as 1).
+        if navigationCount > Self.maxRedirects + 1 {
+            resumeOnce(.failure(WebFetchError.tooManyRedirects))
+            decisionHandler(.cancel); return
+        }
+
+        // First navigation: scheme was already validated by handle(); allow any
+        // scheme the engine caller supplied. WebFetchEngine.fetch is also used
+        // directly by the integration test (file:// fixture) — do not block it.
+        if navigationCount == 1 {
+            decisionHandler(.allow); return
+        }
+
+        // Redirect: enforce strict http/https allowlist. Blocks 3xx → file:// exfil.
+        guard let scheme = url.scheme, scheme == "http" || scheme == "https" else {
+            resumeOnce(.failure(WebFetchError.invalidURL))
+            decisionHandler(.cancel); return
+        }
+
+        // Redirect: re-resolve host. Blocks public-site → private-IP rebind and
+        // 3xx Location headers pointing at 169.254.169.254 (cloud metadata).
+        if !allowPrivate, let host = url.host, hostResolvesToPrivate(host) {
+            resumeOnce(.failure(WebFetchError.privateAddressBlocked))
+            decisionHandler(.cancel); return
+        }
+
+        decisionHandler(.allow)
     }
 
     func webView(_ webView: WKWebView, didFinish _: WKNavigation?) {
@@ -276,11 +336,20 @@ final class WebFetchEngine {
 
     /// Fetch `url` with JS execution and return output in the requested format.
     /// Must be called from a non-isolated async context; hops to MainActor internally.
-    nonisolated func fetch(url: URL, timeoutSeconds: Int, format: String = "tree") async throws -> String {
+    nonisolated func fetch(
+        url: URL,
+        timeoutSeconds: Int,
+        format: String = "tree",
+        allowPrivate: Bool = false
+    ) async throws -> String {
         return try await withCheckedThrowingContinuation { continuation in
             Task { @MainActor [self] in
                 let wv = getOrCreateWebView()
-                let handler = NavigationHandler(timeout: Double(timeoutSeconds), format: format) { result in
+                let handler = NavigationHandler(
+                    timeout: Double(timeoutSeconds),
+                    format: format,
+                    allowPrivate: allowPrivate
+                ) { result in
                     switch result {
                     case .success(let s): continuation.resume(returning: s)
                     case .failure(let e): continuation.resume(throwing: e)
@@ -300,30 +369,133 @@ final class WebFetchEngine {
 
 // MARK: - SSRF Helper
 
-/// Returns true if the host resolves to a private / link-local range that should
-/// be blocked to prevent Server-Side Request Forgery attacks.
-/// Localhost (127.x, ::1) is intentionally NOT blocked — developer use case.
+/// Check whether a 32-bit IPv4 address (network byte order in `netOrder`) is in a
+/// private / link-local / reserved range. Loopback (127.0.0.0/8) is intentionally
+/// NOT reported private — developer use case.
+private func isPrivateIPv4(_ netOrder: UInt32) -> Bool {
+    let host = UInt32(bigEndian: netOrder)
+    let a = UInt8((host >> 24) & 0xff)
+    let b = UInt8((host >> 16) & 0xff)
+    if a == 127 { return false }                        // loopback allowed
+    if a == 0 { return true }                           // 0.0.0.0/8 unspecified/reserved
+    if a == 10 { return true }                          // 10.0.0.0/8
+    if a == 172 && (16...31).contains(b) { return true }  // 172.16.0.0/12
+    if a == 192 && b == 168 { return true }             // 192.168.0.0/16
+    if a == 169 && b == 254 { return true }             // 169.254.0.0/16 link-local
+    if a == 100 && (64...127).contains(b) { return true } // 100.64.0.0/10 CGNAT
+    if a >= 224 { return true }                         // multicast + reserved
+    return false
+}
+
+/// Check whether 16 IPv6 bytes are in a private / link-local / reserved range.
+/// Loopback (::1) is intentionally NOT reported private. Recognizes IPv4-mapped
+/// (::ffff:x.y.z.w) and IPv4-compatible (::x.y.z.w, deprecated) forms.
+private func isPrivateIPv6(_ b: [UInt8]) -> Bool {
+    guard b.count == 16 else { return true }
+    // IPv4-mapped: ::ffff:A.B.C.D
+    if b[0..<10].allSatisfy({ $0 == 0 }) && b[10] == 0xff && b[11] == 0xff {
+        let v4 = UInt32(b[12]) << 24 | UInt32(b[13]) << 16 | UInt32(b[14]) << 8 | UInt32(b[15])
+        return isPrivateIPv4(v4.bigEndian)
+    }
+    // IPv4-compatible (deprecated): ::A.B.C.D with A.B.C.D != 0.0.0.1 (loopback).
+    if b[0..<12].allSatisfy({ $0 == 0 }) {
+        let tail = Array(b[12..<16])
+        if tail == [0, 0, 0, 0] { return true }              // ::/128 unspecified
+        if tail == [0, 0, 0, 1] { return false }             // ::1 loopback allowed
+        // Any other ::A.B.C.D is deprecated / likely a bypass attempt — block.
+        return true
+    }
+    if b[0] == 0xfe && (b[1] & 0xc0) == 0x80 { return true }  // fe80::/10 link-local
+    if (b[0] & 0xfe) == 0xfc { return true }                   // fc00::/7 ULA
+    if b[0] == 0xff { return true }                            // ff00::/8 multicast
+    return false
+}
+
+/// String-level SSRF check against IP literals. Now covers:
+///   - Dotted-decimal IPv4 via inet_pton.
+///   - IPv6 (including IPv4-mapped ::ffff:x.y.z.w and IPv4-compatible ::x.y.z.w).
+///   - IPv6 bracket notation.
+/// Does NOT resolve hostnames — use `hostResolvesToPrivate` for that.
+/// Kept for backward compatibility with unit tests.
 func isPrivateHost(_ host: String) -> Bool {
-    // Strip IPv6 brackets if present
     let h = host.hasPrefix("[") && host.hasSuffix("]")
         ? String(host.dropFirst().dropLast())
         : host
 
-    // IPv6 loopback is allowed; site-local fc/fd and link-local fe80 are not
-    if h == "::1" { return false }
-    if h.lowercased().hasPrefix("fe80") { return true }   // link-local
-    if h.lowercased().hasPrefix("fc") || h.lowercased().hasPrefix("fd") { return true }  // ULA
+    // IPv4 literal
+    var v4 = in_addr()
+    if inet_pton(AF_INET, h, &v4) == 1 {
+        return isPrivateIPv4(v4.s_addr)
+    }
 
-    // Parse dotted-decimal IPv4
-    let parts = h.split(separator: ".").compactMap { UInt8($0) }
-    guard parts.count == 4 else { return false }  // hostname — DNS lookup not done here
+    // IPv6 literal
+    var v6 = in6_addr()
+    if inet_pton(AF_INET6, h, &v6) == 1 {
+        var bytes = [UInt8](repeating: 0, count: 16)
+        withUnsafeBytes(of: v6) { raw in
+            for i in 0..<16 { bytes[i] = raw[i] }
+        }
+        return isPrivateIPv6(bytes)
+    }
 
-    let a = parts[0], b = parts[1]
-    if a == 10 { return true }                         // 10.0.0.0/8
-    if a == 172 && (16...31).contains(b) { return true } // 172.16.0.0/12
-    if a == 192 && b == 168 { return true }            // 192.168.0.0/16
-    if a == 169 && b == 254 { return true }            // 169.254.0.0/16 link-local
-    if a == 100 && (64...127).contains(b) { return true } // 100.64.0.0/10 CGNAT
+    // Not an IP literal (hostname) — string-level check cannot decide; caller should
+    // run `hostResolvesToPrivate` for DNS-backed resolution.
+    return false
+}
+
+/// Resolve `host` via getaddrinfo and return true if ANY resolved address is private.
+/// Fails closed on resolution error (returns true) — a host that does not resolve
+/// cannot legitimately be reached, and refusing to fetch prevents DNS-rebind-shaped
+/// attacks where the attacker controls intermittent resolution.
+func hostResolvesToPrivate(_ host: String) -> Bool {
+    let h = host.hasPrefix("[") && host.hasSuffix("]")
+        ? String(host.dropFirst().dropLast())
+        : host
+
+    // Fast path: IP literal — skip DNS.
+    if isPrivateHost(h) { return true }
+    // Also need to detect public IP literals so we don't call DNS on them.
+    var v4 = in_addr()
+    var v6 = in6_addr()
+    if inet_pton(AF_INET, h, &v4) == 1 { return isPrivateIPv4(v4.s_addr) }
+    if inet_pton(AF_INET6, h, &v6) == 1 {
+        var bytes = [UInt8](repeating: 0, count: 16)
+        withUnsafeBytes(of: v6) { raw in for i in 0..<16 { bytes[i] = raw[i] } }
+        return isPrivateIPv6(bytes)
+    }
+
+    var hints = addrinfo()
+    hints.ai_family = AF_UNSPEC
+    hints.ai_socktype = SOCK_STREAM
+
+    var result: UnsafeMutablePointer<addrinfo>?
+    let status = getaddrinfo(h, nil, &hints, &result)
+    guard status == 0, let head = result else {
+        // Resolution failure: fail closed.
+        return true
+    }
+    defer { freeaddrinfo(head) }
+
+    var node: UnsafeMutablePointer<addrinfo>? = head
+    while let n = node {
+        if let saPtr = n.pointee.ai_addr {
+            switch Int32(saPtr.pointee.sa_family) {
+            case AF_INET:
+                let sin = UnsafeRawPointer(saPtr).assumingMemoryBound(to: sockaddr_in.self)
+                if isPrivateIPv4(sin.pointee.sin_addr.s_addr) { return true }
+            case AF_INET6:
+                let sin6 = UnsafeRawPointer(saPtr).assumingMemoryBound(to: sockaddr_in6.self)
+                var bytes = [UInt8](repeating: 0, count: 16)
+                withUnsafeBytes(of: sin6.pointee.sin6_addr) { raw in
+                    for i in 0..<16 { bytes[i] = raw[i] }
+                }
+                if isPrivateIPv6(bytes) { return true }
+            default:
+                break
+            }
+        }
+        node = n.pointee.ai_next
+    }
     return false
 }
 
@@ -339,11 +511,13 @@ enum WebFetchTool {
             )
         }
 
-        // URL validation: http, https, or file only
+        // URL validation: http or https only. file:// dropped — local files go through
+        // senkani_read, which has the full ProjectSecurity guard. file:// via the web
+        // tool was an LLM-exfiltration path (redirect chains, prompt injection).
         guard let urlStr = arguments?["url"]?.stringValue,
               let url    = URL(string: urlStr),
               let scheme = url.scheme,
-              ["http", "https", "file"].contains(scheme)
+              ["http", "https"].contains(scheme)
         else {
             return .init(
                 content: [.text(text: WebFetchError.invalidURL.errorDescription!, annotations: nil, _meta: nil)],
@@ -351,26 +525,25 @@ enum WebFetchTool {
             )
         }
 
-        // SSRF guard: block RFC 1918 + link-local ranges by default.
-        // Localhost (127.x / ::1) is allowed for developer use.
+        // SSRF guard: DNS-resolve the host, reject if ANY address is private/link-local.
+        // Loopback (127.0.0.0/8, ::1) intentionally allowed — developer use case.
         // Set SENKANI_WEB_ALLOW_PRIVATE=on to bypass (e.g. internal docs servers).
         let allowPrivate = ProcessInfo.processInfo.environment["SENKANI_WEB_ALLOW_PRIVATE"]?.lowercased() == "on"
-        if !allowPrivate, let host = url.host {
-            if isPrivateHost(host) {
-                return .init(
-                    content: [.text(
-                        text: "Private network addresses are blocked by default (SENKANI_WEB_ALLOW_PRIVATE=on to override).",
-                        annotations: nil, _meta: nil)],
-                    isError: true
-                )
-            }
+        if !allowPrivate, let host = url.host, hostResolvesToPrivate(host) {
+            return .init(
+                content: [.text(
+                    text: WebFetchError.privateAddressBlocked.errorDescription!,
+                    annotations: nil, _meta: nil)],
+                isError: true
+            )
         }
 
         let timeout = min(60, max(5, arguments?["timeout"]?.intValue ?? 15))
         let format  = arguments?["format"]?.stringValue ?? "tree"
 
         do {
-            let markdown = try await WebFetchEngine.shared.fetch(url: url, timeoutSeconds: timeout, format: format)
+            let markdown = try await WebFetchEngine.shared.fetch(
+                url: url, timeoutSeconds: timeout, format: format, allowPrivate: allowPrivate)
 
             // html format: always sandbox regardless of line count (HTML is always large)
             if format == "html" {

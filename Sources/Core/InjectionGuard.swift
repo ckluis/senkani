@@ -85,34 +85,40 @@ public enum InjectionGuard {
 
     // MARK: - Normalization (anti-evasion)
 
+    private static let zeroWidthScalars: Set<Unicode.Scalar> = [
+        "\u{200B}", "\u{200C}", "\u{200D}", "\u{FEFF}",
+        "\u{00AD}", "\u{2060}", "\u{180E}",
+    ]
+
+    private static let homoglyphMap: [Unicode.Scalar: Unicode.Scalar] = [
+        "\u{0430}": "a", "\u{0435}": "e", "\u{043E}": "o",
+        "\u{0440}": "p", "\u{0441}": "c", "\u{0443}": "y",
+        "\u{0445}": "x", "\u{0410}": "a", "\u{0415}": "e",
+        "\u{041E}": "o", "\u{0420}": "p", "\u{0421}": "c",
+        "\u{0423}": "y", "\u{0425}": "x",
+    ]
+
     private static func normalize(_ input: String) -> String {
-        var s = input.lowercased()
+        // Single pass: lowercase, drop zero-width, remap Cyrillic homoglyphs,
+        // collapse whitespace runs. Preserves prior per-pair-loop semantics but
+        // runs linear in input size.
+        let lowered = input.lowercased()
+        var scalars = String.UnicodeScalarView()
+        scalars.reserveCapacity(lowered.unicodeScalars.count)
 
-        // Strip zero-width Unicode characters
-        let zeroWidth: [Character] = [
-            "\u{200B}", "\u{200C}", "\u{200D}", "\u{FEFF}",
-            "\u{00AD}", "\u{2060}", "\u{180E}",
-        ]
-        s.removeAll { zeroWidth.contains($0) }
-
-        // Map common Cyrillic homoglyphs to Latin
-        let homoglyphs: [(Character, Character)] = [
-            ("\u{0430}", "a"), ("\u{0435}", "e"), ("\u{043E}", "o"),
-            ("\u{0440}", "p"), ("\u{0441}", "c"), ("\u{0443}", "y"),
-            ("\u{0445}", "x"), ("\u{0410}", "a"), ("\u{0415}", "e"),
-            ("\u{041E}", "o"), ("\u{0420}", "p"), ("\u{0421}", "c"),
-            ("\u{0423}", "y"), ("\u{0425}", "x"),
-        ]
-        for (cyrillic, latin) in homoglyphs {
-            s = s.map { $0 == cyrillic ? latin : $0 }.reduce("", { $0 + String($1) })
+        var lastWasSpace = false
+        for scalar in lowered.unicodeScalars {
+            if zeroWidthScalars.contains(scalar) { continue }
+            let mapped = homoglyphMap[scalar] ?? scalar
+            if mapped == " " {
+                if lastWasSpace { continue }
+                lastWasSpace = true
+            } else {
+                lastWasSpace = false
+            }
+            scalars.append(mapped)
         }
-
-        // Collapse whitespace sequences (defeats "i g n o r e" spacing)
-        while s.contains("  ") {
-            s = s.replacingOccurrences(of: "  ", with: " ")
-        }
-
-        return s
+        return String(scalars)
     }
 
     // MARK: - Pattern Table

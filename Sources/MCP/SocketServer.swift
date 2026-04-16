@@ -257,14 +257,13 @@ public final class SocketServerManager: @unchecked Sendable {
             execution. Call senkani_session with action 'stats' to see savings.
             """
 
-        let repoMap = session.repoMap()
-        let mapSection = repoMap.isEmpty ? "" : "\n\nProject structure:\n\(repoMap)"
-        let briefSection = session.sessionBrief()
+        // P1-7: bounded instructions payload across the socket path too.
+        let instructions = session.instructionsPayload(base: baseInstructions)
 
         let server = Server(
             name: "senkani",
-            version: "0.1.0",
-            instructions: baseInstructions + mapSection + briefSection,
+            version: VersionTool.serverVersion,
+            instructions: instructions,
             capabilities: .init(tools: .init(listChanged: false))
         )
 

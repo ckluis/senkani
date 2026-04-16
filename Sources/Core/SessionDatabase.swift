@@ -72,6 +72,7 @@ public final class SessionDatabase: @unchecked Sendable {
         createTokenEventsTable()
         createSandboxedResultsTable()
         createValidationResultsTable()
+        runMigrations(path: dbPath)
     }
 
     /// Testable initializer — opens a DB at a custom path (use a temp file).
@@ -89,6 +90,34 @@ public final class SessionDatabase: @unchecked Sendable {
         createTokenEventsTable()
         createSandboxedResultsTable()
         createValidationResultsTable()
+        runMigrations(path: path)
+    }
+
+    /// Current `PRAGMA user_version` — used by the senkani_version tool and diagnostics.
+    /// Returns 0 if the DB is unavailable or pre-migration.
+    public func currentSchemaVersion() -> Int {
+        return queue.sync {
+            guard let db = db else { return 0 }
+            return MigrationRunner.currentVersion(db: db)
+        }
+    }
+
+    /// Run schema migrations after table creation. On failure, log and continue —
+    /// the kill-switch lockfile and MigrationError.description surface the issue.
+    private func runMigrations(path: String) {
+        guard let db = db else { return }
+        queue.sync {
+            do {
+                let report = try MigrationRunner.run(db: db, dbPath: path)
+                if !report.appliedVersions.isEmpty {
+                    print("[SessionDatabase] Applied migrations: \(report.appliedVersions)")
+                }
+            } catch let e as MigrationError {
+                print("[SessionDatabase] Migration failed: \(e.description)")
+            } catch {
+                print("[SessionDatabase] Migration failed: \(error)")
+            }
+        }
     }
 
     deinit {
@@ -278,6 +307,11 @@ public final class SessionDatabase: @unchecked Sendable {
     }
 
     /// Record a single command within a session.
+    ///
+    /// P3-13: wrapped in BEGIN IMMEDIATE / COMMIT so the INSERT into `commands` (plus
+    /// the FTS5 trigger sync) and the UPDATE of `sessions` aggregates are atomic.
+    /// Before this: 3 separate sqlite syncs per call, and a crash between them could
+    /// leave stats out-of-sync with the command history.
     public func recordCommand(
         sessionId: String,
         toolName: String,
@@ -292,13 +326,21 @@ public final class SessionDatabase: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self, let db = self.db else { return }
 
+            // Open transaction. If anything in the block fails, rollback.
+            guard sqlite3_exec(db, "BEGIN IMMEDIATE;", nil, nil, nil) == SQLITE_OK else { return }
+            var committed = false
+            defer {
+                if !committed {
+                    sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+                }
+            }
+
             let sql = """
                 INSERT INTO commands (session_id, timestamp, tool_name, command, raw_bytes, compressed_bytes, feature, output_preview)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?);
                 """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-            defer { sqlite3_finalize(stmt) }
             sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
             sqlite3_bind_double(stmt, 2, now)
             sqlite3_bind_text(stmt, 3, (toolName as NSString).utf8String, -1, nil)
@@ -319,7 +361,9 @@ public final class SessionDatabase: @unchecked Sendable {
             } else {
                 sqlite3_bind_null(stmt, 8)
             }
-            sqlite3_step(stmt)
+            let insertRC = sqlite3_step(stmt)
+            sqlite3_finalize(stmt)
+            guard insertRC == SQLITE_DONE else { return }
 
             // Update session aggregates
             let updateSQL = """
@@ -332,14 +376,19 @@ public final class SessionDatabase: @unchecked Sendable {
                 """
             var updateStmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, updateSQL, -1, &updateStmt, nil) == SQLITE_OK else { return }
-            defer { sqlite3_finalize(updateStmt) }
             let saved = rawBytes - compressedBytes
             let costCents = ModelPricing.costSavedCents(bytes: saved)
             sqlite3_bind_int64(updateStmt, 1, Int64(rawBytes))
             sqlite3_bind_int64(updateStmt, 2, Int64(saved))
             sqlite3_bind_int(updateStmt, 3, Int32(costCents))
             sqlite3_bind_text(updateStmt, 4, (sessionId as NSString).utf8String, -1, nil)
-            sqlite3_step(updateStmt)
+            let updateRC = sqlite3_step(updateStmt)
+            sqlite3_finalize(updateStmt)
+            guard updateRC == SQLITE_DONE else { return }
+
+            if sqlite3_exec(db, "COMMIT;", nil, nil, nil) == SQLITE_OK {
+                committed = true
+            }
         }
     }
 

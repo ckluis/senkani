@@ -6,7 +6,8 @@ import Foundation
 @Suite("FilterPipeline Integration")
 struct FilterPipelineTests {
     @Test func filterDisabledPassesThrough() {
-        let config = FeatureConfig(filter: false, secrets: false, indexer: false)
+        // injectionGuard now defaults to true globally; explicitly disable here to isolate the filter axis.
+        let config = FeatureConfig(filter: false, secrets: false, indexer: false, terse: false, injectionGuard: false)
         let pipeline = FilterPipeline(config: config)
         let result = pipeline.process(command: "git status", output: "\u{1B}[32mOn branch\u{1B}[0m")
         // ANSI should NOT be stripped when filter is off
@@ -15,7 +16,7 @@ struct FilterPipelineTests {
     }
 
     @Test func filterEnabledStripsANSI() {
-        let config = FeatureConfig(filter: true, secrets: false, indexer: false)
+        let config = FeatureConfig(filter: true, secrets: false, indexer: false, terse: false, injectionGuard: false)
         let pipeline = FilterPipeline(config: config)
         let result = pipeline.process(command: "git status", output: "\u{1B}[32mOn branch\u{1B}[0m")
         #expect(!result.output.contains("\u{1B}"))
@@ -33,7 +34,7 @@ struct FilterPipelineTests {
     }
 
     @Test func bothFeaturesCompound() {
-        let config = FeatureConfig(filter: true, secrets: true, indexer: false)
+        let config = FeatureConfig(filter: true, secrets: true, indexer: false, terse: false, injectionGuard: false)
         let pipeline = FilterPipeline(config: config)
         let input = "\u{1B}[32mKEY=sk-ant-api03-abcdefghijklmnopqrstuvwxyz\u{1B}[0m"
         let result = pipeline.process(command: "git status", output: input)

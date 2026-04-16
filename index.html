@@ -1805,7 +1805,7 @@ unchanged — only prose is compressed.</span></div>
       <div class="ref-section" id="mcp-tools">
         <div class="ref-section-hd">
           <h3>MCP Tools</h3>
-          <p>15 tools that sit between Claude and your filesystem, compressing everything before it hits your token budget. They auto-register via <code>senkani init</code> and are invoked by the hook relay transparently — you don't change how you work. Each is also directly callable by any MCP-compatible agent.</p>
+          <p>17 tools that sit between Claude and your filesystem, compressing everything before it hits your token budget. They auto-register via <code>senkani init</code> and are invoked by the hook relay transparently — you don't change how you work. Each is also directly callable by any MCP-compatible agent.</p>
         </div>
         <div class="tools-card">
           <div class="tools-head">
@@ -1914,9 +1914,23 @@ unchanged — only prose is compressed.</span></div>
             <div><span class="badge badge-live-d">Live</span></div>
           </div>
           <div class="tool-row">
+            <div class="tool-name">senkani_web</div>
+            <div class="tool-replaces">curl + LLM-parses-HTML</div>
+            <div><div class="tool-desc">Render <code>http://</code>/<code>https://</code> pages with full JavaScript and return AXTree markdown (headings, text, links, buttons, form fields).</div><div class="tool-how">WKWebView + semantic DOM extraction. SSRF guard: DNS-resolves the host via <code>getaddrinfo</code> before fetch, blocks any address in private/link-local/CGNAT/multicast ranges (including IPv4-mapped IPv6 and octal/hex IPv4). <code>decidePolicyFor</code> re-validates every redirect. <code>file://</code> not accepted — use <code>senkani_read</code> instead.</div></div>
+            <div class="tool-save">~99%</div>
+            <div><span class="badge badge-live-d">Live</span></div>
+          </div>
+          <div class="tool-row">
             <div class="tool-name">senkani_knowledge</div>
             <div class="tool-replaces">—</div>
             <div><div class="tool-desc">Query and update the project knowledge graph — entities, links, decisions, FTS5 search.</div><div class="tool-how">7 actions: upsert_entity, get_entity, list_entities, upsert_link, search_knowledge (FTS5), list_decisions, graph. Session brief injected at startup.</div></div>
+            <div class="tool-save na">—</div>
+            <div><span class="badge badge-live-d">Live</span></div>
+          </div>
+          <div class="tool-row">
+            <div class="tool-name">senkani_version</div>
+            <div class="tool-replaces">—</div>
+            <div><div class="tool-desc">Version negotiation: <code>server_version</code>, <code>tool_schemas_version</code>, <code>schema_db_version</code>, and the list of exposed tools.</div><div class="tool-how">Clients cache tool schemas keyed on <code>tool_schemas_version</code>. That number increments on any breaking change to a tool's input schema or output contract. <code>schema_db_version</code> surfaces <code>PRAGMA user_version</code> on the session DB for migration diagnostics.</div></div>
             <div class="tool-save na">—</div>
             <div><span class="badge badge-live-d">Live</span></div>
           </div>
@@ -2082,7 +2096,7 @@ unchanged — only prose is compressed.</span></div>
         <div class="ref-section-hd">
           <div class="overline">What's built</div>
           <h2>The compression layer <span class="accent">is live.</span></h2>
-          <p style="font-size:16px; color:var(--ink-soft); max-width:600px; line-height:1.65; margin-top:12px;">MCP intelligence layer, symbol indexer (22 languages), filter pipeline, hook relay with Layer 3 smart denials, session database, local ML, budget enforcement, per-pane budget hard caps, benchmark suite (80.37× on fixtures), output sandboxing, agent timeline, knowledge graph (entities + decisions + coupling + enrichment), session continuity, compound learning, agent usage tracking, BM25+RRF search fusion, @-mention context pinning, entropy-based secret detection, L0/L1/L2 tiered context pre-warming, WARP.md skill auto-discovery, JS-rendered web fetch + AXTree extraction (senkani_web, 16th MCP tool) — all working. 870 unit tests passing. 16 pane types live.</p>
+          <p style="font-size:16px; color:var(--ink-soft); max-width:600px; line-height:1.65; margin-top:12px;">MCP intelligence layer, symbol indexer (22 languages), filter pipeline, hook relay with Layer 3 smart denials, session database, local ML, budget enforcement, per-pane budget hard caps, benchmark suite (80.37× on fixtures), output sandboxing, agent timeline, knowledge graph (entities + decisions + coupling + enrichment), session continuity, compound learning, agent usage tracking, BM25+RRF search fusion, @-mention context pinning, entropy-based secret detection, L0/L1/L2 tiered context pre-warming, WARP.md skill auto-discovery, JS-rendered web fetch + AXTree extraction (senkani_web), v0.2.0 security hardening (SSRF guard with DNS resolution + redirect re-validation, prompt injection guard default-on, versioned schema migrations, scheduled retention pruning, version negotiation via senkani_version, 17 MCP tools total) — all working. 915 unit tests passing. 16 pane types live.</p>
         </div>
 
         <div class="feature-grid">

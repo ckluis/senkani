@@ -50,36 +50,35 @@ public struct MCPServerRunner {
             Use senkani_session action='pin' to keep a symbol's outline in context across calls.
             """
 
-        // Append repo map if the index is already warm (loaded from disk cache)
-        let repoMap = session.repoMap()
-        let mapSection = repoMap.isEmpty ? "" : "\n\nProject structure:\n\(repoMap)"
-
-        // Session continuity: inject brief about prior session activity
-        let briefSection = session.sessionBrief()
-
-        // WARP.md skills: inject active skill files from ~/.senkani/skills/ and .senkani/skills/
-        let skillsSection = session.skillsPrompt()
-
+        // P1-7: bounded instructions payload. instructionsPayload handles repoMap +
+        // sessionBrief + skills assembly with a single byte budget (default 2 KB).
+        let payload = session.instructionsPayload(base: baseInstructions)
         let instructions: String
         if TerseMode.isEnabled {
-            instructions = TerseMode.systemPrompt + "\n\n" + baseInstructions + mapSection + briefSection + skillsSection
+            instructions = TerseMode.systemPrompt + "\n\n" + payload
         } else {
-            instructions = baseInstructions + mapSection + briefSection + skillsSection
+            instructions = payload
         }
 
         let server = Server(
             name: "senkani",
-            version: "0.1.0",
+            version: VersionTool.serverVersion,
             instructions: instructions,
             capabilities: .init(tools: .init(listChanged: false))
         )
 
         await ToolRouter.register(on: server, session: session)
 
+        // P1-6: start hourly retention pruning. Previously the prune functions existed
+        // but nothing scheduled them — long-running installs accumulated unbounded rows.
+        let retentionConfig = RetentionConfig.load(projectRoot: ProcessInfo.processInfo.environment["SENKANI_PROJECT_ROOT"])
+        RetentionScheduler.shared.start(config: retentionConfig)
+
         // Handle SIGTERM/SIGINT for clean shutdown
         let sigTermSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
         sigTermSource.setEventHandler {
             FileHandle.standardError.write(Data("🔴 [MCP] Received SIGTERM — shutting down\n".utf8))
+            RetentionScheduler.shared.stop()
             session.shutdown()
             SessionDatabase.shared.close()
             exit(0)
@@ -90,6 +89,7 @@ public struct MCPServerRunner {
         let sigIntSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
         sigIntSource.setEventHandler {
             FileHandle.standardError.write(Data("🔴 [MCP] Received SIGINT — shutting down\n".utf8))
+            RetentionScheduler.shared.stop()
             session.shutdown()
             SessionDatabase.shared.close()
             exit(0)
@@ -126,6 +126,7 @@ public struct MCPServerRunner {
         }
 
         // Clean shutdown
+        RetentionScheduler.shared.stop()
         session.shutdown()
         SessionDatabase.shared.close()
         FileHandle.standardError.write(Data("🔴 [MCP] Process exiting cleanly.\n".utf8))

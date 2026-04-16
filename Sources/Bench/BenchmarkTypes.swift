@@ -111,3 +111,19 @@ public struct BenchmarkReport: Sendable, Codable {
     public let overallMultiplier: Double
     public let allGatesPassed: Bool
 }
+
+extension BenchmarkReport {
+    /// Returns a new report with additional gates appended and allGatesPassed recomputed.
+    public func appending(gates extra: [QualityGate]) -> BenchmarkReport {
+        let merged = gates + extra
+        return BenchmarkReport(
+            timestamp: timestamp,
+            durationMs: durationMs,
+            configs: configs,
+            results: results,
+            gates: merged,
+            overallMultiplier: overallMultiplier,
+            allGatesPassed: merged.allSatisfy(\.passed)
+        )
+    }
+}

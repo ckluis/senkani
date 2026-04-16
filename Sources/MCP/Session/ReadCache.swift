@@ -16,6 +16,7 @@ final class ReadCache: @unchecked Sendable {
     }
 
     private var entries: [String: Entry] = [:]
+    private var pinnedPaths: Set<String> = []
     private let lock = NSLock()
     private let maxEntries = 500
     private let maxBytes = 50_000_000  // 50MB
@@ -82,25 +83,36 @@ final class ReadCache: @unchecked Sendable {
         lock.unlock()
     }
 
+    func pin(_ path: String) {
+        lock.lock(); defer { lock.unlock() }
+        pinnedPaths.insert(path)
+    }
+
     func clear() {
         lock.lock()
         entries.removeAll()
+        pinnedPaths.removeAll()
         hits = 0
         misses = 0
         lock.unlock()
     }
 
     /// Only called while lock is held. Uses cachedBytesUnsafe (no re-lock).
+    /// Pinned entries (L0) are excluded from eviction candidates.
     private func evictIfNeeded() {
         while entries.count > maxEntries {
-            if let oldest = entries.min(by: { $0.value.lastAccess < $1.value.lastAccess }) {
+            if let oldest = entries
+                .filter({ !pinnedPaths.contains($0.key) })
+                .min(by: { $0.value.lastAccess < $1.value.lastAccess }) {
                 entries.removeValue(forKey: oldest.key)
-            }
+            } else { break }
         }
         while cachedBytesUnsafe > maxBytes && !entries.isEmpty {
-            if let oldest = entries.min(by: { $0.value.lastAccess < $1.value.lastAccess }) {
+            if let oldest = entries
+                .filter({ !pinnedPaths.contains($0.key) })
+                .min(by: { $0.value.lastAccess < $1.value.lastAccess }) {
                 entries.removeValue(forKey: oldest.key)
-            }
+            } else { break }
         }
     }
 }

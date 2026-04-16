@@ -29,9 +29,13 @@ final class MCPSession: @unchecked Sendable {
     let readCache: ReadCache
     let pipeline: FilterPipeline
     let validatorRegistry: ValidatorRegistry
+    let knowledgeStore: KnowledgeStore
+    let entityTracker: EntityTracker
+    let knowledgeLayer: KnowledgeFileLayer?
     let metricsFilePath: String?
     let sessionId: String?
     let paneId: String?
+    let agentType: AgentType
     private let lock = NSLock()
 
     // Feature toggles (mutable at runtime — refreshed from config file on each tool call)
@@ -66,6 +70,21 @@ final class MCPSession: @unchecked Sendable {
     private var queriedSymbols: Set<String> = []
     private var staleNotices: [String] = []
 
+    // Pinned context: @-mention entries prepended to subsequent tool results
+    let pinnedContextStore = PinnedContextStore()
+    private(set) var autoPinEnabled: Bool = false
+
+    // Lazy-cached skills prompt (WARP.md injection). Populated on first call to skillsPrompt().
+    private var _skillsContent: String?
+    private var _loadedSkillNames: [String]?
+
+    // Per-pane budget cap (in cents). Nil = no pane-level cap.
+    // Read from SENKANI_PANE_BUDGET_SESSION in the per-pane config file via refreshConfig().
+    // Settable at runtime via updateConfig(budgetSessionCents:).
+    private(set) var paneBudgetSessionLimitCents: Int? = nil
+    // Last IPC status sent to GUI — deduplicates fire-and-forget IPC pushes.
+    private var lastBudgetIPCStatus: String = "none"
+
     // Running metrics
     private(set) var totalRawBytes = 0
     private(set) var totalCompressedBytes = 0
@@ -78,7 +97,7 @@ final class MCPSession: @unchecked Sendable {
          injectionGuardEnabled: Bool = false,
          readCache: ReadCache? = nil,
          metricsFilePath: String? = nil, sessionId: String? = nil, paneId: String? = nil,
-         configFilePath: String? = nil) {
+         configFilePath: String? = nil, agentType: AgentType = .unknownMCP) {
         self.projectRoot = projectRoot
         self.filterEnabled = filterEnabled
         self.secretsEnabled = secretsEnabled
@@ -90,11 +109,16 @@ final class MCPSession: @unchecked Sendable {
         self.metricsFilePath = metricsFilePath
         self.sessionId = sessionId
         self.paneId = paneId
+        self.agentType = agentType
         self.configFilePath = configFilePath
 
         let config = FeatureConfig(filter: filterEnabled, secrets: secretsEnabled, indexer: indexerEnabled, terse: terseEnabled)
         self.pipeline = FilterPipeline(config: config)
         self.validatorRegistry = ValidatorRegistry.load(projectRoot: projectRoot)
+        let ks = KnowledgeStore(projectRoot: projectRoot)
+        self.knowledgeStore = ks
+        self.entityTracker = EntityTracker(store: ks)
+        self.knowledgeLayer = try? KnowledgeFileLayer(projectRoot: projectRoot, store: ks)
 
         // Start background index warmup so first tool call doesn't block
         if indexerEnabled {
@@ -102,6 +126,16 @@ final class MCPSession: @unchecked Sendable {
         }
         // Pre-cache hot files from prior sessions (non-blocking)
         preCacheHotFiles()
+        // Pre-warm WebFetchEngine: spawns WebKit XPC subprocess once so first senkani_web call is fast
+        Task { @MainActor in
+            WebFetchEngine.shared.warmUp()
+        }
+        // Mine co-change coupling in background (idempotent; no-op if not a git repo)
+        let _pr = projectRoot
+        let _ks = knowledgeStore
+        Task.detached(priority: .background) {
+            ChangeSetMiner.mine(projectRoot: _pr, store: _ks)
+        }
     }
 
     /// Resolve session config from environment.
@@ -130,7 +164,8 @@ final class MCPSession: @unchecked Sendable {
         // Prune expired sandboxed results (>24h) on session startup
         SessionDatabase.shared.pruneSandboxedResults()
 
-        let sessionId: String? = SessionDatabase.shared.createSession(projectRoot: root)
+        let agentType = AgentDetector.detect(environment: ProcessInfo.processInfo.environment)
+        let sessionId: String? = SessionDatabase.shared.createSession(projectRoot: root, agentType: agentType)
         let paneId = ProcessInfo.processInfo.environment["SENKANI_PANE_ID"]
 
         FileHandle.standardError.write(Data("🔴 MCPSession.resolve(): rawRoot=\(rawRoot) normalized=\(root) metrics=\(metricsFile) pane=\(paneId ?? "nil") session=\(sessionId ?? "nil")\n".utf8))
@@ -148,7 +183,8 @@ final class MCPSession: @unchecked Sendable {
             metricsFilePath: metricsFile,
             sessionId: sessionId,
             paneId: paneId,
-            configFilePath: configFile
+            configFilePath: configFile,
+            agentType: agentType
         )
     }
 
@@ -185,6 +221,11 @@ final class MCPSession: @unchecked Sendable {
         if let val = env["SENKANI_SECRETS"] { secretsEnabled = val == "on" }
         if let val = env["SENKANI_INDEXER"] { indexerEnabled = val == "on" }
         if let val = env["SENKANI_TERSE"] { terseEnabled = val == "on" }
+        // Per-pane budget cap — use SENKANI_PANE_BUDGET_SESSION to avoid collision
+        // with the global SENKANI_BUDGET_SESSION env var read by BudgetConfig.
+        if let val = env["SENKANI_PANE_BUDGET_SESSION"] {
+            paneBudgetSessionLimitCents = Int(val)
+        }
         lock.unlock()
     }
 
@@ -302,24 +343,62 @@ final class MCPSession: @unchecked Sendable {
         }
     }
 
+    /// Build the WARP.md skills section for injection into MCP instructions. Cached after first call.
+    /// Returns empty string when SENKANI_SKILLS=off or no skill files are found.
+    func skillsPrompt() -> String {
+        let skillsEnv = ProcessInfo.processInfo.environment["SENKANI_SKILLS"]?.lowercased()
+        guard skillsEnv != "off" else { return "" }
+
+        lock.lock()
+        if let cached = _skillsContent {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+
+        let prompt = SkillScanner.buildSkillsPrompt(projectRoot: projectRoot)
+        let names: [String]
+        if prompt.isEmpty {
+            names = []
+        } else {
+            names = SkillScanner.scanSenkaniSkills(projectRoot: projectRoot).map(\.name)
+        }
+
+        lock.lock()
+        _skillsContent = prompt
+        _loadedSkillNames = names
+        lock.unlock()
+
+        if names.isEmpty {
+            FileHandle.standardError.write(Data("[MCP] WARP skills: none found (add .md files to ~/.senkani/skills/)\n".utf8))
+        } else {
+            FileHandle.standardError.write(Data("[MCP] WARP skills loaded: \(names.joined(separator: ", "))\n".utf8))
+        }
+        return prompt
+    }
+
     /// Pre-populate ReadCache with hot files from the session database.
+    /// L0 (top 5): pinned — never evicted by LRU. L1 (next 15): normal LRU.
     /// Non-blocking (utility queue). Only when cacheEnabled.
     func preCacheHotFiles() {
         guard cacheEnabled else { return }
         DispatchQueue.global(qos: .utility).async { [projectRoot, readCache] in
-            let hotPaths = SessionDatabase.shared.hotFiles(projectRoot: projectRoot, limit: 20)
-            for path in hotPaths {
-                let absPath = path.hasPrefix("/") ? path : projectRoot + "/" + path
+            let hotFiles = SessionDatabase.shared.hotFiles(projectRoot: projectRoot, limit: 50)
+            var l0Count = 0, l1Count = 0
+            for (index, file) in hotFiles.prefix(20).enumerated() {
+                let absPath = file.path.hasPrefix("/") ? file.path : projectRoot + "/" + file.path
                 guard FileManager.default.fileExists(atPath: absPath),
                       let content = try? String(contentsOfFile: absPath, encoding: .utf8),
                       content.utf8.count <= 500_000  // 500KB cap per file
                 else { continue }
                 let attrs = try? FileManager.default.attributesOfItem(atPath: absPath)
                 let mtime = (attrs?[.modificationDate] as? Date) ?? Date()
+                if index < 5 { readCache.pin(absPath) }
                 readCache.store(path: absPath, mtime: mtime, content: content, rawBytes: content.utf8.count)
+                if index < 5 { l0Count += 1 } else { l1Count += 1 }
             }
-            if !hotPaths.isEmpty {
-                fputs("[senkani] Pre-cached \(hotPaths.count) hot files\n", stderr)
+            if l0Count + l1Count > 0 {
+                fputs("[senkani] Pre-cached \(l0Count) L0 (pinned) + \(l1Count) L1 hot files\n", stderr)
             }
         }
     }
@@ -459,6 +538,54 @@ final class MCPSession: @unchecked Sendable {
         staleNotices.removeAll()
         lock.unlock()
         return notices
+    }
+
+    // MARK: - Pinned Context (@-mention)
+
+    /// Pin a named entity. Generates a compressed outline via the fallback chain
+    /// and stores it in `pinnedContextStore` for prepending to subsequent results.
+    /// Returns a user-facing confirmation or error string.
+    func pinContext(name: String, ttl: Int = PinnedContextStore.defaultTTL) -> String {
+        guard let outline = PinnedContextGenerator.generate(name: name, session: self) else {
+            // Nothing found — suggest nearest BM25 match if available
+            if let nearest = PinnedContextGenerator.nearestMatch(name: name, session: self) {
+                return "Symbol '\(name)' not found. Did you mean '\(nearest)'? Use senkani_session action='pin' name='\(nearest)' to pin it."
+            }
+            return "Symbol '\(name)' not found in knowledge base or symbol index."
+        }
+        let entry = PinnedEntry(name: name, outline: outline, ttl: ttl)
+        pinnedContextStore.pin(entry)
+        let path = outline.components(separatedBy: "\n").first ?? name
+        return "Pinned: \(path) · expires in \(entry.maxCalls) calls. Use action='unpin' to remove."
+    }
+
+    /// Enable or disable automatic @-mention pin detection from tool arguments.
+    /// Off by default (Jobs synthesis: explicit-only pin is the safe default).
+    func setAutoPinEnabled(_ enabled: Bool) {
+        lock.lock()
+        autoPinEnabled = enabled
+        lock.unlock()
+    }
+
+    /// Scan tool argument text for `@Name` patterns and queue auto-pins.
+    /// Only called when `autoPinEnabled` is true.
+    func detectAndQueueAutoPins(argText: String) {
+        let pattern = try? NSRegularExpression(pattern: #"@([A-Za-z_][A-Za-z0-9_]*)"#)
+        let range = NSRange(argText.startIndex..., in: argText)
+        let matches = pattern?.matches(in: argText, range: range) ?? []
+        let names = matches.compactMap { match -> String? in
+            guard let r = Range(match.range(at: 1), in: argText) else { return nil }
+            return String(argText[r])
+        }
+        guard !names.isEmpty else { return }
+        let capturedSession = self
+        Task.detached(priority: .background) {
+            for name in names {
+                guard capturedSession.pinnedContextStore.all()
+                    .first(where: { $0.name == name }) == nil else { continue }
+                _ = capturedSession.pinContext(name: name)
+            }
+        }
     }
 
     // MARK: - Background Jobs (senkani_exec background mode)
@@ -694,12 +821,15 @@ final class MCPSession: @unchecked Sendable {
             savedTokens: savedTokens,
             costCents: costCents,
             feature: feature,
-            command: command
+            command: command,
+            modelTier: agentType.modelTier
         )
     }
 
     /// Shut down the session, ending the database session record.
     func shutdown() {
+        // Flush pending KB mention deltas before exit — prevents data loss
+        entityTracker.flush()
         stopFileWatcher()
         // Kill all background jobs
         lock.lock()
@@ -710,63 +840,144 @@ final class MCPSession: @unchecked Sendable {
         }
         if let sid = sessionId {
             SessionDatabase.shared.endSession(sessionId: sid)
+            let root = projectRoot
+            let capturedSid = sid
+            Task.detached(priority: .background) {
+                await CompoundLearning.runPostSession(
+                    sessionId: capturedSid,
+                    projectRoot: root,
+                    db: .shared
+                )
+            }
         }
     }
 
     // MARK: - Budget Enforcement
 
     /// Check budget limits against current session, daily, and weekly spend.
-    /// Returns nil if allowed, a warning string for soft limits, or an error string for hard limits.
-    /// The caller must distinguish warn vs block by checking BudgetConfig.Decision directly.
+    /// Per-pane cap is checked first (avoids DB round-trips for pane-only users).
+    /// Returns the most restrictive decision across pane + global limits.
     func checkBudget() -> BudgetConfig.Decision {
         let config = BudgetConfig.load()
 
-        // If no limits configured, skip entirely
-        guard config.perSessionLimitCents != nil
-            || config.dailyLimitCents != nil
-            || config.weeklyLimitCents != nil else {
-            return .allow
-        }
-
-        // Session cost estimate: (total bytes processed) / 4 bytes per token / 1M * $3 in cents
         lock.lock()
         let raw = totalRawBytes
         let compressed = totalCompressedBytes
+        let paneBudgetLimit = paneBudgetSessionLimitCents
         lock.unlock()
         let sessionCents = ModelPricing.costSavedCents(bytes: raw - compressed)
 
-        // Daily and weekly from database
-        let todayCents = SessionDatabase.shared.costForToday()
-        let weekCents = SessionDatabase.shared.costForWeek()
+        // Per-pane session cap
+        let paneDecision: BudgetConfig.Decision
+        if let limit = paneBudgetLimit, limit > 0 {
+            let softLimit = Int(Double(limit) * 0.8)
+            if sessionCents >= limit {
+                paneDecision = .block("Pane session budget exceeded: $\(String(format: "%.2f", Double(sessionCents) / 100)) / $\(String(format: "%.2f", Double(limit) / 100))")
+            } else if sessionCents >= softLimit {
+                paneDecision = .warn("Approaching pane session budget: $\(String(format: "%.2f", Double(sessionCents) / 100)) / $\(String(format: "%.2f", Double(limit) / 100))")
+            } else {
+                paneDecision = .allow
+            }
+            notifyBudgetStatusIfChanged(decision: paneDecision, sessionCents: sessionCents, limitCents: limit)
+        } else {
+            paneDecision = .allow
+        }
 
-        return config.check(sessionCents: sessionCents, todayCents: todayCents, weekCents: weekCents)
+        // No global limits — return pane decision directly (skips DB queries)
+        guard config.perSessionLimitCents != nil
+            || config.dailyLimitCents != nil
+            || config.weeklyLimitCents != nil else {
+            return paneDecision
+        }
+
+        // DB queries: only executed when the relevant limit is configured
+        let todayCents = config.dailyLimitCents != nil ? SessionDatabase.shared.costForToday() : 0
+        let weekCents = config.weeklyLimitCents != nil ? SessionDatabase.shared.costForWeek() : 0
+        let globalDecision = config.check(sessionCents: sessionCents, todayCents: todayCents, weekCents: weekCents)
+
+        // Most restrictive of pane and global; pane wins on ties (pane message is more actionable)
+        func priority(_ d: BudgetConfig.Decision) -> Int {
+            switch d { case .allow: return 0; case .warn: return 1; case .block: return 2 }
+        }
+        return priority(paneDecision) >= priority(globalDecision) ? paneDecision : globalDecision
     }
 
     /// Budget remaining as a fraction (0.0...1.0). Returns 1.0 if no budget configured.
     /// Used by AdaptiveTruncation to scale output caps.
     func budgetRemainingPercent() -> Double {
         let config = BudgetConfig.load()
-        guard config.perSessionLimitCents != nil
-            || config.dailyLimitCents != nil
-            || config.weeklyLimitCents != nil else {
-            return 1.0  // No budget = unlimited
-        }
 
         lock.lock()
         let raw = totalRawBytes
         let compressed = totalCompressedBytes
+        let paneBudgetLimit = paneBudgetSessionLimitCents
         lock.unlock()
-        let sessionCents = ModelPricing.costSavedCents(bytes: raw - compressed)
-        let todayCents = SessionDatabase.shared.costForToday()
 
+        let hasAnyLimit = config.perSessionLimitCents != nil
+            || config.dailyLimitCents != nil
+            || config.weeklyLimitCents != nil
+            || paneBudgetLimit != nil
+        guard hasAnyLimit else { return 1.0 }
+
+        let sessionCents = ModelPricing.costSavedCents(bytes: raw - compressed)
         var minRemaining = 1.0
+
+        if let limit = paneBudgetLimit, limit > 0 {
+            minRemaining = min(minRemaining, max(0, 1.0 - Double(sessionCents) / Double(limit)))
+        }
         if let limit = config.perSessionLimitCents, limit > 0 {
             minRemaining = min(minRemaining, max(0, 1.0 - Double(sessionCents) / Double(limit)))
         }
         if let limit = config.dailyLimitCents, limit > 0 {
+            let todayCents = SessionDatabase.shared.costForToday()
             minRemaining = min(minRemaining, max(0, 1.0 - Double(todayCents) / Double(limit)))
         }
         return minRemaining
+    }
+
+    /// Send a one-way budget status push to the GUI when the decision changes.
+    /// Uses `lastBudgetIPCStatus` to debounce: only fires on transition (none→warn, warn→block, etc.).
+    private func notifyBudgetStatusIfChanged(decision: BudgetConfig.Decision, sessionCents: Int, limitCents: Int) {
+        guard let pid = paneId else { return }
+        let newStatus: String
+        switch decision {
+        case .allow: newStatus = "none"
+        case .warn:  newStatus = "warning"
+        case .block: newStatus = "blocked"
+        }
+        lock.lock()
+        let changed = newStatus != lastBudgetIPCStatus
+        if changed { lastBudgetIPCStatus = newStatus }
+        lock.unlock()
+        guard changed else { return }
+
+        let spent = sessionCents
+        let limit = limitCents
+        Task.detached(priority: .utility) {
+            MCPSession.sendBudgetStatusIPC(paneId: pid, status: newStatus, spentCents: spent, limitCents: limit)
+        }
+    }
+
+    /// Append a fire-and-forget budget status command to the pane-commands JSONL file.
+    private static func sendBudgetStatusIPC(paneId: String, status: String, spentCents: Int, limitCents: Int) {
+        let cmd = PaneIPCCommand(action: .setBudgetStatus, params: [
+            "pane_id": paneId,
+            "status": status,
+            "spent_cents": "\(spentCents)",
+            "limit_cents": "\(limitCents)",
+        ])
+        PaneIPCPaths.ensureDirectories()
+        guard let data = try? JSONEncoder().encode(cmd),
+              let line = String(data: data, encoding: .utf8) else { return }
+        let filePath = PaneIPCPaths.commandFile
+        let lineData = Data((line + "\n").utf8)
+        if let handle = FileHandle(forWritingAtPath: filePath) {
+            handle.seekToEndOfFile()
+            handle.write(lineData)
+            handle.closeFile()
+        } else {
+            FileManager.default.createFile(atPath: filePath, contents: lineData)
+        }
     }
 
     func recordCacheSaving(bytes: Int) {
@@ -778,13 +989,18 @@ final class MCPSession: @unchecked Sendable {
     }
 
     /// Update feature toggles at runtime.
-    func updateConfig(filter: Bool? = nil, secrets: Bool? = nil, indexer: Bool? = nil, cache: Bool? = nil, terse: Bool? = nil) {
+    /// Pass `budgetSessionCents: 0` to clear the per-pane budget cap.
+    func updateConfig(filter: Bool? = nil, secrets: Bool? = nil, indexer: Bool? = nil,
+                      cache: Bool? = nil, terse: Bool? = nil, autoPin: Bool? = nil,
+                      budgetSessionCents: Int? = nil) {
         lock.lock()
         if let f = filter { filterEnabled = f }
         if let s = secrets { secretsEnabled = s }
         if let i = indexer { indexerEnabled = i }
         if let c = cache { cacheEnabled = c }
         if let t = terse { terseEnabled = t }
+        if let a = autoPin { autoPinEnabled = a }
+        if let b = budgetSessionCents { paneBudgetSessionLimitCents = b > 0 ? b : nil }
         lock.unlock()
     }
 
@@ -820,11 +1036,32 @@ final class MCPSession: @unchecked Sendable {
         lines.append("  Est. cost saved: $\(String(format: "%.2f", estDollarsSaved))")
         lines.append("")
         lines.append("  Toggles: filter=\(filterEnabled) secrets=\(secretsEnabled) indexer=\(indexerEnabled) cache=\(cacheEnabled) terse=\(terseEnabled)")
+
+        lock.lock()
+        let paneBudget = paneBudgetSessionLimitCents
+        let skillNames = _loadedSkillNames
+        lock.unlock()
+        if let limit = paneBudget {
+            let sessionCents = ModelPricing.costSavedCents(bytes: raw - compressed + cacheSaved)
+            lines.append("  Pane budget: $\(String(format: "%.2f", Double(sessionCents) / 100)) / $\(String(format: "%.2f", Double(limit) / 100))")
+        }
+        if let names = skillNames, !names.isEmpty {
+            lines.append("  WARP skills: \(names.joined(separator: ", "))")
+        } else if skillNames != nil {
+            lines.append("  WARP skills: none (add .md files to ~/.senkani/skills/)")
+        }
         return lines.joined(separator: "\n")
     }
 
     func configString() -> String {
-        "filter=\(filterEnabled) secrets=\(secretsEnabled) indexer=\(indexerEnabled) cache=\(cacheEnabled) terse=\(terseEnabled)"
+        lock.lock()
+        let paneBudget = paneBudgetSessionLimitCents
+        lock.unlock()
+        var s = "filter=\(filterEnabled) secrets=\(secretsEnabled) indexer=\(indexerEnabled) cache=\(cacheEnabled) terse=\(terseEnabled)"
+        if let limit = paneBudget {
+            s += " pane_budget=\(limit)¢"
+        }
+        return s
     }
 
     private func formatBytes(_ bytes: Int) -> String {

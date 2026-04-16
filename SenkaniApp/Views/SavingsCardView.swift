@@ -1,4 +1,5 @@
 import SwiftUI
+import Charts
 
 // MARK: - Feature Toggle (Compact)
 
@@ -223,6 +224,25 @@ struct FeatureDetailDrawer: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
+            }
+
+            // Per-feature sparkline (cumulative savings over time)
+            let featureSeries = pane.metrics.perFeatureTimeSeries[featureKey] ?? []
+            if featureSeries.count >= 2 {
+                drawerDivider
+                Chart(featureSeries.indices, id: \.self) { i in
+                    LineMark(
+                        x: .value("Time", featureSeries[i].timestamp),
+                        y: .value("Saved", featureSeries[i].cumulativeSavedBytes)
+                    )
+                    .foregroundStyle(color.opacity(0.85))
+                    .interpolationMethod(.monotone)
+                }
+                .chartXAxis(.hidden)
+                .chartYAxis(.hidden)
+                .frame(height: 36)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
             }
 
             // Top commands

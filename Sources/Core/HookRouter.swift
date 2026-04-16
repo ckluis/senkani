@@ -32,6 +32,11 @@ final class ReadDenialTracker: @unchecked Sendable {
 /// - Block: `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "..."}}`
 public enum HookRouter {
 
+    /// Injected entity observer — set at app startup by MCPServer layer.
+    /// Called synchronously on hookQueue for every PostToolUse event.
+    /// nil in stdio-mode MCP server and hook-relay mode (graceful no-op).
+    nonisolated(unsafe) public static var entityObserver: ((_ toolName: String, _ toolInput: [String: Any]) -> Void)?
+
     /// Process a hook event JSON and return a response JSON.
     /// Returns `{}` (passthrough) for unrecognized or unroutable events.
     public static func handle(eventJSON: Data) -> Data {
@@ -60,6 +65,9 @@ public enum HookRouter {
             if toolName == "Edit" || toolName == "Write" {
                 handlePostEditWrite(toolInput: toolInput, sessionId: sessionId, projectRoot: projectRoot)
             }
+            // Entity mention tracking — bridge to MCPServer layer via injected closure.
+            // No-op when observer is nil (stdio mode, hook-relay mode, tests).
+            entityObserver?(toolName, toolInput)
             return passthroughResponse
         }
 
@@ -158,7 +166,8 @@ public enum HookRouter {
                                 savedTokens: estimateFileTokens(at: fullPath),
                                 costCents: 0,
                                 feature: "reread_suppression",
-                                command: filePath
+                                command: filePath,
+                                modelTier: "tier2_estimated"
                             )
                         }
 
@@ -257,7 +266,8 @@ public enum HookRouter {
                 savedTokens: estimatedSaved,
                 costCents: 0,
                 feature: "command_replay",
-                command: command
+                command: command,
+                modelTier: "tier2_estimated"
             )
         }
 
@@ -386,7 +396,8 @@ public enum HookRouter {
                 savedTokens: max(10, result.utf8.count / 4),
                 costCents: 0,
                 feature: "trivial_routing",
-                command: trimmed
+                command: trimmed,
+                modelTier: "tier2_estimated"
             )
         }
 

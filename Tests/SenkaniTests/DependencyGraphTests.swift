@@ -250,6 +250,34 @@ struct ToolOutputTests {
         #expect(output.contains("Imported by:"))
     }
 
+    @Test("Circular imports build correctly — no crash, no duplicate edges")
+    func circularImportGraph() {
+        // A.swift imports B.swift, B.swift imports A.swift — a simple cycle.
+        // DependencyGraph stores edges as provided; this verifies no crash or
+        // data corruption when circular references are present in the import map.
+        let graph = DependencyGraph(
+            imports: ["A.swift": ["B.swift"], "B.swift": ["A.swift"]],
+            importedBy: ["A.swift": ["B.swift"], "B.swift": ["A.swift"]],
+            projectRoot: "/tmp/test"
+        )
+
+        let depsOfA = graph.dependencies(of: "A.swift")
+        let depsOfB = graph.dependencies(of: "B.swift")
+
+        #expect(depsOfA.contains("B.swift"), "A should depend on B")
+        #expect(depsOfB.contains("A.swift"), "B should depend on A")
+
+        // No duplicate edges (the graph must not double-insert)
+        #expect(Set(depsOfA).count == depsOfA.count, "No duplicate edges for A")
+        #expect(Set(depsOfB).count == depsOfB.count, "No duplicate edges for B")
+
+        // Reverse graph is also correct
+        let dependentsOfA = graph.dependents(of: "A.swift")
+        let dependentsOfB = graph.dependents(of: "B.swift")
+        #expect(dependentsOfB.contains("A.swift"), "A imports B → B is depended on by A")
+        #expect(dependentsOfA.contains("B.swift"), "B imports A → A is depended on by B")
+    }
+
     @Test("Single direction output format")
     func depsToolOutputFormatSingle() {
         let graph = DependencyGraph(

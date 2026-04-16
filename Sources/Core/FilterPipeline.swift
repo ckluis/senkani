@@ -6,7 +6,9 @@ public struct FilterPipeline: Sendable {
     let config: FeatureConfig
 
     public init(rules: [FilterRule]? = nil, config: FeatureConfig = FeatureConfig()) {
-        self.engine = FilterEngine(rules: rules ?? BuiltinRules.rules)
+        let baseRules = rules ?? BuiltinRules.rules
+        let learned = LearnedRulesStore.loadApplied().map(\.asFilterRule)
+        self.engine = FilterEngine(rules: baseRules + learned)
         self.config = config
     }
 
@@ -30,18 +32,27 @@ public struct FilterPipeline: Sendable {
             currentOutput = filterResult.output
         }
 
-        // Stage 2: SecretDetector
+        // Stage 2: SecretDetector + EntropyScanner
         if config.isEnabled(.secrets) {
             let beforeBytes = currentOutput.utf8.count
-            let detection = SecretDetector.scan(currentOutput)
-            let afterBytes = detection.redacted.utf8.count
+
+            // Named-pattern detection (Anthropic, OpenAI, AWS, GitHub, bearer, generic)
+            let namedDetection = SecretDetector.scan(currentOutput)
+            currentOutput = namedDetection.redacted
+            secretsFound = namedDetection.patterns
+
+            // Entropy detection — unnamed high-entropy secrets (base64/hex blobs, random keys).
+            // SecretDetector never emits "HIGH_ENTROPY", so secretsFound += is safe.
+            let entropyDetection = EntropyScanner.scan(currentOutput)
+            currentOutput = entropyDetection.redacted
+            secretsFound += entropyDetection.patterns
+
+            let afterBytes = currentOutput.utf8.count
             breakdown.append(FeatureContribution(
                 feature: .secrets,
                 inputBytes: beforeBytes,
                 outputBytes: afterBytes
             ))
-            currentOutput = detection.redacted
-            secretsFound = detection.patterns
         }
 
         // Stage 3: TerseCompressor

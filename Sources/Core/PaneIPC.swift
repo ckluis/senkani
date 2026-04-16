@@ -14,6 +14,8 @@ public enum PaneIPCAction: String, Codable {
     case add
     case remove
     case setActive = "set_active"
+    /// Fire-and-forget push from MCP → GUI. No response read by sender.
+    case setBudgetStatus = "set_budget_status"
 }
 
 // MARK: - Command (MCP → GUI)

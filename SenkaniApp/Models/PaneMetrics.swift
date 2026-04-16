@@ -57,6 +57,11 @@ final class PaneMetrics {
     /// Time-series data for line/area charts
     var timeSeries: [MetricsDataPoint] = []
 
+    /// Per-feature cumulative time-series for sparklines in the detail drawer.
+    /// Capped at maxTimeSeriesPoints entries per feature to prevent unbounded growth.
+    private(set) var perFeatureTimeSeries: [String: [MetricsDataPoint]] = [:]
+    private let maxTimeSeriesPoints = 1000
+
     var savedBytes: Int { totalRawBytes - totalFilteredBytes }
     var savingsPercent: Double {
         guard totalRawBytes > 0 else { return 0 }
@@ -167,6 +172,19 @@ final class PaneMetrics {
                 cmdMap[base, default: 0] += saved
                 perFeatureCommands[f] = cmdMap
             }
+
+            // Per-feature time-series for sparkline (ring buffer, capped at maxTimeSeriesPoints)
+            let prevSaved = perFeatureTimeSeries[f]?.last?.cumulativeSavedBytes ?? 0
+            let prevRaw   = perFeatureTimeSeries[f]?.last?.cumulativeRawBytes   ?? 0
+            let point = MetricsDataPoint(
+                timestamp: Date(),
+                cumulativeSavedBytes: prevSaved + saved,
+                cumulativeRawBytes:   prevRaw   + rawBytes
+            )
+            var series = perFeatureTimeSeries[f] ?? []
+            series.append(point)
+            if series.count > maxTimeSeriesPoints { series.removeFirst() }
+            perFeatureTimeSeries[f] = series
         }
 
         // Track per-command breakdown
@@ -205,5 +223,6 @@ final class PaneMetrics {
         cacheHits = 0
         cacheMisses = 0
         timeSeries = []
+        perFeatureTimeSeries = [:]
     }
 }

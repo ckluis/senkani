@@ -22,6 +22,12 @@ public struct FilterRule: Sendable {
     /// Ordered list of operations to apply.
     public let ops: [FilterOp]
 
+    public init(command: String, subcommand: String? = nil, ops: [FilterOp]) {
+        self.command = command
+        self.subcommand = subcommand
+        self.ops = ops
+    }
+
     /// Check if this rule matches a parsed command.
     public func matches(_ match: CommandMatcher.Match) -> Bool {
         guard match.base == command else { return false }

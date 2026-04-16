@@ -1766,10 +1766,10 @@ unchanged — only prose is compressed.</span></div>
       <div class="ch-hero">
         <div class="ch-hero-text">
           <div class="overline">Interface</div>
-          <h2>13 MCP tools.<br>13 CLI commands.<br><span class="accent">One workspace.</span></h2>
+          <h2>15 MCP tools.<br>18 CLI commands.<br><span class="accent">One workspace.</span></h2>
           <p class="lede">Every compression feature accessible as an MCP tool, a CLI command, and a workspace pane. The same index that intercepts hook calls is directly callable by your agent or your shell.</p>
           <div class="tag-row">
-            <span class="tag tag-orange">13 MCP tools</span>
+            <span class="tag tag-orange">15 MCP tools</span>
             <span class="tag tag-dim">15 pane types</span>
             <span class="tag tag-dim">80.37× bench</span>
           </div>
@@ -1805,7 +1805,7 @@ unchanged — only prose is compressed.</span></div>
       <div class="ref-section" id="mcp-tools">
         <div class="ref-section-hd">
           <h3>MCP Tools</h3>
-          <p>13 compressed replacements for Claude Code's built-in tools. They auto-register via <code>senkani init</code> and are invoked by the hook relay transparently — you don't change how you work. Each is also directly callable by any MCP-compatible agent.</p>
+          <p>15 tools that sit between Claude and your filesystem, compressing everything before it hits your token budget. They auto-register via <code>senkani init</code> and are invoked by the hook relay transparently — you don't change how you work. Each is also directly callable by any MCP-compatible agent.</p>
         </div>
         <div class="tools-card">
           <div class="tools-head">
@@ -1906,6 +1906,20 @@ unchanged — only prose is compressed.</span></div>
             <div class="tool-save na">—</div>
             <div><span class="badge badge-live-d">Live</span></div>
           </div>
+          <div class="tool-row">
+            <div class="tool-name">senkani_watch</div>
+            <div class="tool-replaces">—</div>
+            <div><div class="tool-desc">Query recently changed files via FSEvents ring buffer — cursor + glob filter.</div><div class="tool-how">500-entry ring buffer on MCPSession. Query by timestamp cursor + glob pattern. Returns changed file paths since last check. Zero polling cost.</div></div>
+            <div class="tool-save na">—</div>
+            <div><span class="badge badge-live-d">Live</span></div>
+          </div>
+          <div class="tool-row">
+            <div class="tool-name">senkani_knowledge</div>
+            <div class="tool-replaces">—</div>
+            <div><div class="tool-desc">Query and update the project knowledge graph — entities, links, decisions, FTS5 search.</div><div class="tool-how">7 actions: upsert_entity, get_entity, list_entities, upsert_link, search_knowledge (FTS5), list_decisions, graph. Session brief injected at startup.</div></div>
+            <div class="tool-save na">—</div>
+            <div><span class="badge badge-live-d">Live</span></div>
+          </div>
         </div>
       </div><!-- end #mcp-tools -->
 
@@ -1930,6 +1944,9 @@ unchanged — only prose is compressed.</span></div>
           <div class="cli-row"><div class="cli-cmd">senkani compare &lt;a&gt; &lt;b&gt;</div><div class="cli-desc">Diff two files or git revisions through the filter pipeline</div></div>
           <div class="cli-row"><div class="cli-cmd">senkani grammars</div><div class="cli-desc">Show installed tree-sitter grammar versions</div></div>
           <div class="cli-row"><div class="cli-cmd">senkani schedule &lt;cron&gt;</div><div class="cli-desc">Schedule recurring commands</div></div>
+          <div class="cli-row"><div class="cli-cmd">senkani uninstall [--yes]</div><div class="cli-desc">Clean removal of all Senkani config, hooks, and MCP entries. <code>--keep-data</code> preserves session DB.</div></div>
+          <div class="cli-row"><div class="cli-cmd">senkani kb [list|get|search]</div><div class="cli-desc">Query the knowledge base — list entities, get detail, FTS5 search. Flags: <code>--sort</code>, <code>--type</code>, <code>--limit</code>, <code>--root</code></div></div>
+          <div class="cli-row"><div class="cli-cmd">senkani eval [--update-baseline]</div><div class="cli-desc">Quality gates: bench savings + KB health + regression detection. <code>--strict</code> for CI, <code>--json</code> for scripting</div></div>
         </div>
       </div><!-- end #cli -->
 
@@ -1937,7 +1954,7 @@ unchanged — only prose is compressed.</span></div>
       <div class="ref-section" id="workspace">
         <div class="ref-section-hd">
           <h3>Workspace</h3>
-          <p>15 pane types. Each pane has its own accent color, FCSIT feature toggles, and layout persistence. The workspace is the visual layer over the compression engine — arrange any combination per project.</p>
+          <p>16 pane types. Each pane has its own accent color, FCSIT feature toggles, and layout persistence. The workspace is the visual layer over the compression engine — arrange any combination per project.</p>
         </div>
 
         <div class="ref-item">
@@ -2065,7 +2082,7 @@ unchanged — only prose is compressed.</span></div>
         <div class="ref-section-hd">
           <div class="overline">What's built</div>
           <h2>The compression layer <span class="accent">is live.</span></h2>
-          <p style="font-size:16px; color:var(--ink-soft); max-width:600px; line-height:1.65; margin-top:12px;">MCP intelligence layer, symbol indexer (22 languages), filter pipeline, hook relay with Layer 3 smart denials, session database, local ML, budget enforcement, benchmark suite (80.37× on fixtures), output sandboxing, agent timeline — all working. 442 unit tests passing. 15 pane types live.</p>
+          <p style="font-size:16px; color:var(--ink-soft); max-width:600px; line-height:1.65; margin-top:12px;">MCP intelligence layer, symbol indexer (22 languages), filter pipeline, hook relay with Layer 3 smart denials, session database, local ML, budget enforcement, per-pane budget hard caps, benchmark suite (80.37× on fixtures), output sandboxing, agent timeline, knowledge graph (entities + decisions + coupling + enrichment), session continuity, compound learning, agent usage tracking, BM25+RRF search fusion, @-mention context pinning, entropy-based secret detection, L0/L1/L2 tiered context pre-warming, WARP.md skill auto-discovery, JS-rendered web fetch + AXTree extraction (senkani_web, 16th MCP tool) — all working. 854 unit tests passing. 16 pane types live.</p>
         </div>
 
         <div class="feature-grid">
@@ -2081,8 +2098,8 @@ unchanged — only prose is compressed.</span></div>
           </div>
           <div class="feature">
             <div class="num-row"><div class="num">03</div><span class="badge badge-live">Live</span></div>
-            <h4>13 MCP tools</h4>
-            <p>senkani_read, senkani_exec, senkani_search, senkani_fetch, senkani_explore, senkani_deps, senkani_validate, senkani_parse, senkani_outline, senkani_embed, senkani_vision, senkani_session, senkani_pane.</p>
+            <h4>15 MCP tools</h4>
+            <p>senkani_read, senkani_exec, senkani_search, senkani_fetch, senkani_explore, senkani_deps, senkani_validate, senkani_parse, senkani_outline, senkani_embed, senkani_vision, senkani_watch, senkani_session, senkani_pane, senkani_knowledge.</p>
           </div>
           <div class="feature">
             <div class="num-row"><div class="num">04</div><span class="badge badge-live">Live</span></div>
@@ -2110,9 +2127,9 @@ unchanged — only prose is compressed.</span></div>
             <p>Every file in the project queryable by meaning, not just text match. Powered by <code>senkani_embed</code> and the local MiniLM index built at project open. No API call required.</p>
           </div>
           <div class="feature">
-            <div class="num-row"><div class="num">09</div><span class="badge badge-coming">Q3 2026</span></div>
-            <h4>Session continuity + Layer 3 expansion</h4>
-            <p>Session context brief injected at session open — agent knows where it left off without re-reading files. Remaining Layer 3 patterns: cross-session command replay, proactive search upgrade hints.</p>
+            <div class="num-row"><div class="num">09</div><span class="badge badge-live">Live</span></div>
+            <h4>Session continuity + knowledge graph</h4>
+            <p>Session context brief (~150 tokens) injected at session open — agent knows hot files, last command, search queries, and savings from the prior session. Knowledge graph tracks entities, decisions, co-change coupling, and enrichment across sessions via <code>senkani_knowledge</code>. Query the KB from any terminal with <code>senkani kb</code>.</p>
           </div>
         </div>
       </div>

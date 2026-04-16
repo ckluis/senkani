@@ -46,7 +46,8 @@ public struct MCPServerRunner {
             for automatic compression and caching. senkani_read returns a compact outline by default — \
             pass full: true only when you need the complete file content. Use senkani_search and \
             senkani_fetch for token-efficient code navigation. Use senkani_exec for filtered command \
-            execution. Call senkani_session with action 'stats' to see savings.
+            execution. Call senkani_session with action 'stats' to see savings. \
+            Use senkani_session action='pin' to keep a symbol's outline in context across calls.
             """
 
         // Append repo map if the index is already warm (loaded from disk cache)
@@ -56,11 +57,14 @@ public struct MCPServerRunner {
         // Session continuity: inject brief about prior session activity
         let briefSection = session.sessionBrief()
 
+        // WARP.md skills: inject active skill files from ~/.senkani/skills/ and .senkani/skills/
+        let skillsSection = session.skillsPrompt()
+
         let instructions: String
         if TerseMode.isEnabled {
-            instructions = TerseMode.systemPrompt + "\n\n" + baseInstructions + mapSection + briefSection
+            instructions = TerseMode.systemPrompt + "\n\n" + baseInstructions + mapSection + briefSection + skillsSection
         } else {
-            instructions = baseInstructions + mapSection + briefSection
+            instructions = baseInstructions + mapSection + briefSection + skillsSection
         }
 
         let server = Server(

@@ -334,7 +334,7 @@ struct SkillBrowserView: View {
                 .foregroundStyle(.tertiary)
             Text("No skills found")
                 .font(.system(size: 14, weight: .medium))
-            Text("Skills from Claude Code, Cursor, and Continue.dev\nwill appear here when detected.")
+            Text("Skills from Claude Code, Cursor, Continue.dev,\nand ~/.senkani/skills/ will appear here when detected.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -357,6 +357,7 @@ struct SkillBrowserView: View {
         case "claude": return "sparkles"
         case "cursor": return "cursorarrow"
         case "continue": return "arrow.right.circle"
+        case "senkani": return "bolt.fill"
         case "all": return "square.grid.2x2"
         default: return "puzzlepiece"
         }
@@ -376,6 +377,7 @@ struct SkillBrowserView: View {
         case "claude": return .orange
         case "cursor": return .blue
         case "continue": return .green
+        case "senkani": return .teal
         default: return .purple
         }
     }

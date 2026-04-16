@@ -20,6 +20,9 @@ struct SenkaniGUI: App {
         // Start hook socket listener so senkani-hook binary can connect
         SocketServerManager.shared.hookHandler = { HookRouter.handle(eventJSON: $0) }
         SocketServerManager.shared.start()
+
+        // Wire entity tracking: native Claude Code tool args → KB mention counts
+        HookRouter.entityObserver = { KBObserver.observeHookEvent(toolName: $0, toolInput: $1) }
     }
 
     /// Kill stale MCP server processes left over from previous sessions.

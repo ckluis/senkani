@@ -57,6 +57,15 @@ struct Doctor: ParsableCommand {
         // 10. Daemon health (socket responsiveness)
         checkDaemonHealth(&results)
 
+        // 11. Agent ecosystem
+        checkAgents(&results)
+
+        // 12. Learned rules
+        checkLearnedRules(&results)
+
+        // 13. WARP.md skills
+        checkSkills(&results)
+
         print("")
         var parts: [String] = []
         if results.passed > 0 { parts.append("\(results.passed) passed") }
@@ -471,6 +480,74 @@ struct Doctor: ParsableCommand {
             printStatus(.pass, "Grammars: \(count) vendored (\(languages)). Run 'senkani grammars check' for updates")
             results.passed += 1
         }
+    }
+
+    // MARK: - Check 11: Agent Ecosystem
+
+    private func checkAgents(_ results: inout Results) {
+        let agents = AgentDiscovery.scan()
+        if agents.isEmpty {
+            printStatus(.skip, "Agents: no known agents detected")
+            results.skipped += 1
+            return
+        }
+        for agent in agents {
+            let configName = (agent.configPath as NSString).lastPathComponent
+            if agent.hasSenkaniMCP {
+                printStatus(.pass, "\(agent.agentType.displayName): senkani MCP registered (\(configName))")
+                results.passed += 1
+            } else {
+                printStatus(.fail, "\(agent.agentType.displayName): installed but senkani MCP not registered (\(configName))")
+                results.failed += 1
+            }
+        }
+    }
+
+    // MARK: - Check 12: Learned Rules
+
+    private func checkLearnedRules(_ results: inout Results) {
+        let file = LearnedRulesStore.shared
+        let staged  = file.rules.filter { $0.status == .staged }.count
+        let applied = file.rules.filter { $0.status == .applied }.count
+
+        if staged > 0 {
+            printStatus(.fail, "Learned rules: \(staged) staged, pending review — run 'senkani learn apply' to activate")
+            results.failed += 1
+        } else if applied > 0 {
+            printStatus(.pass, "Learned rules: \(applied) applied")
+            results.passed += 1
+        } else {
+            printStatus(.skip, "Learned rules: none yet (generated after sessions with low filter savings)")
+            results.skipped += 1
+        }
+    }
+
+    // MARK: - Check 13: WARP.md Skills
+
+    private func checkSkills(_ results: inout Results) {
+        let skillsDir = NSHomeDirectory() + "/.senkani/skills"
+        let fm = FileManager.default
+
+        guard fm.fileExists(atPath: skillsDir) else {
+            printStatus(.skip, "WARP skills: ~/.senkani/skills/ not found — create it and add .md skill files")
+            results.skipped += 1
+            return
+        }
+
+        let files = (try? fm.contentsOfDirectory(atPath: skillsDir))?.filter { $0.hasSuffix(".md") } ?? []
+        if files.isEmpty {
+            printStatus(.skip, "WARP skills: directory exists but no .md files — add skill files to ~/.senkani/skills/")
+            results.skipped += 1
+            return
+        }
+
+        let totalBytes = files.compactMap { f -> Int? in
+            let path = (skillsDir as NSString).appendingPathComponent(f)
+            return (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int)
+        }.reduce(0, +)
+        let kb = Double(totalBytes) / 1024
+        printStatus(.pass, "WARP skills: \(files.count) skill\(files.count == 1 ? "" : "s") (\(String(format: "%.1f", kb)) KB) — injected at session start")
+        results.passed += 1
     }
 
     // MARK: - Output Helpers

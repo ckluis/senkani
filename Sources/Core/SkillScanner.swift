@@ -67,6 +67,10 @@ public final class SkillScanner: Sendable {
         let cwd = fm.currentDirectoryPath
         skills.append(contentsOf: scanProjectDir(cwd, fm: fm))
 
+        // 5. Senkani WARP.md skills: ~/.senkani/skills/ (global only; CWD is unreliable here)
+        let senkaniGlobalDir = (home as NSString).appendingPathComponent(".senkani/skills")
+        skills.append(contentsOf: scanSenkaniSkillsDir(senkaniGlobalDir, fm: fm))
+
         // Deduplicate: prefer project-local over global.
         // Key by lowercased name + type to catch the same skill found in multiple locations.
         let sourcePriority: [String: Int] = ["project": 0, "claude": 1, "cursor": 2, "continue": 3]
@@ -303,6 +307,121 @@ public final class SkillScanner: Sendable {
         }
 
         return skills
+    }
+
+    // MARK: - Senkani Skills (WARP.md)
+
+    /// Scan a single directory for WARP.md-format skill files (*.md).
+    private static func scanSenkaniSkillsDir(_ dir: String, fm: FileManager) -> [SkillInfo] {
+        guard fm.fileExists(atPath: dir) else { return [] }
+        var skills: [SkillInfo] = []
+        guard let files = try? fm.contentsOfDirectory(atPath: dir) else { return [] }
+        for file in files where file.hasSuffix(".md") {
+            let path = (dir as NSString).appendingPathComponent(file)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: path, isDirectory: &isDir), !isDir.boolValue else { continue }
+            let (name, desc) = parseSkillMd(atPath: path)
+            skills.append(SkillInfo(
+                id: "senkani-skill-\(name)",
+                name: name,
+                description: desc,
+                source: "senkani",
+                filePath: path,
+                type: .skill
+            ))
+        }
+        return skills
+    }
+
+    /// Scan both global (~/.senkani/skills/) and project-local (.senkani/skills/) WARP.md skills.
+    /// Project-local skills override global ones with the same name.
+    public static func scanSenkaniSkills(projectRoot: String, fm: FileManager = .default) -> [SkillInfo] {
+        let home = NSHomeDirectory()
+        let globalDir = (home as NSString).appendingPathComponent(".senkani/skills")
+        let projectDir = (projectRoot as NSString).appendingPathComponent(".senkani/skills")
+
+        var all: [SkillInfo] = []
+        all.append(contentsOf: scanSenkaniSkillsDir(globalDir, fm: fm))
+
+        // Project-local skills: mark as "project" source so dedup prefers them
+        let localRaw = scanSenkaniSkillsDir(projectDir, fm: fm)
+        let local = localRaw.map { s in
+            SkillInfo(id: "senkani-local-skill-\(s.name)", name: s.name,
+                      description: s.description, source: "project",
+                      filePath: s.filePath, type: s.type)
+        }
+        all.append(contentsOf: local)
+
+        // Dedup: prefer project-local (priority 0) over global (priority 1)
+        let priority: [String: Int] = ["project": 0, "senkani": 1]
+        var seen: [String: Int] = [:]
+        var deduped: [SkillInfo] = []
+        for skill in all {
+            let key = skill.name.lowercased()
+            let p = priority[skill.source] ?? 99
+            if let idx = seen[key] {
+                let existing = priority[deduped[idx].source] ?? 99
+                if p < existing { deduped[idx] = skill }
+            } else {
+                seen[key] = deduped.count
+                deduped.append(skill)
+            }
+        }
+        return deduped
+    }
+
+    /// Truncate a string to at most maxBytes UTF-8 bytes on a character boundary.
+    static func truncateToBytes(_ s: String, maxBytes: Int) -> String {
+        guard s.utf8.count > maxBytes else { return s }
+        var count = 0
+        var endIndex = s.startIndex
+        for char in s.unicodeScalars {
+            let charBytes = String(char).utf8.count
+            if count + charBytes > maxBytes { break }
+            count += charBytes
+            endIndex = s.unicodeScalars.index(after: endIndex)
+        }
+        return String(s[..<endIndex])
+    }
+
+    /// Build a prompt section containing WARP.md skill contents for injection into MCP instructions.
+    public static func buildSkillsPrompt(skills: [SkillInfo], maxTotalBytes: Int = 8_000, maxFileBytes: Int = 2_000) -> String {
+        guard !skills.isEmpty else { return "" }
+        let header = "\n\n## Active WARP Skills\n"
+        var parts: [String] = []
+        var usedBytes = header.utf8.count
+
+        for skill in skills {
+            guard usedBytes < maxTotalBytes else { break }
+            guard let content = try? String(contentsOfFile: skill.filePath, encoding: .utf8) else { continue }
+
+            let wasTruncated = content.utf8.count > maxFileBytes
+            let body = wasTruncated ? truncateToBytes(content, maxBytes: maxFileBytes) : content
+            var block = "\n### \(skill.name)\n\(body)"
+            if wasTruncated {
+                block += "\n\n[Truncated. Use senkani_read path=\"\(skill.filePath)\" for full content.]"
+            }
+
+            let blockBytes = block.utf8.count
+            if usedBytes + blockBytes > maxTotalBytes {
+                let remaining = maxTotalBytes - usedBytes
+                if remaining >= 64 {
+                    parts.append(truncateToBytes(block, maxBytes: remaining))
+                }
+                break
+            }
+            parts.append(block)
+            usedBytes += blockBytes
+        }
+
+        guard !parts.isEmpty else { return "" }
+        return header + parts.joined()
+    }
+
+    /// Convenience: scan and build prompt in one call.
+    public static func buildSkillsPrompt(projectRoot: String, maxTotalBytes: Int = 8_000, maxFileBytes: Int = 2_000) -> String {
+        let skills = scanSenkaniSkills(projectRoot: projectRoot)
+        return buildSkillsPrompt(skills: skills, maxTotalBytes: maxTotalBytes, maxFileBytes: maxFileBytes)
     }
 
     // MARK: - Parsing Helpers

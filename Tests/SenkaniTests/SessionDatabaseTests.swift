@@ -204,3 +204,58 @@ struct SessionDatabaseTokenEventTests {
         #expect(stats.commandCount == 5)
     }
 }
+
+// MARK: - Suite 4: Schema Migration Idempotency
+
+@Suite("SessionDatabase — Migration Idempotency")
+struct SessionDatabaseMigrationTests {
+
+    @Test("Opening same DB twice runs migrations twice without crash")
+    func migrationIdempotency() {
+        let path = "/tmp/senkani-migration-test-\(UUID().uuidString).sqlite"
+        defer { cleanup(path) }
+
+        // First open: creates schema + runs migrations
+        let db1 = SessionDatabase(path: path)
+        // Record something so the schema is exercised
+        recordAndFlush(db: db1, projectRoot: "/tmp/migtest", inputTokens: 42, savedTokens: 21)
+
+        // Second open: same path, migrations run again on existing schema.
+        // execSilent() must swallow "duplicate column name" without crashing.
+        let db2 = SessionDatabase(path: path)
+
+        // Data written by db1 is readable via db2 — DB is intact after double migration.
+        let stats = db2.tokenStatsForProject("/tmp/migtest")
+        #expect(stats.inputTokens == 42, "Data written before double-migration must survive")
+        #expect(stats.commandCount == 1)
+    }
+}
+
+// MARK: - Suite 5: Live Session Multiplier
+
+@Suite("SessionDatabase — Live Multiplier")
+struct SessionDatabaseLiveMultiplierTests {
+
+    // No saved events → nil (vacuous)
+    @Test func noDataReturnsNil() {
+        let (db, path) = makeTempDB()
+        defer { cleanup(path) }
+        #expect(db.liveSessionMultiplier(projectRoot: "/tmp/no-events-ever-\(UUID().uuidString)") == nil)
+    }
+
+    // inputTokens=20, savedTokens=80 → raw=100, compressed=20 → multiplier=5.0
+    @Test func correctMultiplierComputed() {
+        let (db, path) = makeTempDB()
+        defer { cleanup(path) }
+        db.recordTokenEvent(
+            sessionId: "s1", paneId: nil, projectRoot: "/tmp/lm-proj",
+            source: "test", toolName: nil, model: nil,
+            inputTokens: 20, outputTokens: 0, savedTokens: 80,
+            costCents: 0, feature: "filter", command: nil
+        )
+        _ = db.tokenStatsAllProjects() // flush async write
+        let m = db.liveSessionMultiplier(projectRoot: "/tmp/lm-proj")
+        #expect(m != nil)
+        #expect(abs((m ?? 0) - 5.0) < 0.01)
+    }
+}

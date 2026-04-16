@@ -21,6 +21,7 @@ if isHookMode {
     // Headless socket server mode -- run until terminated
     SocketServerManager.shared.hookHandler = { HookRouter.handle(eventJSON: $0) }
     SocketServerManager.shared.start()
+    HookRouter.entityObserver = { KBObserver.observeHookEvent(toolName: $0, toolInput: $1) }
     // Block forever (the socket server runs on GCD)
     dispatchMain()
 } else {

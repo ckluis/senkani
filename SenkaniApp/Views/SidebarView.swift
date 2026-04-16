@@ -1,5 +1,6 @@
 import SwiftUI
 import Core
+import MCPServer
 
 /// Redesigned sidebar: global tools at top, expandable project list with
 /// inline pane entries and token usage, add project at bottom.
@@ -8,6 +9,7 @@ struct SidebarView: View {
     @Binding var activeToolView: ToolView?
     let onRequestAddPane: () -> Void
     @State private var showClaudeLaunch = false
+    @State private var enrichmentBadge: Int = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -27,6 +29,22 @@ struct SidebarView: View {
                     }
                     toolRow(icon: "calendar.badge.clock", label: "Schedules", isActive: activeToolView == .schedules) {
                         activateTool(.schedules)
+                    }
+                    HStack(spacing: 0) {
+                        toolRow(icon: "brain.head.profile", label: "Knowledge",
+                                isActive: activeToolView == .knowledge) {
+                            activateTool(.knowledge)
+                        }
+                        if enrichmentBadge > 0 {
+                            Text("\(enrichmentBadge)")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(.orange))
+                                .padding(.trailing, 8)
+                                .help("\(enrichmentBadge) enrichment candidate(s)")
+                        }
                     }
 
                     // Thin divider
@@ -77,6 +95,12 @@ struct SidebarView: View {
         }
         .frame(width: SenkaniTheme.sidebarWidth)
         .background(SenkaniTheme.sidebarBackground)
+        .onAppear {
+            enrichmentBadge = KBReader.tracker.state().enrichmentCandidates.count
+        }
+        .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
+            enrichmentBadge = KBReader.tracker.state().enrichmentCandidates.count
+        }
         .onChange(of: workspace.activePaneID) { _, newValue in
             if newValue != nil {
                 clearToolSelection()

@@ -7,7 +7,16 @@ public enum BenchmarkTasks {
 
     /// All tasks in the standard suite.
     public static func all() -> [BenchmarkTask] {
-        return filterTasks() + secretTasks() + sandboxTasks() + terseTasks() + indexerTasks() + parseTasks() + cacheTasks()
+        var tasks: [BenchmarkTask] = []
+        tasks += filterTasks()
+        tasks += secretTasks()
+        tasks += sandboxTasks()
+        tasks += terseTasks()
+        tasks += indexerTasks()
+        tasks += parseTasks()
+        tasks += cacheTasks()
+        tasks += schemaMinTasks()
+        return tasks
     }
 
     // MARK: - Filter Tasks
@@ -226,6 +235,168 @@ public enum BenchmarkTasks {
                         category: "cache",
                         rawBytes: baseline,
                         compressedBytes: cached,
+                        durationMs: Date().timeIntervalSince(start) * 1000
+                    )
+                }
+            ),
+        ]
+    }
+
+    // MARK: - Schema Minimalism Tasks (AXI)
+
+    public static func schemaMinTasks() -> [BenchmarkTask] {
+        return [
+            BenchmarkTask(
+                id: "axi_knowledge_get",
+                category: "schemaMin",
+                description: "knowledge get — compact vs full entity output",
+                execute: { config in
+                    let start = Date()
+                    // Full output: ~600 tokens (entity with 12 decisions, 500-char understanding)
+                    let rawOutput = """
+                    SessionDatabase — class
+                    Source: Sources/Core/SessionDatabase.swift | Mentions: 47 | Last enriched: 2026-04-10
+
+                    Understanding:
+                      SessionDatabase is the primary data persistence layer for senkani. It uses SQLite via GRDB to store token events, budget decisions, and feature-level savings. The main tables are token_events (rawBytes, compressedBytes, inputTokens, savedTokens), budget_decisions (toolName, decision), and kb_enrichment (entityId, sha). All writes are transactional. The liveSessionMultiplier method aggregates token_events by feature and returns (inputTokens + savedTokens) / inputTokens. The schema is versioned via GRDB migrations. Thread safety is ensured by GRDBQueue serialization.
+
+                    Relations (8):
+                      → uses: FeatureSavings
+                      → uses: TokenEvent
+                      → uses: BudgetDecision
+                      → uses: KBEnrichmentRecord
+                      → owns: GRDBDatabaseQueue
+                      → implements: SessionDatabaseProtocol
+                      → depends_on: Core
+                      → co_changes_with: MCPSession
+
+                    Evidence (24 entries):
+                      2026-04-01 [sess_abc]: Added liveSessionMultiplier method
+                      2026-04-02 [sess_def]: Fixed migration race condition
+                      2026-04-03 [sess_ghi]: Added budget_decisions table
+                      2026-04-08 [sess_jkl]: Optimized token_events index
+                      2026-04-10 [sess_mno]: Added kb_enrichment table
+                      ... and 19 more
+
+                    Decisions (12):
+                      2026-01-15: Use GRDB over raw SQLite because type-safe query builder reduces migration errors
+                      2026-01-20: Use shared singleton because session lifecycle matches app lifecycle
+                      2026-02-01: Store rawBytes and compressedBytes separately because ratio queries need both
+                      2026-02-15: Use GRDBQueue for thread safety because actor isolation adds overhead
+                      2026-03-01: Version schema via migrations because forward-only upgrades are safer
+                      2026-03-10: Add feature column to token_events because per-feature analytics needed
+                      2026-03-20: Cap token_events to 10000 rows because disk budget is constrained
+                      2026-04-01: Add liveSessionMultiplier because eval command needs live data
+                      2026-04-05: Store sessionId in token_events because cross-session rollup needed
+                      2026-04-08: Index on (projectRoot, feature) because frequent GROUP BY queries
+                      ... and 2 more
+                    """
+                    let rawBytes = rawOutput.utf8.count
+
+                    // Compact output: ~100 tokens
+                    let compactOutput = """
+                    SessionDatabase — class  ·  47 mentions  ·  enriched: 2026-04-10
+                      Relations: 8  ·  Evidence: 24  ·  Decisions: 12
+                      Understanding: "SessionDatabase is the primary data persistence layer for senkani. It uses SQLite via GRDB to store…"
+
+                    Use knowledge(action:'get', entity:'SessionDatabase', detail:'full') for complete output.
+                    """
+                    let compressedBytes = compactOutput.utf8.count
+
+                    return TaskResult(
+                        taskId: "axi_knowledge_get",
+                        configName: config.name,
+                        category: "schemaMin",
+                        rawBytes: rawBytes,
+                        compressedBytes: compressedBytes,
+                        durationMs: Date().timeIntervalSince(start) * 1000
+                    )
+                }
+            ),
+            BenchmarkTask(
+                id: "axi_validate_summary",
+                category: "schemaMin",
+                description: "validate — summary vs full validator output",
+                execute: { config in
+                    let start = Date()
+                    // Full output: 5-validator run, 2 failures, ~300 tokens
+                    let rawOutput = """
+                    [syntax] SwiftSyntax: ✓
+                    [type] swiftc: ✗
+                      SessionDatabase.swift:234: error: value of type 'OpaquePointer' has no member 'pointee'
+                      SessionDatabase.swift:234: note: add '.pointee' to access the value this pointer points to
+                      SessionDatabase.swift:245: warning: initialization of variable 'stmt' was never used
+                      SessionDatabase.swift:301: warning: result of call to 'execute' is unused
+                      SessionDatabase.swift:312: error: cannot convert value of type 'String' to expected argument type 'Int'
+                      SessionDatabase.swift:312: note: arguments to generic parameter 'Bound' ('String' and 'Int') are expected to have the same type
+                      SessionDatabase.swift:318: warning: variable 'result' was never mutated; consider changing to 'let' constant
+                      SessionDatabase.swift:401: warning: 'init' is deprecated: renamed to 'init(value:)'
+                      SessionDatabase.swift:405: warning: using 'let' with 'try!' is deprecated
+                      SessionDatabase.swift:411: warning: result of call to 'execute' is unused
+                      ... (12 more lines)
+                    [lint] SwiftLint: ✗
+                      SessionDatabase.swift:120:1: warning: line_length violation: Line should be 200 characters or less; currently it's 203 characters (line_length)
+                      SessionDatabase.swift:234:5: error: explicit_init violation: Explicitly calling .init() should be avoided (explicit_init)
+                      SessionDatabase.swift:245:9: warning: unused_optional_binding violation (unused_optional_binding)
+                      ... (5 more lines)
+                    [security] SecretScan: ✓
+                    [format] SwiftFormat: ✓
+                    """
+                    let rawBytes = rawOutput.utf8.count
+
+                    // Summary output: ~80 tokens
+                    let compactOutput = """
+                    // senkani_validate: 5 validators · 3 passed · 2 failed
+
+                    ✗ [type] swiftc — 2 errors, 6 warnings
+                      SessionDatabase.swift:234: error: value of type 'OpaquePointer' has no member 'pointee'
+                      SessionDatabase.swift:245: warning: initialization of variable 'stmt' was never used
+                      SessionDatabase.swift:301: warning: result of call to 'execute' is unused
+                      SessionDatabase.swift:312: error: cannot convert value of type 'String' to expected argument type 'Int'
+                      SessionDatabase.swift:318: warning: variable 'result' was never mutated
+                      ... (7 more lines)
+                    ✗ [lint] SwiftLint — 1 error, 2 warnings
+                      SessionDatabase.swift:120:1: warning: line_length violation
+                      SessionDatabase.swift:234:5: error: explicit_init violation
+                      SessionDatabase.swift:245:9: warning: unused_optional_binding
+                      ... (3 more lines)
+
+                    ✓ 3 passed: SwiftSyntax (syntax), SecretScan (security), SwiftFormat (format)
+
+                    Use validate(file:'SessionDatabase.swift', detail:'full') for complete error output.
+                    """
+                    let compressedBytes = compactOutput.utf8.count
+
+                    return TaskResult(
+                        taskId: "axi_validate_summary",
+                        configName: config.name,
+                        category: "schemaMin",
+                        rawBytes: rawBytes,
+                        compressedBytes: compressedBytes,
+                        durationMs: Date().timeIntervalSince(start) * 1000
+                    )
+                }
+            ),
+            BenchmarkTask(
+                id: "axi_explore_limit",
+                category: "schemaMin",
+                description: "explore — 30-file limit vs full codebase dump",
+                execute: { config in
+                    let start = Date()
+                    // Simulate 100-file explore output at ~120 bytes/file avg
+                    let fileCount = 100
+                    let bytesPerFile = 120
+                    let rawBytes = fileCount * bytesPerFile
+
+                    // Compact: 30 files shown + trailer
+                    let limitedFileCount = 30
+                    let compressedBytes = limitedFileCount * bytesPerFile + 60 // trailer line
+                    return TaskResult(
+                        taskId: "axi_explore_limit",
+                        configName: config.name,
+                        category: "schemaMin",
+                        rawBytes: rawBytes,
+                        compressedBytes: compressedBytes,
                         durationMs: Date().timeIntervalSince(start) * 1000
                     )
                 }

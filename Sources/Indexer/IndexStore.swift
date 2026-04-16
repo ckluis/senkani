@@ -16,7 +16,7 @@ public enum IndexStore {
         return try? decoder.decode(SymbolIndex.self, from: data)
     }
 
-    /// Save the index to disk.
+    /// Save the index to disk and update the FTS5 search store.
     public static func save(_ index: SymbolIndex, projectRoot: String) throws {
         let path = indexPath(projectRoot: projectRoot)
         let dir = (path as NSString).deletingLastPathComponent
@@ -27,6 +27,9 @@ public enum IndexStore {
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(index)
         try data.write(to: URL(fileURLWithPath: path))
+
+        // Non-fatal: FTS is a ranking enhancement; JSON is the source of truth.
+        try? SymbolFTSStore(projectRoot: projectRoot).rebuild(entries: index.symbols)
     }
 
     /// Build or incrementally update the index.

@@ -21,6 +21,14 @@ enum PaneType: String, CaseIterable {
     case dashboard
 }
 
+/// Budget status for a pane, pushed from the MCP process via IPC.
+/// Persistent — only cleared on pane restart.
+enum PaneBudgetStatus: Equatable {
+    case none
+    case warning(spentCents: Int, limitCents: Int)
+    case blocked(spentCents: Int, limitCents: Int)
+}
+
 /// State of the process running in a terminal pane.
 enum ProcessState: Equatable {
     case notStarted
@@ -105,6 +113,9 @@ final class PaneModel: Identifiable {
     var fontSize: CGFloat = 12.0
     /// Whether this pane has unread output since last focused.
     var hasUnreadOutput: Bool = false
+    /// Per-pane budget status pushed via IPC from the MCP process.
+    /// Cleared on pane restart (processState → .notStarted).
+    var budgetStatus: PaneBudgetStatus = .none
 
     init(title: String = "Terminal",
          paneType: PaneType = .terminal,

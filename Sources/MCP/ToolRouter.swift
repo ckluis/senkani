@@ -46,7 +46,7 @@ enum ToolRouter {
             let result = await executeRoute(params, session: session)
             var content = result.content
             content.insert(.text(text: "[Budget Warning] \(warning)", annotations: nil, _meta: nil), at: 0)
-            return prependStaleNotices(.init(content: content, isError: result.isError), session: session)
+            return prependSessionContext(.init(content: content, isError: result.isError), session: session)
 
         case .allow:
             // Log allowed (only if session tracking is active)
@@ -58,7 +58,7 @@ enum ToolRouter {
                 )
             }
             let result = await executeRoute(params, session: session)
-            return prependStaleNotices(result, session: session)
+            return prependSessionContext(result, session: session)
         }
     }
 
@@ -111,21 +111,40 @@ enum ToolRouter {
     )
 
     private static func dispatchTool(_ params: CallTool.Parameters, session: MCPSession) async -> CallTool.Result {
+        // Extract arg text before dispatch — covers ALL tools (async and sync).
+        // Previously only ran in the default/sync path, silently skipping embed/vision/search.
+        let argText = params.arguments?.values.compactMap(\.stringValue).joined(separator: " ") ?? ""
+
+        let result: CallTool.Result
         switch params.name {
         // Async tools — already non-blocking, run directly in cooperative pool
         case "embed":
-            return await EmbedTool.handle(arguments: params.arguments, session: session)
+            result = await EmbedTool.handle(arguments: params.arguments, session: session)
         case "vision":
-            return await VisionTool.handle(arguments: params.arguments, session: session)
+            result = await VisionTool.handle(arguments: params.arguments, session: session)
+        case "search":
+            result = await SearchTool.handle(arguments: params.arguments, session: session)
+        case "web":
+            result = await WebFetchTool.handle(arguments: params.arguments, session: session)
         // All other tools — potentially blocking, run off cooperative pool
         default:
-            return await withCheckedContinuation { continuation in
+            result = await withCheckedContinuation { continuation in
                 toolQueue.async {
-                    let result = syncDispatch(params, session: session)
-                    continuation.resume(returning: result)
+                    let r = syncDispatch(params, session: session)
+                    continuation.resume(returning: r)
                 }
             }
         }
+
+        // Entity mention tracking + auto-pin detection (~52μs, all tools).
+        if !argText.isEmpty {
+            session.entityTracker.observe(text: argText, source: "mcp:\(params.name)")
+            if session.autoPinEnabled {
+                session.detectAndQueueAutoPins(argText: argText)
+            }
+        }
+
+        return result
     }
 
     /// Synchronous tool dispatch. Runs on toolQueue, never on the cooperative pool.
@@ -135,8 +154,6 @@ enum ToolRouter {
             return ReadTool.handle(arguments: params.arguments, session: session)
         case "exec":
             return ExecTool.handle(arguments: params.arguments, session: session)
-        case "search":
-            return SearchTool.handle(arguments: params.arguments, session: session)
         case "fetch":
             return FetchTool.handle(arguments: params.arguments, session: session)
         case "explore":
@@ -155,18 +172,31 @@ enum ToolRouter {
             return DepsTool.handle(arguments: params.arguments, session: session)
         case "watch":
             return WatchTool.handle(arguments: params.arguments, session: session)
+        case "knowledge":
+            return KnowledgeTool.handle(arguments: params.arguments, session: session)
         default:
             return .init(content: [.text(text: "Unknown tool: \(params.name)", annotations: nil, _meta: nil)], isError: true)
         }
     }
 
-    /// Prepend any pending symbol staleness notices to the tool result.
-    private static func prependStaleNotices(_ result: CallTool.Result, session: MCPSession) -> CallTool.Result {
-        let notices = session.drainStaleNotices()
-        guard !notices.isEmpty else { return result }
+    /// Prepend pinned context blocks and staleness notices to the tool result.
+    ///
+    /// Order (index 0 = first thing the model reads):
+    ///   1. Pinned context blocks (--- @Name (N calls remaining) ---)
+    ///   2. Pin expiry notices (for entries whose TTL just hit 0)
+    ///   3. Symbol staleness notices
+    private static func prependSessionContext(_ result: CallTool.Result, session: MCPSession) -> CallTool.Result {
+        let staleNotices = session.drainStaleNotices()
+        let (pinnedContext, expiryNotices) = session.pinnedContextStore.drain()
+
+        var prefixParts: [String] = []
+        if let pc = pinnedContext { prefixParts.append(pc) }
+        prefixParts.append(contentsOf: expiryNotices)
+        prefixParts.append(contentsOf: staleNotices)
+
+        guard !prefixParts.isEmpty else { return result }
         var content = result.content
-        let noticeText = notices.joined(separator: "\n")
-        content.insert(.text(text: noticeText, annotations: nil, _meta: nil), at: 0)
+        content.insert(.text(text: prefixParts.joined(separator: "\n"), annotations: nil, _meta: nil), at: 0)
         return .init(content: content, isError: result.isError)
     }
 
@@ -174,7 +204,7 @@ enum ToolRouter {
         [
             Tool(
                 name: "read",
-                description: "Read a file. Returns a compact outline (symbols + line numbers) by default — pass full: true to get the complete file content. Outlines are ~90% smaller than full reads. Re-reads of unchanged files return instantly from cache.",
+                description: "Read a file. Returns compact outline (symbols + line numbers) by default; pass full:true for complete content. Outlines are ~90% smaller. Unchanged files served from cache.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -189,7 +219,7 @@ enum ToolRouter {
             ),
             Tool(
                 name: "exec",
-                description: "Execute a shell command with output filtering. Applies 24 command-specific rules. Supports background mode for long builds: pass background:true to get a job_id, then poll with job_id to check status.",
+                description: "Execute a shell command with output filtering. Background mode: pass background:true for a job_id, then poll with job_id.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -204,7 +234,7 @@ enum ToolRouter {
             ),
             Tool(
                 name: "search",
-                description: "Search the project's symbol index by name, kind, file, or container. Returns compact results (~50 tokens) instead of grepping files (~5000 tokens). Auto-indexes on first call.",
+                description: "Search the symbol index by name, kind, file, or container. ~50 tokens/result vs grepping files. Auto-indexes on first call.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -219,7 +249,7 @@ enum ToolRouter {
             ),
             Tool(
                 name: "fetch",
-                description: "Fetch a specific symbol's source code. Reads only the symbol's lines, not the entire file. 50-99% savings vs full file reads.",
+                description: "Fetch a symbol's source lines. Reads only that symbol, not the whole file. 50-99% savings vs full reads.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -230,19 +260,35 @@ enum ToolRouter {
                 annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
             ),
             Tool(
+                name: "web",
+                description: "Render a web page with full JavaScript execution and return a compact semantic tree (headings, text, links, buttons, form fields). Works on single-page applications (React/Vue/Next.js). ~99% token savings vs. raw HTML. Use format:'html' to retrieve raw content (always sandboxed).",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "url":     .object(["type": .string("string"),  "description": .string("HTTP, HTTPS, or file:// URL to render")]),
+                        "timeout": .object(["type": .string("integer"), "description": .string("Load timeout in seconds, 5–60 (default: 15)")]),
+                        "format":  .object(["type": .string("string"),  "description": .string("Output: 'tree' (semantic AXTree, default), 'text' (plain text), 'html' (raw HTML, always sandboxed)")]),
+                    ]),
+                    "required": .array([.string("url")]),
+                ]),
+                annotations: .init(readOnlyHint: true, idempotentHint: false, openWorldHint: true)
+            ),
+            Tool(
                 name: "explore",
-                description: "Show the project's symbol tree structure. Symbols grouped by file with type hierarchy. ~500 tokens for a typical project.",
+                description: "Symbol tree grouped by file with type hierarchy. Shows 30 files by default; use limit:0 for all. Filter symbols by kind: 'class,struct,protocol'.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "path": .object(["type": .string("string"), "description": .string("Scope to a subdirectory (optional)")]),
+                        "limit": .object(["type": .string("integer"), "description": .string("Max files to show (default: 30). Use limit:0 for all.")]),
+                        "kinds": .object(["type": .string("string"), "description": .string("Comma-separated kind filter: 'class,struct,protocol,enum' etc.")]),
                     ]),
                 ]),
                 annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
             ),
             Tool(
                 name: "outline",
-                description: "Show a file's structure without reading it. Returns functions, classes, types with line numbers. ~90% savings vs reading the whole file.",
+                description: "A file's structure without reading it. Functions, classes, types with line numbers. ~90% savings vs full reads.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -254,13 +300,14 @@ enum ToolRouter {
             ),
             Tool(
                 name: "session",
-                description: "Session intelligence: view stats, toggle features, manage validators, or reset. Actions: 'stats' (savings), 'config' (feature toggles), 'validators' (list/enable/disable validators), 'reset' (clear cache).",
+                description: "Session stats, feature toggles, validator management, and @-mention context pinning. Actions: stats · config · validators · reset · result · pin · unpin · pins.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
-                        "action": .object(["type": .string("string"), "description": .string("Action: 'stats', 'reset', 'config', 'validators', or 'result'"), "enum": .array([.string("stats"), .string("reset"), .string("config"), .string("validators"), .string("result")])]),
-                        "features": .object(["type": .string("object"), "description": .string("For 'config': {filter?: bool, secrets?: bool, indexer?: bool, cache?: bool, all?: bool}")]),
-                        "name": .object(["type": .string("string"), "description": .string("For 'validators': validator name to enable/disable")]),
+                        "action": .object(["type": .string("string"), "description": .string("Action: 'stats', 'reset', 'config', 'validators', 'result', 'pin', 'unpin', or 'pins'"), "enum": .array([.string("stats"), .string("reset"), .string("config"), .string("validators"), .string("result"), .string("pin"), .string("unpin"), .string("pins")])]),
+                        "features": .object(["type": .string("object"), "description": .string("For 'config': {filter?: bool, secrets?: bool, indexer?: bool, cache?: bool, terse?: bool, auto_pin?: bool, budget_session_cents?: int (0 clears)}")]),
+                        "name": .object(["type": .string("string"), "description": .string("For 'pin'/'unpin': symbol name to pin or unpin. For 'validators': validator name to enable/disable.")]),
+                        "ttl": .object(["type": .string("integer"), "description": .string("For 'pin': how many tool calls to keep the context pinned (1–50, default 20)")]),
                         "enabled": .object(["type": .string("boolean"), "description": .string("For 'validators': set enabled state")]),
                         "result_id": .object(["type": .string("string"), "description": .string("For 'result': the sandboxed result ID to retrieve (e.g. 'r_abc123def456')")]),
                     ]),
@@ -269,12 +316,13 @@ enum ToolRouter {
             ),
             Tool(
                 name: "validate",
-                description: "Validate code using local compilers/linters. Auto-detects installed tools. Runs ALL enabled validators for the file type (syntax, type, lint, security, format). Config-driven: 30+ validators across 15+ languages. Use session(action: 'validators') to see/toggle available validators.",
+                description: "Run local validators (syntax, type, lint, security, format). Returns summary by default; use detail:'full' for complete output. session(action:'validators') to configure.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "file": .object(["type": .string("string"), "description": .string("Path to the file to validate")]),
                         "category": .object(["type": .string("string"), "description": .string("Filter by category: 'syntax', 'type', 'lint', 'security', 'format' (runs all if omitted)")]),
+                        "detail": .object(["type": .string("string"), "description": .string("Output level: 'summary' (default, failures only + counts) or 'full' (all validators, complete output)")]),
                     ]),
                     "required": .array([.string("file")]),
                 ]),
@@ -282,7 +330,7 @@ enum ToolRouter {
             ),
             Tool(
                 name: "parse",
-                description: "Extract structured results from build/test/lint/error output. Returns a concise summary (test pass/fail counts, error locations, stack trace categories) instead of raw output. ~90% token reduction on typical build output.",
+                description: "Extract structured results from build/test/lint output. Returns pass/fail counts, error locations — ~90% token reduction on typical build output.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -295,7 +343,7 @@ enum ToolRouter {
             ),
             Tool(
                 name: "embed",
-                description: "Semantic code search using local embeddings on Apple Silicon. Find relevant files by meaning, not just text matching. Returns top matches with similarity scores. Auto-indexes on first call (~90MB model). $0/call.",
+                description: "Semantic code search via local embeddings on Apple Silicon. Returns top matches by meaning. Auto-indexes on first call.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -309,7 +357,7 @@ enum ToolRouter {
             ),
             Tool(
                 name: "vision",
-                description: "Analyze images using a local vision model on Apple Silicon. OCR, UI element detection, screenshot analysis. $0/call vs $0.01+ per GPT-4o vision call. ~1.5GB model, downloads on first use.",
+                description: "Analyze images with a local vision model on Apple Silicon. OCR, UI element detection, screenshot analysis.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -322,7 +370,7 @@ enum ToolRouter {
             ),
             Tool(
                 name: "deps",
-                description: "Query the project's dependency graph. 'What imports this module?' and 'What does this file import?' in ~50 tokens instead of reading 20 files.",
+                description: "Query the dependency graph. 'What imports this module?' and 'What does this file import?' in ~50 tokens.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -335,7 +383,7 @@ enum ToolRouter {
             ),
             Tool(
                 name: "pane",
-                description: "Control workspace panes. List, add, remove, or focus panes. Enables orchestration: open browsers for testing, terminals for builds, markdown previews for docs.",
+                description: "Control workspace panes: list, add, remove, focus. Open browsers, terminals, or markdown previews for orchestration.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -352,7 +400,7 @@ enum ToolRouter {
             ),
             Tool(
                 name: "watch",
-                description: "Query file changes detected by FSEvents. Returns changed files since a cursor timestamp. Use instead of re-reading files to check what changed after builds/edits.",
+                description: "File changes via FSEvents. Returns paths changed since a cursor timestamp. Use after builds/edits instead of re-reading files.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -361,6 +409,23 @@ enum ToolRouter {
                     ]),
                 ]),
                 annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
+            ),
+            Tool(
+                name: "knowledge",
+                description: "Query the project knowledge graph. Actions: status · get · search · list · relate · mine · propose · commit · discard · graph. get defaults to summary; use detail:'full' for complete output.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "action": .object(["type": .string("string"), "description": .string("Action: status|get|search|list|relate|mine|propose|commit|discard|graph"), "enum": .array([.string("status"), .string("get"), .string("search"), .string("list"), .string("relate"), .string("mine"), .string("propose"), .string("commit"), .string("discard"), .string("graph")])]),
+                        "entity": .object(["type": .string("string"), "description": .string("Entity name for get, relate, graph, propose, commit, discard actions")]),
+                        "query": .object(["type": .string("string"), "description": .string("Full-text search query for 'search' action")]),
+                        "sort": .object(["type": .string("string"), "description": .string("Sort for 'list': 'mentions' (default), 'name', 'staleness', 'recent'")]),
+                        "understanding": .object(["type": .string("string"), "description": .string("Enriched understanding text for 'propose' action")]),
+                        "detail": .object(["type": .string("string"), "description": .string("Output level for 'get': 'summary' (default, ~100 tokens) or 'full' (complete understanding, all relations and decisions)")]),
+                    ]),
+                    "required": .array([.string("action")]),
+                ]),
+                annotations: .init(readOnlyHint: false, idempotentHint: false, openWorldHint: false)
             ),
         ]
     }

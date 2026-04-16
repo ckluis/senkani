@@ -184,6 +184,7 @@ struct PaneContainerView: View {
                         // Reset state — the terminal view will restart on next layout
                         pane.processState = .notStarted
                         pane.shellPid = nil
+                        pane.budgetStatus = .none  // clear budget indicator on restart
                     } label: {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 8))
@@ -193,6 +194,29 @@ struct PaneContainerView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Restart shell")
+                }
+            }
+
+            // Per-pane budget status indicator — persistent until pane restart
+            if pane.paneType == .terminal {
+                switch pane.budgetStatus {
+                case .none:
+                    EmptyView()
+                case .warning(let spent, let limit):
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.orange)
+                        .help("Approaching pane budget: $\(String(format: "%.2f", Double(spent) / 100)) / $\(String(format: "%.2f", Double(limit) / 100))")
+                case .blocked(let spent, let limit):
+                    HStack(spacing: 2) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.red)
+                        Text("$\(String(format: "%.2f", Double(spent) / 100))/$\(String(format: "%.2f", Double(limit) / 100))")
+                            .font(.system(size: 8, design: .monospaced))
+                            .foregroundStyle(.red)
+                    }
+                    .help("Pane session budget exceeded — tool calls blocked")
                 }
             }
 

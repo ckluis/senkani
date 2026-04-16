@@ -152,6 +152,37 @@ actor EmbedEngine {
         return similarities.sorted { $0.score > $1.score }.prefix(topK).map { $0 }
     }
 
+    /// Return pre-computed file similarity ranks for a query — without triggering model load
+    /// or re-indexing. Returns empty if the embedding index is not warm.
+    /// Used by SearchTool for RRF fusion (fast path; never blocks).
+    func cachedFileRanks(query: String, topK: Int = 20) async -> [(file: String, rank: Int)] {
+        guard !fileEmbeddings.isEmpty, modelContainer != nil else { return [] }
+        guard let mc = modelContainer else { return [] }
+
+        // Embed query using already-loaded model (no I/O, pure compute)
+        let queryEmbedding = await mc.perform {
+            (model: EmbeddingModel, tokenizer: Tokenizer, pooling: Pooling) -> [Float] in
+            let input = tokenizer.encode(text: "search_query: \(query)", addSpecialTokens: true)
+            let padded = MLXArray(input).reshaped([1, input.count])
+            let mask = MLXArray.ones(like: padded)
+            let tokenTypes = MLXArray.zeros(like: padded)
+            let output = pooling(
+                model(padded, positionIds: nil, tokenTypeIds: tokenTypes, attentionMask: mask),
+                normalize: true, applyLayerNorm: true
+            )
+            output.eval()
+            return output[0].asArray(Float.self)
+        }
+
+        var similarities: [(file: String, score: Float)] = []
+        for (file, embedding) in fileEmbeddings {
+            let score = cosineSimilarity(queryEmbedding, embedding)
+            similarities.append((file: file, score: score))
+        }
+        let top = similarities.sorted { $0.score > $1.score }.prefix(topK)
+        return top.enumerated().map { (i, r) in (file: r.file, rank: i + 1) }
+    }
+
     private func cosineSimilarity(_ a: [Float], _ b: [Float]) -> Float {
         guard a.count == b.count, !a.isEmpty else { return 0 }
         let dot = zip(a, b).map(*).reduce(0, +)

@@ -86,15 +86,16 @@ struct SearchUpgradeTests {
     @Test func expiredEntriesIgnored() {
         HookRouter.readDenialTracker.reset()
 
-        // Record with a tiny window so entries expire immediately
-        _ = HookRouter.readDenialTracker.recordAndCount(filePath: "old1.swift", windowSeconds: 0.01)
-        _ = HookRouter.readDenialTracker.recordAndCount(filePath: "old2.swift", windowSeconds: 0.01)
+        // Record with a 50ms window. Sleep 4× the window (200ms) for reliable expiry
+        // under CI load. Prior version used 10ms/20ms — too tight, caused flakiness.
+        _ = HookRouter.readDenialTracker.recordAndCount(filePath: "old1.swift", windowSeconds: 0.05)
+        _ = HookRouter.readDenialTracker.recordAndCount(filePath: "old2.swift", windowSeconds: 0.05)
 
-        // Wait for expiry
-        Thread.sleep(forTimeInterval: 0.02)
+        // Wait for expiry (4× window)
+        Thread.sleep(forTimeInterval: 0.2)
 
         // This should be the only unexpired entry — count should be 1
-        let count = HookRouter.readDenialTracker.recordAndCount(filePath: "new.swift", windowSeconds: 0.01)
+        let count = HookRouter.readDenialTracker.recordAndCount(filePath: "new.swift", windowSeconds: 0.05)
         #expect(count == 1, "Expired entries should be pruned")
     }
 

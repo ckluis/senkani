@@ -3,7 +3,7 @@ import Core
 
 /// Which sidebar tool view is currently shown (nil = workspace/panes).
 enum ToolView: Equatable {
-    case models, analytics, skills, schedules, themes
+    case models, analytics, skills, schedules, themes, knowledge
 }
 
 /// Main application view: custom HStack layout with sidebar + canvas + status bar.
@@ -186,6 +186,7 @@ struct ContentView: View {
         case .analytics: AnalyticsView(workspace: workspace)
         case .skills:    SkillBrowserView()
         case .schedules: ScheduleView()
+        case .knowledge: KnowledgeBaseView()
         }
     }
 
@@ -282,6 +283,24 @@ struct ContentView: View {
             }
             workspace.activePaneID = uuid
             return PaneIPCResponse(id: command.id, success: true, result: "Activated pane: \(idStr)")
+
+        case .setBudgetStatus:
+            guard let idStr = command.params["pane_id"],
+                  let uuid = UUID(uuidString: idStr) else {
+                return PaneIPCResponse(id: command.id, success: false, error: "Invalid or missing pane_id")
+            }
+            guard let pane = workspace.allPanes.first(where: { $0.id == uuid }) else {
+                return PaneIPCResponse(id: command.id, success: false, error: "Pane not found: \(idStr)")
+            }
+            let status = command.params["status"] ?? "none"
+            let spentCents = Int(command.params["spent_cents"] ?? "0") ?? 0
+            let limitCents = Int(command.params["limit_cents"] ?? "0") ?? 0
+            switch status {
+            case "warning": pane.budgetStatus = .warning(spentCents: spentCents, limitCents: limitCents)
+            case "blocked":  pane.budgetStatus = .blocked(spentCents: spentCents, limitCents: limitCents)
+            default:         pane.budgetStatus = .none
+            }
+            return PaneIPCResponse(id: command.id, success: true, result: "Budget status updated: \(status)")
         }
     }
 

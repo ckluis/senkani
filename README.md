@@ -107,7 +107,7 @@ senkani doctor
 | `senkani_explore` | Navigate codebase via import/dependency graph | 90%+ |
 | `senkani_deps` | Query bidirectional dependency graph (what imports X, what X imports) | — |
 | `senkani_outline` | File-level structure: top-level functions, classes, types | — |
-| `senkani_validate` | Local syntax validation across 20 languages | 100% |
+| `senkani_validate` | Local syntax validation across 20 languages. `full: true` for complete output (summary is default). | 100% |
 | `senkani_parse` | AST dump via tree-sitter | — |
 | `senkani_embed` | Text embeddings on Apple Silicon (no API cost) | $0/call |
 | `senkani_vision` | Vision model on Apple Silicon (no API cost) | $0/call |
@@ -115,7 +115,7 @@ senkani doctor
 | `senkani_web` | Render `http://`/`https://` page with full JS, return AXTree markdown. DNS-resolved SSRF guard + redirect re-validation; `file://` not accepted (use `senkani_read`). | ~99% vs raw HTML |
 | `senkani_pane` | Control workspace panes — open, close, focus, resize (via Unix socket) | — |
 | `senkani_session` | View stats, toggle features, pin/unpin symbol context (`pin`/`unpin`/`pins`) | — |
-| `senkani_knowledge` | Query/update the project knowledge graph — entities, links, decisions, FTS5 search | near-zero |
+| `senkani_knowledge` | Query/update the project knowledge graph — entities, links, decisions, FTS5 search. `full: true` for complete entity detail (summary is default). | near-zero |
 | `senkani_version` | Version negotiation: `server_version`, `tool_schemas_version`, `schema_db_version`, list of exposed tools. Cache client schemas keyed on `tool_schemas_version`. | — |
 
 ---
@@ -156,6 +156,8 @@ Senkani is a trust boundary for LLM-driven tool calls. Security-sensitive featur
 - **Schema migrations — versioned + crash-safe.** Session DB uses `PRAGMA user_version` + a `schema_migrations` audit log. Cross-process coordination via `flock` sidecar. On failed migration, a kill-switch lockfile is written and subsequent boots refuse to run migrations until the operator inspects the DB.
 - **Retention — scheduled.** `RetentionScheduler` prunes `token_events` (90 d), `sandboxed_results` (24 h), and `validation_results` (24 h) on an hourly tick. Tune via `~/.senkani/config.json` → `"retention": { "token_events_days": 30, ... }`.
 - **Instruction-payload byte cap.** The `instructions` string injected at MCP server start (repo map + session brief + skills) is capped at 2 KB by default. Tune via `SENKANI_INSTRUCTIONS_BUDGET_BYTES`. Prevents the per-session-start token tax from growing with project size.
+- **Socket authentication — opt-in.** Setting `SENKANI_SOCKET_AUTH=on` generates a 32-byte random token at `~/.senkani/.token` (mode 0600), rotated on every server start. Every connection to `mcp.sock`/`hook.sock`/`pane.sock` must send a length-prefixed handshake frame matching the token before normal protocol begins. Raises the bar from ambient same-UID socket access to must-read-token-file — blocks prompt-injected subagents and postinstall scripts that don't parse dot-files. Default off this release for backward compat; flipping to on next release.
+- **Structured logging — opt-in.** `SENKANI_LOG_JSON=1` emits one JSON object per critical event to stderr (mcp.started, mcp.signal.received, web.ssrf.blocked, retention.tick, schema.migration.applied/failed, socket.handshake.rejected). Default is backward-compatible `[event] key=value` format so current grep-based tooling keeps working.
 
 Call `senkani_version` (tool) or `senkani doctor` to confirm the active security posture.
 
@@ -203,7 +205,7 @@ Numbers from the built-in benchmark suite (`senkani bench`):
 | Symbol search | <5ms cold, <1ms cached |
 | Secret scan | <2ms per KB |
 | Hook latency | <5ms active, <1ms passthrough |
-| Unit tests | **915 passing** |
+| Unit tests | **948 passing** |
 | Binary size | ~28 MB universal |
 
 **About the numbers:** The 80.37x figure is from the fixture benchmark — synthetic tasks designed to exercise each optimization layer. Real sessions produce a lower multiplier. The Savings Test pane shows both numbers side by side: fixture ceiling and live floor. The live number is the honest one.
@@ -232,7 +234,7 @@ Prerequisites: macOS 14+, Swift 6.0+, Xcode 15+
 ```bash
 swift build          # debug
 swift build -c release
-swift test           # 915 tests
+swift test           # 948 tests
 senkani doctor       # verify grammar and database setup
 ```
 

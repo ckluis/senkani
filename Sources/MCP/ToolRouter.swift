@@ -111,26 +111,35 @@ enum ToolRouter {
     )
 
     private static func dispatchTool(_ params: CallTool.Parameters, session: MCPSession) async -> CallTool.Result {
+        // P2-10: canonicalize deprecated argument names before handing to the tool.
+        // ArgumentShim returns normalized args + any deprecation warnings. We filter
+        // those warnings through `session.noteDeprecation` so only the first sighting
+        // of each key per session produces a visible warning block — chat-spam-free.
+        let shimmed = ArgumentShim.normalize(toolName: params.name, arguments: params.arguments)
+        let firstSightWarnings = shimmed.deprecations.filter { session.noteDeprecation($0.key) }
+        let normalizedArgs = shimmed.arguments
+        let normalizedParams = CallTool.Parameters(name: params.name, arguments: normalizedArgs)
+
         // Extract arg text before dispatch — covers ALL tools (async and sync).
         // Previously only ran in the default/sync path, silently skipping embed/vision/search.
-        let argText = params.arguments?.values.compactMap(\.stringValue).joined(separator: " ") ?? ""
+        let argText = normalizedArgs?.values.compactMap(\.stringValue).joined(separator: " ") ?? ""
 
         let result: CallTool.Result
-        switch params.name {
+        switch normalizedParams.name {
         // Async tools — already non-blocking, run directly in cooperative pool
         case "embed":
-            result = await EmbedTool.handle(arguments: params.arguments, session: session)
+            result = await EmbedTool.handle(arguments: normalizedArgs, session: session)
         case "vision":
-            result = await VisionTool.handle(arguments: params.arguments, session: session)
+            result = await VisionTool.handle(arguments: normalizedArgs, session: session)
         case "search":
-            result = await SearchTool.handle(arguments: params.arguments, session: session)
+            result = await SearchTool.handle(arguments: normalizedArgs, session: session)
         case "web":
-            result = await WebFetchTool.handle(arguments: params.arguments, session: session)
+            result = await WebFetchTool.handle(arguments: normalizedArgs, session: session)
         // All other tools — potentially blocking, run off cooperative pool
         default:
             result = await withCheckedContinuation { continuation in
                 toolQueue.async {
-                    let r = syncDispatch(params, session: session)
+                    let r = syncDispatch(normalizedParams, session: session)
                     continuation.resume(returning: r)
                 }
             }
@@ -138,10 +147,20 @@ enum ToolRouter {
 
         // Entity mention tracking + auto-pin detection (~52μs, all tools).
         if !argText.isEmpty {
-            session.entityTracker.observe(text: argText, source: "mcp:\(params.name)")
+            session.entityTracker.observe(text: argText, source: "mcp:\(normalizedParams.name)")
             if session.autoPinEnabled {
                 session.detectAndQueueAutoPins(argText: argText)
             }
+        }
+
+        // P2-10: append deprecation advisories AFTER the primary result so tests
+        // indexing `result.content.first` still see the real output. One text block
+        // per call, joined by newlines if multiple deprecations fire simultaneously.
+        if !firstSightWarnings.isEmpty {
+            let body = firstSightWarnings.map(\.message).joined(separator: "\n")
+            var content = result.content
+            content.append(.text(text: body, annotations: nil, _meta: nil))
+            return .init(content: content, isError: result.isError)
         }
 
         return result
@@ -318,13 +337,14 @@ enum ToolRouter {
             ),
             Tool(
                 name: "validate",
-                description: "Run local validators (syntax, type, lint, security, format). Returns summary by default; use detail:'full' for complete output. session(action:'validators') to configure.",
+                description: "Run local validators (syntax, type, lint, security, format). Returns summary by default; pass full:true for complete output. session(action:'validators') to configure.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "file": .object(["type": .string("string"), "description": .string("Path to the file to validate")]),
                         "category": .object(["type": .string("string"), "description": .string("Filter by category: 'syntax', 'type', 'lint', 'security', 'format' (runs all if omitted)")]),
-                        "detail": .object(["type": .string("string"), "description": .string("Output level: 'summary' (default, failures only + counts) or 'full' (all validators, complete output)")]),
+                        "full": .object(["type": .string("boolean"), "description": .string("Return complete output: all validators including passing ones, full error text. Default false (summary only — failing validators + counts).")]),
+                        "detail": .object(["type": .string("string"), "description": .string("[deprecated — use 'full' instead] Output level: 'summary' (default) or 'full'. Removed in tool_schemas_version 2.")]),
                     ]),
                     "required": .array([.string("file")]),
                 ]),
@@ -423,7 +443,7 @@ enum ToolRouter {
             ),
             Tool(
                 name: "knowledge",
-                description: "Query the project knowledge graph. Actions: status · get · search · list · relate · mine · propose · commit · discard · graph. get defaults to summary; use detail:'full' for complete output.",
+                description: "Query the project knowledge graph. Actions: status · get · search · list · relate · mine · propose · commit · discard · graph. get defaults to summary; pass full:true for complete output.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -432,12 +452,104 @@ enum ToolRouter {
                         "query": .object(["type": .string("string"), "description": .string("Full-text search query for 'search' action")]),
                         "sort": .object(["type": .string("string"), "description": .string("Sort for 'list': 'mentions' (default), 'name', 'staleness', 'recent'")]),
                         "understanding": .object(["type": .string("string"), "description": .string("Enriched understanding text for 'propose' action")]),
-                        "detail": .object(["type": .string("string"), "description": .string("Output level for 'get': 'summary' (default, ~100 tokens) or 'full' (complete understanding, all relations and decisions)")]),
+                        "full": .object(["type": .string("boolean"), "description": .string("For 'get': return complete output (understanding, relations, decisions). Default false.")]),
+                        "detail": .object(["type": .string("string"), "description": .string("[deprecated — use 'full' instead] Output level for 'get': 'summary' (default) or 'full'. Removed in tool_schemas_version 2.")]),
                     ]),
                     "required": .array([.string("action")]),
                 ]),
                 annotations: .init(readOnlyHint: false, idempotentHint: false, openWorldHint: false)
             ),
         ]
+    }
+}
+
+// MARK: - P2-10: Argument vocabulary shim
+
+/// Canonicalizes escape-hatch argument names across MCP tools so clients have
+/// one consistent vocabulary. Currently translates `detail: "summary"|"full"`
+/// on `senkani_knowledge` + `senkani_validate` into the canonical
+/// `full: true|false` (the name `senkani_read` has always used).
+///
+/// Pure function — no session state. Callers (ToolRouter) filter deprecations
+/// through `MCPSession.noteDeprecation` so warnings fire only once per session.
+/// Removed entirely when `tool_schemas_version` bumps to 2 (next release).
+public enum ArgumentShim {
+
+    public struct Deprecation: Sendable {
+        /// Stable session-scope identifier, e.g. "knowledge.detail".
+        public let key: String
+        /// Human-readable, actionable warning text appended to the tool result.
+        public let message: String
+    }
+
+    public struct Normalization: Sendable {
+        public let arguments: [String: Value]?
+        public let deprecations: [Deprecation]
+    }
+
+    public static func normalize(
+        toolName: String,
+        arguments: [String: Value]?
+    ) -> Normalization {
+        guard let raw = arguments else {
+            return Normalization(arguments: nil, deprecations: [])
+        }
+
+        switch toolName {
+        case "knowledge", "validate":
+            return normalizeDetailToFull(toolName: toolName, args: raw)
+        default:
+            return Normalization(arguments: raw, deprecations: [])
+        }
+    }
+
+    // MARK: - Private
+
+    private static func normalizeDetailToFull(
+        toolName: String,
+        args: [String: Value]
+    ) -> Normalization {
+        guard let detailValue = args["detail"] else {
+            return Normalization(arguments: args, deprecations: [])
+        }
+
+        var out = args
+        var deps: [Deprecation] = []
+        let key = "\(toolName).detail"
+
+        let raw = detailValue.stringValue ?? ""
+        let lower = raw.lowercased()
+
+        let mapped: Bool?
+        switch lower {
+        case "full":    mapped = true
+        case "summary": mapped = false
+        default:        mapped = nil
+        }
+
+        if let mapped = mapped {
+            // Conflict: caller also set canonical `full`. `full` wins.
+            if let existingFull = args["full"]?.boolValue {
+                deps.append(Deprecation(
+                    key: key,
+                    message: "[senkani deprecation] senkani_\(toolName) received both 'detail' and 'full'; ignoring deprecated 'detail' (\"\(raw)\") and using 'full: \(existingFull)'. Drop 'detail' when you update your client."
+                ))
+            } else {
+                out["full"] = .bool(mapped)
+                deps.append(Deprecation(
+                    key: key,
+                    message: "[senkani deprecation] senkani_\(toolName).detail is renamed to 'full'. Pass 'full: \(mapped)' instead of 'detail: \"\(raw)\"'. Removed in tool_schemas_version 2."
+                ))
+            }
+            out.removeValue(forKey: "detail")
+        } else {
+            // Unknown value — leave the arg alone but warn the caller.
+            deps.append(Deprecation(
+                key: key,
+                message: "[senkani deprecation] senkani_\(toolName) got detail:\"\(raw)\" which is not a recognized value. Valid: full:true or full:false. 'detail' is removed in tool_schemas_version 2."
+            ))
+        }
+
+        return Normalization(arguments: out, deprecations: deps)
     }
 }

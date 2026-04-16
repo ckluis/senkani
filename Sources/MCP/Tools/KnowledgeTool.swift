@@ -92,7 +92,9 @@ enum KnowledgeTool {
             )
         }
 
-        let detail = arguments?["detail"]?.stringValue ?? "summary"
+        // P2-10: canonical `full: bool` read. Any legacy `detail:"full"` was translated
+        // upstream by ArgumentShim.normalize in ToolRouter before this handler ran.
+        let full = arguments?["full"]?.boolValue ?? false
 
         // Understanding — from DB field or from FS if richer
         let understanding: String
@@ -113,7 +115,7 @@ enum KnowledgeTool {
 
         var lines: [String] = []
 
-        if detail == "full" {
+        if full {
             // Full mode: original behaviour + decisions capped at 10
             lines.append("\(entity.name) — \(entity.entityType)")
             var meta: [String] = []
@@ -196,7 +198,7 @@ enum KnowledgeTool {
             }
 
             lines.append("")
-            lines.append("Use knowledge(action:'get', entity:'\(entity.name)', detail:'full') for complete output.")
+            lines.append("Use knowledge(action:'get', entity:'\(entity.name)', full:true) for complete output.")
         }
 
         return .init(content: [.text(text: lines.joined(separator: "\n"), annotations: nil, _meta: nil)])

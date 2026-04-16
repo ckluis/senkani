@@ -38,6 +38,19 @@ final class MCPSession: @unchecked Sendable {
     let agentType: AgentType
     private let lock = NSLock()
 
+    /// P2-10: one-warning-per-session tracking for deprecated argument names.
+    /// Guarded by `lock`. Keys are stable shim-provided identifiers like
+    /// "knowledge.detail". First sight returns true; subsequent sightings return false.
+    private var emittedDeprecations: Set<String> = []
+
+    /// Record a deprecation fire for this session. Returns true the FIRST time
+    /// `key` is observed per session, false thereafter — so the router can append
+    /// a single warning block to the tool result without spamming every call.
+    func noteDeprecation(_ key: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return emittedDeprecations.insert(key).inserted
+    }
+
     // Feature toggles (mutable at runtime — refreshed from config file on each tool call)
     private(set) var filterEnabled: Bool
     private(set) var secretsEnabled: Bool

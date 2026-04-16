@@ -53,8 +53,8 @@ struct KnowledgeGetCompactionTests {
         #expect(text.contains("CompactEntity"))
         #expect(text.contains("class"))
         #expect(text.contains("12 mention"))
-        // Must include escape-hatch hint
-        #expect(text.contains("detail:'full'"))
+        // Must include escape-hatch hint (P2-10: canonical full:true)
+        #expect(text.contains("full:true"))
         // Summary mode must NOT include the multi-line "Understanding:" section header
         // (compact mode shows inline "Understanding: ..." on one line, not the full block)
         let understandingLines = text.components(separatedBy: "\n").filter { $0.contains("Understanding:") }
@@ -78,7 +78,7 @@ struct KnowledgeGetCompactionTests {
             arguments: [
                 "action": .string("get"),
                 "entity": .string("FullEntity"),
-                "detail": .string("full")
+                "full": .bool(true)
             ],
             session: session
         )
@@ -116,7 +116,7 @@ struct KnowledgeGetCompactionTests {
             arguments: [
                 "action": .string("get"),
                 "entity": .string("DecisionHeavy"),
-                "detail": .string("full")
+                "full": .bool(true)
             ],
             session: session
         )
@@ -165,8 +165,8 @@ struct ValidateCompactionTests {
         // "No validators for .swift" rather than actual validation output.
         // The hint for the full escape hatch is only appended when anyErrors == true,
         // so we verify the hint string format directly.
-        let hint = "Use validate(file:'Test.swift', detail:'full') for complete error output."
-        #expect(hint.contains("detail:'full'"))
+        let hint = "Use validate(file:'Test.swift', full:true) for complete error output."
+        #expect(hint.contains("full:true"))
         #expect(hint.hasSuffix("complete error output."))
     }
 }

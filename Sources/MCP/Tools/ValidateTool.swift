@@ -16,7 +16,9 @@ enum ValidateTool {
 
         let ext = (absPath as NSString).pathExtension.lowercased()
         let categoryFilter = arguments?["category"]?.stringValue
-        let detail = arguments?["detail"]?.stringValue ?? "summary"  // "summary" (default) or "full"
+        // P2-10: canonical `full: bool` read. Any legacy `detail:"full"` was translated
+        // upstream by ArgumentShim.normalize in ToolRouter before this handler ran.
+        let full = arguments?["full"]?.boolValue ?? false
 
         var validators = session.validatorRegistry.validatorsFor(extension: ext)
         if let cat = categoryFilter {
@@ -51,7 +53,7 @@ enum ValidateTool {
         lines.append(header)
         lines.append("")
 
-        if detail == "full" {
+        if full {
             // Full mode: show all validators with complete output (original behaviour)
             for r in validatorResults {
                 let status = r.passed ? "✓" : "✗"
@@ -96,7 +98,7 @@ enum ValidateTool {
             }
             if anyErrors {
                 lines.append("")
-                lines.append("Use validate(file:'\(filePath)', detail:'full') for complete error output.")
+                lines.append("Use validate(file:'\(filePath)', full:true) for complete error output.")
             }
         }
 

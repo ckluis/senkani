@@ -202,11 +202,22 @@ the zero-dep constraint loosens.
 | F3 | English-only injection keywords | P2 | ✅ fixed (multilingual round) | ES/FR/DE/PT/IT added |
 | F4 | Cyrillic-only homoglyph map | P2 | ✅ fixed (multilingual round) | NFKC + Greek |
 | F5 | Missing secret patterns | P2 | ✅ fixed (multilingual round) | Slack/GCP/Stripe/npm/HF/sk-proj |
-| F6 | chmod timing window | P3 | open | — (use open(2) with mode) |
-| F7 | HookRelay duplicate logic | P3 | open | — (cross-ref comments) |
+| F6 | chmod timing window | P3 | ✅ fixed (debt-closure round) | atomic open+fchmod+rename |
+| F7 | HookRelay duplicate logic | P3 | ✅ fixed (debt-closure round) | cross-ref comment |
 
-All P1 + P2 findings from the re-audit are now closed. F6/F7 remain
-tracked as P3 defense-in-depth improvements.
+All findings from the re-audit are now closed.
+
+### F6/F7 closure notes
+
+- **F6:** prior `Data.write(.atomic)` + `chmod(path, 0o600)` sequence had a
+  microsecond-wide window where the renamed file carried umask-default perms
+  (typically 0644) before the chmod landed. Replaced with atomic write:
+  `open(temp, O_CREAT|O_WRONLY|O_TRUNC, 0o600)` + `fchmod(fd, 0o600)` (to
+  bypass umask narrowing) + `write` + `close` + `rename(temp, target)`. The
+  final path never exists with permissions wider than 0o600.
+- **F7:** `HookRelay.swift:loadAuthToken` already cites the zero-dep contract
+  and duplication. Added the reverse pointer in `SocketAuthToken.load` docs
+  so future editors see the mirror from either side.
 
 ### F3 / F4 / F5 closure notes
 

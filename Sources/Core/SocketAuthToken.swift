@@ -50,6 +50,14 @@ public enum SocketAuthToken {
     /// as "auth unavailable" — log and proceed un-auth'd. The `path` param
     /// supports parallel-safe testing: every test writes to its own file so
     /// they don't race on shared process state.
+    ///
+    /// F6 (Schneier re-audit 2026-04-16): the prior implementation used
+    /// `Data.write(.atomic)` followed by `chmod(path, 0o600)`. Between the
+    /// `.atomic` rename and the chmod, the final file briefly existed with
+    /// umask-default permissions (typically 0644). Closed by writing to a
+    /// `.tmp` sibling with explicit mode 0o600 + `fchmod` (bypass umask) +
+    /// `rename()`. The final path never exists with wider permissions than
+    /// 0o600 — even for the microsecond-wide race window the prior code had.
     @discardableResult
     public static func generate(at path: String? = nil) throws -> String {
         let target = path ?? defaultTokenPath
@@ -65,12 +73,41 @@ public enum SocketAuthToken {
         }
 
         let hex = bytes.map { String(format: "%02x", $0) }.joined()
-
-        // Write + chmod. chmod(0o600) lands immediately after write — the
-        // same-UID threat model does not benefit from tighter ordering.
         let data = Data(hex.utf8)
-        try data.write(to: URL(fileURLWithPath: target), options: [.atomic])
-        _ = Darwin.chmod(target, 0o600)
+
+        // F6 atomic write: temp file created with explicit 0o600; fchmod
+        // forces exact mode in case a hostile umask would have stripped
+        // owner write (e.g. umask 0o333). Rename is atomic on the same
+        // filesystem — target never exists with wider permissions.
+        let temp = target + ".tmp.\(ProcessInfo.processInfo.processIdentifier)"
+        let fd = Darwin.open(temp, O_CREAT | O_WRONLY | O_TRUNC, 0o600)
+        guard fd >= 0 else {
+            throw NSError(domain: "SocketAuthToken", code: Int(errno), userInfo: [
+                NSLocalizedDescriptionKey: "open(\(temp)) failed: \(String(cString: strerror(errno)))"
+            ])
+        }
+        // Force exact 0o600 regardless of umask. Paranoid defense-in-depth —
+        // if the umask is unusual (e.g. 077, 333), open()'s mode arg is
+        // narrowed by the umask. fchmod is NOT umask-narrowed.
+        _ = Darwin.fchmod(fd, 0o600)
+
+        let written = data.withUnsafeBytes { buf -> Int in
+            Darwin.write(fd, buf.baseAddress!, data.count)
+        }
+        Darwin.close(fd)
+        guard written == data.count else {
+            Darwin.unlink(temp)
+            throw NSError(domain: "SocketAuthToken", code: Int(errno), userInfo: [
+                NSLocalizedDescriptionKey: "write truncated: \(written) of \(data.count) bytes"
+            ])
+        }
+
+        guard Darwin.rename(temp, target) == 0 else {
+            Darwin.unlink(temp)
+            throw NSError(domain: "SocketAuthToken", code: Int(errno), userInfo: [
+                NSLocalizedDescriptionKey: "rename(\(temp) → \(target)) failed: \(String(cString: strerror(errno)))"
+            ])
+        }
 
         return hex
     }
@@ -79,6 +116,11 @@ public enum SocketAuthToken {
     /// `defaultTokenPath`) and has acceptable permissions. Returns nil when
     /// the file is absent or world/group-readable (defensive — refuse an
     /// insecure token rather than use it).
+    ///
+    /// **F7 note:** `Sources/HookRelay/HookRelay.swift` duplicates this
+    /// logic inline (`loadAuthToken`) to preserve its zero-dep contract
+    /// (Lesson #12). The two implementations must stay in sync — if you
+    /// change the permission check here, mirror it there.
     public static func load(at path: String? = nil) -> String? {
         let target = path ?? defaultTokenPath
         guard FileManager.default.fileExists(atPath: target) else { return nil }

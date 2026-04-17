@@ -322,6 +322,15 @@ public final class SessionDatabase: @unchecked Sendable {
         outputPreview: String? = nil
     ) {
         let now = Date().timeIntervalSince1970
+        // C1 (Cavoukian privacy pass 2026-04-16): redact secrets from the
+        // command string before persistence. `output_preview` is already
+        // filtered (built post-pipeline), but the raw command text was
+        // landing unredacted — a user running
+        //   senkani_exec "curl -H 'Authorization: Bearer sk-ant-…' …"
+        // previously left the literal API key in `commands.command`
+        // forever. SecretDetector short-circuits on no-match so the
+        // benign-case cost is negligible.
+        let redactedCommand = command.map { SecretDetector.scan($0).redacted }
         let preview = outputPreview.map { String($0.prefix(500)) }
         queue.async { [weak self] in
             guard let self, let db = self.db else { return }
@@ -344,7 +353,7 @@ public final class SessionDatabase: @unchecked Sendable {
             sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
             sqlite3_bind_double(stmt, 2, now)
             sqlite3_bind_text(stmt, 3, (toolName as NSString).utf8String, -1, nil)
-            if let cmd = command {
+            if let cmd = redactedCommand {
                 sqlite3_bind_text(stmt, 4, (cmd as NSString).utf8String, -1, nil)
             } else {
                 sqlite3_bind_null(stmt, 4)

@@ -162,3 +162,246 @@ struct HookRouterMetricsTests {
         #expect(avgMs < 5.0, "Average hook latency should be under 5ms, was \(String(format: "%.2f", avgMs))ms")
     }
 }
+
+// MARK: - Suite 4: Trivial Routing (Bach G5)
+
+/// Layer-3 interception: commands with trivially-computable answers
+/// (pwd, whoami, …) are answered locally without spawning a shell.
+@Suite("HookRouter — Trivial Routing")
+struct HookRouterTrivialRoutingTests {
+
+    @Test func pwdReturnsProjectRoot() {
+        let reply = HookRouter.checkTrivialRouting(
+            command: "pwd",
+            projectRoot: "/tmp/hr-trivial-test",
+            sessionId: nil,
+            eventName: "PreToolUse"
+        )
+        guard let data = reply, let json = parseResponse(data),
+              let hook = json["hookSpecificOutput"] as? [String: Any],
+              let reason = hook["permissionDecisionReason"] as? String
+        else {
+            Issue.record("expected deny with result, got \(String(describing: reply))")
+            return
+        }
+        #expect(hook["permissionDecision"] as? String == "deny")
+        #expect(reason.contains("/tmp/hr-trivial-test"),
+                "pwd answer must include the project root, got: \(reason)")
+    }
+
+    @Test func whoamiAnswered() {
+        let reply = HookRouter.checkTrivialRouting(
+            command: "whoami",
+            projectRoot: "/tmp/x",
+            sessionId: nil,
+            eventName: "PreToolUse"
+        )
+        #expect(reply != nil, "whoami should be answered locally")
+    }
+
+    @Test func echoStringAnswered() {
+        let reply = HookRouter.checkTrivialRouting(
+            command: "echo hello",
+            projectRoot: "/tmp/x",
+            sessionId: nil,
+            eventName: "PreToolUse"
+        )
+        guard let data = reply, let json = parseResponse(data),
+              let hook = json["hookSpecificOutput"] as? [String: Any],
+              let reason = hook["permissionDecisionReason"] as? String
+        else { Issue.record("expected echo answer"); return }
+        #expect(reason.contains("hello"))
+    }
+
+    @Test func echoQuotedString() {
+        let reply = HookRouter.checkTrivialRouting(
+            command: "echo \"hi world\"",
+            projectRoot: "/tmp/x",
+            sessionId: nil,
+            eventName: "PreToolUse"
+        )
+        guard let data = reply, let json = parseResponse(data),
+              let hook = json["hookSpecificOutput"] as? [String: Any],
+              let reason = hook["permissionDecisionReason"] as? String
+        else { Issue.record("expected echo answer"); return }
+        #expect(reason.contains("hi world"),
+                "surrounding quotes must be stripped")
+    }
+
+    // MARK: Shell-metachar rejections
+
+    @Test func pipeRejected() {
+        let reply = HookRouter.checkTrivialRouting(
+            command: "ls | wc -l",
+            projectRoot: "/tmp/x",
+            sessionId: nil,
+            eventName: "PreToolUse"
+        )
+        #expect(reply == nil, "pipe must fall through to native Bash")
+    }
+
+    @Test func semicolonRejected() {
+        #expect(HookRouter.checkTrivialRouting(
+            command: "ls ; pwd",
+            projectRoot: "/tmp/x",
+            sessionId: nil,
+            eventName: "PreToolUse"
+        ) == nil)
+    }
+
+    @Test func subshellRejected() {
+        #expect(HookRouter.checkTrivialRouting(
+            command: "echo $(pwd)",
+            projectRoot: "/tmp/x",
+            sessionId: nil,
+            eventName: "PreToolUse"
+        ) == nil)
+    }
+
+    @Test func backtickRejected() {
+        #expect(HookRouter.checkTrivialRouting(
+            command: "echo `date`",
+            projectRoot: "/tmp/x",
+            sessionId: nil,
+            eventName: "PreToolUse"
+        ) == nil)
+    }
+
+    @Test func redirectRejected() {
+        #expect(HookRouter.checkTrivialRouting(
+            command: "ls > /tmp/out",
+            projectRoot: "/tmp/x",
+            sessionId: nil,
+            eventName: "PreToolUse"
+        ) == nil)
+    }
+
+    @Test func echoWithVariableExpansionRejected() {
+        // $VAR expansion can't be answered locally — let Bash handle it.
+        #expect(HookRouter.checkTrivialRouting(
+            command: "echo $HOME",
+            projectRoot: "/tmp/x",
+            sessionId: nil,
+            eventName: "PreToolUse"
+        ) == nil)
+    }
+
+    @Test func lsWithFlagsRejected() {
+        // ls with flags (-la, -al, etc.) falls through — we only answer
+        // bare `ls` or `ls <simple-path>`.
+        #expect(HookRouter.checkTrivialRouting(
+            command: "ls -la",
+            projectRoot: "/tmp/x",
+            sessionId: nil,
+            eventName: "PreToolUse"
+        ) == nil)
+    }
+}
+
+// MARK: - Suite 5: Replay Classification
+
+/// `isReplayable` is the gate for Layer-3 command replay. A
+/// command is replayable iff it's a known deterministic read-only
+/// operation. Mutating or untrusted commands must never be replayed.
+@Suite("HookRouter — Replay Classification")
+struct HookRouterReplayClassificationTests {
+
+    @Test func swiftTestIsReplayable() {
+        #expect(HookRouter.isReplayable("swift test"))
+        #expect(HookRouter.isReplayable("swift test --filter Foo"))
+    }
+
+    @Test func commonTestRunnersAreReplayable() {
+        for cmd in ["npm test", "npx jest", "cargo test --release",
+                    "go test ./...", "pytest tests/"] {
+            #expect(HookRouter.isReplayable(cmd), "\(cmd) should be replayable")
+        }
+    }
+
+    @Test func lintersAreReplayable() {
+        for cmd in ["eslint src/", "ruff check .", "mypy .", "swiftlint"] {
+            #expect(HookRouter.isReplayable(cmd), "\(cmd) should be replayable")
+        }
+    }
+
+    @Test func gitMutationsAreNotReplayable() {
+        for cmd in ["git push", "git commit -m msg", "git reset --hard"] {
+            #expect(!HookRouter.isReplayable(cmd),
+                    "\(cmd) is mutating — must NOT be replayable")
+        }
+    }
+
+    @Test func destructiveShellIsNotReplayable() {
+        #expect(!HookRouter.isReplayable("rm -rf /tmp/foo"))
+        #expect(!HookRouter.isReplayable("sudo reboot"))
+    }
+
+    @Test func unknownCommandIsNotReplayable() {
+        #expect(!HookRouter.isReplayable("my-custom-tool"))
+    }
+}
+
+// MARK: - Suite 6: Protocol Edge Cases
+
+@Suite("HookRouter — Protocol Edge Cases")
+struct HookRouterProtocolEdgeCaseTests {
+
+    @Test func malformedJSONReturnsPassthrough() {
+        let response = HookRouter.handle(eventJSON: Data("not json {{".utf8))
+        #expect(String(data: response, encoding: .utf8) == "{}")
+    }
+
+    @Test func missingToolNameReturnsPassthrough() {
+        let json = try! JSONSerialization.data(withJSONObject: ["hook_event_name": "PreToolUse"])
+        let response = HookRouter.handle(eventJSON: json)
+        #expect(String(data: response, encoding: .utf8) == "{}")
+    }
+
+    @Test func unknownToolReturnsPassthrough() {
+        // The HookRouter only intercepts Read/Bash/Grep; any other tool
+        // name passes through.
+        let response = HookRouter.handle(eventJSON: makeEvent(toolName: "NotebookEdit"))
+        #expect(String(data: response, encoding: .utf8) == "{}")
+    }
+
+    @Test func emptyGrepPatternPassesThrough() {
+        let response = HookRouter.handle(eventJSON: makeEvent(
+            toolName: "Grep",
+            toolInput: ["pattern": ""]
+        ))
+        #expect(String(data: response, encoding: .utf8) == "{}",
+                "empty pattern must passthrough, not crash")
+    }
+
+    @Test func emptyBashCommandPassesThrough() {
+        let response = HookRouter.handle(eventJSON: makeEvent(
+            toolName: "Bash",
+            toolInput: ["command": ""]
+        ))
+        #expect(String(data: response, encoding: .utf8) == "{}")
+    }
+
+    @Test func grepWithUnderscoreIdentifierBlocks() {
+        // Identifiers with underscores are valid symbols — should route to search.
+        let response = HookRouter.handle(eventJSON: makeEvent(
+            toolName: "Grep",
+            toolInput: ["pattern": "my_function_name"]
+        ))
+        guard let json = parseResponse(response),
+              let hook = json["hookSpecificOutput"] as? [String: Any]
+        else { Issue.record("expected deny"); return }
+        #expect(hook["permissionDecision"] as? String == "deny")
+    }
+
+    @Test func grepWithDigitsInIdentifierBlocks() {
+        // Numeric suffixes are still identifier-like (must start with letter).
+        let response = HookRouter.handle(eventJSON: makeEvent(
+            toolName: "Grep",
+            toolInput: ["pattern": "http2Handler"]
+        ))
+        guard let json = parseResponse(response),
+              let hook = json["hookSpecificOutput"] as? [String: Any]
+        else { Issue.record("expected deny"); return }
+        #expect(hook["permissionDecision"] as? String == "deny")
+    }
+}

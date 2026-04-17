@@ -186,16 +186,37 @@ the zero-dep constraint loosens.
 
 ## Summary
 
-| # | ID | Severity | Fixed in this commit | Follow-up |
-|---|----|----------|----------------------|-----------|
-| F1 | Handshake read no timeout | **P1** | ✅ | — |
-| F2 | WebKit subresource SSRF | P2 | — | Plan: WKContentRuleList |
-| F3 | English-only injection keywords | P2 | — | Plan: multilingual |
-| F4 | Cyrillic-only homoglyph map | P2 | — | Plan: Greek + Fullwidth + MAS |
-| F5 | Missing secret patterns | P2 | — | Plan: add xoxb/ya29/sk_live_/npm_/hf_ |
-| F6 | chmod timing window | P3 | — | open(2) with mode |
-| F7 | HookRelay duplicate logic | P3 | — | cross-ref comments |
+| # | ID | Severity | Status | Closed in |
+|---|----|----------|--------|-----------|
+| F1 | Handshake read no timeout | **P1** | ✅ fixed | `dde98f9` |
+| F2 | WebKit subresource SSRF | P2 | open | — (plan: WKContentRuleList) |
+| F3 | English-only injection keywords | P2 | ✅ fixed (multilingual round) | ES/FR/DE/PT/IT added |
+| F4 | Cyrillic-only homoglyph map | P2 | ✅ fixed (multilingual round) | NFKC + Greek |
+| F5 | Missing secret patterns | P2 | ✅ fixed (multilingual round) | Slack/GCP/Stripe/npm/HF/sk-proj |
+| F6 | chmod timing window | P3 | open | — (use open(2) with mode) |
+| F7 | HookRelay duplicate logic | P3 | open | — (cross-ref comments) |
 
-Exit: **F1 fixed this round**; F2–F7 converted to tracked
-follow-ups. Soak can now measure the fixed state on the socket-auth
-path.
+F3/F4/F5 closed in the Bach follow-up round after the initial re-audit.
+F2/F6/F7 remain tracked.
+
+### F3 / F4 / F5 closure notes
+
+- **F3:** 5 multilingual `instruction override` patterns (ES, FR, DE,
+  PT, IT) with noun-phrase-anchored Phase-1 keywords. FP-guarded by
+  tests against benign Spanish/French/Italian tech prose.
+- **F4:** NFKC pre-step folds Fullwidth Latin, Mathematical Alphanumeric
+  Symbols, ligatures, and other compatibility variants back to basic
+  Latin. Explicit Greek→Latin entries added to `homoglyphMap` (α, ε, ο,
+  ρ, χ, ι, κ, ν, μ, τ) since Greek is a different script, not NFKC-
+  equivalent to Latin. ASCII fast-path skips NFKC on pure-ASCII input.
+- **F5:** 6 new patterns — `OPENAI_PROJECT_KEY` (which the generic
+  OPENAI pattern missed because `-` breaks its character class),
+  Slack (`xoxb`/`xoxp`/etc.), GCP OAuth (`ya29.`), Stripe
+  (`sk_live_` / `sk_test_`), npm (`npm_`), HuggingFace (`hf_`).
+
+### Side win: Phase-1 keyword check now 2× faster
+
+Replacing the N-keyword substring-contains loop with a single compiled
+regex alternation dropped the 1 MB benign-normalize path from 338 ms
+(pre-F3) to **161 ms** (post-F3/F4/F5) — faster than the pre-expansion
+baseline despite covering 23 keywords vs. 13.

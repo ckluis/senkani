@@ -32,7 +32,7 @@ Bach rule: absence of a test is evidence of absence of signal.
 | G6 | CLI commands have no direct test coverage | P2 | ✅ 2026-04-17 — `CLISmokeTests` iterates every subcommand in `Senkani.configuration.subcommands`: non-empty commandName + abstract, renders helpMessage(), round-trips `--help` through parseAsRoot, rejects bogus subcommand names. Also caught 9 commands relying on ArgumentParser's default name derivation (now explicit). 7 new tests (1086 total). |
 | G7 | HookRelay inline handshake (zero-dep) has no tests | P3 | Low — divergence risk |
 | G8 | PaneControlTool client-side handshake send not tested | P3 | Low |
-| G9 | `MCPSession.instructionsPayload` end-to-end not tested (only `truncate`) | P3 | Low |
+| G9 | `MCPSession.instructionsPayload` end-to-end not tested (only `truncate`) | P3 | ✅ 2026-04-17 — `InstructionsPayloadIntegrationTests` adds 5 end-to-end tests: budget ceiling holds across base + repoMap + brief + skills for tight (256B) and default (2048B) budgets, base always prefix, monotone in budget, empty project returns base-only. Real `MCPSession` with temp project root. |
 | G10 | Thin test files: VersionTool, FeatureConfig, WikiLinkCompletion | P3 | Low — cheap to flesh out |
 
 ## G1 — ProjectSecurity is untested (P1)

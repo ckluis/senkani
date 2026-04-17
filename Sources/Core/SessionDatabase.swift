@@ -1,6 +1,56 @@
 import Foundation
 import SQLite3
 
+// MARK: - Split plan (Luminary P2-11, deferred)
+//
+// This file is the single façade for everything in the session SQLite DB:
+// sessions, commands, FTS5, token_events, sandboxed_results,
+// validation_results, hook_events, event_counters, migrations, retention.
+// It passed the 2026-04 Luminary audit as "too large but not yet dangerous";
+// the split was deferred until the conditions below are met, and this comment
+// is the handoff for whoever picks it up.
+//
+// Gate (all three required before splitting):
+//   1. Wave 2 migration system landed.               ✅ 2026-04-15
+//   2. A second contributor needs to touch the DB layer.
+//   3. Bounded contexts clarified by a concrete feature ask.
+//
+// Target carve-up (Evans / Kleppmann): each store owns its own transaction
+// boundary and is reachable from Core only through this file.
+//
+//   CommandStore       — sessions, commands, commands_fts, recordCommand
+//                        (the FTS5 sync already uses BEGIN IMMEDIATE — keep
+//                        that transactional boundary in the carve-out).
+//   TokenEventStore    — token_events, claude_session_cursors,
+//                        tokenStats*, hotFiles, liveSessionMultiplier.
+//   SandboxStore       — sandboxed_results + prune-on-start.
+//   ValidationStore    — validation_results + AutoValidate integration.
+//   HookEventStore     — hook_events (interception telemetry).
+//
+// What stays on `SessionDatabase`:
+//   - The `Connection`/`DatabaseQueue` lifecycle.
+//   - `MigrationRunner` invocation (flock + kill-switch).
+//   - Cross-store aggregates that today exist as SQL JOINs
+//     (`lifetimeStats`, `tokenStatsForProject` joining sessions ↔ events).
+//     These become thin façade methods that call the stores and compose.
+//
+// What deliberately does NOT move (Torvalds):
+//   - `event_counters` (`recordEvent`/`eventCounts`) — trivial table, moving
+//     it would mean every defense site imports a new store just to bump a
+//     counter. Keep on the façade.
+//   - `schema_migrations` read/write — owned by the migration runner.
+//
+// When you do split, land it in three commits so reverts stay scoped:
+//   1. Extract `CommandStore` (biggest, lowest cross-table coupling).
+//   2. Extract `TokenEventStore` (depends on session id but not command id).
+//   3. Extract the two 24-h prune stores together (they share the retention
+//      scheduler cadence).
+//
+// Do not split in a feature branch that also changes schema. The migration
+// system is the other half of the contract and must stay stable across the
+// refactor; if you need new columns, land them first on a migration PR,
+// then split, then use them.
+
 /// Result row from full-text search across commands.
 public struct CommandSearchResult: Identifiable, Sendable {
     public let id: Int
@@ -1655,6 +1705,273 @@ public final class SessionDatabase: @unchecked Sendable {
                     avgInputTokens: avgInput,
                     avgSavedPct: avgPct
                 ))
+            }
+            return rows
+        }
+    }
+
+    /// Return recent `commands.output_preview` rows where the command column
+    /// matches `commandPrefix` exactly OR matches the canonical
+    /// `<base> <sub> …` form as a LIKE-prefix.
+    ///
+    /// Powers the H+1 regression gate: feeds real observed output previews
+    /// into `RegressionGate.check(proposed:samples:)` so a proposed rule is
+    /// validated against data that actually triggered it, not a synthetic
+    /// fixture. `limit` is the sample cap per call (default 20).
+    public func outputPreviewsForCommand(
+        projectRoot: String?,
+        commandPrefix: String,
+        limit: Int = 20
+    ) -> [String] {
+        let likePattern = commandPrefix + "%"
+        return queue.sync {
+            guard let db = db else { return [] }
+
+            let sql: String
+            if projectRoot != nil {
+                sql = """
+                    SELECT c.output_preview
+                    FROM commands c
+                    JOIN sessions s ON s.id = c.session_id
+                    WHERE c.tool_name = 'exec'
+                      AND c.output_preview IS NOT NULL
+                      AND c.output_preview != ''
+                      AND (c.command = ? OR c.command LIKE ?)
+                      AND s.project_root = ?
+                    ORDER BY c.timestamp DESC
+                    LIMIT ?;
+                """
+            } else {
+                sql = """
+                    SELECT output_preview
+                    FROM commands
+                    WHERE tool_name = 'exec'
+                      AND output_preview IS NOT NULL
+                      AND output_preview != ''
+                      AND (command = ? OR command LIKE ?)
+                    ORDER BY timestamp DESC
+                    LIMIT ?;
+                """
+            }
+
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+
+            sqlite3_bind_text(stmt, 1, (commandPrefix as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 2, (likePattern as NSString).utf8String, -1, nil)
+            var nextBind: Int32 = 3
+            if let root = projectRoot {
+                let normalized = Self.normalizePath(root) ?? root
+                sqlite3_bind_text(stmt, nextBind, (normalized as NSString).utf8String, -1, nil)
+                nextBind += 1
+            }
+            sqlite3_bind_int(stmt, nextBind, Int32(limit))
+
+            var rows: [String] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                if let ptr = sqlite3_column_text(stmt, 0) {
+                    rows.append(String(cString: ptr))
+                }
+            }
+            return rows
+        }
+    }
+
+    /// H+2b — recurring file-path mentions for context-signal generation.
+    /// Returns commands (typically file paths) that appeared in reads/
+    /// outlines/fetches across at least `minSessions` distinct sessions.
+    /// Scoped to a project root; results sorted by session count desc.
+    ///
+    /// Rationale: when the same file shows up across ≥3 sessions, it's
+    /// load-bearing enough that the agent should be primed on it at
+    /// session start. `ContextSignalGenerator` turns each row into a
+    /// priming `LearnedContextDoc`.
+    public struct RecurringFileRow: Sendable {
+        public let path: String
+        public let sessionCount: Int
+        public let mentionCount: Int
+    }
+
+    public func recurringFileMentions(
+        projectRoot: String,
+        minSessions: Int = 3,
+        limit: Int = 20
+    ) -> [RecurringFileRow] {
+        let normalized = Self.normalizePath(projectRoot) ?? projectRoot
+        return queue.sync {
+            guard let db = db else { return [] }
+            // Tool names that conventionally use `command` as a file path.
+            // Exec commands are command strings (not paths) — explicitly
+            // excluded so we don't treat `git status` as a file.
+            let sql = """
+                SELECT command,
+                       COUNT(DISTINCT session_id) AS session_count,
+                       COUNT(*) AS mention_count
+                FROM token_events
+                WHERE tool_name IN ('read', 'outline', 'fetch', 'parse', 'validate')
+                  AND project_root = ?
+                  AND command IS NOT NULL
+                  AND command != ''
+                GROUP BY command
+                HAVING session_count >= ?
+                ORDER BY session_count DESC, mention_count DESC
+                LIMIT ?;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_int(stmt, 2, Int32(minSessions))
+            sqlite3_bind_int(stmt, 3, Int32(limit))
+
+            var rows: [RecurringFileRow] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let cmd = String(cString: sqlite3_column_text(stmt, 0))
+                let sessions = Int(sqlite3_column_int64(stmt, 1))
+                let mentions = Int(sqlite3_column_int64(stmt, 2))
+                rows.append(RecurringFileRow(
+                    path: cmd,
+                    sessionCount: sessions,
+                    mentionCount: mentions
+                ))
+            }
+            return rows
+        }
+    }
+
+    /// H+2c — commands that retried within a single session.
+    /// Returns (tool_name, command, retry_count) for tool/command pairs
+    /// that fired ≥ minRetries times in at least `minSessions` distinct
+    /// sessions. Retry-in-session is a proxy for "the agent didn't get
+    /// what it wanted the first time" — an instruction hint on that tool
+    /// could disambiguate usage.
+    public struct InstructionRetryRow: Sendable {
+        public let toolName: String
+        public let command: String
+        public let sessionCount: Int
+        public let avgRetries: Double
+    }
+
+    public func instructionRetryPatterns(
+        projectRoot: String,
+        minRetries: Int = 3,
+        minSessions: Int = 2,
+        limit: Int = 10
+    ) -> [InstructionRetryRow] {
+        let normalized = Self.normalizePath(projectRoot) ?? projectRoot
+        return queue.sync {
+            guard let db = db else { return [] }
+            // Inner: per-session (tool, command) retry count.
+            // Outer: average across sessions and filter those that retried ≥ minRetries in ≥ minSessions.
+            let sql = """
+                SELECT tool_name, command,
+                       COUNT(DISTINCT session_id) AS session_count,
+                       AVG(retries) AS avg_retries
+                FROM (
+                    SELECT tool_name, command, session_id, COUNT(*) AS retries
+                    FROM token_events
+                    WHERE project_root = ?
+                      AND tool_name IS NOT NULL
+                      AND command IS NOT NULL
+                      AND command != ''
+                    GROUP BY tool_name, command, session_id
+                    HAVING retries >= ?
+                ) AS per_session
+                GROUP BY tool_name, command
+                HAVING session_count >= ?
+                ORDER BY avg_retries DESC, session_count DESC
+                LIMIT ?;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_int(stmt, 2, Int32(minRetries))
+            sqlite3_bind_int(stmt, 3, Int32(minSessions))
+            sqlite3_bind_int(stmt, 4, Int32(limit))
+
+            var rows: [InstructionRetryRow] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let tn = String(cString: sqlite3_column_text(stmt, 0))
+                let cmd = String(cString: sqlite3_column_text(stmt, 1))
+                let sessions = Int(sqlite3_column_int64(stmt, 2))
+                let avg = sqlite3_column_double(stmt, 3)
+                rows.append(InstructionRetryRow(
+                    toolName: tn, command: cmd,
+                    sessionCount: sessions, avgRetries: avg))
+            }
+            return rows
+        }
+    }
+
+    /// H+2c — ordered tool-call pairs (A, B) where B follows A within
+    /// `windowSeconds` across ≥ minSessions distinct sessions, at least
+    /// `minOccurrencesPerSession` times per session. Rough sequence
+    /// mining — captures the two-step pattern every successful
+    /// workflow starts with.
+    public struct WorkflowPairRow: Sendable {
+        public let firstTool: String
+        public let secondTool: String
+        public let sessionCount: Int
+        public let totalOccurrences: Int
+    }
+
+    public func workflowPairPatterns(
+        projectRoot: String,
+        windowSeconds: Double = 60.0,
+        minOccurrencesPerSession: Int = 3,
+        minSessions: Int = 2,
+        limit: Int = 10
+    ) -> [WorkflowPairRow] {
+        let normalized = Self.normalizePath(projectRoot) ?? projectRoot
+        return queue.sync {
+            guard let db = db else { return [] }
+            // Self-join token_events within a timestamp window, per
+            // session. Group by (A, B, session), count; outer groups
+            // on (A, B) across sessions.
+            let sql = """
+                SELECT a.tool_name AS first_tool,
+                       b.tool_name AS second_tool,
+                       COUNT(DISTINCT a.session_id) AS session_count,
+                       COUNT(*) AS total_occ
+                FROM token_events a
+                INNER JOIN token_events b
+                    ON a.session_id = b.session_id
+                   AND b.timestamp > a.timestamp
+                   AND b.timestamp - a.timestamp <= ?
+                WHERE a.project_root = ?
+                  AND a.tool_name IS NOT NULL
+                  AND b.tool_name IS NOT NULL
+                  AND a.tool_name != b.tool_name
+                GROUP BY first_tool, second_tool
+                HAVING session_count >= ?
+                ORDER BY total_occ DESC, session_count DESC
+                LIMIT ?;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_double(stmt, 1, windowSeconds)
+            sqlite3_bind_text(stmt, 2, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_int(stmt, 3, Int32(minSessions))
+            sqlite3_bind_int(stmt, 4, Int32(limit))
+
+            var rows: [WorkflowPairRow] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let a = String(cString: sqlite3_column_text(stmt, 0))
+                let b_ = String(cString: sqlite3_column_text(stmt, 1))
+                let sessions = Int(sqlite3_column_int64(stmt, 2))
+                let occ = Int(sqlite3_column_int64(stmt, 3))
+                // Filter on per-session-occurrence in Swift since
+                // SQLite HAVING on the grouped count aggregates all
+                // sessions together; we approximate via total_occ /
+                // session_count ≥ minOccurrencesPerSession.
+                let perSession = Double(occ) / max(Double(sessions), 1)
+                guard perSession >= Double(minOccurrencesPerSession) else { continue }
+                rows.append(WorkflowPairRow(
+                    firstTool: a, secondTool: b_,
+                    sessionCount: sessions, totalOccurrences: occ))
             }
             return rows
         }

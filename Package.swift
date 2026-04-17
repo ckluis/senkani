@@ -273,6 +273,15 @@ let package = Package(
             ],
             path: "Sources/Bench"
         ),
+        .target(
+            name: "Bundle",
+            dependencies: [
+                "Core",
+                "Filter",
+                "Indexer",
+            ],
+            path: "Sources/Bundle"
+        ),
         .executableTarget(
             name: "CLI",
             dependencies: [
@@ -280,6 +289,7 @@ let package = Package(
                 "Filter",
                 "Indexer",
                 "Bench",
+                "Bundle",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             path: "Sources/CLI"
@@ -290,6 +300,7 @@ let package = Package(
                 "Core",
                 "Filter",
                 "Indexer",
+                "Bundle",
                 .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "MLXEmbedders", package: "mlx-swift-lm"),
                 .product(name: "MLXVLM", package: "mlx-swift-lm"),
@@ -336,8 +347,10 @@ let package = Package(
                 "Core",
                 "Indexer",
                 "Bench",
+                "Bundle",
                 "MCPServer",
                 "CLI",
+                "HookRelay",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Testing", package: "swift-testing"),
             ],

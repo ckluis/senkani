@@ -8,7 +8,7 @@ struct KB: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "kb",
         abstract: "Query the Senkani knowledge base.",
-        subcommands: [KBList.self, KBGet.self, KBSearch.self]
+        subcommands: [KBList.self, KBGet.self, KBSearch.self, KBRollback.self, KBHistory.self, KBTimeline.self]
     )
 
     @Option(name: .long, help: "Project root directory.")
@@ -178,6 +178,137 @@ struct KBSearch: ParsableCommand {
             print("  \(r.entity.name) (\(r.entity.entityType))")
             if !r.snippet.isEmpty {
                 print("    \(r.snippet)")
+            }
+        }
+    }
+}
+
+// MARK: - kb rollback (F+3 Round 6)
+
+struct KBRollback: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "rollback",
+        abstract: "Restore an entity's markdown from history archive."
+    )
+
+    @Argument(help: "Entity name (matches .senkani/knowledge/<name>.md).")
+    var entity: String
+
+    @Option(name: .long, help: "Target ISO date (YYYY-MM-DD). Defaults to most recent archive before today.")
+    var to: String?
+
+    @Option(name: .long, help: "Project root directory.")
+    var root: String?
+
+    func run() throws {
+        guard let projectRoot = resolveKBRoot(root) else {
+            fputs("No Senkani KB found.\n", stderr)
+            throw ExitCode(2)
+        }
+        let target: Date
+        if let dateStr = to {
+            let fmt = DateFormatter()
+            fmt.dateFormat = "yyyy-MM-dd"
+            fmt.locale = Locale(identifier: "en_US_POSIX")
+            fmt.timeZone = TimeZone(identifier: "UTC")
+            guard let d = fmt.date(from: dateStr) else {
+                fputs("Invalid --to date: '\(dateStr)'. Expected YYYY-MM-DD.\n", stderr)
+                throw ExitCode(2)
+            }
+            target = d
+        } else {
+            target = Date()
+        }
+
+        let store = KnowledgeStore(projectRoot: projectRoot)
+        let fileLayer: KnowledgeFileLayer
+        do {
+            fileLayer = try KnowledgeFileLayer(projectRoot: projectRoot, store: store)
+        } catch {
+            fputs("KnowledgeFileLayer init failed: \(error.localizedDescription)\n", stderr)
+            throw ExitCode(1)
+        }
+        do {
+            try fileLayer.rollback(entityName: entity, to: target)
+            print("Rolled back `\(entity)` to archive closest to \(target).")
+        } catch {
+            fputs("Rollback failed: \(error.localizedDescription)\n", stderr)
+            throw ExitCode(1)
+        }
+    }
+}
+
+// MARK: - kb history (F+3 Round 6)
+
+struct KBHistory: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "history",
+        abstract: "List archived revisions of an entity's markdown."
+    )
+
+    @Argument(help: "Entity name.")
+    var entity: String
+
+    @Option(name: .long, help: "Project root directory.")
+    var root: String?
+
+    func run() throws {
+        guard let projectRoot = resolveKBRoot(root) else {
+            fputs("No Senkani KB found.\n", stderr)
+            throw ExitCode(2)
+        }
+        let historyDir = projectRoot + "/.senkani/knowledge/.history/" + entity
+        guard FileManager.default.fileExists(atPath: historyDir) else {
+            print("No history archive for `\(entity)`.")
+            return
+        }
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: historyDir)) ?? []
+        let mdFiles = files.filter { $0.hasSuffix(".md") }.sorted()
+        if mdFiles.isEmpty {
+            print("Archive exists but is empty.")
+            return
+        }
+        print("History for `\(entity)` (\(mdFiles.count) revision(s)):")
+        for f in mdFiles {
+            print("  \(f)")
+        }
+        print("")
+        print("Roll back to a specific revision:")
+        print("  senkani kb rollback \(entity) --to YYYY-MM-DD")
+    }
+}
+
+// MARK: - kb timeline (F+4 Round 7)
+
+struct KBTimeline: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "timeline",
+        abstract: "Show the append-only evidence timeline for an entity."
+    )
+
+    @Argument(help: "Entity name.") var entity: String
+    @Option(name: .long, help: "Project root directory.") var root: String?
+
+    func run() throws {
+        guard let projectRoot = resolveKBRoot(root) else {
+            fputs("No Senkani KB found.\n", stderr)
+            throw ExitCode(2)
+        }
+        let store = KnowledgeStore(projectRoot: projectRoot)
+        guard let e = store.entity(named: entity) else {
+            fputs("No entity named `\(entity)`.\n", stderr)
+            throw ExitCode(1)
+        }
+        let timeline = store.timeline(forEntityId: e.id)
+        if timeline.isEmpty {
+            print("Evidence timeline for `\(entity)` is empty.")
+            return
+        }
+        print("Evidence timeline for `\(entity)` (\(timeline.count) entries):")
+        for entry in timeline {
+            print("  [\(kbShortDate(entry.createdAt))] \(entry.whatWasLearned)")
+            if !entry.source.isEmpty {
+                print("         source: \(entry.source)")
             }
         }
     }

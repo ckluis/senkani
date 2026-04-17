@@ -12,20 +12,25 @@ import Darwin.POSIX
 public enum HookRelay {
 
     private static let socketPath = NSHomeDirectory() + "/.senkani/hook.sock"
-    private static let tokenPath  = NSHomeDirectory() + "/.senkani/.token"
+    internal static let defaultTokenPath = NSHomeDirectory() + "/.senkani/.token"
     private static let timeoutMs: UInt32 = 5 // 5ms — hooks must be imperceptible
 
     /// P2-12: read a same-UID-only token file. Returns nil if absent or
     /// insecure. Inlined (not imported from Core) to preserve HookRelay's
     /// zero-dependency contract — see Lesson #12 in the file header.
-    private static func loadAuthToken() -> String? {
-        guard FileManager.default.fileExists(atPath: tokenPath) else { return nil }
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: tokenPath),
+    ///
+    /// `path` is injectable for tests only — production always calls with
+    /// the default (nil → `defaultTokenPath`). Must stay in sync with
+    /// `Core.SocketAuthToken.load(at:)` (see that file's F7 note).
+    internal static func loadAuthToken(at path: String? = nil) -> String? {
+        let target = path ?? defaultTokenPath
+        guard FileManager.default.fileExists(atPath: target) else { return nil }
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: target),
            let posix = attrs[.posixPermissions] as? NSNumber,
            (posix.uint16Value & 0o177) != 0 {
             return nil
         }
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: tokenPath)),
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: target)),
               let hex = String(data: data, encoding: .utf8)?
                         .trimmingCharacters(in: .whitespacesAndNewlines),
               !hex.isEmpty
@@ -37,8 +42,12 @@ public enum HookRelay {
     /// Returns true on successful write, false on short-write / I/O error.
     /// No-op (returns true) when no token file is present — server-side
     /// enforcement is gated by SENKANI_SOCKET_AUTH on the server.
-    private static func sendHandshake(fd: Int32) -> Bool {
-        guard let token = loadAuthToken() else { return true }
+    ///
+    /// `tokenPath` is injectable for tests only. The frame format MUST
+    /// match `Core.SocketAuthToken.handshakeFrame(token:)` byte-for-byte
+    /// or the inline-vs-Core drift the audit flagged will reappear.
+    internal static func sendHandshake(fd: Int32, tokenPath: String? = nil) -> Bool {
+        guard let token = loadAuthToken(at: tokenPath) else { return true }
         let body = "{\"handshake\":{\"token\":\"\(token)\"}}"
         let payload = Data(body.utf8)
         var length = UInt32(payload.count).bigEndian

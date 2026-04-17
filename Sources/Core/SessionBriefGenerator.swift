@@ -6,34 +6,67 @@ import Foundation
 public enum SessionBriefGenerator {
 
     /// Generate a session continuity brief.
-    /// Returns empty string if no prior session data exists.
+    /// Returns empty string if no prior session data exists AND no
+    /// applied context docs. (Context docs alone can seed a brief even
+    /// on a fresh install — the agent benefits from priming even if
+    /// there's no "last session" to resume.)
     /// Output is guaranteed to be <= maxTokens (estimated at 4 chars/token).
+    ///
+    /// H+2b: `appliedContextDocs` (top-N recent, already `.applied`)
+    /// contribute a "Learned context:" section at the bottom of the
+    /// brief with its own sub-budget. Each doc contributes only a
+    /// one-line summary (title + first 140 chars of body) so a large
+    /// doc can't dominate. Full bodies live on disk at
+    /// `.senkani/context/<title>.md` — the agent can `senkani_read`
+    /// them on demand if it wants the full context.
     public static func generate(
         lastActivity: SessionDatabase.LastSessionActivity?,
         changedFilesSinceLastSession: [String] = [],
+        appliedContextDocs: [LearnedContextDoc] = [],
         maxTokens: Int = 170
     ) -> String {
-        guard let activity = lastActivity else { return "" }
+        // Early-out: empty when there's nothing of either kind to show.
+        if lastActivity == nil && appliedContextDocs.isEmpty { return "" }
 
-        let section1 = buildSessionResume(activity)
-        let section2 = buildChangedFiles(changedFilesSinceLastSession)
-        let section3 = buildFocusHint(activity)
-
-        // Assemble with token budget enforcement
         let maxChars = maxTokens * 4
-        var result = section1
 
-        if !section3.isEmpty {
-            let candidate = result + " " + section3
-            if candidate.count <= maxChars {
-                result = candidate
+        var result = ""
+        if let activity = lastActivity {
+            let section1 = buildSessionResume(activity)
+            let section2 = buildChangedFiles(changedFilesSinceLastSession)
+            let section3 = buildFocusHint(activity)
+
+            result = section1
+
+            if !section3.isEmpty {
+                let candidate = result + " " + section3
+                if candidate.count <= maxChars {
+                    result = candidate
+                }
+            }
+
+            if !section2.isEmpty {
+                let candidate = result + " " + section2
+                if candidate.count <= maxChars {
+                    result = candidate
+                }
             }
         }
 
-        if !section2.isEmpty {
-            let candidate = result + " " + section2
-            if candidate.count <= maxChars {
-                result = candidate
+        // H+2b — append learned context section if there's budget.
+        // Each line is capped at 160 chars; we keep adding while the
+        // total stays under budget, so a small brief can show more docs.
+        if !appliedContextDocs.isEmpty, result.count < maxChars {
+            let contextSection = buildContextSection(
+                docs: appliedContextDocs,
+                remainingChars: maxChars - result.count - 20 // 20 chars slack for separator
+            )
+            if !contextSection.isEmpty {
+                let separator = result.isEmpty ? "" : " "
+                let candidate = result + separator + contextSection
+                if candidate.count <= maxChars {
+                    result = candidate
+                }
             }
         }
 
@@ -43,6 +76,47 @@ public enum SessionBriefGenerator {
         }
 
         return result
+    }
+
+    /// Section 4 (H+2b): "Learned: title — first line of body" per applied
+    /// doc, packed until `remainingChars` is exhausted. Docs assumed
+    /// pre-sorted most-recent-first.
+    static func buildContextSection(
+        docs: [LearnedContextDoc],
+        remainingChars: Int
+    ) -> String {
+        guard remainingChars > 20, !docs.isEmpty else { return "" }
+        let lineMax = 160
+        var lines: [String] = []
+        var used = 0
+        for doc in docs {
+            let firstLine = extractFirstContentLine(doc.body)
+            let entry = firstLine.isEmpty
+                ? "\(doc.title)"
+                : "\(doc.title) — \(firstLine)"
+            let clipped = String(entry.prefix(lineMax))
+            // +2 for the ", " separator between entries.
+            let cost = clipped.count + (lines.isEmpty ? 0 : 2)
+            if used + cost > remainingChars { break }
+            lines.append(clipped)
+            used += cost
+        }
+        guard !lines.isEmpty else { return "" }
+        return "Learned: " + lines.joined(separator: ", ") + "."
+    }
+
+    /// Extract the first non-empty non-heading line from a markdown body.
+    /// Keeps the brief line terse — an applied doc's one-sentence summary
+    /// lives at the top of its body by convention.
+    private static func extractFirstContentLine(_ body: String) -> String {
+        for rawLine in body.split(separator: "\n") {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { continue }
+            if line.hasPrefix("#") { continue }  // skip headings
+            if line.hasPrefix("<!--") { continue } // skip HTML comments
+            return line
+        }
+        return ""
     }
 
     // MARK: - Section Builders

@@ -30,10 +30,10 @@ Bach rule: absence of a test is evidence of absence of signal.
 | G4 | WebFetch redirect `decidePolicyFor` logic only tested via its inner helpers | **P2** | High — the actual policy fn is untested as a unit |
 | G5 | HookRouter (507 LOC, Layer-3 interception) has 9 tests — thin | P2 | Medium — happy-path heavy |
 | G6 | CLI commands have no direct test coverage | P2 | ✅ 2026-04-17 — `CLISmokeTests` iterates every subcommand in `Senkani.configuration.subcommands`: non-empty commandName + abstract, renders helpMessage(), round-trips `--help` through parseAsRoot, rejects bogus subcommand names. Also caught 9 commands relying on ArgumentParser's default name derivation (now explicit). 7 new tests (1086 total). |
-| G7 | HookRelay inline handshake (zero-dep) has no tests | P3 | Low — divergence risk |
-| G8 | PaneControlTool client-side handshake send not tested | P3 | Low |
+| G7 | HookRelay inline handshake (zero-dep) has no tests | P3 | ✅ 2026-04-17 — `HookRelayHandshakeTests` locks the inline frame format to `SocketAuthToken.handshakeFrame` byte-for-byte over socketpair, covers the 0600 permission guard, whitespace trim, no-op path, and server-side round-trip via `SocketAuthToken.readAndValidate`. Made `loadAuthToken` / `sendHandshake` internal with injectable `path` / `tokenPath` params (zero-dep contract preserved). 10 new tests. |
+| G8 | PaneControlTool client-side handshake send not tested | P3 | ✅ 2026-04-17 — `PaneControlHandshakeTests` extracts the inline handshake into `writeHandshakeFrame(fd:tokenPath:)` and covers: no-token no-op, 0644 rejection (must not leak an insecure token onto the wire), byte-identical canonical frame, good/bad server validation, EPIPE short-write returns false. 6 new tests. |
 | G9 | `MCPSession.instructionsPayload` end-to-end not tested (only `truncate`) | P3 | ✅ 2026-04-17 — `InstructionsPayloadIntegrationTests` adds 5 end-to-end tests: budget ceiling holds across base + repoMap + brief + skills for tight (256B) and default (2048B) budgets, base always prefix, monotone in budget, empty project returns base-only. Real `MCPSession` with temp project root. |
-| G10 | Thin test files: VersionTool, FeatureConfig, WikiLinkCompletion | P3 | Low — cheap to flesh out |
+| G10 | Thin test files: VersionTool, FeatureConfig, WikiLinkCompletion | P3 | ✅ 2026-04-17 — fleshed out: VersionToolTests 3→9 (semver shape, JSON parse, tools list matches+sorted, non-error), FeatureConfigTests 4→11 (default policy, CaseIterable, arithmetic, raw-value contract, config file precedence, flag-beats-file, malformed JSON fallback), WikiLinkCompletionTests 5→14 (closed-then-open, single-bracket rejection, spaces in partial/candidate, round-trip, prefix preservation). 22 new tests. |
 
 ## G1 — ProjectSecurity is untested (P1)
 
@@ -128,6 +128,13 @@ mocking needed. 10 new cases cover:
 G5–G10 stay in the debt list. Priorities for next round: G5 hook
 router coverage expansion (Layer-3 interception pathways that affect
 every Claude Code interaction).
+
+**Follow-up 2026-04-17.** G5 closed earlier (HookRouter coverage
+expansion). G6, G9, G10 closed 2026-04-17. G7, G8 closed 2026-04-17 —
+the inline HookRelay handshake and the PaneControlTool client-side
+handshake are now covered end-to-end against `SocketAuthToken`'s
+canonical format via socketpair round-trips. Bach's entire G1–G10
+debt ledger is now GREEN.
 
 ## Summary
 

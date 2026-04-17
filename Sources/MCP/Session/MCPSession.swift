@@ -180,6 +180,24 @@ final class MCPSession: @unchecked Sendable {
         SessionDatabase.shared.pruneSandboxedResults()
         // Prune token_events older than 90 days to prevent unbounded table growth
         SessionDatabase.shared.pruneTokenEvents()
+        // Phase H+1 daily cadence sweep — promote `.recurring` rules with
+        // sufficient evidence to `.staged` so they're visible to the
+        // operator on the next `senkani learn status`. Lazy on session
+        // start (no timers, no launchd plist). Bounded to `.recurring`
+        // rules only — zero work when none exist.
+        //
+        // H+2a adds Gemma 4 rationale enrichment via the `GemmaInferenceAdapter`
+        // — any rule promoted this sweep gets a detached Task that asks
+        // the VLM to rewrite its deterministic rationale. Adapter returns
+        // nil when no Gemma model is downloaded, so enrichment is best-
+        // effort and never blocks the sweep.
+        let enricher = GemmaRationaleRewriter(llm: GemmaInferenceAdapter())
+        let promoted = CompoundLearning.runDailySweep(
+            db: .shared, projectRoot: root, enricher: enricher)
+        if promoted > 0 {
+            FileHandle.standardError.write(Data(
+                "[compound_learning] daily sweep promoted \(promoted) rule(s) → staged\n".utf8))
+        }
 
         let agentType = AgentDetector.detect(environment: ProcessInfo.processInfo.environment)
         let sessionId: String? = SessionDatabase.shared.createSession(projectRoot: root, agentType: agentType)
@@ -402,9 +420,14 @@ final class MCPSession: @unchecked Sendable {
             changedFiles = []
         }
 
+        // H+2b: pull applied context docs (most-recent-first) into the
+        // brief's optional "Learned:" section. Docs contribute terse
+        // one-liners; full bodies live on disk at .senkani/context/.
+        let appliedDocs = Array(LearnedRulesStore.appliedContextDocs().prefix(5))
         let brief = SessionBriefGenerator.generate(
             lastActivity: lastActivity,
-            changedFilesSinceLastSession: changedFiles
+            changedFilesSinceLastSession: changedFiles,
+            appliedContextDocs: appliedDocs
         )
         let section = brief.isEmpty ? "" : "\n\nSession context:\n" + brief
 

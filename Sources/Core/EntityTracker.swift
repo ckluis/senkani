@@ -126,7 +126,12 @@ public final class EntityTracker: @unchecked Sendable {
 
     /// Flush pending mention deltas to KnowledgeStore (async DB write).
     /// Resets callsSinceFlush. Safe to call from any thread.
-    public func flush() {
+    ///
+    /// F+2 (Round 5) adds telemetry: bumps
+    /// `knowledge.tracker.flush` on every call with a non-empty delta,
+    /// and `knowledge.tracker.threshold_crossed` once per newly-queued
+    /// enrichment candidate.
+    public func flush(db: SessionDatabase? = nil, projectRoot: String? = nil) {
         lock.lock()
         guard !pendingDelta.isEmpty else {
             callsSinceFlush = 0
@@ -139,6 +144,54 @@ public final class EntityTracker: @unchecked Sendable {
         lock.unlock()
 
         store.batchIncrementMentions(delta)
+
+        if let db {
+            db.recordEvent(
+                type: "knowledge.tracker.flush",
+                projectRoot: projectRoot)
+        }
+    }
+
+    /// F+2 (Round 5) — distribution + telemetry summary emitted on
+    /// session close. Logs a single percentile line to stderr and
+    /// bumps `knowledge.tracker.threshold_crossed` per queued entity.
+    public func logSessionSummary(
+        db: SessionDatabase? = nil,
+        projectRoot: String? = nil
+    ) {
+        lock.lock()
+        let counts = Array(sessionTotal.values).sorted()
+        let queued = enrichmentQueue.count
+        lock.unlock()
+
+        let line = String(
+            format: "[knowledge] entities_seen=%d entities_p50=%.0f p75=%.0f p95=%.0f enrichment_queue=%d\n",
+            counts.count,
+            percentile(counts, 0.50),
+            percentile(counts, 0.75),
+            percentile(counts, 0.95),
+            queued
+        )
+        FileHandle.standardError.write(Data(line.utf8))
+
+        if let db {
+            for _ in 0..<queued {
+                db.recordEvent(
+                    type: "knowledge.tracker.threshold_crossed",
+                    projectRoot: projectRoot)
+            }
+        }
+    }
+
+    /// Simple percentile for the distribution log. Returns 0 for empty.
+    private func percentile(_ sorted: [Int], _ q: Double) -> Double {
+        guard !sorted.isEmpty else { return 0 }
+        let pos = q * Double(sorted.count - 1)
+        let lo = Int(pos.rounded(.down))
+        let hi = Int(pos.rounded(.up))
+        if lo == hi { return Double(sorted[lo]) }
+        let frac = pos - Double(lo)
+        return (1 - frac) * Double(sorted[lo]) + frac * Double(sorted[hi])
     }
 
     /// Reset all in-memory session state.

@@ -106,34 +106,17 @@ enum SessionTool {
     }
 
     /// Observability dashboard fragment appended to `senkani_session stats`.
-    /// Queries `event_counters` for both project-scoped and process-global
-    /// rows so the operator sees the full security posture. Returns empty
-    /// string when nothing has fired yet (avoid noisy dashboards on fresh
-    /// installs).
+    /// Delegates to the shared `SecurityEventsFormatter` so the MCP tool
+    /// output and `senkani stats --security` CLI have identical semantics.
+    /// Passes the caller's `projectRoot` so project-scoped rows show up
+    /// alongside the process-global ones, and hands a `totalCommands`
+    /// denominator so Gelman's rate annotation appears.
     private static func formatSecurityEvents(projectRoot: String) -> String {
-        let projectRows = SessionDatabase.shared.eventCounts(projectRoot: projectRoot)
-        let globalRows = SessionDatabase.shared.eventCounts(projectRoot: "")
-        // Merge: global rows supplement project rows. If both exist for the
-        // same event type, show them distinctly.
-        var lines: [String] = []
-        let df = DateFormatter()
-        df.dateStyle = .short
-        df.timeStyle = .short
-
-        func emit(_ rows: [SessionDatabase.EventCountRow], scope: String) {
-            for r in rows {
-                lines.append("  \(r.eventType)  count=\(r.count)  last=\(df.string(from: r.lastSeenAt))  [\(scope)]")
-            }
-        }
-        if !projectRows.isEmpty {
-            lines.append("Security events (this project):")
-            emit(projectRows, scope: "project")
-        }
-        if !globalRows.isEmpty {
-            if !lines.isEmpty { lines.append("") }
-            lines.append("Security events (process-global):")
-            emit(globalRows, scope: "global")
-        }
-        return lines.joined(separator: "\n")
+        let lifetime = SessionDatabase.shared.totalStats()
+        return SecurityEventsFormatter.format(.init(
+            verbose: true,
+            totalCommands: lifetime.totalCommands > 0 ? lifetime.totalCommands : nil,
+            projectRoot: projectRoot
+        ))
     }
 }

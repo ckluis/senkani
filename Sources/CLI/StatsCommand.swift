@@ -16,7 +16,17 @@ struct Stats: ParsableCommand {
     @Option(name: .long, help: "Path to metrics file.")
     var file: String?
 
+    @Flag(name: .long, help: "Show security event counters (injection, SSRF, handshake, retention, migrations).")
+    var security = false
+
+    @Flag(name: .long, help: "With --security: include per-row breakdown (last-seen, per-project).")
+    var verbose = false
+
     func run() throws {
+        if security {
+            runSecurity()
+            return
+        }
         if compare {
             try runCompare()
             return
@@ -25,6 +35,26 @@ struct Stats: ParsableCommand {
         let targetPath = try resolveMetricsPath()
         let summary = try loadSummary(from: targetPath)
         printSummary(summary, path: targetPath)
+    }
+
+    /// Render `event_counters` into the operator's terminal. Uses
+    /// `SessionDatabase.shared.totalStats().totalCommands` as Gelman's
+    /// denominator for `security.*` rates; pass `projectRoot = ""` so
+    /// project-scoped and global rows both surface.
+    private func runSecurity() {
+        let lifetime = SessionDatabase.shared.totalStats()
+        let out = SecurityEventsFormatter.format(.init(
+            verbose: verbose,
+            totalCommands: lifetime.totalCommands > 0 ? lifetime.totalCommands : nil,
+            projectRoot: "" // both project + global at the CLI
+        ))
+        if out.isEmpty {
+            print("No security events recorded yet.")
+            return
+        }
+        print("")
+        print(out)
+        print("")
     }
 
     private func runCompare() throws {

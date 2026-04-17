@@ -88,6 +88,14 @@ senkani bench
 
 # Check your setup
 senkani doctor
+
+# View security event counters (injection detections, SSRF blocks,
+# retention prunes, migration history) with Gelman rate annotations
+senkani stats --security
+senkani stats --security --verbose   # per-row, per-project, last-seen
+
+# Export your session data (JSONL, one row per line)
+senkani export --output ~/senkani-backup.jsonl --since 2026-04-01 --redact
 ```
 
 **MCP server:** Auto-registered globally in `~/.claude/settings.json` on first app launch — no `senkani init` needed. The MCP server only activates in Senkani-managed terminal panes (gated by `SENKANI_PANE_ID` env var). Non-Senkani terminals never see Senkani tools, even if the app is running.
@@ -157,7 +165,9 @@ Senkani is a trust boundary for LLM-driven tool calls. Security-sensitive featur
 - **Retention — scheduled.** `RetentionScheduler` prunes `token_events` (90 d), `sandboxed_results` (24 h), and `validation_results` (24 h) on an hourly tick. Tune via `~/.senkani/config.json` → `"retention": { "token_events_days": 30, ... }`.
 - **Instruction-payload byte cap.** The `instructions` string injected at MCP server start (repo map + session brief + skills) is capped at 2 KB by default. Tune via `SENKANI_INSTRUCTIONS_BUDGET_BYTES`. Prevents the per-session-start token tax from growing with project size.
 - **Socket authentication — opt-in.** Setting `SENKANI_SOCKET_AUTH=on` generates a 32-byte random token at `~/.senkani/.token` (mode 0600), rotated on every server start. Every connection to `mcp.sock`/`hook.sock`/`pane.sock` must send a length-prefixed handshake frame matching the token before normal protocol begins. Raises the bar from ambient same-UID socket access to must-read-token-file — blocks prompt-injected subagents and postinstall scripts that don't parse dot-files. Default off this release for backward compat; flipping to on next release.
-- **Structured logging — opt-in.** `SENKANI_LOG_JSON=1` emits one JSON object per critical event to stderr (mcp.started, mcp.signal.received, web.ssrf.blocked, retention.tick, schema.migration.applied/failed, socket.handshake.rejected). Default is backward-compatible `[event] key=value` format so current grep-based tooling keeps working.
+- **Structured logging — opt-in + sink-redacted.** `SENKANI_LOG_JSON=1` emits one JSON object per critical event to stderr. Every `.string(_)` log field passes through `SecretDetector.scan` at emit time (Cavoukian C5), so a stray API key / bearer token / AWS / Slack / Stripe / GCP / npm / HuggingFace / GitHub token in a log field is automatically `[REDACTED:…]`'d. Use `LogValue.path(_)` for filesystem paths — `/Users/<name>` collapses to `~` (current user) or `/Users/***` (foreign). Default is backward-compatible `[event] key=value` format.
+- **Observability counters — surfaced via CLI + MCP tool.** Every security-defense site increments an `event_counters` row (migration v2): injection detections, SSRF blocks, socket handshake rejections, schema migrations, retention prunes, command redactions. Read them via `senkani stats --security` (Gelman rate annotation: `count/total (pct%)`) or `senkani_session action:"stats"`. Per-project paths are redacted (Cavoukian C2).
+- **Data portability (GDPR-adjacent).** `senkani export --output <file> [--since DATE] [--redact]` streams sessions + commands + token_events as JSONL via a read-only SQLite connection — doesn't block the live MCP server.
 
 Call `senkani_version` (tool) or `senkani doctor` to confirm the active security posture.
 

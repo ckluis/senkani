@@ -80,6 +80,14 @@ public struct FilterPipeline: Sendable {
             ))
             currentOutput = detection.sanitized
             injectionsFound = detection.detections
+            // Observability: count each triggered detection so the
+            // Gelman FP-rate analysis has a denominator.
+            if !injectionsFound.isEmpty {
+                SessionDatabase.shared.recordEvent(
+                    type: "security.injection.detected",
+                    delta: injectionsFound.count
+                )
+            }
         }
 
         let filteredBytes = currentOutput.utf8.count

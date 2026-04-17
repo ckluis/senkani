@@ -98,6 +98,13 @@ public enum MigrationRunner {
                     "description": .string(mig.description),
                     "outcome": .string("success")
                 ])
+                // Note: schema.migration.applied counter is incremented by
+                // the CALLER (SessionDatabase.runMigrations) after run()
+                // returns — we can't call recordEvent here because:
+                //  1. The caller holds SessionDatabase's queue sync lock,
+                //     so a self-dispatch would deadlock.
+                //  2. We're mid-init of the singleton, so
+                //     SessionDatabase.shared would re-enter init.
             } catch {
                 _ = try? exec(db, "ROLLBACK;")
                 let underlying = (error as? MigrationError)?.description ?? "\(error)"

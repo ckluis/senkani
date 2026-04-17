@@ -93,6 +93,110 @@ public final class SessionDatabase: @unchecked Sendable {
         runMigrations(path: path)
     }
 
+    // MARK: - Observability counters (migration v2)
+
+    /// One row of the `event_counters` table — a running total of how many
+    /// times a named event fired for a given project (or process-globally,
+    /// with project_root == "").
+    public struct EventCountRow: Sendable {
+        public let projectRoot: String
+        public let eventType: String
+        public let count: Int
+        public let firstSeenAt: Date
+        public let lastSeenAt: Date
+    }
+
+    /// Increment a counter. Creates the row if missing. Event vocabulary is
+    /// documented in `spec/roadmap.md` "Observability gaps" and in the
+    /// Cavoukian/Schneier findings; the strings currently in use:
+    ///   - `security.injection.detected`
+    ///   - `security.ssrf.blocked`
+    ///   - `security.socket.handshake.rejected`
+    ///   - `security.command.redacted`
+    ///   - `retention.pruned.token_events`
+    ///   - `retention.pruned.sandboxed_results`
+    ///   - `retention.pruned.validation_results`
+    ///   - `schema.migration.applied`
+    ///
+    /// `projectRoot == nil` stores under the empty string — process-global
+    /// events that aren't tied to a project.
+    public func recordEvent(
+        type: String,
+        projectRoot: String? = nil,
+        delta: Int = 1
+    ) {
+        guard delta != 0 else { return }
+        let ts = Date().timeIntervalSince1970
+        let root = projectRoot ?? ""
+        queue.async { [weak self] in
+            guard let self, let db = self.db else { return }
+            // UPSERT: insert new row at 1, or add delta to existing.
+            // last_seen_at always updates; first_seen_at only on insert.
+            let sql = """
+                INSERT INTO event_counters (project_root, event_type, count, first_seen_at, last_seen_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(project_root, event_type) DO UPDATE SET
+                    count = count + excluded.count,
+                    last_seen_at = excluded.last_seen_at;
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (root as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 2, (type as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(stmt, 3, Int64(delta))
+            sqlite3_bind_double(stmt, 4, ts)
+            sqlite3_bind_double(stmt, 5, ts)
+            sqlite3_step(stmt)
+        }
+    }
+
+    /// Query event counters. All filters are optional.
+    ///   - `projectRoot` — if set, return rows for this project only.
+    ///     Pass `""` for process-global events.
+    ///   - `prefix` — match event_type on prefix (e.g. `"security."`).
+    public func eventCounts(
+        projectRoot: String? = nil,
+        prefix: String? = nil
+    ) -> [EventCountRow] {
+        return queue.sync {
+            guard let db = db else { return [] }
+            var sql = "SELECT project_root, event_type, count, first_seen_at, last_seen_at FROM event_counters"
+            var clauses: [String] = []
+            if projectRoot != nil { clauses.append("project_root = ?") }
+            if prefix != nil      { clauses.append("event_type LIKE ?") }
+            if !clauses.isEmpty {
+                sql += " WHERE " + clauses.joined(separator: " AND ")
+            }
+            sql += " ORDER BY event_type ASC;"
+
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            var idx: Int32 = 1
+            if let root = projectRoot {
+                sqlite3_bind_text(stmt, idx, (root as NSString).utf8String, -1, nil); idx += 1
+            }
+            if let pfx = prefix {
+                let like = pfx + "%"
+                sqlite3_bind_text(stmt, idx, (like as NSString).utf8String, -1, nil); idx += 1
+            }
+            var out: [EventCountRow] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let root = sqlite3_column_text(stmt, 0).map { String(cString: $0) } ?? ""
+                let type = sqlite3_column_text(stmt, 1).map { String(cString: $0) } ?? ""
+                let count = Int(sqlite3_column_int64(stmt, 2))
+                let first = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 3))
+                let last = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 4))
+                out.append(EventCountRow(
+                    projectRoot: root, eventType: type, count: count,
+                    firstSeenAt: first, lastSeenAt: last
+                ))
+            }
+            return out
+        }
+    }
+
     /// Current `PRAGMA user_version` — used by the senkani_version tool and diagnostics.
     /// Returns 0 if the DB is unavailable or pre-migration.
     public func currentSchemaVersion() -> Int {
@@ -106,17 +210,28 @@ public final class SessionDatabase: @unchecked Sendable {
     /// the kill-switch lockfile and MigrationError.description surface the issue.
     private func runMigrations(path: String) {
         guard let db = db else { return }
+        var applied: [Int] = []
         queue.sync {
             do {
                 let report = try MigrationRunner.run(db: db, dbPath: path)
-                if !report.appliedVersions.isEmpty {
-                    print("[SessionDatabase] Applied migrations: \(report.appliedVersions)")
+                applied = report.appliedVersions
+                if !applied.isEmpty {
+                    print("[SessionDatabase] Applied migrations: \(applied)")
                 }
             } catch let e as MigrationError {
                 print("[SessionDatabase] Migration failed: \(e.description)")
             } catch {
                 print("[SessionDatabase] Migration failed: \(error)")
             }
+        }
+        // Observability: count each migration that ran in this process. Only
+        // versions >= 2 are recorded because event_counters itself is created
+        // by v2 — v1 baseline stamping may precede the table existing. The
+        // caller (this function) lives OUTSIDE MigrationRunner so we avoid
+        // the queue-reentrancy trap.
+        for v in applied where v >= 2 {
+            recordEvent(type: "schema.migration.applied")
+            _ = v  // silence unused-variable when no >= 2 applied
         }
     }
 
@@ -330,7 +445,9 @@ public final class SessionDatabase: @unchecked Sendable {
         // previously left the literal API key in `commands.command`
         // forever. SecretDetector short-circuits on no-match so the
         // benign-case cost is negligible.
-        let redactedCommand = command.map { SecretDetector.scan($0).redacted }
+        let scanResult = command.map { SecretDetector.scan($0) }
+        let redactedCommand = scanResult?.redacted
+        let didRedact = !(scanResult?.patterns.isEmpty ?? true)
         let preview = outputPreview.map { String($0.prefix(500)) }
         queue.async { [weak self] in
             guard let self, let db = self.db else { return }
@@ -398,6 +515,12 @@ public final class SessionDatabase: @unchecked Sendable {
             if sqlite3_exec(db, "COMMIT;", nil, nil, nil) == SQLITE_OK {
                 committed = true
             }
+        }
+        // Observability: count redactions as a privacy-health signal.
+        // Emitted outside the recordCommand queue block so it enqueues its
+        // own update — keeps the commands-insert transaction minimal.
+        if didRedact {
+            recordEvent(type: "security.command.redacted", projectRoot: nil)
         }
     }
 
@@ -1943,31 +2066,35 @@ public final class SessionDatabase: @unchecked Sendable {
     }
 
     /// Prune old validation results.
-    public func pruneValidationResults(olderThanHours: Int = 24) {
+    @discardableResult
+    public func pruneValidationResults(olderThanHours: Int = 24) -> Int {
         let cutoff = Date().addingTimeInterval(-Double(olderThanHours) * 3600).timeIntervalSince1970
-        queue.async { [weak self] in
-            guard let self, let db = self.db else { return }
+        return queue.sync {
+            guard let db = db else { return 0 }
             let sql = "DELETE FROM validation_results WHERE created_at < ?;"
             var stmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
             defer { sqlite3_finalize(stmt) }
             sqlite3_bind_double(stmt, 1, cutoff)
             sqlite3_step(stmt)
+            return Int(sqlite3_changes(db))
         }
     }
 
     /// Prune token_events older than N days (default: 90) to prevent unbounded growth.
     /// The index on (project_root, tool_name, timestamp) makes the WHERE clause efficient.
-    public func pruneTokenEvents(olderThanDays: Int = 90) {
+    @discardableResult
+    public func pruneTokenEvents(olderThanDays: Int = 90) -> Int {
         let cutoff = Date().addingTimeInterval(-Double(olderThanDays) * 86400).timeIntervalSince1970
-        queue.async { [weak self] in
-            guard let self, let db = self.db else { return }
+        return queue.sync {
+            guard let db = db else { return 0 }
             let sql = "DELETE FROM token_events WHERE timestamp < ?;"
             var stmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
             defer { sqlite3_finalize(stmt) }
             sqlite3_bind_double(stmt, 1, cutoff)
             sqlite3_step(stmt)
+            return Int(sqlite3_changes(db))
         }
     }
 

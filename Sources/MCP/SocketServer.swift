@@ -294,6 +294,7 @@ public final class SocketServerManager: @unchecked Sendable {
                 "socket": .string("mcp"),
                 "outcome": .string("closed")
             ])
+            SessionDatabase.shared.recordEvent(type: "security.socket.handshake.rejected")
             Darwin.close(fd)
             return
         }
@@ -454,6 +455,7 @@ public final class SocketServerManager: @unchecked Sendable {
                     "socket": .string("hook"),
                     "outcome": .string("closed")
                 ])
+                SessionDatabase.shared.recordEvent(type: "security.socket.handshake.rejected")
                 return
             }
 
@@ -578,6 +580,7 @@ public final class SocketServerManager: @unchecked Sendable {
                     "socket": .string("pane"),
                     "outcome": .string("closed")
                 ])
+                SessionDatabase.shared.recordEvent(type: "security.socket.handshake.rejected")
                 return
             }
 

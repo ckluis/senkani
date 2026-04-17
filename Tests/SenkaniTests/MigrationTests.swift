@@ -80,6 +80,13 @@ struct MigrationRunnerTests {
 
     // MARK: - Fixtures (test matrix per the plan)
 
+    /// Registry shipping in the product at test-authoring time.
+    /// `MigrationRegistry.all` contains every shipped migration, so the
+    /// assertion "v1 baseline + v2 event_counters" is the current-truth
+    /// baseline. Tests that want to isolate v1-only behavior use
+    /// `[v1Only]` explicitly.
+    private static let v1Only: [Migration] = [MigrationRegistry.all.first { $0.version == 1 }!]
+
     @Test("fresh DB at current version after baseline")
     func freshDBBaselines() throws {
         let db = Self.openMemory()
@@ -89,11 +96,15 @@ struct MigrationRunnerTests {
         let report = try MigrationRunner.run(db: db, dbPath: ":memory:")
 
         #expect(Self.tableExists(db, "schema_migrations"))
-        #expect(Self.appliedCount(db) == 1, "baseline v1 must be stamped")
-        #expect(MigrationRunner.currentVersion(db: db) == 1)
-        #expect(report.targetVersion == 1)
-        #expect(report.appliedVersions.isEmpty,
-                "baseline stamp is not a re-applied migration; appliedVersions is for just-run ups")
+        // Baseline stamps v1 (legacy columns present), then runner applies
+        // any newer migrations in the registry (currently v2 = event_counters).
+        #expect(Self.appliedCount(db) == MigrationRegistry.all.count,
+                "baseline v1 + every post-v1 migration must land")
+        #expect(MigrationRunner.currentVersion(db: db)
+                == MigrationRegistry.all.map(\.version).max()!)
+        #expect(report.appliedVersions == MigrationRegistry.all
+                    .map(\.version).filter { $0 >= 2 },
+                "appliedVersions reports only the >=v2 migrations that actually ran up()")
     }
 
     @Test("legacy pre-ALTER DB is NOT baselined — v1 runs via runner, not as stamped baseline")
@@ -102,10 +113,11 @@ struct MigrationRunnerTests {
         defer { sqlite3_close(db) }
 
         Self.buildLegacyPreAlterSchema(db) // missing all 3 ALTER'd columns
-        let report = try MigrationRunner.run(db: db, dbPath: ":memory:")
+        let report = try MigrationRunner.run(db: db, dbPath: ":memory:", registry: Self.v1Only)
 
         // Baselining didn't fire (legacy columns absent), so v1 ran through the runner
-        // and appears in report.appliedVersions. End state still has v1 recorded once.
+        // and appears in report.appliedVersions. Scoped to v1Only so the test is
+        // insulated from future migrations added to MigrationRegistry.all.
         #expect(Self.tableExists(db, "schema_migrations"))
         #expect(report.appliedVersions == [1], "v1 must run as a migration, not as a baseline stamp")
         #expect(Self.appliedCount(db) == 1)
@@ -120,10 +132,9 @@ struct MigrationRunnerTests {
         Self.buildLegacyPreAlterSchema(db)
         Self.exec(db, "ALTER TABLE commands ADD COLUMN budget_decision TEXT;")
         // Missing sessions.project_root and sessions.agent_type — partial state.
-        let report = try MigrationRunner.run(db: db, dbPath: ":memory:")
+        // Scoped to v1Only for the same "insulate from future migrations" reason.
+        let report = try MigrationRunner.run(db: db, dbPath: ":memory:", registry: Self.v1Only)
 
-        // Partial state MUST fall through to the runner — baselining requires ALL legacy
-        // columns to avoid stamping a DB that's actually mid-migration.
         #expect(report.appliedVersions == [1],
                 "partial state must run v1 via the runner, not via baseline stamping")
         #expect(Self.appliedCount(db) == 1)
@@ -153,22 +164,27 @@ struct MigrationRunnerTests {
         Self.buildCurrentProductionSchema(db)
         _ = try MigrationRunner.run(db: db, dbPath: ":memory:")
 
-        // Simulate a future v2 migration that adds a new table.
-        let v2 = Migration(version: 2, description: "add example_table") { db in
+        // Hypothetical future migration numbered ONE past the currently-shipped
+        // max so it doesn't collide with real v2 (event_counters).
+        let futureVersion = (MigrationRegistry.all.map(\.version).max() ?? 1) + 1
+        let future = Migration(version: futureVersion,
+                               description: "add example_table (test)") { db in
             var err: UnsafeMutablePointer<CChar>?
             let rc = sqlite3_exec(db, "CREATE TABLE example_table (id INTEGER PRIMARY KEY);", nil, nil, &err)
             if let err = err { sqlite3_free(err) }
             if rc != SQLITE_OK {
-                throw MigrationError.sqlFailed(stage: "v2", detail: "CREATE TABLE failed")
+                throw MigrationError.sqlFailed(stage: "future", detail: "CREATE TABLE failed")
             }
         }
-        let registry = MigrationRegistry.all + [v2]
+        let registry = MigrationRegistry.all + [future]
         let report = try MigrationRunner.run(db: db, dbPath: ":memory:", registry: registry)
 
-        #expect(report.appliedVersions == [2])
+        #expect(report.appliedVersions == [futureVersion],
+                "only the un-applied future migration runs")
         #expect(Self.tableExists(db, "example_table"))
-        #expect(MigrationRunner.currentVersion(db: db) == 2)
-        #expect(Self.appliedCount(db) == 2, "schema_migrations should have v1 (baseline) + v2")
+        #expect(MigrationRunner.currentVersion(db: db) == futureVersion)
+        #expect(Self.appliedCount(db) == MigrationRegistry.all.count + 1,
+                "schema_migrations has every shipped migration + our future one")
     }
 
     @Test("failed migration triggers rollback, lockfile, and re-throws")
@@ -183,8 +199,12 @@ struct MigrationRunnerTests {
         defer { sqlite3_close(db) }
         Self.buildCurrentProductionSchema(db!)
         _ = try MigrationRunner.run(db: db!, dbPath: dbPath)
+        let baselineApplied = Self.appliedCount(db!)
+        let baselineVersion = MigrationRunner.currentVersion(db: db!)
 
-        let badMigration = Migration(version: 2, description: "guaranteed to fail") { db in
+        let futureVersion = (MigrationRegistry.all.map(\.version).max() ?? 1) + 1
+        let badMigration = Migration(version: futureVersion,
+                                     description: "guaranteed to fail") { db in
             // Reference a non-existent table — SQLite raises "no such table".
             var err: UnsafeMutablePointer<CChar>?
             let rc = sqlite3_exec(db, "DELETE FROM ghost_table;", nil, nil, &err)
@@ -204,8 +224,10 @@ struct MigrationRunnerTests {
         #expect(threw, "bad migration must throw")
         #expect(FileManager.default.fileExists(atPath: dbPath + ".schema.lock"),
                 "lockfile must be written on failure")
-        #expect(Self.appliedCount(db!) == 1, "failed migration must not leave a v2 row")
-        #expect(MigrationRunner.currentVersion(db: db!) == 1, "user_version must not advance on failure")
+        #expect(Self.appliedCount(db!) == baselineApplied,
+                "failed migration must not leave a row")
+        #expect(MigrationRunner.currentVersion(db: db!) == baselineVersion,
+                "user_version must not advance on failure")
     }
 
     /// Bach G2: the P1-4 plan required verifying the `flock` sidecar
@@ -236,34 +258,37 @@ struct MigrationRunnerTests {
         Self.buildCurrentProductionSchema(seed!)
         sqlite3_close(seed)
 
-        let v2 = Migration(version: 2, description: "seq-add-table") { db in
+        // Use a version past the currently-shipped max so we don't collide
+        // with the real v2 (event_counters) in MigrationRegistry.all.
+        let futureVersion = (MigrationRegistry.all.map(\.version).max() ?? 1) + 1
+        let futureMig = Migration(version: futureVersion, description: "seq-add-table") { db in
             var err: UnsafeMutablePointer<CChar>?
-            let rc = sqlite3_exec(db, "CREATE TABLE seq_v2 (id INTEGER PRIMARY KEY);", nil, nil, &err)
+            let rc = sqlite3_exec(db, "CREATE TABLE seq_future (id INTEGER PRIMARY KEY);", nil, nil, &err)
             if let err = err { sqlite3_free(err) }
             guard rc == SQLITE_OK else {
-                throw MigrationError.sqlFailed(stage: "seq-v2", detail: "create failed rc=\(rc)")
+                throw MigrationError.sqlFailed(stage: "seq-future", detail: "create failed rc=\(rc)")
             }
         }
-        let registry = MigrationRegistry.all + [v2]
+        let registry = MigrationRegistry.all + [futureMig]
 
-        // Runner A — applies v2.
+        // Runner A — applies all un-applied migrations (including futureMig).
         var dbA: OpaquePointer?
         #expect(sqlite3_open(dbPath, &dbA) == SQLITE_OK)
         sqlite3_busy_timeout(dbA, 5000)
         let reportA = try MigrationRunner.run(db: dbA!, dbPath: dbPath, registry: registry)
         sqlite3_close(dbA)
-        #expect(reportA.appliedVersions == [2],
-                "first runner applies v2, got \(reportA.appliedVersions)")
+        #expect(reportA.appliedVersions.contains(futureVersion),
+                "first runner applies futureMig, got \(reportA.appliedVersions)")
 
-        // Runner B — fresh connection, reads applied={1,2}, does nothing.
+        // Runner B — fresh connection, reads everything applied, does nothing.
         var dbB: OpaquePointer?
         #expect(sqlite3_open(dbPath, &dbB) == SQLITE_OK)
         sqlite3_busy_timeout(dbB, 5000)
         let reportB = try MigrationRunner.run(db: dbB!, dbPath: dbPath, registry: registry)
         #expect(reportB.appliedVersions.isEmpty,
                 "second runner is a no-op, got \(reportB.appliedVersions)")
-        #expect(MigrationRunner.currentVersion(db: dbB!) == 2)
-        #expect(Self.tableExists(dbB!, "seq_v2"))
+        #expect(MigrationRunner.currentVersion(db: dbB!) == futureVersion)
+        #expect(Self.tableExists(dbB!, "seq_future"))
         sqlite3_close(dbB)
 
         // Sidecar flock file is created during run().

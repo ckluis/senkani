@@ -108,17 +108,34 @@ public final class RetentionScheduler: @unchecked Sendable {
     }
 
     private func tick(config: RetentionConfig) {
-        SessionDatabase.shared.pruneTokenEvents(olderThanDays: config.tokenEventsDays)
-        _ = SessionDatabase.shared.pruneSandboxedResults(
+        let tokenPruned = SessionDatabase.shared.pruneTokenEvents(
+            olderThanDays: config.tokenEventsDays
+        )
+        let sandboxPruned = SessionDatabase.shared.pruneSandboxedResults(
             olderThan: TimeInterval(config.sandboxResultsHours) * 3600
         )
-        SessionDatabase.shared.pruneValidationResults(olderThanHours: config.validationResultsHours)
+        let validationPruned = SessionDatabase.shared.pruneValidationResults(
+            olderThanHours: config.validationResultsHours
+        )
 
         Logger.log("retention.tick", fields: [
             "token_events_days": .int(config.tokenEventsDays),
             "sandbox_results_hours": .int(config.sandboxResultsHours),
-            "validation_results_hours": .int(config.validationResultsHours)
+            "validation_results_hours": .int(config.validationResultsHours),
+            "token_events_pruned": .int(tokenPruned),
+            "sandbox_results_pruned": .int(sandboxPruned),
+            "validation_results_pruned": .int(validationPruned)
         ])
+
+        // Observability: increment counters by the number of rows actually
+        // pruned per table. Zero-delta calls are no-ops so quiet ticks
+        // don't pollute the counter table.
+        SessionDatabase.shared.recordEvent(
+            type: "retention.pruned.token_events", delta: tokenPruned)
+        SessionDatabase.shared.recordEvent(
+            type: "retention.pruned.sandboxed_results", delta: sandboxPruned)
+        SessionDatabase.shared.recordEvent(
+            type: "retention.pruned.validation_results", delta: validationPruned)
 
         let report = TickReport(
             tokenEventsDays: config.tokenEventsDays,

@@ -35,5 +35,33 @@ public enum MigrationRegistry {
             // produced the version-1 shape. For pre-existing DBs, the baselining
             // pass stamps this as applied without re-running `up`.
         },
+        Migration(version: 2, description: "event_counters for security + observability") { db in
+            // Observability wave: incrementing counters for every defense
+            // site (injection detections, SSRF blocks, retention pruning,
+            // migrations applied, socket handshake rejections, command
+            // redactions). Queryable via SessionDatabase.eventCounts and
+            // surfaced through senkani_session stats + senkani stats
+            // --security. project_root is "" for process-global events
+            // that aren't tied to a project (e.g. socket handshake).
+            let sql = """
+                CREATE TABLE IF NOT EXISTS event_counters (
+                    project_root TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    count INTEGER NOT NULL DEFAULT 0,
+                    first_seen_at REAL NOT NULL,
+                    last_seen_at REAL NOT NULL,
+                    PRIMARY KEY (project_root, event_type)
+                );
+                CREATE INDEX IF NOT EXISTS idx_event_counters_type
+                    ON event_counters(event_type);
+                """
+            var err: UnsafeMutablePointer<CChar>?
+            let rc = sqlite3_exec(db, sql, nil, nil, &err)
+            let msg = err.map { String(cString: $0) } ?? "unknown"
+            if let err = err { sqlite3_free(err) }
+            guard rc == SQLITE_OK else {
+                throw MigrationError.sqlFailed(stage: "v2", detail: msg)
+            }
+        },
     ]
 }

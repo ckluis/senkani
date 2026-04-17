@@ -601,6 +601,10 @@ enum WebFetchTool {
                 "host": .string(host),
                 "outcome": .string("blocked")
             ])
+            SessionDatabase.shared.recordEvent(
+                type: "security.ssrf.blocked",
+                projectRoot: session.projectRoot
+            )
             return .init(
                 content: [.text(
                     text: WebFetchError.privateAddressBlocked.errorDescription!,

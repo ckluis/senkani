@@ -8,7 +8,16 @@ enum SessionTool {
 
         switch action {
         case "stats":
-            return .init(content: [.text(text: session.statsString(), annotations: nil, _meta: nil)])
+            // Base stats + observability counters (ships with Observability
+            // wave). Counters are per-project where the site knows it
+            // (SSRF blocks, command redactions), process-global otherwise
+            // (socket handshake rejections, schema migrations).
+            var body = session.statsString()
+            let securitySection = formatSecurityEvents(projectRoot: session.projectRoot)
+            if !securitySection.isEmpty {
+                body += "\n\n" + securitySection
+            }
+            return .init(content: [.text(text: body, annotations: nil, _meta: nil)])
 
         case "reset":
             session.readCache.clear()
@@ -94,5 +103,37 @@ enum SessionTool {
         default:
             return .init(content: [.text(text: "Unknown action: \(action). Valid actions: 'stats', 'reset', 'config', 'validators', 'result', 'pin', 'unpin', 'pins'.", annotations: nil, _meta: nil)], isError: true)
         }
+    }
+
+    /// Observability dashboard fragment appended to `senkani_session stats`.
+    /// Queries `event_counters` for both project-scoped and process-global
+    /// rows so the operator sees the full security posture. Returns empty
+    /// string when nothing has fired yet (avoid noisy dashboards on fresh
+    /// installs).
+    private static func formatSecurityEvents(projectRoot: String) -> String {
+        let projectRows = SessionDatabase.shared.eventCounts(projectRoot: projectRoot)
+        let globalRows = SessionDatabase.shared.eventCounts(projectRoot: "")
+        // Merge: global rows supplement project rows. If both exist for the
+        // same event type, show them distinctly.
+        var lines: [String] = []
+        let df = DateFormatter()
+        df.dateStyle = .short
+        df.timeStyle = .short
+
+        func emit(_ rows: [SessionDatabase.EventCountRow], scope: String) {
+            for r in rows {
+                lines.append("  \(r.eventType)  count=\(r.count)  last=\(df.string(from: r.lastSeenAt))  [\(scope)]")
+            }
+        }
+        if !projectRows.isEmpty {
+            lines.append("Security events (this project):")
+            emit(projectRows, scope: "project")
+        }
+        if !globalRows.isEmpty {
+            if !lines.isEmpty { lines.append("") }
+            lines.append("Security events (process-global):")
+            emit(globalRows, scope: "global")
+        }
+        return lines.joined(separator: "\n")
     }
 }

@@ -4,6 +4,7 @@ import Core
 
 struct Validate: ParsableCommand {
     static let configuration = CommandConfiguration(
+        commandName: "validate",
         abstract: "Validate a source file using local compilers/linters."
     )
 

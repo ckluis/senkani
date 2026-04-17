@@ -76,6 +76,12 @@ BSD flock's per-process semantics (see
 *(empty — nothing confirmed yet; add rows with a commit hash + date
 as items are verified)*
 
+## Covered by automated smoke tests (no manual verification needed)
+
+- `senkani <subcommand> --help` for all 20 subcommands — covered
+  by `CLISmokeTests` (bc7fca1 → current). No need to type each
+  `--help` by hand to check for arg-parser regressions.
+
 ---
 
 ## Won't verify

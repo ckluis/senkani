@@ -4,6 +4,7 @@ import Foundation
 
 struct Init: ParsableCommand {
     static let configuration = CommandConfiguration(
+        commandName: "init",
         abstract: "Register senkani-hook for the current project."
     )
 

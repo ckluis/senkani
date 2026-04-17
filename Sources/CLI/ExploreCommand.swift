@@ -4,6 +4,7 @@ import Indexer
 
 struct Explore: ParsableCommand {
     static let configuration = CommandConfiguration(
+        commandName: "explore",
         abstract: "Show the project's symbol tree."
     )
 

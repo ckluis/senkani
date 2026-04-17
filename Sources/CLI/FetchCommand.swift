@@ -4,6 +4,7 @@ import Indexer
 
 struct Fetch: ParsableCommand {
     static let configuration = CommandConfiguration(
+        commandName: "fetch",
         abstract: "Fetch a symbol's source code (reads only the relevant lines)."
     )
 

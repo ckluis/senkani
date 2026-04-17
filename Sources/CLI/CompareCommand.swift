@@ -5,6 +5,7 @@ import Filter
 
 struct Compare: ParsableCommand {
     static let configuration = CommandConfiguration(
+        commandName: "compare",
         abstract: "Run a command across all feature permutations and compare token savings."
     )
 

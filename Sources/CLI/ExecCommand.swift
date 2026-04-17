@@ -5,6 +5,7 @@ import Filter
 
 struct Exec: ParsableCommand {
     static let configuration = CommandConfiguration(
+        commandName: "exec",
         abstract: "Run a command through the filter pipeline."
     )
 

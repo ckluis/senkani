@@ -337,6 +337,8 @@ let package = Package(
                 "Indexer",
                 "Bench",
                 "MCPServer",
+                "CLI",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Testing", package: "swift-testing"),
             ],
             path: "Tests/SenkaniTests"

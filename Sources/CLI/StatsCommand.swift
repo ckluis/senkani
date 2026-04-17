@@ -4,6 +4,7 @@ import Core
 
 struct Stats: ParsableCommand {
     static let configuration = CommandConfiguration(
+        commandName: "stats",
         abstract: "View session metrics."
     )
 

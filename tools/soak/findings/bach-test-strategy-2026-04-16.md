@@ -29,7 +29,7 @@ Bach rule: absence of a test is evidence of absence of signal.
 | G3 | No property-based / fuzz tests anywhere in 91 files | **P2** | High — SSRF parser has 25 cases but zero fuzzing |
 | G4 | WebFetch redirect `decidePolicyFor` logic only tested via its inner helpers | **P2** | High — the actual policy fn is untested as a unit |
 | G5 | HookRouter (507 LOC, Layer-3 interception) has 9 tests — thin | P2 | Medium — happy-path heavy |
-| G6 | CLI commands have no direct test coverage | P2 | Medium — user-facing regressions |
+| G6 | CLI commands have no direct test coverage | P2 | ✅ 2026-04-17 — `CLISmokeTests` iterates every subcommand in `Senkani.configuration.subcommands`: non-empty commandName + abstract, renders helpMessage(), round-trips `--help` through parseAsRoot, rejects bogus subcommand names. Also caught 9 commands relying on ArgumentParser's default name derivation (now explicit). 7 new tests (1086 total). |
 | G7 | HookRelay inline handshake (zero-dep) has no tests | P3 | Low — divergence risk |
 | G8 | PaneControlTool client-side handshake send not tested | P3 | Low |
 | G9 | `MCPSession.instructionsPayload` end-to-end not tested (only `truncate`) | P3 | Low |

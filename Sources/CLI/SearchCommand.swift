@@ -4,6 +4,7 @@ import Indexer
 
 struct Search: ParsableCommand {
     static let configuration = CommandConfiguration(
+        commandName: "search",
         abstract: "Search the symbol index."
     )
 

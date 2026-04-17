@@ -3,31 +3,42 @@ import Foundation
 /// P2-9: Typed-field structured log value.
 ///
 /// The `log` API accepts a dictionary of these so callers don't pass
-/// stringly-typed numbers. Four cases cover every field we currently emit;
-/// add cases if a future event needs e.g. `[String]` or `Data`.
+/// stringly-typed numbers. Five cases:
+/// - `.string(_)` — arbitrary user-influenced text; secret-scanned at emit.
+/// - `.int`/`.double`/`.bool` — numeric / boolean primitives, no scanning.
+/// - `.path(_)` — filesystem path; `/Users/<name>` stripped at emit
+///   (Cavoukian C2). Use this for any field that holds a user's project
+///   root, home-directory descendant, or otherwise identifying path.
+///
+/// All `.string(_)` values are passed through `SecretDetector.scan` at
+/// emit time (Cavoukian C5). Even if a caller accidentally places an API
+/// key in a log field, it's redacted at the sink.
 public enum LogValue: Sendable {
     case string(String)
     case int(Int)
     case double(Double)
     case bool(Bool)
+    case path(String)
 
     /// JSON literal — quoted + escaped for strings, bare for numerics.
     var jsonLiteral: String {
         switch self {
-        case .string(let s): return "\"\(Logger.jsonEscape(s))\""
+        case .string(let s): return "\"\(Logger.jsonEscape(Logger.sanitizeUserString(s)))\""
         case .int(let i):    return "\(i)"
         case .double(let d): return "\(d)"
         case .bool(let b):   return b ? "true" : "false"
+        case .path(let p):   return "\"\(Logger.jsonEscape(ProjectSecurity.redactPath(p)))\""
         }
     }
 
     /// Plain `key=value` literal for human-readable mode.
     var textLiteral: String {
         switch self {
-        case .string(let s): return s
+        case .string(let s): return Logger.sanitizeUserString(s)
         case .int(let i):    return "\(i)"
         case .double(let d): return "\(d)"
         case .bool(let b):   return b ? "true" : "false"
+        case .path(let p):   return ProjectSecurity.redactPath(p)
         }
     }
 }
@@ -107,6 +118,15 @@ public enum Logger {
             }
             return parts.joined(separator: " ")
         }
+    }
+
+    /// Cavoukian C5: every user-influenced string field passes through
+    /// `SecretDetector.scan` at emit time so planted API keys / bearer
+    /// tokens / AWS creds get `[REDACTED:…]`'d in logs the same way
+    /// they are in MCP outputs. Cost: 13 regex `firstMatch` probes per
+    /// string field; negligible vs. the `write(2)` that follows.
+    internal static func sanitizeUserString(_ s: String) -> String {
+        SecretDetector.scan(s).redacted
     }
 
     /// JSON string escape. Only the characters JSON requires — `\`, `"`, the

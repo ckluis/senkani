@@ -70,4 +70,83 @@ struct LoggerTests {
         let obj = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
         #expect(obj?["event"] as? String == "weird\"event")
     }
+
+    // MARK: - Cavoukian C5: secret redaction at the log sink
+    //
+    // Any `.string(_)` value flows through SecretDetector.scan before emit.
+    // Even if a caller accidentally puts an API key or bearer token into a
+    // log field, the stderr line carries `[REDACTED:*]` instead.
+
+    @Test func stringFieldRedactsAnthropicKey() throws {
+        // Build a plausible Anthropic-style token without embedding a real
+        // prefix as a literal — keeps repo-secret-scanners happy.
+        let token = "sk-" + "ant-" + String(repeating: "a", count: 40)
+        let line = Logger.format(
+            event: "mcp.debug",
+            fields: ["note": .string("leaked \(token) in a field")],
+            asJSON: true
+        )
+        let obj = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+        let note = obj?["note"] as? String ?? ""
+        #expect(!note.contains(token), "raw token must not appear in logs")
+        #expect(note.contains("[REDACTED:ANTHROPIC_API_KEY]"), "secret-detector tag must be present, got \(note)")
+    }
+
+    @Test func stringFieldRedactsBearerTokenInTextMode() {
+        let bearer = "Bearer " + String(repeating: "z", count: 40)
+        let line = Logger.format(
+            event: "http.request",
+            fields: ["auth": .string(bearer)],
+            asJSON: false
+        )
+        #expect(!line.contains(bearer))
+        #expect(line.contains("[REDACTED:BEARER_TOKEN]"))
+    }
+
+    @Test func stringFieldWithNoSecretIsUnchanged() {
+        let line = Logger.format(
+            event: "mcp.tool.invoked",
+            fields: ["tool": .string("read"), "outcome": .string("success")],
+            asJSON: false
+        )
+        #expect(line == "[mcp.tool.invoked] outcome=success tool=read")
+    }
+
+    // MARK: - Cavoukian C2: path redaction via .path() case
+
+    @Test func pathValueStripsHomeDirectory() throws {
+        let home = NSHomeDirectory()
+        let realPath = home + "/Desktop/projects/senkani"
+        let line = Logger.format(
+            event: "filewatcher.scan",
+            fields: ["project_root": .path(realPath)],
+            asJSON: true
+        )
+        let obj = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+        let redacted = obj?["project_root"] as? String ?? ""
+        #expect(redacted == "~/Desktop/projects/senkani",
+                "home prefix must collapse to ~, got \(redacted)")
+        #expect(!redacted.contains(home), "raw home must not leak")
+    }
+
+    @Test func pathValueObscuresForeignUsername() {
+        let line = Logger.format(
+            event: "filewatcher.scan",
+            fields: ["project_root": .path("/Users/someone/Projects/thing")],
+            asJSON: false
+        )
+        // `/Users/someone` → `/Users/***` (redactPath rule).
+        #expect(line.contains("/Users/***/Projects/thing"))
+        #expect(!line.contains("someone"))
+    }
+
+    @Test func pathValueTextModeRedaction() {
+        let home = NSHomeDirectory()
+        let line = Logger.format(
+            event: "filewatcher.scan",
+            fields: ["project_root": .path(home + "/code/x")],
+            asJSON: false
+        )
+        #expect(line == "[filewatcher.scan] project_root=~/code/x")
+    }
 }

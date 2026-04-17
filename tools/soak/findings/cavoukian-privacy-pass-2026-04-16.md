@@ -77,7 +77,7 @@ Destructive actions (Jobs) require explicit `--yes`. Running without
 - ~/.senkani/.token (socket-auth token)
 - Optionally: entire ~/.senkani directory (skills, pane state)
 
-### C2 — P3: `project_root` contains home path + username (OPEN)
+### C2 — P3: `project_root` contains home path + username (PARTIAL — closed for logs, open for export)
 
 `sessions.project_root` stores paths like
 `/Users/<username>/Projects/senkani`. Usable as an index key but
@@ -85,8 +85,15 @@ echoes the username into any log or export. `ProjectSecurity.redactPath`
 exists as a display helper but isn't used at storage time (can't be —
 paths are correlation keys).
 
-**Mitigation plan:** add a `--redact` flag to a future `senkani export`
-that applies `ProjectSecurity.redactPath` to output.
+**Closed (2026-04-17):** `LogValue.path(_)` case added to Logger. Any
+caller emitting a project root via `.path(...)` gets it redacted at
+sink (`/Users/alice/x` → `~/x` when it matches the current user, or
+`/Users/***/x` otherwise). Call sites using `.string(...)` continue
+to work unchanged but are not path-redacted; `.path(...)` is opt-in
+for "this is a filesystem path" fields.
+
+**Still open for C3:** `senkani export` must apply the same redaction
+to output when `--redact` is passed. Tracked in C3.
 
 ### C3 — P2: No data-portability export (OPEN)
 
@@ -97,16 +104,22 @@ data except by querying the SQLite file directly.
 emits sessions + commands + token_events as JSONL. Respect
 `--redact` to apply path redaction. Not shipped this round.
 
-### C5 — P3: Log stream may carry sensitive fields (OPEN)
+### C5 — P3: Log stream may carry sensitive fields (CLOSED 2026-04-17)
 
 `SENKANI_LOG_JSON=1` events include `session_id`, `tool`, occasionally
 `command` fragments, `host` from SSRF blocks. Session ID is a UUID
 (safe). Tool name is safe. Command fragments aren't filter-applied in
 log payloads the way `commands.command` now is.
 
-**Mitigation plan:** audit every `Logger.log` call site for the
-fields it passes; apply `SecretDetector.scan` where any `command`
-or user-text field is emitted.
+**Closed (2026-04-17):** Logger applies `SecretDetector.scan` to every
+`.string(_)` value at emit time (`Logger.sanitizeUserString`). Defense
+is at the sink, not the call site — any future caller that
+accidentally puts an API key / bearer token / AWS creds / Slack /
+Stripe / GCP / npm / HuggingFace / GitHub token into a log field
+gets it `[REDACTED:…]`'d in stderr output automatically. Unit tests:
+`stringFieldRedactsAnthropicKey`,
+`stringFieldRedactsBearerTokenInTextMode`,
+`stringFieldWithNoSecretIsUnchanged`.
 
 ## Summary
 
@@ -114,9 +127,9 @@ or user-text field is emitted.
 |---|----|----------|--------|
 | C1 | Unredacted command text in DB | P2 | ✅ fixed this commit |
 | C4 | No user-facing wipe | P2 | ✅ fixed this commit |
-| C2 | project_root leaks username | P3 | open — needs --redact export flag |
+| C2 | project_root leaks username | P3 | ✅ fixed 2026-04-17 (Logger `.path(_)` case) |
 | C3 | No data-portability export | P2 | open — `senkani export` planned |
-| C5 | Log field redaction audit | P3 | open — next round |
+| C5 | Log field redaction audit | P3 | ✅ fixed 2026-04-17 (sink-side SecretDetector in Logger) |
 
 C1 + C4 addressed this round. C2/C3/C5 tracked. Retention already
 covers token_events (90d), sandboxed_results (24h), and

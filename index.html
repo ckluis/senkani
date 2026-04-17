@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>senkani — compression layer for AI coding agents</title>
+<meta name="description" content="Senkani is a native macOS token-compression layer for AI coding agents. Reduce Claude Code token costs up to 80× with hook-based file caching, tree-sitter symbol indexing, and intelligent shell output filtering. Works with Claude Code, Cursor, Copilot, and any MCP agent.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Inconsolata:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -16,7 +17,7 @@
   --bg-elev:   #ebe6d8;
   --ink:       #1a1a1a;
   --ink-soft:  #4a4a47;
-  --ink-mute:  #8a867d;
+  --ink-mute:  #706c66;
   --rule:      rgba(26,26,26,0.14);
   --accent:    #ff6200;
   --accent-hi: #ff8534;
@@ -58,7 +59,7 @@
    BASE
    ============================================================ */
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
 html, body { margin: 0; padding: 0; }
 body {
   background: var(--bg);
@@ -109,7 +110,7 @@ a.inline:hover { color: var(--accent); }
 
 .overline {
   font-family: var(--font-display);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 1.6px;
   text-transform: uppercase;
@@ -805,6 +806,7 @@ nav.topnav {
   border-bottom: 1px solid var(--app-rule); align-items: start; font-size: 12px;
 }
 .tool-row:last-child { border-bottom: none; }
+.tool-row:nth-child(even) { background: rgba(255,255,255,0.04); }
 .tool-name { color: var(--accent); font-family: var(--font-code); font-weight: 600; font-size: 12px; word-break: break-all; }
 .tool-replaces { font-family: var(--font-code); font-size: 11px; color: var(--app-mute); }
 .tool-desc { color: var(--app-text); font-size: 12px; line-height: 1.5; margin-bottom: 3px; }
@@ -876,7 +878,7 @@ nav.topnav {
   margin: 24px 0;
 }
 .install-col { background: var(--bg); padding: 24px 24px; }
-.install-label { font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--ink-mute); margin-bottom: 12px; font-family: var(--font-code); }
+.install-label { font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--ink-mute); margin-bottom: 12px; font-family: var(--font-code); }
 
 /* ============================================================
    FOOTER
@@ -915,6 +917,91 @@ footer p { font-size: 14px; color: var(--ink-mute); max-width: 560px; line-heigh
   .canvas { grid-template-columns: 1fr 1fr; }
   .canvas .pane:last-child { display: none; }
 }
+/* ============================================================
+   SKIP NAVIGATION
+   ============================================================ */
+.skip-nav {
+  position: absolute;
+  top: -100px;
+  left: 16px;
+  background: var(--accent);
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 0 0 4px 4px;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  z-index: 500;
+}
+.skip-nav:focus { top: 0; }
+
+/* ============================================================
+   FOCUS VISIBLE
+   ============================================================ */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+.btn:focus-visible { outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ============================================================
+   MOBILE NAV
+   ============================================================ */
+.topnav-hamburger {
+  display: none;
+  background: none;
+  border: none;
+  padding: 6px;
+  cursor: pointer;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.topnav-hamburger span {
+  display: block;
+  width: 18px;
+  height: 2px;
+  background: var(--ink);
+  margin: 4px 0;
+  border-radius: 1px;
+  transition: all .15s ease;
+}
+
+@media (max-width: 768px) {
+  .topnav-hamburger { display: block; }
+  .topnav-links {
+    display: none;
+    position: absolute;
+    top: var(--nav-h);
+    left: 0;
+    right: 0;
+    background: var(--bg);
+    border-bottom: 1px solid var(--rule);
+    padding: 16px 28px 20px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+    z-index: 199;
+    box-shadow: 0 8px 24px rgba(26,26,26,.10);
+  }
+  .topnav-links.open { display: flex; }
+  .topnav-links .btn-nav { width: 100%; text-align: center; padding: 10px 18px; }
+}
+
 @media (max-width: 600px) {
   .ch-hero .lede { max-width: 100%; }
   .stats-grid, .feature-grid { grid-template-columns: 1fr; }
@@ -933,18 +1020,23 @@ footer p { font-size: 14px; color: var(--ink-mute); max-width: 560px; line-heigh
 </head>
 <body>
 
+<a href="#docs-main" class="skip-nav">Skip to main content</a>
+
 <!-- ================================================================
      NAV
      ================================================================ -->
-<nav class="topnav">
+<nav class="topnav" aria-label="Primary navigation">
   <a class="wordmark" href="#">
     sen<span style="color:var(--accent)">kani</span>
     <small>compression layer for AI coding agents</small>
   </a>
-  <div class="topnav-links">
-    <a href="#how-it-works">Hooks</a>
+  <button class="topnav-hamburger" aria-label="Open navigation menu" aria-expanded="false" aria-controls="topnav-links">
+    <span></span><span></span><span></span>
+  </button>
+  <div class="topnav-links" id="topnav-links">
+    <a href="#how-it-works">How It Works</a>
     <a href="#intelligence">Intelligence</a>
-    <a href="#mcp-tools">Tools</a>
+    <a href="#interface">Tools</a>
     <a href="#status">Status</a>
     <a href="https://github.com/ckluis/senkani" class="btn-nav">GitHub →</a>
   </div>
@@ -959,10 +1051,10 @@ footer p { font-size: 14px; color: var(--ink-mute); max-width: 560px; line-heigh
   <p class="lede">Senkani sits between your AI coding agent and your filesystem. Every file read is cached and compressed, every shell output filtered, every symbol search answered from a local index — before a single token reaches the model. Works with Claude Code, Cursor, Copilot, and any MCP-compatible agent.</p>
   <div class="cta-row">
     <a class="btn btn-primary" href="https://github.com/ckluis/senkani">Build from source</a>
-    <a class="btn btn-secondary" href="#mcp-tools">13 MCP tools</a>
+    <a class="btn btn-secondary" href="#mcp-tools">17 MCP tools</a>
     <a class="btn btn-ghost" href="#how-it-works">How it works</a>
   </div>
-  <div class="meta">
+  <div class="meta" aria-hidden="true">
     <span>Universal binary · Swift</span>
     <span>macOS 14+</span>
     <span>MIT licensed core</span>
@@ -970,7 +1062,7 @@ footer p { font-size: 14px; color: var(--ink-mute); max-width: 560px; line-heigh
 </header>
 
 <!-- Hero app mockup -->
-<div style="padding: 0 48px 0; max-width: 1440px;">
+<div style="padding: 0 48px 0; max-width: 1440px;" aria-hidden="true">
   <div class="mockup mockup-lg">
     <div class="tb">
       <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
@@ -1166,7 +1258,7 @@ footer p { font-size: 14px; color: var(--ink-mute); max-width: 560px; line-heigh
             <span class="tag tag-dim">Any MCP agent</span>
           </div>
         </div>
-        <div class="ch-hero-visual">
+        <div class="ch-hero-visual" aria-hidden="true">
           <div class="mockup">
             <div class="tb">
               <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
@@ -1488,7 +1580,7 @@ footer p { font-size: 14px; color: var(--ink-mute); max-width: 560px; line-heigh
             <span class="tag tag-dim">FSEvents auto-update</span>
           </div>
         </div>
-        <div class="ch-hero-visual">
+        <div class="ch-hero-visual" aria-hidden="true">
           <div class="mockup">
             <div class="tb">
               <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
@@ -1634,7 +1726,7 @@ footer p { font-size: 14px; color: var(--ink-mute); max-width: 560px; line-heigh
             <span class="tag tag-dim">env var overrides</span>
           </div>
         </div>
-        <div class="ch-hero-visual">
+        <div class="ch-hero-visual" aria-hidden="true">
           <div class="mockup">
             <div class="tb">
               <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
@@ -1766,15 +1858,15 @@ unchanged — only prose is compressed.</span></div>
       <div class="ch-hero">
         <div class="ch-hero-text">
           <div class="overline">Interface</div>
-          <h2>15 MCP tools.<br>18 CLI commands.<br><span class="accent">One workspace.</span></h2>
+          <h2>17 MCP tools.<br>18 CLI commands.<br><span class="accent">One workspace.</span></h2>
           <p class="lede">Every compression feature accessible as an MCP tool, a CLI command, and a workspace pane. The same index that intercepts hook calls is directly callable by your agent or your shell.</p>
           <div class="tag-row">
-            <span class="tag tag-orange">15 MCP tools</span>
-            <span class="tag tag-dim">15 pane types</span>
+            <span class="tag tag-orange">17 MCP tools</span>
+            <span class="tag tag-dim">16 pane types</span>
             <span class="tag tag-dim">80.37× bench</span>
           </div>
         </div>
-        <div class="ch-hero-visual">
+        <div class="ch-hero-visual" aria-hidden="true">
           <div class="mockup">
             <div class="tb">
               <div class="dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
@@ -1807,132 +1899,132 @@ unchanged — only prose is compressed.</span></div>
           <h3>MCP Tools</h3>
           <p>17 tools that sit between Claude and your filesystem, compressing everything before it hits your token budget. They auto-register via <code>senkani init</code> and are invoked by the hook relay transparently — you don't change how you work. Each is also directly callable by any MCP-compatible agent.</p>
         </div>
-        <div class="tools-card">
-          <div class="tools-head">
-            <div>Tool</div>
-            <div>Replaces</div>
-            <div>What it does · How</div>
-            <div>Savings</div>
-            <div>Status</div>
+        <div class="tools-card" role="table" aria-label="MCP tools reference">
+          <div class="tools-head" role="row">
+            <div role="columnheader">Tool</div>
+            <div role="columnheader">Replaces</div>
+            <div role="columnheader">What it does · How</div>
+            <div role="columnheader">Savings</div>
+            <div role="columnheader">Status</div>
           </div>
-          <div class="tool-row">
-            <div class="tool-name">senkani_read</div>
-            <div class="tool-replaces">Read</div>
-            <div><div class="tool-desc">Compressed file reads with session caching and secret redaction.</div><div class="tool-how">ANSI strip → blank collapse → SecretDetector → ReadCache(path, mtime). Re-reads of unchanged files return from cache instantly.</div></div>
-            <div class="tool-save">50–99%</div>
-            <div><span class="badge badge-live-d">Live</span></div>
+          <div class="tool-row" role="row">
+            <div class="tool-name" role="cell">senkani_read</div>
+            <div class="tool-replaces" role="cell">Read</div>
+            <div role="cell"><div class="tool-desc">Compressed file reads with session caching and secret redaction.</div><div class="tool-how">ANSI strip → blank collapse → SecretDetector → ReadCache(path, mtime). Re-reads of unchanged files return from cache instantly.</div></div>
+            <div class="tool-save" role="cell">50–99%</div>
+            <div role="cell"><span class="badge badge-live-d">Live</span></div>
           </div>
-          <div class="tool-row">
-            <div class="tool-name">senkani_exec</div>
-            <div class="tool-replaces">Bash</div>
-            <div><div class="tool-desc">Shell commands with 24 command-specific filter rules applied to output.</div><div class="tool-how">FilterEngine matches (command, subcommand) → applies rule chain. Mutating commands (git commit, rm, docker run…) pass through unmodified.</div></div>
-            <div class="tool-save">60–90%</div>
-            <div><span class="badge badge-live-d">Live</span></div>
+          <div class="tool-row" role="row">
+            <div class="tool-name" role="cell">senkani_exec</div>
+            <div class="tool-replaces" role="cell">Bash</div>
+            <div role="cell"><div class="tool-desc">Shell commands with 24 command-specific filter rules applied to output.</div><div class="tool-how">FilterEngine matches (command, subcommand) → applies rule chain. Mutating commands (git commit, rm, docker run…) pass through unmodified.</div></div>
+            <div class="tool-save" role="cell">60–90%</div>
+            <div role="cell"><span class="badge badge-live-d">Live</span></div>
           </div>
-          <div class="tool-row">
-            <div class="tool-name">senkani_search</div>
-            <div class="tool-replaces">Grep</div>
-            <div><div class="tool-desc">Symbol lookup from the local tree-sitter index. Returns file:line, kind, container.</div><div class="tool-how">Substring match on in-memory IndexEntry array. ~50 tokens vs ~5,000 from grepping. Hook intercepts plain-identifier Grep calls automatically.</div></div>
-            <div class="tool-save">99%</div>
-            <div><span class="badge badge-live-d">Live</span></div>
+          <div class="tool-row" role="row">
+            <div class="tool-name" role="cell">senkani_search</div>
+            <div class="tool-replaces" role="cell">Grep</div>
+            <div role="cell"><div class="tool-desc">Symbol lookup from the local tree-sitter index. Returns file:line, kind, container.</div><div class="tool-how">Substring match on in-memory IndexEntry array. ~50 tokens vs ~5,000 from grepping. Hook intercepts plain-identifier Grep calls automatically.</div></div>
+            <div class="tool-save" role="cell">99%</div>
+            <div role="cell"><span class="badge badge-live-d">Live</span></div>
           </div>
-          <div class="tool-row">
-            <div class="tool-name">senkani_fetch</div>
-            <div class="tool-replaces">Read</div>
-            <div><div class="tool-desc">Read only a symbol's exact source lines, not the entire file.</div><div class="tool-how">Uses startLine/endLine from IndexEntry. Slices from ReadCache if warm, disk otherwise. Token cost is proportional to the symbol, not the file.</div></div>
-            <div class="tool-save">50–99%</div>
-            <div><span class="badge badge-live-d">Live</span></div>
+          <div class="tool-row" role="row">
+            <div class="tool-name" role="cell">senkani_fetch</div>
+            <div class="tool-replaces" role="cell">Read</div>
+            <div role="cell"><div class="tool-desc">Read only a symbol's exact source lines, not the entire file.</div><div class="tool-how">Uses startLine/endLine from IndexEntry. Slices from ReadCache if warm, disk otherwise. Token cost is proportional to the symbol, not the file.</div></div>
+            <div class="tool-save" role="cell">50–99%</div>
+            <div role="cell"><span class="badge badge-live-d">Live</span></div>
           </div>
-          <div class="tool-row">
-            <div class="tool-name">senkani_explore</div>
-            <div class="tool-replaces">Read ×N</div>
-            <div><div class="tool-desc">Navigate codebase via bidirectional import graph. Returns a subgraph, not a file list.</div><div class="tool-how">DependencyExtractor builds edges during indexing pass. Returns a bounded subgraph from a starting file — ~500 tokens for a typical entry point.</div></div>
-            <div class="tool-save">90%+</div>
-            <div><span class="badge badge-live-d">Live</span></div>
+          <div class="tool-row" role="row">
+            <div class="tool-name" role="cell">senkani_explore</div>
+            <div class="tool-replaces" role="cell">Read ×N</div>
+            <div role="cell"><div class="tool-desc">Navigate codebase via bidirectional import graph. Returns a subgraph, not a file list.</div><div class="tool-how">DependencyExtractor builds edges during indexing pass. Returns a bounded subgraph from a starting file — ~500 tokens for a typical entry point.</div></div>
+            <div class="tool-save" role="cell">90%+</div>
+            <div role="cell"><span class="badge badge-live-d">Live</span></div>
           </div>
-          <div class="tool-row">
-            <div class="tool-name">senkani_deps</div>
-            <div class="tool-replaces">Read ×N</div>
-            <div><div class="tool-desc">Query dependency edges. "What does X import?" and "What imports X?" across 15+ languages.</div><div class="tool-how">Direct lookup in the bidirectional edge set built by DependencyExtractor at index time.</div></div>
+          <div class="tool-row" role="row">
+            <div class="tool-name" role="cell">senkani_deps</div>
+            <div class="tool-replaces" role="cell">Read ×N</div>
+            <div role="cell"><div class="tool-desc">Query dependency edges. "What does X import?" and "What imports X?" across 15+ languages.</div><div class="tool-how">Direct lookup in the bidirectional edge set built by DependencyExtractor at index time.</div></div>
             <div class="tool-save na">—</div>
-            <div><span class="badge badge-live-d">Live</span></div>
+            <div role="cell"><span class="badge badge-live-d">Live</span></div>
           </div>
-          <div class="tool-row">
-            <div class="tool-name">senkani_outline</div>
-            <div class="tool-replaces">Read</div>
-            <div><div class="tool-desc">File-level structure: all top-level functions, classes, and types. No line bodies.</div><div class="tool-how">Queries IndexEntry for entries matching a file path. Returns names + line numbers only. ~10× smaller than reading the file.</div></div>
+          <div class="tool-row" role="row">
+            <div class="tool-name" role="cell">senkani_outline</div>
+            <div class="tool-replaces" role="cell">Read</div>
+            <div role="cell"><div class="tool-desc">File-level structure: all top-level functions, classes, and types. No line bodies.</div><div class="tool-how">Queries IndexEntry for entries matching a file path. Returns names + line numbers only. ~10× smaller than reading the file.</div></div>
             <div class="tool-save na">—</div>
-            <div><span class="badge badge-live-d">Live</span></div>
+            <div role="cell"><span class="badge badge-live-d">Live</span></div>
           </div>
-          <div class="tool-row">
-            <div class="tool-name">senkani_validate</div>
-            <div class="tool-replaces">Bash build</div>
-            <div><div class="tool-desc">Local syntax check across 22 languages. Never runs a build to catch a typo.</div><div class="tool-how">Passes source to tree-sitter parser for the detected language. Parse errors → structured error list. Success → zero API calls consumed.</div></div>
-            <div class="tool-save">100%</div>
-            <div><span class="badge badge-live-d">Live</span></div>
+          <div class="tool-row" role="row">
+            <div class="tool-name" role="cell">senkani_validate</div>
+            <div class="tool-replaces" role="cell">Bash build</div>
+            <div role="cell"><div class="tool-desc">Local syntax check across 22 languages. Never runs a build to catch a typo.</div><div class="tool-how">Passes source to tree-sitter parser for the detected language. Parse errors → structured error list. Success → zero API calls consumed.</div></div>
+            <div class="tool-save" role="cell">100%</div>
+            <div role="cell"><span class="badge badge-live-d">Live</span></div>
           </div>
-          <div class="tool-row">
-            <div class="tool-name">senkani_parse</div>
-            <div class="tool-replaces">—</div>
-            <div><div class="tool-desc">Return the tree-sitter AST for a file or snippet as structured JSON.</div><div class="tool-how">Runs the appropriate tree-sitter parser and returns the node tree. Useful for agent tasks that need to reason about code structure.</div></div>
+          <div class="tool-row" role="row">
+            <div class="tool-name" role="cell">senkani_parse</div>
+            <div class="tool-replaces" role="cell">—</div>
+            <div role="cell"><div class="tool-desc">Return the tree-sitter AST for a file or snippet as structured JSON.</div><div class="tool-how">Runs the appropriate tree-sitter parser and returns the node tree. Useful for agent tasks that need to reason about code structure.</div></div>
             <div class="tool-save na">—</div>
-            <div><span class="badge badge-live-d">Live</span></div>
+            <div role="cell"><span class="badge badge-live-d">Live</span></div>
           </div>
-          <div class="tool-row">
-            <div class="tool-name">senkani_embed</div>
-            <div class="tool-replaces">API call</div>
-            <div><div class="tool-desc">Text embeddings on Apple Silicon via MLX. Zero API cost.</div><div class="tool-how">MiniLM-L6-v2 on Neural Engine. 384-dim Float32 output. Sub-200ms. Backs semantic search pane (Q3 2026).</div></div>
-            <div class="tool-save">$0/call</div>
-            <div><span class="badge badge-live-d">Live</span></div>
+          <div class="tool-row" role="row">
+            <div class="tool-name" role="cell">senkani_embed</div>
+            <div class="tool-replaces" role="cell">API call</div>
+            <div role="cell"><div class="tool-desc">Text embeddings on Apple Silicon via MLX. Zero API cost.</div><div class="tool-how">MiniLM-L6-v2 on Neural Engine. 384-dim Float32 output. Sub-200ms. Backs semantic search pane (Q3 2026).</div></div>
+            <div class="tool-save" role="cell">$0/call</div>
+            <div role="cell"><span class="badge badge-live-d">Live</span></div>
           </div>
-          <div class="tool-row">
-            <div class="tool-name">senkani_vision</div>
-            <div class="tool-replaces">API call</div>
-            <div><div class="tool-desc">Vision model on Apple Silicon (Gemma via MLX). OCR, UI analysis, screenshot reading.</div><div class="tool-how">Input: image path or base64 PNG. Output: text or structured JSON. Sub-500ms on M-series. Fully offline.</div></div>
-            <div class="tool-save">$0/call</div>
-            <div><span class="badge badge-live-d">Live</span></div>
+          <div class="tool-row" role="row">
+            <div class="tool-name" role="cell">senkani_vision</div>
+            <div class="tool-replaces" role="cell">API call</div>
+            <div role="cell"><div class="tool-desc">Vision model on Apple Silicon (Gemma via MLX). OCR, UI analysis, screenshot reading.</div><div class="tool-how">Input: image path or base64 PNG. Output: text or structured JSON. Sub-500ms on M-series. Fully offline.</div></div>
+            <div class="tool-save" role="cell">$0/call</div>
+            <div role="cell"><span class="badge badge-live-d">Live</span></div>
           </div>
-          <div class="tool-row">
-            <div class="tool-name">senkani_session</div>
-            <div class="tool-replaces">—</div>
-            <div><div class="tool-desc">Query session metrics, toggle features, manage pane state from within a tool call.</div><div class="tool-how">Actions: <code>stats</code> / <code>toggle</code> / <code>pane-list</code> / <code>clear-cache</code>. Writes to SessionDatabase and live MCPSession state.</div></div>
+          <div class="tool-row" role="row">
+            <div class="tool-name" role="cell">senkani_session</div>
+            <div class="tool-replaces" role="cell">—</div>
+            <div role="cell"><div class="tool-desc">Query session metrics, toggle features, manage pane state from within a tool call.</div><div class="tool-how">Actions: <code>stats</code> / <code>toggle</code> / <code>pane-list</code> / <code>clear-cache</code>. Writes to SessionDatabase and live MCPSession state.</div></div>
             <div class="tool-save na">—</div>
-            <div><span class="badge badge-live-d">Live</span></div>
+            <div role="cell"><span class="badge badge-live-d">Live</span></div>
           </div>
-          <div class="tool-row">
-            <div class="tool-name">senkani_pane</div>
-            <div class="tool-replaces">—</div>
-            <div><div class="tool-desc">Control workspace panes from a tool call — open, close, focus, resize.</div><div class="tool-how">Sends IPC messages to the SwiftUI app via a local socket. Pane mutations execute on the main thread.</div></div>
+          <div class="tool-row" role="row">
+            <div class="tool-name" role="cell">senkani_pane</div>
+            <div class="tool-replaces" role="cell">—</div>
+            <div role="cell"><div class="tool-desc">Control workspace panes from a tool call — open, close, focus, resize.</div><div class="tool-how">Sends IPC messages to the SwiftUI app via a local socket. Pane mutations execute on the main thread.</div></div>
             <div class="tool-save na">—</div>
-            <div><span class="badge badge-live-d">Live</span></div>
+            <div role="cell"><span class="badge badge-live-d">Live</span></div>
           </div>
-          <div class="tool-row">
-            <div class="tool-name">senkani_watch</div>
-            <div class="tool-replaces">—</div>
-            <div><div class="tool-desc">Query recently changed files via FSEvents ring buffer — cursor + glob filter.</div><div class="tool-how">500-entry ring buffer on MCPSession. Query by timestamp cursor + glob pattern. Returns changed file paths since last check. Zero polling cost.</div></div>
+          <div class="tool-row" role="row">
+            <div class="tool-name" role="cell">senkani_watch</div>
+            <div class="tool-replaces" role="cell">—</div>
+            <div role="cell"><div class="tool-desc">Query recently changed files via FSEvents ring buffer — cursor + glob filter.</div><div class="tool-how">500-entry ring buffer on MCPSession. Query by timestamp cursor + glob pattern. Returns changed file paths since last check. Zero polling cost.</div></div>
             <div class="tool-save na">—</div>
-            <div><span class="badge badge-live-d">Live</span></div>
+            <div role="cell"><span class="badge badge-live-d">Live</span></div>
           </div>
-          <div class="tool-row">
-            <div class="tool-name">senkani_web</div>
-            <div class="tool-replaces">curl + LLM-parses-HTML</div>
-            <div><div class="tool-desc">Render <code>http://</code>/<code>https://</code> pages with full JavaScript and return AXTree markdown (headings, text, links, buttons, form fields).</div><div class="tool-how">WKWebView + semantic DOM extraction. SSRF guard: DNS-resolves the host via <code>getaddrinfo</code> before fetch, blocks any address in private/link-local/CGNAT/multicast ranges (including IPv4-mapped IPv6 and octal/hex IPv4). <code>decidePolicyFor</code> re-validates every redirect. <code>file://</code> not accepted — use <code>senkani_read</code> instead.</div></div>
-            <div class="tool-save">~99%</div>
-            <div><span class="badge badge-live-d">Live</span></div>
+          <div class="tool-row" role="row">
+            <div class="tool-name" role="cell">senkani_web</div>
+            <div class="tool-replaces" role="cell">curl + LLM-parses-HTML</div>
+            <div role="cell"><div class="tool-desc">Render <code>http://</code>/<code>https://</code> pages with full JavaScript and return AXTree markdown (headings, text, links, buttons, form fields).</div><div class="tool-how">WKWebView + semantic DOM extraction. SSRF guard: DNS-resolves the host via <code>getaddrinfo</code> before fetch, blocks any address in private/link-local/CGNAT/multicast ranges (including IPv4-mapped IPv6 and octal/hex IPv4). <code>decidePolicyFor</code> re-validates every redirect. <code>file://</code> not accepted — use <code>senkani_read</code> instead.</div></div>
+            <div class="tool-save" role="cell">~99%</div>
+            <div role="cell"><span class="badge badge-live-d">Live</span></div>
           </div>
-          <div class="tool-row">
-            <div class="tool-name">senkani_knowledge</div>
-            <div class="tool-replaces">—</div>
-            <div><div class="tool-desc">Query and update the project knowledge graph — entities, links, decisions, FTS5 search.</div><div class="tool-how">7 actions: upsert_entity, get_entity, list_entities, upsert_link, search_knowledge (FTS5), list_decisions, graph. Session brief injected at startup.</div></div>
+          <div class="tool-row" role="row">
+            <div class="tool-name" role="cell">senkani_knowledge</div>
+            <div class="tool-replaces" role="cell">—</div>
+            <div role="cell"><div class="tool-desc">Query and update the project knowledge graph — entities, links, decisions, FTS5 search.</div><div class="tool-how">7 actions: upsert_entity, get_entity, list_entities, upsert_link, search_knowledge (FTS5), list_decisions, graph. Session brief injected at startup.</div></div>
             <div class="tool-save na">—</div>
-            <div><span class="badge badge-live-d">Live</span></div>
+            <div role="cell"><span class="badge badge-live-d">Live</span></div>
           </div>
-          <div class="tool-row">
-            <div class="tool-name">senkani_version</div>
-            <div class="tool-replaces">—</div>
-            <div><div class="tool-desc">Version negotiation: <code>server_version</code>, <code>tool_schemas_version</code>, <code>schema_db_version</code>, and the list of exposed tools.</div><div class="tool-how">Clients cache tool schemas keyed on <code>tool_schemas_version</code>. That number increments on any breaking change to a tool's input schema or output contract. <code>schema_db_version</code> surfaces <code>PRAGMA user_version</code> on the session DB for migration diagnostics.</div></div>
+          <div class="tool-row" role="row">
+            <div class="tool-name" role="cell">senkani_version</div>
+            <div class="tool-replaces" role="cell">—</div>
+            <div role="cell"><div class="tool-desc">Version negotiation: <code>server_version</code>, <code>tool_schemas_version</code>, <code>schema_db_version</code>, and the list of exposed tools.</div><div class="tool-how">Clients cache tool schemas keyed on <code>tool_schemas_version</code>. That number increments on any breaking change to a tool's input schema or output contract. <code>schema_db_version</code> surfaces <code>PRAGMA user_version</code> on the session DB for migration diagnostics.</div></div>
             <div class="tool-save na">—</div>
-            <div><span class="badge badge-live-d">Live</span></div>
+            <div role="cell"><span class="badge badge-live-d">Live</span></div>
           </div>
         </div>
       </div><!-- end #mcp-tools -->
@@ -1989,7 +2081,7 @@ unchanged — only prose is compressed.</span></div>
 
         <div class="ref-item">
           <div class="ref-item-hd"><span class="ref-name plain">Pane types</span></div>
-          <div class="pane-grid-4">
+          <div class="pane-grid-4" aria-hidden="true">
             <!-- Terminal pane -->
             <div class="pane inactive">
               <div class="pane-accent" style="background:var(--app-green);"></div>
@@ -2099,9 +2191,19 @@ unchanged — only prose is compressed.</span></div>
         <div class="ref-section-hd">
           <div class="overline">What's built</div>
           <h2>The compression layer <span class="accent">is live.</span></h2>
-          <p style="font-size:16px; color:var(--ink-soft); max-width:600px; line-height:1.65; margin-top:12px;">MCP intelligence layer, symbol indexer (22 languages), filter pipeline, hook relay with Layer 3 smart denials, session database, local ML, budget enforcement, per-pane budget hard caps, benchmark suite (80.37× on fixtures), output sandboxing, agent timeline, knowledge graph (entities + decisions + coupling + enrichment), session continuity, compound learning, agent usage tracking, BM25+RRF search fusion, @-mention context pinning, entropy-based secret detection, L0/L1/L2 tiered context pre-warming, WARP.md skill auto-discovery, JS-rendered web fetch + AXTree extraction (senkani_web), v0.2.0 security hardening (SSRF guard with DNS resolution + redirect re-validation + WKContentRuleList subresource blocklist that stops hostile pages from probing private IPs via img/script/xhr, prompt injection guard default-on with multilingual patterns (ES/FR/DE/PT/IT) and NFKC-folded Fullwidth/Math-Alphanumeric/Greek homoglyphs, 13 secret-detector families (Anthropic/OpenAI/OpenAI-project/AWS/Slack/GCP/Stripe/npm/HuggingFace/GitHub/bearer/generic/AWS-id) with short-circuit fast path, socket-auth handshake with bounded-wait poll() so same-UID DoS can't hold the listener, versioned schema migrations, scheduled retention pruning, version negotiation via senkani_version, unified `full:true` escape-hatch vocabulary with one-release deprecation shim, opt-in socket auth via SENKANI_SOCKET_AUTH=on with rotating per-startup token at ~/.senkani/.token, opt-in structured JSON logs via SENKANI_LOG_JSON=1 with sink-side SecretDetector redaction so stray tokens never reach stderr, event_counters migration (v2) surfaced via `senkani stats --security` + `senkani_session` with Gelman rate annotation and Cavoukian path redaction, `senkani export --output` JSONL data-portability, 17 MCP tools total, CLI smoke test harness covering every subcommand's name/abstract/help/parse path) — all working. 1091 unit tests passing. 16 pane types live.</p>
+          <p style="font-size:16px; color:var(--ink-soft); max-width:600px; line-height:1.65; margin-top:12px;">All core features are live and tested. 1,182 unit tests passing. 17 MCP tools, 18 CLI commands, 16 pane types.</p>
+          <ul style="font-size:14px; color:var(--ink-soft); max-width:620px; line-height:1.7; margin:16px 0 0; padding-left:20px; display:grid; gap:6px;">
+            <li><strong>Hook relay + filter pipeline</strong> — 24 command-specific rules; Layer 3 smart denials (re-read suppression, command replay, trivial routing, symbol upgrade, redundant validation); 80.37× overall reduction on fixture suite</li>
+            <li><strong>Symbol indexer</strong> — 22 languages, tree-sitter AST, FSEvents incremental updates, bidirectional dependency graph, container hierarchy, &lt;5ms cold / &lt;1ms cached</li>
+            <li><strong>Session database + analytics</strong> — SQLite + FTS5, per-call token tracking, budget enforcement at hook layer, BM25+RRF search fusion, @-mention context pinning, session continuity, JSONL data export</li>
+            <li><strong>Local ML</strong> — MiniLM embeddings (384-dim) + Gemma vision via MLX on Neural Engine; fully offline after download; L0/L1/L2 tiered context pre-warming</li>
+            <li><strong>Knowledge graph + compound learning</strong> — entities, decisions, co-change coupling, enrichment; LearnedFilterRule v2 with Laplace-smoothed confidence; WARP.md skill auto-discovery; <code>senkani_bundle</code> for budget-bounded codebase snapshots</li>
+            <li><strong>Security hardening (v0.2.0)</strong> — SSRF guard with DNS pre-resolution + redirect re-validation + WKContentRuleList subresource blocklist; prompt injection guard (multilingual + homoglyph NFKC-folded); 13 secret-detector families with entropy-based detection; socket-auth handshake; opt-in structured JSON logs with sink-side redaction</li>
+            <li><strong>JS-rendered web fetch</strong> — <code>senkani_web</code> returns AXTree markdown via WKWebView; version negotiation via <code>senkani_version</code>; CLI smoke test harness covering every subcommand</li>
+          </ul>
         </div>
 
+        <h3 class="visually-hidden">Feature inventory</h3>
         <div class="feature-grid">
           <div class="feature">
             <div class="num-row"><div class="num">01</div><span class="badge badge-live">Live</span></div>
@@ -2115,8 +2217,8 @@ unchanged — only prose is compressed.</span></div>
           </div>
           <div class="feature">
             <div class="num-row"><div class="num">03</div><span class="badge badge-live">Live</span></div>
-            <h4>15 MCP tools</h4>
-            <p>senkani_read, senkani_exec, senkani_search, senkani_fetch, senkani_explore, senkani_deps, senkani_validate, senkani_parse, senkani_outline, senkani_embed, senkani_vision, senkani_watch, senkani_session, senkani_pane, senkani_knowledge.</p>
+            <h4>17 MCP tools</h4>
+            <p>senkani_read, senkani_exec, senkani_search, senkani_fetch, senkani_explore, senkani_deps, senkani_validate, senkani_parse, senkani_outline, senkani_embed, senkani_vision, senkani_watch, senkani_session, senkani_pane, senkani_knowledge, senkani_web, senkani_version.</p>
           </div>
           <div class="feature">
             <div class="num-row"><div class="num">04</div><span class="badge badge-live">Live</span></div>
@@ -2217,7 +2319,7 @@ swift build -c release
 
         <div class="cta-row" style="margin-top:32px;">
           <a class="btn btn-primary" href="https://github.com/ckluis/senkani">View on GitHub</a>
-          <a class="btn btn-secondary" href="#mcp-tools">See the 13 tools</a>
+          <a class="btn btn-secondary" href="#mcp-tools">See the 17 tools</a>
           <a class="btn btn-ghost" href="#how-it-works">How it works</a>
         </div>
       </div>
@@ -2239,7 +2341,7 @@ swift build -c release
      ================================================================ -->
 <footer>
   <div class="ft">sen<span style="color:var(--accent)">kani</span></div>
-  <p>閃蟹 — fast claw. Native macOS, written in Swift. Sources/Filter, Sources/Indexer, Sources/MCPServer, Sources/Hook.</p>
+  <p><span lang="zh">閃蟹</span> — fast claw. Native macOS, written in Swift. Sources/Filter, Sources/Indexer, Sources/MCPServer, Sources/Hook.</p>
   <p style="margin-top:20px;">© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</p>
 </footer>
 
@@ -2347,6 +2449,25 @@ swift build -c release
 
   // Seed the TOC with the first chapter on load
   if (chapters.length) renderToc(chapters[0].id);
+
+  // ── Mobile hamburger nav ────────────────────────────────────────
+  const hamburger = document.querySelector('.topnav-hamburger');
+  const navLinks  = document.getElementById('topnav-links');
+  if (hamburger && navLinks) {
+    hamburger.addEventListener('click', () => {
+      const isOpen = navLinks.classList.toggle('open');
+      hamburger.setAttribute('aria-expanded', String(isOpen));
+      hamburger.setAttribute('aria-label', isOpen ? 'Close navigation menu' : 'Open navigation menu');
+    });
+    // Close menu when a link is clicked
+    navLinks.querySelectorAll('a').forEach(a => {
+      a.addEventListener('click', () => {
+        navLinks.classList.remove('open');
+        hamburger.setAttribute('aria-expanded', 'false');
+        hamburger.setAttribute('aria-label', 'Open navigation menu');
+      });
+    });
+  }
 
   // ── Tab buttons ─────────────────────────────────────────────────
   document.querySelectorAll('.tab-btn').forEach(btn => {

@@ -1,110 +1,27 @@
 # Senkani (閃蟹)
 
-**A native macOS terminal workspace with built-in AI intelligence.**
-
-Senkani is two things in one binary: a **multi-pane terminal workspace** (native SwiftUI, Apple Silicon, sub-3ms render latency) and an **MCP intelligence layer** that intercepts perception tasks before they hit your AI — compressing output, indexing symbols, redacting secrets, running validators locally. The result: 50–90% fewer tokens per session, no workflow changes required, and a workspace where your terminal, notes, browser, and analytics live side by side.
-
----
-
-## What's Built vs What's Coming
-
-| Feature | Status |
-|---------|--------|
-| **Terminal pane** — SwiftTerm, Apple Silicon native, configurable font size | ✅ Live |
-| **Markdown preview pane** — live-rendered from file | ✅ Live |
-| **Browser pane** — WKWebView embedded | ✅ Live |
-| **Code Editor pane** — pure SwiftUI, tree-sitter syntax highlighting (22 languages), file tree sidebar, symbol navigation (Cmd+click → definition), token intelligence overlays | ✅ Live |
-| **Analytics pane** — token/cost savings with charts, persistent across restarts | ✅ Live |
-| **Dashboard pane** — multi-project portfolio: hero savings card, project breakdown table, feature charts, auto-generated insights | ✅ Live |
-| **Model manager pane** — download/manage local LLMs | ✅ Live |
-| **Savings test pane** — fixture benchmark (80.37x) + live per-feature breakdown + session history with paired fixture/live multipliers | ✅ Live |
-| **Diff viewer / log viewer / scratchpad panes** | ✅ Live |
-| **Agent timeline pane** — tool call history with optimization events | ✅ Live |
-| **Knowledge base pane** — entity list (sort/filter/enrichment badge), understanding editor, decision records, co-change couplings, wiki-link `[[completion]]`, canvas relations graph, session brief | ✅ Live |
-| **Multi-project workspace** — persistent per-project layout | ✅ Live |
-| **Menu bar integration** — lifetime stats, socket toggle, launch-at-login | ✅ Live |
-| **⌘K command palette** — search-as-you-type for panes, themes, actions | ✅ Live |
-| **MCP intelligence layer** — 17 tools, auto-registers with Claude Code | ✅ Live |
-| **Filter pipeline** — 44 command-specific rules, ANSI stripping, dedup | ✅ Live |
-| **Secret redaction** — API keys, AWS tokens, GitHub PATs, Bearer tokens | ✅ Live |
-| **Terse compression** — algorithmic word/phrase minimization | ✅ Live |
-| **Symbol indexer** — 22 languages (incl. HTML/CSS), tree-sitter AST + regex fallback | ✅ Live |
-| **Incremental indexing** — re-indexes only changed files, symbol staleness notifications | ✅ Live |
-| **Dependency graph** — bidirectional imports, 15+ languages | ✅ Live |
-| **Session database** — SQLite + FTS5, token tracking, cost history, metrics persistence | ✅ Live |
-| **Hook system** — budget enforcement, tool routing, Layer 3 interception (5 patterns), auto-validate reactions, <5ms latency | ✅ Live |
-| **Layer 3 interception** — re-read suppression, command replay, trivial routing, search upgrade, redundant validation | ✅ Live |
-| **Auto-validate** — PostToolUse → background syntax/type check → advisory on next tool call | ✅ Live |
-| **Model routing** — per-pane presets (Auto/Build/Research/Quick/Local), difficulty scoring, CLAUDE_MODEL env injection | ✅ Live |
-| **Local vision** — Gemma on Apple Silicon MLX, no API cost | ✅ Live |
-| **Local embeddings** — MLX, no API cost | ✅ Live |
-| **`senkani_watch` tool** — FSEvents ring buffer; query changed files by cursor + glob | ✅ Live |
-| **`senkani_exec` background mode** — detach long builds, poll stdout, kill on demand | ✅ Live |
-| **Process lifecycle controls** — kill/restart buttons in pane header, PID tracking | ✅ Live |
-| **Metrics persistence** — all savings data survives app restart via SQLite | ✅ Live |
-| **Smart first-read selection** — outline-first reads return symbol structure by default | ✅ Live |
-| **Adaptive truncation** — output caps scale with budget remaining | ✅ Live |
-| **Broadcast mode** — type once, all terminal panes hear | ✅ Live |
-| **Notification rings** — blue ring on panes with unread output | ✅ Live |
-| **Sidebar metadata** — git branch per project | ✅ Live |
-| **Display settings** — font size slider + presets per pane | ✅ Live |
-| **CLI** — 18 commands: exec, search, bench, doctor, grammars, kb, eval, learn, uninstall, … | ✅ Live |
-| **Benchmarking suite** — filter, indexer, cache, terse, schemaMin — with reporters | ✅ Live |
-| **Pane socket IPC** — instant pane control via Unix socket (<10ms vs 5s polling) | ✅ Live |
-| **Socket health check** — senkani doctor verifies daemon responsiveness | ✅ Live |
-| IDE pane (LSP completions, inline diagnostics, multi-cursor) | 🔄 Planned |
-| Agent runner pane (spawn, observe, interrupt) | 🔄 Planned |
-| Workflow builder (pipeline graph UI) | 🔄 Planned |
-| SSH / Mosh pane | 🔄 Planned |
-| **Session continuity** — context brief injected at session open, agent resumes from prior session | ✅ Live |
-| **Prompt injection detection** — scans tool responses for embedded attack strings, 4 categories, anti-evasion normalization | ✅ Live |
-| **MCP output compaction** — `knowledge`, `validate`, `explore` compact by default; `detail:'full'` escape hatch; 30% tool description trim | ✅ Live |
-| **Agent usage tracking** — tier-1 exact (Claude Code JSONL), tier-2 estimated (hooks), tier-3 partial (MCP-only); per-agent breakdown in `senkani eval` | ✅ Live |
-| **Compound learning** — post-session waste analysis, learned filter rule proposals, `senkani learn status/apply/reject` | ✅ Live |
-| **Workstream isolation** — git worktree + pane pair, lifecycle hooks | ✅ Live |
-
----
+One macOS binary, two jobs: a **native multi-pane workspace** (SwiftUI, sub-3ms renders, 16 pane types) and an **MCP intelligence layer** that cuts 50–90% of the tokens your AI spends on perception. Compression, symbol indexing, secret redaction, local validators, and Layer-3 hook interception run before the request ever leaves your machine. No workflow changes — point Claude Code at it and your session just costs less.
 
 ## Quick Start
 
-**Build and run:**
 ```bash
-git clone https://github.com/ckluis/senkani.git
-cd senkani
+git clone https://github.com/ckluis/senkani.git && cd senkani
 swift build -c release
-.build/release/SenkaniApp
+.build/release/SenkaniApp           # launch the workspace
+.build/release/senkani doctor       # verify setup + MCP registration
 ```
 
-**CLI:**
-```bash
-# Run a command with token-compressed output
-senkani exec -- git status
-
-# Search your codebase by symbol
-senkani search MyViewController
-
-# Run the benchmark suite
-senkani bench
-
-# Check your setup
-senkani doctor
-
-# View security event counters (injection detections, SSRF blocks,
-# retention prunes, migration history) with Gelman rate annotations
-senkani stats --security
-senkani stats --security --verbose   # per-row, per-project, last-seen
-
-# Export your session data (JSONL, one row per line)
-senkani export --output ~/senkani-backup.jsonl --since 2026-04-01 --redact
-```
-
-**MCP server:** Auto-registered globally in `~/.claude/settings.json` on first app launch — no `senkani init` needed. The MCP server only activates in Senkani-managed terminal panes (gated by `SENKANI_PANE_ID` env var). Non-Senkani terminals never see Senkani tools, even if the app is running.
+The MCP server auto-registers globally in `~/.claude/settings.json` on first
+launch and only activates inside Senkani-managed terminal panes (gated by the
+`SENKANI_PANE_ID` env var). Non-Senkani terminals never see the tools even if
+the app is running. See [CHANGELOG.md](CHANGELOG.md) for the full shipped
+feature list and roadmap.
 
 ---
 
 ## The MCP Intelligence Layer
 
-17 tools that sit between Claude and your filesystem, compressing everything before it hits your token budget.
+19 tools that sit between Claude and your filesystem, compressing everything before it hits your token budget.
 
 | Tool | What it does | Savings |
 |------|-------------|---------|
@@ -125,6 +42,20 @@ senkani export --output ~/senkani-backup.jsonl --since 2026-04-01 --redact
 | `senkani_session` | View stats, toggle features, pin/unpin symbol context (`pin`/`unpin`/`pins`) | — |
 | `senkani_knowledge` | Query/update the project knowledge graph — entities, links, decisions, FTS5 search. `full: true` for complete entity detail (summary is default). | near-zero |
 | `senkani_version` | Version negotiation: `server_version`, `tool_schemas_version`, `schema_db_version`, list of exposed tools. Cache client schemas keyed on `tool_schemas_version`. | — |
+| `senkani_bundle` | Budget-bounded repo snapshot. Composes symbol outlines + dep graph + KB entities + README in a canonical truncation-robust order. Emits `format: "markdown"` (default) or stable-schema `format: "json"` (`BundleDocument`). Path-validated; embedded free-text runs through `SecretDetector`. | repo-level |
+| `senkani_repo` | Query any public GitHub repo without cloning. Actions: tree / file / readme / search. Host-allowlisted (api.github.com + raw.githubusercontent.com), anonymous by default (60 req/h); `GITHUB_TOKEN` env raises the limit. All responses SecretDetector-scanned. TTL+LRU cache. | query-level |
+
+**Compound learning** (Phase K) — the system learns your workflow across sessions. Proposals go `.recurring → .staged → .applied` with a lazy session-start sweep (`recurrence ≥ 3 + confidence ≥ 0.7`). Four artifact types:
+- **Filter rules** (H, H+1) — `head(50)` + substring `stripMatching(...)` from the post-session waste analyzer. Regression-gated on real `commands.output_preview` samples. Laplace-smoothed confidence.
+- **Context docs** (H+2b) — files read across ≥3 distinct sessions become priming documents at `.senkani/context/<title>.md`, injected into the next session's brief as a one-line "Learned:" section. Body is `SecretDetector`-scanned on every read/write.
+- **Instruction patches** (H+2c) — tool hints derived from per-session retry patterns. **Never auto-apply from the daily sweep** — Schneier constraint forces explicit `senkani learn apply <id>`.
+- **Workflow playbooks** (H+2c) — named multi-step recipes mined from ordered tool-call pairs within 60 s. Applied at `.senkani/playbooks/learned/<title>.md` — namespace-isolated from shipped skills.
+
+Thresholds are operator-tunable via `~/.senkani/compound-learning.json` or `SENKANI_COMPOUND_*` env vars. CLI: `senkani learn status --type <filter|context>` · `apply` · `reject` · `sweep` · `enrich` · `config {show,set}` · `review [--days N]` (sprint cadence) · `audit [--idle D]` (quarterly currency review).
+
+Gemma 4 optionally enriches rationale strings (H+2a) — contained to a dedicated `enrichedRationale` field, never enters `FilterPipeline`.
+
+**Knowledge base** (Phase F + F+1..F+5) integrates with compound learning: `.senkani/knowledge/*.md` is the source of truth, SQLite is a rebuilt index (`KBLayer1Coordinator` detects staleness + corrupt-DB recovery), entities mentioned ≥5× per session get queued for Gemma enrichment, `EnrichmentValidator` flags information loss / contradiction / excessive rewrite before commit, `senkani kb rollback / history / timeline` wrap the append-only evidence + history archive. `KBCompoundBridge` knits the two systems: high-mention entities boost compound-learning confidence; applied context docs seed KB entity stubs; rolling back a KB entity cascades to invalidate derived context docs.
 
 ---
 
@@ -230,7 +161,8 @@ Numbers from the built-in benchmark suite (`senkani bench`):
 | **Filter** | — | Token compression: 44 cmd rules, ANSI strip, dedup, secrets, terse |
 | **Indexer** | SwiftTreeSitter | 22 tree-sitter backends, FTS5 search, dependency graph, incremental parsing, FSEvents |
 | **Bench** | Core, Filter, Indexer | Token savings test suite: 10 tasks × 7 configs, quality gates, JSON export |
-| **MCP** | Core, Filter, Indexer, MLX | 17 MCP tools, socket server (mcp + hook + pane), vision + embedding inference |
+| **MCP** | Core, Filter, Indexer, Bundle, MLX | 18 MCP tools, socket server (mcp + hook + pane), vision + embedding inference, Gemma 4 rationale adapter |
+| **Bundle** | Core, Filter, Indexer | `BundleComposer` — budget-bounded repo-snapshot composition for `senkani_bundle` |
 | **HookRelay** | — | Zero-dep hook relay library shared by senkani-hook binary and app's --hook mode |
 | **CLI** | Core, Filter, Indexer, Bench | 18 commands: exec, search, bench, doctor, grammars, kb, eval, learn, init, … |
 | **SenkaniApp** | All + SwiftTerm | SwiftUI workspace: 16 pane types, multi-project, ⌘K palette, dashboard, menu bar |

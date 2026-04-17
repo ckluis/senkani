@@ -1,0 +1,284 @@
+# Senkani — Manual test queue
+
+Live things that unit tests and CI can't validate. Exercise when you're
+back at your machine and can attach Senkani to a real Claude Code (or
+Cursor / Codex) session. Tick items off with a date line.
+
+Older queue items are also tracked in `spec/roadmap.md` "Manual test queue
+(requires real sessions / user's physical machine)" — this file is the
+wave-by-wave operator diary; the roadmap is the long-lived spec.
+
+---
+
+## Wave-by-wave (most recent first)
+
+### senkani_bundle JSON format (shipped 2026-04-17)
+
+7 unit tests cover determinism, round-trip, fixture shape, secret
+redaction, include-set filtering, and truncation. Real-world
+validation items:
+
+- [ ] **Feed `senkani bundle --format json` output into a downstream
+      tool.** Pipe the JSON into `jq` to extract the top-N imported
+      modules or the outlines for a specific file. Confirm the schema
+      is stable enough to script against without string parsing.
+- [ ] **Decode against the schema from a second language.** Write a
+      short Python snippet (or `jq` walk) that asserts the
+      `header.provenance` matches `_Senkani bundle_` and every file in
+      `outlines.files[].path` is a real file under the project root.
+      Protects against schema drift vs this repo's `BundleDocument`.
+- [ ] **Spot-check budget truncation on a big real repo.** Run
+      `senkani bundle --format json --budget 2000` on this repo (or
+      something larger) and confirm the `truncated` block names a
+      section (not null) and the response is still valid JSON.
+- [ ] **MCP path.** In a Claude Code session, call
+      `senkani_bundle format:"json"` and confirm the returned text is
+      parseable JSON. Also confirm the telemetry command string in
+      `senkani stats` includes `format=json`.
+
+### senkani_repo (19th MCP tool, shipped 2026-04-17)
+
+29 unit tests cover validation, host allowlist, sanitization, URLProtocol-
+stubbed network paths, auth header gating, and cache mechanics. Real-world
+validation items:
+
+- [ ] **Rate-limit message on a real API blow.** Make 60+ anonymous calls
+      in an hour. Confirm the 61st returns a clear `rateLimited` error
+      with remaining count + reset timestamp. Confirm setting
+      `GITHUB_TOKEN` resumes normal operation.
+- [ ] **Secret redaction on a real repo.** Point `senkani_repo action:readme
+      repo:some-repo/with-secrets` at a repo whose README contains a
+      known API-key format. Confirm the returned body has `[REDACTED:…]`
+      in place of the key.
+- [ ] **`action: tree` on a large repo.** Fire against a large real repo
+      (kubernetes/kubernetes or similar). Confirm the tree response
+      truncation notice appears when output exceeds 100 KB.
+- [ ] **Cache hit behavior.** Make the same `senkani_repo action:readme
+      repo:owner/name` call twice within 15 min. Confirm
+      `senkani stats --security | grep repo_tool.cache.hit` increments.
+
+### Nine-round compound-learning + KB master plan (shipped 2026-04-17, Rounds 1–9)
+
+Rounds 1–8 are shipped in code + unit tests (1204 → 1278, +74 tests
+this arc). Round 9 consolidated docs. Six behavioral items below
+that unit tests can't cover — exercise when you're back at your machine
+with real sessions.
+
+- [ ] **H+2c instruction patches never auto-apply.** Engineer a
+      session with ≥3 retries of the same `senkani_search` command,
+      repeat across ≥2 sessions. Confirm after the daily sweep that
+      `senkani learn status --type filter` shows the instruction patch
+      as `Staged`, NOT `Applied`. Confirm a manual
+      `senkani learn apply <id>` is the only path that moves it.
+- [ ] **H+2c workflow playbook lands at `.senkani/playbooks/learned/`.**
+      After a session with ≥3 outline→fetch pairs within 60 s across
+      ≥2 sessions, confirm `senkani learn status` shows a playbook.
+      Apply it. Confirm the file appears at
+      `.senkani/playbooks/learned/outline-then-fetch.md` — NOT under
+      `.senkani/skills/`. Hand-edit the description, observe edit
+      persists.
+- [ ] **H+2d review/audit CLI output is actually useful.** After
+      ~1 week of real sessions, run `senkani learn review --days 7`.
+      Review the output for decision-making quality: does the grouping
+      help you triage? Are staged proposals in the order that matches
+      your mental urgency? After ~3 months, run
+      `senkani learn audit --idle 60` and note whether the stale-flags
+      catch anything worth retiring.
+- [ ] **F+1 rebuild on manual edit.** Hand-edit
+      `.senkani/knowledge/SomeEntity.md`. Start a new Senkani session.
+      Confirm stderr logs `knowledge.rebuild.triggered` and the
+      SQLite-indexed `compiledUnderstanding` reflects your edit.
+      (Phase F.7 already did this on commit; F+1 adds the staleness
+      detection that catches out-of-band edits.)
+- [ ] **F+3 validator flags a bad enrichment.** Propose a context
+      doc update that deletes the Compiled Understanding section
+      (via `senkani_knowledge propose understanding=""`). Confirm the
+      validator surfaces `informationLoss`. Commit anyway with
+      operator override (TBD — for now, validator output is advisory
+      via the CLI). Roll back via `senkani kb rollback SomeEntity`.
+- [ ] **F+5 cascade invalidation.** Apply a context doc derived from
+      SessionDatabase (title `sessiondatabase-swift`). Roll back the
+      SessionDatabase KB entity to yesterday via
+      `senkani kb rollback SessionDatabase --to YYYY-MM-DD`. Call
+      `KBCompoundBridge.invalidateDerivedContext("SessionDatabase",
+      ...)` (wire into the rollback CLI in a follow-up — Round 8
+      shipped the bridge, the auto-call-on-rollback is a nice-to-have).
+      Confirm the applied context doc drops back to `.recurring`.
+
+### Phase K — Compound Learning H+2b (shipped 2026-04-17)
+
+Round 1 of the nine-round master plan. 27 unit tests cover the polymorphic
+store, migration, generator mechanics, lifecycle, session-brief
+integration, counter emission. What units can NOT tell you: whether the
+*context signals* are useful on a real project. Five items below — all
+require your machine with real session activity.
+
+- [ ] **Seed real recurring-file data.** Open 3+ Senkani sessions over
+      a day, each reading `Sources/Core/SessionDatabase.swift` (or
+      another file you actually work on often). Confirm
+      `senkani learn status --type context` shows a `.recurring` doc
+      for that path after the third session. Recurrence counter should
+      read `×1` on first detection and climb as more sessions flag the
+      same file.
+- [ ] **Daily sweep promotes it.** Cross the recurrence threshold
+      (`CompoundLearning.dailySweepRecurrenceThreshold`, default 3),
+      then open a 4th session. Stderr should log
+      `[compound_learning] daily sweep promoted N rule(s) → staged`;
+      `senkani learn status --type context` should show the doc under
+      `Context staged`.
+- [ ] **`senkani learn apply <id>` writes to disk.** Apply the staged
+      context doc. Confirm
+      `.senkani/context/<title>.md` exists with the expected markdown
+      body. Hand-edit the body to add a project-specific
+      note — preserves through the next session because the file is
+      authoritative on `.applied` reads.
+- [ ] **Next session's brief includes the doc.** Start a new Senkani
+      session. The MCP server's `instructions` field (visible in
+      `SENKANI_LOG_JSON=1` stderr or via the Claude Code MCP debug
+      surface) should contain a `Session context: … Learned:
+      <title> — <first content line>.` section.
+- [ ] **Hand-edit → secret leak defense.** Put a fake API key into
+      `.senkani/context/<title>.md` (use e.g. `sk-ant-api03-` + 85
+      chars). Start a new session. Confirm the brief shows
+      `[REDACTED:…]` instead of the raw key — `ContextFileStore.read`
+      re-scans at read time, not just on write.
+
+### Phase K — Compound Learning H+2a (shipped 2026-04-17)
+
+22 unit tests cover the mechanics end-to-end with a `MockRationaleLLM`
+— prompt capping, output capping, SecretDetector scrubbing on LLM
+output, silent fallback on failure, v2→v3 migration, orchestration
+hook, threshold config precedence. What the unit tests can NOT tell
+you: whether real Gemma 4 output on a real rules file is actually
+better than the deterministic rationale. That part is the operator's
+job. Five items below — all require your machine with MLX + a Gemma
+tier downloaded.
+
+- [ ] **First Gemma enrichment on a real staged rule.** Open a Senkani
+      pane (starts an MCP session → triggers `runDailySweep` with the
+      MLX-backed adapter). Seed a `.recurring` rule that meets the
+      promotion threshold. Confirm the detached Task fires and
+      `senkani learn status --enriched` now shows an `✦` line with
+      an LLM-generated sentence. Visually inspect for coherence.
+- [ ] **Hallucination check on the first 5 enriched rules.** For each
+      real enrichment, compare against the deterministic rationale.
+      Note any enrichment that introduces facts not supported by the
+      rule's command/ops/counts fields. If >1 of 5 hallucinates,
+      drop the feature back to deterministic-only via
+      `senkani learn config set minConfidence 0.99` (effectively
+      disables promotion) pending H+2a+ refinement.
+- [ ] **Latency on 8 GB vs 16 GB machines.** Time the enrichment Task
+      from `compound_learning.enrichment.queued` bump to
+      `compound_learning.enrichment.success`. Record p50/p95. If
+      p95 > 5 s, raise the issue — model-load amortization may not
+      be working as designed.
+- [ ] **No-model fallback.** Temporarily rename
+      `~/.cache/huggingface/hub/models--mlx-community--gemma-*` or
+      otherwise make the Gemma model unavailable. Run a session.
+      Confirm `compound_learning.enrichment.failed` bumps but the
+      session itself completes cleanly. `senkani learn status --enriched`
+      should quietly fall back to the deterministic rationale (no
+      error message).
+- [ ] **Config file persistence across restarts.** Run
+      `senkani learn config set minConfidence 0.75`. Close the app.
+      Reopen. Run `senkani learn config show`. Confirm the value
+      persists. Confirm
+      `SENKANI_COMPOUND_MIN_CONFIDENCE=0.50 senkani learn config show`
+      reports 0.50 (env overrides file).
+- [ ] **Distribution log visibility.** Start a session, let
+      `runPostSession` fire. Confirm a line like
+      `[compound_learning] proposals=N sessions_p50=X p75=X p95=X
+      savedpct_p50=X p95=X` lands in the MCP stderr stream (or in
+      the JSON log if `SENKANI_LOG_JSON=1`). Over 10+ real sessions
+      this produces the histogram that H+2b will use for threshold
+      recalibration.
+
+### senkani_bundle (18th MCP tool, shipped 2026-04-17)
+
+Unit tests cover determinism, section order, budget truncation, secret
+redaction on embedded content, KB/deps topN caps, README discovery,
+empty-project edge case (16 tests). These are the things only a real
+project + real LLM can validate.
+
+- [ ] **Bundle an actual Senkani checkout.** Run `senkani bundle --output senkani-bundle.md` in the Senkani repo itself. Open the resulting markdown. Sanity checks:
+      - Provenance line lists correct project name, timestamp, budget
+      - File order is lex-sorted across the whole Sources/ tree
+      - KB section shows the most-mentioned entities from actual sessions
+      - README section contains the real README content with no secret leakage
+- [ ] **Feed the bundle to a frontier model.** Paste `senkani-bundle.md` into Claude.ai and ask: "Based only on this bundle, what are the main architectural layers?" Compare the answer to what you'd say yourself. This is the Karpathy P3 eval we deferred — human-in-the-loop qualitative signal.
+- [ ] **Bundle a large external project.** Run `senkani bundle --budget 40000 --root ~/code/some-big-project`. Confirm the truncation notice fires on the expected section and that the output is still coherent up to that point.
+- [ ] **Path traversal defense fires.** Try `senkani bundle --root ~/.aws`. Expect an error, no bundle produced, no file content emitted.
+- [ ] **`--output` path defense.** Try `senkani bundle --output /etc/passwd`. Expect either filesystem permission denial OR a clean error, never a partial write.
+- [ ] **MCP surface from Claude Code.** Call `senkani_bundle` from a Senkani pane's Claude Code session; confirm the response arrives, respects budget, appears in the Agent Timeline with the correct savings number.
+
+### Phase K — Compound Learning H+1 (shipped 2026-04-17)
+
+Unit tests cover every gate branch, migration, sweep, and counter (1159
+total). These are the things only a real session can exercise.
+
+- [ ] **Real post-session loop fires.** Start a real Claude Code session in
+      a Senkani pane, run ≥5 uncovered exec commands (e.g.
+      `docker compose logs`, `poetry show --tree`), let the session close
+      naturally. Then:
+      - `senkani learn status` — expect ≥1 rule in the `Recurring` section
+        with the new rationale line + confidence %
+      - `senkani stats --security | grep compound_learning` — expect at
+        least `compound_learning.run.post_session` and one
+        `compound_learning.proposal.*` counter
+- [ ] **Daily sweep promotes after 3× recurrence.** Repeat the same flow
+      across 3 separate sessions with the same uncovered command. On
+      session 4 start, stderr should log
+      `[compound_learning] daily sweep promoted N rule(s) → staged` and
+      `senkani learn status` should show it under `Staged`.
+- [ ] **stripMatching generator with real output.** Run a command whose
+      output has recurring noise lines (e.g. repeated timestamp
+      prefixes). After ≥5 sessions, confirm `senkani learn status`
+      surfaces a `stripMatching(<literal>)` proposal — NOT just
+      `head(50)`.
+- [ ] **Regression gate fires on a no-op proposal.** Engineer a scenario
+      where a proposed `head(50)` doesn't actually help (output <50
+      lines) and confirm the corresponding rejection counter bumps.
+- [ ] **`senkani learn apply` updates FilterPipeline.** Apply a staged
+      rule, start a NEW session, run the covered command, confirm
+      `senkani_session stats` shows the filter savings the rule
+      predicts.
+- [ ] **`senkani learn sweep` CLI end-to-end.** Manual trigger outside
+      MCPSession startup path — confirm it promotes and prints the
+      expected "run `senkani learn apply`" hint.
+- [ ] **Rationale surfaces in Agent Timeline pane.** Open the pane while
+      a compound-learning event fires; confirm the new rationale string
+      is visible (once GUI wiring lands — currently CLI-only).
+- [ ] **v1 rules file migrates on a machine that had Phase H installed.**
+      Keep a backup of an old `~/.senkani/learned-rules.json` with
+      `version: 1`. Launch Senkani, trigger one `save` path, confirm
+      file now reads `"version": 2` and every rule has `recurrenceCount`,
+      `sources`, `signalType: "failure"`, etc.
+
+### Prior waves (cross-link to existing queue)
+
+- Wave 1/2/3 hardening soak S1–S12 — see
+  `~/.claude/plans/soak-after-wave-3.md` and
+  `tools/soak/findings/*.md`.
+- `senkani uninstall` — 7 artifact sweep (`spec/cleanup.md` #15).
+- `senkani export --redact` round-trip PII check.
+- `senkani stats --security` live counter validation.
+- Structured-log shape via `SENKANI_LOG_JSON=1`.
+- Multi-process migration race (BSD flock cross-process).
+
+---
+
+## When to revisit
+
+Run through this list:
+
+1. When you're back at your physical machine with a real LLM client
+   configured.
+2. Before any "it works" claim reaches the README comparison
+   screenshots (Phase I) or the live-multiplier chart (Phase Q).
+3. After any compound-learning behavior change that the unit-test
+   fixtures don't simulate (agent variance, human-in-the-loop apply
+   decisions, cross-project contamination).
+
+Tick items off with `- [x] — YYYY-MM-DD — notes` lines. If a scenario
+surfaces a bug, file it in `spec/cleanup.md` rather than burying the
+finding here.

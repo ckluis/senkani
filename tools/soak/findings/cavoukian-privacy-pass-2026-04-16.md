@@ -95,14 +95,20 @@ for "this is a filesystem path" fields.
 **Still open for C3:** `senkani export` must apply the same redaction
 to output when `--redact` is passed. Tracked in C3.
 
-### C3 — P2: No data-portability export (OPEN)
+### C3 — P2: No data-portability export (CLOSED 2026-04-17)
 
 No `senkani export` command. User can't retrieve their own session
 data except by querying the SQLite file directly.
 
-**Mitigation plan:** ship `senkani export --output path.jsonl` that
-emits sessions + commands + token_events as JSONL. Respect
-`--redact` to apply path redaction. Not shipped this round.
+**Closed (2026-04-17):** `senkani export --output <file> [--since DATE]
+[--redact]` ships. Streams sessions + commands + token_events as
+JSONL (`{"row":{...}, "table":"..."}` one per line) via a dedicated
+read-only SQLite connection (no queue contention with the live MCP
+server). `--redact` passes `project_root` and any `/Users/<name>/`
+paths in `command` / `output_preview` through
+`ProjectSecurity.redactPath` (same rule as the Logger `.path(_)`
+case from C2). `--output -` writes to stdout so the JSONL can be
+piped. 6 `SessionExporterTests` cover shape, filter, and redaction.
 
 ### C5 — P3: Log stream may carry sensitive fields (CLOSED 2026-04-17)
 
@@ -128,10 +134,12 @@ gets it `[REDACTED:…]`'d in stderr output automatically. Unit tests:
 | C1 | Unredacted command text in DB | P2 | ✅ fixed this commit |
 | C4 | No user-facing wipe | P2 | ✅ fixed this commit |
 | C2 | project_root leaks username | P3 | ✅ fixed 2026-04-17 (Logger `.path(_)` case) |
-| C3 | No data-portability export | P2 | open — `senkani export` planned |
+| C3 | No data-portability export | P2 | ✅ fixed 2026-04-17 (`senkani export` JSONL) |
 | C5 | Log field redaction audit | P3 | ✅ fixed 2026-04-17 (sink-side SecretDetector in Logger) |
 
-C1 + C4 addressed this round. C2/C3/C5 tracked. Retention already
-covers token_events (90d), sandboxed_results (24h), and
-validation_results (24h) — the unbounded-retention table that matters
-most (commands) is now covered at the redaction layer.
+C1 + C4 addressed the initial round (2026-04-16). C2/C3/C5 closed
+the following day (2026-04-17). Retention covers token_events (90d),
+sandboxed_results (24h), and validation_results (24h). The Cavoukian
+pass is now complete; the next privacy-adjacent work is the manual
+`senkani wipe` soak walk (tracked in `spec/roadmap.md` manual-test
+queue).

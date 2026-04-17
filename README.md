@@ -151,7 +151,7 @@ A horizontal canvas of panes. Each pane is a primitive type; you arrange them ho
 Senkani is a trust boundary for LLM-driven tool calls. Security-sensitive features default to **on**; opt-outs are explicit env vars, not hidden flags.
 
 - **Prompt injection guard — on by default.** `InjectionGuard` scans every MCP tool response for instruction-override, tool-call injection, context-manipulation, and exfiltration patterns, with anti-evasion normalization (lowercase, zero-width strip, Cyrillic→Latin homoglyphs). Runs in a single linear pass. Override: `SENKANI_INJECTION_GUARD=off`.
-- **Web fetch SSRF hardening.** `senkani_web` resolves the target host via `getaddrinfo` before fetch and blocks any address in private/link-local/CGNAT/multicast ranges (including IPv4-mapped IPv6, octal/hex IPv4, and IPv4-compatible IPv6). Redirects are re-validated via `WKNavigationDelegate.decidePolicyFor` — a 3xx Location header to `10.x`/`169.254.169.254`/`::ffff:…` is cancelled. `file://` scheme is not accepted — read local files with `senkani_read`. Override for internal docs servers: `SENKANI_WEB_ALLOW_PRIVATE=on`.
+- **Web fetch SSRF hardening.** `senkani_web` resolves the target host via `getaddrinfo` before fetch and blocks any address in private/link-local/CGNAT/multicast ranges (including IPv4-mapped IPv6, octal/hex IPv4, and IPv4-compatible IPv6). Redirects are re-validated via `WKNavigationDelegate.decidePolicyFor` — a 3xx Location header to `10.x`/`169.254.169.254`/`::ffff:…` is cancelled. `file://` scheme is not accepted — read local files with `senkani_read`. **Subresource filter (F2):** a `WKContentRuleList` blocks `<img>`/`<script>`/`<xhr>`/etc. requests to the same private ranges — a hostile HTML page embedding `<img src="http://169.254.169.254/…">` cannot reach cloud metadata through WebKit's auto-rendering. Override for internal docs servers: `SENKANI_WEB_ALLOW_PRIVATE=on`.
 - **Secret redaction — on by default.** `SecretDetector` now short-circuits with `firstMatch` so no-match inputs don't pay the full regex cost (1 MB benign input scans in ~25 ms).
 - **Schema migrations — versioned + crash-safe.** Session DB uses `PRAGMA user_version` + a `schema_migrations` audit log. Cross-process coordination via `flock` sidecar. On failed migration, a kill-switch lockfile is written and subsequent boots refuse to run migrations until the operator inspects the DB.
 - **Retention — scheduled.** `RetentionScheduler` prunes `token_events` (90 d), `sandboxed_results` (24 h), and `validation_results` (24 h) on an hourly tick. Tune via `~/.senkani/config.json` → `"retention": { "token_events_days": 30, ... }`.
@@ -205,7 +205,7 @@ Numbers from the built-in benchmark suite (`senkani bench`):
 | Symbol search | <5ms cold, <1ms cached |
 | Secret scan | <2ms per KB |
 | Hook latency | <5ms active, <1ms passthrough |
-| Unit tests | **948 passing** |
+| Unit tests | **1022 passing** |
 | Binary size | ~28 MB universal |
 
 **About the numbers:** The 80.37x figure is from the fixture benchmark — synthetic tasks designed to exercise each optimization layer. Real sessions produce a lower multiplier. The Savings Test pane shows both numbers side by side: fixture ceiling and live floor. The live number is the honest one.
@@ -234,7 +234,7 @@ Prerequisites: macOS 14+, Swift 6.0+, Xcode 15+
 ```bash
 swift build          # debug
 swift build -c release
-swift test           # 948 tests
+swift test           # 1022 tests
 senkani doctor       # verify grammar and database setup
 ```
 

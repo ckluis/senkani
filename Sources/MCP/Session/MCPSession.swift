@@ -139,9 +139,11 @@ final class MCPSession: @unchecked Sendable {
         }
         // Pre-cache hot files from prior sessions (non-blocking)
         preCacheHotFiles()
-        // Pre-warm WebFetchEngine: spawns WebKit XPC subprocess once so first senkani_web call is fast
-        Task { @MainActor in
-            WebFetchEngine.shared.warmUp()
+        // Pre-warm WebFetchEngine: spawns WebKit XPC subprocess once AND compiles
+        // the F2 subresource blocklist (~50 ms one-time) before the first
+        // senkani_web call so the engine is ready with full SSRF defense.
+        Task {
+            await WebFetchEngine.shared.warmUp()
         }
         // Mine co-change coupling in background (idempotent; no-op if not a git repo)
         let _pr = projectRoot

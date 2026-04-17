@@ -49,37 +49,46 @@ the timeout path without spinning up a live listener.
 
 ---
 
-### F2 — P2: WebKit subresource SSRF gap
+### F2 — P2: WebKit subresource SSRF gap (CLOSED)
 
-**Evidence:** `NavigationHandler.webView(_:decidePolicyFor navigationAction:)`
+**Original evidence:** `NavigationHandler.webView(_:decidePolicyFor navigationAction:)`
 fires for main-frame navigations and redirects only. WebKit issues
 subresource requests (img, script, link, xhr, fetch, etc.) without
 consulting the navigation delegate. A malicious public page that
-embeds `<img src="http://169.254.169.254/latest/meta-data/">` can
+embeds `<img src="http://169.254.169.254/latest/meta-data/">` could
 reach the cloud metadata endpoint from inside the user's machine
 during `senkani_web` rendering.
 
-**Exploitability today:** attacker must return HTML via a public URL
-that the user (or prompt-injected LLM) passes to `senkani_web`. Loose
-but not unreasonable — this tool is explicitly designed to accept
-LLM-chosen URLs, so the LLM *is* the attacker in a prompt-injection
-scenario.
+**Fix shipped:** `Sources/MCP/Tools/WebContentBlocklist.swift` —
+compiles a `WKContentRuleList` at engine warmup with block rules for
+RFC 1918 (10/8, 172.16/12, 192.168/16), link-local (169.254/16),
+CGNAT (100.64/10), IPv6 ULA (fc/fd), IPv6 link-local (fe80), IPv6
+multicast (ff), and IPv4-mapped IPv6 equivalents of all the above.
+Attached to `WKWebViewConfiguration.userContentController` BEFORE
+WKWebView init (WebKit's configuration is copy-at-init — post-init
+attachment has no effect, so ordering matters). Bypass via
+`SENKANI_WEB_ALLOW_PRIVATE=on`, mirroring the main-frame guard.
 
-**Data exfil vector:** subresource request LINE (URL + headers)
-reaches the attacker if they control the target domain. Subresource
-BODY is not parsed into AXTree output, so the LLM doesn't see it —
-but an attacker who can observe the request (e.g., AWS metadata
-endpoint response logging) may still leak.
+**WebKit surprise caught by the integration test:** URL-filter regex
+is a restricted subset — `|` disjunction is NOT supported ("Error
+while parsing … Disjunctions are not supported yet."). Every
+alternation split into its own rule (20 total). The integration test
+`rulesCompileUnderWebKit` asserts the JSON compiles against real
+WebKit, so a future pattern with unsupported syntax is caught at
+test time, not at production warmup.
 
-**Fix plan (not this commit):** install a `WKContentRuleList` with
-block rules for RFC 1918 / link-local / CGNAT / IPv4-mapped IPv6
-literal patterns at the URL-filter level. Does not catch DNS →
-private resolutions at subresource time (WebKit doesn't expose that
-hook), but blocks the literal-IP cases which cover the vast majority
-of known SSRF probes.
+**Coverage:**
+- 16 mirror-regex tests via `NSRegularExpression` (every blocked
+  range + public neighbors + loopback + public IPv4-mapped).
+- 1 integration test — real WebKit compilation.
 
-**Defer rationale:** WKContentRuleList surgery is a separate focused
-patch; F1 is the more urgent kill. Captured as follow-up.
+**Known residual gap:** DNS-at-subresource. Pattern-based filter
+can't see the resolved IP. A hostile HTML page with `<img src="http://dns-rebind.evil/">`
+that resolves to `10.0.0.1` at request time still reaches the private
+IP. Same structural limitation as any hostname-blocklist. Could be
+closed by running WebKit inside a proxy or `WKURLSchemeHandler`, but
+the latter doesn't apply to http/https and the former is a new
+process model. Accept the gap; document in the security defaults.
 
 ---
 
@@ -189,15 +198,15 @@ the zero-dep constraint loosens.
 | # | ID | Severity | Status | Closed in |
 |---|----|----------|--------|-----------|
 | F1 | Handshake read no timeout | **P1** | ✅ fixed | `dde98f9` |
-| F2 | WebKit subresource SSRF | P2 | open | — (plan: WKContentRuleList) |
+| F2 | WebKit subresource SSRF | P2 | ✅ fixed (F2 round) | WKContentRuleList |
 | F3 | English-only injection keywords | P2 | ✅ fixed (multilingual round) | ES/FR/DE/PT/IT added |
 | F4 | Cyrillic-only homoglyph map | P2 | ✅ fixed (multilingual round) | NFKC + Greek |
 | F5 | Missing secret patterns | P2 | ✅ fixed (multilingual round) | Slack/GCP/Stripe/npm/HF/sk-proj |
 | F6 | chmod timing window | P3 | open | — (use open(2) with mode) |
 | F7 | HookRelay duplicate logic | P3 | open | — (cross-ref comments) |
 
-F3/F4/F5 closed in the Bach follow-up round after the initial re-audit.
-F2/F6/F7 remain tracked.
+All P1 + P2 findings from the re-audit are now closed. F6/F7 remain
+tracked as P3 defense-in-depth improvements.
 
 ### F3 / F4 / F5 closure notes
 

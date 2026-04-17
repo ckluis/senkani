@@ -349,25 +349,55 @@ final class WebFetchEngine {
 
     private var webView: WKWebView?
     private var currentHandler: NavigationHandler?  // strong-retained during navigation
+    /// F2: cache the webview-creation Task so concurrent callers converge
+    /// on one compile+init pass. The rule list MUST attach to the
+    /// configuration BEFORE WKWebView init (WKWebViewConfiguration is
+    /// immutable post-init), so we can't hot-attach later.
+    private var webViewTask: Task<WKWebView, Never>?
 
-    /// Pre-warm: create the WKWebView on the main actor, spawning the WebKit
-    /// XPC subprocess. Call once at session start so first tool call is not slow.
-    func warmUp() {
-        _ = getOrCreateWebView()
-        FileHandle.standardError.write(
-            Data("[MCP] WebFetchEngine warmed up (WebKit XPC subprocess ready)\n".utf8))
+    /// Pre-warm: spawn the WebKit XPC subprocess + compile the subresource
+    /// blocklist asynchronously. Call once at session start so first tool
+    /// call is not slow.
+    nonisolated func warmUp() async {
+        await Task { @MainActor [self] in
+            _ = await ensureWebView()
+            FileHandle.standardError.write(
+                Data("[MCP] WebFetchEngine warmed up (WebKit XPC subprocess ready)\n".utf8))
+        }.value
     }
 
-    private func getOrCreateWebView() -> WKWebView {
-        if let wv = webView { return wv }
-        let config = WKWebViewConfiguration()
-        config.mediaTypesRequiringUserActionForPlayback = .all
-        let wv = WKWebView(
-            frame: CGRect(x: 0, y: 0, width: 1024, height: 768),
-            configuration: config
-        )
-        webView = wv
-        return wv
+    /// Returns the singleton WKWebView, creating it on first call. The
+    /// first caller awaits the subresource blocklist compile; later callers
+    /// share the same Task's result.
+    ///
+    /// F2 invariant: if the blocklist compiled successfully AND the user
+    /// did NOT set `SENKANI_WEB_ALLOW_PRIVATE=on`, the compiled rule list
+    /// is attached to the configuration BEFORE WKWebView init. This is the
+    /// only point we can attach; WKWebViewConfiguration is copied-at-init
+    /// and further mutations don't take effect.
+    private func ensureWebView() async -> WKWebView {
+        if let existing = webViewTask { return await existing.value }
+        let task = Task { @MainActor in
+            // Compile blocklist first — unless the user bypassed via env.
+            var ruleList: WKContentRuleList? = nil
+            if !WebContentBlocklist.bypassEnabled {
+                ruleList = await WebContentBlocklist.compile()
+            }
+
+            let config = WKWebViewConfiguration()
+            config.mediaTypesRequiringUserActionForPlayback = .all
+            if let ruleList = ruleList {
+                config.userContentController.add(ruleList)
+            }
+            let wv = WKWebView(
+                frame: CGRect(x: 0, y: 0, width: 1024, height: 768),
+                configuration: config
+            )
+            self.webView = wv
+            return wv
+        }
+        webViewTask = task
+        return await task.value
     }
 
     /// Fetch `url` with JS execution and return output in the requested format.
@@ -380,7 +410,7 @@ final class WebFetchEngine {
     ) async throws -> String {
         return try await withCheckedThrowingContinuation { continuation in
             Task { @MainActor [self] in
-                let wv = getOrCreateWebView()
+                let wv = await ensureWebView()
                 let handler = NavigationHandler(
                     timeout: Double(timeoutSeconds),
                     format: format,

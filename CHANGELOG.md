@@ -37,6 +37,9 @@ Senkani *is*. Entries are grouped by the server version reported by
   truncation-robust order. Emits `format: "markdown"` (default) or
   stable-schema `format: "json"` (decodes into the `BundleDocument`
   Codable type). CLI mirror: `senkani bundle --format markdown|json`.
+  Remote mode (`remote: "owner/name"`, `ref:` optional) snapshots any
+  public GitHub repo via `senkani_repo` — inherits host allowlist +
+  `SecretDetector`. CLI mirror: `senkani bundle --remote owner/name`.
   Path-validated (`root`), all embedded free-text scanned by
   `SecretDetector`. 18th MCP tool.
 - `senkani_repo` — query any public GitHub repo without cloning. Four

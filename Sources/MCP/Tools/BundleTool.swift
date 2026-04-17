@@ -32,7 +32,20 @@ import Bundle
 //   - Fails fast with a diagnostic if the symbol index hasn't warmed yet.
 
 enum BundleTool {
-    static func handle(arguments: [String: Value]?, session: MCPSession) -> CallTool.Result {
+
+    /// Module-scoped client + cache for `--remote` fetches. Shared with
+    /// `RepoTool` in spirit (same host allowlist, same secret scan), but
+    /// keeping a dedicated instance here avoids cross-tool cache-key
+    /// collisions since the bundle path composes tree + readme in a
+    /// single logical call.
+    private static let remoteClient = RemoteRepoClient()
+
+    static func handle(arguments: [String: Value]?, session: MCPSession) async -> CallTool.Result {
+        // Remote branch — short-circuits before any local index access.
+        if let repo = arguments?["remote"]?.stringValue, !repo.isEmpty {
+            return await handleRemote(repo: repo, arguments: arguments, session: session)
+        }
+
         // 1. Resolve root — validated via ProjectSecurity (Schneier P0).
         let root: String
         if let requested = arguments?["root"]?.stringValue, !requested.isEmpty {
@@ -110,6 +123,82 @@ enum BundleTool {
             compressedBytes: output.utf8.count,
             feature: "bundle",
             command: "max_tokens=\(maxTokens) format=\(format.rawValue)",
+            outputPreview: String(output.prefix(200))
+        )
+
+        return .init(content: [.text(text: output, annotations: nil, _meta: nil)])
+    }
+
+    // MARK: - Remote branch
+
+    private static func handleRemote(
+        repo: String,
+        arguments: [String: Value]?,
+        session: MCPSession
+    ) async -> CallTool.Result {
+        // Pre-flight validation — fail cleanly before any network traffic.
+        do {
+            try RemoteRepoClient.validateRepo(repo)
+        } catch {
+            return .init(content: [.text(
+                text: "Error: invalid `remote` — \(error.localizedDescription).",
+                annotations: nil, _meta: nil)], isError: true)
+        }
+
+        let ref = arguments?["ref"]?.stringValue
+        let rawBudget = arguments?["max_tokens"]?.intValue ?? 20_000
+        let maxTokens = max(500, min(200_000, rawBudget))
+
+        var include: Set<BundleSection> = Set(BundleSection.allCases)
+        if case let .array(incArr)? = arguments?["include"] {
+            var parsed: Set<BundleSection> = []
+            for v in incArr {
+                guard let s = v.stringValue,
+                      let sec = BundleSection(rawValue: s) else { continue }
+                parsed.insert(sec)
+            }
+            if !parsed.isEmpty { include = parsed }
+        }
+        let format: BundleFormat = {
+            if let raw = arguments?["format"]?.stringValue,
+               let f = BundleFormat(rawValue: raw) {
+                return f
+            }
+            return .markdown
+        }()
+
+        let inputs: RemoteBundleInputs
+        do {
+            inputs = try await BundleComposer.fetchRemote(
+                client: remoteClient, repo: repo, ref: ref)
+        } catch let e as RemoteRepoError {
+            return .init(content: [.text(
+                text: "senkani_bundle --remote: \(e.description)",
+                annotations: nil, _meta: nil)], isError: true)
+        } catch {
+            return .init(content: [.text(
+                text: "senkani_bundle --remote: \(error.localizedDescription)",
+                annotations: nil, _meta: nil)], isError: true)
+        }
+
+        let opts = BundleOptions(
+            projectRoot: repo,
+            maxTokens: maxTokens,
+            include: include
+        )
+        let output = BundleComposer.composeRemote(
+            options: opts, inputs: inputs, format: format)
+
+        // Metrics: raw-bytes here is notional — a clone would be ~20×
+        // larger than the composed snapshot. Same heuristic RepoTool
+        // uses; keeps the savings pane's math consistent.
+        let compressedBytes = output.utf8.count
+        let notionalRaw = max(compressedBytes * 20, inputs.files.count * 100)
+        session.recordMetrics(
+            rawBytes: notionalRaw,
+            compressedBytes: compressedBytes,
+            feature: "bundle",
+            command: "remote=\(repo) max_tokens=\(maxTokens) format=\(format.rawValue)",
             outputPreview: String(output.prefix(200))
         )
 

@@ -135,6 +135,10 @@ enum ToolRouter {
             result = await SearchTool.handle(arguments: normalizedArgs, session: session)
         case "web":
             result = await WebFetchTool.handle(arguments: normalizedArgs, session: session)
+        case "repo":
+            result = await RepoTool.handle(arguments: normalizedArgs, session: session)
+        case "bundle":
+            result = await BundleTool.handle(arguments: normalizedArgs, session: session)
         // All other tools — potentially blocking, run off cooperative pool
         default:
             result = await withCheckedContinuation { continuation in
@@ -438,6 +442,39 @@ enum ToolRouter {
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([:]),
+                ]),
+                annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
+            ),
+            Tool(
+                name: "repo",
+                description: "Query any public GitHub repo without cloning. Actions: tree (list files), file (fetch content), readme (GitHub-rendered README), search (code search scoped to the repo). Anonymous by default (60 req/h); set GITHUB_TOKEN env for 5000 req/h. Host-allowlisted to api.github.com + raw.githubusercontent.com (SSRF defense). Every response passes through SecretDetector before return. In-memory cache with 15min TTL.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "action": .object(["type": .string("string"), "description": .string("tree | file | readme | search"), "enum": .array([.string("tree"), .string("file"), .string("readme"), .string("search")])]),
+                        "repo": .object(["type": .string("string"), "description": .string("owner/name identifier — strictly validated. Example: 'react-router/react-router'.")]),
+                        "ref": .object(["type": .string("string"), "description": .string("Git ref (branch, tag, or commit SHA). Optional — defaults to HEAD / default branch.")]),
+                        "path": .object(["type": .string("string"), "description": .string("File path for `file` action. Relative, no leading /, no `..` components.")]),
+                        "query": .object(["type": .string("string"), "description": .string("Search query for `search` action. Passed verbatim to GitHub code search, scoped to `repo:owner/name`.")]),
+                        "limit": .object(["type": .string("integer"), "description": .string("Max results for `search`. Clamped to [1, 30].")]),
+                    ]),
+                    "required": .array([.string("action"), .string("repo")]),
+                ]),
+                annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: true)
+            ),
+            Tool(
+                name: "bundle",
+                description: "Budget-bounded repo snapshot as a single markdown (or JSON) document. Local mode composes symbol outlines + dep graph + KB entities + README (critical context first). Remote mode (pass remote:\"owner/name\") snapshots any public GitHub repo via senkani_repo — same host allowlist + SecretDetector. Params: root, max_tokens, include, format (markdown|json), remote (owner/name), ref (branch/tag/SHA for --remote).",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "root": .object(["type": .string("string"), "description": .string("Project root override. Defaults to the session project. Must be an existing directory you own. Ignored when `remote` is set.")]),
+                        "max_tokens": .object(["type": .string("integer"), "description": .string("Token budget (char/4 approx). Default 20000. Clamped to [500, 200000].")]),
+                        "include": .object(["type": .string("array"), "items": .object(["type": .string("string"), "enum": .array([.string("outlines"), .string("deps"), .string("kb"), .string("readme")])]), "description": .string("Subset of sections to include. Default: all four in canonical order (outlines → deps → kb → readme). Order of values here does not affect output ordering.")]),
+                        "format": .object(["type": .string("string"), "description": .string("Output format: 'markdown' (default) or 'json' (stable BundleDocument schema).")]),
+                        "remote": .object(["type": .string("string"), "description": .string("Bundle a public GitHub repo (owner/name) instead of the local project. Validated strictly; host-allowlisted.")]),
+                        "ref": .object(["type": .string("string"), "description": .string("Git ref (branch/tag/SHA) for `remote` bundles. Defaults to HEAD / default branch.")]),
+                    ]),
                 ]),
                 annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
             ),

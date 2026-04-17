@@ -12,6 +12,36 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### senkani_bundle --remote wiring (shipped 2026-04-17)
+
+22 unit tests (URLProtocol-stubbed) cover parseTree, fetchRemote,
+composeRemote markdown+JSON, secret redaction, rate-limit/404
+propagation, tree-truncation notice. Real-world validation items:
+
+- [ ] **Bundle a real public repo end-to-end.** Run `senkani bundle
+      --remote react-router/react-router --output /tmp/rr.md`
+      unauthenticated. Confirm the tree arrives, README is included,
+      and the output is under the default budget. Retry with
+      `GITHUB_TOKEN` set and observe the `Authorization: Bearer`
+      header only hitting `api.github.com` (proxy or `tcpdump` if
+      paranoid — the unit tests cover this but live traffic is the
+      real gate).
+- [ ] **Exercise rate-limit handling on a real anonymous run.** Blast
+      `senkani bundle --remote …` five or six times in quick
+      succession against a small anonymous quota; confirm the
+      user-facing error message names the reset time and exits with
+      code 2 rather than crashing or silently returning a partial
+      bundle.
+- [ ] **Verify tree-truncation banner on a huge repo.** Some repos
+      exceed GitHub's 100 KB tree limit — run against one and confirm
+      the bundle header includes the "GitHub flagged the tree response
+      as truncated" note.
+- [ ] **MCP `remote:` argument from a real agent.** From Claude Code
+      or Cursor, call `senkani_bundle { remote: "owner/name" }` inside
+      a session and confirm the returned snapshot is usable as
+      context (outlines list files, README renders, KB + deps are
+      empty placeholders with the "remote snapshot" note).
+
 ### senkani_bundle JSON format (shipped 2026-04-17)
 
 7 unit tests cover determinism, round-trip, fixture shape, secret

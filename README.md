@@ -42,7 +42,7 @@ feature list and roadmap.
 | `senkani_session` | View stats, toggle features, pin/unpin symbol context (`pin`/`unpin`/`pins`) | — |
 | `senkani_knowledge` | Query/update the project knowledge graph — entities, links, decisions, FTS5 search. `full: true` for complete entity detail (summary is default). | near-zero |
 | `senkani_version` | Version negotiation: `server_version`, `tool_schemas_version`, `schema_db_version`, list of exposed tools. Cache client schemas keyed on `tool_schemas_version`. | — |
-| `senkani_bundle` | Budget-bounded repo snapshot. Composes symbol outlines + dep graph + KB entities + README in a canonical truncation-robust order. Emits `format: "markdown"` (default) or stable-schema `format: "json"` (`BundleDocument`). Path-validated; embedded free-text runs through `SecretDetector`. | repo-level |
+| `senkani_bundle` | Budget-bounded repo snapshot. Local mode composes symbol outlines + dep graph + KB entities + README in a canonical truncation-robust order. Remote mode (`remote: "owner/name"`) snapshots any public GitHub repo via `senkani_repo` — same host allowlist + `SecretDetector`. Emits `format: "markdown"` (default) or stable-schema `format: "json"` (`BundleDocument`). Path-validated. | repo-level |
 | `senkani_repo` | Query any public GitHub repo without cloning. Actions: tree / file / readme / search. Host-allowlisted (api.github.com + raw.githubusercontent.com), anonymous by default (60 req/h); `GITHUB_TOKEN` env raises the limit. All responses SecretDetector-scanned. TTL+LRU cache. | query-level |
 
 **Compound learning** (Phase K) — the system learns your workflow across sessions. Proposals go `.recurring → .staged → .applied` with a lazy session-start sweep (`recurrence ≥ 3 + confidence ≥ 0.7`). Four artifact types:

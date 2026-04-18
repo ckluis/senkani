@@ -30,6 +30,9 @@ extension Schedule {
         @Option(name: .long, help: "Budget limit in cents for this task (optional).")
         var budget: Int?
 
+        @Flag(name: .long, help: "Run each fire inside a fresh git worktree (requires current dir to be a git repo when run).")
+        var worktree: Bool = false
+
         func validate() throws {
             // Validate name: alphanumeric, dashes, underscores only
             let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
@@ -56,7 +59,8 @@ extension Schedule {
                 name: name,
                 cronPattern: cron,
                 command: command,
-                budgetLimitCents: budget
+                budgetLimitCents: budget,
+                worktree: worktree
             )
 
             // Save task config
@@ -267,6 +271,9 @@ extension Schedule {
                 return
             }
 
+            let projectRoot = FileManager.default.currentDirectoryPath
+            let runId = ScheduleTelemetry.makeRunId()
+
             // Check budget if configured
             if let budgetLimit = task.budgetLimitCents {
                 let budget = BudgetConfig.load()
@@ -275,6 +282,12 @@ extension Schedule {
                     task.lastRunAt = Date()
                     task.lastRunResult = "budget_exceeded"
                     try? ScheduleStore.save(task)
+                    ScheduleTelemetry.recordBlocked(
+                        projectRoot: projectRoot,
+                        taskName: task.name,
+                        runId: runId,
+                        reason: reason
+                    )
                     FileHandle.standardError.write(
                         Data("Budget exceeded for task '\(name)': \(reason)\n".utf8)
                     )
@@ -282,17 +295,47 @@ extension Schedule {
                 }
             }
 
+            // Optionally spawn in a fresh git worktree. Must happen after
+            // the budget gate so a blocked run doesn't leave disk litter.
+            var worktreeHandle: ScheduleWorktree.Handle?
+            if task.worktree {
+                do {
+                    worktreeHandle = try ScheduleWorktree.create(
+                        projectRoot: projectRoot, scheduleName: task.name
+                    )
+                } catch {
+                    task.lastRunAt = Date()
+                    task.lastRunResult = "failed: \(error.localizedDescription)"
+                    try? ScheduleStore.save(task)
+                    FileHandle.standardError.write(
+                        Data("Worktree create failed for '\(name)': \(error.localizedDescription)\n".utf8)
+                    )
+                    throw ExitCode(1)
+                }
+            }
+
+            ScheduleTelemetry.recordStart(
+                projectRoot: projectRoot,
+                taskName: task.name,
+                command: task.command,
+                runId: runId
+            )
+
             // Run the command
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
             process.arguments = ["-c", task.command]
             process.environment = ProcessInfo.processInfo.environment
+            if let handle = worktreeHandle {
+                process.currentDirectoryURL = URL(fileURLWithPath: handle.path)
+            }
 
             let outPipe = Pipe()
             let errPipe = Pipe()
             process.standardOutput = outPipe
             process.standardError = errPipe
 
+            var exitCode: Int32 = -1
             do {
                 try process.run()
                 let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
@@ -303,15 +346,34 @@ extension Schedule {
                 FileHandle.standardOutput.write(outData)
                 FileHandle.standardError.write(errData)
 
+                exitCode = process.terminationStatus
                 task.lastRunAt = Date()
-                if process.terminationStatus == 0 {
+                if exitCode == 0 {
                     task.lastRunResult = "success"
                 } else {
-                    task.lastRunResult = "failed: exit \(process.terminationStatus)"
+                    task.lastRunResult = "failed: exit \(exitCode)"
                 }
             } catch {
                 task.lastRunAt = Date()
                 task.lastRunResult = "failed: \(error.localizedDescription)"
+            }
+
+            ScheduleTelemetry.recordEnd(
+                projectRoot: projectRoot,
+                taskName: task.name,
+                runId: runId,
+                exitCode: exitCode
+            )
+
+            // Cleanup worktree on success; retain on failure for inspection.
+            if let handle = worktreeHandle {
+                if task.lastRunResult == "success" {
+                    try? ScheduleWorktree.cleanup(handle)
+                } else {
+                    FileHandle.standardError.write(
+                        Data("Worktree retained for inspection: \(handle.path)\n".utf8)
+                    )
+                }
             }
 
             try? ScheduleStore.save(task)

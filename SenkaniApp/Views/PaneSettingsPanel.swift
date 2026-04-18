@@ -118,10 +118,6 @@ struct PaneSettingsPanel: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(SenkaniTheme.textPrimary)
 
-            Text("Terminal font and appearance settings.")
-                .font(.system(size: 11))
-                .foregroundStyle(SenkaniTheme.textSecondary)
-
             // Font size slider
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
@@ -133,7 +129,11 @@ struct PaneSettingsPanel: View {
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(SenkaniTheme.textSecondary)
                 }
-                Slider(value: $pane.fontSize, in: 8...24, step: 1)
+                Slider(
+                    value: $pane.fontSize,
+                    in: CGFloat(PaneFontSettings.minFontSize)...CGFloat(PaneFontSettings.maxFontSize),
+                    step: 1
+                )
             }
 
             // Font size presets
@@ -143,6 +143,23 @@ struct PaneSettingsPanel: View {
                 fontPresetButton("Medium", size: 14)
                 fontPresetButton("Large", size: 16)
                 fontPresetButton("XL", size: 20)
+            }
+
+            // Font family picker
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Font family")
+                        .font(.system(size: 11))
+                        .foregroundStyle(SenkaniTheme.textPrimary)
+                    Spacer()
+                }
+                Picker("", selection: $pane.fontFamily) {
+                    ForEach(PaneFontSettings.availableMonospaceFamilies, id: \.self) { family in
+                        Text(family).tag(family)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
             }
         }
     }

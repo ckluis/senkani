@@ -6,6 +6,145 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 18 — Pane Display settings: font-family picker + persistence
+- The Display section of the pane settings panel now ships a
+  monospace font-family picker alongside the existing size slider and
+  preset buttons. The picker is populated from a curated
+  six-family list (SF Mono / Menlo / Monaco / Courier / Courier New /
+  Andale Mono) — hard-coded (not queried from `NSFontManager`) so the
+  list is deterministic across machines.
+- New `Sources/Core/PaneFontSettings.swift` — pure Foundation
+  `Codable` / `Equatable` / `Sendable` struct plus static helpers
+  (`clampFontSize`, `resolveFamily`, `fontSizeDidChange`,
+  `fontFamilyDidChange`). The AppKit resolution layer
+  (`NSFont(name:size:)` → `monospacedSystemFont` fallback) stays in
+  `TerminalViewRepresentable.resolveFont`. Splitting the layer keeps
+  the Core type testable from `SenkaniTests` (which has no
+  SenkaniApp dependency) while AppKit lives where it belongs.
+- `PaneModel.fontFamily` joins the existing `fontSize` field.
+  `PersistedPane` extends with optional `fontSize` / `fontFamily`
+  entries — pre-existing `workspace.json` files decode cleanly
+  (`decodeIfPresent` path) and land at `PaneModel`'s init defaults.
+  On restore, `clampFontSize` + `resolveFamily` guard against a
+  tampered or stale workspace file. Changes propagate live to the
+  terminal view: `updateNSView` re-applies the font when size diffs
+  by more than 0.5pt OR the family name differs exactly — single
+  slider tick / picker change fires exactly one font re-apply.
+- 11 new tests (1413 → 1424): defaults shape, bounds inclusion
+  (8–24pt range is a superset of the 9–20 acceptance), clamp
+  below-min / above-max / in-range identity, curated family set,
+  known-family roundtrip, unknown-family fallback to default,
+  size-diff 0.5pt threshold, family exact-string compare,
+  `Codable` roundtrip. No regressions in existing tests.
+
+### April 18 — Pane IPC: JSONL poll → Unix socket
+- Migrated the last fire-and-forget pane IPC caller
+  (`MCPSession.sendBudgetStatusIPC`) from the `pane-commands.jsonl` file
+  path to the existing `~/.senkani/pane.sock` Unix domain socket — same
+  length-prefixed binary protocol, optional `SocketAuthToken` handshake,
+  `chmod 0600` permissions enforced by `SocketServerManager`. Every
+  pane IPC path now uses the socket; JSONL transport is retired.
+- Wired `SocketServerManager.shared.paneHandler` from
+  `ContentView.onAppear`. The closure captures the `WorkspaceModel` +
+  `SessionRegistry` actor handles, decodes `PaneIPCCommand`, dispatches
+  the mutation to the main thread via `DispatchSemaphore`, and encodes
+  the `PaneIPCResponse` back. This closes a latent defect — the pane
+  socket listener in `SocketServerManager` had no handler registered on
+  the GUI side, so the file-IPC path was doing all the work.
+- New `PaneIPC.sendFireAndForget(_:socketPath:)` in `Sources/Core/` —
+  connect + handshake + write + close, no response read. 200ms
+  `SO_SNDTIMEO` caps the worst-case write stall against a stuck peer so
+  fire-and-forget semantics hold. Returns a typed `SendOutcome` enum
+  (`.written`, `.socketUnreachable`, `.writeFailed`, `.encodeFailed`)
+  for test assertions; production callers ignore the result.
+- Deleted `SenkaniApp/Services/PaneCommandWatcher.swift` (the
+  JSONL file watcher) and the JSONL accessors on the old
+  `PaneIPCPaths` enum; `PaneIPC.swift` replaces them with
+  `PaneIPCSocket.defaultPath`.
+- 9 new tests (1404 → 1413): single-frame round-trip, absent-socket
+  no-op with sub-500ms bound, oversize-path rejection, all 5 actions
+  round-trip, 4-way concurrent writes all deliver distinct frames,
+  multi-KB frame with concurrent drain, full setBudgetStatus
+  end-to-end, big-endian length prefix wire format, legacy JSONL
+  file regression guard.
+
+### April 18 — Schedule runs emit Agent Timeline events
+- New `Core/ScheduleTelemetry` helper records a `token_events` row at
+  the start and end of every `Schedule.Run` invocation so scheduled
+  runs appear in the Agent Timeline pane alongside interactive tool
+  calls. Events use `source = "schedule"` and `feature =
+  "schedule_start" | "schedule_end" | "schedule_blocked"`. Paired
+  start/end events for the same run share `session_id =
+  "schedule:{taskName}:{runId}"` — consumers can join the pair
+  without a separate metadata column. Run-id format matches
+  `ScheduleWorktree.makeRunId` (`yyyyMMddHHmmss-<6 alnum>` UTC).
+- Budget-exceeded runs emit a single `schedule_blocked` event instead
+  of a start/end pair; the block reason from
+  `BudgetConfig.Decision.block` is preserved verbatim in the event's
+  `command` field so the Timeline surface keeps the operator-facing
+  message intact. Failed runs record the exit code in the end event's
+  `command` string (`"{name}: failed: exit {N}"`).
+- No schema change — reuses the existing `token_events` table and
+  columns. No new `AgentType` case. Test-only DB override
+  (`ScheduleTelemetry.withTestDatabase`) mirrors the
+  `ScheduleStore.withTestDirs` / `ScheduleWorktree.withTestDir`
+  pattern (NSLock-serialized override slot).
+- 8 new tests (1396 → 1404) — start event shape, end success +
+  failure-with-exit-code, blocked event reason passthrough, start/end
+  sessionId pairing, project-root filtering, blocked-only (no
+  orphan pair), runId format sanity. Sub-item 3 of 3 under the
+  `cron-scheduled-agents` umbrella — the umbrella is now fully
+  delivered.
+
+### April 18 — Schedule runs spawn in worktrees
+- `ScheduledTask` gains a `worktree: Bool` field (default `false`,
+  `decodeIfPresent` keeps pre-field JSON files on disk readable).
+  `senkani schedule create --worktree` opts a task in; on each fire
+  `Schedule.Run` creates a fresh detached-HEAD worktree under
+  `~/.senkani/schedules/worktrees/{name}-{runId}/`, chdirs the command
+  there, and tears it down on success.
+- New `Core/ScheduleWorktree` helper (no SwiftUI/AppKit deps — pure
+  Foundation + `/usr/bin/git`). `create` fails fast with `notGitRepo`
+  when cwd isn't a git working tree; `cleanup` uses
+  `git worktree remove --force`, falling back to physical delete +
+  `worktree prune` on git failure so a stuck registration can't wedge
+  future runs. Run-ID format: `yyyyMMddHHmmss-{6 random alphanum}` UTC,
+  so two fires in the same wall-clock second can't collide
+  (~2×10⁻⁹ probability).
+- Failed runs intentionally retain the worktree for inspection — the
+  stderr log prints the retained path. Budget-exceeded runs short-circuit
+  *before* worktree creation so a blocked run doesn't leave disk litter.
+- 8 new tests (1388 → 1396) — backwards-compat decode of pre-field JSON,
+  `worktree` field roundtrip, create-in-git-repo, cleanup-on-success,
+  retain-when-cleanup-skipped, non-git-repo rejection, 4 concurrent
+  creates produce 4 distinct worktrees, run-ID shape sanity. Sub-item
+  2 of 3 under the `cron-scheduled-agents` umbrella.
+
+### April 18 — Schedule subsystem test coverage
+- `ScheduleConfigTests` (19 tests, 1369 → 1388) covers the previously
+  untested schedule subsystem: `CronToLaunchd.convert` (wrong field
+  count, `* * * * *`, single value, `*/N`, comma list, out-of-range
+  rejection, non-integer / zero divisor, cartesian product across
+  minute × hour × weekday), `CronToLaunchd.humanReadable` (every
+  minute, every N minutes, daily at H:M AM/PM, weekly per weekday
+  name, raw-cron fallback for unhandled patterns), and
+  `ScheduleStore` CRUD (save+load roundtrip preserving all fields,
+  list sorts by `createdAt`, load-missing returns nil, remove
+  deletes both the JSON and the launchd plist, remove succeeds
+  when plist is absent, `plistLabel(for:)` formatting).
+- `ScheduleStore` gains a test-only `withTestDirs(base:launchAgents:_:)`
+  wrapper mirroring the `LearnedRulesStore.withPath` pattern —
+  redirects `baseDir` + `launchAgentsDir` to a tmp directory for the
+  body's duration, holding a shared `NSLock` so concurrent test
+  cases serialize on the override slots. Production callers are
+  untouched; `baseDir` / `launchAgentsDir` fall back to `$HOME`
+  when the override is nil.
+- First of three sub-items carved from the `cron-scheduled-agents`
+  umbrella (pre-audit found it 3/5 shipped — Schedules pane + CRUD
+  + budget + launchd gen — but with 0 tests and two unshipped
+  bullets). Remaining: `schedule-worktree-spawn`,
+  `schedule-timeline-integration`.
+
 ### April 18 — Tree-sitter grammars: Dart, TOML, GraphQL
 - Three vendored parsers landed in `Sources/TreeSitter{Dart,Toml,GraphQL}Parser/`
   and wired into the Indexer, `GrammarManifest`, and `FileWalker`

@@ -1,5 +1,6 @@
 import SwiftUI
 import Core
+import MCPServer
 
 /// Which sidebar tool view is currently shown (nil = workspace/panes).
 enum ToolView: Equatable {
@@ -14,7 +15,6 @@ struct ContentView: View {
     @State var activeToolView: ToolView?
     @State var showAddPaneSheet = false
     @State var showCommandPalette = false
-    @State private var paneCommandWatcher = PaneCommandWatcher()
     @State private var broadcastEnabled = false
     @State private var broadcastText = ""
 
@@ -94,13 +94,13 @@ struct ContentView: View {
         .onAppear {
             ThemeEngine.shared.restoreLastTheme()
             restoreWorkspace()  // Also starts MetricsStore after workspace is populated
-            startPaneCommandWatcher()
+            registerPaneSocketHandler()
         }
         .onDisappear {
             WorkspaceStorage.save(workspace)
             SessionStore.shared.saveSession(workspace: workspace)
             sessions.stopAll()
-            paneCommandWatcher.stop()
+            SocketServerManager.shared.paneHandler = nil
             MetricsStore.shared.stop()
         }
         // Auto-save workspace when project/pane structure changes
@@ -215,13 +215,49 @@ struct ContentView: View {
         WorkspaceStorage.save(workspace)
     }
 
-    // MARK: - Pane Command Watcher (IPC from MCP tools)
+    // MARK: - Pane Socket Handler (IPC from MCP tools over ~/.senkani/pane.sock)
 
-    private func startPaneCommandWatcher() {
-        paneCommandWatcher.onCommand = { [workspace, sessions] command in
-            ContentView.handlePaneCommand(command, workspace: workspace, sessions: sessions)
+    /// Install a pane-command handler on `SocketServerManager.shared`. The
+    /// manager invokes the closure on `paneQueue` (background); we hop to
+    /// the main thread (SwiftUI/WorkspaceModel require it) and block with a
+    /// semaphore until the response is encoded. Each connection sends one
+    /// length-prefixed command frame and expects one length-prefixed
+    /// response — this mirrors the `hookHandler` shape.
+    private func registerPaneSocketHandler() {
+        SocketServerManager.shared.paneHandler = { [workspace, sessions] cmdData in
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+
+            let response: PaneIPCResponse
+            if let command = try? decoder.decode(PaneIPCCommand.self, from: cmdData) {
+                // Dispatch to main thread; workspace mutations touch SwiftUI
+                // state and must run on the main actor.
+                var resolved: PaneIPCResponse?
+                let semaphore = DispatchSemaphore(value: 0)
+                DispatchQueue.main.async {
+                    resolved = ContentView.handlePaneCommand(
+                        command,
+                        workspace: workspace,
+                        sessions: sessions
+                    )
+                    semaphore.signal()
+                }
+                semaphore.wait()
+                response = resolved ?? PaneIPCResponse(
+                    id: command.id, success: false,
+                    error: "handler produced no response"
+                )
+            } else {
+                response = PaneIPCResponse(
+                    id: "unknown", success: false,
+                    error: "failed to decode PaneIPCCommand"
+                )
+            }
+
+            return (try? encoder.encode(response)) ?? Data("{}".utf8)
         }
-        paneCommandWatcher.start()
     }
 
     private static func handlePaneCommand(

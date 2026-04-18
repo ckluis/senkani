@@ -1060,7 +1060,10 @@ final class MCPSession: @unchecked Sendable {
         }
     }
 
-    /// Append a fire-and-forget budget status command to the pane-commands JSONL file.
+    /// Fire-and-forget push of the pane's budget status to the GUI over
+    /// `~/.senkani/pane.sock`. If the GUI is not running, the call no-ops
+    /// silently — budget telemetry is best-effort and must never stall
+    /// the tool-call path.
     private static func sendBudgetStatusIPC(paneId: String, status: String, spentCents: Int, limitCents: Int) {
         let cmd = PaneIPCCommand(action: .setBudgetStatus, params: [
             "pane_id": paneId,
@@ -1068,18 +1071,7 @@ final class MCPSession: @unchecked Sendable {
             "spent_cents": "\(spentCents)",
             "limit_cents": "\(limitCents)",
         ])
-        PaneIPCPaths.ensureDirectories()
-        guard let data = try? JSONEncoder().encode(cmd),
-              let line = String(data: data, encoding: .utf8) else { return }
-        let filePath = PaneIPCPaths.commandFile
-        let lineData = Data((line + "\n").utf8)
-        if let handle = FileHandle(forWritingAtPath: filePath) {
-            handle.seekToEndOfFile()
-            handle.write(lineData)
-            handle.closeFile()
-        } else {
-            FileManager.default.createFile(atPath: filePath, contents: lineData)
-        }
+        _ = PaneIPC.sendFireAndForget(cmd)
     }
 
     func recordCacheSaving(bytes: Int) {

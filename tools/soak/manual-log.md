@@ -12,6 +12,133 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Display settings — font-family picker + persistence (shipped 2026-04-18)
+
+Unit tests cover the pure `Core.PaneFontSettings` type (clamp, resolve,
+diff). The AppKit resolution path (`NSFont(name:size:)` →
+`monospacedSystemFont` fallback) and the live view update happen in
+`SenkaniApp` which the test target cannot import. Real-machine
+validation to run next session:
+
+- Open Senkani, pick a terminal pane, open the gear → Display section.
+  Confirm the font-family Picker lists all six curated names (SF Mono,
+  Menlo, Monaco, Courier, Courier New, Andale Mono) and the current
+  selection is highlighted. Switch between them — the terminal view
+  must redraw glyphs immediately with no restart.
+- Move the size slider one tick at a time (9 → 10 → 11 …). Each tick
+  should fire exactly one font re-apply; multiple ticks in rapid
+  succession should not produce visual tearing.
+- Pick Monaco, quit Senkani, relaunch. The pane should come back with
+  Monaco. Pick a size (e.g. 15pt), quit, relaunch — size persists.
+- Simulate a missing font: tamper `~/.senkani/workspace.json` to set
+  `"fontFamily": "BogusFont"`. Relaunch — the pane must revert to SF
+  Mono cleanly (no crash, no blank terminal). `clampFontSize` and
+  `resolveFamily` run at restore time.
+- Edge case: set `fontFamily` to `"Courier New"` on a clean machine
+  install. If the name resolves via `NSFont(name:size:)`, it renders
+  Courier New; if not, the AppKit fallback silently uses
+  `monospacedSystemFont`. Verify visually that the terminal is never
+  blank.
+
+### Pane IPC socket migration (shipped 2026-04-18)
+
+`MCPSession.sendBudgetStatusIPC` now writes to `~/.senkani/pane.sock`
+instead of `~/.senkani/pane-commands.jsonl`. The GUI wires
+`SocketServerManager.shared.paneHandler` from `ContentView.onAppear`.
+Unit tests exercise the helper against a temp-UDS listener and prove
+9 wire-format + lifecycle invariants, but the full production loop
+needs a real machine run:
+
+- Open Senkani, spawn a Claude pane, set `SENKANI_PANE_BUDGET_SESSION`
+  low enough that a few tool calls cross the soft-limit. Confirm the
+  amber triangle badge lights up in the pane header via the socket path
+  (not the old JSONL file). `~/.senkani/pane-commands.jsonl` must NOT
+  be created or appended to — verify with `stat` before + after.
+- Push the pane over the hard limit. Confirm the red block badge
+  appears with `$spent/$limit` text. Budget status must clear on pane
+  restart.
+- `senkani_pane list` via the MCP tool from a Claude session. Pre-fix
+  this path was broken (paneHandler was unset; the listener returned
+  "No pane handler registered"). Post-fix it should return the JSON
+  pane list within <10ms.
+- Confirm `SENKANI_SOCKET_AUTH=on` path still works end-to-end —
+  handshake frame + command frame must both land before the server
+  dispatches.
+
+### Schedule timeline integration (shipped 2026-04-18)
+
+`Schedule.Run` now emits `token_events` rows at start / end / blocked
+points of every scheduled fire so runs render in the Agent Timeline
+pane. Unit tests cover the helper (event shape, session-id pairing,
+project-root filtering, blocked-without-pair, runId format) against a
+temp DB, but several display + persistence paths only exercise under a
+real launchd fire + live `SessionDatabase.shared`:
+
+- [ ] **End-to-end timeline render.** Create a schedule (e.g.
+      `senkani schedule create --name tl-smoke --cron '*/2 * * * *'
+      --command 'echo hi'`), wait for it to fire, then open the Agent
+      Timeline pane in the app and confirm a `schedule_start` row and a
+      `schedule_end` row appear with `command` values of
+      `"tl-smoke: echo hi"` and `"tl-smoke: success"`.
+- [ ] **project_root correctness under launchd.** launchd's default cwd
+      is `$HOME`; `Schedule.Run` uses `FileManager.currentDirectoryPath`
+      as the event's `project_root`. Confirm the Timeline pane's
+      project filter correctly surfaces (or hides) the scheduled-run
+      events depending on which project is active. If the event
+      reliably files under `$HOME` only, consider a follow-up to wire
+      `WorkingDirectory` through the plist (already on the queue
+      below) so the events land under the source repo instead.
+- [ ] **Budget-block path visibility.** Configure a zero-dollar daily
+      cap in `~/.senkani/budget.json` and a task with
+      `--budget-limit-cents`. Wait for a fire. Confirm a single
+      `schedule_blocked` event appears in the Timeline with the block
+      reason embedded in `command` (e.g. `"task: budget_exceeded
+      (Daily budget exceeded: $0.00 / $0.00)"`) — and that NO
+      `schedule_start` or `schedule_end` pair is present for the same
+      run.
+- [ ] **Failed-run exit code visibility.** Create a schedule with
+      `--command 'exit 7'`. Wait for a fire. Confirm the Timeline
+      `schedule_end` row's `command` is `"task: failed: exit 7"` and
+      the corresponding `schedule_start` row exists with the original
+      command text.
+
+### Schedule worktree spawn (shipped 2026-04-18)
+
+`senkani schedule create --worktree` opts a cron job into running in a
+fresh detached-HEAD git worktree under
+`~/.senkani/schedules/worktrees/{name}-{runId}/`. Unit tests cover the
+helper (create / cleanup / retain-on-failure / concurrent-spawn /
+non-git-repo rejection / run-id shape) hermetically, but several
+end-to-end paths only exercise under a real launchd fire:
+
+- [ ] **Real launchd fire with `--worktree`.** Create a schedule with
+      `senkani schedule create --name wt-smoke --cron '*/2 * * * *'
+      --command 'git rev-parse HEAD > /tmp/senkani-wt-smoke.out' --worktree`
+      from inside a real git repo. Wait two minutes. Confirm the `.out`
+      file exists, the HEAD it captured matches the source repo's HEAD,
+      and that no worktree dir remains under
+      `~/.senkani/schedules/worktrees/` after a clean run.
+- [ ] **Retain-on-failure path.** Change the command to `false` so the
+      shell exits non-zero. After the next fire, check that the
+      worktree dir is retained for inspection and that the stderr log
+      (`~/.senkani/logs/{name}.err`) includes the
+      `Worktree retained for inspection: …` line with the path.
+- [ ] **Cwd inheritance via launchd.** By default launchd starts jobs
+      with cwd = `$HOME`, so `--worktree` fails fast with notGitRepo
+      unless the user's `$HOME` is itself a git repo. Confirm the
+      `lastRunResult` in the saved task JSON reads
+      `failed: Not a git repository: …` in that default-cwd case, and
+      document whether we should add a `WorkingDirectory` key to the
+      generated plist in a follow-up.
+- [ ] **TTL cleanup for retained worktrees.** This round explicitly did
+      NOT ship automatic TTL-based cleanup of retained failure worktrees
+      — they accumulate until the operator manually deletes them. Track
+      how many build up over a real week of schedule failures; if it's
+      non-trivial, add a `.ttl_days` config knob in a follow-up round.
+- [ ] **Branch pollution check.** The helper uses
+      `git worktree add --detach` (no new branch), so branches shouldn't
+      accumulate — confirm `git branch -a` stays clean after ~10 fires.
+
 ### Tree-sitter grammars — Dart, TOML, GraphQL (shipped 2026-04-18)
 
 Indexer now covers 25 languages (was 22). 10 unit tests validate parse +

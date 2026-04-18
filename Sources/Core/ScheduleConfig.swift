@@ -11,6 +11,7 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
     public var createdAt: Date
     public var lastRunAt: Date?
     public var lastRunResult: String?  // "success", "failed: ...", "budget_exceeded"
+    public var worktree: Bool
 
     public init(
         name: String,
@@ -20,7 +21,8 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
         enabled: Bool = true,
         createdAt: Date = Date(),
         lastRunAt: Date? = nil,
-        lastRunResult: String? = nil
+        lastRunResult: String? = nil,
+        worktree: Bool = false
     ) {
         self.name = name
         self.cronPattern = cronPattern
@@ -30,13 +32,46 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
         self.createdAt = createdAt
         self.lastRunAt = lastRunAt
         self.lastRunResult = lastRunResult
+        self.worktree = worktree
+    }
+
+    // Explicit Codable so a missing `worktree` key (pre-field JSON files
+    // already on disk) decodes as `false` instead of failing.
+    private enum CodingKeys: String, CodingKey {
+        case name, cronPattern, command, budgetLimitCents, enabled
+        case createdAt, lastRunAt, lastRunResult, worktree
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.name = try c.decode(String.self, forKey: .name)
+        self.cronPattern = try c.decode(String.self, forKey: .cronPattern)
+        self.command = try c.decode(String.self, forKey: .command)
+        self.budgetLimitCents = try c.decodeIfPresent(Int.self, forKey: .budgetLimitCents)
+        self.enabled = try c.decode(Bool.self, forKey: .enabled)
+        self.createdAt = try c.decode(Date.self, forKey: .createdAt)
+        self.lastRunAt = try c.decodeIfPresent(Date.self, forKey: .lastRunAt)
+        self.lastRunResult = try c.decodeIfPresent(String.self, forKey: .lastRunResult)
+        self.worktree = try c.decodeIfPresent(Bool.self, forKey: .worktree) ?? false
     }
 }
 
 /// File-based store for scheduled tasks under ~/.senkani/schedules/.
 public enum ScheduleStore {
+    // MARK: - Test-only overrides
+    //
+    // Mirrors the `LearnedRulesStore.withPath` pattern: production reads
+    // `baseDir` / `launchAgentsDir` straight out of `$HOME`, tests wrap a
+    // body in `withTestDirs` to redirect both to a temp dir. `withTestDirs`
+    // holds `testLock` for its entire body so concurrent test cases
+    // serialize on the shared override slots instead of racing.
+
+    nonisolated(unsafe) private static var _baseDirOverride: String?
+    nonisolated(unsafe) private static var _launchAgentsDirOverride: String?
+    private static let testLock = NSLock()
+
     public static var baseDir: String {
-        FileManager.default.homeDirectoryForCurrentUser.path + "/.senkani/schedules"
+        _baseDirOverride ?? FileManager.default.homeDirectoryForCurrentUser.path + "/.senkani/schedules"
     }
 
     public static var logsDir: String {
@@ -44,7 +79,28 @@ public enum ScheduleStore {
     }
 
     public static var launchAgentsDir: String {
-        FileManager.default.homeDirectoryForCurrentUser.path + "/Library/LaunchAgents"
+        _launchAgentsDirOverride ?? FileManager.default.homeDirectoryForCurrentUser.path + "/Library/LaunchAgents"
+    }
+
+    /// TEST ONLY: redirect `baseDir` + `launchAgentsDir` to `base` /
+    /// `launchAgents` for the duration of `body`, then restore. Holds
+    /// `testLock` so concurrent callers serialize.
+    public static func withTestDirs<T>(
+        base: String,
+        launchAgents: String,
+        _ body: () throws -> T
+    ) rethrows -> T {
+        testLock.lock()
+        let priorBase = _baseDirOverride
+        let priorLaunch = _launchAgentsDirOverride
+        _baseDirOverride = base
+        _launchAgentsDirOverride = launchAgents
+        defer {
+            _baseDirOverride = priorBase
+            _launchAgentsDirOverride = priorLaunch
+            testLock.unlock()
+        }
+        return try body()
     }
 
     /// Read all .json files from the schedules directory.

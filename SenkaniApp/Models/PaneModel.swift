@@ -110,7 +110,10 @@ final class PaneModel: Identifiable {
     /// Model routing preset. Controls CLAUDE_MODEL env var for this pane.
     var modelPreset: ModelPreset = .auto
     /// Terminal font size (points). Adjustable via Display settings.
-    var fontSize: CGFloat = 12.0
+    var fontSize: CGFloat = CGFloat(PaneFontSettings.defaultFontSize)
+    /// Terminal font family name. Resolved via `PaneFontSettings.resolveFamily`
+    /// before use so unknown strings snap to the default.
+    var fontFamily: String = PaneFontSettings.defaultFontFamily
     /// Whether this pane has unread output since last focused.
     var hasUnreadOutput: Bool = false
     /// Per-pane budget status pushed via IPC from the MCP process.

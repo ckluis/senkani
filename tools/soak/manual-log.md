@@ -12,6 +12,34 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Display settings — font-family picker + persistence (shipped 2026-04-18)
+
+Unit tests cover the pure `Core.PaneFontSettings` type (clamp, resolve,
+diff). The AppKit resolution path (`NSFont(name:size:)` →
+`monospacedSystemFont` fallback) and the live view update happen in
+`SenkaniApp` which the test target cannot import. Real-machine
+validation to run next session:
+
+- Open Senkani, pick a terminal pane, open the gear → Display section.
+  Confirm the font-family Picker lists all six curated names (SF Mono,
+  Menlo, Monaco, Courier, Courier New, Andale Mono) and the current
+  selection is highlighted. Switch between them — the terminal view
+  must redraw glyphs immediately with no restart.
+- Move the size slider one tick at a time (9 → 10 → 11 …). Each tick
+  should fire exactly one font re-apply; multiple ticks in rapid
+  succession should not produce visual tearing.
+- Pick Monaco, quit Senkani, relaunch. The pane should come back with
+  Monaco. Pick a size (e.g. 15pt), quit, relaunch — size persists.
+- Simulate a missing font: tamper `~/.senkani/workspace.json` to set
+  `"fontFamily": "BogusFont"`. Relaunch — the pane must revert to SF
+  Mono cleanly (no crash, no blank terminal). `clampFontSize` and
+  `resolveFamily` run at restore time.
+- Edge case: set `fontFamily` to `"Courier New"` on a clean machine
+  install. If the name resolves via `NSFont(name:size:)`, it renders
+  Courier New; if not, the AppKit fallback silently uses
+  `monospacedSystemFont`. Verify visually that the terminal is never
+  blank.
+
 ### Pane IPC socket migration (shipped 2026-04-18)
 
 `MCPSession.sendBudgetStatusIPC` now writes to `~/.senkani/pane.sock`

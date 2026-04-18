@@ -335,6 +335,7 @@ struct PaneContainerView: View {
                 workingDirectory: pane.workingDirectory,
                 isActive: isActive,
                 fontSize: pane.fontSize,
+                fontFamily: pane.fontFamily,
                 onProcessExited: { code in
                     pane.processState = .exited(code)
                     pane.shellPid = nil

@@ -6,6 +6,37 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 18 — Pane Display settings: font-family picker + persistence
+- The Display section of the pane settings panel now ships a
+  monospace font-family picker alongside the existing size slider and
+  preset buttons. The picker is populated from a curated
+  six-family list (SF Mono / Menlo / Monaco / Courier / Courier New /
+  Andale Mono) — hard-coded (not queried from `NSFontManager`) so the
+  list is deterministic across machines.
+- New `Sources/Core/PaneFontSettings.swift` — pure Foundation
+  `Codable` / `Equatable` / `Sendable` struct plus static helpers
+  (`clampFontSize`, `resolveFamily`, `fontSizeDidChange`,
+  `fontFamilyDidChange`). The AppKit resolution layer
+  (`NSFont(name:size:)` → `monospacedSystemFont` fallback) stays in
+  `TerminalViewRepresentable.resolveFont`. Splitting the layer keeps
+  the Core type testable from `SenkaniTests` (which has no
+  SenkaniApp dependency) while AppKit lives where it belongs.
+- `PaneModel.fontFamily` joins the existing `fontSize` field.
+  `PersistedPane` extends with optional `fontSize` / `fontFamily`
+  entries — pre-existing `workspace.json` files decode cleanly
+  (`decodeIfPresent` path) and land at `PaneModel`'s init defaults.
+  On restore, `clampFontSize` + `resolveFamily` guard against a
+  tampered or stale workspace file. Changes propagate live to the
+  terminal view: `updateNSView` re-applies the font when size diffs
+  by more than 0.5pt OR the family name differs exactly — single
+  slider tick / picker change fires exactly one font re-apply.
+- 11 new tests (1413 → 1424): defaults shape, bounds inclusion
+  (8–24pt range is a superset of the 9–20 acceptance), clamp
+  below-min / above-max / in-range identity, curated family set,
+  known-family roundtrip, unknown-family fallback to default,
+  size-diff 0.5pt threshold, family exact-string compare,
+  `Codable` roundtrip. No regressions in existing tests.
+
 ### April 18 — Pane IPC: JSONL poll → Unix socket
 - Migrated the last fire-and-forget pane IPC caller
   (`MCPSession.sendBudgetStatusIPC`) from the `pane-commands.jsonl` file

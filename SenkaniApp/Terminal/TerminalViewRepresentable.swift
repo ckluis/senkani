@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Core
 import SwiftTerm
 
 extension Notification.Name {
@@ -143,7 +144,8 @@ struct TerminalViewRepresentable: NSViewRepresentable {
     let environment: [String: String]
     let workingDirectory: String
     let isActive: Bool
-    var fontSize: CGFloat = 12
+    var fontSize: CGFloat = CGFloat(PaneFontSettings.defaultFontSize)
+    var fontFamily: String = PaneFontSettings.defaultFontFamily
     let onProcessExited: ((Int32) -> Void)?
     let onProcessStarted: ((pid_t) -> Void)?
     let onActivate: (() -> Void)?
@@ -153,7 +155,8 @@ struct TerminalViewRepresentable: NSViewRepresentable {
          environment: [String: String] = [:],
          workingDirectory: String = NSHomeDirectory(),
          isActive: Bool = true,
-         fontSize: CGFloat = 12,
+         fontSize: CGFloat = CGFloat(PaneFontSettings.defaultFontSize),
+         fontFamily: String = PaneFontSettings.defaultFontFamily,
          onProcessExited: ((Int32) -> Void)? = nil,
          onProcessStarted: ((pid_t) -> Void)? = nil,
          onActivate: (() -> Void)? = nil) {
@@ -163,6 +166,7 @@ struct TerminalViewRepresentable: NSViewRepresentable {
         self.workingDirectory = workingDirectory
         self.isActive = isActive
         self.fontSize = fontSize
+        self.fontFamily = fontFamily
         self.onProcessExited = onProcessExited
         self.onProcessStarted = onProcessStarted
         self.onActivate = onActivate
@@ -183,8 +187,12 @@ struct TerminalViewRepresentable: NSViewRepresentable {
         tv.nativeForegroundColor = .white
         tv.nativeBackgroundColor = .black
 
-        // Font — both Flock and cmux set this explicitly
-        tv.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        // Font — both Flock and cmux set this explicitly. Resolve the
+        // family-by-name first; fall back to `monospacedSystemFont` if
+        // `NSFont(name:size:)` misses (e.g. Courier removed on a fresh
+        // install). Family is already snapped to the curated list at the
+        // model boundary via `PaneFontSettings.resolveFamily`.
+        tv.font = Self.resolveFont(family: fontFamily, size: fontSize)
 
         // CRITICAL: Only processDelegate. NEVER terminalDelegate.
         tv.processDelegate = context.coordinator
@@ -222,13 +230,35 @@ struct TerminalViewRepresentable: NSViewRepresentable {
            nsView.window?.firstResponder !== tv {
             nsView.window?.makeFirstResponder(tv)
         }
-        // Apply font size changes from display settings
+        // Apply font size or family changes from Display settings.
+        // The size diff uses the 0.5pt threshold shared with
+        // `PaneFontSettings.fontSizeDidChange`; the family check is
+        // exact-string against `familyName`. Either change re-applies
+        // via `resolveFont` which falls back to the system monospace.
         if let tv = nsView.terminalView {
-            let currentSize = tv.font.pointSize
-            if abs(currentSize - fontSize) > 0.5 {
-                tv.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+            let sizeChanged = PaneFontSettings.fontSizeDidChange(
+                from: Double(tv.font.pointSize),
+                to: Double(fontSize)
+            )
+            let familyChanged = PaneFontSettings.fontFamilyDidChange(
+                from: tv.font.familyName ?? "",
+                to: fontFamily
+            )
+            if sizeChanged || familyChanged {
+                tv.font = Self.resolveFont(family: fontFamily, size: fontSize)
             }
         }
+    }
+
+    /// Resolve a curated family name + size to an NSFont. If
+    /// `NSFont(name:size:)` misses (font unavailable on the machine),
+    /// return the system monospace at the same size. This is the
+    /// AppKit-layer twin of `PaneFontSettings.resolveFamily`.
+    static func resolveFont(family: String, size: CGFloat) -> NSFont {
+        if let named = NSFont(name: family, size: size) {
+            return named
+        }
+        return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
     }
 
     func makeCoordinator() -> Coordinator {

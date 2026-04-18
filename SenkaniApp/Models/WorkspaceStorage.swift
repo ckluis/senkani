@@ -46,6 +46,9 @@ struct PersistedPane: Codable {
     var totalFilteredBytes: Int?
     var commandCount: Int?
     var secretsCaught: Int?
+    // Terminal font (nil on pre-font-persistence JSON — restore defaults then)
+    var fontSize: Double?
+    var fontFamily: String?
 }
 
 struct PersistedFeatures: Codable {
@@ -225,7 +228,9 @@ enum WorkspaceStorage {
             totalRawBytes: pane.metrics.totalRawBytes,
             totalFilteredBytes: pane.metrics.totalFilteredBytes,
             commandCount: pane.metrics.commandCount,
-            secretsCaught: pane.metrics.secretsCaught
+            secretsCaught: pane.metrics.secretsCaught,
+            fontSize: Double(pane.fontSize),
+            fontFamily: pane.fontFamily
         )
     }
 
@@ -254,6 +259,14 @@ enum WorkspaceStorage {
         pane.metrics.totalFilteredBytes = ppane.totalFilteredBytes ?? 0
         pane.metrics.commandCount = ppane.commandCount ?? 0
         pane.metrics.secretsCaught = ppane.secretsCaught ?? 0
+        // Restore font — clamp size and resolve unknown family back to default.
+        // Pre-font JSON (nil fields) falls back to PaneModel's init defaults.
+        if let size = ppane.fontSize {
+            pane.fontSize = CGFloat(PaneFontSettings.clampFontSize(size))
+        }
+        if let family = ppane.fontFamily {
+            pane.fontFamily = PaneFontSettings.resolveFamily(requested: family)
+        }
         return pane
     }
 }

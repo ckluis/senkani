@@ -67,7 +67,7 @@ A horizontal canvas of panes. Each pane is a primitive type; you arrange them ho
 
 - **Terminal** — SwiftTerm, configurable font size, kill/restart buttons, broadcast mode
 - **Dashboard** — multi-project portfolio: total savings, project table, feature charts, insights
-- **Code Editor** — tree-sitter syntax highlighting (22 languages), symbol navigation, file tree
+- **Code Editor** — tree-sitter syntax highlighting (25 languages, incl. Dart/TOML/GraphQL), symbol navigation, file tree
 - **Browser** — WKWebView embedded, localhost or any URL
 - **Markdown Preview** — live render from file, updates on save
 - **Analytics** — token/cost savings with charts, persistent across restarts
@@ -146,7 +146,7 @@ Numbers from the built-in benchmark suite (`senkani bench`):
 | Symbol search | <5ms cold, <1ms cached |
 | Secret scan | <2ms per KB |
 | Hook latency | <5ms active, <1ms passthrough |
-| Unit tests | **1359 passing** |
+| Unit tests | **1369 passing** |
 | Binary size | ~28 MB universal |
 
 **About the numbers:** The 80.37x figure is from the fixture benchmark — synthetic tasks designed to exercise each optimization layer. Real sessions produce a lower multiplier. The Savings Test pane shows both numbers side by side: fixture ceiling and live floor. The live number is the honest one.
@@ -159,7 +159,7 @@ Numbers from the built-in benchmark suite (`senkani bench`):
 |--------|------|------|
 | **Core** | Filter | Session DB, feature config, metrics, budget, hook routing, model routing, auto-validate, adaptive truncation |
 | **Filter** | — | Token compression: 44 cmd rules, ANSI strip, dedup, secrets, terse |
-| **Indexer** | SwiftTreeSitter | 22 tree-sitter backends, FTS5 search, dependency graph, incremental parsing, FSEvents |
+| **Indexer** | SwiftTreeSitter | 25 tree-sitter backends, FTS5 search, dependency graph, incremental parsing, FSEvents |
 | **Bench** | Core, Filter, Indexer | Token savings test suite: 10 tasks × 7 configs, quality gates, JSON export |
 | **MCP** | Core, Filter, Indexer, Bundle, MLX | 18 MCP tools, socket server (mcp + hook + pane), vision + embedding inference, Gemma 4 rationale adapter |
 | **Bundle** | Core, Filter, Indexer | `BundleComposer` — budget-bounded repo-snapshot composition for `senkani_bundle` |
@@ -176,7 +176,7 @@ Prerequisites: macOS 14+, Swift 6.0+, Xcode 15+
 ```bash
 swift build          # debug
 swift build -c release
-swift test           # 1359 tests
+swift test           # 1369 tests
 senkani doctor       # verify grammar and database setup
 ```
 

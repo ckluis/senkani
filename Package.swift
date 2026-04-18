@@ -227,6 +227,33 @@ let package = Package(
             cSettings: [.headerSearchPath("."), .headerSearchPath("include")]
         ),
         .target(
+            name: "TreeSitterDartParser",
+            dependencies: [],
+            path: "Sources/TreeSitterDartParser",
+            exclude: ["VERSION"],
+            sources: ["parser.c", "scanner.c"],
+            publicHeadersPath: "include",
+            cSettings: [.headerSearchPath("."), .headerSearchPath("include")]
+        ),
+        .target(
+            name: "TreeSitterTomlParser",
+            dependencies: [],
+            path: "Sources/TreeSitterTomlParser",
+            exclude: ["VERSION"],
+            sources: ["parser.c", "scanner.c"],
+            publicHeadersPath: "include",
+            cSettings: [.headerSearchPath("."), .headerSearchPath("include")]
+        ),
+        .target(
+            name: "TreeSitterGraphQLParser",
+            dependencies: [],
+            path: "Sources/TreeSitterGraphQLParser",
+            exclude: ["VERSION"],
+            sources: ["parser.c"],
+            publicHeadersPath: "include",
+            cSettings: [.headerSearchPath("."), .headerSearchPath("include")]
+        ),
+        .target(
             name: "Indexer",
             dependencies: [
                 .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
@@ -252,6 +279,9 @@ let package = Package(
                 "TreeSitterZigParser",
                 "TreeSitterHtmlParser",
                 "TreeSitterCssParser",
+                "TreeSitterDartParser",
+                "TreeSitterTomlParser",
+                "TreeSitterGraphQLParser",
             ],
             path: "Sources/Indexer"
         ),

@@ -12,6 +12,37 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Tree-sitter grammars — Dart, TOML, GraphQL (shipped 2026-04-18)
+
+Indexer now covers 25 languages (was 22). 10 unit tests validate parse +
+symbol extraction for each. Real-world items to exercise on the operator
+machine:
+
+- [ ] **Index a real Flutter / Dart repo.** Point Senkani at a
+      non-trivial Dart codebase (e.g. a `pubspec.yaml` project with
+      multiple classes, mixins, extensions, getters/setters) and call
+      `senkani_search`, `senkani_outline`, `senkani_explore` on Dart
+      files. Confirm classes, methods, enums, and mixins show up with
+      correct container resolution and line numbers.
+- [ ] **Parse a production `Cargo.toml` / `pyproject.toml`.** Run
+      `senkani_outline` on both. Verify that top-level pairs emit as
+      `.variable` and `[table]` sections become `.extension` with their
+      nested pairs as `.property`. Double-check that `[dependencies]`
+      nested tables don't lose their container.
+- [ ] **Parse a real schema.graphql.** Pick a production GraphQL schema
+      (Hasura, Supabase, or any app's `schema.graphql`). Confirm that
+      `senkani_outline` lists every top-level `type`, `interface`,
+      `enum`, `scalar`, `union`, `input`, and `directive`. The
+      `walkGraphQL` path is a second walker (not the main `walkNode`
+      switch) so the one thing to watch for is missed node types.
+- [ ] **Swift 6 codegen watchdog.** Run `swift test --no-parallel` on a
+      machine with a different Xcode / Swift toolchain version (not
+      just the one this round was built on). Two cases in `walkNode`
+      that call back into itself are deliberately folded into a single
+      `case "A", "B":` to dodge a Swift-6 switch-codegen cliff; on a
+      different toolchain the cliff may be somewhere else. If Bash
+      realistic-script tests SIGBUS, that's the smell.
+
 ### Migration race test + flock inode fix (shipped 2026-04-17)
 
 3 unit tests (`MigrationMultiProcTests`) spawn two `senkani-mig-helper`

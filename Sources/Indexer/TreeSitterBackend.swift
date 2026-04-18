@@ -22,6 +22,9 @@ import TreeSitterHaskellParser
 import TreeSitterZigParser
 import TreeSitterHtmlParser
 import TreeSitterCssParser
+import TreeSitterDartParser
+import TreeSitterTomlParser
+import TreeSitterGraphQLParser
 
 /// AST-based indexer using tree-sitter for supported languages.
 /// Provides accurate symbol extraction with proper container tracking
@@ -29,7 +32,7 @@ import TreeSitterCssParser
 public enum TreeSitterBackend {
 
     /// Languages with vendored tree-sitter grammars.
-    public static let supportedLanguages: Set<String> = ["swift", "python", "typescript", "tsx", "javascript", "go", "rust", "java", "c", "cpp", "csharp", "ruby", "php", "kotlin", "bash", "lua", "scala", "elixir", "haskell", "zig", "html", "css"]
+    public static let supportedLanguages: Set<String> = ["swift", "python", "typescript", "tsx", "javascript", "go", "rust", "java", "c", "cpp", "csharp", "ruby", "php", "kotlin", "bash", "lua", "scala", "elixir", "haskell", "zig", "html", "css", "dart", "toml", "graphql"]
 
     /// Whether tree-sitter supports the given language.
     public static func supports(_ language: String) -> Bool {
@@ -62,6 +65,9 @@ public enum TreeSitterBackend {
         case "zig":        return Language(language: tree_sitter_zig())
         case "html":       return Language(language: tree_sitter_html())
         case "css":        return Language(language: tree_sitter_css())
+        case "dart":       return Language(language: tree_sitter_dart())
+        case "toml":       return Language(language: tree_sitter_toml())
+        case "graphql":    return Language(language: tree_sitter_graphql())
         default:           return nil
         }
     }
@@ -131,6 +137,12 @@ public enum TreeSitterBackend {
             tsLanguage = Language(language: tree_sitter_html())
         case "css":
             tsLanguage = Language(language: tree_sitter_css())
+        case "dart":
+            tsLanguage = Language(language: tree_sitter_dart())
+        case "toml":
+            tsLanguage = Language(language: tree_sitter_toml())
+        case "graphql":
+            tsLanguage = Language(language: tree_sitter_graphql())
         default:
             return []
         }
@@ -169,6 +181,13 @@ public enum TreeSitterBackend {
         container: String?,
         entries: inout [IndexEntry]
     ) {
+        // GraphQL uses its own walker — keeping it out of this switch keeps
+        // `walkNode`'s stack frame small enough for Swift 6 to compile without
+        // tripping a codegen SIGBUS on large unrelated ASTs (see walkGraphQL).
+        if language == "graphql" {
+            walkGraphQL(node, file: file, source: source, lines: lines, container: container, entries: &entries)
+            return
+        }
         for i in 0..<Int(node.childCount) {
             guard let child = node.child(at: i) else { continue }
             let type = child.nodeType ?? ""
@@ -768,6 +787,10 @@ public enum TreeSitterBackend {
                         signature: signatureText(lines: lines, line: startLine(of: child)),
                         container: container, engine: "tree-sitter"
                     ))
+                } else if child.childCount > 0 {
+                    // Other languages (e.g. GraphQL) use `type_definition` as a
+                    // wrapper node — recurse so inner definitions are visited.
+                    walkNode(child, language: language, file: file, source: source, lines: lines, container: container, entries: &entries)
                 }
 
             // C/C++ declarations (function prototypes, constructor declarations)
@@ -909,11 +932,133 @@ public enum TreeSitterBackend {
                     walkNode(child, language: language, file: file, source: source, lines: lines, container: container, entries: &entries)
                 }
 
+            // Dart function_signature (top-level functions + class methods; method_signature wraps this)
+            case "function_signature":
+                if language == "dart", let name = nodeName(child, source: source) {
+                    let kind: SymbolKind = container != nil ? .method : .function
+                    entries.append(IndexEntry(
+                        name: name, kind: kind, file: file,
+                        startLine: startLine(of: child), endLine: endLine(of: child),
+                        signature: signatureText(lines: lines, line: startLine(of: child)),
+                        container: container, engine: "tree-sitter"
+                    ))
+                } else if child.childCount > 0 {
+                    walkNode(child, language: language, file: file, source: source, lines: lines, container: container, entries: &entries)
+                }
+
+            // Dart getter/setter signatures (emit as property-like methods)
+            case "getter_signature", "setter_signature":
+                if language == "dart", let name = nodeName(child, source: source) {
+                    let kind: SymbolKind = container != nil ? .property : .variable
+                    entries.append(IndexEntry(
+                        name: name, kind: kind, file: file,
+                        startLine: startLine(of: child), endLine: endLine(of: child),
+                        signature: signatureText(lines: lines, line: startLine(of: child)),
+                        container: container, engine: "tree-sitter"
+                    ))
+                }
+
+            // Dart extension_declaration (extension Foo on Bar { ... })
+            case "extension_declaration":
+                if language == "dart" {
+                    let nameOpt = nodeName(child, source: source)
+                    let name = nameOpt ?? "extension"
+                    entries.append(IndexEntry(
+                        name: name, kind: .extension, file: file,
+                        startLine: startLine(of: child), endLine: endLine(of: child),
+                        signature: signatureText(lines: lines, line: startLine(of: child)),
+                        container: container, engine: "tree-sitter"
+                    ))
+                    if let body = findBody(child) {
+                        walkNode(body, language: language, file: file, source: source, lines: lines, container: name, entries: &entries)
+                    }
+                }
+
+            // Dart mixin_declaration (mixin Foo { ... })
+            case "mixin_declaration":
+                if language == "dart", let name = nodeName(child, source: source) {
+                    entries.append(IndexEntry(
+                        name: name, kind: .class, file: file,
+                        startLine: startLine(of: child), endLine: endLine(of: child),
+                        signature: signatureText(lines: lines, line: startLine(of: child)),
+                        container: container, engine: "tree-sitter"
+                    ))
+                    if let body = findBody(child) {
+                        walkNode(body, language: language, file: file, source: source, lines: lines, container: name, entries: &entries)
+                    }
+                }
+
+            // TOML [table] + [[table_array_element]] headers (children include
+            // the key node + inner pairs; emit as `.extension` and recurse so
+            // nested pairs get the table as container).
+            // NOTE: Keep `table` and `table_array_element` folded into a single
+            // `case A, B:` — splitting them into two adjacent cases triggers a
+            // Swift 6 switch-codegen stack-overflow when the switch has many
+            // String cases (see: walkNode has ~70 cases). Measured: separate
+            // cases with identical `walkNode(child, …, container: name)` tails
+            // blow the stack on large Bash ASTs; folded case is fine.
+            case "table", "table_array_element":
+                if language == "toml" {
+                    if let name = extractTomlTableName(child, source: source) {
+                        entries.append(IndexEntry(
+                            name: name, kind: .extension, file: file,
+                            startLine: startLine(of: child), endLine: endLine(of: child),
+                            signature: signatureText(lines: lines, line: startLine(of: child)),
+                            container: container, engine: "tree-sitter"
+                        ))
+                        walkNode(child, language: language, file: file, source: source, lines: lines, container: name, entries: &entries)
+                    }
+                }
+
+            // TOML key = value
+            case "pair":
+                if language == "toml", let name = extractTomlPairKey(child, source: source) {
+                    let kind: SymbolKind = container != nil ? .property : .variable
+                    entries.append(IndexEntry(
+                        name: name, kind: kind, file: file,
+                        startLine: startLine(of: child), endLine: endLine(of: child),
+                        signature: signatureText(lines: lines, line: startLine(of: child)),
+                        container: container, engine: "tree-sitter"
+                    ))
+                }
+
             default:
                 // Recurse into non-declaration nodes (decorated_definition, export_statement, block, etc.)
                 if child.childCount > 0 {
                     walkNode(child, language: language, file: file, source: source, lines: lines, container: container, entries: &entries)
                 }
+            }
+        }
+    }
+
+    // MARK: - GraphQL Walker
+
+    /// GraphQL has its own dedicated walker so it doesn't share the large
+    /// `walkNode` switch. Matches top-level schema definitions (object,
+    /// interface, enum, scalar, union, input object, directive) by name,
+    /// recursing into wrapper nodes (`document`, `definition`,
+    /// `type_system_definition`, `type_definition`) via a simple loop.
+    private static func walkGraphQL(
+        _ node: Node,
+        file: String,
+        source: NSString,
+        lines: [String],
+        container: String?,
+        entries: inout [IndexEntry]
+    ) {
+        for i in 0..<Int(node.childCount) {
+            guard let child = node.child(at: i) else { continue }
+            let type = child.nodeType ?? ""
+            if let kind = graphqlDefinitionKind(type),
+               let name = graphqlName(child, source: source) {
+                entries.append(IndexEntry(
+                    name: name, kind: kind, file: file,
+                    startLine: startLine(of: child), endLine: endLine(of: child),
+                    signature: signatureText(lines: lines, line: startLine(of: child)),
+                    container: container, engine: "tree-sitter"
+                ))
+            } else if child.childCount > 0 {
+                walkGraphQL(child, file: file, source: source, lines: lines, container: container, entries: &entries)
             }
         }
     }
@@ -1481,6 +1626,69 @@ public enum TreeSitterBackend {
         if type == "function_declarator" { return true }
         return cHasFunctionDeclarator(declarator)
     }
+
+    // MARK: - TOML Extractors
+
+    /// Extract the header key from a TOML `table` or `table_array_element`.
+    /// Children order is [ `[` or `[[`, key_node, `]` or `]]`, ...pairs ]; the
+    /// key node is `bare_key`, `quoted_key`, or `dotted_key`.
+    private static func extractTomlTableName(_ node: Node, source: NSString) -> String? {
+        for i in 0..<Int(node.childCount) {
+            guard let child = node.child(at: i) else { continue }
+            switch child.nodeType ?? "" {
+            case "bare_key", "quoted_key", "dotted_key":
+                return nodeText(child, source: source)
+            default:
+                continue
+            }
+        }
+        return nil
+    }
+
+    /// Extract the LHS key from a TOML `pair` (`key = value`).
+    private static func extractTomlPairKey(_ node: Node, source: NSString) -> String? {
+        for i in 0..<Int(node.childCount) {
+            guard let child = node.child(at: i) else { continue }
+            switch child.nodeType ?? "" {
+            case "bare_key", "quoted_key", "dotted_key":
+                return nodeText(child, source: source)
+            default:
+                continue
+            }
+        }
+        return nil
+    }
+
+    // MARK: - GraphQL Extractors
+
+    /// Return the text of a GraphQL definition's `name` child node.
+    /// GraphQL grammar treats `name` as a node type (not a field), so we
+    /// look it up by type.
+    private static func graphqlName(_ node: Node, source: NSString) -> String? {
+        guard let nameNode = findChildByType(node, type: "name") else { return nil }
+        return nodeText(nameNode, source: source)
+    }
+
+    /// Map a GraphQL top-level definition node type to a `SymbolKind`.
+    /// object_type_definition → .class (struct-like aggregate of fields)
+    /// interface_type_definition → .interface
+    /// enum_type_definition → .enum
+    /// input_object_type_definition → .struct (input-only aggregate)
+    /// scalar_type_definition / union_type_definition → .type
+    /// directive_definition → .function (callable-ish thing at use sites)
+    private static func graphqlDefinitionKind(_ nodeType: String) -> SymbolKind? {
+        switch nodeType {
+        case "object_type_definition":       return .class
+        case "interface_type_definition":    return .interface
+        case "enum_type_definition":         return .enum
+        case "input_object_type_definition": return .struct
+        case "scalar_type_definition",
+             "union_type_definition":        return .type
+        case "directive_definition":         return .function
+        default:                             return nil
+        }
+    }
+
 
     // MARK: - Node Helpers
 

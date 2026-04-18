@@ -1575,7 +1575,7 @@ footer p { font-size: 14px; color: var(--ink-mute); max-width: 560px; line-heigh
           <h2>Find any symbol<br>in <span class="accent">~50 tokens.</span><br>Not ~5,000.</h2>
           <p class="lede">A local tree-sitter index answers symbol lookups, navigates import graphs, and reads only the exact lines a function occupies — before the agent touches the filesystem.</p>
           <div class="tag-row">
-            <span class="tag tag-orange">22 languages</span>
+            <span class="tag tag-orange">25 languages</span>
             <span class="tag tag-dim">AST precision</span>
             <span class="tag tag-dim">FSEvents auto-update</span>
           </div>
@@ -1589,7 +1589,7 @@ footer p { font-size: 14px; color: var(--ink-mute); max-width: 560px; line-heigh
             </div>
             <div style="padding:18px 22px; background:var(--app-panel); font-family:var(--font-code); font-size:12px; line-height:1.9;">
               <div><span class="term-prompt">chris</span><span class="term-at">@</span><span class="term-dir">acme-api</span> <span class="term-cmd">senkani</span> <span class="term-arg">search</span> <span class="term-arg">AuthService</span></div>
-              <div style="color:var(--app-dim);">→ index: 4,218 symbols · 22 languages · &lt;5ms cold</div>
+              <div style="color:var(--app-dim);">→ index: 4,218 symbols · 25 languages · &lt;5ms cold</div>
               <div style="margin-top:8px;">
                 <div><span style="color:var(--app-green);">src/api/auth.ts:14&nbsp;&nbsp;&nbsp;&nbsp;</span><span style="color:var(--app-purple);">class&nbsp;&nbsp;&nbsp;</span><span style="color:var(--app-text);">AuthService</span></div>
                 <div><span style="color:var(--app-green);">src/api/auth.ts:28&nbsp;&nbsp;&nbsp;&nbsp;</span><span style="color:var(--app-purple);">func&nbsp;&nbsp;&nbsp;&nbsp;</span><span style="color:var(--app-text);">AuthService.login(email, password)</span></div>
@@ -1607,14 +1607,14 @@ footer p { font-size: 14px; color: var(--ink-mute); max-width: 560px; line-heigh
       <div class="ref-section" id="symbol-indexer">
         <div class="ref-section-hd">
           <h3>Symbol Indexer</h3>
-          <p>Tree-sitter AST extraction across 22 languages. Vendored C parsers, no runtime grammar loading. The same index that intercepts Grep calls also powers <code>senkani_search</code>, <code>senkani_fetch</code>, <code>senkani_explore</code>, and <code>senkani_deps</code>.</p>
+          <p>Tree-sitter AST extraction across 25 languages. Vendored C parsers, no runtime grammar loading. The same index that intercepts Grep calls also powers <code>senkani_search</code>, <code>senkani_fetch</code>, <code>senkani_explore</code>, and <code>senkani_deps</code>.</p>
         </div>
 
         <div class="mech-grid">
           <div class="mech">
             <div class="mech-cat">Tree-sitter</div>
-            <h4>22 grammars vendored in the binary</h4>
-            <div class="mech-what">AST precision across Swift, TypeScript, TSX, JavaScript, Go, Rust, Python, Java, C, C++, C#, Ruby, PHP, Kotlin, Bash, Lua, Scala, Elixir, Haskell, Zig, HTML, CSS.</div>
+            <h4>25 grammars vendored in the binary</h4>
+            <div class="mech-what">AST precision across Swift, TypeScript, TSX, JavaScript, Go, Rust, Python, Java, C, C++, C#, Ruby, PHP, Kotlin, Bash, Lua, Scala, Elixir, Haskell, Zig, HTML, CSS, Dart, TOML, GraphQL.</div>
             <div class="mech-how">C parser sources live in <code>Sources/</code> as vendored submodules. No network fetch, no runtime grammar loading. Binary includes all parsers. <code>senkani grammars</code> shows pinned versions.</div>
           </div>
           <div class="mech">
@@ -2191,10 +2191,10 @@ unchanged — only prose is compressed.</span></div>
         <div class="ref-section-hd">
           <div class="overline">What's built</div>
           <h2>The compression layer <span class="accent">is live.</span></h2>
-          <p style="font-size:16px; color:var(--ink-soft); max-width:600px; line-height:1.65; margin-top:12px;">All core features are live and tested. 1,359 unit tests passing. 19 MCP tools, 19 CLI commands, 16 pane types. `senkani_repo` (19th tool) queries any public GitHub repo without cloning — host-allowlisted (api.github.com + raw.githubusercontent.com), SecretDetector-scanned, TTL-cached, auth-token-gated. The nine-round compound-learning + knowledge-base master plan landed 2026-04-17 (H+2b polymorphic typed-artifact store + context signals, H+2c instruction + workflow signal generators with Schneier "never auto-apply" on instructions, H+2d sprint + quarterly cadence CLIs, F+1 Layer-1-as-source-of-truth rebuild coordinator, F+2 entity-tracker telemetry, F+3 enrichment validator + <code>senkani kb rollback/history</code>, F+4 <code>senkani kb timeline</code>, F+5 KB ↔ compound-learning bridge with confidence boost + idempotent entity seeding + rollback-cascade invalidation). On-device MLX inference (<code>senkani_vision</code>, <code>senkani_embed</code>, Gemma rationale rewriter) now runs behind a shared <code>MLXInferenceLock</code> that FIFO-serializes every call and drops loaded model containers on macOS memory-pressure warnings.</p>
+          <p style="font-size:16px; color:var(--ink-soft); max-width:600px; line-height:1.65; margin-top:12px;">All core features are live and tested. 1,369 unit tests passing. 19 MCP tools, 19 CLI commands, 16 pane types. `senkani_repo` (19th tool) queries any public GitHub repo without cloning — host-allowlisted (api.github.com + raw.githubusercontent.com), SecretDetector-scanned, TTL-cached, auth-token-gated. The nine-round compound-learning + knowledge-base master plan landed 2026-04-17 (H+2b polymorphic typed-artifact store + context signals, H+2c instruction + workflow signal generators with Schneier "never auto-apply" on instructions, H+2d sprint + quarterly cadence CLIs, F+1 Layer-1-as-source-of-truth rebuild coordinator, F+2 entity-tracker telemetry, F+3 enrichment validator + <code>senkani kb rollback/history</code>, F+4 <code>senkani kb timeline</code>, F+5 KB ↔ compound-learning bridge with confidence boost + idempotent entity seeding + rollback-cascade invalidation). On-device MLX inference (<code>senkani_vision</code>, <code>senkani_embed</code>, Gemma rationale rewriter) now runs behind a shared <code>MLXInferenceLock</code> that FIFO-serializes every call and drops loaded model containers on macOS memory-pressure warnings.</p>
           <ul style="font-size:14px; color:var(--ink-soft); max-width:620px; line-height:1.7; margin:16px 0 0; padding-left:20px; display:grid; gap:6px;">
             <li><strong>Hook relay + filter pipeline</strong> — 24 command-specific rules; Layer 3 smart denials (re-read suppression, command replay, trivial routing, symbol upgrade, redundant validation); 80.37× overall reduction on fixture suite</li>
-            <li><strong>Symbol indexer</strong> — 22 languages, tree-sitter AST, FSEvents incremental updates, bidirectional dependency graph, container hierarchy, &lt;5ms cold / &lt;1ms cached</li>
+            <li><strong>Symbol indexer</strong> — 25 languages, tree-sitter AST, FSEvents incremental updates, bidirectional dependency graph, container hierarchy, &lt;5ms cold / &lt;1ms cached</li>
             <li><strong>Session database + analytics</strong> — SQLite + FTS5, per-call token tracking, budget enforcement at hook layer, BM25+RRF search fusion, @-mention context pinning, session continuity, JSONL data export</li>
             <li><strong>Local ML</strong> — MiniLM embeddings (384-dim) + Gemma vision via MLX on Neural Engine; fully offline after download; L0/L1/L2 tiered context pre-warming</li>
             <li><strong>Knowledge graph + compound learning</strong> — entities, decisions, co-change coupling, enrichment; LearnedFilterRule v2 with Laplace-smoothed confidence; WARP.md skill auto-discovery; <code>senkani_bundle</code> for budget-bounded codebase snapshots (markdown or stable-schema JSON via <code>BundleDocument</code>); <code>--remote owner/name</code> for public-repo snapshots via <code>senkani_repo</code></li>
@@ -2212,7 +2212,7 @@ unchanged — only prose is compressed.</span></div>
           </div>
           <div class="feature">
             <div class="num-row"><div class="num">02</div><span class="badge badge-live">Live</span></div>
-            <h4>Symbol indexer (22 languages)</h4>
+            <h4>Symbol indexer (25 languages)</h4>
             <p>Tree-sitter AST extraction, vendored grammars, incremental FSEvents updates, bidirectional dependency graph, container hierarchy, in-memory index with &lt;5ms cold search / &lt;1ms cached.</p>
           </div>
           <div class="feature">
@@ -2238,7 +2238,7 @@ unchanged — only prose is compressed.</span></div>
           <div class="feature">
             <div class="num-row"><div class="num">07</div><span class="badge badge-live">Live</span></div>
             <h4>Code Editor pane</h4>
-            <p>NSTextView with tree-sitter syntax highlighting across 22 languages, Cmd+click symbol navigation to definition, and token intelligence overlays showing live compression counts per file.</p>
+            <p>NSTextView with tree-sitter syntax highlighting across 25 languages, Cmd+click symbol navigation to definition, and token intelligence overlays showing live compression counts per file.</p>
           </div>
           <div class="feature">
             <div class="num-row"><div class="num">08</div><span class="badge badge-coming">Q3 2026</span></div>

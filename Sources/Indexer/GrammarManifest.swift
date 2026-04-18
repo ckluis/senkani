@@ -187,6 +187,27 @@ public enum GrammarManifest {
             vendoredDate: "2026-04-13",
             targetName: "TreeSitterCssParser"
         ),
+        "dart": GrammarInfo(
+            language: "dart",
+            version: "1.0.0",
+            repo: "UserNobody14/tree-sitter-dart",
+            vendoredDate: "2026-04-18",
+            targetName: "TreeSitterDartParser"
+        ),
+        "toml": GrammarInfo(
+            language: "toml",
+            version: "0.7.0",
+            repo: "tree-sitter-grammars/tree-sitter-toml",
+            vendoredDate: "2026-04-18",
+            targetName: "TreeSitterTomlParser"
+        ),
+        "graphql": GrammarInfo(
+            language: "graphql",
+            version: "0.0.1",
+            repo: "bkegley/tree-sitter-graphql",
+            vendoredDate: "2026-04-18",
+            targetName: "TreeSitterGraphQLParser"
+        ),
     ]
 
     /// Sorted list of all grammar infos for display.

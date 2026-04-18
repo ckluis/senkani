@@ -32,6 +32,9 @@ public enum FileWalker {
         "hs": "haskell", "lhs": "haskell",
         "html": "html", "htm": "html",
         "css": "css",
+        "dart": "dart",
+        "toml": "toml",
+        "graphql": "graphql", "gql": "graphql",
     ]
 
     public struct WalkResult: Sendable {

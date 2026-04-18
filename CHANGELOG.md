@@ -6,6 +6,33 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 18 — Tree-sitter grammars: Dart, TOML, GraphQL
+- Three vendored parsers landed in `Sources/TreeSitter{Dart,Toml,GraphQL}Parser/`
+  and wired into the Indexer, `GrammarManifest`, and `FileWalker`
+  (`.dart` → dart, `.toml` → toml, `.graphql` / `.gql` → graphql).
+  Indexer now covers **25 languages**.
+- Dart: top-level functions, methods, classes, enums, extensions,
+  mixins, getter/setter signatures — via `function_signature`,
+  `class_definition`, `enum_declaration`, `extension_declaration`,
+  `mixin_declaration` walkNode cases (lexical container nesting).
+- TOML: `[table]` + `[[table_array_element]]` emit as `.extension`
+  symbols; their inner `pair`s inherit the table as container
+  (`.property`) while top-level pairs are `.variable`.
+- GraphQL: object/interface/enum/scalar/union/input/directive
+  definitions mapped to the canonical `SymbolKind`s. Dispatched
+  via a dedicated `walkGraphQL` function rather than adding seven
+  more cases to `walkNode`'s main switch — the extra cases were
+  observed to balloon `walkNode`'s stack frame past a Swift 6
+  switch-codegen cliff and SIGBUS at runtime on large *unrelated*
+  ASTs (the Bash realistic test). `table` and `table_array_element`
+  are folded into a single `case "A", "B":` for the same reason;
+  see [spec/tree_sitter.md](spec/tree_sitter.md#adding-more-cases-to-walknode--a-swift-6-codegen-trap).
+- 10 new tests (1359 → 1369): wiring sanity (supports + manifest +
+  FileWalker for all three), Dart top-level function + class with
+  method + enum, TOML top-level pairs + table with nested pairs +
+  table-array element, GraphQL object type + interface/enum/scalar
+  mix + input + directive.
+
 ### April 17 — Migration race test + flock inode fix
 - Bach G2 closed: `tools/migration-runner/senkani-mig-helper` +
   `MigrationMultiProcTests` spawn two real processes via

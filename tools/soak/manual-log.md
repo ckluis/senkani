@@ -12,6 +12,43 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Schedule worktree spawn (shipped 2026-04-18)
+
+`senkani schedule create --worktree` opts a cron job into running in a
+fresh detached-HEAD git worktree under
+`~/.senkani/schedules/worktrees/{name}-{runId}/`. Unit tests cover the
+helper (create / cleanup / retain-on-failure / concurrent-spawn /
+non-git-repo rejection / run-id shape) hermetically, but several
+end-to-end paths only exercise under a real launchd fire:
+
+- [ ] **Real launchd fire with `--worktree`.** Create a schedule with
+      `senkani schedule create --name wt-smoke --cron '*/2 * * * *'
+      --command 'git rev-parse HEAD > /tmp/senkani-wt-smoke.out' --worktree`
+      from inside a real git repo. Wait two minutes. Confirm the `.out`
+      file exists, the HEAD it captured matches the source repo's HEAD,
+      and that no worktree dir remains under
+      `~/.senkani/schedules/worktrees/` after a clean run.
+- [ ] **Retain-on-failure path.** Change the command to `false` so the
+      shell exits non-zero. After the next fire, check that the
+      worktree dir is retained for inspection and that the stderr log
+      (`~/.senkani/logs/{name}.err`) includes the
+      `Worktree retained for inspection: …` line with the path.
+- [ ] **Cwd inheritance via launchd.** By default launchd starts jobs
+      with cwd = `$HOME`, so `--worktree` fails fast with notGitRepo
+      unless the user's `$HOME` is itself a git repo. Confirm the
+      `lastRunResult` in the saved task JSON reads
+      `failed: Not a git repository: …` in that default-cwd case, and
+      document whether we should add a `WorkingDirectory` key to the
+      generated plist in a follow-up.
+- [ ] **TTL cleanup for retained worktrees.** This round explicitly did
+      NOT ship automatic TTL-based cleanup of retained failure worktrees
+      — they accumulate until the operator manually deletes them. Track
+      how many build up over a real week of schedule failures; if it's
+      non-trivial, add a `.ttl_days` config knob in a follow-up round.
+- [ ] **Branch pollution check.** The helper uses
+      `git worktree add --detach` (no new branch), so branches shouldn't
+      accumulate — confirm `git branch -a` stays clean after ~10 fires.
+
 ### Tree-sitter grammars — Dart, TOML, GraphQL (shipped 2026-04-18)
 
 Indexer now covers 25 languages (was 22). 10 unit tests validate parse +

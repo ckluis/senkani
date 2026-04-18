@@ -11,6 +11,7 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
     public var createdAt: Date
     public var lastRunAt: Date?
     public var lastRunResult: String?  // "success", "failed: ...", "budget_exceeded"
+    public var worktree: Bool
 
     public init(
         name: String,
@@ -20,7 +21,8 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
         enabled: Bool = true,
         createdAt: Date = Date(),
         lastRunAt: Date? = nil,
-        lastRunResult: String? = nil
+        lastRunResult: String? = nil,
+        worktree: Bool = false
     ) {
         self.name = name
         self.cronPattern = cronPattern
@@ -30,6 +32,27 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
         self.createdAt = createdAt
         self.lastRunAt = lastRunAt
         self.lastRunResult = lastRunResult
+        self.worktree = worktree
+    }
+
+    // Explicit Codable so a missing `worktree` key (pre-field JSON files
+    // already on disk) decodes as `false` instead of failing.
+    private enum CodingKeys: String, CodingKey {
+        case name, cronPattern, command, budgetLimitCents, enabled
+        case createdAt, lastRunAt, lastRunResult, worktree
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.name = try c.decode(String.self, forKey: .name)
+        self.cronPattern = try c.decode(String.self, forKey: .cronPattern)
+        self.command = try c.decode(String.self, forKey: .command)
+        self.budgetLimitCents = try c.decodeIfPresent(Int.self, forKey: .budgetLimitCents)
+        self.enabled = try c.decode(Bool.self, forKey: .enabled)
+        self.createdAt = try c.decode(Date.self, forKey: .createdAt)
+        self.lastRunAt = try c.decodeIfPresent(Date.self, forKey: .lastRunAt)
+        self.lastRunResult = try c.decodeIfPresent(String.self, forKey: .lastRunResult)
+        self.worktree = try c.decodeIfPresent(Bool.self, forKey: .worktree) ?? false
     }
 }
 

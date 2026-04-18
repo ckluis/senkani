@@ -30,6 +30,9 @@ extension Schedule {
         @Option(name: .long, help: "Budget limit in cents for this task (optional).")
         var budget: Int?
 
+        @Flag(name: .long, help: "Run each fire inside a fresh git worktree (requires current dir to be a git repo when run).")
+        var worktree: Bool = false
+
         func validate() throws {
             // Validate name: alphanumeric, dashes, underscores only
             let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
@@ -56,7 +59,8 @@ extension Schedule {
                 name: name,
                 cronPattern: cron,
                 command: command,
-                budgetLimitCents: budget
+                budgetLimitCents: budget,
+                worktree: worktree
             )
 
             // Save task config
@@ -282,11 +286,34 @@ extension Schedule {
                 }
             }
 
+            // Optionally spawn in a fresh git worktree. Must happen after
+            // the budget gate so a blocked run doesn't leave disk litter.
+            var worktreeHandle: ScheduleWorktree.Handle?
+            if task.worktree {
+                let cwd = FileManager.default.currentDirectoryPath
+                do {
+                    worktreeHandle = try ScheduleWorktree.create(
+                        projectRoot: cwd, scheduleName: task.name
+                    )
+                } catch {
+                    task.lastRunAt = Date()
+                    task.lastRunResult = "failed: \(error.localizedDescription)"
+                    try? ScheduleStore.save(task)
+                    FileHandle.standardError.write(
+                        Data("Worktree create failed for '\(name)': \(error.localizedDescription)\n".utf8)
+                    )
+                    throw ExitCode(1)
+                }
+            }
+
             // Run the command
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
             process.arguments = ["-c", task.command]
             process.environment = ProcessInfo.processInfo.environment
+            if let handle = worktreeHandle {
+                process.currentDirectoryURL = URL(fileURLWithPath: handle.path)
+            }
 
             let outPipe = Pipe()
             let errPipe = Pipe()
@@ -312,6 +339,17 @@ extension Schedule {
             } catch {
                 task.lastRunAt = Date()
                 task.lastRunResult = "failed: \(error.localizedDescription)"
+            }
+
+            // Cleanup worktree on success; retain on failure for inspection.
+            if let handle = worktreeHandle {
+                if task.lastRunResult == "success" {
+                    try? ScheduleWorktree.cleanup(handle)
+                } else {
+                    FileHandle.standardError.write(
+                        Data("Worktree retained for inspection: \(handle.path)\n".utf8)
+                    )
+                }
             }
 
             try? ScheduleStore.save(task)

@@ -6,6 +6,30 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 18 — Schedule runs spawn in worktrees
+- `ScheduledTask` gains a `worktree: Bool` field (default `false`,
+  `decodeIfPresent` keeps pre-field JSON files on disk readable).
+  `senkani schedule create --worktree` opts a task in; on each fire
+  `Schedule.Run` creates a fresh detached-HEAD worktree under
+  `~/.senkani/schedules/worktrees/{name}-{runId}/`, chdirs the command
+  there, and tears it down on success.
+- New `Core/ScheduleWorktree` helper (no SwiftUI/AppKit deps — pure
+  Foundation + `/usr/bin/git`). `create` fails fast with `notGitRepo`
+  when cwd isn't a git working tree; `cleanup` uses
+  `git worktree remove --force`, falling back to physical delete +
+  `worktree prune` on git failure so a stuck registration can't wedge
+  future runs. Run-ID format: `yyyyMMddHHmmss-{6 random alphanum}` UTC,
+  so two fires in the same wall-clock second can't collide
+  (~2×10⁻⁹ probability).
+- Failed runs intentionally retain the worktree for inspection — the
+  stderr log prints the retained path. Budget-exceeded runs short-circuit
+  *before* worktree creation so a blocked run doesn't leave disk litter.
+- 8 new tests (1388 → 1396) — backwards-compat decode of pre-field JSON,
+  `worktree` field roundtrip, create-in-git-repo, cleanup-on-success,
+  retain-when-cleanup-skipped, non-git-repo rejection, 4 concurrent
+  creates produce 4 distinct worktrees, run-ID shape sanity. Sub-item
+  2 of 3 under the `cron-scheduled-agents` umbrella.
+
 ### April 18 — Schedule subsystem test coverage
 - `ScheduleConfigTests` (19 tests, 1369 → 1388) covers the previously
   untested schedule subsystem: `CronToLaunchd.convert` (wrong field

@@ -6,6 +6,34 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 18 — Schedule runs emit Agent Timeline events
+- New `Core/ScheduleTelemetry` helper records a `token_events` row at
+  the start and end of every `Schedule.Run` invocation so scheduled
+  runs appear in the Agent Timeline pane alongside interactive tool
+  calls. Events use `source = "schedule"` and `feature =
+  "schedule_start" | "schedule_end" | "schedule_blocked"`. Paired
+  start/end events for the same run share `session_id =
+  "schedule:{taskName}:{runId}"` — consumers can join the pair
+  without a separate metadata column. Run-id format matches
+  `ScheduleWorktree.makeRunId` (`yyyyMMddHHmmss-<6 alnum>` UTC).
+- Budget-exceeded runs emit a single `schedule_blocked` event instead
+  of a start/end pair; the block reason from
+  `BudgetConfig.Decision.block` is preserved verbatim in the event's
+  `command` field so the Timeline surface keeps the operator-facing
+  message intact. Failed runs record the exit code in the end event's
+  `command` string (`"{name}: failed: exit {N}"`).
+- No schema change — reuses the existing `token_events` table and
+  columns. No new `AgentType` case. Test-only DB override
+  (`ScheduleTelemetry.withTestDatabase`) mirrors the
+  `ScheduleStore.withTestDirs` / `ScheduleWorktree.withTestDir`
+  pattern (NSLock-serialized override slot).
+- 8 new tests (1396 → 1404) — start event shape, end success +
+  failure-with-exit-code, blocked event reason passthrough, start/end
+  sessionId pairing, project-root filtering, blocked-only (no
+  orphan pair), runId format sanity. Sub-item 3 of 3 under the
+  `cron-scheduled-agents` umbrella — the umbrella is now fully
+  delivered.
+
 ### April 18 — Schedule runs spawn in worktrees
 - `ScheduledTask` gains a `worktree: Bool` field (default `false`,
   `decodeIfPresent` keeps pre-field JSON files on disk readable).

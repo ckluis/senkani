@@ -12,6 +12,43 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Schedule timeline integration (shipped 2026-04-18)
+
+`Schedule.Run` now emits `token_events` rows at start / end / blocked
+points of every scheduled fire so runs render in the Agent Timeline
+pane. Unit tests cover the helper (event shape, session-id pairing,
+project-root filtering, blocked-without-pair, runId format) against a
+temp DB, but several display + persistence paths only exercise under a
+real launchd fire + live `SessionDatabase.shared`:
+
+- [ ] **End-to-end timeline render.** Create a schedule (e.g.
+      `senkani schedule create --name tl-smoke --cron '*/2 * * * *'
+      --command 'echo hi'`), wait for it to fire, then open the Agent
+      Timeline pane in the app and confirm a `schedule_start` row and a
+      `schedule_end` row appear with `command` values of
+      `"tl-smoke: echo hi"` and `"tl-smoke: success"`.
+- [ ] **project_root correctness under launchd.** launchd's default cwd
+      is `$HOME`; `Schedule.Run` uses `FileManager.currentDirectoryPath`
+      as the event's `project_root`. Confirm the Timeline pane's
+      project filter correctly surfaces (or hides) the scheduled-run
+      events depending on which project is active. If the event
+      reliably files under `$HOME` only, consider a follow-up to wire
+      `WorkingDirectory` through the plist (already on the queue
+      below) so the events land under the source repo instead.
+- [ ] **Budget-block path visibility.** Configure a zero-dollar daily
+      cap in `~/.senkani/budget.json` and a task with
+      `--budget-limit-cents`. Wait for a fire. Confirm a single
+      `schedule_blocked` event appears in the Timeline with the block
+      reason embedded in `command` (e.g. `"task: budget_exceeded
+      (Daily budget exceeded: $0.00 / $0.00)"`) — and that NO
+      `schedule_start` or `schedule_end` pair is present for the same
+      run.
+- [ ] **Failed-run exit code visibility.** Create a schedule with
+      `--command 'exit 7'`. Wait for a fire. Confirm the Timeline
+      `schedule_end` row's `command` is `"task: failed: exit 7"` and
+      the corresponding `schedule_start` row exists with the original
+      command text.
+
 ### Schedule worktree spawn (shipped 2026-04-18)
 
 `senkani schedule create --worktree` opts a cron job into running in a

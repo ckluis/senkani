@@ -6,6 +6,33 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 18 — SkillScanner: scanAsync() wired into the Skill Browser (FIXME resolution)
+- `SkillBrowserView.loadSkills()` now calls `SkillScanner.scanAsync()`
+  instead of the synchronous `scan()`. SwiftUI's `.task { ... }`
+  inherits the MainActor, so the previous call stalled the UI thread
+  for the duration of the scan — a silent trap on machines with a
+  large `~/.claude/` tree. `scanAsync` hops to
+  `Task.detached(priority: .utility)` so the scan runs on a
+  background executor and the main actor stays responsive.
+- The FIXME at `SkillScanner.swift:47` is gone. The zero-arg
+  synchronous `scan()` is retained for CLI / non-UI use but is now
+  `@available(*, deprecated, message: "UI callers must use
+  scanAsync() to avoid main-thread stalls")` — any future UI
+  regression that reverts to `scan()` trips a yellow build warning
+  on the call-site.
+- New `scan(homeDir:cwd:)` and `scanAsync(homeDir:cwd:)` overloads
+  parameterize the scan roots for fixture-driven tests (the old
+  signatures hit `NSHomeDirectory()` + `fm.currentDirectoryPath`
+  directly, so tests could not isolate from the host machine).
+  Production continues to call the zero-arg forms.
+- 4 new tests (1424 → 1428): scan on empty fixture returns empty;
+  scanAsync matches scan on a seeded fixture (Claude commands +
+  Cursor rule + Senkani skill; key-order parity); scanAsync on 80+
+  seeded files finishes under a 2-second wall-clock bound
+  (regression guard against accidental resync, not a micro-benchmark);
+  scanAsync runs in parallel with a concurrent async task without
+  blocking it (rules out a regression that awaits inline).
+
 ### April 18 — Pane Display settings: font-family picker + persistence
 - The Display section of the pane settings panel now ships a
   monospace font-family picker alongside the existing size slider and

@@ -345,7 +345,7 @@ struct SkillBrowserView: View {
     // MARK: - Helpers
 
     private func loadSkills() async {
-        let found = SkillScanner.scan()
+        let found = await SkillScanner.scanAsync()
         await MainActor.run {
             skills = found
             isLoading = false

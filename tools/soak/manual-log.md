@@ -12,6 +12,35 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### SkillScanner — scanAsync() wired into Skill Browser (shipped 2026-04-18)
+
+Unit tests cover the async dispatch (Task.detached priority .utility),
+fixture-root parity with sync scan, and a timing-sanity upper bound.
+Real-machine validation — specifically to confirm the UI no longer
+stalls on large home directories — can only be done in the running app:
+
+- Seed or confirm presence of a non-trivial `~/.claude/` tree
+  (≥ 50 command files + several nested SKILL.md subdirectories — the
+  author's machine has ≈ 120 commands + 40 skills, which stalls the
+  old sync path visibly). Open Senkani → Skill Browser pane. The
+  "Scanning for skills…" spinner should appear smoothly (no frozen
+  window title-bar, no beachball) and resolve within ~1 second on
+  modern hardware. Hover the window chrome and drag during the scan —
+  the main thread must remain responsive; pre-fix this dragged only
+  after the scan completed.
+- Click the Rescan button with the same tree. Spinner → list refresh
+  cycle should feel identical to initial load. No duplicate entries,
+  no stale flicker of the previous list.
+- Point Senkani at a machine with a dotfile tree that symlinks back
+  into itself (historically rare but possible via
+  `~/.claude/commands/mirror -> ~/.claude`). The existing symlink
+  loop guard in `scanRecursive` should still terminate; scanAsync
+  must return the deduped result without blocking the UI.
+- Regression guard: If the Skill Browser ever starts feeling sluggish
+  again, grep for `SkillScanner.scan()` (no args) in `SenkaniApp/`.
+  A deprecation warning should already fire at build time; this
+  check is the "operator sanity" version.
+
 ### Display settings — font-family picker + persistence (shipped 2026-04-18)
 
 Unit tests cover the pure `Core.PaneFontSettings` type (clamp, resolve,

@@ -12,6 +12,26 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### DiffViewer LCS (shipped 2026-04-17)
+
+13 unit tests cover the algorithm (no-change, mid-file
+insert/delete/replacement, whitespace-only change, mismatched
+replacement run, 1200-line scale, accept/reject round-trip). Real-world
+validation items:
+
+- [ ] **Open two real Swift files in DiffViewer.** Paste the path of a
+      file + its previous version (e.g. `git show HEAD~5:Sources/CLI/
+      Senkani.swift > /tmp/old.swift` then compare `/tmp/old.swift`
+      against the current file). Confirm mid-file insertions/deletions
+      align without cascading false-diff rows after the change.
+- [ ] **Whitespace-only change.** Load a file, save a trailing-
+      whitespace-only variant, compare. Both sides should show the
+      differing lines highlighted; unchanged lines above/below should
+      stay aligned.
+- [ ] **Large file.** Diff two ~2k-line JSON or log files with a
+      handful of mid-file edits. Should render in under ~1s and
+      preserve scrolling alignment.
+
 ### senkani_bundle --remote wiring (shipped 2026-04-17)
 
 22 unit tests (URLProtocol-stubbed) cover parseTree, fetchRemote,

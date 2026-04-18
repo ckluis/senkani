@@ -75,7 +75,7 @@ A horizontal canvas of panes. Each pane is a primitive type; you arrange them ho
 - **Savings Test** — fixture bench + live session replay + scenario simulator
 - **Agent Timeline** — timeline of optimization events
 - **Knowledge Base** — project knowledge entities, freshness indicators
-- **Diff Viewer** — side-by-side diff
+- **Diff Viewer** — side-by-side LCS diff (correct insertions, deletions, replacements)
 - **Log Viewer** — searchable log output
 - **Scratchpad** — auto-saving markdown notepad
 - **Schedules** — manage recurring tasks via launchd

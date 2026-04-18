@@ -1,7 +1,8 @@
 import SwiftUI
+import Core
 
 /// Side-by-side file diff viewer. Drop two files or paste paths to compare.
-/// Highlights added (green), removed (red), and changed (yellow) lines.
+/// Highlights added (green) and removed (red) lines.
 struct DiffViewerPane: View {
     @Bindable var pane: PaneModel
     @State private var leftPath: String = ""
@@ -34,7 +35,6 @@ struct DiffViewerPane: View {
             if !hasCompared {
                 emptyState
             } else {
-                // Side-by-side diff
                 HStack(spacing: 0) {
                     diffColumn(lines: leftLines, label: "Original")
                     Rectangle().fill(SenkaniTheme.inactiveBorder).frame(width: 0.5)
@@ -101,7 +101,7 @@ struct DiffViewerPane: View {
                         }
                         .padding(.vertical, 1)
                         .padding(.horizontal, 4)
-                        .background(line.kind.backgroundColor)
+                        .background(backgroundColor(for: line.kind))
                     }
                 }
             }
@@ -109,56 +109,21 @@ struct DiffViewerPane: View {
         }
     }
 
-    private func runDiff() {
-        let left = (try? String(contentsOfFile: leftPath, encoding: .utf8)) ?? ""
-        let right = (try? String(contentsOfFile: rightPath, encoding: .utf8)) ?? ""
-
-        let leftArr = left.components(separatedBy: "\n")
-        let rightArr = right.components(separatedBy: "\n")
-
-        // Simple line-by-line comparison (not a proper LCS diff, but functional)
-        let maxLines = max(leftArr.count, rightArr.count)
-        var lResult: [DiffLine] = []
-        var rResult: [DiffLine] = []
-
-        for i in 0..<maxLines {
-            let lLine = i < leftArr.count ? leftArr[i] : ""
-            let rLine = i < rightArr.count ? rightArr[i] : ""
-
-            if lLine == rLine {
-                lResult.append(DiffLine(text: lLine, kind: .unchanged))
-                rResult.append(DiffLine(text: rLine, kind: .unchanged))
-            } else if i >= leftArr.count {
-                lResult.append(DiffLine(text: "", kind: .unchanged))
-                rResult.append(DiffLine(text: rLine, kind: .added))
-            } else if i >= rightArr.count {
-                lResult.append(DiffLine(text: lLine, kind: .removed))
-                rResult.append(DiffLine(text: "", kind: .unchanged))
-            } else {
-                lResult.append(DiffLine(text: lLine, kind: .removed))
-                rResult.append(DiffLine(text: rLine, kind: .added))
-            }
-        }
-
-        leftLines = lResult
-        rightLines = rResult
-        hasCompared = true
-    }
-}
-
-struct DiffLine {
-    let text: String
-    let kind: DiffKind
-}
-
-enum DiffKind {
-    case unchanged, added, removed
-
-    var backgroundColor: Color {
-        switch self {
+    private func backgroundColor(for kind: DiffLineKind) -> Color {
+        switch kind {
         case .unchanged: return .clear
         case .added: return Color.green.opacity(0.1)
         case .removed: return Color.red.opacity(0.1)
         }
+    }
+
+    private func runDiff() {
+        let left = (try? String(contentsOfFile: leftPath, encoding: .utf8)) ?? ""
+        let right = (try? String(contentsOfFile: rightPath, encoding: .utf8)) ?? ""
+
+        let paired = DiffEngine.computePairedLines(original: left, modified: right)
+        leftLines = paired.left
+        rightLines = paired.right
+        hasCompared = true
     }
 }

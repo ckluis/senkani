@@ -189,6 +189,13 @@ Senkani *is*. Entries are grouped by the server version reported by
 - `senkani eval --agent` per-agent breakdown
 
 ### Infrastructure
+- DiffViewer LCS — `DiffEngine` promoted to `Sources/Core` (testable
+  library); `computePairedLines` renders side-by-side rows with
+  correct alignment for insertions, deletions, and replacements.
+  Replacement runs pair row-for-row; excess removes/adds pad with
+  placeholders. 13 tests cover no-change, mid-file insertion /
+  deletion / replacement, whitespace-only change, mismatched run,
+  1200-line scale, and accept/reject round-trip.
 - HookRelay consolidation — shared library used by `senkani-hook` binary
   and the app's `--hook` mode (Lesson #16)
 - Pane socket IPC — instant pane control (<10 ms) replacing 5 s file polling

@@ -25,6 +25,9 @@ public actor GemmaInferenceAdapter: RationaleLLM {
     private var modelContainer: ModelContainer?
     private var loadedModelId: String?
 
+    /// True once we've registered an unload handler with MLXInferenceLock.
+    private var unloadHandlerRegistered = false
+
     /// Token cap on generation. Rationales are one sentence; 128 tokens
     /// is generous and keeps even the smallest Gemma tier under ~1 s.
     private let maxTokens: Int
@@ -33,38 +36,46 @@ public actor GemmaInferenceAdapter: RationaleLLM {
         self.maxTokens = maxTokens
     }
 
+    /// Drop the loaded VLM. Called by MLXInferenceLock on memory warning.
+    func unload() {
+        modelContainer = nil
+        loadedModelId = nil
+    }
+
     public func rewrite(prompt: String) async throws -> String {
-        let container: ModelContainer
         do {
-            container = try await ensureModel()
-        } catch {
-            // Treat all load failures as "model unavailable" — the
-            // rewriter is a best-effort path and callers must never
-            // see a thrown error surface anywhere except as a silent
-            // nil rewrite.
-            throw RationaleLLMError.unavailable
-        }
-
-        // Text-only UserInput. Empty image array is the text-only path
-        // for VLMs; Gemma 4 handles it fine.
-        let userInput = UserInput(prompt: prompt, images: [])
-
-        do {
-            let input = try await container.prepare(input: userInput)
-            let params = GenerateParameters(maxTokens: maxTokens)
-            var result = ""
-            let stream = try await container.generate(input: input, parameters: params)
-            for await generation in stream {
-                switch generation {
-                case .chunk(let text):
-                    result += text
-                case .info, .toolCall:
-                    break
+            return try await MLXInferenceLock.shared.run {
+                let container: ModelContainer
+                do {
+                    container = try await self.ensureModel()
+                } catch {
+                    // Treat all load failures as "model unavailable" — the
+                    // rewriter is a best-effort path and callers must never
+                    // see a thrown error surface anywhere except as a silent
+                    // nil rewrite.
+                    throw RationaleLLMError.unavailable
                 }
+
+                // Text-only UserInput. Empty image array is the text-only path
+                // for VLMs; Gemma 4 handles it fine. Constructed inside the
+                // Sendable closure — `UserInput` is not Sendable.
+                let userInput = UserInput(prompt: prompt, images: [])
+                let input = try await container.prepare(input: userInput)
+                let params = GenerateParameters(maxTokens: self.maxTokens)
+                var result = ""
+                let stream = try await container.generate(input: input, parameters: params)
+                for await generation in stream {
+                    switch generation {
+                    case .chunk(let text):
+                        result += text
+                    case .info, .toolCall:
+                        break
+                    }
+                }
+                let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { throw RationaleLLMError.emptyResponse }
+                return trimmed
             }
-            let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { throw RationaleLLMError.emptyResponse }
-            return trimmed
         } catch let e as RationaleLLMError {
             throw e
         } catch is CancellationError {
@@ -82,6 +93,13 @@ public actor GemmaInferenceAdapter: RationaleLLM {
     /// layout changing out from under it.
     private func ensureModel() async throws -> ModelContainer {
         if let mc = modelContainer { return mc }
+
+        if !unloadHandlerRegistered {
+            unloadHandlerRegistered = true
+            await MLXInferenceLock.shared.registerUnloadHandler { [weak self] in
+                await self?.unload()
+            }
+        }
 
         let mgr = ModelManager.shared
         let ram = ModelManager.availableRAMGB

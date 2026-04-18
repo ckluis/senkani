@@ -12,6 +12,37 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### MLX inference serialize lock (shipped 2026-04-17)
+
+7 unit tests cover the lock primitive (non-overlapping concurrent exec,
+FIFO ordering, error-in-closure releases the lock, unload-handler
+register + fire on simulated warning, `clearUnloadHandlers` empties the
+registry, `startMemoryMonitor` idempotent / stop clears, queue-depth
+drains). The DispatchSource memory-pressure path can't be faked in a
+unit test — it only fires under real kernel-reported RAM pressure.
+Real-world validation items:
+
+- [ ] **Concurrent vision + embed under real MLX.** Open two panes,
+      fire `senkani_vision` on a screenshot in one and `senkani_search`
+      (which warms the embedding model) in the other within a few
+      hundred ms. Confirm both complete without `EXC_BAD_ACCESS` or
+      Metal-pool stalls, and that stderr shows the calls did not
+      interleave their "vision model loaded" / "indexed N files" log
+      lines.
+- [ ] **Memory-pressure unload.** Load a Gemma 4 tier (trigger any
+      `senkani_vision` call), then deliberately pressure memory —
+      `memory_pressure -s 10 -l warn` or spawn a large process — and
+      watch stderr for the next `senkani_vision` call re-loading the
+      model from scratch. If RAM dropped below the loaded tier's
+      `requiredRAM`, confirm the re-load picks a smaller tier from the
+      fallback chain.
+- [ ] **No regression on single-caller latency.** Run a baseline
+      `senkani_vision` analysis; add `MLXInferenceLock` warmup (call
+      once, let it release); re-run; confirm the serialized path adds
+      <1 ms of lock overhead vs. the pre-lock path (eyeball the
+      per-call total; the lock is pure actor work so it should be
+      sub-millisecond).
+
 ### DiffViewer LCS (shipped 2026-04-17)
 
 13 unit tests cover the algorithm (no-change, mid-file

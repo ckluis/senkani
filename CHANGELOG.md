@@ -6,6 +6,22 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 17 — MLX inference serialize lock
+- `MLXInferenceLock` (Core actor) serializes on-device MLX inference
+  across VisionEngine, EmbedEngine, and GemmaInferenceAdapter. All
+  three share the same Metal command queue and memory pool; concurrent
+  calls now FIFO-queue through `MLXInferenceLock.shared.run { ... }`
+  instead of thrashing the GPU.
+- Memory pressure: `DispatchSource.makeMemoryPressureSource(.warning)`
+  fires every registered unload handler. Each engine nils its
+  `ModelContainer`, and the next call re-loads via the existing
+  RAM-aware fallback chain — natural step-down to a smaller tier.
+- Started in `MCPServerRunner.run` via `startMemoryMonitor()`.
+- 7 unit tests (1349 → 1356): non-overlapping concurrent exec, FIFO
+  waiter ordering, error-in-closure releases lock, handler register +
+  fire on simulated warning, `clearUnloadHandlers` empties registry,
+  `startMemoryMonitor` idempotent / stop clears, queue-depth drain.
+
 ### Workspace
 - 16 pane types — Terminal, Dashboard, Code Editor, Browser, Markdown
   Preview, Analytics, Model Manager, Savings Test, Agent Timeline,

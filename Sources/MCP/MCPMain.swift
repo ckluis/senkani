@@ -24,6 +24,10 @@ public struct MCPServerRunner {
 
         let session = MCPSession.resolve()
 
+        // Start watching for macOS memory-pressure warnings. Registered
+        // MLX engines will drop their ModelContainers when a warning fires.
+        await MLXInferenceLock.shared.startMemoryMonitor()
+
         // Register download handler so ModelManager.download(modelId:) works from the UI.
         // This bridges Core (no MLX dependency) to the MCP layer (has MLX).
         ModelManager.shared.registerDownloadHandler { modelId in

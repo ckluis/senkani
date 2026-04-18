@@ -11,16 +11,22 @@ import Core
 /// Indexes project files, returns most relevant files for a query.
 /// Cost: $0 (local Apple Silicon inference) vs $0.003+ per API call.
 ///
-/// Thread safety: EmbedEngine is an actor, so all state mutations (modelContainer,
-/// fileEmbeddings, indexedAt) are serialized by Swift concurrency. Two concurrent
-/// `ensureModel()` calls will be serialized — the second will see the model already loaded.
+/// Thread safety: EmbedEngine is an actor, so its own state is serialized
+/// by Swift concurrency. Cross-engine concurrency with VisionEngine /
+/// GemmaInferenceAdapter is serialized by `MLXInferenceLock.shared` — the
+/// shared Metal pool tolerates no concurrent inference work.
 ///
-/// MiniLM-L6 is ~90MB in RAM — acceptable to keep resident even as a daemon.
+/// Memory pressure: this engine registers an unload handler with the lock
+/// on first load. On a macOS memory-pressure warning, the handler nils
+/// out `modelContainer` and clears the in-memory index; the next call
+/// rebuilds. MiniLM-L6 is ~90MB in RAM — usually fine to keep resident,
+/// but dropping it frees memory for the VLM tier when RAM is tight.
 actor EmbedEngine {
     private var modelContainer: MLXEmbedders.ModelContainer?
     private var fileEmbeddings: [String: [Float]] = [:]  // relative path → embedding
     private var projectRoot: String = ""
     private var indexedAt: Date?
+    private var unloadHandlerRegistered = false
 
     /// The model ID used for ModelManager tracking.
     static let modelId = "minilm-l6"
@@ -28,10 +34,24 @@ actor EmbedEngine {
     /// How long before the index is considered stale and should be rebuilt.
     private static let indexStalenessInterval: TimeInterval = 300  // 5 minutes
 
+    /// Drop the loaded embedding model + cached index. Called by
+    /// MLXInferenceLock on memory warning.
+    func unload() {
+        modelContainer = nil
+        fileEmbeddings.removeAll()
+        indexedAt = nil
+    }
+
     /// Load the embedding model. ModelManager must report ready before calling this.
     /// Actor isolation guarantees only one caller loads at a time — no race condition.
     func ensureModel() async throws -> MLXEmbedders.ModelContainer {
         if let mc = modelContainer { return mc }
+        if !unloadHandlerRegistered {
+            unloadHandlerRegistered = true
+            await MLXInferenceLock.shared.registerUnloadHandler { [weak self] in
+                await self?.unload()
+            }
+        }
         ModelManager.shared.updateProgress(Self.modelId, progress: 0.0)
         let mc = try await MLXEmbedders.loadModelContainer(configuration: .minilm_l6) { progress in
             ModelManager.shared.updateProgress(Self.modelId, progress: progress.fractionCompleted)
@@ -57,6 +77,7 @@ actor EmbedEngine {
     }
 
     /// Index all source files in the project. Skips if index is fresh.
+    /// Inference work is serialized globally by `MLXInferenceLock`.
     func indexProject(root: String, files: [String]) async throws {
         // Skip if we already have a fresh index for this root
         if isIndexFresh(root: root, fileCount: files.count) { return }
@@ -79,37 +100,39 @@ actor EmbedEngine {
 
         guard !texts.isEmpty else { return }
 
-        // Generate embeddings in batches
+        // Generate embeddings in batches. MLX work runs under the global lock.
         let capturedTexts = texts
-        let embeddings = await mc.perform {
-            (model: EmbeddingModel, tokenizer: Tokenizer, pooling: Pooling) -> [[Float]] in
+        let embeddings: [[Float]] = await MLXInferenceLock.shared.run {
+            await mc.perform {
+                (model: EmbeddingModel, tokenizer: Tokenizer, pooling: Pooling) -> [[Float]] in
 
-            var results: [[Float]] = []
-            let batchSize = 32
+                var results: [[Float]] = []
+                let batchSize = 32
 
-            for batchStart in stride(from: 0, to: capturedTexts.count, by: batchSize) {
-                let batchEnd = min(batchStart + batchSize, capturedTexts.count)
-                let batch = Array(capturedTexts[batchStart..<batchEnd])
+                for batchStart in stride(from: 0, to: capturedTexts.count, by: batchSize) {
+                    let batchEnd = min(batchStart + batchSize, capturedTexts.count)
+                    let batch = Array(capturedTexts[batchStart..<batchEnd])
 
-                let inputs = batch.map { tokenizer.encode(text: $0, addSpecialTokens: true) }
-                let maxLength = inputs.reduce(into: 16) { acc, elem in acc = max(acc, elem.count) }
+                    let inputs = batch.map { tokenizer.encode(text: $0, addSpecialTokens: true) }
+                    let maxLength = inputs.reduce(into: 16) { acc, elem in acc = max(acc, elem.count) }
 
-                let padded = stacked(inputs.map { elem in
-                    MLXArray(elem + Array(repeating: tokenizer.eosTokenId ?? 0,
-                                          count: maxLength - elem.count))
-                })
-                let mask = (padded .!= tokenizer.eosTokenId ?? 0)
-                let tokenTypes = MLXArray.zeros(like: padded)
+                    let padded = stacked(inputs.map { elem in
+                        MLXArray(elem + Array(repeating: tokenizer.eosTokenId ?? 0,
+                                              count: maxLength - elem.count))
+                    })
+                    let mask = (padded .!= tokenizer.eosTokenId ?? 0)
+                    let tokenTypes = MLXArray.zeros(like: padded)
 
-                let output = pooling(
-                    model(padded, positionIds: nil, tokenTypeIds: tokenTypes, attentionMask: mask),
-                    normalize: true, applyLayerNorm: true
-                )
-                output.eval()
-                results.append(contentsOf: output.map { $0.asArray(Float.self) })
+                    let output = pooling(
+                        model(padded, positionIds: nil, tokenTypeIds: tokenTypes, attentionMask: mask),
+                        normalize: true, applyLayerNorm: true
+                    )
+                    output.eval()
+                    results.append(contentsOf: output.map { $0.asArray(Float.self) })
+                }
+
+                return results
             }
-
-            return results
         }
 
         // Store embeddings (replace old index)
@@ -122,24 +145,26 @@ actor EmbedEngine {
         fputs("senkani: indexed \(fileEmbeddings.count) files for semantic search\n", stderr)
     }
 
-    /// Find files most similar to a query.
+    /// Find files most similar to a query. MLX query-embedding runs
+    /// under `MLXInferenceLock`; cosine-similarity is pure Swift.
     func search(query: String, topK: Int = 5) async throws -> [(file: String, score: Float)] {
         guard !fileEmbeddings.isEmpty else { return [] }
         let mc = try await ensureModel()
 
-        // Embed the query
-        let queryEmbedding = await mc.perform {
-            (model: EmbeddingModel, tokenizer: Tokenizer, pooling: Pooling) -> [Float] in
-            let input = tokenizer.encode(text: "search_query: \(query)", addSpecialTokens: true)
-            let padded = MLXArray(input).reshaped([1, input.count])
-            let mask = MLXArray.ones(like: padded)
-            let tokenTypes = MLXArray.zeros(like: padded)
-            let output = pooling(
-                model(padded, positionIds: nil, tokenTypeIds: tokenTypes, attentionMask: mask),
-                normalize: true, applyLayerNorm: true
-            )
-            output.eval()
-            return output[0].asArray(Float.self)
+        let queryEmbedding: [Float] = await MLXInferenceLock.shared.run {
+            await mc.perform {
+                (model: EmbeddingModel, tokenizer: Tokenizer, pooling: Pooling) -> [Float] in
+                let input = tokenizer.encode(text: "search_query: \(query)", addSpecialTokens: true)
+                let padded = MLXArray(input).reshaped([1, input.count])
+                let mask = MLXArray.ones(like: padded)
+                let tokenTypes = MLXArray.zeros(like: padded)
+                let output = pooling(
+                    model(padded, positionIds: nil, tokenTypeIds: tokenTypes, attentionMask: mask),
+                    normalize: true, applyLayerNorm: true
+                )
+                output.eval()
+                return output[0].asArray(Float.self)
+            }
         }
 
         // Compute cosine similarity with all indexed files
@@ -159,19 +184,21 @@ actor EmbedEngine {
         guard !fileEmbeddings.isEmpty, modelContainer != nil else { return [] }
         guard let mc = modelContainer else { return [] }
 
-        // Embed query using already-loaded model (no I/O, pure compute)
-        let queryEmbedding = await mc.perform {
-            (model: EmbeddingModel, tokenizer: Tokenizer, pooling: Pooling) -> [Float] in
-            let input = tokenizer.encode(text: "search_query: \(query)", addSpecialTokens: true)
-            let padded = MLXArray(input).reshaped([1, input.count])
-            let mask = MLXArray.ones(like: padded)
-            let tokenTypes = MLXArray.zeros(like: padded)
-            let output = pooling(
-                model(padded, positionIds: nil, tokenTypeIds: tokenTypes, attentionMask: mask),
-                normalize: true, applyLayerNorm: true
-            )
-            output.eval()
-            return output[0].asArray(Float.self)
+        // Embed query using already-loaded model (no I/O, pure compute). Serialized.
+        let queryEmbedding: [Float] = await MLXInferenceLock.shared.run {
+            await mc.perform {
+                (model: EmbeddingModel, tokenizer: Tokenizer, pooling: Pooling) -> [Float] in
+                let input = tokenizer.encode(text: "search_query: \(query)", addSpecialTokens: true)
+                let padded = MLXArray(input).reshaped([1, input.count])
+                let mask = MLXArray.ones(like: padded)
+                let tokenTypes = MLXArray.zeros(like: padded)
+                let output = pooling(
+                    model(padded, positionIds: nil, tokenTypeIds: tokenTypes, attentionMask: mask),
+                    normalize: true, applyLayerNorm: true
+                )
+                output.eval()
+                return output[0].asArray(Float.self)
+            }
         }
 
         var similarities: [(file: String, score: Float)] = []

@@ -8,17 +8,29 @@ import Core
 /// Cost: $0 (local Apple Silicon inference) vs $0.01+ per GPT-4o vision call.
 ///
 /// Fallback chain: auto-selected Gemma 4 tier (by RAM) → smaller tiers → error.
-/// The actor ensures concurrent calls are serialized safely by Swift concurrency.
+/// Inference is serialized globally by `MLXInferenceLock.shared` — a concurrent
+/// `senkani_embed` or `senkani_vision` call from another session queues up
+/// instead of thrashing the Metal pool.
 ///
-/// TODO: Memory pressure handling — when running as a daemon (Phase 5), the loaded VLM
-/// stays resident (~1.5-12GB depending on tier). ModelContainer does not expose an
-/// unload/evict API. Consider implementing an idle timer that nil-outs `modelContainer`
-/// after e.g. 10 minutes, allowing ARC to free the MLX buffers.
+/// Memory pressure: this engine registers an unload handler with the lock
+/// on first load. A macOS memory-pressure warning invokes the handler,
+/// which nils out `modelContainer`; the next call re-loads via the
+/// RAM-aware fallback chain and naturally steps down to a smaller tier
+/// if RAM shrank.
 actor VisionEngine {
     private var modelContainer: ModelContainer?
 
     /// Which model is currently loaded, tracked for ModelManager reporting.
     private(set) var loadedModelId: String?
+
+    /// True once we've registered an unload handler with MLXInferenceLock.
+    private var unloadHandlerRegistered = false
+
+    /// Drop the loaded VLM. Called by MLXInferenceLock on memory warning.
+    func unload() {
+        modelContainer = nil
+        loadedModelId = nil
+    }
 
     /// Build a RAM-ordered fallback chain from ModelManager's Gemma 4 tiers.
     /// Tries the recommended (highest-quality) tier first, falls back to smaller ones.
@@ -37,6 +49,13 @@ actor VisionEngine {
     func ensureModel() async throws -> (ModelContainer, String) {
         if let mc = modelContainer, let id = loadedModelId {
             return (mc, id)
+        }
+
+        if !unloadHandlerRegistered {
+            unloadHandlerRegistered = true
+            await MLXInferenceLock.shared.registerUnloadHandler { [weak self] in
+                await self?.unload()
+            }
         }
 
         let chain = Self.fallbackChain
@@ -77,35 +96,33 @@ actor VisionEngine {
         )
     }
 
-    /// Analyze an image with an optional prompt.
+    /// Analyze an image with an optional prompt. Serialized globally by
+    /// `MLXInferenceLock` so a concurrent embedding or rationale call
+    /// queues rather than thrashing Metal.
     func analyze(imagePath: String, prompt: String) async throws -> String {
-        let (mc, _) = try await ensureModel()
-
-        let imageURL = URL(fileURLWithPath: imagePath)
         guard FileManager.default.fileExists(atPath: imagePath) else {
             throw NSError(domain: "senkani", code: 1, userInfo: [NSLocalizedDescriptionKey: "Image not found: \(imagePath)"])
         }
+        let imageURL = URL(fileURLWithPath: imagePath)
 
-        let userInput = UserInput(
-            prompt: prompt,
-            images: [.url(imageURL)]
-        )
+        return try await MLXInferenceLock.shared.run {
+            let (mc, _) = try await self.ensureModel()
+            let userInput = UserInput(prompt: prompt, images: [.url(imageURL)])
+            let input = try await mc.prepare(input: userInput)
+            let params = GenerateParameters(maxTokens: 512)
 
-        let input = try await mc.prepare(input: userInput)
-        let params = GenerateParameters(maxTokens: 512)
-
-        var result = ""
-        let stream = try await mc.generate(input: input, parameters: params)
-        for await generation in stream {
-            switch generation {
-            case .chunk(let text):
-                result += text
-            case .info, .toolCall:
-                break
+            var result = ""
+            let stream = try await mc.generate(input: input, parameters: params)
+            for await generation in stream {
+                switch generation {
+                case .chunk(let text):
+                    result += text
+                case .info, .toolCall:
+                    break
+                }
             }
+            return result
         }
-
-        return result
     }
 }
 

@@ -58,10 +58,20 @@ public enum MigrationRunner {
         }
 
         // Acquire cross-process flock. Tests use in-memory DB and skip this.
+        //
+        // NOTE: do NOT pre-create the lockfile via `FileManager.createFile` —
+        // on both macOS and Linux, `createFile(atPath:contents:)` does an
+        // atomic write (temp file + rename), which UNLINKS the existing
+        // file and installs a new inode at the same path. A concurrent
+        // process that's already holding flock on the old inode keeps its
+        // lock, but the new process `open()`s the NEW inode and its flock
+        // never conflicts — both proceed into the migration critical
+        // section and race on schema_migrations. `open(O_RDWR|O_CREAT)` by
+        // itself is safe: it creates the file if absent and opens the
+        // existing inode if present, never unlinking.
         var flockFD: Int32 = -1
         if usesSidecar {
             let flockPath = dbPath + ".migrating"
-            FileManager.default.createFile(atPath: flockPath, contents: nil)
             flockFD = open(flockPath, O_RDWR | O_CREAT, 0o600)
             guard flockFD >= 0 else { throw MigrationError.flockFailed(errno: errno) }
             while flock(flockFD, LOCK_EX) != 0 {

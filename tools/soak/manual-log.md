@@ -12,6 +12,37 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Migration race test + flock inode fix (shipped 2026-04-17)
+
+3 unit tests (`MigrationMultiProcTests`) spawn two `senkani-mig-helper`
+processes via `Foundation.Process` and exercise the cross-process flock
+contract automatically. Fixed a real defect in `MigrationRunner.run`
+along the way (pre-racing `FileManager.createFile` + `open(O_RDWR|
+O_CREAT)` → different inodes per process → no mutual exclusion). Real-
+world validation items — mostly redundant now that the contract is
+under unit test, but worth a once-over after the first real session
+that triggers a migration:
+
+- [ ] **Real install + upgrade migration on a DB with actual data.**
+      Run the new build against an existing user DB (committed through
+      months of real sessions, not a fresh `/tmp` fixture). Confirm
+      `schema_migrations` is populated, `PRAGMA user_version` matches
+      the max shipped version, no `.schema.lock` written, and no
+      surprise lockfile left behind from an older install.
+- [ ] **Concurrent launch: MCP server + GUI app on one DB.** Start
+      the MCP server and the GUI workspace at roughly the same time,
+      both pointing at the same user DB. Verify (via the schema
+      migration logs in `stderr`) that exactly one side applies any
+      pending migrations and the other sees them as already applied.
+      Pre-fix this would have raced; with the fix it's the same
+      contract the unit test now exercises.
+- [ ] **Kill-switch lockfile user-visible path.** Force a migration
+      failure (e.g. point a dev build at a DB where a future
+      migration is rigged to fail) and confirm the error message
+      surfaced to the user mentions the `.schema.lock` path and the
+      "investigate the DB and remove the lockfile before retrying"
+      guidance.
+
 ### MLX inference serialize lock (shipped 2026-04-17)
 
 7 unit tests cover the lock primitive (non-overlapping concurrent exec,

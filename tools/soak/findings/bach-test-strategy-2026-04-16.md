@@ -25,7 +25,7 @@ Bach rule: absence of a test is evidence of absence of signal.
 | # | Gap | Severity | Signal per hour |
 |---|-----|----------|-----------------|
 | G1 | `ProjectSecurity` has ZERO tests | **P1** | High — trust boundary |
-| G2 | Migration runner concurrency test was planned but never shipped | **P1** | High — only theoretical flock verification |
+| G2 | Migration runner concurrency test was planned but never shipped | **P1** | ✅ 2026-04-17 — `MigrationMultiProcTests` spawns two `senkani-mig-helper` processes via `Foundation.Process`, releases a shared barrier, and asserts exactly-once semantics (union of applied versions = full registry, exactly one applies + one no-ops, kill-switch lockfile not produced). Found and fixed a real flock race in `MigrationRunner.run` — `FileManager.createFile` was pre-racing `open(O_RDWR\|O_CREAT)` on the same sidecar because `createFile`'s atomic write unlinks + renames, so concurrent processes flocked different inodes. 3 new tests. |
 | G3 | No property-based / fuzz tests anywhere in 91 files | **P2** | High — SSRF parser has 25 cases but zero fuzzing |
 | G4 | WebFetch redirect `decidePolicyFor` logic only tested via its inner helpers | **P2** | High — the actual policy fn is untested as a unit |
 | G5 | HookRouter (507 LOC, Layer-3 interception) has 9 tests — thin | P2 | Medium — happy-path heavy |
@@ -54,33 +54,54 @@ Bach rule: absence of a test is evidence of absence of signal.
 **Fix shipped this commit:** `ProjectSecurityTests.swift` with 12
 cases covering every branch.
 
-## G2 — Migration concurrency test (partially shipped, subprocess follow-up)
+## G2 — Migration concurrency test (closed 2026-04-17)
 
 The P1-4 plan called for:
 > "concurrency test: spawn two DatabaseQueues against the same file,
 > race them, assert only one migration transaction wins."
 
-**Discovery while implementing:** macOS `flock(2)` is a **per-process**
+**Intra-process limitation.** macOS `flock(2)` is a **per-process**
 advisory lock. Two `Task.detached` handles inside the same test
 process hold the *same* process-level flock and both proceed
 concurrently. The second runner's `CREATE TABLE` fails with "table
 already exists" — the intra-process race exposes the test's own
-limitation, not a bug in `MigrationRunner`. Production is safe because
-the MCP server and GUI app are *separate processes* and the per-process
-flock semantics serialize them correctly there.
+limitation, not a bug in `MigrationRunner`. This is why the original
+follow-up required a subprocess harness.
 
-**What I shipped this commit:** `sequentialRunnersAreIdempotent` — a
-deterministic test that proves the idempotency contract: two sequential
-runs on the same DB, second is a no-op, sidecar flock file is created.
-Plus a documented comment explaining the intra-process flock limitation.
+**What shipped (prior commit).** `sequentialRunnersAreIdempotent` —
+a deterministic test that proves the single-process idempotency
+contract: two sequential runs on the same DB, second is a no-op,
+sidecar flock file is created. Plus a documented comment explaining
+the intra-process flock limitation.
 
-**Follow-up (tracked):** write a true cross-process test by spawning a
-helper subprocess via `Foundation.Process`. Requires a small helper
-binary (or repurposing senkani-mcp in a test-only mode) that calls
-`MigrationRunner.run` and reports its result over stdout/stdin. Not
-done this round — non-trivial extra infrastructure for proportionally
-small signal (the per-process semantics of BSD flock are a stable
-platform guarantee).
+**What shipped 2026-04-17 (this audit trail entry).** Bach G2 is
+fully closed by `MigrationMultiProcTests`, which spawns two real
+processes (`senkani-mig-helper`, a 60 LOC executable under
+`tools/migration-runner/`) via `Foundation.Process`. A shared
+barrier file releases both helpers at approximately the same
+instant; assertions check the union of applied versions equals the
+full registry, exactly one helper applies while the other no-ops,
+schema_migrations is fully populated, and no kill-switch lockfile
+is written. Additional tests cover (a) two helpers against an
+already-migrated DB both no-op and (b) a planted kill-switch
+lockfile blocks both concurrent launches.
+
+**Production defect found and fixed.** The multi-process test
+failed on first run with `UNIQUE constraint failed:
+schema_migrations.version` — the cross-process flock was NOT
+serializing the two processes. Root cause: `MigrationRunner.run`
+called `FileManager.default.createFile(atPath: dbPath +
+".migrating", contents: nil)` immediately before
+`open(O_RDWR|O_CREAT)`. `FileManager.createFile` performs an
+atomic write (write to temp, rename to target), which unlinks the
+existing sidecar and installs a new inode at the same path. A
+concurrent process holding flock on the old inode does not
+conflict with another process flocking the new inode — both
+proceed into the critical section and race on `schema_migrations`.
+The fix was a one-line deletion: `open(O_RDWR|O_CREAT)` on its own
+creates the file if absent and opens the existing inode if
+present, never unlinking. The fix shipped with the test in the
+same commit.
 
 ## G3 — No property-based or fuzz tests in 91 files (P2)
 
@@ -141,10 +162,11 @@ debt ledger is now GREEN.
 | Gap | Shipped this commit | Tests added |
 |-----|---------------------|-------------|
 | G1 ProjectSecurity | ✅ | ~12 |
-| G2 Migration concurrency | ✅ | 1 |
+| G2 Migration concurrency (intra-process) | ✅ | 1 |
+| G2 Migration concurrency (multi-process) | ✅ 2026-04-17 | 3 |
 | G3 SSRF table expansion | ✅ | ~50 parametric |
 | G4 RedirectPolicy extraction | ✅ | 10 |
-| G5–G10 | tracked | — |
+| G5–G10 | ✅ 2026-04-17 | see G6–G10 rows above |
 
 Expected post-commit test count: 953 + ~73 = ~1026.
 

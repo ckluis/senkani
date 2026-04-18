@@ -10,6 +10,7 @@ let package = Package(
         .executable(name: "senkani", targets: ["CLI"]),
         .executable(name: "senkani-mcp", targets: ["SenkaniMCP"]),
         .executable(name: "senkani-hook", targets: ["SenkaniHook"]),
+        .executable(name: "senkani-mig-helper", targets: ["SenkaniMigHelper"]),
         .library(name: "MCPServer", targets: ["MCPServer"]),
         .library(name: "SenkaniFilter", targets: ["Filter"]),
         .library(name: "SenkaniCore", targets: ["Core"]),
@@ -319,6 +320,11 @@ let package = Package(
             name: "SenkaniHook",
             dependencies: ["HookRelay"],
             path: "Sources/Hook"
+        ),
+        .executableTarget(
+            name: "SenkaniMigHelper",
+            dependencies: ["Core"],
+            path: "tools/migration-runner"
         ),
         .executableTarget(
             name: "SenkaniApp",

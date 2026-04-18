@@ -6,6 +6,24 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 17 — Migration race test + flock inode fix
+- Bach G2 closed: `tools/migration-runner/senkani-mig-helper` +
+  `MigrationMultiProcTests` spawn two real processes via
+  `Foundation.Process`, release a shared barrier, and assert
+  exactly-once migration semantics end-to-end.
+- Flock inode bug fixed in `MigrationRunner.run`: the old code called
+  `FileManager.createFile(atPath: dbPath + ".migrating", contents:
+  nil)` before `open(O_RDWR|O_CREAT)`. `createFile` performs an atomic
+  (temp file + rename) write, which UNLINKS the existing sidecar and
+  installs a new inode at the same path. Concurrent migrators were
+  flocking different inodes — no mutual exclusion. The runner now
+  relies on `open(O_RDWR|O_CREAT)` alone, which creates the sidecar
+  on first run and opens the existing inode on every subsequent run,
+  so flock serializes correctly across processes.
+- 3 new tests (1356 → 1359): two-helper race on a pristine DB, two
+  helpers against an already-migrated DB both no-op, kill-switch
+  lockfile blocks both concurrent launches.
+
 ### April 17 — MLX inference serialize lock
 - `MLXInferenceLock` (Core actor) serializes on-device MLX inference
   across VisionEngine, EmbedEngine, and GemmaInferenceAdapter. All

@@ -12,6 +12,31 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Pane IPC socket migration (shipped 2026-04-18)
+
+`MCPSession.sendBudgetStatusIPC` now writes to `~/.senkani/pane.sock`
+instead of `~/.senkani/pane-commands.jsonl`. The GUI wires
+`SocketServerManager.shared.paneHandler` from `ContentView.onAppear`.
+Unit tests exercise the helper against a temp-UDS listener and prove
+9 wire-format + lifecycle invariants, but the full production loop
+needs a real machine run:
+
+- Open Senkani, spawn a Claude pane, set `SENKANI_PANE_BUDGET_SESSION`
+  low enough that a few tool calls cross the soft-limit. Confirm the
+  amber triangle badge lights up in the pane header via the socket path
+  (not the old JSONL file). `~/.senkani/pane-commands.jsonl` must NOT
+  be created or appended to — verify with `stat` before + after.
+- Push the pane over the hard limit. Confirm the red block badge
+  appears with `$spent/$limit` text. Budget status must clear on pane
+  restart.
+- `senkani_pane list` via the MCP tool from a Claude session. Pre-fix
+  this path was broken (paneHandler was unset; the listener returned
+  "No pane handler registered"). Post-fix it should return the JSON
+  pane list within <10ms.
+- Confirm `SENKANI_SOCKET_AUTH=on` path still works end-to-end —
+  handshake frame + command frame must both land before the server
+  dispatches.
+
 ### Schedule timeline integration (shipped 2026-04-18)
 
 `Schedule.Run` now emits `token_events` rows at start / end / blocked

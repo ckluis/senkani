@@ -6,6 +6,37 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 18 — Pane IPC: JSONL poll → Unix socket
+- Migrated the last fire-and-forget pane IPC caller
+  (`MCPSession.sendBudgetStatusIPC`) from the `pane-commands.jsonl` file
+  path to the existing `~/.senkani/pane.sock` Unix domain socket — same
+  length-prefixed binary protocol, optional `SocketAuthToken` handshake,
+  `chmod 0600` permissions enforced by `SocketServerManager`. Every
+  pane IPC path now uses the socket; JSONL transport is retired.
+- Wired `SocketServerManager.shared.paneHandler` from
+  `ContentView.onAppear`. The closure captures the `WorkspaceModel` +
+  `SessionRegistry` actor handles, decodes `PaneIPCCommand`, dispatches
+  the mutation to the main thread via `DispatchSemaphore`, and encodes
+  the `PaneIPCResponse` back. This closes a latent defect — the pane
+  socket listener in `SocketServerManager` had no handler registered on
+  the GUI side, so the file-IPC path was doing all the work.
+- New `PaneIPC.sendFireAndForget(_:socketPath:)` in `Sources/Core/` —
+  connect + handshake + write + close, no response read. 200ms
+  `SO_SNDTIMEO` caps the worst-case write stall against a stuck peer so
+  fire-and-forget semantics hold. Returns a typed `SendOutcome` enum
+  (`.written`, `.socketUnreachable`, `.writeFailed`, `.encodeFailed`)
+  for test assertions; production callers ignore the result.
+- Deleted `SenkaniApp/Services/PaneCommandWatcher.swift` (the
+  JSONL file watcher) and the JSONL accessors on the old
+  `PaneIPCPaths` enum; `PaneIPC.swift` replaces them with
+  `PaneIPCSocket.defaultPath`.
+- 9 new tests (1404 → 1413): single-frame round-trip, absent-socket
+  no-op with sub-500ms bound, oversize-path rejection, all 5 actions
+  round-trip, 4-way concurrent writes all deliver distinct frames,
+  multi-KB frame with concurrent drain, full setBudgetStatus
+  end-to-end, big-endian length prefix wire format, legacy JSONL
+  file regression guard.
+
 ### April 18 — Schedule runs emit Agent Timeline events
 - New `Core/ScheduleTelemetry` helper records a `token_events` row at
   the start and end of every `Schedule.Run` invocation so scheduled

@@ -6,6 +6,31 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 18 — Schedule subsystem test coverage
+- `ScheduleConfigTests` (19 tests, 1369 → 1388) covers the previously
+  untested schedule subsystem: `CronToLaunchd.convert` (wrong field
+  count, `* * * * *`, single value, `*/N`, comma list, out-of-range
+  rejection, non-integer / zero divisor, cartesian product across
+  minute × hour × weekday), `CronToLaunchd.humanReadable` (every
+  minute, every N minutes, daily at H:M AM/PM, weekly per weekday
+  name, raw-cron fallback for unhandled patterns), and
+  `ScheduleStore` CRUD (save+load roundtrip preserving all fields,
+  list sorts by `createdAt`, load-missing returns nil, remove
+  deletes both the JSON and the launchd plist, remove succeeds
+  when plist is absent, `plistLabel(for:)` formatting).
+- `ScheduleStore` gains a test-only `withTestDirs(base:launchAgents:_:)`
+  wrapper mirroring the `LearnedRulesStore.withPath` pattern —
+  redirects `baseDir` + `launchAgentsDir` to a tmp directory for the
+  body's duration, holding a shared `NSLock` so concurrent test
+  cases serialize on the override slots. Production callers are
+  untouched; `baseDir` / `launchAgentsDir` fall back to `$HOME`
+  when the override is nil.
+- First of three sub-items carved from the `cron-scheduled-agents`
+  umbrella (pre-audit found it 3/5 shipped — Schedules pane + CRUD
+  + budget + launchd gen — but with 0 tests and two unshipped
+  bullets). Remaining: `schedule-worktree-spawn`,
+  `schedule-timeline-integration`.
+
 ### April 18 — Tree-sitter grammars: Dart, TOML, GraphQL
 - Three vendored parsers landed in `Sources/TreeSitter{Dart,Toml,GraphQL}Parser/`
   and wired into the Indexer, `GrammarManifest`, and `FileWalker`

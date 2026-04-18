@@ -35,8 +35,20 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
 
 /// File-based store for scheduled tasks under ~/.senkani/schedules/.
 public enum ScheduleStore {
+    // MARK: - Test-only overrides
+    //
+    // Mirrors the `LearnedRulesStore.withPath` pattern: production reads
+    // `baseDir` / `launchAgentsDir` straight out of `$HOME`, tests wrap a
+    // body in `withTestDirs` to redirect both to a temp dir. `withTestDirs`
+    // holds `testLock` for its entire body so concurrent test cases
+    // serialize on the shared override slots instead of racing.
+
+    nonisolated(unsafe) private static var _baseDirOverride: String?
+    nonisolated(unsafe) private static var _launchAgentsDirOverride: String?
+    private static let testLock = NSLock()
+
     public static var baseDir: String {
-        FileManager.default.homeDirectoryForCurrentUser.path + "/.senkani/schedules"
+        _baseDirOverride ?? FileManager.default.homeDirectoryForCurrentUser.path + "/.senkani/schedules"
     }
 
     public static var logsDir: String {
@@ -44,7 +56,28 @@ public enum ScheduleStore {
     }
 
     public static var launchAgentsDir: String {
-        FileManager.default.homeDirectoryForCurrentUser.path + "/Library/LaunchAgents"
+        _launchAgentsDirOverride ?? FileManager.default.homeDirectoryForCurrentUser.path + "/Library/LaunchAgents"
+    }
+
+    /// TEST ONLY: redirect `baseDir` + `launchAgentsDir` to `base` /
+    /// `launchAgents` for the duration of `body`, then restore. Holds
+    /// `testLock` so concurrent callers serialize.
+    public static func withTestDirs<T>(
+        base: String,
+        launchAgents: String,
+        _ body: () throws -> T
+    ) rethrows -> T {
+        testLock.lock()
+        let priorBase = _baseDirOverride
+        let priorLaunch = _launchAgentsDirOverride
+        _baseDirOverride = base
+        _launchAgentsDirOverride = launchAgents
+        defer {
+            _baseDirOverride = priorBase
+            _launchAgentsDirOverride = priorLaunch
+            testLock.unlock()
+        }
+        return try body()
     }
 
     /// Read all .json files from the schedules directory.

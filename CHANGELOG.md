@@ -6,6 +6,43 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 19 — Pane diaries (round 1/3): `PaneDiaryStore` I/O half
+- New `Sources/Core/PaneDiaryStore.swift` — disk I/O half of the
+  cross-session per-pane memory feature. Owns the on-disk contract at
+  `~/.senkani/diaries/<workspaceSlug>/<paneSlug>.md`; round 2 lands
+  `PaneDiaryGenerator` (brief composition from `token_events`); round 3
+  wires generator + store into the pane-open MCP path.
+- API: `read(workspaceSlug:paneSlug:home:env:)`, `write(_:workspaceSlug:paneSlug:home:env:)`,
+  `delete(workspaceSlug:paneSlug:home:env:)`, `isEnabled(env:)`,
+  `diaryPath(workspaceSlug:paneSlug:home:)`. Pure static functions on
+  a `public enum` — no instance state, home/env override seams for
+  fixture-driven tests.
+- Safety invariants: env gate `SENKANI_PANE_DIARY=off` short-circuits
+  read/write/delete (case-insensitive; default ON); `SecretDetector.scan`
+  runs on every write AND every read (defense-in-depth for diaries
+  written by older versions or hand-edited on disk); slug validation
+  hard-rejects `..`, `/`, `\`, and empty slugs via a typed
+  `StoreError.invalidSlug(field:value:)`; atomic write via PID-
+  suffixed tmp file + `replaceItemAt`/`moveItem` so a crashed or
+  permission-denied write cannot corrupt an existing diary; written
+  files land at mode 0600 (mirrors `SocketAuthToken` — diaries are
+  user-local command history on a potentially multi-user machine and
+  the regex defense is not complete).
+- +8 tests (1466 → 1474): round-trip read/write, env-off short-circuits
+  all three operations (write/read/delete) + isEnabled semantics,
+  write redacts a planted `sk-ant-…` Anthropic key, read re-redacts
+  a pre-seeded `sk-proj-…` secret (simulating a hand-edited file),
+  slug keying isolates diaries across workspace × pane combinations
+  and delete is scoped, atomic write preserves existing content when
+  the parent dir is chmod'd read-only mid-round, slug rejection for
+  `..` / `/` / `\` / empty / whitespace-only across both fields and
+  no bogus files land on disk, 0600 permission bit asserted on-disk
+  via `FileManager.attributesOfItem`.
+- No callers yet — store ships standalone. Umbrella
+  `pane-diaries-cross-session-memory` still 1/3 shipped; rounds 2
+  (`PaneDiaryGenerator`) and 3 (pane-open MCP injection + close-time
+  regen) remain.
+
 ### April 19 — Sprint Review pane: GUI for `senkani learn review`
 - New 17th pane type: `Sprint Review`. SwiftUI surface for
   compound-learning review — lists staged artifacts across all four

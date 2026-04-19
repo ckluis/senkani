@@ -12,6 +12,44 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### PaneDiaryStore — round 1 of pane-diaries (shipped 2026-04-19)
+
+The I/O half lands standalone — no callers yet. Round 2
+(`PaneDiaryGenerator`) and round 3 (pane-open MCP injection + pane-close
+regen) will produce the real user-visible behavior. What unit tests
+can't exercise on a real install:
+
+- **File permissions under a real umask.** Test `writtenFileIsMode0600`
+  asserts `chmod(2)` lands, but it runs inside a tempdir with no
+  umask surprises. On a real `$HOME` with an unusual umask
+  (0077 / 0022 / 0002 variants), confirm a fresh diary
+  (`~/.senkani/diaries/<ws>/<pane>.md`) reports `-rw-------` under
+  `ls -l`, not `-rw-r--r--` or `-rw-rw-rw-`.
+- **Multi-FS rename edge.** `replaceItemAt` is atomic on a single
+  filesystem; if a user's `$HOME` is on an exotic mount (tmpfs,
+  encrypted overlay, symlinked into APFS snapshot), confirm
+  write+read round-trip still works without the tmp file left behind.
+  `ls -la ~/.senkani/diaries/<ws>/` after a fresh write should show
+  only `<pane>.md`, no `.pane.md.tmp.<pid>` stragglers.
+- **Env gate flips cleanly mid-session.** Set `SENKANI_PANE_DIARY=off`
+  in the launch env of a senkani daemon that already wrote diaries.
+  Start the daemon, write a diary via a future direct caller (or the
+  round-3 MCP path once it lands). Expect no disk writes and no reads
+  surfaced into the pane-open brief. Flip the env back (relaunch),
+  confirm old diaries are still readable and the feature is enabled.
+- **Redaction of novel secret patterns.** Paste a hand-authored secret
+  style that the current `SecretDetector.patterns` set doesn't cover
+  (e.g., an internal-format token) directly into a diary on disk.
+  Trigger a read. Confirm the read returns the raw token (as expected
+  — redaction only catches known patterns). File a backlog item to
+  extend `SecretDetector.patterns` if the internal format is common
+  enough to warrant a regex.
+- **Slug stability across pane-id recycles.** Round 3 will wire the
+  actual pane-slug derivation from `PaneType` + workspace slot.
+  Until then, the I/O layer takes the slug as a caller-supplied
+  string; no real-machine test is possible for round 1. Defer the
+  "reopens-same-slot produces-same-diary" behavioral check to round 3.
+
 ### Sprint Review pane (shipped 2026-04-19)
 
 Unit tests cover the view-model routing (accept/reject dispatch per

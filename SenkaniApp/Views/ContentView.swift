@@ -364,6 +364,7 @@ struct ContentView: View {
             "savingsTest": .savingsTest, "codeEditor": .codeEditor,
             "agentTimeline": .agentTimeline,
             "dashboard": .dashboard,
+            "sprintReview": .sprintReview,
         ]
         guard let type = typeMap[typeId] else { return }
         addPane(type: type, title: type == .terminal ? "Terminal" : typeId.capitalized, command: "")

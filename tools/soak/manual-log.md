@@ -12,6 +12,57 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Sprint Review pane (shipped 2026-04-19)
+
+Unit tests cover the view-model routing (accept/reject dispatch per
+artifact kind, window filter, staleness flag mapping, file side effects
+for context doc + workflow playbook). What they cannot exercise is the
+SwiftUI pane end-to-end in a running SenkaniApp:
+
+- Launch SenkaniApp. Open ⌘K. Filter by "sprint". Expect a
+  "New Sprint Review" row under Panes. Hit enter — a new Sprint
+  Review pane lands in the active workstream. Also verify
+  "+" toolbar button → "Sprint Review" card in the grid.
+- On an install with no staged compound-learning artifacts, expect
+  the empty state ("No staged proposals") with the secondary line
+  about the daily sweep promoting from `.recurring`. No errors.
+- Populate staged artifacts via the CLI (or run a real session to
+  seed them). Reopen the pane. Expect four sections collapsed by
+  kind, each row showing title + subtitle + confidence pill + `×N`
+  recurrence. Adjust the window stepper (7d / 14d / …); the visible
+  row set should narrow/widen per the `lastSeenAt` cutoff.
+- Click Accept on a filter-rule row. Expect: row disappears
+  (status → applied). No filesystem change. `senkani learn status`
+  from the CLI confirms the transition.
+- Click Accept on a context-doc row. Expect: row disappears, a
+  new `<projectRoot>/.senkani/context/<slug>.md` lands on disk.
+  Open it — body matches the staged body. A second open of the same
+  pane after a session should show the doc surfacing through
+  SessionBriefGenerator.
+- Click Accept on a workflow-playbook row. Expect:
+  `<projectRoot>/.senkani/playbooks/learned/<slug>.md` lands on
+  disk. Content matches.
+- Click Accept on an instruction-patch row. Expect: state-only
+  transition (no file write — instruction patches are
+  Schneier-constrained).
+- Click Reject on any row. Expect: row disappears, status →
+  .rejected. Re-rejecting via `senkani learn reject <id>` is a no-op.
+- Trigger an error path — delete `~/.senkani/learned-rules.json`
+  mid-click, click Accept. Expect: orange error banner with
+  `Accept failed: …`. Dismissing the banner via × clears it. Pane
+  remains interactive.
+- Fire a quarterly audit in the absence of any applied artifacts
+  (clean install). Expect: the "Stale applied artifacts (N)"
+  section is hidden. With stale artifacts present (e.g. an applied
+  filter rule with `lastSeenAt` back-dated > 60 days), the section
+  renders with amber accents and a Retire button per row.
+- Confirm the `liveToolNames` default — in the current wiring, the
+  pane passes an empty `Set<String>`, so the quarterly audit skips
+  the instruction-patch-tool-missing heuristic. If the operator
+  decides to wire this to `ToolRouter.allTools().map(\.name)` from
+  SenkaniApp (requires cross-process state the GUI doesn't have
+  today), a new manual-log entry will supersede this one.
+
 ### Browser Design Mode — click-to-capture wedge (shipped 2026-04-18)
 
 Unit tests cover the pure logic (selector generation, Markdown schema,

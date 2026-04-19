@@ -1,6 +1,6 @@
 # Senkani (閃蟹)
 
-One macOS binary, two jobs: a **native multi-pane workspace** (SwiftUI, sub-3ms renders, 16 pane types) and an **MCP intelligence layer** that cuts 50–90% of the tokens your AI spends on perception. Compression, symbol indexing, secret redaction, local validators, and Layer-3 hook interception run before the request ever leaves your machine. No workflow changes — point Claude Code at it and your session just costs less.
+One macOS binary, two jobs: a **native multi-pane workspace** (SwiftUI, sub-3ms renders, 17 pane types) and an **MCP intelligence layer** that cuts 50–90% of the tokens your AI spends on perception. Compression, symbol indexing, secret redaction, local validators, and Layer-3 hook interception run before the request ever leaves your machine. No workflow changes — point Claude Code at it and your session just costs less.
 
 ## Quick Start
 
@@ -63,7 +63,7 @@ Gemma 4 optionally enriches rationale strings (H+2a) — contained to a dedicate
 
 A horizontal canvas of panes. Each pane is a primitive type; you arrange them however makes sense for what you're doing right now, and Senkani persists the layout per project.
 
-**16 pane types:**
+**17 pane types:**
 
 - **Terminal** — SwiftTerm, configurable font size, kill/restart buttons, broadcast mode
 - **Dashboard** — multi-project portfolio: total savings, project table, feature charts, insights
@@ -80,6 +80,7 @@ A horizontal canvas of panes. Each pane is a primitive type; you arrange them ho
 - **Scratchpad** — auto-saving markdown notepad
 - **Schedules** — manage recurring tasks via launchd
 - **Skill Library** — browse, install, and manage AI agent skills
+- **Sprint Review** — GUI counterpart to `senkani learn review`: accept/reject staged compound-learning proposals (filter rules, context docs, instruction patches, workflow playbooks) plus a stale-applied section mirroring the quarterly audit
 
 **⌘K command palette** opens everything: new panes, themes, actions. Search-as-you-type with category grouping.
 
@@ -165,7 +166,7 @@ Numbers from the built-in benchmark suite (`senkani bench`):
 | **Bundle** | Core, Filter, Indexer | `BundleComposer` — budget-bounded repo-snapshot composition for `senkani_bundle` |
 | **HookRelay** | — | Zero-dep hook relay library shared by senkani-hook binary and app's --hook mode |
 | **CLI** | Core, Filter, Indexer, Bench | 18 commands: exec, search, bench, doctor, grammars, kb, eval, learn, init, … |
-| **SenkaniApp** | All + SwiftTerm | SwiftUI workspace: 16 pane types, multi-project, ⌘K palette, dashboard, menu bar |
+| **SenkaniApp** | All + SwiftTerm | SwiftUI workspace: 17 pane types, multi-project, ⌘K palette, dashboard, menu bar |
 
 ---
 

@@ -1862,7 +1862,7 @@ unchanged — only prose is compressed.</span></div>
           <p class="lede">Every compression feature accessible as an MCP tool, a CLI command, and a workspace pane. The same index that intercepts hook calls is directly callable by your agent or your shell.</p>
           <div class="tag-row">
             <span class="tag tag-orange">17 MCP tools</span>
-            <span class="tag tag-dim">16 pane types</span>
+            <span class="tag tag-dim">17 pane types</span>
             <span class="tag tag-dim">80.37× bench</span>
           </div>
         </div>
@@ -2063,7 +2063,7 @@ unchanged — only prose is compressed.</span></div>
       <div class="ref-section" id="workspace">
         <div class="ref-section-hd">
           <h3>Workspace</h3>
-          <p>16 pane types. Each pane has its own accent color, FCSIT feature toggles, and layout persistence. The workspace is the visual layer over the compression engine — arrange any combination per project.</p>
+          <p>17 pane types. Each pane has its own accent color, FCSIT feature toggles, and layout persistence. The workspace is the visual layer over the compression engine — arrange any combination per project.</p>
         </div>
 
         <div class="ref-item">
@@ -2191,7 +2191,7 @@ unchanged — only prose is compressed.</span></div>
         <div class="ref-section-hd">
           <div class="overline">What's built</div>
           <h2>The compression layer <span class="accent">is live.</span></h2>
-          <p style="font-size:16px; color:var(--ink-soft); max-width:600px; line-height:1.65; margin-top:12px;">All core features are live and tested. 1,454 unit tests passing. 19 MCP tools, 19 CLI commands, 16 pane types. `senkani_repo` (19th tool) queries any public GitHub repo without cloning — host-allowlisted (api.github.com + raw.githubusercontent.com), SecretDetector-scanned, TTL-cached, auth-token-gated. The nine-round compound-learning + knowledge-base master plan landed 2026-04-17 (H+2b polymorphic typed-artifact store + context signals, H+2c instruction + workflow signal generators with Schneier "never auto-apply" on instructions, H+2d sprint + quarterly cadence CLIs, F+1 Layer-1-as-source-of-truth rebuild coordinator, F+2 entity-tracker telemetry, F+3 enrichment validator + <code>senkani kb rollback/history</code>, F+4 <code>senkani kb timeline</code>, F+5 KB ↔ compound-learning bridge with confidence boost + idempotent entity seeding + rollback-cascade invalidation). On-device MLX inference (<code>senkani_vision</code>, <code>senkani_embed</code>, Gemma rationale rewriter) now runs behind a shared <code>MLXInferenceLock</code> that FIFO-serializes every call and drops loaded model containers on macOS memory-pressure warnings.</p>
+          <p style="font-size:16px; color:var(--ink-soft); max-width:600px; line-height:1.65; margin-top:12px;">All core features are live and tested. 1,466 unit tests passing. 19 MCP tools, 19 CLI commands, 17 pane types (incl. the new Sprint Review pane — GUI counterpart to <code>senkani learn review</code>). `senkani_repo` (19th tool) queries any public GitHub repo without cloning — host-allowlisted (api.github.com + raw.githubusercontent.com), SecretDetector-scanned, TTL-cached, auth-token-gated. The nine-round compound-learning + knowledge-base master plan landed 2026-04-17 (H+2b polymorphic typed-artifact store + context signals, H+2c instruction + workflow signal generators with Schneier "never auto-apply" on instructions, H+2d sprint + quarterly cadence CLIs, F+1 Layer-1-as-source-of-truth rebuild coordinator, F+2 entity-tracker telemetry, F+3 enrichment validator + <code>senkani kb rollback/history</code>, F+4 <code>senkani kb timeline</code>, F+5 KB ↔ compound-learning bridge with confidence boost + idempotent entity seeding + rollback-cascade invalidation). On-device MLX inference (<code>senkani_vision</code>, <code>senkani_embed</code>, Gemma rationale rewriter) now runs behind a shared <code>MLXInferenceLock</code> that FIFO-serializes every call and drops loaded model containers on macOS memory-pressure warnings.</p>
           <ul style="font-size:14px; color:var(--ink-soft); max-width:620px; line-height:1.7; margin:16px 0 0; padding-left:20px; display:grid; gap:6px;">
             <li><strong>Hook relay + filter pipeline</strong> — 24 command-specific rules; Layer 3 smart denials (re-read suppression, command replay, trivial routing, symbol upgrade, redundant validation); 80.37× overall reduction on fixture suite</li>
             <li><strong>Symbol indexer</strong> — 25 languages, tree-sitter AST, FSEvents incremental updates, bidirectional dependency graph, container hierarchy, &lt;5ms cold / &lt;1ms cached</li>

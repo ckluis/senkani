@@ -6,6 +6,50 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 19 — Sprint Review pane: GUI for `senkani learn review`
+- New 17th pane type: `Sprint Review`. SwiftUI surface for
+  compound-learning review — lists staged artifacts across all four
+  types (filter rule / context doc / instruction patch / workflow
+  playbook) for a configurable window (default 14 days), with
+  accept/reject per row plus a stale-applied section sourced from
+  the quarterly audit heuristics (`CompoundLearningReview.quarterlyAuditFlags`).
+- Registered everywhere a pane type needs to be known: `PaneType.sprintReview`
+  enum case, `SenkaniTheme` accent/icon/description/name, `PaneModel`
+  default columnWidth, `PaneContainerView` view + context-label
+  switches, `AddPaneSheet` card grid, `CommandEntryBuilder.paneEntries()`
+  for ⌘K palette, `ContentView.addPaneByTypeId` palette typeId map.
+- Architecture split: pure view-model + types in
+  `Sources/Core/SprintReviewViewModel.swift` (testable from
+  SenkaniTests, which does not depend on SenkaniApp). Presentation
+  in `SenkaniApp/Views/SprintReviewPane.swift`. Accept/reject
+  route through the canonical `CompoundLearning.apply*` /
+  `LearnedRulesStore.reject*` paths — no new write paths, no new
+  SQL, no new DB migration, no new secret-scan boundaries. The
+  backlog said "LearnedRulesStore.promote(...)" / "LearnedRulesStore.reject(...)";
+  the real method names are kind-specific (`apply` / `applyContextDoc`
+  / `applyInstructionPatch` / `applyWorkflowPlaybook`), so the view
+  model dispatches on `SprintReviewArtifactKind`.
+- +13 view-model tests (1453 → 1466): empty-store snapshot,
+  four-kind grouping, filter-rule command/sub shaping with rationale,
+  workflow step-count pluralization, window cutoff, applied-stale
+  flag surfacing, accept routing for each of the four kinds (filter
+  rule → state only; context doc + workflow playbook verify
+  `.md` landed on disk; instruction patch → state), reject routing
+  per kind, all-four reject round-trip, and rejected item no longer
+  in next snapshot. Existing `CommandPaletteTests.paneEntriesIncludeAllTypes`
+  count assertion bumped 16 → 17 to match the new palette entry.
+- Deferred to `tools/soak/manual-log.md`: live GUI validation
+  (visual pass on empty/populated states, stepper behavior, accept
+  writes through on real install, error banner), and the
+  `liveToolNames` plumbing (quarterly audit's instruction-patch
+  staleness heuristic currently defaults to an empty set, matching
+  the CLI — wiring it to the live `ToolRouter.allTools()` list from
+  the MCP server would surface extra stale flags but requires
+  cross-process state the GUI doesn't have).
+- Closes `sprint-review-pane` backlog item; compound-learning
+  spec's "non-autonomous Sprint-review pane UI" line (Round 9
+  consolidation) no longer applies — the CLI + GUI both ship.
+
 ### April 19 — ContentView: strip stray restoreWorkspace debug print (follow-up)
 - One-line follow-up to `metricsrefresher-debug-print-cleanup`.
   Deleted the 🚨-tagged `print("[CONTENT-VIEW] restoreWorkspace

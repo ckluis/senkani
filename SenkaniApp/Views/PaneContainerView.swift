@@ -386,6 +386,8 @@ struct PaneContainerView: View {
             CodeEditorPane(pane: pane)
         case .dashboard:
             DashboardView(workspace: workspace)
+        case .sprintReview:
+            SprintReviewPane(workspace: workspace)
         }
     }
 
@@ -487,6 +489,8 @@ struct PaneContainerView: View {
             return file.isEmpty ? "code" : file
         case .dashboard:
             return "\(workspace?.projects.count ?? 0) projects"
+        case .sprintReview:
+            return "review"
         }
     }
 

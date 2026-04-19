@@ -207,7 +207,6 @@ struct ContentView: View {
         }
         // Always start metrics AFTER restore, so projects array is populated.
         // Safe even if restore fails — default project may still exist.
-        print("🚨 [CONTENT-VIEW] restoreWorkspace done: \(workspace.projects.count) projects")
         MetricsStore.shared.start(projects: workspace.projects)
     }
 

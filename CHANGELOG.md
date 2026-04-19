@@ -6,6 +6,18 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 19 — ContentView: strip stray restoreWorkspace debug print (follow-up)
+- One-line follow-up to `metricsrefresher-debug-print-cleanup`.
+  Deleted the 🚨-tagged `print("[CONTENT-VIEW] restoreWorkspace
+  done: …")` call at `SenkaniApp/Views/ContentView.swift:210`. Same
+  provenance as the MetricsStore prints (a 2026-04 troubleshooting
+  pass). No replacement Logger.log() — `restoreWorkspace` runs once
+  at app launch; a startup banner adds no operational signal.
+- All emoji-tagged `print()` calls are now gone from
+  `SenkaniApp/`. Future regressions can be caught with
+  `grep -rn "print(.*🚨\|print(.*💀" SenkaniApp/`.
+- Build clean. Tests unchanged.
+
 ### April 19 — MetricsStore: strip leftover debugging prints (cleanup.md #11 closed)
 - `SenkaniApp/Services/MetricsRefresher.swift` dropped from 79 → 60
   LOC. Five emoji-tagged `print()` lines (🚨🚨🚨 / 💀) left over from

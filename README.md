@@ -68,7 +68,7 @@ A horizontal canvas of panes. Each pane is a primitive type; you arrange them ho
 - **Terminal** — SwiftTerm, configurable font size, kill/restart buttons, broadcast mode
 - **Dashboard** — multi-project portfolio: total savings, project table, feature charts, insights
 - **Code Editor** — tree-sitter syntax highlighting (25 languages, incl. Dart/TOML/GraphQL), symbol navigation, file tree
-- **Browser** — WKWebView embedded, localhost or any URL
+- **Browser** — WKWebView embedded, localhost or any URL. Optional click-to-capture Design Mode (env-gate `SENKANI_BROWSER_DESIGN=on`, ⌥⇧D toggles) — click an element, get a fixed-schema Markdown block on the clipboard.
 - **Markdown Preview** — live render from file, updates on save
 - **Analytics** — token/cost savings with charts, persistent across restarts
 - **Model Manager** — download, verify, and delete local LLMs (Gemma, MiniLM)

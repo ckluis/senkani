@@ -6,6 +6,71 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 18 — Browser Design Mode wedge: click-to-capture (scope-reduced from FUTURE)
+- Default-off, env-gated feature on the Browser pane. Set
+  `SENKANI_BROWSER_DESIGN=on` in the environment and ⌥⇧D toggles a
+  click-to-capture mode on the active BrowserPaneView. Click an
+  element and a fixed-schema Markdown block lands on the clipboard.
+  CEO review 2026-04-18 reduced the original three-round plan
+  (MVP → direct-pin → screenshot/annotation) to a single instrumented
+  wedge — larger scope is explicitly gated on
+  `browser_design.entered` reaching the median of existing feature
+  gates over a 30-day window. If unused, the wedge DELETES rather
+  than expands.
+- Selector generator: `#id` if unique → `tag.class1.class2` if
+  unique → `nil` with `fallbackReason: "no unique anchor"`. **No
+  nth-of-type recursion** — the highest-bug-density code in the
+  original plan, deferred. Shadow DOM and cross-origin iframe
+  elements emit a clear "Can't capture — element is inside a shadow
+  DOM" / "cross-origin iframe" toast instead of a malformed capture.
+- Triple SecretDetector scan: `innerText` truncated to 300 chars
+  then redacted; classes scanned as defense logging; final
+  serialized Markdown run through one more sink-side scan so a
+  secret embedded in a class name can't leak via the rendered
+  `tag:` line (test 9 proves the sink catches a `sk_live_…`
+  planted class name).
+- Mode lifecycle torn down on navigation AND on pane close — guards
+  the leak-across-navigation failure mode. `WKUserContentController`
+  gets `removeAllUserScripts()` + `removeScriptMessageHandler(forName:)`
+  on every exit path. Pure-Swift state machine (Core.BrowserDesignMode.State)
+  covers the transition contract in unit tests so the App-side
+  integration can't drift.
+- Four `event_counters` rows declared:
+  `browser_design.entered`, `browser_design.captured`,
+  `browser_design.shadow_dom_skipped`, `browser_design.keyboard_conflict`.
+  The first three are recorded by the App-side controller on the
+  matching transitions. `keyboard_conflict` stays declared in the
+  counter enum but unrecorded — the spec's detection path
+  ("page captures ⌥⇧D before WKUserScript") doesn't apply because
+  the Swift NSEvent monitor runs out-of-band from page JS;
+  scaffolding stays in place for v1.1+.
+- 2 new files, 1 modified. Pure logic in
+  `Sources/Core/BrowserDesignMode.swift` (env gate, selector gen,
+  capture payload processing, Markdown formatter, state machine,
+  injected-JS source) keeps SenkaniTests coverage possible.
+  `SenkaniApp/Views/BrowserDesignController.swift` owns the
+  WKUserScript + WKScriptMessageHandler lifecycle, toast state, and
+  clipboard write. `BrowserPaneView.swift` wires the ⌥⇧D NSEvent
+  monitor (guarded on first-responder so the chord only toggles when
+  the pane's WKWebView is focused) and passes an
+  `onDidStartNavigation` closure down to the WKNavigationDelegate
+  coordinator so the controller can tear down.
+- 16 new tests (1438 → 1454): id-anchor + class-anchor + no-anchor
+  selector; non-unique-id fallthrough; shadow-DOM and cross-origin
+  iframe guards; SecretDetector redaction on innerText; class-name
+  secret caught by sink-side Markdown scan; innerText truncation
+  bound; Markdown byte-stable snapshot vs a fixed `CapturedElement`;
+  Markdown fallback line when selector is nil; state machine
+  lifecycle (enter → navigate → discard; enter → pane close →
+  discard); navigation on a non-active pane is a no-op; env-var
+  gate accepts only `on`/`ON` and `State.enter(featureEnabled:false)`
+  is a no-op; counter vocabulary matches the four declared rows;
+  injected JS bundle sanity (message handler name, elementFromPoint,
+  getRootNode, Escape, re-entrancy guard).
+- Manual-log entries seeded for real-machine validation (live
+  WKWebView ⌥⇧D capture, shadow DOM page, cross-origin iframe,
+  page-JS keyboard hostility, ⌘C vs our clipboard write).
+
 ### April 18 — Budget enforcement: symmetric tests for the MCP + Hook gates (cleanup.md #9)
 - Budget enforcement fires at two independent layers: `ToolRouter` uses
   `session.checkBudget()` before any MCP-routed tool call;

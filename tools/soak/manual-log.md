@@ -12,6 +12,54 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Browser Design Mode — click-to-capture wedge (shipped 2026-04-18)
+
+Unit tests cover the pure logic (selector generation, Markdown schema,
+state machine, SecretDetector sink passes). What they cannot exercise
+is the actual WKWebView + WKUserScript + clipboard + NSEvent flow in a
+running SenkaniApp. Real-session sanity checks:
+
+- Launch SenkaniApp with `SENKANI_BROWSER_DESIGN=on` in the
+  environment. Open a Browser pane on a real site (e.g.
+  https://developer.mozilla.org/en-US/docs/Web/HTML/Element/button).
+  Press ⌥⇧D. Expect: the URL-bar indicator flips to orange; cursor
+  becomes a crosshair when hovering the web content; hover outlines
+  elements with a 1px amber border. Press ⌥⇧D again OR Escape —
+  the mode exits, indicator goes gray.
+- With mode on, click a `<button>` element. Expect: a ~2s toast at
+  the top of the pane ("Captured <selector> — copied to clipboard.");
+  paste into any other editor and verify the Markdown schema —
+  `## Browser element (senkani design mode)` header, `selector`,
+  `tag`, `text`, `captured: <ISO8601>` lines. Verify the text is
+  truncated at 300 chars on a long-text element.
+- Navigate the webview to a different URL while Design Mode is on.
+  Expect: the URL-bar indicator flips back to gray (mode exited);
+  no toast persists; subsequent click does NOT capture. Confirms the
+  WKUserScript + message handler were removed on navigation (guards
+  Torvalds' leak-across-navigation flag).
+- Find or build a page with a shadow-DOM component (e.g. a custom
+  element using `attachShadow({mode:'open'})`) and click something
+  inside. Expect: the toast reads "Can't capture — element is
+  inside a shadow DOM." — not a malformed capture. Verify
+  `senkani stats events` shows `browser_design.shadow_dom_skipped`
+  incremented.
+- Close the Browser pane while Design Mode is on. Expect: no crash,
+  no lingering mode on the next opened Browser pane. Verify
+  `~/.senkani/events.log` (or whatever surface is plumbed) shows the
+  three recorded counters (`entered`, `captured`,
+  `shadow_dom_skipped`) and that `keyboard_conflict` is NOT recorded
+  from routine use — it's declared but the Swift NSEvent monitor
+  runs out-of-band from page JS so it never increments in practice.
+- Clipboard sanity: with Design Mode on, capture an element, then
+  immediately hit ⌘C (system Copy) with text selected elsewhere.
+  Expect: ⌘C overwrites our capture. This is expected — we write
+  to the standard pasteboard; system Copy wins. Worth confirming so
+  the UX isn't surprising.
+- Keyboard guard: with Design Mode NOT installed (env var unset),
+  press ⌥⇧D inside a Browser pane. Expect: no-op, no WKUserScript
+  installs, no `entered` counter. The env gate is what makes this a
+  default-off wedge.
+
 ### Budget enforcement — dual-layer symmetric tests (shipped 2026-04-18)
 
 Unit tests now cover both the MCP gate (`session.checkBudget()`) and

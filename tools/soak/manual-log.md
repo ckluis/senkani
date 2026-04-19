@@ -12,6 +12,55 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### PaneDiaryInjection — round 3 of pane-diaries (shipped 2026-04-19, umbrella DELIVERED)
+
+Round 3 wires generator + store into the MCP subprocess (read on
+server start, write on shutdown) and sets the workspace/pane slug env
+vars in SenkaniApp. Everything below the process boundary is unit
+tested — what unit tests can't exercise until a real session runs end-
+to-end:
+
+- **Actual "reopen a terminal in the same project" UX.** Launch
+  SenkaniApp, open a terminal pane in a project (say
+  `~/Desktop/projects/senkani`), run `claude` or a few tool calls so
+  token_events accumulate, close the pane (or quit the app). Reopen
+  the pane. The MCP subprocess spawns with
+  `SENKANI_WORKSPACE_SLUG=projects-senkani` +
+  `SENKANI_PANE_SLUG=terminal`; its `instructionsPayload` should now
+  include a `Pane context:` section summarizing the last session's
+  last command, files touched, token cost, and recent commands. Check
+  the MCP server stderr around startup for the line printed by the
+  payload, or inspect the on-disk diary at
+  `~/.senkani/diaries/projects-senkani/terminal.md`.
+- **Multi-terminal collision inside one workspace.** Open two terminal
+  panes in the same project. Both spawn with the same pane-slug
+  (`terminal`) — intended behavior, per the cross-session-slot design
+  — so their close events write the SAME diary file. Verify the
+  last-closed pane's content wins (current diary reflects whichever
+  pane shut down last). If this feels wrong in practice, file a
+  backlog item to include an index suffix in the slug (e.g.,
+  `terminal-1` / `terminal-2`). Left as an intentional trade-off for
+  now: diaries are a "resume the slot" hint, not a "resume exactly
+  this pane instance" guarantee.
+- **Disk permission failure on pane close.** Remove write on
+  `~/.senkani/diaries/` (`chmod -w`). Close a terminal pane. The MCP
+  shutdown should NOT hang — `PaneDiaryInjection.persist` swallows
+  the throw and moves on to `endSession` normally. Confirm via
+  process exit latency (should be the usual <500 ms) and MCP stderr
+  (no unhandled throws).
+- **Slug edge cases in real workspaces.** Open panes in projects
+  whose working directories contain `..` resolution, symlinks, or
+  unusual chars (spaces, parentheses, emoji). The slug helper in
+  PaneContainerView strips `..` + backslashes before joining; confirm
+  the resulting env var works end-to-end (diary file lands at the
+  expected path). If a project path produces an empty slug, the
+  helper falls back to `"workspace"` — verify that too if you've got
+  an exotic dev dir.
+- **SENKANI_PANE_DIARY=off mid-session.** Export the env and relaunch
+  SenkaniApp. Confirm (a) no new diaries are written on pane close
+  and (b) existing diaries are not injected on pane open. Flip the
+  env back off (unset), relaunch, confirm behavior returns.
+
 ### PaneDiaryGenerator — round 2 of pane-diaries (shipped 2026-04-19)
 
 The composition half lands standalone — no callers yet. Round 3 wires

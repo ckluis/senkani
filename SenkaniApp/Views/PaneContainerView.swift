@@ -328,6 +328,14 @@ struct PaneContainerView: View {
                     "SENKANI_MCP_SECRETS":  pane.features.secrets ? "on" : "off",
                     "SENKANI_MCP_INDEX":    pane.features.indexer ? "on" : "off",
                     "SENKANI_MCP_TERSE":    pane.features.terse   ? "on" : "off",
+                    // Round-3 pane diary slugs — stable across pane-id
+                    // recycles so a reopened terminal in the same
+                    // project surfaces the same diary. Workspace slug
+                    // mirrors the metrics-file fallback convention
+                    // (last two path components joined with "-"); pane
+                    // slug is the pane type's rawValue.
+                    "SENKANI_WORKSPACE_SLUG": paneDiaryWorkspaceSlug(pane.workingDirectory),
+                    "SENKANI_PANE_SLUG":      pane.paneType.rawValue,
                     // Model routing
                     "CLAUDE_MODEL":          resolvedClaudeModel,
                     "SENKANI_MODEL_PRESET":  pane.modelPreset.rawValue,
@@ -444,6 +452,23 @@ struct PaneContainerView: View {
         let gemma4Available = false // TODO: check ModelManager when accessible from app target
         let result = ModelRouter.resolve(prompt: "", preset: pane.modelPreset, gemma4Downloaded: gemma4Available)
         return result.tier.claudeModelValue
+    }
+
+    /// Derive the pane diary workspace slug from a pane's working
+    /// directory. Mirrors `MCPSession.fallbackMetricsPath`'s suffix-2
+    /// joined-with-"-" convention so `~/senkani` and
+    /// `~/clones/senkani` don't collide on disk. Slashes, `..`, and
+    /// empty components are stripped before joining — `PaneDiaryStore`
+    /// hard-rejects those and we don't want the MCP subprocess to
+    /// never-load a diary because of an unusual path shape.
+    private func paneDiaryWorkspaceSlug(_ workingDirectory: String) -> String {
+        let parts = workingDirectory
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map { String($0) }
+            .filter { $0 != ".." && !$0.contains("\\") }
+        let tail = parts.suffix(2)
+        let joined = tail.joined(separator: "-")
+        return joined.isEmpty ? "workspace" : joined
     }
 
     private var accentColor: Color {

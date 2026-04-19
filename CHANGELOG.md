@@ -6,6 +6,54 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 19 — Pane diaries (round 3/3): MCP injection + pane-close regen — umbrella DELIVERED
+- New `Sources/Core/PaneDiaryInjection.swift` — Core-level glue
+  between `PaneDiaryStore` (I/O) + `PaneDiaryGenerator` (composition)
+  and the MCP subprocess. Two entry points: `instructionsSection(env:home:)`
+  (called on MCP server start — loads the prior diary into the
+  instructions payload) and `persist(rows:env:home:lastError:)`
+  (called on MCP server shutdown — regenerates + writes the diary).
+  Both honor `SENKANI_PANE_DIARY=off`, both require
+  `SENKANI_WORKSPACE_SLUG` + `SENKANI_PANE_SLUG` to be set +
+  non-empty, both swallow all failure paths so a bad diary cannot
+  block MCP server start or pane close (pane-open-never-hangs +
+  pane-close-never-hangs invariants from the acceptance).
+- `MCPSession.instructionsPayload` now interpolates the pane diary
+  between `sessionBrief()` and `skillsPrompt()` with a dedicated
+  `paneDiaryBudget = min(800, budget/3)` slice. Truncation marker
+  `[pane diary truncated]` fires only if a pathologically large
+  diary blows past the budget (generator caps at 200 tokens ≈ 800
+  bytes, so dual-bounded in practice).
+- `MCPSession.shutdown()` fetches the last 100 `token_events` rows
+  for the session's project root via `recentTokenEvents(projectRoot:limit:)`
+  and calls `PaneDiaryInjection.persist` BEFORE `endSession` — the
+  generator window is the just-closed session's activity. The write
+  is best-effort and non-blocking.
+- `SenkaniApp/Views/PaneContainerView.swift` now sets
+  `SENKANI_WORKSPACE_SLUG` (derived from the pane's working
+  directory — last two path components joined with `-`, mirroring
+  the metrics-file-path convention) and `SENKANI_PANE_SLUG` (the
+  `PaneType.rawValue`) on every terminal pane spawn. Stable across
+  pane-id recycles, so reopening a terminal in the same project
+  surfaces the same diary.
+- Schneier gate: no path-traversal attack surface — `PaneDiaryStore`
+  already hard-rejects `..`/`/`/`\` slugs, env-var poisoning can only
+  pick a different file under `~/.senkani/diaries/` (never outside).
+  Written files stay mode 0600 from the round-1 store contract. The
+  injection's swallow-errors pattern is intentional: it's the right
+  failure mode for a best-effort resume hint.
+- +10 tests (1482 → 1492): read-side injects prior diary with
+  `Pane context:\n` section header, env-off produces empty section
+  even when diary exists, missing/partial slug env produces empty,
+  no-diary-on-disk produces empty, malformed slug (`..`) degrades
+  to empty (no throw), write-side persists a brief composed from
+  real rows (round-trip verifies via store), write-side is no-op
+  when env-off / slugs-missing / rows-empty, persist→inject
+  round-trip recovers the written section on the next read.
+- Umbrella `pane-diaries-cross-session-memory` DELIVERED 2026-04-19
+  (3/3 sub-items shipped; cumulative 1466 → 1492, +26 tests across
+  the three rounds).
+
 ### April 19 — Pane diaries (round 2/3): `PaneDiaryGenerator` brief composer
 - New `Sources/Core/PaneDiaryGenerator.swift` — pure composition half
   of the cross-session per-pane memory feature. Given `token_events`

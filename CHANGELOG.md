@@ -6,6 +6,28 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 19 — MetricsStore: strip leftover debugging prints (cleanup.md #11 closed)
+- `SenkaniApp/Services/MetricsRefresher.swift` dropped from 79 → 60
+  LOC. Five emoji-tagged `print()` lines (🚨🚨🚨 / 💀) left over from
+  a 2026-04 troubleshooting pass — the start banner, per-project
+  enumeration loop, self-nil dying, tick-counter heartbeat, and
+  task-cancelled lifecycle line — all deleted. Heartbeat fired every
+  refresh tick (1 Hz), so on real installs every operator's stderr
+  was getting one observability-noise line per second per started
+  MetricsStore. The `weak self` capture and `guard let self else
+  { return }` semantics are preserved; behavior is identical.
+- Closes the staleness review on cleanup.md #11. Verified during
+  this round: there is no caching layer in MetricsStore — `@Observable`
+  + a 1-second refresh task that writes `projectStats`/`allStats`
+  directly is all there is, so the UI cannot lag the DB by more
+  than one refresh tick. The original spec implied a TTL the
+  implementation never had.
+- Tests: 1453 → 1453 (no test changes — hygiene pass). Full suite
+  green under `swift test --no-parallel` (the 5 known
+  `BundleRemote*`/`RemoteRepoClient*` parallel-mode URLProtocol
+  failures are pre-existing and documented in the
+  `mlx-inference-lock` round notes).
+
 ### April 18 — Browser Design Mode wedge: click-to-capture (scope-reduced from FUTURE)
 - Default-off, env-gated feature on the Browser pane. Set
   `SENKANI_BROWSER_DESIGN=on` in the environment and ⌥⇧D toggles a

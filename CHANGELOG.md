@@ -6,6 +6,37 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 18 — Budget enforcement: symmetric tests for the MCP + Hook gates (cleanup.md #9)
+- Budget enforcement fires at two independent layers: `ToolRouter` uses
+  `session.checkBudget()` before any MCP-routed tool call;
+  `HookRouter.handle` uses the daily/weekly gate before any non-MCP
+  tool call (Read / Bash / Grep via the hook relay). Before this
+  round only the MCP side had unit-test coverage — a regression on
+  the hook side could land without any test failure.
+- New `Tests/SenkaniTests/BudgetEnforcementDualLayerTests.swift` —
+  9 tests exercising both gates independently: MCP gate blocks on
+  global per-session hard limit, MCP gate warns at 80% soft limit,
+  hook gate blocks on daily limit, hook gate blocks on weekly limit,
+  pane-cap fires at MCP layer with no global config, below-limit
+  call passes both layers, hook gate short-circuits when
+  `projectRoot` is nil, hook gate short-circuits when no daily /
+  weekly limit configured, MCP gate fires with no hook plumbing at
+  all (cross-layer independence).
+- Two production-code changes enable the tests without touching
+  behavior: (a) `BudgetConfig.withTestOverride(_:_:)` — sync-only,
+  `NSRecursiveLock`-serialized test slot that `load()` /
+  `forceReload()` consult before disk + env + cache; same-thread
+  reentry works (so a body that calls the gate under test can
+  itself re-enter `load()` without deadlocking); (b) the hook
+  budget block inside `HookRouter.handle` factored out into a
+  public helper `checkHookBudgetGate(projectRoot:config:costForToday:costForWeek:)`
+  with closure defaults pointing at `SessionDatabase.shared` — tests
+  inject fabricated cost functions to exercise the gate without
+  polluting the real DB. Production call-site is a one-liner now,
+  same observable behavior.
+- 9 new tests (1428 → 1437). All existing budget tests pass
+  unchanged.
+
 ### April 18 — SkillScanner: scanAsync() wired into the Skill Browser (FIXME resolution)
 - `SkillBrowserView.loadSkills()` now calls `SkillScanner.scanAsync()`
   instead of the synchronous `scan()`. SwiftUI's `.task { ... }`

@@ -12,6 +12,34 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Budget enforcement — dual-layer symmetric tests (shipped 2026-04-18)
+
+Unit tests now cover both the MCP gate (`session.checkBudget()`) and
+the hook gate (`HookRouter.checkHookBudgetGate`) symmetrically via the
+new `BudgetConfig.withTestOverride` + injectable cost closures. These
+are pure-function tests — they don't exercise the real budget
+`~/.senkani/budget.json` on disk or the real
+`SessionDatabase.costForToday()` query. Real-session sanity checks:
+
+- Configure a real `~/.senkani/budget.json` with a low daily cap
+  (say $0.50). Run Senkani for a session that crosses the cap. Verify:
+  (1) MCP tool calls return `"Budget exceeded: Daily budget …"` with
+  `isError: true`; (2) non-MCP Read/Bash/Grep via the hook relay
+  return `permissionDecision: deny` with the same reason string.
+  The CHANGELOG text is the contract — if Claude Code sees a
+  different message for the same condition across the two paths,
+  flag it.
+- With the same config, confirm the 80% soft-limit warning surfaces
+  on MCP tool calls with a `[Budget Warning]` prefix but still
+  executes the tool — and does NOT surface on the hook path (hook
+  gate only has block/passthrough today, no warn prefix).
+- Pane-cap path: set `SENKANI_PANE_BUDGET_SESSION` in a pane env,
+  exceed it. MCP tool calls should block with a "Pane session
+  budget exceeded" message. Non-MCP hook-routed tools in the SAME
+  pane will NOT block on the pane cap (by design — pane cap is
+  MCP-session-scoped; the asymmetry is encoded in
+  `checkHookBudgetGate` passing `sessionCents: 0`).
+
 ### SkillScanner — scanAsync() wired into Skill Browser (shipped 2026-04-18)
 
 Unit tests cover the async dispatch (Task.detached priority .utility),

@@ -81,16 +81,8 @@ public enum HookRouter {
         }
 
         // Budget enforcement on the hook path
-        if projectRoot != nil {
-            let budget = BudgetConfig.load()
-            if budget.dailyLimitCents != nil || budget.weeklyLimitCents != nil {
-                let todayCents = SessionDatabase.shared.costForToday()
-                let weekCents = SessionDatabase.shared.costForWeek()
-                let decision = budget.check(sessionCents: 0, todayCents: todayCents, weekCents: weekCents)
-                if case .block(let reason) = decision {
-                    return blockResponse(reason, eventName: eventName)
-                }
-            }
+        if case .block(let reason) = checkHookBudgetGate(projectRoot: projectRoot) {
+            return blockResponse(reason, eventName: eventName)
         }
 
         // Route the tool call
@@ -488,6 +480,39 @@ public enum HookRouter {
         hookOutput["permissionDecisionReason"] = reason + advisory
         json["hookSpecificOutput"] = hookOutput
         return (try? JSONSerialization.data(withJSONObject: json)) ?? response
+    }
+
+    // MARK: - Budget Gate (testable)
+
+    /// Hook-path budget gate. Pure function of (projectRoot, config, costs).
+    /// Returns the decision that `handle()` should apply:
+    /// - `.allow` when no projectRoot / no daily-or-weekly limit configured.
+    /// - `.block(reason)` / `.warn(reason)` from `BudgetConfig.check`.
+    ///
+    /// The cost fetchers default to `SessionDatabase.shared` so production
+    /// callers don't need to wire anything up; tests inject fabricated
+    /// closures to exercise the gate without DB pollution.
+    ///
+    /// Note: this path passes `sessionCents: 0` by design — per-session limits
+    /// are MCP-session-scoped (tracked by `MCPSession`) and don't apply to
+    /// hook events from arbitrary tools. Only daily and weekly limits fire
+    /// here. The ToolRouter path layers pane-cap + per-session on top of
+    /// these same daily/weekly checks.
+    public static func checkHookBudgetGate(
+        projectRoot: String?,
+        config: BudgetConfig = BudgetConfig.load(),
+        costForToday: () -> Int = { SessionDatabase.shared.costForToday() },
+        costForWeek: () -> Int = { SessionDatabase.shared.costForWeek() }
+    ) -> BudgetConfig.Decision {
+        guard projectRoot != nil else { return .allow }
+        guard config.dailyLimitCents != nil || config.weeklyLimitCents != nil else {
+            return .allow
+        }
+        return config.check(
+            sessionCents: 0,
+            todayCents: costForToday(),
+            weekCents: costForWeek()
+        )
     }
 
     // MARK: - Response Builders

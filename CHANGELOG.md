@@ -6,6 +6,42 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 19 — Pane diaries (round 2/3): `PaneDiaryGenerator` brief composer
+- New `Sources/Core/PaneDiaryGenerator.swift` — pure composition half
+  of the cross-session per-pane memory feature. Given `token_events`
+  rows for a pane-slug (plus an optional caller-supplied `lastError`),
+  returns a terse brief the round-3 pane-open path can inject into
+  MCP instructions. No disk I/O, no DB access — round 3 wires the
+  fetch side.
+- API: single `generate(rows:paneSlug:lastError:maxTokens:)` static
+  method on a `public enum`. Output sections (priority order, earlier
+  survives truncation): header (`Last time in '<slug>':`), optional
+  `Error:` line, `Last:` (most-recent command), `Files:` (top-3
+  unique paths from read/edit-like rows, recency-first, basenames
+  only), `Cost:` (summed input+output tokens), `Recent:` (up to 5
+  commands, dropped first on overflow).
+- Token cap: hard 200-token default enforced via
+  `ModelPricing.bytesToTokens` (4 bytes/token — the senkani-wide
+  estimator). Overflow handled at section granularity — sections land
+  whole or are dropped whole, so output always terminates on a
+  section boundary, never mid-word.
+- Round 2 kept the "last error" input optional + caller-supplied
+  rather than synthesized from the row stream: `TimelineEvent` has
+  no error column, and the round-3 fetch layer is the natural place
+  to derive it. This keeps the generator pure and testable.
+- +8 tests (1474 → 1482): empty rows + no error → empty brief,
+  small rows surface header + last + files + cost + recent inside
+  the cap, caller-supplied error lands below the header, error with
+  no rows still produces header + error, 200-row flood respects the
+  cap exactly and every output line is a recognized section prefix
+  (no mid-line truncation), tight 30-token budget drops `Recent:`
+  before core sections, file dedupe keeps the most-recent occurrence
+  only, non-file tools (`exec`, `grep`) never leak into the `Files:`
+  section.
+- No callers yet — generator ships standalone. Umbrella
+  `pane-diaries-cross-session-memory` now 2/3 shipped; round 3
+  (pane-open MCP injection + pane-close regen) remains.
+
 ### April 19 — Pane diaries (round 1/3): `PaneDiaryStore` I/O half
 - New `Sources/Core/PaneDiaryStore.swift` — disk I/O half of the
   cross-session per-pane memory feature. Owns the on-disk contract at

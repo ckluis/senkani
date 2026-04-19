@@ -12,6 +12,34 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### PaneDiaryGenerator — round 2 of pane-diaries (shipped 2026-04-19)
+
+The composition half lands standalone — no callers yet. Round 3 wires
+the DB fetch (pane-slug → session_ids → `[TimelineEvent]`) and the
+pane-open MCP injection. What unit tests can't exercise on a real
+install until round 3 arrives:
+
+- **Real-row token budget realism.** Unit tests assert the hard
+  200-token cap with synthetic rows. On a real install with 100+ real
+  `token_events` rows carrying real filenames and argv strings, visually
+  confirm the produced brief reads like a useful resume note rather
+  than a truncated data dump. Eyeball: last command is meaningful,
+  `Files:` basenames are recognizable, `Cost:` total reflects real
+  activity, `Recent:` doesn't trail off awkwardly.
+- **Unicode / wide-char content.** Rows whose `command` column holds
+  CJK / emoji / RTL text should land in the brief without breaking
+  the 4-bytes-per-token estimator's actual byte count. Run
+  `PaneDiaryGenerator.generate` (via a small harness once round 3 is
+  in, or via Swift REPL now) on a fixture with mixed scripts; confirm
+  the output is still ≤200 tokens by the `ModelPricing` definition.
+- **Caller-supplied error formatting.** The generator renders any
+  `lastError: String?` verbatim (truncated at 140 chars). Round 3
+  callers should pass a pre-cleaned one-line summary — if they pass
+  the raw SQLite error message or a multi-line stack trace, the brief
+  will contain linebreak garbage that the section-labeled format
+  can't parse. Sanity-check the round-3 error-derivation code once
+  it lands.
+
 ### PaneDiaryStore — round 1 of pane-diaries (shipped 2026-04-19)
 
 The I/O half lands standalone — no callers yet. Round 2

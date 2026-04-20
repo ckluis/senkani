@@ -6,6 +6,36 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 19 — `senkani doctor`: grammar staleness advisory (non-blocking)
+- New `Sources/Indexer/GrammarStaleness.swift` — pure
+  `advise(cached:today:thresholdDays:)` helper returns one of
+  `.noUpstreamData`, `.allFresh`, `.recentUpdatesAvailable(count:)`, or
+  `.stale([StaleEntry])`. Stale = upstream has a newer version AND the
+  grammar has been vendored for more than 30 days. Under the 30-day
+  window, outdated grammars roll up as PASS ("recent update available")
+  so routine upstream churn cannot red-light `senkani doctor`. Over the
+  window, the advisory reports SKIP (not FAIL) — the check is a
+  non-blocking warning so it can't false-alarm CI per
+  `spec/tree_sitter.md:80`. `today:` is injectable for deterministic
+  tests; `parseVendoredDate` parses ISO `YYYY-MM-DD` without
+  allocating a DateFormatter.
+- `DoctorCommand.checkGrammars` rewritten to switch on the advisory:
+  offline path (no cache) → SKIP with "run senkani grammars check"
+  hint; all-fresh → PASS with full language list; recent-updates → PASS
+  with a count of how many grammars are waiting in the 30-day window;
+  stale → SKIP listing each language with its current + latest version
+  + days-stale. Reuses the existing 24h GitHub-version cache — no new
+  network paths.
+- New `Tests/SenkaniTests/GrammarStalenessTests.swift` — 12 tests
+  (+1498 → 1510): offline (nil cache), empty cache, all-fresh,
+  recent-updates-within-window, stale-beyond-window (99 days),
+  exact-30-day boundary is NOT stale, 31-day first-past-boundary,
+  mixed-cache lists only stale entries sorted alphabetically,
+  outdated-without-latestVersion is skipped defensively,
+  custom-threshold parameter, ISO date parse happy-path, and
+  malformed-date rejection. All injected `today:` fixtures, zero
+  network I/O.
+
 ### April 19 — `senkani uninstall` automated smoke — narrows cleanup.md #15 gap
 - New `Sources/CLI/UninstallArtifactScanner.swift` (~160 LOC) —
   testable artifact discovery + removal factored out of

@@ -76,6 +76,20 @@ final class MCPSession: @unchecked Sendable {
     // Cached session continuity brief (generated once per session)
     private var _sessionBrief: String?
 
+    // Phase S.1 — resolved manifest effective-set (lazy; guarded by `lock`).
+    // Resolves team manifest + user overrides on first read; cached for the
+    // session. Absence of `.senkani/senkani.json` yields an
+    // `EffectiveSet` with `manifestPresent: false`, which signals backwards-
+    // compat (all tools enabled) to ToolRouter.
+    private var _effectiveSet: EffectiveSet?
+    var effectiveSet: EffectiveSet {
+        lock.lock(); defer { lock.unlock() }
+        if let cached = _effectiveSet { return cached }
+        let set = ManifestLoader.load(projectRoot: projectRoot)
+        _effectiveSet = set
+        return set
+    }
+
     // Dependency graph (lazily built on first use)
     private var _dependencyGraph: DependencyGraph?
 

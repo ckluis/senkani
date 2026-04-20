@@ -6,6 +6,46 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 20 — Phase S.1: manifest schema + MCP tool gating (foundation)
+- `phase-s-manifest-schema` closes the first Week-1 slice of Phase S
+  (skill/tool/hook manifest, approved 2026-04-19). New module
+  `Sources/Core/Manifest/` (3 files, ~170 LOC):
+  `Manifest.swift` (team manifest schema + `ManifestOverrides` +
+  `EffectiveSet`), `ManifestResolver.swift` (pure resolver
+  `effective = team ∩ optOuts ∪ additions`), `ManifestLoader.swift`
+  (disk I/O; missing files are not errors).
+- On-disk home is `<projectRoot>/.senkani/senkani.json` for the team
+  manifest, `~/.senkani/overrides.json` (single file, keyed by
+  absolute project-root path) for user-local overrides. Format is
+  JSON rather than the YAML named in the roadmap spec — no YAML
+  parser is in-tree; JSON is a strict YAML subset so a future
+  Yams-backed round reads today's files verbatim.
+- `MCPSession.effectiveSet` is a lazy lock-guarded resolve that
+  happens on first read and caches for the session. Never throws —
+  missing files yield `manifestPresent: false`.
+- `ToolRouter.advertisedTools(for:)` filters the catalog by the
+  effective set, with core tools (`read`, `outline`, `deps`,
+  `session`) always-on. `ToolRouter.route` gates CallTool by the
+  same set, returning `isError: true` with a Skills-pane-pointer
+  message for disabled tools. `ListTools` handler queries the
+  filtered catalog.
+- Backwards-compat invariant: projects with no
+  `.senkani/senkani.json` get `manifestPresent: false` and the full
+  tool surface — today's behavior, verified by
+  `backwardsCompatWithoutManifestEnablesEverything` and
+  `advertisedToolsIncludesEverythingWhenNoManifest`.
+- Out of scope this round (deferred to follow-up rounds):
+  Skills-pane UI (S.4), storefront/registry (S.6), AXI.9
+  `buildSkillsPrompt` retrofit (touches MCPSession.swift), Starter
+  Kits (S.7), ratings + comments (S.5), cron/agents manifest
+  sections (S.8), YAML parser swap.
+- Tests: 1510 → 1527 (+17 new) across five `ManifestTests` suites —
+  schema round-trip + coreTools identity, resolver formula (team/
+  opt-out/addition/precedence/nil-manifest), `isToolEnabled`
+  gating (core-always, backwards-compat, non-core requires listing),
+  loader disk paths (missing file, present file, user overrides,
+  per-project keying), and ToolRouter advertise filtering.
+
 ### April 20 — Website search: client-side Lunr across the wiki
 - `website-rebuild-10-search` closes. `scripts/gen.py` emits
   `assets/search-index.json` by walking every `docs/**/*.html` —

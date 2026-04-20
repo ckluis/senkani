@@ -7,7 +7,7 @@ private struct ToolTimeoutError: Error {}
 enum ToolRouter {
     static func register(on server: Server, session: MCPSession) async {
         await server.withMethodHandler(ListTools.self) { _ in
-            .init(tools: allTools())
+            .init(tools: advertisedTools(for: session.effectiveSet))
         }
 
         await server.withMethodHandler(CallTool.self) { params in
@@ -15,10 +15,32 @@ enum ToolRouter {
         }
     }
 
+    /// Filter the full tool catalog by the session's effective-set.
+    /// Core tools (read/outline/deps/session) always appear even when
+    /// the manifest omits them. When no manifest file is present at
+    /// all (`manifestPresent == false`) the full catalog ships — today's
+    /// backwards-compat behavior.
+    static func advertisedTools(for effectiveSet: EffectiveSet) -> [Tool] {
+        let catalog = allTools()
+        guard effectiveSet.manifestPresent else { return catalog }
+        return catalog.filter { effectiveSet.isToolEnabled($0.name) }
+    }
+
     static func route(_ params: CallTool.Parameters, session: MCPSession) async -> CallTool.Result {
         FileHandle.standardError.write(Data("🟡 TOOL CALL: \(params.name)\n".utf8))
         // Re-read feature toggles from pane config file (GUI may have changed them)
         session.refreshConfig()
+        // Phase S.1 — manifest gating. If a manifest is present and does
+        // not enable this tool, return a structured error pointing the
+        // caller at the Skills pane toggle rather than silently dispatching.
+        // No manifest present → full surface (today's behavior).
+        let effective = session.effectiveSet
+        if effective.manifestPresent, !effective.isToolEnabled(params.name) {
+            return .init(content: [.text(
+                text: "Tool '\(params.name)' is not enabled in this project's manifest. Enable it in the Skills pane (or add it to .senkani/senkani.json).",
+                annotations: nil, _meta: nil)],
+                isError: true)
+        }
         // SECURITY: Budget enforcement — non-bypassable gate before any tool execution.
         // This is the only routing path, so all tool calls pass through this check.
         let budgetDecision = session.checkBudget()

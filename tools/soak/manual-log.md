@@ -12,6 +12,48 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Phase S.1 — manifest schema + MCP tool gating (shipped 2026-04-20)
+
+Foundation round of Phase S. The manifest file format and effective-set
+resolution are fully exercised in unit tests, but the end-to-end story
+(agent sees the filtered tool list, disabled-tool calls fail gracefully
+with a usable message) can only be validated against a real Claude Code
+session.
+
+- **Empty-manifest backwards-compat.** In a fresh project, run Senkani
+  MCP with **no** `.senkani/senkani.json`. Agent should see the full
+  tool surface exactly as before — `senkani_read`, `senkani_exec`,
+  `senkani_knowledge`, `senkani_web`, etc. all callable. If any tool
+  is missing, the `manifestPresent: false` fallback broke.
+- **Manifest present gates the advertised list.** Drop a
+  `.senkani/senkani.json` with `{"mcpTools": ["knowledge"]}` into a
+  project. Open a fresh MCP session — `ListTools` should return the
+  four core tools (`read`, `outline`, `deps`, `session`) plus
+  `knowledge`, and nothing else. The agent's tool palette confirms
+  this (fewer tools visible).
+- **Disabled-tool call returns Skills-pane pointer.** With the
+  manifest above, ask the agent to run `senkani_exec` or
+  `senkani_web`. Expected: `isError: true` with the text
+  `"Tool '<name>' is not enabled in this project's manifest. Enable
+  it in the Skills pane (or add it to .senkani/senkani.json)."` No
+  silent dispatch, no crash.
+- **User overrides layer correctly.** Add
+  `~/.senkani/overrides.json` with
+  `{"/abs/path/to/project": {"optOutTools":["knowledge"],"addTools":["exec"]}}`.
+  Same project, fresh session: `knowledge` should disappear even
+  though it's in the team manifest, and `exec` should work even
+  though it isn't. Core tools stay visible.
+- **Different project's overrides stay isolated.** The overrides
+  file is a map keyed by absolute project-root path — confirm that
+  adding an entry for a different project doesn't leak into the
+  project under test. (Unit-tested, but worth spot-checking a real
+  two-project setup.)
+- **YAML migration pressure.** The spec calls for
+  `.senkani/senkani.yaml`; this round ships JSON. Track whether any
+  team that touches the manifest asks for YAML — if so, prioritize
+  a Yams-backed follow-up round. Until then, JSON is the canonical
+  on-disk format.
+
 ### Website redesign wave 2 — hero stack + /docs/ move (shipped 2026-04-19)
 
 Second operator-directed round on the website. Three deliverables:

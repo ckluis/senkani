@@ -6,6 +6,44 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 19 — Website rebuild plan (Luminary planning round)
+- New `spec/website_rebuild.md` (~420 lines) — the umbrella spec for
+  splitting the single-page `index.html` into a ~75-page Diátaxis-
+  structured wiki + a tightened landing page. Operator-directed
+  planning round run through
+  `/luminaryReview:marketing + /luminaryReview:ux + default`
+  (combined starting roster per `ckluis.github.io/luminaryTeam/`).
+  Final 10-member roster: Jobs, Torvalds, Norman, Zhuo, Morville,
+  Butterick, Procida, Dunford, Handley, Sutton. Four red flags
+  fired — Morville (single-page IA, USER IMPACT); Butterick (sub-
+  14px reference tables, USER IMPACT + COMPLIANCE); Sutton
+  (multiple WCAG AA contrast fails, COMPLIANCE — `--ink-mute:
+  #706c66` on `--bg: #f5f1e8` measures ~3.9:1); Procida
+  (reference + explanation fusion, Diátaxis anti-pattern, USER
+  IMPACT).
+- Spec covers: diagnosis with `index.html` line citations;
+  target sitemap (one URL per MCP tool, per CLI command, per
+  FCSIT option, per pane type — ~75 pages total); typography
+  scale (all reading text ≥14px, badges ≥12px, code blocks
+  ≥14px); color tokens (`--ink-mute` moves to `#5a5652` so every
+  text/bg pair passes WCAG AA); per-page skeletons for
+  concept / reference / guide / landing; build harness
+  (`scripts/build.sh` + `assets/theme.css` + partials, no
+  framework, no npm on CI); voice rubric (Handley + Dunford);
+  staged execution plan; out-of-scope list (dark mode, l10n, CMS,
+  pixel trackers); closing success criteria (axe-core 0 AA,
+  Lighthouse a11y ≥ 95 + perf ≥ 90, landing ≤ 600 lines HTML,
+  search returns any MCP tool in ≤ 2 keystrokes).
+- `spec/autonomous-backlog.yaml` — umbrella landed as
+  `website-rebuild-0-spec` (completed 2026-04-19); 12 new
+  `pending` items queued (`website-rebuild-1-typography-tokens`
+  through `website-rebuild-12-claude-prototype-review`) with
+  `blocked_by` chains that enforce the execution order. Umbrella
+  is DELIVERED when items 1–11 ship green (item 12 is a parallel
+  Claude Design prototype extract with no hard blockers).
+- No source code changes; no test delta. Implementation ships
+  incrementally in rounds 1–11.
+
 ### April 19 — `senkani doctor`: grammar staleness advisory (non-blocking)
 - New `Sources/Indexer/GrammarStaleness.swift` — pure
   `advise(cached:today:thresholdDays:)` helper returns one of

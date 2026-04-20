@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Concepts — understanding senkani</title>
+<meta name="description" content="Explanation pages: why senkani compresses where it compresses, how the hook relay works, how compound learning mines your own sessions, and how the knowledge base stays coherent.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/theme.css">
+</head>
+<body>
+<a href="#main" class="skip-nav">Skip to main content</a>
+<nav class="topnav" aria-label="Primary navigation">
+  <a class="wordmark" href="../">sen<span class="accent">kani</span><small>compression layer for AI coding agents</small></a>
+  <button class="topnav-hamburger" aria-label="Open navigation menu" aria-expanded="false" aria-controls="topnav-links"><span></span><span></span><span></span></button>
+  <div class="topnav-links" id="topnav-links">
+    <a href="../what-is-senkani/">What is it?</a>
+    <a href="../concepts/">Concepts</a>
+    <a href="../reference/">Reference</a>
+    <a href="../guides/">Guides</a>
+    <a href="../status/">Status</a>
+    <div class="topnav-search"><input type="search" id="site-search" placeholder="Search · /" aria-label="Search the site"></div>
+    <a href="https://github.com/ckluis/senkani" class="btn-nav">GitHub →</a>
+  </div>
+</nav>
+<main id="main" class="wiki-layout">
+  <aside class="wiki-nav" aria-label="Concepts navigation">
+    <div class="wiki-nav-group">
+      <h4>Overview</h4>
+      <ul>
+        <li><a href="../what-is-senkani/">What is senkani?</a></li>
+        <li><a href="../concepts/" class="active">All concepts</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>Concepts</h4>
+      <ul>
+        <li><a href="../concepts/compression-layer/">Compression layer</a></li>
+        <li><a href="../concepts/hook-relay/">Hook relay</a></li>
+        <li><a href="../concepts/mcp-intelligence/">MCP intelligence</a></li>
+        <li><a href="../concepts/three-layer-stack/">Three-layer stack</a></li>
+        <li><a href="../concepts/compound-learning/">Compound learning</a></li>
+        <li><a href="../concepts/knowledge-base/">Knowledge base</a></li>
+        <li><a href="../concepts/security-posture/">Security posture</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>Next</h4>
+      <ul>
+        <li><a href="../reference/">Reference index</a></li>
+        <li><a href="../guides/install/">Install</a></li>
+      </ul>
+    </div>
+  </aside>
+  <article class="wiki-main">
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../">Home</a> <span class="sep">›</span> <span class="here">Concepts</span>
+    </nav>
+    <span class="quadrant concept">Concept · Explanation</span>
+    <h1 class="page-title">Concepts</h1>
+    <p class="lede">Explanation pages — the <em>why</em> behind senkani. Reference tells you what each tool does; concepts tell you why the system works. Start with <a href="../what-is-senkani/">What is senkani?</a> if this is your first visit.</p>
+
+    <div class="card-grid">
+      <a class="card" href="../concepts/compression-layer/"><h4>Compression layer</h4><p>Three places Senkani compresses: input (before the LLM sees it), redundancy (before the tool runs), output (before responses grow). Why all three.</p></a>
+      <a class="card" href="../concepts/hook-relay/"><h4>Hook relay</h4><p>How the <code>senkani-hook</code> binary intercepts your agent's Read/Bash/Grep, routes to senkani equivalents, and denies with cached results when appropriate.</p></a>
+      <a class="card" href="../concepts/mcp-intelligence/"><h4>MCP intelligence</h4><p>What "MCP tool" means and why senkani has 19 of them. How tree-sitter + FTS5 + MiniLM compose into sub-5 ms symbol search.</p></a>
+      <a class="card" href="../concepts/three-layer-stack/"><h4>Three-layer stack</h4><p>Layer 1 tools, Layer 2 hooks, Layer 3 smart denials. Why denial-with-cached-result is the biggest win on pathological sessions.</p></a>
+      <a class="card" href="../concepts/compound-learning/"><h4>Compound learning</h4><p>Four artifact types — filter rules, context docs, instruction patches, workflow playbooks — mined from your own sessions. The <code>.recurring → .staged → .applied</code> flow.</p></a>
+      <a class="card" href="../concepts/knowledge-base/"><h4>Knowledge base</h4><p>Project entities + decisions + links. Markdown as source-of-truth, SQLite as rebuilt index. How it stays coherent when you hand-edit.</p></a>
+      <a class="card" href="../concepts/security-posture/"><h4>Security posture</h4><p>v0.2.0 defaults: prompt-injection guard on, SSRF hardening on, secret redaction on, socket auth opt-in. Why senkani is a trust boundary and what that means concretely.</p></a>
+    </div>
+  </article>
+</main>
+<footer class="site-foot">
+  <div class="foot-grid">
+    <div>
+      <div class="foot-wordmark">sen<span class="accent">kani</span></div>
+      <p class="foot-tagline"><span lang="zh">閃蟹</span> — "fast claw." A native macOS binary written in Swift.</p>
+    </div>
+    <div class="foot-col"><h4>Product</h4><ul><li><a href="../what-is-senkani/">What is it?</a></li><li><a href="../concepts/">Concepts</a></li><li><a href="../reference/">Reference</a></li><li><a href="../guides/">Guides</a></li><li><a href="../status/">Status</a></li></ul></div>
+    <div class="foot-col"><h4>Reference</h4><ul><li><a href="../reference/mcp/">MCP tools</a></li><li><a href="../reference/cli/">CLI commands</a></li><li><a href="../reference/options/">Options &amp; env</a></li><li><a href="../reference/panes/">Panes</a></li><li><a href="../changelog/">Changelog</a></li></ul></div>
+    <div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li><li><a href="../guides/install/">Install</a></li><li><a href="../guides/troubleshooting/">Troubleshooting</a></li><li><a href="../about/">About &amp; license</a></li></ul></div>
+  </div>
+  <div class="foot-meta">
+    <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
+    <span><a href="../changelog/">v0.2.0 changelog</a></span>
+  </div>
+</footer>
+<script src="../assets/app.js" defer></script>
+</body>
+</html>

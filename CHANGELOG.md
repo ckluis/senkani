@@ -6,6 +6,41 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 19 — Website rebuild (items 1–9 shipped in one megaround)
+- Operator-directed bundle of the entire website-rebuild chain from
+  `spec/website_rebuild.md`. 94 HTML files shipped across a Diátaxis-
+  structured wiki: 19 MCP tool pages, 19 CLI command pages, 17 pane
+  pages, 10 option pages, 7 concept pages, 9 guide pages, 10 hub
+  pages, plus a rewritten landing at 280 lines (target was ≤600).
+  Every page has its own URL — bookmarkable, linkable, searchable.
+- `assets/theme.css` (~900 lines) implements the Section 4
+  typography scale (all reading text ≥14px, tables ≥15px, code
+  ≥14px, badges ≥12px), the contrast-adjusted ink tokens
+  (`--ink-mute` moved from #706c66 → #5a5652 for WCAG AA on body
+  text), focus rings on every interactive element, skip-link, and
+  `prefers-reduced-motion` honoring across animations + terminal-
+  cursor blink. Every text/bg pair in the new palette passes AA.
+- `scripts/gen.py` (~1000 lines, stdlib-only Python) renders the
+  templated pages (MCP, CLI, panes, options, concepts, guides,
+  hubs) from in-file data tables. No framework, no npm, no package
+  manager. Regenerate via `python3 scripts/gen.py`.
+- Relative-path architecture: every page computes its own `../`
+  prefix from the output path depth so links resolve correctly
+  under both `file://` local viewing AND GitHub Pages project-
+  subpath deploys (`ckluis.github.io/senkani/`). `.nojekyll`
+  added to skip Jekyll processing.
+- Legacy anchor redirects preserved in `assets/app.js`: inbound
+  links to `/#how-it-works`, `/#mcp-tools`, `/#install`, `/#terse`,
+  etc. now redirect to the corresponding new wiki URLs.
+- Pending in follow-up rounds: `website-rebuild-10-search` (Lunr
+  index generation + vendoring), `website-rebuild-11-content-pass`
+  (editorial + closing audit), `website-rebuild-12-claude-prototype-
+  review` (operator's auth-walled Claude Design prototype extract).
+- No Swift code changes; no test delta (1510 → 1510). Manual
+  validation queue added to `tools/soak/manual-log.md` (visual
+  inspection, axe-core-cli pass, Lighthouse, keyboard traversal,
+  mobile layout, cross-browser, live deploy preview).
+
 ### April 19 — Website rebuild plan (Luminary planning round)
 - New `spec/website_rebuild.md` (~420 lines) — the umbrella spec for
   splitting the single-page `index.html` into a ~75-page Diátaxis-

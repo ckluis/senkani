@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>About — senkani</title>
+<meta name="description" content="License, credits, the name (閃蟹 — fast claw).">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/theme.css">
+</head>
+<body>
+<a href="#main" class="skip-nav">Skip to main content</a>
+<nav class="topnav" aria-label="Primary navigation">
+  <a class="wordmark" href="../">sen<span class="accent">kani</span><small>compression layer for AI coding agents</small></a>
+  <button class="topnav-hamburger" aria-label="Open navigation menu" aria-expanded="false" aria-controls="topnav-links"><span></span><span></span><span></span></button>
+  <div class="topnav-links" id="topnav-links">
+    <a href="../what-is-senkani/">What is it?</a>
+    <a href="../concepts/">Concepts</a>
+    <a href="../reference/">Reference</a>
+    <a href="../guides/">Guides</a>
+    <a href="../status/">Status</a>
+    <div class="topnav-search"><input type="search" id="site-search" placeholder="Search · /" aria-label="Search the site"></div>
+    <a href="https://github.com/ckluis/senkani" class="btn-nav">GitHub →</a>
+  </div>
+</nav>
+<main id="main" class="wiki-layout">
+  <aside class="wiki-nav" aria-label="Reference navigation">
+    <div class="wiki-nav-group">
+      <h4>Reference</h4>
+      <ul>
+        <li><a href="../reference/">All reference</a></li>
+        <li><a href="../reference/mcp/">MCP tools (19)</a></li>
+        <li><a href="../reference/cli/">CLI commands (19)</a></li>
+        <li><a href="../reference/options/">Options &amp; env</a></li>
+        <li><a href="../reference/panes/">Panes (17)</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>Start</h4>
+      <ul>
+        <li><a href="../what-is-senkani/">What is it?</a></li>
+        <li><a href="../concepts/">Concepts</a></li>
+        <li><a href="../guides/install/">Install</a></li>
+      </ul>
+    </div>
+  </aside>
+  <article class="wiki-main">
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../">Home</a> <span class="sep">›</span> <span class="here">About</span>
+    </nav>
+    <h1 class="page-title">About</h1>
+
+    <h2>The name</h2>
+    <p><strong lang="zh">閃蟹</strong> — "senkani" — literally <em>flash crab</em>, or "fast claw." The crab is a pincer; Senkani is the pincer between your agent and your filesystem. Snap, compress, return.</p>
+
+    <h2>License</h2>
+    <p>Core: <strong>MIT</strong>. See <a href="https://github.com/ckluis/senkani/blob/main/LICENSE">LICENSE</a>.</p>
+
+    <h2>Built with</h2>
+    <ul>
+      <li><strong>Swift 6.0+</strong> — Sources/Core, Sources/Filter, Sources/Indexer, Sources/MCPServer, Sources/Bundle, Sources/HookRelay, Sources/CLI, SenkaniApp.</li>
+      <li><strong>SwiftUI + SwiftTerm</strong> — the workspace.</li>
+      <li><strong>tree-sitter</strong> — 25 vendored grammars for symbol extraction.</li>
+      <li><strong>SQLite + FTS5</strong> — session DB, knowledge graph index, bench results.</li>
+      <li><strong>Apple MLX</strong> — MiniLM embeddings, Gemma vision, Gemma rationale rewriter.</li>
+    </ul>
+
+    <h2>Platform</h2>
+    <p>macOS 14+, Apple Silicon native universal binary. Intel macs run the core but not the MLX-accelerated tools.</p>
+
+    <h2>Telemetry</h2>
+    <p><strong>Off by default.</strong> Senkani does not send telemetry, usage data, or model outputs anywhere. The session database is local to your machine; <code>senkani export</code> is the only way data leaves the device, and only when you invoke it.</p>
+
+    <h2>Links</h2>
+    <ul>
+      <li><a href="https://github.com/ckluis/senkani">GitHub</a></li>
+      <li><a href="../changelog/">Changelog</a></li>
+      <li><a href="https://github.com/ckluis/senkani/blob/main/LICENSE">LICENSE</a></li>
+    </ul>
+  </article>
+</main>
+<footer class="site-foot">
+  <div class="foot-grid">
+    <div>
+      <div class="foot-wordmark">sen<span class="accent">kani</span></div>
+      <p class="foot-tagline"><span lang="zh">閃蟹</span> — "fast claw." A native macOS binary written in Swift.</p>
+    </div>
+    <div class="foot-col"><h4>Product</h4><ul><li><a href="../what-is-senkani/">What is it?</a></li><li><a href="../concepts/">Concepts</a></li><li><a href="../reference/">Reference</a></li><li><a href="../guides/">Guides</a></li><li><a href="../status/">Status</a></li></ul></div>
+    <div class="foot-col"><h4>Reference</h4><ul><li><a href="../reference/mcp/">MCP tools</a></li><li><a href="../reference/cli/">CLI commands</a></li><li><a href="../reference/options/">Options &amp; env</a></li><li><a href="../reference/panes/">Panes</a></li><li><a href="../changelog/">Changelog</a></li></ul></div>
+    <div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li><li><a href="../guides/install/">Install</a></li><li><a href="../guides/troubleshooting/">Troubleshooting</a></li><li><a href="../about/">About &amp; license</a></li></ul></div>
+  </div>
+  <div class="foot-meta">
+    <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
+    <span><a href="../changelog/">v0.2.0 changelog</a></span>
+  </div>
+</footer>
+<script src="../assets/app.js" defer></script>
+</body>
+</html>

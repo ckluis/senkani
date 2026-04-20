@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Options & env vars — reference</title>
+<meta name="description" content="FCSIT toggles, budget caps, security env vars, and compound-learning thresholds.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/theme.css">
+</head>
+<body>
+<a href="#main" class="skip-nav">Skip to main content</a>
+<nav class="topnav" aria-label="Primary navigation">
+  <a class="wordmark" href="../../">sen<span class="accent">kani</span><small>compression layer for AI coding agents</small></a>
+  <button class="topnav-hamburger" aria-label="Open navigation menu" aria-expanded="false" aria-controls="topnav-links"><span></span><span></span><span></span></button>
+  <div class="topnav-links" id="topnav-links">
+    <a href="../../what-is-senkani/">What is it?</a>
+    <a href="../../concepts/">Concepts</a>
+    <a href="../../reference/">Reference</a>
+    <a href="../../guides/">Guides</a>
+    <a href="../../status/">Status</a>
+    <div class="topnav-search"><input type="search" id="site-search" placeholder="Search · /" aria-label="Search the site"></div>
+    <a href="https://github.com/ckluis/senkani" class="btn-nav">GitHub →</a>
+  </div>
+</nav>
+<main id="main" class="wiki-layout">
+  <aside class="wiki-nav" aria-label="Options navigation">
+    <div class="wiki-nav-group">
+      <h4>Reference</h4>
+      <ul>
+        <li><a href="../../reference/">All reference</a></li>
+        <li><a href="../../reference/options/" class="active">Options index</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>Options &amp; env</h4>
+      <ul>
+        <li><a href="../../reference/options/fcsit/">FCSIT overview</a></li>
+        <li><a href="../../reference/options/filter/">F — Filter</a></li>
+        <li><a href="../../reference/options/cache/">C — Cache</a></li>
+        <li><a href="../../reference/options/secrets/">S — Secrets</a></li>
+        <li><a href="../../reference/options/indexer/">I — Indexer</a></li>
+        <li><a href="../../reference/options/terse/">T — Terse</a></li>
+        <li><a href="../../reference/options/budget/">Budget caps</a></li>
+        <li><a href="../../reference/options/security/">Security env vars</a></li>
+        <li><a href="../../reference/options/web/">Web env vars</a></li>
+        <li><a href="../../reference/options/compound-learning/">Compound-learning env</a></li>
+      </ul>
+    </div>
+  </aside>
+  <article class="wiki-main">
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../">Home</a> <span class="sep">›</span>
+      <a href="../../reference/">Reference</a> <span class="sep">›</span>
+      <span class="here">Options &amp; env</span>
+    </nav>
+    <span class="quadrant reference">Reference · Information</span>
+    <h1 class="page-title">Options &amp; env vars</h1>
+    <p class="lede">Resolution order: <strong>CLI flag &gt; env var &gt; <code>~/.senkani/config.json</code> &gt; default</strong>. Any toggle can be overridden at any level without touching other settings.</p>
+
+    <h2>FCSIT — per-pane feature toggles</h2>
+    <div class="fcsit-card">
+      <a class="fcsit-letter f" href="../../reference/options/filter/"><span class="ltr">F</span><span class="name">Filter</span><span class="default">default on</span></a>
+      <a class="fcsit-letter c" href="../../reference/options/cache/"><span class="ltr">C</span><span class="name">Cache</span><span class="default">default on</span></a>
+      <a class="fcsit-letter s" href="../../reference/options/secrets/"><span class="ltr">S</span><span class="name">Secrets</span><span class="default">default on</span></a>
+      <a class="fcsit-letter i" href="../../reference/options/indexer/"><span class="ltr">I</span><span class="name">Indexer</span><span class="default">default on</span></a>
+      <a class="fcsit-letter t" href="../../reference/options/terse/"><span class="ltr">T</span><span class="name">Terse</span><span class="default">default off</span></a>
+    </div>
+    <p><a href="../../reference/options/fcsit/">Read the FCSIT overview →</a></p>
+
+    <h2>Env-var families</h2>
+    <div class="card-grid">
+      <a class="card" href="../../reference/options/budget/"><h4>Budget caps</h4><p>Daily + weekly spend ceilings enforced at the hook layer. <code>SENKANI_BUDGET_DAILY</code>, <code>SENKANI_BUDGET_WEEKLY</code>.</p></a>
+      <a class="card" href="../../reference/options/security/"><h4>Security env vars</h4><p>Prompt-injection guard, SSRF overrides, socket auth, structured JSON logs, retention tuning.</p></a>
+      <a class="card" href="../../reference/options/web/"><h4>Web env vars</h4><p>Overrides for the <code>senkani_web</code> SSRF guard, subresource blocklist, allowlisted hosts.</p></a>
+      <a class="card" href="../../reference/options/compound-learning/"><h4>Compound-learning env</h4><p>Confidence thresholds, recurrence gates, Gemma enrichment rate limits.</p></a>
+    </div>
+
+    <h2 style="margin-top:32px;">Config file</h2>
+    <pre class="code"><span class="c">// ~/.senkani/config.json</span>
+{
+  <span class="k">"retention"</span>: {
+    <span class="k">"token_events_days"</span>: <span class="e">90</span>,
+    <span class="k">"sandboxed_results_hours"</span>: <span class="e">24</span>
+  },
+  <span class="k">"budget"</span>: {
+    <span class="k">"daily_usd"</span>: <span class="e">5.00</span>,
+    <span class="k">"weekly_usd"</span>: <span class="e">25.00</span>
+  }
+}</pre>
+  </article>
+</main>
+<footer class="site-foot">
+  <div class="foot-grid">
+    <div>
+      <div class="foot-wordmark">sen<span class="accent">kani</span></div>
+      <p class="foot-tagline"><span lang="zh">閃蟹</span> — "fast claw." A native macOS binary written in Swift.</p>
+    </div>
+    <div class="foot-col"><h4>Product</h4><ul><li><a href="../../what-is-senkani/">What is it?</a></li><li><a href="../../concepts/">Concepts</a></li><li><a href="../../reference/">Reference</a></li><li><a href="../../guides/">Guides</a></li><li><a href="../../status/">Status</a></li></ul></div>
+    <div class="foot-col"><h4>Reference</h4><ul><li><a href="../../reference/mcp/">MCP tools</a></li><li><a href="../../reference/cli/">CLI commands</a></li><li><a href="../../reference/options/">Options &amp; env</a></li><li><a href="../../reference/panes/">Panes</a></li><li><a href="../../changelog/">Changelog</a></li></ul></div>
+    <div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li><li><a href="../../guides/install/">Install</a></li><li><a href="../../guides/troubleshooting/">Troubleshooting</a></li><li><a href="../../about/">About &amp; license</a></li></ul></div>
+  </div>
+  <div class="foot-meta">
+    <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
+    <span><a href="../../changelog/">v0.2.0 changelog</a></span>
+  </div>
+</footer>
+<script src="../../assets/app.js" defer></script>
+</body>
+</html>

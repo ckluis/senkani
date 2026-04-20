@@ -12,6 +12,73 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Website rebuild — visual + a11y validation (shipped 2026-04-19)
+
+The full github-pages rebuild landed in one operator-directed round
+(umbrella `website-rebuild-0-spec` + items 1–9). 94 HTML files across
+a Diátaxis-structured wiki: 19 MCP tool pages, 19 CLI command pages,
+17 pane pages, 10 option pages, 7 concept pages, 9 guide pages, plus
+10 hub pages and a rewritten landing. Everything deploys from the
+repo root via GitHub Pages with `.nojekyll` present; all internal
+paths are relative so it works both over `file://` and at
+`ckluis.github.io/senkani/`. Automated a11y tooling wasn't run in the
+round — needs a real machine with Node / axe-core-cli available.
+
+- **Visual inspection on a mid-tier display.** Open <code>index.html</code>
+  via `python3 -m http.server 8080` (NOT `file://` — relative paths
+  now work there, but some browsers block `fetch()` on `file://`).
+  Skim hero, positioning, teasers, stat strip, gallery. Look for:
+  unreadable text, broken cards, broken dark-mockup legibility,
+  misaligned grids, missing spacing.
+- **Nav sanity walk.** Click through: Home → What is it? →
+  Concepts → each concept page → Reference → MCP tools index →
+  `senkani_read` → `senkani_web` → Options → FCSIT → Terse →
+  Guides → Install → Troubleshooting. Every breadcrumb, every
+  wiki-nav entry, every "see also" link should resolve without
+  404s.
+- **axe-core-cli pass on every page.** Install via `npm i -g
+  @axe-core/cli` and run: `axe http://localhost:8080/ --exit`,
+  then spot-check a representative deep page
+  (`axe http://localhost:8080/reference/mcp/senkani_read/`).
+  Target: 0 AA violations per page. If anything fires, update
+  `assets/theme.css` tokens and re-run.
+- **Lighthouse perf + a11y per page.** Open Chrome DevTools →
+  Lighthouse → run against landing + one deep reference page.
+  Target: perf ≥ 90 (mid-tier), a11y ≥ 95. The biggest drag is
+  the Google Fonts stylesheet; `preconnect` is in place but if
+  perf misses, consider `font-display: swap` hints or self-
+  hosting.
+- **Mobile (360–780px) layout.** Open any page in devtools
+  mobile mode. The hamburger menu should work; wiki-nav should
+  collapse to a stacked list above content; the hero type should
+  scale sanely; the tool listing should reflow to single-column.
+- **Keyboard-only traversal.** Tab through the landing. Skip-link
+  should be the first focusable element. Every link/button should
+  show the orange focus ring. Nothing trap-focused.
+- **Legacy anchor redirects.** Hit
+  `http://localhost:8080/#how-it-works` — should redirect to
+  `/concepts/`. Same for `#mcp-tools` (→ `/reference/mcp/`),
+  `#install` (→ `/guides/install/`), `#terse` (→
+  `/reference/options/terse/`). See `assets/app.js` legacyMap.
+- **Search stub.** The search input in the top nav currently has
+  no index (`assets/search-index.json` and `assets/lunr.min.js`
+  aren't vendored yet — that's `website-rebuild-10-search`
+  pending). Confirm the input at least doesn't throw JS errors
+  on focus (it should quietly fail the fetch and do nothing).
+- **Deploy preview.** Push to a branch, enable GitHub Pages for
+  that branch, open `https://ckluis.github.io/senkani/`. All
+  relative paths should resolve under the `/senkani/` subpath.
+  Confirm CSS loads, deep links work, external GitHub links
+  still go to `github.com/ckluis/senkani`.
+- **Safari + Firefox cross-browser.** Every page built + tested
+  in Chrome by default; Safari/Firefox should just work since
+  there's no exotic CSS, but confirm. Especially mockup chrome
+  (mockup gradients, pane dots, FCSIT button pills).
+- **`prefers-reduced-motion`.** Toggle macOS Reduce Motion →
+  reload landing. Terminal-cursor blink in the hero mockup
+  should stop; smooth-scroll should disable. Both are in
+  `assets/theme.css`.
+
 ### `senkani uninstall` — real-install validation (synthetic smoke shipped 2026-04-19)
 
 `Tests/SenkaniTests/UninstallSmokeTests.swift` now fences the

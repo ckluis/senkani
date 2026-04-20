@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Budget caps — options reference</title>
+<meta name="description" content="Daily and weekly spend ceilings enforced at the hook layer. When you hit a cap, new tool calls are denied with a clear message.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../../assets/theme.css">
+</head>
+<body>
+<a href="#main" class="skip-nav">Skip to main content</a>
+<nav class="topnav" aria-label="Primary navigation">
+  <a class="wordmark" href="../../../">sen<span class="accent">kani</span><small>compression layer for AI coding agents</small></a>
+  <button class="topnav-hamburger" aria-label="Open navigation menu" aria-expanded="false" aria-controls="topnav-links"><span></span><span></span><span></span></button>
+  <div class="topnav-links" id="topnav-links">
+    <a href="../../../what-is-senkani/">What is it?</a>
+    <a href="../../../concepts/">Concepts</a>
+    <a href="../../../reference/">Reference</a>
+    <a href="../../../guides/">Guides</a>
+    <a href="../../../status/">Status</a>
+    <div class="topnav-search"><input type="search" id="site-search" placeholder="Search · /" aria-label="Search the site"></div>
+    <a href="https://github.com/ckluis/senkani" class="btn-nav">GitHub →</a>
+  </div>
+</nav>
+<main id="main" class="wiki-layout">
+  <aside class="wiki-nav" aria-label="Options navigation">
+    <div class="wiki-nav-group">
+      <h4>Reference</h4>
+      <ul>
+        <li><a href="../../../reference/">All reference</a></li>
+        <li><a href="../../../reference/options/">Options index</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>Options &amp; env</h4>
+      <ul>
+        <li><a href="../../../reference/options/fcsit/">FCSIT overview</a></li>
+        <li><a href="../../../reference/options/filter/">F — Filter</a></li>
+        <li><a href="../../../reference/options/cache/">C — Cache</a></li>
+        <li><a href="../../../reference/options/secrets/">S — Secrets</a></li>
+        <li><a href="../../../reference/options/indexer/">I — Indexer</a></li>
+        <li><a href="../../../reference/options/terse/">T — Terse</a></li>
+        <li><a href="../../../reference/options/budget/" class="active">Budget caps</a></li>
+        <li><a href="../../../reference/options/security/">Security env vars</a></li>
+        <li><a href="../../../reference/options/web/">Web env vars</a></li>
+        <li><a href="../../../reference/options/compound-learning/">Compound-learning env</a></li>
+      </ul>
+    </div>
+  </aside>
+  <article class="wiki-main">
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../">Home</a> <span class="sep">›</span>
+      <a href="../../../reference/">Reference</a> <span class="sep">›</span>
+      <a href="../../../reference/options/">Options &amp; env</a> <span class="sep">›</span>
+      <span class="here">Budget caps</span>
+    </nav>
+    <span class="quadrant reference">Reference · Information</span>
+    <h1 class="page-title">Budget caps</h1>
+    <p class="lede">Daily and weekly spend ceilings enforced at the hook layer. When you hit a cap, new tool calls are denied with a clear message.</p>
+
+    <h2>Env vars</h2>
+    <p><code>SENKANI_BUDGET_DAILY=5.00</code> — daily spend cap in USD (default <strong>$5.00</strong>).<br>
+    <code>SENKANI_BUDGET_WEEKLY=25.00</code> — weekly spend cap in USD (default <strong>$25.00</strong>).</p>
+
+    <h2>How enforcement works</h2>
+    <p>The hook layer queries <code>costForToday()</code> and <code>costForWeek()</code> from the session DB (aggregated from <code>token_events</code>) before approving a tool call. When a cap is exceeded, the hook denies with a structured error message that the agent sees — not a silent failure.</p>
+
+    <h2>Dual-layer enforcement</h2>
+    <p>Enforcement runs at both the pre-tool-use hook AND the MCP server — so denial happens even if the agent bypasses the Senkani tools and calls built-ins directly.</p>
+
+    <h2>Reset</h2>
+    <p>Daily resets at midnight local. Weekly resets Monday 00:00 local. No manual reset — the cap is a ceiling on lifetime spend, not a bank.</p>
+
+    <div class="seealso"><h3>See also</h3><ul>
+      <li><a href="../../../guides/budget-setup/">Budget setup guide</a></li>
+      <li><a href="../../../reference/cli/senkani-stats/"><code>senkani stats</code> — see your spend</a></li>
+    </ul></div>
+
+  </article>
+</main>
+<footer class="site-foot">
+  <div class="foot-grid">
+    <div>
+      <div class="foot-wordmark">sen<span class="accent">kani</span></div>
+      <p class="foot-tagline"><span lang="zh">閃蟹</span> — "fast claw." A native macOS binary written in Swift.</p>
+    </div>
+    <div class="foot-col"><h4>Product</h4><ul><li><a href="../../../what-is-senkani/">What is it?</a></li><li><a href="../../../concepts/">Concepts</a></li><li><a href="../../../reference/">Reference</a></li><li><a href="../../../guides/">Guides</a></li><li><a href="../../../status/">Status</a></li></ul></div>
+    <div class="foot-col"><h4>Reference</h4><ul><li><a href="../../../reference/mcp/">MCP tools</a></li><li><a href="../../../reference/cli/">CLI commands</a></li><li><a href="../../../reference/options/">Options &amp; env</a></li><li><a href="../../../reference/panes/">Panes</a></li><li><a href="../../../changelog/">Changelog</a></li></ul></div>
+    <div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li><li><a href="../../../guides/install/">Install</a></li><li><a href="../../../guides/troubleshooting/">Troubleshooting</a></li><li><a href="../../../about/">About &amp; license</a></li></ul></div>
+  </div>
+  <div class="foot-meta">
+    <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
+    <span><a href="../../../changelog/">v0.2.0 changelog</a></span>
+  </div>
+</footer>
+<script src="../../../assets/app.js" defer></script>
+</body>
+</html>

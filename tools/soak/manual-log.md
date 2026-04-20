@@ -12,6 +12,37 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### `senkani uninstall` — real-install validation (synthetic smoke shipped 2026-04-19)
+
+`Tests/SenkaniTests/UninstallSmokeTests.swift` now fences the
+discovery + filter + removal logic against a fixture HOME (6 tests).
+That covers refactor-induced regressions. What synthetic tests
+*can't* catch: a newly-added runtime artifact path that the scanner
+doesn't know about yet. So the real-install pass still matters:
+
+- **Run `senkani uninstall` on a real dev install.** With a Senkani
+  app that has actually been registered (MCP entry in
+  `~/.claude/settings.json`, hooks in project settings, something in
+  `~/.senkani/`, optionally a launchd plist from `senkani schedule`).
+  Default run (no flags) — confirm the artifact list shows only the
+  categories you expect, cancel with `N`, verify nothing on disk
+  changed.
+- **`senkani uninstall --keep-data`.** Verify the list omits the
+  session database line; re-run, accept, confirm that
+  `~/Library/Application Support/Senkani/` survives while the other
+  six categories go.
+- **`senkani uninstall --yes` (full wipe).** Run twice. First run
+  removes everything the scanner found; second run prints "Nothing
+  to uninstall" (idempotent). `claude` in a plain terminal should
+  show no Senkani tools. Re-launching SenkaniApp should re-register
+  everything (reversibility).
+- **Look for artifacts the scanner missed.** After a `--yes` run, do
+  a quick sweep: `ls ~/.senkani/`, `ls ~/Library/LaunchAgents/com.senkani.*`,
+  `grep -l senkani ~/.claude/settings.json ~/.claude/projects/*/settings.json`,
+  `ls ~/Library/Application Support/Senkani/`. If anything is still
+  there, file a note — that's a new category the synthetic fixture
+  needs to grow to cover.
+
 ### PaneDiaryInjection — round 3 of pane-diaries (shipped 2026-04-19, umbrella DELIVERED)
 
 Round 3 wires generator + store into the MCP subprocess (read on

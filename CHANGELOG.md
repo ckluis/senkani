@@ -6,6 +6,35 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 19 — `senkani uninstall` automated smoke — narrows cleanup.md #15 gap
+- New `Sources/CLI/UninstallArtifactScanner.swift` (~160 LOC) —
+  testable artifact discovery + removal factored out of
+  `UninstallCommand`. Takes explicit `homeDir` + `appSupportDir`, so
+  tests can seed a fixture HOME under a tmp dir without ever touching
+  the operator's real `$HOME`. All seven categories mirror the old
+  inline logic: global MCP registration, project-level hooks,
+  `~/.senkani/bin/senkani-hook`, the `~/.senkani/` runtime dir, the
+  session DB in `~/Library/Application Support/Senkani/`, senkani
+  launchd plists, and per-project `.senkani/` dirs.
+- `UninstallCommand.scanForArtifacts` is now a five-line wrapper that
+  builds the scanner with real paths. Public CLI behavior is
+  byte-identical (same icons, same descriptions, same ordering, same
+  `--keep-data` semantics). `removeGlobalMCPEntry` + the project-hook
+  cleanup helper moved onto the scanner as static methods.
+- Schneier gate: the new filter-boundary test seeds non-senkani hook
+  files + non-senkani launchd plists and asserts the scanner does NOT
+  flag them — prevents the refactor from silently widening deletion
+  scope beyond `senkani*`/`senkani-daemon` and `com.senkani.*.plist`.
+- New `Tests/SenkaniTests/UninstallSmokeTests.swift` — 6 tests
+  (+1492 → 1498): full-seed produces all 7 categories, `--keep-data`
+  omits `sessionDatabase`, default run includes it, pristine HOME is
+  empty, removal → re-scan is idempotent, non-senkani hooks/plists
+  aren't flagged. Every test isolates itself under a unique tmp dir.
+- `tools/soak/manual-log.md` keeps the "real install" half of
+  cleanup.md #15 on the queue — this round fences the synthetic half
+  against regression, the real-machine validation still wants
+  operator hands.
+
 ### April 19 — Pane diaries (round 3/3): MCP injection + pane-close regen — umbrella DELIVERED
 - New `Sources/Core/PaneDiaryInjection.swift` — Core-level glue
   between `PaneDiaryStore` (I/O) + `PaneDiaryGenerator` (composition)

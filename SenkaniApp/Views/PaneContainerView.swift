@@ -315,31 +315,25 @@ struct PaneContainerView: View {
             TerminalViewRepresentable(
                 paneId: pane.id,
                 initialCommand: pane.initialCommand,
-                environment: pane.features.environmentVars.merging([
-                    "SENKANI_METRICS_FILE": pane.metricsFilePath,
-                    "SENKANI_CONFIG_FILE":  pane.configFilePath,
-                    "SENKANI_INTERCEPT":    "on",
-                    "SENKANI_HOOK":         "on",
-                    "SENKANI_PROJECT_ROOT": pane.workingDirectory,
-                    "SENKANI_PANE_ID":      pane.id.uuidString,
-                    // MCP-name aliases: MCPSession.resolve() reads SENKANI_MCP_*
-                    "SENKANI_MCP_FILTER":   pane.features.filter  ? "on" : "off",
-                    "SENKANI_MCP_CACHE":    pane.features.cache   ? "on" : "off",
-                    "SENKANI_MCP_SECRETS":  pane.features.secrets ? "on" : "off",
-                    "SENKANI_MCP_INDEX":    pane.features.indexer ? "on" : "off",
-                    "SENKANI_MCP_TERSE":    pane.features.terse   ? "on" : "off",
-                    // Round-3 pane diary slugs — stable across pane-id
-                    // recycles so a reopened terminal in the same
-                    // project surfaces the same diary. Workspace slug
-                    // mirrors the metrics-file fallback convention
-                    // (last two path components joined with "-"); pane
-                    // slug is the pane type's rawValue.
-                    "SENKANI_WORKSPACE_SLUG": paneDiaryWorkspaceSlug(pane.workingDirectory),
-                    "SENKANI_PANE_SLUG":      pane.paneType.rawValue,
-                    // Model routing
-                    "CLAUDE_MODEL":          resolvedClaudeModel,
-                    "SENKANI_MODEL_PRESET":  pane.modelPreset.rawValue,
-                ]) { _, new in new },
+                environment: pane.features.environmentVars
+                    .merging(PaneLaunchEnv.terminal(PaneLaunchEnv.Inputs(
+                        paneID: pane.id,
+                        projectRoot: pane.workingDirectory,
+                        metricsFilePath: pane.metricsFilePath,
+                        configFilePath: pane.configFilePath,
+                        workspaceSlug: paneDiaryWorkspaceSlug(pane.workingDirectory),
+                        paneSlug: pane.paneType.rawValue,
+                        filterOn: pane.features.filter,
+                        cacheOn: pane.features.cache,
+                        secretsOn: pane.features.secrets,
+                        indexerOn: pane.features.indexer,
+                        terseOn: pane.features.terse
+                    ))) { _, new in new }
+                    .merging([
+                        // Terminal-only extras (model routing) layered on top.
+                        "CLAUDE_MODEL":         resolvedClaudeModel,
+                        "SENKANI_MODEL_PRESET": pane.modelPreset.rawValue,
+                    ]) { _, new in new },
                 workingDirectory: pane.workingDirectory,
                 isActive: isActive,
                 fontSize: pane.fontSize,
@@ -396,6 +390,9 @@ struct PaneContainerView: View {
             DashboardView(workspace: workspace)
         case .sprintReview:
             SprintReviewPane(workspace: workspace)
+        case .ollamaLauncher:
+            OllamaLauncherPane(pane: pane, isActive: isActive)
+                .onChange(of: pane.features) { _, _ in pane.features.persist(to: pane.configFilePath) }
         }
     }
 
@@ -516,6 +513,8 @@ struct PaneContainerView: View {
             return "\(workspace?.projects.count ?? 0) projects"
         case .sprintReview:
             return "review"
+        case .ollamaLauncher:
+            return pane.ollamaDefaultModel
         }
     }
 

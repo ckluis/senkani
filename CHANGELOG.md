@@ -6,6 +6,48 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 20 — Ollama pane: pin the MCP env contract (`mcp-in-ollama-pane-verify`)
+- `mcp-in-ollama-pane-verify` closes round 5 of the
+  `ollama-pane-discovery-models-bundle` umbrella. The operator flagged
+  that Senkani MCP tooling's behaviour inside the Ollama-launcher pane
+  was unverified after the pane went first-class. Pre-audit traced the
+  env-injection path — both the plain Terminal pane and the Ollama
+  pane funnel through `TerminalViewRepresentable`, which merges the
+  supplied env dict onto `ProcessInfo.environment` before `startProcess`,
+  so `SENKANI_PANE_ID` et al. transit identically regardless of whether
+  `initialCommand` is an empty shell or `ollama run <tag>`.
+- Finding: env bundles were assembled inline in two SwiftUI views
+  (`OllamaLauncherPane.terminalBody` and `PaneContainerView.paneBody`
+  case `.terminal`). Torvalds flag: drift risk — a key added to one
+  site could silently disappear from the other, and the MCP gate
+  (`MCPMain.swift:19`, `SENKANI_PANE_ID != nil`) would fire on one
+  pane type and not the other.
+- New `Sources/Core/PaneLaunchEnv.swift` hoists the env-dict build
+  into a pure-Foundation helper with two entry points: `terminal(_:)`
+  and `ollamaLauncher(_:resolvedModelTag:)`. Both produce the same
+  MCP gate-key bundle (`SENKANI_PANE_ID`, `SENKANI_PROJECT_ROOT`,
+  `SENKANI_HOOK`, `SENKANI_INTERCEPT`, metrics/config paths,
+  workspace + pane slugs, every `SENKANI_MCP_*` toggle); the ollama
+  variant layers `SENKANI_OLLAMA_MODEL` on top. Both views now call
+  the helper so the contract is single-sourced.
+- New `Tests/SenkaniTests/PaneLaunchEnvTests.swift` pins the contract
+  with 8 tests: gate-key coverage for each pane type, cross-type
+  parity (terminal ↔ ollama dicts agree on every shared key), ollama
+  model-tag round-trip, bounded-context guard (terminal env omits
+  `SENKANI_OLLAMA_MODEL`), shell-safe value assertion (Schneier — no
+  `\n`, `\r`, `\0` in any value), workspace/pane slug round-trip,
+  feature-flag on↔off mapping.
+- The live end-to-end verification (real MCP client attached to an
+  ollama-launched shell) still requires the operator's machine —
+  pushed to `tools/soak/manual-log.md` under Wave "Ollama pane: MCP
+  tool reachability (2026-04-20)" so the concern stops bleeding
+  across rounds without a landing point.
+- **Accepted risks**: if an ollama REPL spawns `/bin/sh -c ...` from
+  inside the LLM chat (the `!<cmd>` escape), the child shell
+  inherits SENKANI_* by POSIX rule — this is the same behaviour every
+  other terminal pane has. No new leak path; documented under the
+  soak entry.
+
 ### April 20 — Models pane: install → verify state machine (`models-page-installable`)
 - `models-page-installable` closes round 4 of the
   `ollama-pane-discovery-models-bundle` umbrella. The Models pane's

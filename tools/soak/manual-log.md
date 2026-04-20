@@ -12,6 +12,50 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Ollama pane: MCP tool reachability (shipped 2026-04-20)
+
+Round 5 of the `ollama-pane-discovery-models-bundle` umbrella. Pre-audit
+showed the env-injection path is shared with the Terminal pane
+(`TerminalViewRepresentable` merges the caller's env dict onto
+`ProcessInfo.environment` before `startProcess`), and new
+`Tests/SenkaniTests/PaneLaunchEnvTests.swift` pins the cross-type
+parity — so we know the gate keys go in. What the unit tests cannot
+cover: an external `ollama` binary actually answers, and a real MCP
+client attached to the pane's session can reach `senkani_read` /
+`senkani_session`. These soak steps close that loop.
+
+- **Ollama daemon reachable, MCP env present.** Fresh project. Open
+  the AddPaneSheet gallery → **AI & Models** → pick **Ollama**. With
+  Ollama installed and its daemon running on localhost:11434 the
+  pane should transition `Detecting… → connected` (green dot in the
+  header) and start a terminal running `ollama run <default-tag>`.
+  Expected env in that shell: `echo $SENKANI_PANE_ID` prints a UUID;
+  `echo $SENKANI_PROJECT_ROOT` prints the project directory;
+  `echo $SENKANI_OLLAMA_MODEL` prints the resolved tag (e.g.
+  `llama3.1:8b`). Parity check: open a plain Terminal pane in the
+  same workspace, dump the same three env vars — all three should
+  be set on both panes; `SENKANI_OLLAMA_MODEL` is only present in
+  the Ollama pane.
+- **Senkani MCP tools answer from the Ollama pane.** From inside the
+  Ollama pane's shell (either the `ollama` REPL's `!<cmd>` escape
+  or quit back to zsh), run `senkani_read <anyfile>` via a connected
+  MCP client (Claude Code, Cursor, or Codex). Expected: a non-empty
+  response (outline-first by default). Re-run the same command from
+  a plain Terminal pane — result should be equivalent shape (same
+  file, same outline). Repeat with `senkani_session action=stats` —
+  both panes should see the same session.
+- **Ollama daemon absent.** Stop the daemon (`ollama stop` or
+  `launchctl unload` the plist) and add a new Ollama pane. Pane
+  should show the **Get Ollama / Retry** CTA (no terminal spawned).
+  Clicking **Retry** after restarting the daemon should flip the
+  pane to the connected-terminal state without recreating it.
+- **`!<cmd>` escape inheritance (Schneier accepted-risk spot-check).**
+  From inside the ollama REPL, type `!env | grep SENKANI_ | head`.
+  Expected: SENKANI_* keys inherited (POSIX rule — the shell-out
+  child inherits the REPL's env, which is the Terminal pane's env).
+  This matches the Terminal pane's behaviour and is not a new leak
+  path; confirming just documents the observation.
+
 ### Models pane: install → verify state machine (shipped 2026-04-20)
 
 Round 4 of the `ollama-pane-discovery-models-bundle` umbrella. The Core

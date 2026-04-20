@@ -6,6 +6,52 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 20 — Pane gallery: categorize 17 panes + fix missing Dashboard
+- `pane-add-gallery-redesign` closes round 1 of the
+  `ollama-pane-discovery-models-bundle` umbrella (escalated to the
+  top of the backlog 2026-04-20 after operator feedback on
+  discoverability + ollama-launch flow). `AddPaneSheet` was already
+  a 2-column visual grid with icon + title + description + hover
+  lift — NOT a hidden menu as the operator's framing suggested. The
+  real gaps were: (1) `dashboard` was missing from the entries list
+  (16 of 17 panes listed), (2) no categorization on a 16-item flat
+  grid, (3) gallery data was duplicated in the SwiftUI view and
+  untestable.
+- New `Sources/Core/PaneGalleryBuilder.swift` mirrors
+  `CommandEntryBuilder` — pure-data, string-ID-based, testable.
+  17 entries grouped into 4 categories (Morville + Norman
+  taxonomy): **Shell & Agents** (Terminal, Agent Timeline),
+  **AI & Models** (Skills, Knowledge Base, Models, Sprint Review),
+  **Data & Insights** (Dashboard, Analytics, Savings Test,
+  Schedules, Log Viewer), **Docs & Code** (Code Editor, Markdown
+  Preview, HTML Preview, Browser, Diff Viewer, Scratchpad). Every
+  category is ≤6 entries (skimmable bar).
+- `AddPaneSheet` refactored to consume `PaneGalleryBuilder`:
+  category section headers (uppercased, tracked, 10pt) above a
+  2-column grid per category, filter still works across all
+  categories (empty categories auto-omit from filtered output),
+  sheet grew 420×480 → 460×560 to fit labels.
+- **Unchanged:** the "+ Add Pane" button in the sidebar bottom bar
+  is already labeled (verified in `SidebarView.swift:289–307`) —
+  the operator's "hidden +" concern was actually the flat-grid
+  discoverability once the sheet opened, not the trigger itself.
+- 12 new tests under `@Suite("Pane Gallery")`: 17-type coverage,
+  dashboard-present regression pin, unique IDs, ≤6 per category,
+  every entry in a known category, categorization is total,
+  category order stable, descriptions ≤80 chars (Podmajersky bar),
+  filter case-insensitive + matches description, empty query
+  returns all, filter→categorized collapse.
+- Test count: 1527 → 1539 (+12).
+- **Accepted risks** (documented in `tools/soak/manual-log.md`):
+  Butterick explicit focus-ring treatment not added this round
+  (SwiftUI Button default keyboard focus is reachable but
+  visually subtle); Podmajersky microcopy audit deferred (current
+  descriptions are ≤80 chars but stylistically inconsistent).
+  Both are follow-up items, not round-blockers.
+- **Deferred to the next 4 sub-items** of the umbrella:
+  `ollama-pane-first-class` (b), `ollama-model-curation` (c),
+  `models-page-installable` (d), `mcp-in-ollama-pane-verify` (e).
+
 ### April 20 — Phase S.1: manifest schema + MCP tool gating (foundation)
 - `phase-s-manifest-schema` closes the first Week-1 slice of Phase S
   (skill/tool/hook manifest, approved 2026-04-19). New module

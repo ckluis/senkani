@@ -1,179 +1,41 @@
 import SwiftUI
+import Core
 
-/// Beautiful sheet for adding new panes. Grid of type cards with search filter,
-/// accent colors, and hover effects. Opened via Cmd+N or "+" toolbar button.
+/// Categorized gallery for adding new panes. Consumes `PaneGalleryBuilder`
+/// from Core (testable); this view is the SwiftUI presentation layer only.
 struct AddPaneSheet: View {
     let onAdd: (PaneType, String, String) -> Void  // (type, title, command)
 
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
-    @State private var hoveredType: PaneType?
+    @State private var hoveredEntryID: String?
 
-    /// All available pane type entries with their metadata.
-    private struct PaneEntry: Identifiable {
-        let id: PaneType
-        let type: PaneType
-        let name: String
-        let description: String
-        let icon: String
-        let accent: Color
-        let defaultTitle: String
-        let defaultCommand: String
-    }
+    /// Map the gallery's string IDs back to the app-target PaneType enum.
+    /// Mirrors the command-palette mapping in ContentView. Keep in sync
+    /// when adding a new pane type.
+    private let idToType: [String: PaneType] = [
+        "terminal": .terminal,
+        "agentTimeline": .agentTimeline,
+        "skillLibrary": .skillLibrary,
+        "knowledgeBase": .knowledgeBase,
+        "modelManager": .modelManager,
+        "sprintReview": .sprintReview,
+        "dashboard": .dashboard,
+        "analytics": .analytics,
+        "savingsTest": .savingsTest,
+        "schedules": .scheduleManager,
+        "logViewer": .logViewer,
+        "codeEditor": .codeEditor,
+        "markdownPreview": .markdownPreview,
+        "htmlPreview": .htmlPreview,
+        "browser": .browser,
+        "diffViewer": .diffViewer,
+        "scratchpad": .scratchpad,
+    ]
 
-    private var entries: [PaneEntry] {
-        let all: [PaneEntry] = [
-            PaneEntry(
-                id: .terminal, type: .terminal,
-                name: "Terminal",
-                description: "Run commands and AI agents",
-                icon: SenkaniTheme.iconName(for: .terminal),
-                accent: SenkaniTheme.accentColor(for: .terminal),
-                defaultTitle: "Terminal",
-                defaultCommand: ""
-            ),
-            PaneEntry(
-                id: .markdownPreview, type: .markdownPreview,
-                name: "Markdown Preview",
-                description: "Live preview .md files",
-                icon: SenkaniTheme.iconName(for: .markdownPreview),
-                accent: SenkaniTheme.accentColor(for: .markdownPreview),
-                defaultTitle: "Markdown",
-                defaultCommand: ""
-            ),
-            PaneEntry(
-                id: .htmlPreview, type: .htmlPreview,
-                name: "HTML Preview",
-                description: "Preview web pages",
-                icon: SenkaniTheme.iconName(for: .htmlPreview),
-                accent: SenkaniTheme.accentColor(for: .htmlPreview),
-                defaultTitle: "HTML",
-                defaultCommand: ""
-            ),
-            PaneEntry(
-                id: .skillLibrary, type: .skillLibrary,
-                name: "Skill Library",
-                description: "Browse your AI skills",
-                icon: SenkaniTheme.iconName(for: .skillLibrary),
-                accent: SenkaniTheme.accentColor(for: .skillLibrary),
-                defaultTitle: "Skills",
-                defaultCommand: ""
-            ),
-            PaneEntry(
-                id: .knowledgeBase, type: .knowledgeBase,
-                name: "Knowledge Base",
-                description: "Search your AI history",
-                icon: SenkaniTheme.iconName(for: .knowledgeBase),
-                accent: SenkaniTheme.accentColor(for: .knowledgeBase),
-                defaultTitle: "Knowledge",
-                defaultCommand: ""
-            ),
-            PaneEntry(
-                id: .analytics, type: .analytics,
-                name: "Analytics",
-                description: "Charts and cost tracking",
-                icon: SenkaniTheme.iconName(for: .analytics),
-                accent: SenkaniTheme.accentColor(for: .analytics),
-                defaultTitle: "Analytics",
-                defaultCommand: ""
-            ),
-            PaneEntry(
-                id: .modelManager, type: .modelManager,
-                name: "Model Manager",
-                description: "Download and manage ML models",
-                icon: SenkaniTheme.iconName(for: .modelManager),
-                accent: SenkaniTheme.accentColor(for: .modelManager),
-                defaultTitle: "Models",
-                defaultCommand: ""
-            ),
-            PaneEntry(
-                id: .scheduleManager, type: .scheduleManager,
-                name: "Schedules",
-                description: "View scheduled tasks",
-                icon: SenkaniTheme.iconName(for: .scheduleManager),
-                accent: SenkaniTheme.accentColor(for: .scheduleManager),
-                defaultTitle: "Schedules",
-                defaultCommand: ""
-            ),
-            PaneEntry(
-                id: .browser, type: .browser,
-                name: "Browser",
-                description: "Browse URLs and localhost",
-                icon: SenkaniTheme.iconName(for: .browser),
-                accent: SenkaniTheme.accentColor(for: .browser),
-                defaultTitle: "Browser",
-                defaultCommand: ""
-            ),
-            PaneEntry(
-                id: .diffViewer, type: .diffViewer,
-                name: "Diff Viewer",
-                description: "Compare files side by side",
-                icon: SenkaniTheme.iconName(for: .diffViewer),
-                accent: SenkaniTheme.accentColor(for: .diffViewer),
-                defaultTitle: "Diff",
-                defaultCommand: ""
-            ),
-            PaneEntry(
-                id: .logViewer, type: .logViewer,
-                name: "Log Viewer",
-                description: "Tail and filter log files",
-                icon: SenkaniTheme.iconName(for: .logViewer),
-                accent: SenkaniTheme.accentColor(for: .logViewer),
-                defaultTitle: "Log",
-                defaultCommand: ""
-            ),
-            PaneEntry(
-                id: .scratchpad, type: .scratchpad,
-                name: "Scratchpad",
-                description: "Quick notes and scratch space",
-                icon: SenkaniTheme.iconName(for: .scratchpad),
-                accent: SenkaniTheme.accentColor(for: .scratchpad),
-                defaultTitle: "Notes",
-                defaultCommand: ""
-            ),
-            PaneEntry(
-                id: .savingsTest, type: .savingsTest,
-                name: "Savings Test",
-                description: "Benchmark optimization savings",
-                icon: SenkaniTheme.iconName(for: .savingsTest),
-                accent: SenkaniTheme.accentColor(for: .savingsTest),
-                defaultTitle: "Savings Test",
-                defaultCommand: ""
-            ),
-            PaneEntry(
-                id: .codeEditor, type: .codeEditor,
-                name: "Code Editor",
-                description: "View code with syntax highlighting",
-                icon: SenkaniTheme.iconName(for: .codeEditor),
-                accent: SenkaniTheme.accentColor(for: .codeEditor),
-                defaultTitle: "Code",
-                defaultCommand: ""
-            ),
-            PaneEntry(
-                id: .agentTimeline, type: .agentTimeline,
-                name: "Agent Timeline",
-                description: "Live feed of optimization events",
-                icon: SenkaniTheme.iconName(for: .agentTimeline),
-                accent: SenkaniTheme.accentColor(for: .agentTimeline),
-                defaultTitle: "Timeline",
-                defaultCommand: ""
-            ),
-            PaneEntry(
-                id: .sprintReview, type: .sprintReview,
-                name: SenkaniTheme.displayName(for: .sprintReview),
-                description: SenkaniTheme.description(for: .sprintReview),
-                icon: SenkaniTheme.iconName(for: .sprintReview),
-                accent: SenkaniTheme.accentColor(for: .sprintReview),
-                defaultTitle: "Sprint Review",
-                defaultCommand: ""
-            ),
-        ]
-
-        if searchText.isEmpty { return all }
-        return all.filter {
-            $0.name.localizedCaseInsensitiveContains(searchText)
-            || $0.description.localizedCaseInsensitiveContains(searchText)
-        }
+    private var filteredGroups: [(category: String, entries: [PaneGalleryEntry])] {
+        let filtered = PaneGalleryBuilder.filter(PaneGalleryBuilder.allEntries(), query: searchText)
+        return PaneGalleryBuilder.categorized(filtered)
     }
 
     private let columns = [
@@ -183,98 +45,133 @@ struct AddPaneSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
-            HStack {
-                Text("Add Pane")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(SenkaniTheme.textPrimary)
+            header
+            searchField
+            galleryScroll
+        }
+        .frame(width: 460, height: 560)
+        .background(SenkaniTheme.paneShell)
+    }
 
-                Spacer()
+    // MARK: - Header
 
+    private var header: some View {
+        HStack {
+            Text("Add Pane")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(SenkaniTheme.textPrimary)
+
+            Spacer()
+
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(SenkaniTheme.textTertiary)
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.escape)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 20)
+        .padding(.bottom, 12)
+    }
+
+    // MARK: - Search
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12))
+                .foregroundStyle(SenkaniTheme.textTertiary)
+
+            TextField("Filter pane types...", text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundStyle(SenkaniTheme.textPrimary)
+
+            if !searchText.isEmpty {
                 Button {
-                    dismiss()
+                    searchText = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 16))
+                        .font(.system(size: 10))
                         .foregroundStyle(SenkaniTheme.textTertiary)
                 }
                 .buttonStyle(.plain)
-                .keyboardShortcut(.escape)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 20)
-            .padding(.bottom, 12)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(SenkaniTheme.paneBody)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 20)
+        .padding(.bottom, 16)
+    }
 
-            // Search field
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12))
-                    .foregroundStyle(SenkaniTheme.textTertiary)
+    // MARK: - Categorized gallery
 
-                TextField("Filter pane types...", text: $searchText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13))
-                    .foregroundStyle(SenkaniTheme.textPrimary)
-
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(SenkaniTheme.textTertiary)
-                    }
-                    .buttonStyle(.plain)
+    @ViewBuilder
+    private var galleryScroll: some View {
+        ScrollView {
+            if filteredGroups.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 24))
+                        .foregroundStyle(SenkaniTheme.textTertiary)
+                    Text("No matching pane types")
+                        .font(.system(size: 12))
+                        .foregroundStyle(SenkaniTheme.textSecondary)
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 40)
+            } else {
+                VStack(alignment: .leading, spacing: 20) {
+                    ForEach(filteredGroups, id: \.category) { group in
+                        categorySection(group.category, entries: group.entries)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(SenkaniTheme.paneBody)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal, 20)
-            .padding(.bottom, 16)
+        }
+    }
 
-            // Grid of pane type cards
-            ScrollView {
-                if entries.isEmpty {
-                    VStack(spacing: 8) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 24))
-                            .foregroundStyle(SenkaniTheme.textTertiary)
-                        Text("No matching pane types")
-                            .font(.system(size: 12))
-                            .foregroundStyle(SenkaniTheme.textSecondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 40)
-                } else {
-                    LazyVGrid(columns: columns, spacing: 12) {
-                        ForEach(entries) { entry in
-                            paneCard(entry)
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 20)
+    private func categorySection(_ category: String, entries: [PaneGalleryEntry]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(category)
+                .font(.system(size: 10, weight: .semibold))
+                .textCase(.uppercase)
+                .tracking(0.8)
+                .foregroundStyle(SenkaniTheme.textTertiary)
+
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(entries) { entry in
+                    paneCard(entry)
                 }
             }
         }
-        .frame(width: 420, height: 480)
-        .background(SenkaniTheme.paneShell)
     }
 
     // MARK: - Pane card
 
-    private func paneCard(_ entry: PaneEntry) -> some View {
-        let isHovered = hoveredType == entry.type
+    private func paneCard(_ entry: PaneGalleryEntry) -> some View {
+        let isHovered = hoveredEntryID == entry.id
+        let accent = accentColor(for: entry.id)
 
         return Button {
-            onAdd(entry.type, entry.defaultTitle, entry.defaultCommand)
+            guard let type = idToType[entry.id] else {
+                dismiss()
+                return
+            }
+            onAdd(type, entry.defaultTitle, "")
             dismiss()
         } label: {
             VStack(spacing: 10) {
                 Image(systemName: entry.icon)
                     .font(.system(size: 24))
-                    .foregroundStyle(entry.accent)
+                    .foregroundStyle(accent)
 
                 VStack(spacing: 2) {
                     Text(entry.name)
@@ -298,14 +195,13 @@ struct AddPaneSheet: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(
-                        isHovered ? entry.accent.opacity(0.6) : SenkaniTheme.inactiveBorder,
+                        isHovered ? accent.opacity(0.6) : SenkaniTheme.inactiveBorder,
                         lineWidth: isHovered ? 1.5 : 0.5
                     )
             )
-            // Lift effect on hover
             .scaleEffect(isHovered ? 1.02 : 1.0)
             .shadow(
-                color: isHovered ? entry.accent.opacity(0.15) : .clear,
+                color: isHovered ? accent.opacity(0.15) : .clear,
                 radius: isHovered ? 8 : 0,
                 y: isHovered ? 2 : 0
             )
@@ -313,7 +209,12 @@ struct AddPaneSheet: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            hoveredType = hovering ? entry.type : nil
+            hoveredEntryID = hovering ? entry.id : nil
         }
+    }
+
+    private func accentColor(for id: String) -> Color {
+        guard let type = idToType[id] else { return SenkaniTheme.textSecondary }
+        return SenkaniTheme.accentColor(for: type)
     }
 }

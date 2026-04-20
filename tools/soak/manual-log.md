@@ -12,6 +12,42 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Pane gallery: categorized add-pane sheet (shipped 2026-04-20)
+
+Round 1 of the `ollama-pane-discovery-models-bundle` umbrella. Unit
+tests pin the data model (17 entries, 4 categories, ≤6 per category,
+filter behavior, regression pin for dashboard-present), but the
+SwiftUI rendering is not covered by automated tests.
+
+- **Visual render check.** Launch SenkaniApp → sidebar bottom bar →
+  click "+ Add Pane" → choose "New Pane...". Expected: sheet at
+  460×560 with four category section headers in order **Shell &
+  Agents / AI & Models / Data & Insights / Docs & Code**, 2-column
+  grid under each, every card shows icon + title + 1–2 line
+  description. Dashboard must be visible under "Data & Insights"
+  (regression pin; it was missing before this round).
+- **Filter behavior.** Type "dash" — only the Dashboard card should
+  remain, under just the "Data & Insights" header. Type "term" —
+  only Terminal (Shell & Agents). Clear the filter — all four
+  categories reappear.
+- **Keyboard affordance (Butterick, accepted risk).** Tab through
+  the sheet; every card should take focus in visual order. SwiftUI
+  Button default focus ring is keyboard-reachable but visually
+  subtle — verify it's still perceptible on the current theme. If
+  the focus ring is invisible against the card hover state, file a
+  follow-up for an explicit ring treatment.
+- **Microcopy consistency (Podmajersky, accepted risk).**
+  Descriptions are currently a mix of verb-first ("Run commands and
+  AI agents") and noun-first ("Live preview .md files"). All are
+  under 80 characters (pinned in tests) but the voice is
+  inconsistent. A future microcopy audit round should normalize to
+  one voice.
+- **Regression check.** The Command Palette (⌘K) pane list should
+  still show 17 entries (shared `PaneType` enum; the palette uses
+  `CommandEntryBuilder` which is unchanged by this round). The
+  sidebar's "+ Add Pane" Menu and its "Claude Code..." entry are
+  also unchanged.
+
 ### Website-rebuild item 12 — Claude Design prototype extract (aborted 2026-04-20)
 
 Autonomous round attempted `website-rebuild-12-claude-prototype-review`

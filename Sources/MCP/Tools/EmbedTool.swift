@@ -238,13 +238,18 @@ enum EmbedTool {
             case .downloading:
                 let pct = Int((info?.downloadProgress ?? 0) * 100)
                 return .init(content: [.text(text: "Embedding model is downloading (\(pct)%). Please wait and retry.", annotations: nil, _meta: nil)], isError: true)
+            case .verifying:
+                return .init(content: [.text(text: "Embedding model is verifying. Please wait and retry.", annotations: nil, _meta: nil)], isError: true)
+            case .broken:
+                let msg = info?.lastError ?? "verification failed"
+                return .init(content: [.text(text: "Embedding model verification failed: \(msg). Delete and re-install from the Models pane.", annotations: nil, _meta: nil)], isError: true)
             case .error:
                 let msg = info?.lastError ?? "unknown error"
                 return .init(content: [.text(text: "Embedding model failed to download: \(msg). The model (\(size)) will re-download on next attempt.", annotations: nil, _meta: nil)], isError: true)
             case .available:
                 // Model not yet cached — allow the download to proceed via ensureModel()
                 break
-            case .downloaded:
+            case .downloaded, .verified:
                 break // shouldn't reach here given the isReady check above
             }
         }

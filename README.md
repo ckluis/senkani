@@ -1,6 +1,6 @@
 # Senkani (閃蟹)
 
-One macOS binary, two jobs: a **native multi-pane workspace** (SwiftUI, sub-3ms renders, 17 pane types) and an **MCP intelligence layer** that cuts 50–90% of the tokens your AI spends on perception. Compression, symbol indexing, secret redaction, local validators, and Layer-3 hook interception run before the request ever leaves your machine. No workflow changes — point Claude Code at it and your session just costs less.
+One macOS binary, two jobs: a **native multi-pane workspace** (SwiftUI, sub-3ms renders, 18 pane types) and an **MCP intelligence layer** that cuts 50–90% of the tokens your AI spends on perception. Compression, symbol indexing, secret redaction, local validators, and Layer-3 hook interception run before the request ever leaves your machine. No workflow changes — point Claude Code at it and your session just costs less.
 
 ## Quick Start
 
@@ -63,7 +63,7 @@ Gemma 4 optionally enriches rationale strings (H+2a) — contained to a dedicate
 
 A horizontal canvas of panes. Each pane is a primitive type; you arrange them however makes sense for what you're doing right now, and Senkani persists the layout per project.
 
-**17 pane types:**
+**18 pane types:**
 
 - **Terminal** — SwiftTerm, configurable font size, kill/restart buttons, broadcast mode
 - **Dashboard** — multi-project portfolio: total savings, project table, feature charts, insights
@@ -71,7 +71,7 @@ A horizontal canvas of panes. Each pane is a primitive type; you arrange them ho
 - **Browser** — WKWebView embedded, localhost or any URL. Optional click-to-capture Design Mode (env-gate `SENKANI_BROWSER_DESIGN=on`, ⌥⇧D toggles) — click an element, get a fixed-schema Markdown block on the clipboard.
 - **Markdown Preview** — live render from file, updates on save
 - **Analytics** — token/cost savings with charts, persistent across restarts
-- **Model Manager** — download, verify, and delete local LLMs (Gemma, MiniLM)
+- **Model Manager** — install → verify → ready state machine for local ML (MiniLM-L6 embeddings + Gemma 4 vision tiers). One-click **Install** drives `Available → Installing N% → Installed → Verifying… → Ready`; verification loads the model into an MLX container (real fixture) and flips to `Ready` or `Verification failed` with a one-click **Re-verify**.
 - **Savings Test** — fixture bench + live session replay + scenario simulator
 - **Agent Timeline** — timeline of optimization events, interactive tool calls, and scheduled-task runs (start/end/blocked)
 - **Knowledge Base** — project knowledge entities, freshness indicators
@@ -81,6 +81,7 @@ A horizontal canvas of panes. Each pane is a primitive type; you arrange them ho
 - **Schedules** — manage recurring tasks via launchd
 - **Skill Library** — browse, install, and manage AI agent skills
 - **Sprint Review** — GUI counterpart to `senkani learn review`: accept/reject staged compound-learning proposals (filter rules, context docs, instruction patches, workflow playbooks) plus a stale-applied section mirroring the quarterly audit
+- **Ollama** — first-class local-LLM launcher: availability-gated, per-pane default-model selector, same MCP env injection terminal panes get. Header **download** button opens a curated-catalog drawer: pick from 5 LLMs (llama3.1:8b, qwen2.5-coder:7b, deepseek-r1:7b, mistral:7b, gemma2:2b), each row discloses size before the pull click and streams `ollama pull` progress into the UI. Install CTA when the daemon isn't running.
 
 **⌘K command palette** opens everything: new panes, themes, actions. Search-as-you-type with category grouping.
 
@@ -166,7 +167,7 @@ Numbers from the built-in benchmark suite (`senkani bench`):
 | **Bundle** | Core, Filter, Indexer | `BundleComposer` — budget-bounded repo-snapshot composition for `senkani_bundle` |
 | **HookRelay** | — | Zero-dep hook relay library shared by senkani-hook binary and app's --hook mode |
 | **CLI** | Core, Filter, Indexer, Bench | 18 commands: exec, search, bench, doctor, grammars, kb, eval, learn, init, … |
-| **SenkaniApp** | All + SwiftTerm | SwiftUI workspace: 17 pane types, multi-project, ⌘K palette, dashboard, menu bar |
+| **SenkaniApp** | All + SwiftTerm | SwiftUI workspace: 18 pane types, multi-project, ⌘K palette, dashboard, menu bar |
 
 ---
 

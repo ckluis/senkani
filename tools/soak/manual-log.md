@@ -12,6 +12,192 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Models pane: install → verify state machine (shipped 2026-04-20)
+
+Round 4 of the `ollama-pane-discovery-models-bundle` umbrella. The Core
+state machine is fully unit-tested with fake handlers + a planted HF
+snapshot (see `Tests/SenkaniTests/ModelManagerInstallTests.swift`, 7
+tests). What unit tests CANNOT cover: the MCP-registered verification
+handler that calls `EmbedTool.engine.ensureModel()` /
+`VisionTool.engine.ensureModel()` — that path pulls ~90MB–12GB from
+HuggingFace and loads the real MLX `ModelContainer`. These soak steps
+are the gate.
+
+- **Happy path — MiniLM-L6.** Fresh install (delete
+  `~/Documents/huggingface/models/sentence-transformers/all-MiniLM-L6-v2`
+  first). Open the Models pane → click **Install** on MiniLM-L6.
+  Expected: badge progresses `Available → Installing N% → Installed
+  → Verifying… → Ready` with the linear progress bar filling during
+  `Installing`. `senkani doctor` should afterwards print
+  `✓ MiniLM-L6 Embeddings: verified`.
+- **Happy path — Gemma 4 E2B** (lightest vision tier, ≥4GB RAM).
+  Same flow. Expected: progress bar + auto-verify; `Ready` badge +
+  trash button once the MLX container loads cleanly.
+- **Delete + re-install round-trip.** On a verified model, click
+  the trash icon. Expected: confirmation alert with `(N MB freed)`
+  → click **Delete** → badge returns to `Available`, disk usage in
+  the header drops. Click **Install** again → full state progression
+  reaches `Ready`. Cache directory exists again on disk.
+- **Failed verify retry.** Manually corrupt the config
+  (`echo "{}" > ~/Documents/huggingface/models/<repo>/config.json`
+  while `Ready`). Restart the app. Expected: `reconcileWithDisk`
+  keeps it at `Downloaded` (config parses — the integrity check
+  passes). Click **Re-verify** from the Ollama pane row (only shown
+  when state is `broken` — to force `broken`, replace a weight file
+  with zeros while in `Ready`; the MLX `ensureModel()` call should
+  throw on weight-load). Expected: badge flips to
+  `Verification failed`; the orange re-verify arrow appears; a
+  second delete clears + re-install restores.
+- **Offline install.** With Wi-Fi off, click **Install** on an
+  un-cached model. Expected: badge flips to `Error` within a few
+  seconds; the `lastError` copy in the alert banner is a network
+  message. `senkani doctor` prints
+  `✗ <model>: install error — <error>`.
+
+**Carry-over: pre-existing URLProtocol-mock race (accepted risk).**
+`MockURLProtocol.stubs` is `nonisolated(unsafe) static var [String: Stub]`
+mutated from parallel swift-testing contexts. `swift test` on a clean
+tree drops 3–8 flaky failures in
+`RemoteRepoClient — network paths (URLProtocol stub)` and
+`Bundle remote — URLProtocol paths` on busy CI workers. Running those
+filters alone with `--filter RepoNetworkPath` shows the same races
+(different tests fail depending on scheduling). NOT caused by this
+round — grep shows the `@unchecked` storage pre-dates 2026-04. Fix:
+wrap `stubs` in an `NSLock` or a `@_spi(Experimental) nonisolated(safe)`
+actor. Left out of scope for this round; file a new backlog item for
+an isolated fix.
+
+### Ollama: curated LLM catalog + click-to-pull drawer (shipped 2026-04-20)
+
+Round 3 of the `ollama-pane-discovery-models-bundle` umbrella. Unit
+tests pin the pure-Foundation layer (curated-list invariants, pull
+state machine, `ollama pull` output parser, `ollama list` tabular
+parser, digest extraction, argv gating). The subprocess path
+(`OllamaModelDownloadController`'s `Process()` spawn) is NOT
+unit-tested — real `ollama` CLI isn't on the CI runner. These soak
+steps are the gate.
+
+- **Drawer opens from the pane header.** With Ollama.app running,
+  add an Ollama pane (gallery or Welcome). Expected: header shows
+  a `square.and.arrow.down` icon next to the `connected` dot.
+  Click it: a 520×420 sheet appears with 5 model rows
+  (Llama 3.1 8B, Qwen2.5 Coder 7B, DeepSeek-R1 7B, Mistral 7B,
+  Gemma 2 2B). Each row shows name + tag + 1-line use-case +
+  size. The row whose tag matches the pane's current default has
+  an orange **default** chip.
+- **Pull button discloses size BEFORE the click (Podmajersky).**
+  Every un-pulled row's button reads **Pull N.N GB** — never a
+  plain "Pull". Rows with models already on disk show
+  **Current** (disabled) or **Use** (sets as default).
+- **Click-to-pull streams progress.** On a row you haven't pulled,
+  click the **Pull N.N GB** button. Expected: button swaps to
+  **Cancel**, progress-line swaps from the size to a linear
+  ProgressView + `XX% N.N GB`. Monitor Activity Monitor → an
+  `ollama` child subprocess of SenkaniApp appears.
+  On completion (~minutes depending on size + bandwidth), row
+  flips to an **installed · <digest>** line with a green seal
+  icon, button becomes **Use**.
+- **Cancel mid-pull terminates the subprocess.** Start a pull,
+  wait until progress reaches ≥5%, click **Cancel**. Expected:
+  button returns to **Pull N.N GB**, progress-line returns to
+  just the size, subprocess exits (gone from Activity Monitor
+  within a second). `ollama list` at this point must NOT show the
+  tag (partial pull got cleaned up).
+- **Pulled digest matches `ollama list`.** After a successful
+  pull, open Terminal.app and run `ollama list`. The digest
+  shown in the drawer row (first 12 hex chars) must match the
+  `ID` column for that tag. (This proves the parser + fallback
+  list-parse chain wired correctly.)
+- **Absent-state deep-links instead of pulling.** Quit Ollama.app,
+  reopen the drawer (either via the pane header icon or by
+  opening a fresh pane). Expected: every row's button reads
+  **Install Ollama** (no size disclosed — pull is unreachable).
+  Click one: the default browser opens `https://ollama.com/download`.
+- **"Use" swaps the default + restarts chat.** With two or more
+  tags pulled, click **Use** on a row that isn't the current
+  default. Expected: default chip moves to the new row, the
+  drawer stays open, and closing the drawer shows the pane's
+  terminal has restarted (chat history cleared; the new model tag
+  is the running session). The header model Menu also reflects
+  the new selection.
+- **Pull error surfaces cleanly.** Edge test: disconnect
+  networking, start a pull. Expected: row state flips to
+  **failed** with an orange warning icon + the truncated
+  `ollama pull` error message (e.g. "Error: connection refused").
+  Button returns to **Pull N.N GB** so the user can retry once
+  connectivity is back.
+
+**Environmental note (2026-04-20, FIXED in `filewatcher-fsevents-uaf`):**
+The full-suite `swift test` flake originally filed as "SIGTRAP
+(signal code 5) in the tree-sitter / MLX area" was misdiagnosed
+on both counts. The actual signal was **11 (SIGSEGV)**, and the
+faulting subsystem was the FSEvents `FileWatcher` — not
+tree-sitter and not MLX. The crash got buffered into a neighbour
+test's stdout line, which is what made it look like the parser
+had killed the process; targeted `--filter` runs reordered the
+test schedule and avoided the race entirely, which is why
+`--filter Ollama` and `--filter PaneGallery` always stayed green.
+Root cause was an `Unmanaged.passUnretained` use-after-free in
+`Sources/Indexer/FileWatcher.swift::start` — FSEvents could fire
+a callback on the watcher's serial queue while the watcher was
+mid-`deinit`. Fix details + reproduction tests live under the
+`filewatcher-fsevents-uaf` entry in `spec/autonomous-backlog.yaml`.
+Post-fix: 6 consecutive `swift test --no-parallel` runs clean,
+zero SIGSEGV, zero `non-zero retain count` warnings.
+
+### Ollama: first-class `.ollamaLauncher` PaneType (shipped 2026-04-20)
+
+Round 2 of the `ollama-pane-discovery-models-bundle` umbrella. Unit
+tests pin the support layer (tag validator, launch-command builder,
+resolve-with-fallback, default-tag invariants, gallery registration,
+closed-port availability probe), but everything SwiftUI and
+everything involving the real ollama daemon is manual.
+
+- **Absent-state CTA.** Quit Ollama.app. Open SenkaniApp → add an
+  Ollama pane (gallery → **AI & Models** → Ollama OR Welcome card
+  → Start Ollama when no panes exist). Expected: after ~0.5 s the
+  pane shows a `cpu` icon, `Ollama isn't running` headline, an
+  orange **Get Ollama** button (opens https://ollama.com/ in the
+  default browser), and a **Retry** button. Retry re-probes without
+  tearing the pane down.
+- **Connected state.** Start Ollama.app, wait for the tray icon to
+  show active. In the pane, hit **Retry** (or add a fresh pane).
+  Expected: `connected` status dot flips green, the terminal body
+  spawns `ollama run llama3.1:8b` (the default tag), and the pane
+  header shows the selected tag in a monospaced menu button with
+  a dropdown caret.
+- **Model switch restarts the session.** From the pane's header
+  menu pick `gemma2:2b`. Expected: the running `ollama run …`
+  subprocess tears down and a new one spawns with the new tag;
+  the menu shows a checkmark next to `gemma2:2b`; pane context
+  label in the outer header updates to the new tag.
+- **Add-to-existing-project path.** Open an existing project with
+  panes already present. Sidebar **+** → **AI & Models → Ollama**.
+  Expected: pane lands on the active workstream like any other.
+- **Persistence.** Pick a non-default tag, quit Senkani, relaunch.
+  Expected: the pane reopens with your chosen tag, not the default.
+- **MCP env passthrough (manual spot-check; formal verification is
+  sub-item `mcp-in-ollama-pane-verify`).** In the running pane's
+  terminal, hit Ctrl-D to drop back to a shell if ollama exits,
+  then `env | grep SENKANI_`. Expected: `SENKANI_PANE_ID`,
+  `SENKANI_PROJECT_ROOT`, `SENKANI_WORKSPACE_SLUG`,
+  `SENKANI_PANE_SLUG=ollamaLauncher`, `SENKANI_OLLAMA_MODEL=<tag>`
+  are all set. If `SENKANI_PANE_SLUG` is missing in the ollama
+  subprocess specifically, file into sub-item `mcp-in-ollama-pane-verify`.
+- **Welcome card vs gallery parity.** Delete all panes (fresh
+  project), click the **Start Ollama** card on the Welcome
+  screen. Expected: lands a first-class Ollama pane with the
+  default tag — identical to the gallery path. The old
+  `ollama run llama3` hardcoding should NOT appear anywhere
+  (grep confirms at commit time, but the visual confirmation is
+  here).
+- **Accepted-risk follow-up.** Pane-open UI telemetry is NOT
+  recorded in `token_events` this round (bounded-context gate;
+  see the CHANGELOG for the reasoning). If you want a signal that
+  the pane is being used before the dedicated UI telemetry path
+  lands, count `~/.senkani/panes/*.env` files with
+  `SENKANI_PANE_SLUG=ollamaLauncher` in them.
+
 ### Pane gallery: categorized add-pane sheet (shipped 2026-04-20)
 
 Round 1 of the `ollama-pane-discovery-models-bundle` umbrella. Unit

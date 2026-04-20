@@ -45,6 +45,27 @@ public struct MCPServerRunner {
             }
         }
 
+        // Register verification handler. Running `ensureModel()` loads the
+        // freshly-installed model into an MLX ModelContainer — if the weights
+        // are corrupt or the config is incompatible this will throw, which
+        // ModelManager converts to `.broken`. This IS the "tiny inference
+        // fixture" referenced in the install spec — the container load
+        // exercises the actual runtime path a tool would use.
+        ModelManager.shared.registerVerificationHandler { modelId in
+            switch modelId {
+            case EmbedEngine.modelId:
+                _ = try await EmbedTool.engine.ensureModel()
+            case let id where ModelManager.visionModelIds.contains(id):
+                _ = try await VisionTool.engine.ensureModel()
+            default:
+                throw NSError(
+                    domain: "dev.senkani.MCPServer",
+                    code: 7,
+                    userInfo: [NSLocalizedDescriptionKey: "Unknown model ID for verification: \(modelId)"]
+                )
+            }
+        }
+
         let baseInstructions = """
             Senkani is a token compression layer. Use senkani_read instead of reading files directly \
             for automatic compression and caching. senkani_read returns a compact outline by default — \

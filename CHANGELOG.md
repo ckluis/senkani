@@ -6,6 +6,195 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 20 — Models pane: install → verify state machine (`models-page-installable`)
+- `models-page-installable` closes round 4 of the
+  `ollama-pane-discovery-models-bundle` umbrella. The Models pane's
+  install buttons now drive the full download→install→verify flow
+  end-to-end for senkani-internal ML (MiniLM-L6 embeddings + the 3
+  Gemma 4 vision tiers). Clicking **Install** progresses through
+  `Available → Installing N% → Installed → Verifying… → Ready`;
+  failures stop at `Error` (download) or `Verification failed`
+  (verify) with a **Re-verify** action that retries without
+  re-downloading.
+- `ModelStatus` (Sources/Core/ModelManager.swift:7) gains
+  `.verifying`, `.verified`, and `.broken`. `isReady` treats both
+  `.downloaded` (integrity unconfirmed) and `.verified` (fixture
+  passed) as ready so existing MCP gates keep working.
+- `ModelManager.download(modelId:)` now wraps the registered
+  handler: on throw it `markError`s the model with
+  `error.localizedDescription` instead of letting the exception
+  escape into UI without state; on success it auto-invokes
+  `verify(modelId:)` so "install → verify" is one call for the UI
+  (Jansen gate — no second click to verify).
+- New `verify(modelId:)` + `registerVerificationHandler(_:)` pair,
+  parallel to the existing `download(modelId:)` /
+  `registerDownloadHandler(_:)` layering. When no handler is
+  registered, Core falls back to an integrity-only default:
+  re-check `config.json` + a weight file are on disk and
+  `config.json` parses as a JSON dict. MCP layer registers an MLX
+  handler that calls `EmbedTool.engine.ensureModel()` /
+  `VisionTool.engine.ensureModel()` — loading the freshly-installed
+  model into a `ModelContainer` IS the "tiny inference fixture",
+  since a corrupt weight file or incompatible config blows up at
+  container load.
+- `senkani doctor` check #5 reads every registered model's status
+  directly — `.verified: "verified"`, `.downloaded: "installed (not
+  yet verified)"`, `.broken: "verification failed — <error>"` (with
+  per-model lastError captured), `.error: "install error — <error>"`,
+  `.available: "not installed"`. Failures (broken / error) now fail
+  doctor with an actionable line instead of silently skipping.
+- `ModelCardView` renders distinct badge colors and action buttons
+  per state: Installing (orange %), Verifying… (orange sparkles),
+  Ready (green check + trash), Verification failed (orange warning
+  + re-verify + trash). Delete still wipes the cache dir and resets
+  to `.available` so re-install round-trips cleanly.
+- 7 new tests in `ModelManagerInstallTests.swift` drive the state
+  machine with fake handlers + planted HF snapshots: happy path,
+  download fail, verify fail keeps files on disk, delete-and-
+  reinstall round-trip, `.broken → verify retry → .verified`,
+  per-model doctor readout (three models in three different
+  states), missing-handler guard. Test count: 1577 → 1584 (+7).
+- **Accepted risks**: real-machine verification of the MLX
+  `ensureModel` verify path is deferred to the soak log — the
+  state machine IS unit-tested, but actually running `ensureModel`
+  on a freshly-downloaded model requires network + multi-GB
+  download and can't run in CI. See `tools/soak/manual-log.md`.
+  Pre-existing `MockURLProtocol.stubs` race (3 flaky URLProtocol
+  tests under parallel runs) is **not** introduced by this round —
+  documented under accepted-risk in manual-log.
+
+### April 20 — Ollama: curated LLM catalog + click-to-pull drawer
+- `ollama-model-curation` closes round 3 of the
+  `ollama-pane-discovery-models-bundle` umbrella. The Ollama pane now
+  has a settings drawer (header → download icon) that shows a curated
+  list of 5 user-facing LLMs — each row discloses its size BEFORE the
+  click and kicks off an out-of-process `ollama pull` that streams
+  progress into the UI (Schneier: explicit click-to-pull, no
+  auto-pull; Podmajersky: size disclosed in the button copy).
+- New `Sources/Core/OllamaModelCatalog.swift` is the pure-Foundation
+  layer: `OllamaCuratedModel` (tag + displayName + useCase + sizeGB +
+  `pullButtonCopy` that renders `"Pull 4.7 GB"`), the curated list
+  (llama3.1:8b, qwen2.5-coder:7b, deepseek-r1:7b, mistral:7b,
+  gemma2:2b), `OllamaPullState` (`.notPulled` / `.pulling(progress)`
+  / `.pulled(digest?)` / `.failed(message)`),
+  `OllamaPullOutputParser` (incremental line-by-line parser for
+  `ollama pull` stdout — progress monotonic, digest captured,
+  Error line flips to failed), `OllamaInstalledListParser` (parses
+  `ollama list` tabular output → `[(tag, digest)]`), and
+  `OllamaPullCommand` (argv builder gated by the existing
+  shell-injection validator). Evans' bounded-context gate: this
+  catalog is STRICTLY separate from `ModelManager`, which owns
+  senkani-internal ML — two surfaces, two lifecycles.
+- New `SenkaniApp/Models/OllamaModelDownloadController.swift`
+  (~@MainActor `ObservableObject`, ~180 LOC) owns per-tag state +
+  the `ollama pull` `Process()` references. Spawns via
+  `PATH`-resolved ollama binary (with Homebrew + direct-DMG
+  fallback paths), streams stdout through a `LineBuffer` that
+  splits on `\n` and `\r` so the parser sees complete progress
+  frames, and on exit drains trailing output through the parser
+  (catching a late `success` / error line). On success falls back
+  to `ollama list` when the parser didn't pick up a digest.
+  `cancelPull(tag:)` `.terminate()`s the subprocess, clears
+  state back to `.notPulled`.
+- New `SenkaniApp/Views/OllamaModelsDrawer.swift` renders the
+  curated list as a 520×420 sheet: each row shows displayName +
+  tag + use-case + size/progress line + action button. Action
+  resolves against daemon availability: absent → **Install
+  Ollama** deep-link to ollama.com/download; present + not-pulled
+  → **Pull N.N GB**; present + pulling → **Cancel**; present +
+  pulled → **Use** / **Current** (sets the pane's default model).
+  Swapping the default restarts the terminal subprocess via the
+  pane's existing `restartToken` so chat reflects the new model
+  without the user reopening the pane.
+- `OllamaLauncherPane` gets a `square.and.arrow.down` icon in the
+  pane header next to the connected indicator — opens the drawer
+  as a sheet. The existing header model-picker Menu still works
+  for quick-switching among already-pulled tags.
+- `OllamaLauncherSupport.defaultModelTags` now delegates to
+  `OllamaModelCatalog.curatedTags` so the selector list + pull
+  surface + pane default all single-source off the catalog. Legacy
+  callers (header Menu, pane-restore fallback) continue to work
+  unchanged.
+- 21 new tests under `@Suite("Ollama Model Catalog")`: curated-list
+  invariants (size ≥5, all tags validate, no dupes, first entry
+  doubles as default), button-copy discloses size (Podmajersky
+  gate), use-case copy ≤50 chars (Handley gate), parser state
+  machine from .notPulled through .pulling(p) to .pulled(digest)
+  on canonical transcript, progress monotonicity, error-line
+  flip-to-failed, junk-input doesn't move state, percent
+  extraction across 1/2/3-digit values, layer-digest extraction
+  skips the `manifest` keyword, pull/list argv gate invalid tags,
+  `ollama list` tabular-output parse + malformed-row rejection,
+  parser freshness on cancel-and-restart, state classification
+  helpers.
+- Test count: 1554 → 1575 (+21).
+- **Accepted risks** (documented in `tools/soak/manual-log.md`):
+  the `OllamaModelDownloadController`'s `Process()` path is NOT
+  unit-tested (would require a real `ollama` binary on the CI
+  runner) — all state-machine + parsing logic driving it IS
+  tested, and soak-log adds an end-to-end manual validation
+  entry. Concurrent pulls are allowed at the controller level but
+  the drawer exposes one button per row, so the common path is
+  one-at-a-time. Custom-model (non-curated) tags are a FUTURE
+  surface — this round ships the curated list only.
+
+### April 20 — Ollama: first-class `.ollamaLauncher` PaneType
+- `ollama-pane-first-class` closes round 2 of the
+  `ollama-pane-discovery-models-bundle` umbrella. The Welcome screen's
+  hardcoded `onStart("Ollama", "ollama run llama3")` string is gone;
+  the Ollama card (and the new gallery entry) now open a dedicated
+  pane instead of bolting ollama semantics onto the Terminal pane
+  (Torvalds' "category error" gate, Evans' "senkani ML ≠ user LLMs"
+  bounded-context gate).
+- New `Sources/Core/OllamaLauncherSupport.swift` holds the testable
+  layer: a 4-tag default selector list (`llama3.1:8b`,
+  `qwen2.5-coder:7b`, `mistral:7b`, `gemma2:2b`), a tag validator
+  that rejects shell metacharacters (Schneier's shell-injection
+  gate), a `launchCommand` builder, and `resolveModelTag` for the
+  persistence-fallback path. `OllamaAvailability.detect` is extracted
+  from `WelcomeView` so the pane and the Welcome card share one
+  probe.
+- New `SenkaniApp/Views/OllamaLauncherPane.swift` renders the pane:
+  compact model-picker header, tri-state availability gate
+  (detecting → absent-CTA with "Get Ollama" + "Retry" buttons →
+  connected terminal body), and delegates to `TerminalViewRepresentable`
+  for the subprocess. Same MCP env bundle terminal panes get
+  (`SENKANI_PANE_ID`, `SENKANI_PROJECT_ROOT`, `SENKANI_WORKSPACE_SLUG`,
+  `SENKANI_PANE_SLUG`, FCSIT aliases) plus a new `SENKANI_OLLAMA_MODEL`
+  hint for the hook binary.
+- `PaneType.ollamaLauncher` added (18 types now). `SenkaniTheme`
+  gains accent (warm orange `#ee7f31`), `cpu.fill` icon, description,
+  displayName. `PaneContainerView.paneBody` routes the new case.
+- `AddPaneSheet.idToType` + `ContentView.addPaneByTypeId` map the new
+  string ID; `PaneGalleryBuilder` lists "Ollama" in **AI & Models**
+  (category now 5 entries, still ≤6).
+- `PaneModel.ollamaDefaultModel` persists the user's selected tag;
+  `WorkspaceStorage` round-trips it (field is optional so old JSON
+  files migrate silently). Invalid/missing values snap to the
+  package default on restore.
+- WelcomeView's `detectOllama` now delegates to the Core probe so a
+  single code path answers both the Welcome card and the pane's
+  absent-CTA gate.
+- 14 new tests under `@Suite("Ollama Launcher Support")`: default-
+  tag list invariants (non-empty, first-entry == default, no dupes),
+  tag validator accepts realistic tags + rejects 14 shell-meta
+  injection attempts + empty/oversized, launch-command shape + nil
+  on invalid, `resolveModelTag` fallback matrix (nil/empty/invalid/
+  valid), gallery registration + description length, availability
+  probe against a closed port. `PaneGalleryTests.allEntriesCoversAll17PaneTypes`
+  renamed to `allEntriesCoversAll18PaneTypes`.
+- Test count: 1540 → 1554 (+14).
+- **Accepted risks** (documented in `tools/soak/manual-log.md`):
+  pane-open telemetry to `token_events` NOT wired this round — the
+  backlog proposed overloading token_events with a UI-open event,
+  but that's the exact bounded-context merger Evans' gate at
+  umbrella time was telling us to avoid (token_events is for LLM
+  tool-call telemetry). Deferred to a follow-up round that adds a
+  dedicated UI-telemetry path. Click-to-pull UX for the curated
+  model list also deferred — that's sub-item `ollama-model-curation`.
+  For now, `ollama run <tag>` still auto-pulls on first launch
+  (ollama's default behavior).
+
 ### April 20 — Pane gallery: categorize 17 panes + fix missing Dashboard
 - `pane-add-gallery-redesign` closes round 1 of the
   `ollama-pane-discovery-models-bundle` umbrella (escalated to the

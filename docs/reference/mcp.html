@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Reference — senkani</title>
-<meta name="description" content="Reference for every MCP tool, CLI command, option, pane type.">
+<title>MCP tools — reference</title>
+<meta name="description" content="Reference for all 19 senkani MCP tools.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -17,63 +17,61 @@
   <button class="topnav-hamburger" aria-label="Open navigation menu" aria-expanded="false" aria-controls="topnav-links"><span></span><span></span><span></span></button>
   <div class="topnav-links" id="topnav-links">
     <a href="../../docs/what-is-senkani.html">What is it?</a>
-    <a href="../../docs/concepts/">Concepts</a>
-    <a href="../../docs/reference/">Reference</a>
-    <a href="../../docs/guides/">Guides</a>
+    <a href="../../docs/concepts.html">Concepts</a>
+    <a href="../../docs/reference.html">Reference</a>
+    <a href="../../docs/guides.html">Guides</a>
     <a href="../../docs/status.html">Status</a>
     <div class="topnav-search"><input type="search" id="site-search" placeholder="Search · /" aria-label="Search the site"></div>
     <a href="https://github.com/ckluis/senkani" class="btn-nav">GitHub →</a>
   </div>
 </nav>
 <main id="main" class="wiki-layout">
-  <aside class="wiki-nav" aria-label="Reference navigation">
+  <aside class="wiki-nav" aria-label="MCP tools navigation">
     <div class="wiki-nav-group">
       <h4>Reference</h4>
       <ul>
-        <li><a href="../../docs/reference/" class="active">All reference</a></li>
-        <li><a href="../../docs/reference/mcp/">MCP tools (19)</a></li>
-        <li><a href="../../docs/reference/cli/">CLI commands (19)</a></li>
-        <li><a href="../../docs/reference/options/">Options &amp; env</a></li>
-        <li><a href="../../docs/reference/panes/">Panes (17)</a></li>
+        <li><a href="../../docs/reference.html">All reference</a></li>
+        <li><a href="../../docs/reference/mcp.html">MCP tools index</a></li>
+        <li><a href="../../docs/reference/cli.html">CLI commands</a></li>
+        <li><a href="../../docs/reference/options.html">Options &amp; env</a></li>
+        <li><a href="../../docs/reference/panes.html">Panes</a></li>
       </ul>
     </div>
     <div class="wiki-nav-group">
-      <h4>Start</h4>
+      <h4>MCP tools (19)</h4>
       <ul>
-        <li><a href="../../docs/what-is-senkani.html">What is it?</a></li>
-        <li><a href="../../docs/concepts/">Concepts</a></li>
-        <li><a href="../../docs/guides/install.html">Install</a></li>
+        <li><a href="../../docs/reference/mcp/senkani_read.html"><code>senkani_read</code></a></li>
+        <li><a href="../../docs/reference/mcp/senkani_exec.html"><code>senkani_exec</code></a></li>
+        <li><a href="../../docs/reference/mcp/senkani_search.html"><code>senkani_search</code></a></li>
+        <li><a href="../../docs/reference/mcp/senkani_fetch.html"><code>senkani_fetch</code></a></li>
+        <li><a href="../../docs/reference/mcp/senkani_explore.html"><code>senkani_explore</code></a></li>
+        <li><a href="../../docs/reference/mcp/senkani_deps.html"><code>senkani_deps</code></a></li>
+        <li><a href="../../docs/reference/mcp/senkani_outline.html"><code>senkani_outline</code></a></li>
+        <li><a href="../../docs/reference/mcp/senkani_validate.html"><code>senkani_validate</code></a></li>
+        <li><a href="../../docs/reference/mcp/senkani_parse.html"><code>senkani_parse</code></a></li>
+        <li><a href="../../docs/reference/mcp/senkani_embed.html"><code>senkani_embed</code></a></li>
+        <li><a href="../../docs/reference/mcp/senkani_vision.html"><code>senkani_vision</code></a></li>
+        <li><a href="../../docs/reference/mcp/senkani_watch.html"><code>senkani_watch</code></a></li>
+        <li><a href="../../docs/reference/mcp/senkani_web.html"><code>senkani_web</code></a></li>
+        <li><a href="../../docs/reference/mcp/senkani_pane.html"><code>senkani_pane</code></a></li>
+        <li><a href="../../docs/reference/mcp/senkani_session.html"><code>senkani_session</code></a></li>
+        <li><a href="../../docs/reference/mcp/senkani_knowledge.html"><code>senkani_knowledge</code></a></li>
+        <li><a href="../../docs/reference/mcp/senkani_version.html"><code>senkani_version</code></a></li>
+        <li><a href="../../docs/reference/mcp/senkani_bundle.html"><code>senkani_bundle</code></a></li>
+        <li><a href="../../docs/reference/mcp/senkani_repo.html"><code>senkani_repo</code></a></li>
       </ul>
     </div>
   </aside>
   <article class="wiki-main">
     <nav class="crumb" aria-label="Breadcrumb">
-      <a href="../../">Home</a> <span class="sep">›</span> <span class="here">Reference</span>
+      <a href="../../">Home</a> <span class="sep">›</span>
+      <a href="../../docs/reference.html">Reference</a> <span class="sep">›</span>
+      <span class="here">MCP tools</span>
     </nav>
     <span class="quadrant reference">Reference · Information</span>
-    <h1 class="page-title">Reference</h1>
-    <p class="lede">Every MCP tool, CLI command, option, and pane type has its own page. This index links to every reference section. Bookmark any URL.</p>
+    <h1 class="page-title">MCP tools</h1>
+    <p class="lede">19 tools that sit between your agent and your filesystem. Each tool has its own page with inputs, outputs, examples, security notes, and source pointers. Pick any.</p>
 
-    <div class="card-grid">
-      <a class="card" href="../../docs/reference/mcp/">
-        <h3>MCP tools <span class="tag tag-orange" style="margin-left:8px;">19</span></h3>
-        <p>Every <code>senkani_*</code> tool your agent can call — read, exec, search, fetch, explore, web, knowledge, bundle, repo, and more.</p>
-      </a>
-      <a class="card" href="../../docs/reference/cli/">
-        <h3>CLI commands <span class="tag tag-orange" style="margin-left:8px;">19</span></h3>
-        <p>The same filter and index, scriptable from the shell: <code>senkani exec</code>, <code>senkani search</code>, <code>senkani bench</code>, <code>senkani learn</code>, <code>senkani kb</code>, and more.</p>
-      </a>
-      <a class="card" href="../../docs/reference/options/">
-        <h3>Options &amp; env</h3>
-        <p>FCSIT per-pane toggles, budget caps, security env vars, web SSRF overrides, compound-learning thresholds. Every <code>SENKANI_*</code> variable documented.</p>
-      </a>
-      <a class="card" href="../../docs/reference/panes/">
-        <h3>Panes <span class="tag tag-orange" style="margin-left:8px;">17</span></h3>
-        <p>17 workspace pane types: Terminal, Code Editor, Browser, Analytics, Agent Timeline, Sprint Review, Knowledge Base, and more.</p>
-      </a>
-    </div>
-
-    <h2 style="margin-top:32px;">All MCP tools</h2>
     <div class="listing">
       <div class="listing-row head">
         <div>Tool</div><div>What it does</div><div>Savings</div><div>Status</div>
@@ -99,12 +97,10 @@
       <a class="listing-row" href="../../docs/reference/mcp/senkani_repo.html"><div class="listing-name">senkani_repo</div><div class="listing-desc">Query any public GitHub repo without cloning. Actions: tree, file, readme, search.</div><div class="listing-savings">query-level</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
     </div>
 
-    <h2 style="margin-top:32px;">Next</h2>
-    <ul>
-      <li><a href="../../docs/reference/cli/">Browse CLI commands →</a></li>
-      <li><a href="../../docs/reference/options/fcsit.html">Start with FCSIT toggles</a> (the five per-pane feature switches).</li>
-      <li><a href="../../docs/concepts/three-layer-stack.html">Understand the three-layer stack</a>.</li>
-    </ul>
+    <div class="callout callout-info">
+      <span class="callout-icon">⚐</span>
+      <div>All tools auto-register via <a href="../../docs/reference/cli/senkani-init.html"><code>senkani init</code></a>. Non-Senkani terminals never see the tools — activation is gated on <code>SENKANI_PANE_ID</code>, which the app injects only into managed panes.</div>
+    </div>
   </article>
 </main>
 <footer class="site-foot">
@@ -113,8 +109,8 @@
       <div class="foot-wordmark">sen<span class="accent">kani</span></div>
       <p class="foot-tagline"><span lang="zh">閃蟹</span> — "fast claw." A native macOS binary written in Swift.</p>
     </div>
-    <div class="foot-col"><h4>Product</h4><ul><li><a href="../../docs/what-is-senkani.html">What is it?</a></li><li><a href="../../docs/concepts/">Concepts</a></li><li><a href="../../docs/reference/">Reference</a></li><li><a href="../../docs/guides/">Guides</a></li><li><a href="../../docs/status.html">Status</a></li></ul></div>
-    <div class="foot-col"><h4>Reference</h4><ul><li><a href="../../docs/reference/mcp/">MCP tools</a></li><li><a href="../../docs/reference/cli/">CLI commands</a></li><li><a href="../../docs/reference/options/">Options &amp; env</a></li><li><a href="../../docs/reference/panes/">Panes</a></li><li><a href="../../docs/changelog.html">Changelog</a></li></ul></div>
+    <div class="foot-col"><h4>Product</h4><ul><li><a href="../../docs/what-is-senkani.html">What is it?</a></li><li><a href="../../docs/concepts.html">Concepts</a></li><li><a href="../../docs/reference.html">Reference</a></li><li><a href="../../docs/guides.html">Guides</a></li><li><a href="../../docs/status.html">Status</a></li></ul></div>
+    <div class="foot-col"><h4>Reference</h4><ul><li><a href="../../docs/reference/mcp.html">MCP tools</a></li><li><a href="../../docs/reference/cli.html">CLI commands</a></li><li><a href="../../docs/reference/options.html">Options &amp; env</a></li><li><a href="../../docs/reference/panes.html">Panes</a></li><li><a href="../../docs/changelog.html">Changelog</a></li></ul></div>
     <div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li><li><a href="../../docs/guides/install.html">Install</a></li><li><a href="../../docs/guides/troubleshooting.html">Troubleshooting</a></li><li><a href="../../docs/about.html">About &amp; license</a></li></ul></div>
   </div>
   <div class="foot-meta">

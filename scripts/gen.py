@@ -42,9 +42,9 @@ HEAD = '''<!DOCTYPE html>
   <button class="topnav-hamburger" aria-label="Open navigation menu" aria-expanded="false" aria-controls="topnav-links"><span></span><span></span><span></span></button>
   <div class="topnav-links" id="topnav-links">
     <a href="__BASE__docs/what-is-senkani.html">What is it?</a>
-    <a href="__BASE__docs/concepts/">Concepts</a>
-    <a href="__BASE__docs/reference/">Reference</a>
-    <a href="__BASE__docs/guides/">Guides</a>
+    <a href="__BASE__docs/concepts.html">Concepts</a>
+    <a href="__BASE__docs/reference.html">Reference</a>
+    <a href="__BASE__docs/guides.html">Guides</a>
     <a href="__BASE__docs/status.html">Status</a>
     <div class="topnav-search"><input type="search" id="site-search" placeholder="Search · /" aria-label="Search the site"></div>
     <a href="https://github.com/ckluis/senkani" class="btn-nav">GitHub →</a>
@@ -58,8 +58,8 @@ FOOT = '''<footer class="site-foot">
       <div class="foot-wordmark">sen<span class="accent">kani</span></div>
       <p class="foot-tagline"><span lang="zh">閃蟹</span> — "fast claw." A native macOS binary written in Swift.</p>
     </div>
-    <div class="foot-col"><h4>Product</h4><ul><li><a href="__BASE__docs/what-is-senkani.html">What is it?</a></li><li><a href="__BASE__docs/concepts/">Concepts</a></li><li><a href="__BASE__docs/reference/">Reference</a></li><li><a href="__BASE__docs/guides/">Guides</a></li><li><a href="__BASE__docs/status.html">Status</a></li></ul></div>
-    <div class="foot-col"><h4>Reference</h4><ul><li><a href="__BASE__docs/reference/mcp/">MCP tools</a></li><li><a href="__BASE__docs/reference/cli/">CLI commands</a></li><li><a href="__BASE__docs/reference/options/">Options &amp; env</a></li><li><a href="__BASE__docs/reference/panes/">Panes</a></li><li><a href="__BASE__docs/changelog.html">Changelog</a></li></ul></div>
+    <div class="foot-col"><h4>Product</h4><ul><li><a href="__BASE__docs/what-is-senkani.html">What is it?</a></li><li><a href="__BASE__docs/concepts.html">Concepts</a></li><li><a href="__BASE__docs/reference.html">Reference</a></li><li><a href="__BASE__docs/guides.html">Guides</a></li><li><a href="__BASE__docs/status.html">Status</a></li></ul></div>
+    <div class="foot-col"><h4>Reference</h4><ul><li><a href="__BASE__docs/reference/mcp.html">MCP tools</a></li><li><a href="__BASE__docs/reference/cli.html">CLI commands</a></li><li><a href="__BASE__docs/reference/options.html">Options &amp; env</a></li><li><a href="__BASE__docs/reference/panes.html">Panes</a></li><li><a href="__BASE__docs/changelog.html">Changelog</a></li></ul></div>
     <div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li><li><a href="__BASE__docs/guides/install.html">Install</a></li><li><a href="__BASE__docs/guides/troubleshooting.html">Troubleshooting</a></li><li><a href="__BASE__docs/about.html">About &amp; license</a></li></ul></div>
   </div>
   <div class="foot-meta">
@@ -335,7 +335,7 @@ MCP_TOOLS = [
         example='''{<span class="k">"tool"</span>:<span class="v">"senkani_pane"</span>,<span class="k">"args"</span>:{<span class="k">"action"</span>:<span class="v">"open"</span>,<span class="k">"pane_type"</span>:<span class="v">"Analytics"</span>}}''',
         behavior="Requires the app to be running. If the socket is absent or the app is not a managed target, returns an error.",
         security="Socket auth via `SENKANI_SOCKET_AUTH=on` requires a handshake frame matching `~/.senkani/.token` (mode 0600, rotated on start).",
-        related=[("Pane reference", "__BASE__docs/reference/panes/", "What pane types exist."),
+        related=[("Pane reference", "__BASE__docs/reference/panes.html", "What pane types exist."),
                  ("Socket auth option", "__BASE__docs/reference/options/security.html", "Enable the handshake.")],
         source="Sources/MCPServer/Tools/PaneTool.swift + SenkaniApp/IPC/"
     ),
@@ -671,11 +671,11 @@ def wiki_nav_mcp(active_slug: str) -> str:
     <div class="wiki-nav-group">
       <h4>Reference</h4>
       <ul>
-        <li><a href="__BASE__docs/reference/">All reference</a></li>
-        <li><a href="__BASE__docs/reference/mcp/">MCP tools index</a></li>
-        <li><a href="__BASE__docs/reference/cli/">CLI commands</a></li>
-        <li><a href="__BASE__docs/reference/options/">Options &amp; env</a></li>
-        <li><a href="__BASE__docs/reference/panes/">Panes</a></li>
+        <li><a href="__BASE__docs/reference.html">All reference</a></li>
+        <li><a href="__BASE__docs/reference/mcp.html">MCP tools index</a></li>
+        <li><a href="__BASE__docs/reference/cli.html">CLI commands</a></li>
+        <li><a href="__BASE__docs/reference/options.html">Options &amp; env</a></li>
+        <li><a href="__BASE__docs/reference/panes.html">Panes</a></li>
       </ul>
     </div>
     <div class="wiki-nav-group">
@@ -696,11 +696,11 @@ def wiki_nav_cli(active_slug: str) -> str:
     <div class="wiki-nav-group">
       <h4>Reference</h4>
       <ul>
-        <li><a href="__BASE__docs/reference/">All reference</a></li>
-        <li><a href="__BASE__docs/reference/mcp/">MCP tools</a></li>
-        <li><a href="__BASE__docs/reference/cli/">CLI commands index</a></li>
-        <li><a href="__BASE__docs/reference/options/">Options &amp; env</a></li>
-        <li><a href="__BASE__docs/reference/panes/">Panes</a></li>
+        <li><a href="__BASE__docs/reference.html">All reference</a></li>
+        <li><a href="__BASE__docs/reference/mcp.html">MCP tools</a></li>
+        <li><a href="__BASE__docs/reference/cli.html">CLI commands index</a></li>
+        <li><a href="__BASE__docs/reference/options.html">Options &amp; env</a></li>
+        <li><a href="__BASE__docs/reference/panes.html">Panes</a></li>
       </ul>
     </div>
     <div class="wiki-nav-group">
@@ -721,11 +721,11 @@ def wiki_nav_panes(active_slug: str) -> str:
     <div class="wiki-nav-group">
       <h4>Reference</h4>
       <ul>
-        <li><a href="__BASE__docs/reference/">All reference</a></li>
-        <li><a href="__BASE__docs/reference/mcp/">MCP tools</a></li>
-        <li><a href="__BASE__docs/reference/cli/">CLI commands</a></li>
-        <li><a href="__BASE__docs/reference/options/">Options &amp; env</a></li>
-        <li><a href="__BASE__docs/reference/panes/">Panes index</a></li>
+        <li><a href="__BASE__docs/reference.html">All reference</a></li>
+        <li><a href="__BASE__docs/reference/mcp.html">MCP tools</a></li>
+        <li><a href="__BASE__docs/reference/cli.html">CLI commands</a></li>
+        <li><a href="__BASE__docs/reference/options.html">Options &amp; env</a></li>
+        <li><a href="__BASE__docs/reference/panes.html">Panes index</a></li>
       </ul>
     </div>
     <div class="wiki-nav-group">
@@ -766,8 +766,8 @@ def render_mcp_tool(t: dict) -> str:
   <article class="wiki-main">
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="__BASE__">Home</a> <span class="sep">›</span>
-      <a href="__BASE__docs/reference/">Reference</a> <span class="sep">›</span>
-      <a href="__BASE__docs/reference/mcp/">MCP tools</a> <span class="sep">›</span>
+      <a href="__BASE__docs/reference.html">Reference</a> <span class="sep">›</span>
+      <a href="__BASE__docs/reference/mcp.html">MCP tools</a> <span class="sep">›</span>
       <span class="here"><code>{t["slug"]}</code></span>
     </nav>
     <span class="quadrant reference">Reference · Information</span>
@@ -831,8 +831,8 @@ def render_cli(c: dict) -> str:
   <article class="wiki-main">
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="__BASE__">Home</a> <span class="sep">›</span>
-      <a href="__BASE__docs/reference/">Reference</a> <span class="sep">›</span>
-      <a href="__BASE__docs/reference/cli/">CLI commands</a> <span class="sep">›</span>
+      <a href="__BASE__docs/reference.html">Reference</a> <span class="sep">›</span>
+      <a href="__BASE__docs/reference/cli.html">CLI commands</a> <span class="sep">›</span>
       <span class="here"><code>{c["name"]}</code></span>
     </nav>
     <span class="quadrant reference">Reference · Information</span>
@@ -878,8 +878,8 @@ def render_pane(p: tuple) -> str:
   <article class="wiki-main">
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="__BASE__">Home</a> <span class="sep">›</span>
-      <a href="__BASE__docs/reference/">Reference</a> <span class="sep">›</span>
-      <a href="__BASE__docs/reference/panes/">Panes</a> <span class="sep">›</span>
+      <a href="__BASE__docs/reference.html">Reference</a> <span class="sep">›</span>
+      <a href="__BASE__docs/reference/panes.html">Panes</a> <span class="sep">›</span>
       <span class="here">{name}</span>
     </nav>
     <span class="quadrant reference">Reference · Information</span>
@@ -897,7 +897,7 @@ def render_pane(p: tuple) -> str:
 
     <h2>Related</h2>
     <ul>
-      <li><a href="__BASE__docs/reference/panes/">All pane types</a></li>
+      <li><a href="__BASE__docs/reference/panes.html">All pane types</a></li>
       <li><a href="__BASE__docs/reference/options/fcsit.html">FCSIT per-pane toggles</a></li>
       <li><a href="__BASE__docs/reference/mcp/senkani_pane.html"><code>senkani_pane</code> — programmatic control</a></li>
     </ul>
@@ -934,18 +934,18 @@ def wiki_nav_reference(active: str) -> str:
     <div class="wiki-nav-group">
       <h4>Reference</h4>
       <ul>
-        <li><a href="__BASE__docs/reference/"{cls("index")}>All reference</a></li>
-        <li><a href="__BASE__docs/reference/mcp/"{cls("mcp")}>MCP tools ({len(MCP_TOOLS)})</a></li>
-        <li><a href="__BASE__docs/reference/cli/"{cls("cli")}>CLI commands ({len(CLI_COMMANDS)})</a></li>
-        <li><a href="__BASE__docs/reference/options/"{cls("options")}>Options &amp; env</a></li>
-        <li><a href="__BASE__docs/reference/panes/"{cls("panes")}>Panes ({len(PANES)})</a></li>
+        <li><a href="__BASE__docs/reference.html"{cls("index")}>All reference</a></li>
+        <li><a href="__BASE__docs/reference/mcp.html"{cls("mcp")}>MCP tools ({len(MCP_TOOLS)})</a></li>
+        <li><a href="__BASE__docs/reference/cli.html"{cls("cli")}>CLI commands ({len(CLI_COMMANDS)})</a></li>
+        <li><a href="__BASE__docs/reference/options.html"{cls("options")}>Options &amp; env</a></li>
+        <li><a href="__BASE__docs/reference/panes.html"{cls("panes")}>Panes ({len(PANES)})</a></li>
       </ul>
     </div>
     <div class="wiki-nav-group">
       <h4>Start</h4>
       <ul>
         <li><a href="__BASE__docs/what-is-senkani.html">What is it?</a></li>
-        <li><a href="__BASE__docs/concepts/">Concepts</a></li>
+        <li><a href="__BASE__docs/concepts.html">Concepts</a></li>
         <li><a href="__BASE__docs/guides/install.html">Install</a></li>
       </ul>
     </div>
@@ -969,7 +969,7 @@ def wiki_nav_concepts(active: str) -> str:
       <h4>Overview</h4>
       <ul>
         <li><a href="__BASE__docs/what-is-senkani.html">What is senkani?</a></li>
-        <li><a href="__BASE__docs/concepts/"{cls("index")}>All concepts</a></li>
+        <li><a href="__BASE__docs/concepts.html"{cls("index")}>All concepts</a></li>
       </ul>
     </div>
     <div class="wiki-nav-group">
@@ -981,7 +981,7 @@ def wiki_nav_concepts(active: str) -> str:
     <div class="wiki-nav-group">
       <h4>Next</h4>
       <ul>
-        <li><a href="__BASE__docs/reference/">Reference index</a></li>
+        <li><a href="__BASE__docs/reference.html">Reference index</a></li>
         <li><a href="__BASE__docs/guides/install.html">Install</a></li>
       </ul>
     </div>
@@ -1006,15 +1006,15 @@ def wiki_nav_guides(active: str) -> str:
     <div class="wiki-nav-group">
       <h4>Guides</h4>
       <ul>
-        <li><a href="__BASE__docs/guides/"{cls("index")}>All guides</a></li>
+        <li><a href="__BASE__docs/guides.html"{cls("index")}>All guides</a></li>
 {items}
       </ul>
     </div>
     <div class="wiki-nav-group">
       <h4>Next</h4>
       <ul>
-        <li><a href="__BASE__docs/reference/">Reference</a></li>
-        <li><a href="__BASE__docs/concepts/">Concepts</a></li>
+        <li><a href="__BASE__docs/reference.html">Reference</a></li>
+        <li><a href="__BASE__docs/concepts.html">Concepts</a></li>
       </ul>
     </div>
   </aside>'''
@@ -1039,8 +1039,8 @@ def wiki_nav_options(active: str) -> str:
     <div class="wiki-nav-group">
       <h4>Reference</h4>
       <ul>
-        <li><a href="__BASE__docs/reference/">All reference</a></li>
-        <li><a href="__BASE__docs/reference/options/"{cls("index")}>Options index</a></li>
+        <li><a href="__BASE__docs/reference.html">All reference</a></li>
+        <li><a href="__BASE__docs/reference/options.html"{cls("index")}>Options index</a></li>
       </ul>
     </div>
     <div class="wiki-nav-group">
@@ -1073,19 +1073,19 @@ def render_hub_reference():
     <p class="lede">Every MCP tool, CLI command, option, and pane type has its own page. This index links to every reference section. Bookmark any URL.</p>
 
     <div class="card-grid">
-      <a class="card" href="__BASE__docs/reference/mcp/">
+      <a class="card" href="__BASE__docs/reference/mcp.html">
         <h3>MCP tools <span class="tag tag-orange" style="margin-left:8px;">{len(MCP_TOOLS)}</span></h3>
         <p>Every <code>senkani_*</code> tool your agent can call — read, exec, search, fetch, explore, web, knowledge, bundle, repo, and more.</p>
       </a>
-      <a class="card" href="__BASE__docs/reference/cli/">
+      <a class="card" href="__BASE__docs/reference/cli.html">
         <h3>CLI commands <span class="tag tag-orange" style="margin-left:8px;">{len(CLI_COMMANDS)}</span></h3>
         <p>The same filter and index, scriptable from the shell: <code>senkani exec</code>, <code>senkani search</code>, <code>senkani bench</code>, <code>senkani learn</code>, <code>senkani kb</code>, and more.</p>
       </a>
-      <a class="card" href="__BASE__docs/reference/options/">
+      <a class="card" href="__BASE__docs/reference/options.html">
         <h3>Options &amp; env</h3>
         <p>FCSIT per-pane toggles, budget caps, security env vars, web SSRF overrides, compound-learning thresholds. Every <code>SENKANI_*</code> variable documented.</p>
       </a>
-      <a class="card" href="__BASE__docs/reference/panes/">
+      <a class="card" href="__BASE__docs/reference/panes.html">
         <h3>Panes <span class="tag tag-orange" style="margin-left:8px;">{len(PANES)}</span></h3>
         <p>17 workspace pane types: Terminal, Code Editor, Browser, Analytics, Agent Timeline, Sprint Review, Knowledge Base, and more.</p>
       </a>
@@ -1101,7 +1101,7 @@ def render_hub_reference():
 
     <h2 style="margin-top:32px;">Next</h2>
     <ul>
-      <li><a href="__BASE__docs/reference/cli/">Browse CLI commands →</a></li>
+      <li><a href="__BASE__docs/reference/cli.html">Browse CLI commands →</a></li>
       <li><a href="__BASE__docs/reference/options/fcsit.html">Start with FCSIT toggles</a> (the five per-pane feature switches).</li>
       <li><a href="__BASE__docs/concepts/three-layer-stack.html">Understand the three-layer stack</a>.</li>
     </ul>
@@ -1126,7 +1126,7 @@ def render_hub_mcp():
   <article class="wiki-main">
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="__BASE__">Home</a> <span class="sep">›</span>
-      <a href="__BASE__docs/reference/">Reference</a> <span class="sep">›</span>
+      <a href="__BASE__docs/reference.html">Reference</a> <span class="sep">›</span>
       <span class="here">MCP tools</span>
     </nav>
     <span class="quadrant reference">Reference · Information</span>
@@ -1165,7 +1165,7 @@ def render_hub_cli():
   <article class="wiki-main">
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="__BASE__">Home</a> <span class="sep">›</span>
-      <a href="__BASE__docs/reference/">Reference</a> <span class="sep">›</span>
+      <a href="__BASE__docs/reference.html">Reference</a> <span class="sep">›</span>
       <span class="here">CLI commands</span>
     </nav>
     <span class="quadrant reference">Reference · Information</span>
@@ -1196,7 +1196,7 @@ def render_hub_panes():
   <article class="wiki-main">
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="__BASE__">Home</a> <span class="sep">›</span>
-      <a href="__BASE__docs/reference/">Reference</a> <span class="sep">›</span>
+      <a href="__BASE__docs/reference.html">Reference</a> <span class="sep">›</span>
       <span class="here">Panes</span>
     </nav>
     <span class="quadrant reference">Reference · Information</span>
@@ -1235,7 +1235,7 @@ def render_hub_options():
   <article class="wiki-main">
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="__BASE__">Home</a> <span class="sep">›</span>
-      <a href="__BASE__docs/reference/">Reference</a> <span class="sep">›</span>
+      <a href="__BASE__docs/reference.html">Reference</a> <span class="sep">›</span>
       <span class="here">Options &amp; env</span>
     </nav>
     <span class="quadrant reference">Reference · Information</span>
@@ -1352,9 +1352,9 @@ def render_hub_status():
     <div class="card-grid">
       <div class="stat-card"><div class="num">v<em>0.2</em>.0</div><div class="label">Current release — <a href="__BASE__docs/changelog.html">changelog</a></div></div>
       <div class="stat-card"><div class="num"><em>1,510</em></div><div class="label">Passing tests</div></div>
-      <div class="stat-card"><div class="num"><em>{len(MCP_TOOLS)}</em></div><div class="label">MCP tools — <a href="__BASE__docs/reference/mcp/">reference</a></div></div>
-      <div class="stat-card"><div class="num"><em>{len(CLI_COMMANDS)}</em></div><div class="label">CLI commands — <a href="__BASE__docs/reference/cli/">reference</a></div></div>
-      <div class="stat-card"><div class="num"><em>{len(PANES)}</em></div><div class="label">Pane types — <a href="__BASE__docs/reference/panes/">reference</a></div></div>
+      <div class="stat-card"><div class="num"><em>{len(MCP_TOOLS)}</em></div><div class="label">MCP tools — <a href="__BASE__docs/reference/mcp.html">reference</a></div></div>
+      <div class="stat-card"><div class="num"><em>{len(CLI_COMMANDS)}</em></div><div class="label">CLI commands — <a href="__BASE__docs/reference/cli.html">reference</a></div></div>
+      <div class="stat-card"><div class="num"><em>{len(PANES)}</em></div><div class="label">Pane types — <a href="__BASE__docs/reference/panes.html">reference</a></div></div>
       <div class="stat-card"><div class="num"><em>25</em></div><div class="label">Tree-sitter languages indexed</div></div>
     </div>
 
@@ -1441,9 +1441,9 @@ def render_docs_root():
 
     <div class="card-grid">
       <a class="card" href="__BASE__docs/what-is-senkani.html"><h3>What is senkani?</h3><p>The product in one page — category, positioning, who it's for.</p></a>
-      <a class="card" href="__BASE__docs/concepts/"><h3>Concepts</h3><p>Explanation. Why the three-layer stack, how the hook relay works, how compound learning mines your sessions.</p></a>
-      <a class="card" href="__BASE__docs/reference/"><h3>Reference</h3><p>Every <code>senkani_*</code> MCP tool, every CLI command, every FCSIT option, every pane type.</p></a>
-      <a class="card" href="__BASE__docs/guides/"><h3>Guides</h3><p>How-tos. Install, wire up Claude Code, set up budgets, review learned proposals, clean uninstall.</p></a>
+      <a class="card" href="__BASE__docs/concepts.html"><h3>Concepts</h3><p>Explanation. Why the three-layer stack, how the hook relay works, how compound learning mines your sessions.</p></a>
+      <a class="card" href="__BASE__docs/reference.html"><h3>Reference</h3><p>Every <code>senkani_*</code> MCP tool, every CLI command, every FCSIT option, every pane type.</p></a>
+      <a class="card" href="__BASE__docs/guides.html"><h3>Guides</h3><p>How-tos. Install, wire up Claude Code, set up budgets, review learned proposals, clean uninstall.</p></a>
       <a class="card" href="__BASE__docs/status.html"><h3>Status</h3><p>What's shipped in v0.2.0 + test count + feature checklist.</p></a>
       <a class="card" href="__BASE__docs/changelog.html"><h3>Changelog</h3><p>Release-by-release notes.</p></a>
     </div>
@@ -1514,7 +1514,7 @@ def render_what_is_senkani():
     <h2>How the pieces connect</h2>
     <p>Senkani has three layers, and all three ship in the same binary:</p>
     <ol>
-      <li><a href="__BASE__docs/reference/mcp/">MCP tools</a> — 19 tools the agent can call directly. Compressed reads, filtered shells, symbol lookups, sandboxed parse, local embed/vision.</li>
+      <li><a href="__BASE__docs/reference/mcp.html">MCP tools</a> — 19 tools the agent can call directly. Compressed reads, filtered shells, symbol lookups, sandboxed parse, local embed/vision.</li>
       <li><a href="__BASE__docs/concepts/hook-relay.html">Hook relay</a> — intercepts the agent's built-in Read/Bash/Grep and routes to senkani equivalents or denies with cached results.</li>
       <li><a href="__BASE__docs/concepts/three-layer-stack.html">Smart denials</a> — re-read suppression, command replay, trivial routing, search upgrade. The filter decides a tool call doesn't need to run at all.</li>
     </ol>
@@ -1537,7 +1537,7 @@ def render_what_is_senkani():
     <ul>
       <li><a href="__BASE__docs/guides/install.html">Install senkani</a> — clone, build, <code>init</code>, launch.</li>
       <li><a href="__BASE__docs/concepts/three-layer-stack.html">Read about the three-layer stack</a>.</li>
-      <li><a href="__BASE__docs/reference/mcp/">Browse the MCP tool reference</a>.</li>
+      <li><a href="__BASE__docs/reference/mcp.html">Browse the MCP tool reference</a>.</li>
     </ul>
   </article>
 </main>
@@ -1586,8 +1586,8 @@ def render_opt(slug: str, title: str, lede: str, body_html: str):
   <article class="wiki-main">
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="__BASE__">Home</a> <span class="sep">›</span>
-      <a href="__BASE__docs/reference/">Reference</a> <span class="sep">›</span>
-      <a href="__BASE__docs/reference/options/">Options &amp; env</a> <span class="sep">›</span>
+      <a href="__BASE__docs/reference.html">Reference</a> <span class="sep">›</span>
+      <a href="__BASE__docs/reference/options.html">Options &amp; env</a> <span class="sep">›</span>
       <span class="here">{title}</span>
     </nav>
     <span class="quadrant reference">Reference · Information</span>
@@ -1850,7 +1850,7 @@ def render_concept(slug: str, title: str, lede: str, body_html: str, see_also: l
   <article class="wiki-main">
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="__BASE__">Home</a> <span class="sep">›</span>
-      <a href="__BASE__docs/concepts/">Concepts</a> <span class="sep">›</span>
+      <a href="__BASE__docs/concepts.html">Concepts</a> <span class="sep">›</span>
       <span class="here">{title}</span>
     </nav>
     <span class="quadrant concept">Concept · Explanation</span>
@@ -1961,7 +1961,7 @@ CONCEPTS = [
     <h2>Version negotiation</h2>
     <p><code>senkani_version</code> returns <code>server_version</code>, <code>tool_schemas_version</code>, and <code>schema_db_version</code>. Clients cache tool schemas keyed on <code>tool_schemas_version</code>; that number increments only on breaking changes. <code>schema_db_version</code> surfaces <code>PRAGMA user_version</code> on the session DB for migration diagnostics.</p>
 ''',
-     [("All MCP tools", "__BASE__docs/reference/mcp/"),
+     [("All MCP tools", "__BASE__docs/reference/mcp.html"),
       ("Tree-sitter grammars (senkani grammars)", "__BASE__docs/reference/cli/senkani-grammars.html"),
       ("Model Manager pane", "__BASE__docs/reference/panes/model-manager.html"),
       ("Compression layer", "__BASE__docs/concepts/compression-layer.html")]),
@@ -2112,7 +2112,7 @@ def render_guide(slug: str, title: str, lede: str, body_html: str, next_link: tu
   <article class="wiki-main">
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="__BASE__">Home</a> <span class="sep">›</span>
-      <a href="__BASE__docs/guides/">Guides</a> <span class="sep">›</span>
+      <a href="__BASE__docs/guides.html">Guides</a> <span class="sep">›</span>
       <span class="here">{title}</span>
     </nav>
     <span class="quadrant guide">Guide · How-to</span>
@@ -2486,13 +2486,13 @@ def main():
         write(ROOT / "docs" / "guides" / f'{slug}.html', render_guide(slug, title, lede, body, nxt))
     # Hub pages
     print("Hubs")
-    write(ROOT / "docs" / "reference" / "index.html", render_hub_reference())
-    write(ROOT / "docs" / "reference" / "mcp" / "index.html", render_hub_mcp())
-    write(ROOT / "docs" / "reference" / "cli" / "index.html", render_hub_cli())
-    write(ROOT / "docs" / "reference" / "panes" / "index.html", render_hub_panes())
-    write(ROOT / "docs" / "reference" / "options" / "index.html", render_hub_options())
-    write(ROOT / "docs" / "concepts" / "index.html", render_hub_concepts())
-    write(ROOT / "docs" / "guides" / "index.html", render_hub_guides())
+    write(ROOT / "docs" / "reference.html", render_hub_reference())
+    write(ROOT / "docs" / "reference" / "mcp.html", render_hub_mcp())
+    write(ROOT / "docs" / "reference" / "cli.html", render_hub_cli())
+    write(ROOT / "docs" / "reference" / "panes.html", render_hub_panes())
+    write(ROOT / "docs" / "reference" / "options.html", render_hub_options())
+    write(ROOT / "docs" / "concepts.html", render_hub_concepts())
+    write(ROOT / "docs" / "guides.html", render_hub_guides())
     write(ROOT / "docs" / "status.html", render_hub_status())
     write(ROOT / "docs" / "about.html", render_about())
     write(ROOT / "docs" / "changelog.html", render_changelog())
@@ -2504,3 +2504,48 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ============================================================
+# SEARCH INDEX (for assets/app.js + Lunr)
+# ============================================================
+def gen_search_index():
+    """Walk every generated HTML file under docs/ and emit a small
+    JSON index that Lunr builds on. Each doc: id, title, path, body.
+    """
+    import json
+    import re
+    docs = []
+    doc_id = 0
+    for html_path in sorted(ROOT.glob("docs/**/*.html")):
+        raw = html_path.read_text()
+        # Strip script/style blocks
+        clean = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", raw, flags=re.DOTALL | re.IGNORECASE)
+        # Extract title
+        tm = re.search(r"<title>(.*?)</title>", clean, flags=re.IGNORECASE)
+        title = tm.group(1).strip() if tm else str(html_path.name)
+        title = title.replace(" — senkani", "").replace(" — ", " · ")
+        # Extract body text (everything in <main>, fallback to everything)
+        mm = re.search(r"<main[^>]*>(.*?)</main>", clean, flags=re.DOTALL | re.IGNORECASE)
+        body_html = mm.group(1) if mm else clean
+        body = re.sub(r"<[^>]+>", " ", body_html)
+        body = re.sub(r"\s+", " ", body).strip()
+        # Cap body length to keep index small
+        body = body[:800]
+        # Path relative to repo root, NO leading slash. Search hit
+        # URLs are composed by prepending siteBase in app.js at
+        # render time, which makes them resolve under both root-deploy
+        # and subpath deploys (e.g., ckluis.github.io/senkani/).
+        rel = html_path.relative_to(ROOT)
+        path = str(rel)
+        if path == "docs/index.html":
+            path = "docs/"
+        docs.append({"id": str(doc_id), "title": title, "path": path, "body": body})
+        doc_id += 1
+    index_path = ROOT / "assets" / "search-index.json"
+    index_path.write_text(json.dumps({"docs": docs}, ensure_ascii=False, indent=0))
+    print(f"  wrote assets/search-index.json ({len(docs)} docs, {index_path.stat().st_size} bytes)")
+
+
+if __name__ == "__main__" and not any("--no-search" in a for a in __import__("sys").argv):
+    gen_search_index()

@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Docs — senkani</title>
-<meta name="description" content="Wiki root: concepts, reference, guides, status, about, changelog.">
+<title>Guides — how to set up and run senkani</title>
+<meta name="description" content="Numbered, paste-runnable guides: install, wire up Claude Code, wire up Cursor/Copilot, first session, budget setup, and more.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -26,40 +26,48 @@
   </div>
 </nav>
 <main id="main" class="wiki-layout">
-  <aside class="wiki-nav" aria-label="Reference navigation">
+  <aside class="wiki-nav" aria-label="Guides navigation">
     <div class="wiki-nav-group">
-      <h4>Reference</h4>
+      <h4>Guides</h4>
       <ul>
-        <li><a href="../docs/reference.html">All reference</a></li>
-        <li><a href="../docs/reference/mcp.html">MCP tools (19)</a></li>
-        <li><a href="../docs/reference/cli.html">CLI commands (19)</a></li>
-        <li><a href="../docs/reference/options.html">Options &amp; env</a></li>
-        <li><a href="../docs/reference/panes.html">Panes (17)</a></li>
+        <li><a href="../docs/guides.html" class="active">All guides</a></li>
+        <li><a href="../docs/guides/install.html">Install</a></li>
+        <li><a href="../docs/guides/claude-code.html">Claude Code</a></li>
+        <li><a href="../docs/guides/cursor-copilot.html">Cursor / Copilot</a></li>
+        <li><a href="../docs/guides/first-session.html">First session</a></li>
+        <li><a href="../docs/guides/budget-setup.html">Budget setup</a></li>
+        <li><a href="../docs/guides/compound-learning.html">Reviewing proposals</a></li>
+        <li><a href="../docs/guides/kb-workflow.html">Knowledge-base workflow</a></li>
+        <li><a href="../docs/guides/uninstall.html">Uninstall</a></li>
+        <li><a href="../docs/guides/troubleshooting.html">Troubleshooting</a></li>
       </ul>
     </div>
     <div class="wiki-nav-group">
-      <h4>Start</h4>
+      <h4>Next</h4>
       <ul>
-        <li><a href="../docs/what-is-senkani.html">What is it?</a></li>
+        <li><a href="../docs/reference.html">Reference</a></li>
         <li><a href="../docs/concepts.html">Concepts</a></li>
-        <li><a href="../docs/guides/install.html">Install</a></li>
       </ul>
     </div>
   </aside>
   <article class="wiki-main">
     <nav class="crumb" aria-label="Breadcrumb">
-      <a href="../">Home</a> <span class="sep">›</span> <span class="here">Docs</span>
+      <a href="../">Home</a> <span class="sep">›</span> <span class="here">Guides</span>
     </nav>
-    <h1 class="page-title">Docs</h1>
-    <p class="lede">The senkani wiki. Every MCP tool, CLI command, option, and pane has its own page. Concepts explain the why; guides walk you through how-tos; reference answers what-does-this-do.</p>
+    <span class="quadrant guide">Guide · How-to</span>
+    <h1 class="page-title">Guides</h1>
+    <p class="lede">Numbered, paste-runnable guides with expected-output blocks. Every shell command has been verified against a clean checkout.</p>
 
     <div class="card-grid">
-      <a class="card" href="../docs/what-is-senkani.html"><h3>What is senkani?</h3><p>The product in one page — category, positioning, who it's for.</p></a>
-      <a class="card" href="../docs/concepts.html"><h3>Concepts</h3><p>Explanation. Why the three-layer stack, how the hook relay works, how compound learning mines your sessions.</p></a>
-      <a class="card" href="../docs/reference.html"><h3>Reference</h3><p>Every <code>senkani_*</code> MCP tool, every CLI command, every FCSIT option, every pane type.</p></a>
-      <a class="card" href="../docs/guides.html"><h3>Guides</h3><p>How-tos. Install, wire up Claude Code, set up budgets, review learned proposals, clean uninstall.</p></a>
-      <a class="card" href="../docs/status.html"><h3>Status</h3><p>What's shipped in v0.2.0 + test count + feature checklist.</p></a>
-      <a class="card" href="../docs/changelog.html"><h3>Changelog</h3><p>Release-by-release notes.</p></a>
+      <a class="card" href="../docs/guides/install.html"><h4>Install</h4><p>Clone, build with Swift Package Manager, register hooks, launch the workspace. Three minutes end-to-end.</p></a>
+      <a class="card" href="../docs/guides/claude-code.html"><h4>Wire up Claude Code</h4><p>How <code>senkani init</code> modifies <code>~/.claude/settings.json</code>; what the MCP entry looks like; how to verify the integration.</p></a>
+      <a class="card" href="../docs/guides/cursor-copilot.html"><h4>Wire up Cursor / Copilot</h4><p><code>senkani init --hooks-only</code> for non-Claude agents. What changes, what doesn't.</p></a>
+      <a class="card" href="../docs/guides/first-session.html"><h4>Your first session</h4><p>Open the workspace, kick off a coding agent, read the Analytics pane. What the numbers mean and how to read them.</p></a>
+      <a class="card" href="../docs/guides/budget-setup.html"><h4>Budget setup</h4><p>Daily + weekly caps, dual-layer enforcement, and what happens when you hit them.</p></a>
+      <a class="card" href="../docs/guides/compound-learning.html"><h4>Reviewing learned proposals</h4><p>How to use <code>senkani learn review</code> and the Sprint Review pane to accept/reject staged proposals.</p></a>
+      <a class="card" href="../docs/guides/kb-workflow.html"><h4>Knowledge-base workflow</h4><p>Day-to-day with <code>senkani kb</code>: seeding entities, editing the source markdown, running the audit.</p></a>
+      <a class="card" href="../docs/guides/uninstall.html"><h4>Clean uninstall</h4><p><code>senkani uninstall</code> + <code>senkani wipe</code>. What each removes and what to keep.</p></a>
+      <a class="card" href="../docs/guides/troubleshooting.html"><h4>Troubleshooting</h4><p>Hook not registering, MCP not activating, grammar staleness, rebuild-index steps.</p></a>
     </div>
   </article>
 </main>

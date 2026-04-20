@@ -12,6 +12,32 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Website-rebuild item 12 — Claude Design prototype extract (aborted 2026-04-20)
+
+Autonomous round attempted `website-rebuild-12-claude-prototype-review`
+and aborted per the item's own abort path: the share URL
+`claude.ai/design/p/deee4b49-7dc6-48e7-bff1-5eb837dcad89?via=share` is
+auth-walled (WebFetch returns HTTP 403 in a fresh non-interactive
+context). The item was returned to `pending` status with this note; no
+forward blocker exists (no other item lists it in `blocked_by`).
+
+Operator action to unblock, pick ONE:
+
+- **Option A — screenshots.** Open the share link in a logged-in
+  browser, capture each screen of the prototype (landing + every
+  sub-screen), drop the PNGs into a new `spec/assets/claude-prototype/`
+  directory, and re-mark the backlog item `pending`. The next
+  autonomous round will extract visual ideas from the screenshots
+  into `spec/website_rebuild_claude_prototype.md`.
+- **Option B — HTML/MHTML export.** From the logged-in share link,
+  use browser "Save Page As… → Web Page, Complete" (or MHTML) and
+  commit the export under `spec/website_rebuild_claude_prototype_raw/`.
+  The next round can parse the HTML offline.
+- **Option C — drop the item.** If the prototype is no longer
+  informing the rebuild, mark the item `status: skipped` in the
+  backlog with a short note and move on — item 12 has zero
+  downstream blockers.
+
 ### Phase S.1 — manifest schema + MCP tool gating (shipped 2026-04-20)
 
 Foundation round of Phase S. The manifest file format and effective-set

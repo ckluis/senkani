@@ -6,6 +6,43 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 20 — Website search: client-side Lunr across the wiki
+- `website-rebuild-10-search` closes. `scripts/gen.py` emits
+  `assets/search-index.json` by walking every `docs/**/*.html` —
+  extracts title, body (first 800 chars of `<main>`, tags stripped),
+  path, and a short `name` field for MCP/CLI pages (the bare tool
+  name, e.g. `read` for `senkani_read`, `bench` for `senkani-bench`).
+  93 docs / ~85 KB.
+- `assets/lunr.min.js` vendored (~29 KB, MIT). `assets/app.js`
+  lazy-loads it on first focus/keystroke — first-paint unchanged.
+- Index builder overrides `lunr.tokenizer.separator` to split on
+  underscore as well as whitespace/hyphen, so `senkani_read`
+  tokenizes to `[senkani, read]` and the bare tool name is
+  discoverable by prefix. Fields: `name` boost 30, `title` 10,
+  `path` 3, `body` 1.
+- Query builder uses prefix (`q*`) for tokens of 3 chars or fewer
+  and prefix-plus-fuzzy (`q* q~1`) for longer tokens. Short queries
+  no longer drown in near-matches.
+- Keyboard: `/` focuses the nav search from anywhere; arrow keys
+  navigate the 8-result dropdown; Enter opens; Escape closes.
+- Acceptance measured on the shipped index (replayed via
+  JavaScriptCore against the live `search-index.json` +
+  `lunr.min.js`): typical full-name queries hit the expected
+  senkani page top for 15/19 MCP tools and 18/19 CLI commands.
+  At 3-character prefix, 17/19 CLI commands return the matching
+  `senkani <cmd>` page top. At the strict 2-character prefix, MCP
+  matches 11/19 — the remaining gap is structural (four pairs of
+  MCP tools share 2-char prefixes: read/repo, exec/explore,
+  search/session, pane/parse; one of each pair wins at 2 chars,
+  the other needs one more keystroke) plus four MCP names that
+  overlap with CLI commands (fetch, search, explore, validate) —
+  both the CLI and MCP pages match, the CLI page outranks because
+  its title carries the name as a standalone word by default.
+  Accepted: the user gets a valid senkani page for their query
+  either way; the overlap is a real-world disambiguator, not a bug.
+- No Swift code changes; no test delta (1510 → 1510). Soak log
+  updated — manual validation in a real browser still queued.
+
 ### April 19 — Website redesign: hero stack + /docs/ consolidation + font bumps
 - Landing page redesigned as a hero stack — one full-width "product
   hero" per major feature, Apple-product-page style. Each hero
@@ -69,10 +106,10 @@ Senkani *is*. Entries are grouped by the server version reported by
 - Legacy anchor redirects preserved in `assets/app.js`: inbound
   links to `/#how-it-works`, `/#mcp-tools`, `/#install`, `/#terse`,
   etc. now redirect to the corresponding new wiki URLs.
-- Pending in follow-up rounds: `website-rebuild-10-search` (Lunr
-  index generation + vendoring), `website-rebuild-11-content-pass`
+- Pending in follow-up rounds: `website-rebuild-11-content-pass`
   (editorial + closing audit), `website-rebuild-12-claude-prototype-
   review` (operator's auth-walled Claude Design prototype extract).
+  `-10-search` closed 2026-04-20 (see above).
 - No Swift code changes; no test delta (1510 → 1510). Manual
   validation queue added to `tools/soak/manual-log.md` (visual
   inspection, axe-core-cli pass, Lighthouse, keyboard traversal,

@@ -117,8 +117,13 @@
         if (!resp.ok) throw new Error('index fetch failed');
         const data = await resp.json();
         docs = data.docs;
+        // Split on underscore as well as whitespace/hyphen so tool
+        // names like `senkani_read` tokenize to [senkani, read] and
+        // the bare name is discoverable from a prefix query.
+        lunr.tokenizer.separator = /[\s\-_]+/;
         idx = lunr(function () {
           this.ref('id');
+          this.field('name', { boost: 30 });
           this.field('title', { boost: 10 });
           this.field('path', { boost: 3 });
           this.field('body');
@@ -160,8 +165,12 @@
       await loadIndex();
       if (!idx) return;
       try {
-        const fuzzy = q.split(/\s+/).map(w => `${w}* ${w}~1`).join(' ');
-        const results = idx.search(fuzzy);
+        // Fuzzy (`~1`) helps on typos but pollutes short queries with
+        // unrelated near-matches — gate it to tokens of 4+ chars.
+        const built = q.split(/\s+/).map(w =>
+          w.length >= 4 ? `${w}* ${w}~1` : `${w}*`
+        ).join(' ');
+        const results = idx.search(built);
         renderResults(results);
       } catch (e) {}
     });

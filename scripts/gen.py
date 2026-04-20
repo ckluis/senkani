@@ -2540,7 +2540,22 @@ def gen_search_index():
         path = str(rel)
         if path == "docs/index.html":
             path = "docs/"
-        docs.append({"id": str(doc_id), "title": title, "path": path, "body": body})
+        # Short-name field for MCP/CLI pages so Lunr's default tokenizer
+        # (which keeps `senkani_read` as a single token) still lets the
+        # bare tool name be prefix-matched. Example: searching "read"
+        # should return senkani_read at the top, not pages whose body
+        # happens to mention read/reading. For MCP the filename stem is
+        # `senkani_read`; for CLI it's `senkani-bench`. Strip the prefix.
+        name = ""
+        stem = html_path.stem
+        if "/reference/mcp/" in str(rel) and stem.startswith("senkani_"):
+            name = stem[len("senkani_"):]
+        elif "/reference/cli/" in str(rel) and stem.startswith("senkani-"):
+            name = stem[len("senkani-"):]
+        doc = {"id": str(doc_id), "title": title, "path": path, "body": body}
+        if name:
+            doc["name"] = name
+        docs.append(doc)
         doc_id += 1
     index_path = ROOT / "assets" / "search-index.json"
     index_path.write_text(json.dumps({"docs": docs}, ensure_ascii=False, indent=0))

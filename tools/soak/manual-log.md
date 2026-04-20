@@ -106,11 +106,19 @@ round — needs a real machine with Node / axe-core-cli available.
   `/concepts/`. Same for `#mcp-tools` (→ `/reference/mcp/`),
   `#install` (→ `/guides/install/`), `#terse` (→
   `/reference/options/terse/`). See `assets/app.js` legacyMap.
-- **Search stub.** The search input in the top nav currently has
-  no index (`assets/search-index.json` and `assets/lunr.min.js`
-  aren't vendored yet — that's `website-rebuild-10-search`
-  pending). Confirm the input at least doesn't throw JS errors
-  on focus (it should quietly fail the fetch and do nothing).
+- **Search: live Lunr index.** `website-rebuild-10-search` shipped
+  2026-04-20 (see CHANGELOG). Type into the top-nav search. On the
+  first keystroke the network panel should show `lunr.min.js`
+  (~29 KB) and `search-index.json` (~85 KB) fetched. Subsequent
+  queries should not re-fetch. Try: `read` → `senkani_read · MCP
+  tool reference` top. `bench` → `senkani bench · CLI reference`
+  top. `install` → the guide page top. Arrow keys should highlight
+  rows; Enter should navigate; Escape should close. The global
+  `/` hotkey should focus the nav search from any page. Known
+  2-char ambiguities to spot-check: `re` picks one of read/repo,
+  `ex` picks one of exec/explore/export, `pa` picks one of
+  pane/parse, `se` picks one of search/session/setup — both pages
+  should appear in the top 3 regardless.
 - **Deploy preview.** Push to a branch, enable GitHub Pages for
   that branch, open `https://ckluis.github.io/senkani/`. All
   relative paths should resolve under the `/senkani/` subpath.

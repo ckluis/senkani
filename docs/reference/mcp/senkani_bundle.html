@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>senkani_bundle — MCP tool reference</title>
+<meta name="description" content="Budget-bounded repo snapshot — symbol outlines + dep graph + KB entities + README in a canonical, truncation-robust order. Local or remote.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../../assets/theme.css">
+</head>
+<body>
+<a href="#main" class="skip-nav">Skip to main content</a>
+<nav class="topnav" aria-label="Primary navigation">
+  <a class="wordmark" href="../../../">sen<span class="accent">kani</span><small>compression layer for AI coding agents</small></a>
+  <button class="topnav-hamburger" aria-label="Open navigation menu" aria-expanded="false" aria-controls="topnav-links"><span></span><span></span><span></span></button>
+  <div class="topnav-links" id="topnav-links">
+    <a href="../../../docs/what-is-senkani.html">What is it?</a>
+    <a href="../../../docs/concepts/">Concepts</a>
+    <a href="../../../docs/reference/">Reference</a>
+    <a href="../../../docs/guides/">Guides</a>
+    <a href="../../../docs/status.html">Status</a>
+    <div class="topnav-search"><input type="search" id="site-search" placeholder="Search · /" aria-label="Search the site"></div>
+    <a href="https://github.com/ckluis/senkani" class="btn-nav">GitHub →</a>
+  </div>
+</nav>
+<main id="main" class="wiki-layout">
+  <aside class="wiki-nav" aria-label="MCP tools navigation">
+    <div class="wiki-nav-group">
+      <h4>Reference</h4>
+      <ul>
+        <li><a href="../../../docs/reference/">All reference</a></li>
+        <li><a href="../../../docs/reference/mcp/">MCP tools index</a></li>
+        <li><a href="../../../docs/reference/cli/">CLI commands</a></li>
+        <li><a href="../../../docs/reference/options/">Options &amp; env</a></li>
+        <li><a href="../../../docs/reference/panes/">Panes</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>MCP tools (19)</h4>
+      <ul>
+        <li><a href="../../../docs/reference/mcp/senkani_read.html"><code>senkani_read</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_exec.html"><code>senkani_exec</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_search.html"><code>senkani_search</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_fetch.html"><code>senkani_fetch</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_explore.html"><code>senkani_explore</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_deps.html"><code>senkani_deps</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_outline.html"><code>senkani_outline</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_validate.html"><code>senkani_validate</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_parse.html"><code>senkani_parse</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_embed.html"><code>senkani_embed</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_vision.html"><code>senkani_vision</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_watch.html"><code>senkani_watch</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_web.html"><code>senkani_web</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_pane.html"><code>senkani_pane</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_session.html"><code>senkani_session</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_knowledge.html"><code>senkani_knowledge</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_version.html"><code>senkani_version</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_bundle.html" class="active"><code>senkani_bundle</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_repo.html"><code>senkani_repo</code></a></li>
+      </ul>
+    </div>
+  </aside>
+  <article class="wiki-main">
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../">Home</a> <span class="sep">›</span>
+      <a href="../../../docs/reference/">Reference</a> <span class="sep">›</span>
+      <a href="../../../docs/reference/mcp/">MCP tools</a> <span class="sep">›</span>
+      <span class="here"><code>senkani_bundle</code></span>
+    </nav>
+    <span class="quadrant reference">Reference · Information</span>
+    <h1 class="page-title"><code style="background:none;padding:0;color:var(--accent-lo);font-size:0.82em;">senkani_bundle</code></h1>
+    <div class="tag-row" style="margin-bottom:18px;">
+      <span class="badge badge-live">Live</span>
+      
+      <span class="tag tag-green">Savings repo-level</span>
+    </div>
+
+    <p class="lede">Budget-bounded repo snapshot — symbol outlines + dep graph + KB entities + README in a canonical, truncation-robust order. Local or remote.</p>
+
+    <h2>Signature</h2>
+    <div class="ref-signature">senkani_mcp.call(tool="senkani_bundle", args={...})</div>
+
+    <h2>Behavior</h2>
+    <p>`BundleComposer` composes outputs within a fixed token budget. Sections order is canonical so partial truncation still produces a parseable brief. Local mode snapshots the current workspace; remote mode (`remote: "owner/name"`) uses `senkani_repo` to snapshot any public GitHub repo. Two output formats: `format: "markdown"` (default) or `format: "json"` (stable-schema `BundleDocument`).</p>
+
+
+    <h2>Inputs</h2>
+    <div class="ref-io-table">
+      <div class="head">Name</div><div class="head">Type</div><div class="head">Default</div><div class="head">Description</div>
+      <div class="k">budget_tokens</div><div class="t">integer</div><div class="default">8000</div><div class="desc">Max tokens in the output bundle.</div><div class="k">remote</div><div class="t">string</div><div class="default">—</div><div class="desc">`owner/name` for a public GitHub repo. Omit for local mode.</div><div class="k">format</div><div class="t">string</div><div class="default">markdown</div><div class="desc">`markdown` or `json`.</div><div class="k">include</div><div class="t">array</div><div class="default">all</div><div class="desc">Subset of `[outlines, deps, kb, readme]`.</div>
+    </div>
+
+    <h2>Output</h2>
+    <p>Markdown document or a `BundleDocument` JSON.</p>
+
+    <h2>Example</h2>
+    <pre class="code">{<span class="k">"tool"</span>:<span class="v">"senkani_bundle"</span>,<span class="k">"args"</span>:{<span class="k">"budget_tokens"</span>:<span class="e">6000</span>}}</pre>
+
+    
+    <div class="callout callout-security"><span class="callout-icon">⚔</span><div>Host allowlist (api.github.com, raw.githubusercontent.com) + SecretDetector on every scanned file.</div></div>
+
+    <div class="seealso">
+      <h3>See also</h3>
+      <ul>
+        <li><a href="../../../docs/reference/mcp/senkani_repo.html"><code>senkani_repo</code></a> — Remote bundle's underlying GitHub access.</li>
+        <li><a href="../../../docs/concepts/knowledge-base.html"><code>Knowledge base concept</code></a> — What KB entities end up in the bundle.</li>
+      </ul>
+    </div>
+
+    <div class="source-pointer">
+      <strong>Source:</strong> <code>Sources/Bundle/BundleComposer.swift</code>
+    </div>
+  </article>
+</main>
+<footer class="site-foot">
+  <div class="foot-grid">
+    <div>
+      <div class="foot-wordmark">sen<span class="accent">kani</span></div>
+      <p class="foot-tagline"><span lang="zh">閃蟹</span> — "fast claw." A native macOS binary written in Swift.</p>
+    </div>
+    <div class="foot-col"><h4>Product</h4><ul><li><a href="../../../docs/what-is-senkani.html">What is it?</a></li><li><a href="../../../docs/concepts/">Concepts</a></li><li><a href="../../../docs/reference/">Reference</a></li><li><a href="../../../docs/guides/">Guides</a></li><li><a href="../../../docs/status.html">Status</a></li></ul></div>
+    <div class="foot-col"><h4>Reference</h4><ul><li><a href="../../../docs/reference/mcp/">MCP tools</a></li><li><a href="../../../docs/reference/cli/">CLI commands</a></li><li><a href="../../../docs/reference/options/">Options &amp; env</a></li><li><a href="../../../docs/reference/panes/">Panes</a></li><li><a href="../../../docs/changelog.html">Changelog</a></li></ul></div>
+    <div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li><li><a href="../../../docs/guides/install.html">Install</a></li><li><a href="../../../docs/guides/troubleshooting.html">Troubleshooting</a></li><li><a href="../../../docs/about.html">About &amp; license</a></li></ul></div>
+  </div>
+  <div class="foot-meta">
+    <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
+    <span><a href="../../../docs/changelog.html">v0.2.0 changelog</a></span>
+  </div>
+</footer>
+<script src="../../../assets/app.js" defer></script>
+</body>
+</html>

@@ -45,25 +45,25 @@
   // page back to root.
   const legacyMap = {
     'how-it-works':   'docs/concepts/',
-    'hook-architecture': 'docs/concepts/hook-relay/',
-    'filter-pipeline':   'docs/concepts/compression-layer/',
-    'smart-denials':     'docs/concepts/three-layer-stack/',
-    'intelligence':   'docs/concepts/mcp-intelligence/',
-    'symbol-indexer': 'docs/concepts/mcp-intelligence/',
-    'read-cache':     'docs/reference/mcp/senkani_read/',
-    'local-ml':       'docs/concepts/mcp-intelligence/',
+    'hook-architecture': 'docs/concepts/hook-relay.html',
+    'filter-pipeline':   'docs/concepts/compression-layer.html',
+    'smart-denials':     'docs/concepts/three-layer-stack.html',
+    'intelligence':   'docs/concepts/mcp-intelligence.html',
+    'symbol-indexer': 'docs/concepts/mcp-intelligence.html',
+    'read-cache':     'docs/reference/mcp/senkani_read.html',
+    'local-ml':       'docs/concepts/mcp-intelligence.html',
     'control':        'docs/reference/options/',
-    'budget':         'docs/reference/options/budget/',
-    'terse':          'docs/reference/options/terse/',
-    'session-db':     'docs/concepts/three-layer-stack/',
+    'budget':         'docs/reference/options/budget.html',
+    'terse':          'docs/reference/options/terse.html',
+    'session-db':     'docs/concepts/three-layer-stack.html',
     'interface':      'docs/reference/',
     'mcp-tools':      'docs/reference/mcp/',
     'cli':            'docs/reference/cli/',
     'workspace':      'docs/reference/panes/',
     'configuration':  'docs/reference/options/',
-    'status':         'docs/status/',
-    'whats-built':    'docs/status/',
-    'install':        'docs/guides/install/'
+    'status':         'docs/status.html',
+    'whats-built':    'docs/status.html',
+    'install':        'docs/guides/install.html'
   };
   const hash = window.location.hash.replace(/^#/, '');
   if (hash && legacyMap[hash] && /index\.html?$|\/$/.test(window.location.pathname)) {

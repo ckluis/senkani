@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Concepts — understanding senkani</title>
-<meta name="description" content="Explanation pages: why senkani compresses where it compresses, how the hook relay works, how compound learning mines your own sessions, and how the knowledge base stays coherent.">
+<title>Knowledge base — concept</title>
+<meta name="description" content="Project entities, decisions, and links live in &lt;code&gt;.senkani/knowledge/*.md&lt;/code&gt; — markdown as source of truth. SQLite is a rebuilt index. &lt;co">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -31,7 +31,7 @@
       <h4>Overview</h4>
       <ul>
         <li><a href="../../docs/what-is-senkani.html">What is senkani?</a></li>
-        <li><a href="../../docs/concepts/" class="active">All concepts</a></li>
+        <li><a href="../../docs/concepts/">All concepts</a></li>
       </ul>
     </div>
     <div class="wiki-nav-group">
@@ -42,7 +42,7 @@
         <li><a href="../../docs/concepts/mcp-intelligence.html">MCP intelligence</a></li>
         <li><a href="../../docs/concepts/three-layer-stack.html">Three-layer stack</a></li>
         <li><a href="../../docs/concepts/compound-learning.html">Compound learning</a></li>
-        <li><a href="../../docs/concepts/knowledge-base.html">Knowledge base</a></li>
+        <li><a href="../../docs/concepts/knowledge-base.html" class="active">Knowledge base</a></li>
         <li><a href="../../docs/concepts/security-posture.html">Security posture</a></li>
       </ul>
     </div>
@@ -56,21 +56,45 @@
   </aside>
   <article class="wiki-main">
     <nav class="crumb" aria-label="Breadcrumb">
-      <a href="../../">Home</a> <span class="sep">›</span> <span class="here">Concepts</span>
+      <a href="../../">Home</a> <span class="sep">›</span>
+      <a href="../../docs/concepts/">Concepts</a> <span class="sep">›</span>
+      <span class="here">Knowledge base</span>
     </nav>
     <span class="quadrant concept">Concept · Explanation</span>
-    <h1 class="page-title">Concepts</h1>
-    <p class="lede">Explanation pages — the <em>why</em> behind senkani. Reference tells you what each tool does; concepts tell you why the system works. Start with <a href="../../docs/what-is-senkani.html">What is senkani?</a> if this is your first visit.</p>
+    <h1 class="page-title">Knowledge base</h1>
+    <p class="lede">Project entities, decisions, and links live in <code>.senkani/knowledge/*.md</code> — markdown as source of truth. SQLite is a rebuilt index. <code>KBLayer1Coordinator</code> detects staleness and recovers from corruption.</p>
 
-    <div class="card-grid">
-      <a class="card" href="../../docs/concepts/compression-layer.html"><h4>Compression layer</h4><p>Three places Senkani compresses: input (before the LLM sees it), redundancy (before the tool runs), output (before responses grow). Why all three.</p></a>
-      <a class="card" href="../../docs/concepts/hook-relay.html"><h4>Hook relay</h4><p>How the <code>senkani-hook</code> binary intercepts your agent's Read/Bash/Grep, routes to senkani equivalents, and denies with cached results when appropriate.</p></a>
-      <a class="card" href="../../docs/concepts/mcp-intelligence.html"><h4>MCP intelligence</h4><p>What "MCP tool" means and why senkani has 19 of them. How tree-sitter + FTS5 + MiniLM compose into sub-5 ms symbol search.</p></a>
-      <a class="card" href="../../docs/concepts/three-layer-stack.html"><h4>Three-layer stack</h4><p>Layer 1 tools, Layer 2 hooks, Layer 3 smart denials. Why denial-with-cached-result is the biggest win on pathological sessions.</p></a>
-      <a class="card" href="../../docs/concepts/compound-learning.html"><h4>Compound learning</h4><p>Four artifact types — filter rules, context docs, instruction patches, workflow playbooks — mined from your own sessions. The <code>.recurring → .staged → .applied</code> flow.</p></a>
-      <a class="card" href="../../docs/concepts/knowledge-base.html"><h4>Knowledge base</h4><p>Project entities + decisions + links. Markdown as source-of-truth, SQLite as rebuilt index. How it stays coherent when you hand-edit.</p></a>
-      <a class="card" href="../../docs/concepts/security-posture.html"><h4>Security posture</h4><p>v0.2.0 defaults: prompt-injection guard on, SSRF hardening on, secret redaction on, socket auth opt-in. Why senkani is a trust boundary and what that means concretely.</p></a>
-    </div>
+    <h2>Why markdown + rebuilt index</h2>
+    <p>Markdown is diff-able, review-able, and human-editable. SQLite is fast. Senkani keeps the markdown as the source of truth and the SQLite index as a derivable artifact — if the index gets corrupt or stale, rebuild it from markdown. This is the inverse of the usual pattern ("DB is truth, exports are stale") and it prevents whole classes of data-loss bugs.</p>
+
+    <h2>Entity → link → decision</h2>
+    <ul>
+      <li><strong>Entity</strong> — a named thing: a module, a class, a concept, a person, a library. <code>upsert_entity</code> creates or updates.</li>
+      <li><strong>Link</strong> — a typed edge between two entities: <code>depends_on</code>, <code>replaced_by</code>, <code>authored_by</code>, etc.</li>
+      <li><strong>Decision</strong> — a dated note attached to one or more entities explaining why something was built that way.</li>
+    </ul>
+
+    <h2>FTS5 search</h2>
+    <p><code>search_knowledge</code> hits the FTS5-indexed body text. BM25 ranking. Queries are sanitized (FTS5 operator syntax stripped) before execution.</p>
+
+    <h2>Enrichment + validation</h2>
+    <p>High-mention entities (≥ 5× per session) get queued for Gemma enrichment via MLX. <code>EnrichmentValidator</code> flags <strong>information loss</strong> (enrichment shorter than original body), <strong>contradiction</strong> (enrichment contains negation of source claims), and <strong>excessive rewrite</strong> (low Jaccard similarity) before commit. The goal is strict drift detection — enrichment is additive, not editorial.</p>
+
+    <h2>Rollback + timeline</h2>
+    <p>Every enrichment commit creates an append-only history row. <code>senkani kb rollback &lt;id&gt;</code> reverts the latest enrichment; <code>senkani kb history &lt;id&gt;</code> lists prior versions; <code>senkani kb timeline</code> is a chronological view of all KB mutations across the project.</p>
+
+    <h2>Layer 1 coordinator</h2>
+    <p><code>KBLayer1Coordinator</code> detects SQLite index staleness (markdown newer than indexed) and corruption (unreadable pragmas). In either case it rebuilds from markdown without stopping the MCP server. Hand-edits to <code>.senkani/knowledge/*.md</code> are safe — the index follows.</p>
+
+    <h2>Bridge to compound learning</h2>
+    <p>See <a href="../../docs/concepts/compound-learning.html">compound learning</a> for the KB ↔ learning bridge: entity-mention counts boost proposal confidence; applied context docs seed entity stubs; rolling back an entity invalidates derived context docs.</p>
+
+    <div class="seealso"><h3>See also</h3><ul>
+        <li><a href="../../docs/reference/mcp/senkani_knowledge.html">senkani_knowledge MCP tool</a></li>
+        <li><a href="../../docs/reference/cli/senkani-kb.html">senkani kb CLI</a></li>
+        <li><a href="../../docs/concepts/compound-learning.html">Compound learning</a></li>
+        <li><a href="../../docs/reference/panes/knowledge-base.html">Knowledge Base pane</a></li>
+    </ul></div>
   </article>
 </main>
 <footer class="site-foot">

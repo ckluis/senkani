@@ -23,11 +23,11 @@
     <span></span><span></span><span></span>
   </button>
   <div class="topnav-links" id="topnav-links">
-    <a href="docs/what-is-senkani/">What is it?</a>
+    <a href="docs/what-is-senkani.html">What is it?</a>
     <a href="docs/concepts/">Concepts</a>
     <a href="docs/reference/">Reference</a>
     <a href="docs/guides/">Guides</a>
-    <a href="docs/status/">Status</a>
+    <a href="docs/status.html">Status</a>
     <div class="topnav-search"><input type="search" id="site-search" placeholder="Search · /" aria-label="Search the site"></div>
     <a href="https://github.com/ckluis/senkani" class="btn-nav">GitHub →</a>
   </div>
@@ -43,8 +43,8 @@
   <h1>Token compression<br>for <span class="accent">AI coding<br>agents.</span></h1>
   <p class="lede">Senkani is a native macOS binary that sits between your coding agent and your filesystem. Every file read is compressed, every shell output filtered, every symbol search answered from a local index — before a single token reaches the model. Claude Code, Cursor, Copilot, any MCP-compatible agent.</p>
   <div class="cta-row">
-    <a class="btn btn-primary" href="docs/guides/install/">Install in 3 minutes</a>
-    <a class="btn btn-secondary" href="docs/what-is-senkani/">What is senkani?</a>
+    <a class="btn btn-primary" href="docs/guides/install.html">Install in 3 minutes</a>
+    <a class="btn btn-secondary" href="docs/what-is-senkani.html">What is senkani?</a>
     <a class="btn btn-ghost" href="https://github.com/ckluis/senkani">View on GitHub</a>
   </div>
   <div class="meta" aria-hidden="true">
@@ -69,7 +69,7 @@
         <li><strong>Symbol-level reads.</strong> Outline by default (50 tokens); full content only when you pass <code>full: true</code>.</li>
         <li><strong>Smart denials.</strong> Re-read the same file 40 s later? The hook answers from cache; the LLM never sees the redundant call.</li>
       </ul>
-      <a class="product-hero-cta" href="docs/concepts/compression-layer/">How it works <span aria-hidden="true">→</span></a>
+      <a class="product-hero-cta" href="docs/concepts/compression-layer.html">How it works <span aria-hidden="true">→</span></a>
     </div>
     <div class="product-hero-visual" aria-hidden="true">
       <div class="viz-before-after">
@@ -181,7 +181,7 @@
         <li><strong>Instruction patches never auto-apply.</strong> Schneier gate — human-in-the-loop for anything touching the agent's tool hints.</li>
         <li><strong>Sprint + quarterly cadence.</strong> <code>senkani learn review</code> weekly; <code>senkani learn audit</code> quarterly to retire stale applied artifacts.</li>
       </ul>
-      <a class="product-hero-cta" href="docs/concepts/compound-learning/">How the learning flows <span aria-hidden="true">→</span></a>
+      <a class="product-hero-cta" href="docs/concepts/compound-learning.html">How the learning flows <span aria-hidden="true">→</span></a>
     </div>
     <div class="product-hero-visual" aria-hidden="true">
       <div class="viz-flow">
@@ -218,7 +218,7 @@
         <li><strong>Enrichment validator</strong> flags information loss, contradiction, excessive rewrite before any Gemma enrichment commits.</li>
         <li><strong>Rollback + timeline.</strong> Every change is append-only history; <code>senkani kb rollback</code> reverts; <code>senkani kb timeline</code> shows the full chronology.</li>
       </ul>
-      <a class="product-hero-cta" href="docs/concepts/knowledge-base/">How the KB stays coherent <span aria-hidden="true">→</span></a>
+      <a class="product-hero-cta" href="docs/concepts/knowledge-base.html">How the KB stays coherent <span aria-hidden="true">→</span></a>
     </div>
     <div class="product-hero-visual" aria-hidden="true">
       <div class="viz-kb">
@@ -256,7 +256,7 @@
         <li><strong>13 secret-detector families</strong> + entropy fallback. 1 MB benign input: ~25 ms. Every tool output scanned before the model sees it.</li>
         <li><strong>Socket-auth handshake.</strong> Opt-in via <code>SENKANI_SOCKET_AUTH=on</code>. Flipping to on by default next release.</li>
       </ul>
-      <a class="product-hero-cta" href="docs/concepts/security-posture/">Read the full posture <span aria-hidden="true">→</span></a>
+      <a class="product-hero-cta" href="docs/concepts/security-posture.html">Read the full posture <span aria-hidden="true">→</span></a>
     </div>
     <div class="product-hero-visual" aria-hidden="true">
       <div class="viz-shield">
@@ -279,7 +279,7 @@
     <div>
       <span class="overline" style="color:rgba(245,241,232,.55);">Measured, not claimed</span>
       <h2>Numbers from <code style="color:var(--accent);background:none;padding:0;">senkani bench</code> on your hardware.</h2>
-      <p class="lede">Every number here is reproducible. <a href="docs/reference/cli/senkani-bench/" style="color:var(--accent-hi);">Run <code style="background:none;padding:0;">senkani bench</code></a> to verify on your machine.</p>
+      <p class="lede">Every number here is reproducible. <a href="docs/reference/cli/senkani-bench.html" style="color:var(--accent-hi);">Run <code style="background:none;padding:0;">senkani bench</code></a> to verify on your machine.</p>
     </div>
     <div class="stat-strip-grid">
       <div class="stat">
@@ -321,9 +321,9 @@ swift build -c release
 .build/release/senkani doctor
 .build/release/senkani</pre>
   <div class="cta-row" style="margin-top:32px;">
-    <a class="btn btn-primary" href="docs/guides/install/">Full install guide</a>
-    <a class="btn btn-secondary" href="docs/guides/claude-code/">Wire up Claude Code</a>
-    <a class="btn btn-ghost" href="docs/guides/cursor-copilot/">Cursor / Copilot</a>
+    <a class="btn btn-primary" href="docs/guides/install.html">Full install guide</a>
+    <a class="btn btn-secondary" href="docs/guides/claude-code.html">Wire up Claude Code</a>
+    <a class="btn btn-ghost" href="docs/guides/cursor-copilot.html">Cursor / Copilot</a>
   </div>
 </section>
 
@@ -339,11 +339,11 @@ swift build -c release
     <div class="foot-col">
       <h4>Product</h4>
       <ul>
-        <li><a href="docs/what-is-senkani/">What is it?</a></li>
+        <li><a href="docs/what-is-senkani.html">What is it?</a></li>
         <li><a href="docs/concepts/">Concepts</a></li>
         <li><a href="docs/reference/">Reference</a></li>
         <li><a href="docs/guides/">Guides</a></li>
-        <li><a href="docs/status/">Status</a></li>
+        <li><a href="docs/status.html">Status</a></li>
       </ul>
     </div>
     <div class="foot-col">
@@ -353,22 +353,22 @@ swift build -c release
         <li><a href="docs/reference/cli/">CLI commands</a></li>
         <li><a href="docs/reference/options/">Options &amp; env</a></li>
         <li><a href="docs/reference/panes/">Panes</a></li>
-        <li><a href="docs/changelog/">Changelog</a></li>
+        <li><a href="docs/changelog.html">Changelog</a></li>
       </ul>
     </div>
     <div class="foot-col">
       <h4>Project</h4>
       <ul>
         <li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li>
-        <li><a href="docs/guides/install/">Install</a></li>
-        <li><a href="docs/guides/troubleshooting/">Troubleshooting</a></li>
-        <li><a href="docs/about/">About &amp; license</a></li>
+        <li><a href="docs/guides/install.html">Install</a></li>
+        <li><a href="docs/guides/troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="docs/about.html">About &amp; license</a></li>
       </ul>
     </div>
   </div>
   <div class="foot-meta">
     <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
-    <span><a href="https://github.com/ckluis/senkani/blob/main/LICENSE">LICENSE</a> · <a href="docs/changelog/">v0.2.0 changelog</a></span>
+    <span><a href="https://github.com/ckluis/senkani/blob/main/LICENSE">LICENSE</a> · <a href="docs/changelog.html">v0.2.0 changelog</a></span>
   </div>
 </footer>
 

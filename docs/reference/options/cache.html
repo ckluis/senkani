@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Options & env vars — reference</title>
-<meta name="description" content="FCSIT toggles, budget caps, security env vars, and compound-learning thresholds.">
+<title>C — Read cache — options reference</title>
+<meta name="description" content="Session-scoped file-read cache keyed on &lt;code&gt;(path, mtime)&lt;/code&gt;. Unchanged files return instantly from memory.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -31,7 +31,7 @@
       <h4>Reference</h4>
       <ul>
         <li><a href="../../../docs/reference/">All reference</a></li>
-        <li><a href="../../../docs/reference/options/" class="active">Options index</a></li>
+        <li><a href="../../../docs/reference/options/">Options index</a></li>
       </ul>
     </div>
     <div class="wiki-nav-group">
@@ -39,7 +39,7 @@
       <ul>
         <li><a href="../../../docs/reference/options/fcsit.html">FCSIT overview</a></li>
         <li><a href="../../../docs/reference/options/filter.html">F — Filter</a></li>
-        <li><a href="../../../docs/reference/options/cache.html">C — Cache</a></li>
+        <li><a href="../../../docs/reference/options/cache.html" class="active">C — Cache</a></li>
         <li><a href="../../../docs/reference/options/secrets.html">S — Secrets</a></li>
         <li><a href="../../../docs/reference/options/indexer.html">I — Indexer</a></li>
         <li><a href="../../../docs/reference/options/terse.html">T — Terse</a></li>
@@ -54,42 +54,27 @@
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="../../../">Home</a> <span class="sep">›</span>
       <a href="../../../docs/reference/">Reference</a> <span class="sep">›</span>
-      <span class="here">Options &amp; env</span>
+      <a href="../../../docs/reference/options/">Options &amp; env</a> <span class="sep">›</span>
+      <span class="here">C — Read cache</span>
     </nav>
     <span class="quadrant reference">Reference · Information</span>
-    <h1 class="page-title">Options &amp; env vars</h1>
-    <p class="lede">Resolution order: <strong>CLI flag &gt; env var &gt; <code>~/.senkani/config.json</code> &gt; default</strong>. Any toggle can be overridden at any level without touching other settings.</p>
+    <h1 class="page-title">C — Read cache</h1>
+    <p class="lede">Session-scoped file-read cache keyed on <code>(path, mtime)</code>. Unchanged files return instantly from memory.</p>
 
-    <h2>FCSIT — per-pane feature toggles</h2>
-    <div class="fcsit-card">
-      <a class="fcsit-letter f" href="../../../docs/reference/options/filter.html"><span class="ltr">F</span><span class="name">Filter</span><span class="default">default on</span></a>
-      <a class="fcsit-letter c" href="../../../docs/reference/options/cache.html"><span class="ltr">C</span><span class="name">Cache</span><span class="default">default on</span></a>
-      <a class="fcsit-letter s" href="../../../docs/reference/options/secrets.html"><span class="ltr">S</span><span class="name">Secrets</span><span class="default">default on</span></a>
-      <a class="fcsit-letter i" href="../../../docs/reference/options/indexer.html"><span class="ltr">I</span><span class="name">Indexer</span><span class="default">default on</span></a>
-      <a class="fcsit-letter t" href="../../../docs/reference/options/terse.html"><span class="ltr">T</span><span class="name">Terse</span><span class="default">default off</span></a>
-    </div>
-    <p><a href="../../../docs/reference/options/fcsit.html">Read the FCSIT overview →</a></p>
+    <h2>What it does</h2>
+    <p>Every <code>senkani_read</code> (and every intercepted built-in <code>Read</code>) populates the cache. Subsequent reads of the same path with the same <code>mtime</code> return from memory — zero tokens, zero disk I/O. A file change (touch, edit) evicts its entry.</p>
 
-    <h2>Env-var families</h2>
-    <div class="card-grid">
-      <a class="card" href="../../../docs/reference/options/budget.html"><h4>Budget caps</h4><p>Daily + weekly spend ceilings enforced at the hook layer. <code>SENKANI_BUDGET_DAILY</code>, <code>SENKANI_BUDGET_WEEKLY</code>.</p></a>
-      <a class="card" href="../../../docs/reference/options/security.html"><h4>Security env vars</h4><p>Prompt-injection guard, SSRF overrides, socket auth, structured JSON logs, retention tuning.</p></a>
-      <a class="card" href="../../../docs/reference/options/web.html"><h4>Web env vars</h4><p>Overrides for the <code>senkani_web</code> SSRF guard, subresource blocklist, allowlisted hosts.</p></a>
-      <a class="card" href="../../../docs/reference/options/compound-learning.html"><h4>Compound-learning env</h4><p>Confidence thresholds, recurrence gates, Gemma enrichment rate limits.</p></a>
-    </div>
+    <h2>Env var</h2>
+    <p><code>SENKANI_CACHE=on|off</code> — default <strong>on</strong>.</p>
 
-    <h2 style="margin-top:32px;">Config file</h2>
-    <pre class="code"><span class="c">// ~/.senkani/config.json</span>
-{
-  <span class="k">"retention"</span>: {
-    <span class="k">"token_events_days"</span>: <span class="e">90</span>,
-    <span class="k">"sandboxed_results_hours"</span>: <span class="e">24</span>
-  },
-  <span class="k">"budget"</span>: {
-    <span class="k">"daily_usd"</span>: <span class="e">5.00</span>,
-    <span class="k">"weekly_usd"</span>: <span class="e">25.00</span>
-  }
-}</pre>
+    <h2>Where it lives</h2>
+    <p>In-process only. Cleared on pane close. To wipe explicitly: <code>senkani_session</code> with <code>action:"clear-cache"</code>.</p>
+
+    <div class="seealso"><h3>See also</h3><ul>
+      <li><a href="../../../docs/reference/mcp/senkani_read.html"><code>senkani_read</code></a></li>
+      <li><a href="../../../docs/concepts/three-layer-stack.html">Layer 3: re-read suppression</a></li>
+    </ul></div>
+
   </article>
 </main>
 <footer class="site-foot">

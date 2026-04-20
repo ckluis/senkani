@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Guides — how to set up and run senkani</title>
-<meta name="description" content="Numbered, paste-runnable guides: install, wire up Claude Code, wire up Cursor/Copilot, first session, budget setup, and more.">
+<title>Troubleshooting — guide</title>
+<meta name="description" content="Common fixes: hook not registering, MCP not activating, grammar staleness, index rebuild.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -30,7 +30,7 @@
     <div class="wiki-nav-group">
       <h4>Guides</h4>
       <ul>
-        <li><a href="../../docs/guides/" class="active">All guides</a></li>
+        <li><a href="../../docs/guides/">All guides</a></li>
         <li><a href="../../docs/guides/install.html">Install</a></li>
         <li><a href="../../docs/guides/claude-code.html">Claude Code</a></li>
         <li><a href="../../docs/guides/cursor-copilot.html">Cursor / Copilot</a></li>
@@ -39,7 +39,7 @@
         <li><a href="../../docs/guides/compound-learning.html">Reviewing proposals</a></li>
         <li><a href="../../docs/guides/kb-workflow.html">Knowledge-base workflow</a></li>
         <li><a href="../../docs/guides/uninstall.html">Uninstall</a></li>
-        <li><a href="../../docs/guides/troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="../../docs/guides/troubleshooting.html" class="active">Troubleshooting</a></li>
       </ul>
     </div>
     <div class="wiki-nav-group">
@@ -52,23 +52,52 @@
   </aside>
   <article class="wiki-main">
     <nav class="crumb" aria-label="Breadcrumb">
-      <a href="../../">Home</a> <span class="sep">›</span> <span class="here">Guides</span>
+      <a href="../../">Home</a> <span class="sep">›</span>
+      <a href="../../docs/guides/">Guides</a> <span class="sep">›</span>
+      <span class="here">Troubleshooting</span>
     </nav>
     <span class="quadrant guide">Guide · How-to</span>
-    <h1 class="page-title">Guides</h1>
-    <p class="lede">Numbered, paste-runnable guides with expected-output blocks. Every shell command has been verified against a clean checkout.</p>
+    <h1 class="page-title">Troubleshooting</h1>
+    <p class="lede">Common fixes: hook not registering, MCP not activating, grammar staleness, index rebuild.</p>
 
-    <div class="card-grid">
-      <a class="card" href="../../docs/guides/install.html"><h4>Install</h4><p>Clone, build with Swift Package Manager, register hooks, launch the workspace. Three minutes end-to-end.</p></a>
-      <a class="card" href="../../docs/guides/claude-code.html"><h4>Wire up Claude Code</h4><p>How <code>senkani init</code> modifies <code>~/.claude/settings.json</code>; what the MCP entry looks like; how to verify the integration.</p></a>
-      <a class="card" href="../../docs/guides/cursor-copilot.html"><h4>Wire up Cursor / Copilot</h4><p><code>senkani init --hooks-only</code> for non-Claude agents. What changes, what doesn't.</p></a>
-      <a class="card" href="../../docs/guides/first-session.html"><h4>Your first session</h4><p>Open the workspace, kick off a coding agent, read the Analytics pane. What the numbers mean and how to read them.</p></a>
-      <a class="card" href="../../docs/guides/budget-setup.html"><h4>Budget setup</h4><p>Daily + weekly caps, dual-layer enforcement, and what happens when you hit them.</p></a>
-      <a class="card" href="../../docs/guides/compound-learning.html"><h4>Reviewing learned proposals</h4><p>How to use <code>senkani learn review</code> and the Sprint Review pane to accept/reject staged proposals.</p></a>
-      <a class="card" href="../../docs/guides/kb-workflow.html"><h4>Knowledge-base workflow</h4><p>Day-to-day with <code>senkani kb</code>: seeding entities, editing the source markdown, running the audit.</p></a>
-      <a class="card" href="../../docs/guides/uninstall.html"><h4>Clean uninstall</h4><p><code>senkani uninstall</code> + <code>senkani wipe</code>. What each removes and what to keep.</p></a>
-      <a class="card" href="../../docs/guides/troubleshooting.html"><h4>Troubleshooting</h4><p>Hook not registering, MCP not activating, grammar staleness, rebuild-index steps.</p></a>
-    </div>
+    <h2>Start here</h2>
+    <pre class="code">senkani doctor --fix</pre>
+    <p>Checks every expected file, every registration entry, every grammar version. <code>--fix</code> attempts repair for each amber/red finding.</p>
+
+    <h2>Hook not registering</h2>
+    <p>Symptom: tool calls go through but no compression happens, or the Agent Timeline pane stays empty.</p>
+    <ol>
+      <li>Confirm <code>~/.claude/settings.json</code> has PreToolUse + PostToolUse entries pointing at <code>~/.senkani/bin/senkani-hook</code>.</li>
+      <li>Confirm the hook binary exists and is executable: <code>ls -l ~/.senkani/bin/senkani-hook</code>.</li>
+      <li>Re-run <code>senkani init</code> — it's idempotent.</li>
+    </ol>
+
+    <h2>MCP server not activating</h2>
+    <p>Symptom: agent doesn't see any <code>senkani_*</code> tools.</p>
+    <ol>
+      <li>Confirm <code>SENKANI_PANE_ID</code> is set in the shell: <code>echo $SENKANI_PANE_ID</code>. If empty, you're in a non-Senkani terminal — launch <code>claude</code> inside a Terminal pane the app opened.</li>
+      <li>Confirm the MCP server entry in <code>~/.claude/settings.json</code>.</li>
+      <li>Run <code>senkani_version</code> (tool) or <code>senkani doctor</code>.</li>
+    </ol>
+
+    <h2>Grammar staleness warning</h2>
+    <p>Symptom: <code>senkani doctor</code> reports SKIP with "grammar X is N days stale."</p>
+    <p>This is a non-blocking advisory — it never fails CI. Stale = upstream has a newer version AND vendored &gt; 30 days. Within the window, outdated grammars roll up as PASS. Over the window, SKIP (not FAIL). If you want to update, the repo's <code>swift package update</code> pulls the latest grammars.</p>
+
+    <h2>Index out of sync</h2>
+    <p>Symptom: <code>senkani search</code> returns stale results or can't find a symbol you just added.</p>
+    <pre class="code">senkani index --force</pre>
+    <p>Forces a full rebuild. Normally the index updates incrementally via FSEvents — but after switching branches or restoring from a backup, the cursor can get out of sync.</p>
+
+    <h2>Budget cap triggered unexpectedly</h2>
+    <p>Symptom: tool calls denied with "budget exceeded."</p>
+    <pre class="code">senkani stats</pre>
+    <p>Shows spend against the caps. If you want to raise them: edit <code>~/.senkani/config.json</code> or set <code>SENKANI_BUDGET_DAILY</code>/<code>SENKANI_BUDGET_WEEKLY</code>.</p>
+
+    <h2>Still stuck?</h2>
+    <p>Open an issue at <a href="https://github.com/ckluis/senkani/issues">github.com/ckluis/senkani/issues</a>. Include the output of <code>senkani doctor</code> (with any paths redacted) and the relevant slice of <code>senkani stats --security</code>.</p>
+
+
   </article>
 </main>
 <footer class="site-foot">

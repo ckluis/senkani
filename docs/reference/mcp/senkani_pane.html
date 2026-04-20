@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>senkani_pane — MCP tool reference</title>
+<meta name="description" content="Control the workspace panes from a tool call — open, close, focus, resize.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../../assets/theme.css">
+</head>
+<body>
+<a href="#main" class="skip-nav">Skip to main content</a>
+<nav class="topnav" aria-label="Primary navigation">
+  <a class="wordmark" href="../../../">sen<span class="accent">kani</span><small>compression layer for AI coding agents</small></a>
+  <button class="topnav-hamburger" aria-label="Open navigation menu" aria-expanded="false" aria-controls="topnav-links"><span></span><span></span><span></span></button>
+  <div class="topnav-links" id="topnav-links">
+    <a href="../../../docs/what-is-senkani.html">What is it?</a>
+    <a href="../../../docs/concepts/">Concepts</a>
+    <a href="../../../docs/reference/">Reference</a>
+    <a href="../../../docs/guides/">Guides</a>
+    <a href="../../../docs/status.html">Status</a>
+    <div class="topnav-search"><input type="search" id="site-search" placeholder="Search · /" aria-label="Search the site"></div>
+    <a href="https://github.com/ckluis/senkani" class="btn-nav">GitHub →</a>
+  </div>
+</nav>
+<main id="main" class="wiki-layout">
+  <aside class="wiki-nav" aria-label="MCP tools navigation">
+    <div class="wiki-nav-group">
+      <h4>Reference</h4>
+      <ul>
+        <li><a href="../../../docs/reference/">All reference</a></li>
+        <li><a href="../../../docs/reference/mcp/">MCP tools index</a></li>
+        <li><a href="../../../docs/reference/cli/">CLI commands</a></li>
+        <li><a href="../../../docs/reference/options/">Options &amp; env</a></li>
+        <li><a href="../../../docs/reference/panes/">Panes</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>MCP tools (19)</h4>
+      <ul>
+        <li><a href="../../../docs/reference/mcp/senkani_read.html"><code>senkani_read</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_exec.html"><code>senkani_exec</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_search.html"><code>senkani_search</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_fetch.html"><code>senkani_fetch</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_explore.html"><code>senkani_explore</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_deps.html"><code>senkani_deps</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_outline.html"><code>senkani_outline</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_validate.html"><code>senkani_validate</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_parse.html"><code>senkani_parse</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_embed.html"><code>senkani_embed</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_vision.html"><code>senkani_vision</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_watch.html"><code>senkani_watch</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_web.html"><code>senkani_web</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_pane.html" class="active"><code>senkani_pane</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_session.html"><code>senkani_session</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_knowledge.html"><code>senkani_knowledge</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_version.html"><code>senkani_version</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_bundle.html"><code>senkani_bundle</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_repo.html"><code>senkani_repo</code></a></li>
+      </ul>
+    </div>
+  </aside>
+  <article class="wiki-main">
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../">Home</a> <span class="sep">›</span>
+      <a href="../../../docs/reference/">Reference</a> <span class="sep">›</span>
+      <a href="../../../docs/reference/mcp/">MCP tools</a> <span class="sep">›</span>
+      <span class="here"><code>senkani_pane</code></span>
+    </nav>
+    <span class="quadrant reference">Reference · Information</span>
+    <h1 class="page-title"><code style="background:none;padding:0;color:var(--accent-lo);font-size:0.82em;">senkani_pane</code></h1>
+    <div class="tag-row" style="margin-bottom:18px;">
+      <span class="badge badge-live">Live</span>
+      
+      
+    </div>
+
+    <p class="lede">Control the workspace panes from a tool call — open, close, focus, resize.</p>
+
+    <h2>Signature</h2>
+    <div class="ref-signature">senkani_mcp.call(tool="senkani_pane", args={...})</div>
+
+    <h2>Behavior</h2>
+    <p>Sends IPC messages to the SwiftUI app via a local Unix-domain socket (`~/.senkani/sockets/pane.sock`). Pane mutations execute on the app's main thread.</p>
+
+
+    <h2>Inputs</h2>
+    <div class="ref-io-table">
+      <div class="head">Name</div><div class="head">Type</div><div class="head">Default</div><div class="head">Description</div>
+      <div class="k">action</div><div class="t">string</div><div class="default">—</div><div class="desc">`open`, `close`, `focus`, `resize`, `list`.</div><div class="k">pane_type</div><div class="t">string</div><div class="default">—</div><div class="desc">For `open`: Terminal, Analytics, Browser, etc.</div><div class="k">pane_id</div><div class="t">string</div><div class="default">—</div><div class="desc">For `close` / `focus` / `resize`.</div>
+    </div>
+
+    <h2>Output</h2>
+    <p>Updated pane state. `list` returns the full pane tree for the current workspace.</p>
+
+    <h2>Example</h2>
+    <pre class="code">{<span class="k">"tool"</span>:<span class="v">"senkani_pane"</span>,<span class="k">"args"</span>:{<span class="k">"action"</span>:<span class="v">"open"</span>,<span class="k">"pane_type"</span>:<span class="v">"Analytics"</span>}}</pre>
+
+    <h2>Details</h2>
+    <p>Requires the app to be running. If the socket is absent or the app is not a managed target, returns an error.</p>
+
+    <div class="callout callout-security"><span class="callout-icon">⚔</span><div>Socket auth via `SENKANI_SOCKET_AUTH=on` requires a handshake frame matching `~/.senkani/.token` (mode 0600, rotated on start).</div></div>
+
+    <div class="seealso">
+      <h3>See also</h3>
+      <ul>
+        <li><a href="../../../docs/reference/panes/"><code>Pane reference</code></a> — What pane types exist.</li>
+        <li><a href="../../../docs/reference/options/security.html"><code>Socket auth option</code></a> — Enable the handshake.</li>
+      </ul>
+    </div>
+
+    <div class="source-pointer">
+      <strong>Source:</strong> <code>Sources/MCPServer/Tools/PaneTool.swift + SenkaniApp/IPC/</code>
+    </div>
+  </article>
+</main>
+<footer class="site-foot">
+  <div class="foot-grid">
+    <div>
+      <div class="foot-wordmark">sen<span class="accent">kani</span></div>
+      <p class="foot-tagline"><span lang="zh">閃蟹</span> — "fast claw." A native macOS binary written in Swift.</p>
+    </div>
+    <div class="foot-col"><h4>Product</h4><ul><li><a href="../../../docs/what-is-senkani.html">What is it?</a></li><li><a href="../../../docs/concepts/">Concepts</a></li><li><a href="../../../docs/reference/">Reference</a></li><li><a href="../../../docs/guides/">Guides</a></li><li><a href="../../../docs/status.html">Status</a></li></ul></div>
+    <div class="foot-col"><h4>Reference</h4><ul><li><a href="../../../docs/reference/mcp/">MCP tools</a></li><li><a href="../../../docs/reference/cli/">CLI commands</a></li><li><a href="../../../docs/reference/options/">Options &amp; env</a></li><li><a href="../../../docs/reference/panes/">Panes</a></li><li><a href="../../../docs/changelog.html">Changelog</a></li></ul></div>
+    <div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li><li><a href="../../../docs/guides/install.html">Install</a></li><li><a href="../../../docs/guides/troubleshooting.html">Troubleshooting</a></li><li><a href="../../../docs/about.html">About &amp; license</a></li></ul></div>
+  </div>
+  <div class="foot-meta">
+    <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
+    <span><a href="../../../docs/changelog.html">v0.2.0 changelog</a></span>
+  </div>
+</footer>
+<script src="../../../assets/app.js" defer></script>
+</body>
+</html>

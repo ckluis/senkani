@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Concepts — understanding senkani</title>
-<meta name="description" content="Explanation pages: why senkani compresses where it compresses, how the hook relay works, how compound learning mines your own sessions, and how the knowledge base stays coherent.">
+<title>The three-layer stack — concept</title>
+<meta name="description" content="Senkani compresses at three places — Layer 1 (MCP tools), Layer 2 (smart hooks), Layer 3 (preemptive interception). Each layer catches waste the other layers ca">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -31,7 +31,7 @@
       <h4>Overview</h4>
       <ul>
         <li><a href="../../docs/what-is-senkani.html">What is senkani?</a></li>
-        <li><a href="../../docs/concepts/" class="active">All concepts</a></li>
+        <li><a href="../../docs/concepts/">All concepts</a></li>
       </ul>
     </div>
     <div class="wiki-nav-group">
@@ -40,7 +40,7 @@
         <li><a href="../../docs/concepts/compression-layer.html">Compression layer</a></li>
         <li><a href="../../docs/concepts/hook-relay.html">Hook relay</a></li>
         <li><a href="../../docs/concepts/mcp-intelligence.html">MCP intelligence</a></li>
-        <li><a href="../../docs/concepts/three-layer-stack.html">Three-layer stack</a></li>
+        <li><a href="../../docs/concepts/three-layer-stack.html" class="active">Three-layer stack</a></li>
         <li><a href="../../docs/concepts/compound-learning.html">Compound learning</a></li>
         <li><a href="../../docs/concepts/knowledge-base.html">Knowledge base</a></li>
         <li><a href="../../docs/concepts/security-posture.html">Security posture</a></li>
@@ -56,21 +56,41 @@
   </aside>
   <article class="wiki-main">
     <nav class="crumb" aria-label="Breadcrumb">
-      <a href="../../">Home</a> <span class="sep">›</span> <span class="here">Concepts</span>
+      <a href="../../">Home</a> <span class="sep">›</span>
+      <a href="../../docs/concepts/">Concepts</a> <span class="sep">›</span>
+      <span class="here">The three-layer stack</span>
     </nav>
     <span class="quadrant concept">Concept · Explanation</span>
-    <h1 class="page-title">Concepts</h1>
-    <p class="lede">Explanation pages — the <em>why</em> behind senkani. Reference tells you what each tool does; concepts tell you why the system works. Start with <a href="../../docs/what-is-senkani.html">What is senkani?</a> if this is your first visit.</p>
+    <h1 class="page-title">The three-layer stack</h1>
+    <p class="lede">Senkani compresses at three places — Layer 1 (MCP tools), Layer 2 (smart hooks), Layer 3 (preemptive interception). Each layer catches waste the other layers can't.</p>
 
-    <div class="card-grid">
-      <a class="card" href="../../docs/concepts/compression-layer.html"><h4>Compression layer</h4><p>Three places Senkani compresses: input (before the LLM sees it), redundancy (before the tool runs), output (before responses grow). Why all three.</p></a>
-      <a class="card" href="../../docs/concepts/hook-relay.html"><h4>Hook relay</h4><p>How the <code>senkani-hook</code> binary intercepts your agent's Read/Bash/Grep, routes to senkani equivalents, and denies with cached results when appropriate.</p></a>
-      <a class="card" href="../../docs/concepts/mcp-intelligence.html"><h4>MCP intelligence</h4><p>What "MCP tool" means and why senkani has 19 of them. How tree-sitter + FTS5 + MiniLM compose into sub-5 ms symbol search.</p></a>
-      <a class="card" href="../../docs/concepts/three-layer-stack.html"><h4>Three-layer stack</h4><p>Layer 1 tools, Layer 2 hooks, Layer 3 smart denials. Why denial-with-cached-result is the biggest win on pathological sessions.</p></a>
-      <a class="card" href="../../docs/concepts/compound-learning.html"><h4>Compound learning</h4><p>Four artifact types — filter rules, context docs, instruction patches, workflow playbooks — mined from your own sessions. The <code>.recurring → .staged → .applied</code> flow.</p></a>
-      <a class="card" href="../../docs/concepts/knowledge-base.html"><h4>Knowledge base</h4><p>Project entities + decisions + links. Markdown as source-of-truth, SQLite as rebuilt index. How it stays coherent when you hand-edit.</p></a>
-      <a class="card" href="../../docs/concepts/security-posture.html"><h4>Security posture</h4><p>v0.2.0 defaults: prompt-injection guard on, SSRF hardening on, secret redaction on, socket auth opt-in. Why senkani is a trust boundary and what that means concretely.</p></a>
-    </div>
+    <h2>Layer 1 — MCP tools</h2>
+    <p>The agent calls <code>senkani_read</code> instead of <code>Read</code>, <code>senkani_exec</code> instead of <code>Bash</code>, <code>senkani_search</code> instead of <code>Grep</code>. Each tool is cached, compressed, and secret-redacted by construction. This is the happy path.</p>
+
+    <h2>Layer 2 — Smart hooks</h2>
+    <p>Not every agent cooperates. Sometimes an agent calls built-in <code>Read</code> directly instead of <code>senkani_read</code>. Layer 2 intercepts the built-in and rewrites the response through the filter pipeline on the way out. Same compression, worse ergonomics (the agent's tool sheet doesn't show the senkani alternative), but the savings still land.</p>
+
+    <h2>Layer 3 — Preemptive interception (smart denials)</h2>
+    <p>Some calls shouldn't run at all. Layer 3 is five pattern matchers that deny with a cached answer:</p>
+    <ol>
+      <li><strong>Re-read suppression.</strong> The agent just read <code>src/auth.ts</code>; it didn't change; the next <code>Read src/auth.ts</code> is suppressed. The deny reason says "read 42s ago, unchanged."</li>
+      <li><strong>Command replay.</strong> Deterministic commands (<code>npm test</code>, <code>swift build</code>, <code>pytest</code>) with no file changes since the last invocation → deny with the cached result.</li>
+      <li><strong>Trivial routing.</strong> <code>pwd</code>, <code>ls</code>, <code>echo $HOME</code> → answer in the deny reason. Saves a round-trip.</li>
+      <li><strong>Search upgrade.</strong> Three sequential <code>Read</code>s on small related files → deny the third with a hint to use <code>senkani_search</code>.</li>
+      <li><strong>Redundant validation.</strong> If a build/lint command already ran with no file changes since, subsequent re-runs are covered by command replay.</li>
+    </ol>
+
+    <h2>Why three layers, not one</h2>
+    <p>Layer 1 depends on the agent cooperating. Layer 2 handles the common case of a slightly-uncooperative agent. Layer 3 handles pathological waste patterns that neither layer would catch: re-reads, re-runs, round-trippable trivia. On cooperative sessions, Layers 2 and 3 fire rarely. On pathological sessions, they rescue 40–60% of tokens.</p>
+
+    <h2>How denials feel to the model</h2>
+    <p>A denial is not a failure — it's a structured response. The model sees the reason (e.g., "read 42s ago, unchanged"), often with the cached content inline. It continues with the real answer, not a retry. No training signal needed; the agent just reads the deny reason like any other tool result.</p>
+
+    <div class="seealso"><h3>See also</h3><ul>
+        <li><a href="../../docs/concepts/hook-relay.html">Hook relay</a></li>
+        <li><a href="../../docs/reference/mcp/senkani_read.html">senkani_read</a></li>
+        <li><a href="../../docs/concepts/compression-layer.html">Compression layer</a></li>
+    </ul></div>
   </article>
 </main>
 <footer class="site-foot">

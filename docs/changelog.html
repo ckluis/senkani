@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Docs — senkani</title>
-<meta name="description" content="Wiki root: concepts, reference, guides, status, about, changelog.">
+<title>Changelog — senkani</title>
+<meta name="description" content="Versioned release notes for senkani. Full detail from CHANGELOG.md in the repo.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -48,19 +48,23 @@
   </aside>
   <article class="wiki-main">
     <nav class="crumb" aria-label="Breadcrumb">
-      <a href="../">Home</a> <span class="sep">›</span> <span class="here">Docs</span>
+      <a href="../">Home</a> <span class="sep">›</span> <span class="here">Changelog</span>
     </nav>
-    <h1 class="page-title">Docs</h1>
-    <p class="lede">The senkani wiki. Every MCP tool, CLI command, option, and pane has its own page. Concepts explain the why; guides walk you through how-tos; reference answers what-does-this-do.</p>
+    <h1 class="page-title">Changelog</h1>
+    <p class="lede">Release notes per server version (reported by <a href="../docs/reference/mcp/senkani_version.html"><code>senkani_version</code></a>). Full detail lives in <a href="https://github.com/ckluis/senkani/blob/main/CHANGELOG.md">CHANGELOG.md</a> in the repo — this page is a curated summary.</p>
 
-    <div class="card-grid">
-      <a class="card" href="../docs/what-is-senkani.html"><h3>What is senkani?</h3><p>The product in one page — category, positioning, who it's for.</p></a>
-      <a class="card" href="../docs/concepts/"><h3>Concepts</h3><p>Explanation. Why the three-layer stack, how the hook relay works, how compound learning mines your sessions.</p></a>
-      <a class="card" href="../docs/reference/"><h3>Reference</h3><p>Every <code>senkani_*</code> MCP tool, every CLI command, every FCSIT option, every pane type.</p></a>
-      <a class="card" href="../docs/guides/"><h3>Guides</h3><p>How-tos. Install, wire up Claude Code, set up budgets, review learned proposals, clean uninstall.</p></a>
-      <a class="card" href="../docs/status.html"><h3>Status</h3><p>What's shipped in v0.2.0 + test count + feature checklist.</p></a>
-      <a class="card" href="../docs/changelog.html"><h3>Changelog</h3><p>Release-by-release notes.</p></a>
-    </div>
+    <h2>v0.2.0 (current) — April 2026</h2>
+    <ul>
+      <li><strong>Website rebuild</strong> — multi-page wiki + tightened landing page. 19 MCP tools + 19 CLI commands + 17 panes each have their own URL. <a href="../docs/what-is-senkani.html">Start here</a>.</li>
+      <li><strong>Security hardening (v0.2.0 release)</strong> — prompt-injection guard on, SSRF guard on (DNS pre-resolution + redirect re-validation + subresource blocklist), secret detection on (13 families + entropy), socket-auth opt-in, structured JSON logs opt-in with sink redaction, retention scheduler.</li>
+      <li><strong>Compound learning + KB master plan</strong> — nine-round landing 2026-04-17: H+2b context signals, H+2c instruction/workflow generators with Schneier never-auto-apply, H+2d sprint + quarterly cadence, F+1 Layer-1 rebuild coordinator, F+2 entity tracker, F+3 enrichment validator + KB rollback, F+4 KB timeline, F+5 KB↔learning bridge.</li>
+      <li><strong><code>senkani_repo</code></strong> — query any public GitHub repo without cloning. Host-allowlisted, SecretDetector-scanned, TTL-cached.</li>
+      <li><strong>MLX inference lock</strong> — FIFO serialization + macOS memory-pressure-aware model drops across <code>senkani_embed</code>, <code>senkani_vision</code>, Gemma rationale rewriter.</li>
+      <li><strong>Sprint Review pane</strong> — GUI counterpart to <code>senkani learn review</code>. Accept/reject staged proposals with stale-applied panel.</li>
+      <li><strong>Grammar staleness advisory</strong> — non-blocking (SKIP not FAIL) to avoid CI false alarms.</li>
+    </ul>
+
+    <p>See the repo <a href="https://github.com/ckluis/senkani/blob/main/CHANGELOG.md">CHANGELOG.md</a> for dated per-feature detail.</p>
   </article>
 </main>
 <footer class="site-foot">

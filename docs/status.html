@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Docs — senkani</title>
-<meta name="description" content="Wiki root: concepts, reference, guides, status, about, changelog.">
+<title>Status — what's built</title>
+<meta name="description" content="Current release, test count, MCP tool + CLI command + pane counts, security posture, and roadmap.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -48,19 +48,40 @@
   </aside>
   <article class="wiki-main">
     <nav class="crumb" aria-label="Breadcrumb">
-      <a href="../">Home</a> <span class="sep">›</span> <span class="here">Docs</span>
+      <a href="../">Home</a> <span class="sep">›</span> <span class="here">Status</span>
     </nav>
-    <h1 class="page-title">Docs</h1>
-    <p class="lede">The senkani wiki. Every MCP tool, CLI command, option, and pane has its own page. Concepts explain the why; guides walk you through how-tos; reference answers what-does-this-do.</p>
+    <span class="quadrant reference">Reference · Information</span>
+    <h1 class="page-title">Status</h1>
+    <p class="lede">Current release: <strong>v0.2.0</strong>. <strong>1,510</strong> unit tests passing. All features below are live + tested + reproducible on your hardware.</p>
 
     <div class="card-grid">
-      <a class="card" href="../docs/what-is-senkani.html"><h3>What is senkani?</h3><p>The product in one page — category, positioning, who it's for.</p></a>
-      <a class="card" href="../docs/concepts/"><h3>Concepts</h3><p>Explanation. Why the three-layer stack, how the hook relay works, how compound learning mines your sessions.</p></a>
-      <a class="card" href="../docs/reference/"><h3>Reference</h3><p>Every <code>senkani_*</code> MCP tool, every CLI command, every FCSIT option, every pane type.</p></a>
-      <a class="card" href="../docs/guides/"><h3>Guides</h3><p>How-tos. Install, wire up Claude Code, set up budgets, review learned proposals, clean uninstall.</p></a>
-      <a class="card" href="../docs/status.html"><h3>Status</h3><p>What's shipped in v0.2.0 + test count + feature checklist.</p></a>
-      <a class="card" href="../docs/changelog.html"><h3>Changelog</h3><p>Release-by-release notes.</p></a>
+      <div class="stat-card"><div class="num">v<em>0.2</em>.0</div><div class="label">Current release — <a href="../docs/changelog.html">changelog</a></div></div>
+      <div class="stat-card"><div class="num"><em>1,510</em></div><div class="label">Passing tests</div></div>
+      <div class="stat-card"><div class="num"><em>19</em></div><div class="label">MCP tools — <a href="../docs/reference/mcp/">reference</a></div></div>
+      <div class="stat-card"><div class="num"><em>19</em></div><div class="label">CLI commands — <a href="../docs/reference/cli/">reference</a></div></div>
+      <div class="stat-card"><div class="num"><em>17</em></div><div class="label">Pane types — <a href="../docs/reference/panes/">reference</a></div></div>
+      <div class="stat-card"><div class="num"><em>25</em></div><div class="label">Tree-sitter languages indexed</div></div>
     </div>
+
+    <h2 style="margin-top:40px;">Shipped this release (v0.2.0)</h2>
+    <ul>
+      <li><strong>Hook relay + filter pipeline</strong> — 24 command-specific rules; Layer 3 smart denials (re-read suppression, command replay, trivial routing, symbol upgrade, redundant validation); 80.37× fixture-suite reduction.</li>
+      <li><strong>Symbol indexer</strong> — 25 tree-sitter grammars, FTS5 search, dependency graph, container hierarchy, incremental FSEvents updates; cold &lt; 5 ms / cached &lt; 1 ms.</li>
+      <li><strong>Session DB + analytics</strong> — SQLite + FTS5; per-call token tracking; budget enforcement at hook layer; BM25+RRF search fusion; @-mention context pinning; session continuity; JSONL data export.</li>
+      <li><strong>Local ML</strong> — MiniLM embeddings (384-dim) + Gemma vision via MLX on Neural Engine; fully offline after download; L0/L1/L2 tiered context pre-warming.</li>
+      <li><strong>Compound learning</strong> — recurring→staged→applied with Laplace-smoothed confidence; four artifact types; Schneier gate on instruction-patch auto-apply.</li>
+      <li><strong>Knowledge base</strong> — markdown source-of-truth + rebuilt SQLite index; enrichment validator, rollback, timeline; KB↔learning bridge.</li>
+      <li><strong>Security hardening</strong> — SSRF guard with DNS pre-resolution + redirect re-validation + subresource blocklist; prompt-injection guard (multilingual + homoglyph NFKC-folded); 13 secret-detector families; socket-auth handshake; opt-in structured JSON logs with sink redaction.</li>
+      <li><strong>JS-rendered web fetch</strong> — <code>senkani_web</code> returns AXTree markdown via WKWebView; version negotiation via <code>senkani_version</code>.</li>
+      <li><strong>New website</strong> — this rebuild. Multi-page wiki + landing page per <code>spec/website_rebuild.md</code>.</li>
+    </ul>
+
+    <h2>Links</h2>
+    <ul>
+      <li><a href="../docs/changelog.html">Full changelog</a></li>
+      <li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li>
+      <li><a href="../docs/about.html">About + license</a></li>
+    </ul>
   </article>
 </main>
 <footer class="site-foot">

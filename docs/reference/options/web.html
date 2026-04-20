@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Options & env vars — reference</title>
-<meta name="description" content="FCSIT toggles, budget caps, security env vars, and compound-learning thresholds.">
+<title>Web env vars — options reference</title>
+<meta name="description" content="Overrides for the &lt;code&gt;senkani_web&lt;/code&gt; SSRF guard. Only touch these if you know what you&#x27;re doing.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -31,7 +31,7 @@
       <h4>Reference</h4>
       <ul>
         <li><a href="../../../docs/reference/">All reference</a></li>
-        <li><a href="../../../docs/reference/options/" class="active">Options index</a></li>
+        <li><a href="../../../docs/reference/options/">Options index</a></li>
       </ul>
     </div>
     <div class="wiki-nav-group">
@@ -45,7 +45,7 @@
         <li><a href="../../../docs/reference/options/terse.html">T — Terse</a></li>
         <li><a href="../../../docs/reference/options/budget.html">Budget caps</a></li>
         <li><a href="../../../docs/reference/options/security.html">Security env vars</a></li>
-        <li><a href="../../../docs/reference/options/web.html">Web env vars</a></li>
+        <li><a href="../../../docs/reference/options/web.html" class="active">Web env vars</a></li>
         <li><a href="../../../docs/reference/options/compound-learning.html">Compound-learning env</a></li>
       </ul>
     </div>
@@ -54,42 +54,29 @@
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="../../../">Home</a> <span class="sep">›</span>
       <a href="../../../docs/reference/">Reference</a> <span class="sep">›</span>
-      <span class="here">Options &amp; env</span>
+      <a href="../../../docs/reference/options/">Options &amp; env</a> <span class="sep">›</span>
+      <span class="here">Web env vars</span>
     </nav>
     <span class="quadrant reference">Reference · Information</span>
-    <h1 class="page-title">Options &amp; env vars</h1>
-    <p class="lede">Resolution order: <strong>CLI flag &gt; env var &gt; <code>~/.senkani/config.json</code> &gt; default</strong>. Any toggle can be overridden at any level without touching other settings.</p>
+    <h1 class="page-title">Web env vars</h1>
+    <p class="lede">Overrides for the <code>senkani_web</code> SSRF guard. Only touch these if you know what you're doing.</p>
 
-    <h2>FCSIT — per-pane feature toggles</h2>
-    <div class="fcsit-card">
-      <a class="fcsit-letter f" href="../../../docs/reference/options/filter.html"><span class="ltr">F</span><span class="name">Filter</span><span class="default">default on</span></a>
-      <a class="fcsit-letter c" href="../../../docs/reference/options/cache.html"><span class="ltr">C</span><span class="name">Cache</span><span class="default">default on</span></a>
-      <a class="fcsit-letter s" href="../../../docs/reference/options/secrets.html"><span class="ltr">S</span><span class="name">Secrets</span><span class="default">default on</span></a>
-      <a class="fcsit-letter i" href="../../../docs/reference/options/indexer.html"><span class="ltr">I</span><span class="name">Indexer</span><span class="default">default on</span></a>
-      <a class="fcsit-letter t" href="../../../docs/reference/options/terse.html"><span class="ltr">T</span><span class="name">Terse</span><span class="default">default off</span></a>
-    </div>
-    <p><a href="../../../docs/reference/options/fcsit.html">Read the FCSIT overview →</a></p>
+    <h2>SSRF guard bypass</h2>
+    <p><code>SENKANI_WEB_ALLOW_PRIVATE=on</code> — default <strong>off</strong>. Normally, <code>senkani_web</code> blocks any address in private/link-local/CGNAT/multicast ranges (including IPv4-mapped IPv6 and octal/hex IPv4). Redirects are re-validated. Subresources (img/script/xhr/etc.) to the same ranges are blocked via <code>WKContentRuleList</code>. Setting this env var to <code>on</code> lifts the private-range block — use only for internal doc servers on a trusted network.</p>
 
-    <h2>Env-var families</h2>
-    <div class="card-grid">
-      <a class="card" href="../../../docs/reference/options/budget.html"><h4>Budget caps</h4><p>Daily + weekly spend ceilings enforced at the hook layer. <code>SENKANI_BUDGET_DAILY</code>, <code>SENKANI_BUDGET_WEEKLY</code>.</p></a>
-      <a class="card" href="../../../docs/reference/options/security.html"><h4>Security env vars</h4><p>Prompt-injection guard, SSRF overrides, socket auth, structured JSON logs, retention tuning.</p></a>
-      <a class="card" href="../../../docs/reference/options/web.html"><h4>Web env vars</h4><p>Overrides for the <code>senkani_web</code> SSRF guard, subresource blocklist, allowlisted hosts.</p></a>
-      <a class="card" href="../../../docs/reference/options/compound-learning.html"><h4>Compound-learning env</h4><p>Confidence thresholds, recurrence gates, Gemma enrichment rate limits.</p></a>
+    <div class="callout callout-warn">
+      <span class="callout-icon">⚠</span>
+      <div><strong>This is not a "make it work" switch.</strong> Cloud metadata endpoints (169.254.169.254, fd00:ec2::254) are accessible from your machine if this is on. Senkani's SSRF guard exists specifically to keep those endpoints unreachable from LLM-controlled HTTP requests. Bypass at your own risk.</div>
     </div>
 
-    <h2 style="margin-top:32px;">Config file</h2>
-    <pre class="code"><span class="c">// ~/.senkani/config.json</span>
-{
-  <span class="k">"retention"</span>: {
-    <span class="k">"token_events_days"</span>: <span class="e">90</span>,
-    <span class="k">"sandboxed_results_hours"</span>: <span class="e">24</span>
-  },
-  <span class="k">"budget"</span>: {
-    <span class="k">"daily_usd"</span>: <span class="e">5.00</span>,
-    <span class="k">"weekly_usd"</span>: <span class="e">25.00</span>
-  }
-}</pre>
+    <h2>Scheme scope</h2>
+    <p><code>file://</code> is never accepted by <code>senkani_web</code>. Use <a href="../../../docs/reference/mcp/senkani_read.html"><code>senkani_read</code></a> for local files.</p>
+
+    <div class="seealso"><h3>See also</h3><ul>
+      <li><a href="../../../docs/reference/mcp/senkani_web.html"><code>senkani_web</code> — behavior + security</a></li>
+      <li><a href="../../../docs/concepts/security-posture.html">Trust boundary concept</a></li>
+    </ul></div>
+
   </article>
 </main>
 <footer class="site-foot">

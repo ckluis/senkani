@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Options & env vars — reference</title>
-<meta name="description" content="FCSIT toggles, budget caps, security env vars, and compound-learning thresholds.">
+<title>FCSIT — five per-pane toggles — options reference</title>
+<meta name="description" content="Each pane in the workspace carries five feature switches: &lt;strong&gt;F&lt;/strong&gt;ilter, &lt;strong&gt;C&lt;/strong&gt;ache, &lt;strong&gt;S&lt;/strong&gt">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -31,13 +31,13 @@
       <h4>Reference</h4>
       <ul>
         <li><a href="../../../docs/reference/">All reference</a></li>
-        <li><a href="../../../docs/reference/options/" class="active">Options index</a></li>
+        <li><a href="../../../docs/reference/options/">Options index</a></li>
       </ul>
     </div>
     <div class="wiki-nav-group">
       <h4>Options &amp; env</h4>
       <ul>
-        <li><a href="../../../docs/reference/options/fcsit.html">FCSIT overview</a></li>
+        <li><a href="../../../docs/reference/options/fcsit.html" class="active">FCSIT overview</a></li>
         <li><a href="../../../docs/reference/options/filter.html">F — Filter</a></li>
         <li><a href="../../../docs/reference/options/cache.html">C — Cache</a></li>
         <li><a href="../../../docs/reference/options/secrets.html">S — Secrets</a></li>
@@ -54,13 +54,13 @@
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="../../../">Home</a> <span class="sep">›</span>
       <a href="../../../docs/reference/">Reference</a> <span class="sep">›</span>
-      <span class="here">Options &amp; env</span>
+      <a href="../../../docs/reference/options/">Options &amp; env</a> <span class="sep">›</span>
+      <span class="here">FCSIT — five per-pane toggles</span>
     </nav>
     <span class="quadrant reference">Reference · Information</span>
-    <h1 class="page-title">Options &amp; env vars</h1>
-    <p class="lede">Resolution order: <strong>CLI flag &gt; env var &gt; <code>~/.senkani/config.json</code> &gt; default</strong>. Any toggle can be overridden at any level without touching other settings.</p>
+    <h1 class="page-title">FCSIT — five per-pane toggles</h1>
+    <p class="lede">Each pane in the workspace carries five feature switches: <strong>F</strong>ilter, <strong>C</strong>ache, <strong>S</strong>ecrets, <strong>I</strong>ndexer, <strong>T</strong>erse. Set per-pane; persist to <code>~/.senkani/panes/{paneId}.env</code>; take effect immediately without a restart.</p>
 
-    <h2>FCSIT — per-pane feature toggles</h2>
     <div class="fcsit-card">
       <a class="fcsit-letter f" href="../../../docs/reference/options/filter.html"><span class="ltr">F</span><span class="name">Filter</span><span class="default">default on</span></a>
       <a class="fcsit-letter c" href="../../../docs/reference/options/cache.html"><span class="ltr">C</span><span class="name">Cache</span><span class="default">default on</span></a>
@@ -68,28 +68,27 @@
       <a class="fcsit-letter i" href="../../../docs/reference/options/indexer.html"><span class="ltr">I</span><span class="name">Indexer</span><span class="default">default on</span></a>
       <a class="fcsit-letter t" href="../../../docs/reference/options/terse.html"><span class="ltr">T</span><span class="name">Terse</span><span class="default">default off</span></a>
     </div>
-    <p><a href="../../../docs/reference/options/fcsit.html">Read the FCSIT overview →</a></p>
 
-    <h2>Env-var families</h2>
-    <div class="card-grid">
-      <a class="card" href="../../../docs/reference/options/budget.html"><h4>Budget caps</h4><p>Daily + weekly spend ceilings enforced at the hook layer. <code>SENKANI_BUDGET_DAILY</code>, <code>SENKANI_BUDGET_WEEKLY</code>.</p></a>
-      <a class="card" href="../../../docs/reference/options/security.html"><h4>Security env vars</h4><p>Prompt-injection guard, SSRF overrides, socket auth, structured JSON logs, retention tuning.</p></a>
-      <a class="card" href="../../../docs/reference/options/web.html"><h4>Web env vars</h4><p>Overrides for the <code>senkani_web</code> SSRF guard, subresource blocklist, allowlisted hosts.</p></a>
-      <a class="card" href="../../../docs/reference/options/compound-learning.html"><h4>Compound-learning env</h4><p>Confidence thresholds, recurrence gates, Gemma enrichment rate limits.</p></a>
+    <h2>What each letter controls</h2>
+    <div class="ref-io-table">
+      <div class="head">Letter</div><div class="head">Feature</div><div class="head">Default</div><div class="head">What it does</div>
+      <div class="k">F</div><div class="t">Filter</div><div class="default">on</div><div class="desc"><a href="../../../docs/reference/options/filter.html">Filter pipeline</a> — 24 command-specific output rules applied to <code>senkani_exec</code>.</div>
+      <div class="k">C</div><div class="t">Cache</div><div class="default">on</div><div class="desc"><a href="../../../docs/reference/options/cache.html">Read cache</a> — keyed on (path, mtime); unchanged files return from memory.</div>
+      <div class="k">S</div><div class="t">Secrets</div><div class="default">on</div><div class="desc"><a href="../../../docs/reference/options/secrets.html">SecretDetector</a> — 13 regex families + entropy fallback on every tool output.</div>
+      <div class="k">I</div><div class="t">Indexer</div><div class="default">on</div><div class="desc"><a href="../../../docs/reference/options/indexer.html">Symbol indexer</a> — <code>senkani_search</code>, <code>senkani_fetch</code>, <code>senkani_outline</code> active.</div>
+      <div class="k">T</div><div class="t">Terse</div><div class="default">off</div><div class="desc"><a href="../../../docs/reference/options/terse.html">Terse mode</a> — output-token reduction via system-prompt injection + phrase strip.</div>
     </div>
 
-    <h2 style="margin-top:32px;">Config file</h2>
-    <pre class="code"><span class="c">// ~/.senkani/config.json</span>
-{
-  <span class="k">"retention"</span>: {
-    <span class="k">"token_events_days"</span>: <span class="e">90</span>,
-    <span class="k">"sandboxed_results_hours"</span>: <span class="e">24</span>
-  },
-  <span class="k">"budget"</span>: {
-    <span class="k">"daily_usd"</span>: <span class="e">5.00</span>,
-    <span class="k">"weekly_usd"</span>: <span class="e">25.00</span>
-  }
-}</pre>
+    <h2>How to toggle</h2>
+    <ul>
+      <li><strong>UI:</strong> click the letter in the pane header — it highlights when on.</li>
+      <li><strong>Env var:</strong> <code>SENKANI_FILTER=on|off</code>, <code>SENKANI_CACHE=on|off</code>, <code>SENKANI_SECRETS=on|off</code>, <code>SENKANI_INDEXER=on|off</code>, <code>SENKANI_TERSE=on|off</code>.</li>
+      <li><strong>MCP:</strong> <code>senkani_session</code> with <code>action:"toggle", feature:"filter"</code>.</li>
+    </ul>
+
+    <h2>Per-pane vs global</h2>
+    <p>FCSIT is <strong>per-pane</strong>. Different panes can run different combinations — a terse-mode research pane alongside a full-fidelity build pane. Global defaults come from <code>~/.senkani/config.json</code>; env vars override per pane; the UI toggle is the final say for the current session.</p>
+
   </article>
 </main>
 <footer class="site-foot">

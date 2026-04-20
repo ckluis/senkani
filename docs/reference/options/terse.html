@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Options & env vars — reference</title>
-<meta name="description" content="FCSIT toggles, budget caps, security env vars, and compound-learning thresholds.">
+<title>T — Terse mode — options reference</title>
+<meta name="description" content="Output-token reduction. Two layers: a system-prompt injection that asks the model to strip filler, and a post-filter that strips filler phrases from tool output">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -31,7 +31,7 @@
       <h4>Reference</h4>
       <ul>
         <li><a href="../../../docs/reference/">All reference</a></li>
-        <li><a href="../../../docs/reference/options/" class="active">Options index</a></li>
+        <li><a href="../../../docs/reference/options/">Options index</a></li>
       </ul>
     </div>
     <div class="wiki-nav-group">
@@ -42,7 +42,7 @@
         <li><a href="../../../docs/reference/options/cache.html">C — Cache</a></li>
         <li><a href="../../../docs/reference/options/secrets.html">S — Secrets</a></li>
         <li><a href="../../../docs/reference/options/indexer.html">I — Indexer</a></li>
-        <li><a href="../../../docs/reference/options/terse.html">T — Terse</a></li>
+        <li><a href="../../../docs/reference/options/terse.html" class="active">T — Terse</a></li>
         <li><a href="../../../docs/reference/options/budget.html">Budget caps</a></li>
         <li><a href="../../../docs/reference/options/security.html">Security env vars</a></li>
         <li><a href="../../../docs/reference/options/web.html">Web env vars</a></li>
@@ -54,42 +54,38 @@
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="../../../">Home</a> <span class="sep">›</span>
       <a href="../../../docs/reference/">Reference</a> <span class="sep">›</span>
-      <span class="here">Options &amp; env</span>
+      <a href="../../../docs/reference/options/">Options &amp; env</a> <span class="sep">›</span>
+      <span class="here">T — Terse mode</span>
     </nav>
     <span class="quadrant reference">Reference · Information</span>
-    <h1 class="page-title">Options &amp; env vars</h1>
-    <p class="lede">Resolution order: <strong>CLI flag &gt; env var &gt; <code>~/.senkani/config.json</code> &gt; default</strong>. Any toggle can be overridden at any level without touching other settings.</p>
+    <h1 class="page-title">T — Terse mode</h1>
+    <p class="lede">Output-token reduction. Two layers: a system-prompt injection that asks the model to strip filler, and a post-filter that strips filler phrases from tool outputs before they reach the model.</p>
 
-    <h2>FCSIT — per-pane feature toggles</h2>
-    <div class="fcsit-card">
-      <a class="fcsit-letter f" href="../../../docs/reference/options/filter.html"><span class="ltr">F</span><span class="name">Filter</span><span class="default">default on</span></a>
-      <a class="fcsit-letter c" href="../../../docs/reference/options/cache.html"><span class="ltr">C</span><span class="name">Cache</span><span class="default">default on</span></a>
-      <a class="fcsit-letter s" href="../../../docs/reference/options/secrets.html"><span class="ltr">S</span><span class="name">Secrets</span><span class="default">default on</span></a>
-      <a class="fcsit-letter i" href="../../../docs/reference/options/indexer.html"><span class="ltr">I</span><span class="name">Indexer</span><span class="default">default on</span></a>
-      <a class="fcsit-letter t" href="../../../docs/reference/options/terse.html"><span class="ltr">T</span><span class="name">Terse</span><span class="default">default off</span></a>
-    </div>
-    <p><a href="../../../docs/reference/options/fcsit.html">Read the FCSIT overview →</a></p>
+    <h2>System-prompt injection (layer 1)</h2>
+    <p>When <strong>T</strong> is enabled for a pane, the MCP session prepends this message to every tool result:</p>
+    <pre class="code"><span class="c">// Injected before every tool result when T is on</span>
+<span class="w">CRITICAL: You are in TERSE MODE. ALL responses must minimize
+output tokens ruthlessly. No preamble, no summaries, no apologies,
+no "I'll help you with", no "Let me know if you need anything else."
+Respond only with exactly what was asked. Code blocks pass through
+unchanged — only prose is compressed.</span></pre>
+    <p>The model receives this before processing each response and adjusts its output accordingly.</p>
 
-    <h2>Env-var families</h2>
-    <div class="card-grid">
-      <a class="card" href="../../../docs/reference/options/budget.html"><h4>Budget caps</h4><p>Daily + weekly spend ceilings enforced at the hook layer. <code>SENKANI_BUDGET_DAILY</code>, <code>SENKANI_BUDGET_WEEKLY</code>.</p></a>
-      <a class="card" href="../../../docs/reference/options/security.html"><h4>Security env vars</h4><p>Prompt-injection guard, SSRF overrides, socket auth, structured JSON logs, retention tuning.</p></a>
-      <a class="card" href="../../../docs/reference/options/web.html"><h4>Web env vars</h4><p>Overrides for the <code>senkani_web</code> SSRF guard, subresource blocklist, allowlisted hosts.</p></a>
-      <a class="card" href="../../../docs/reference/options/compound-learning.html"><h4>Compound-learning env</h4><p>Confidence thresholds, recurrence gates, Gemma enrichment rate limits.</p></a>
-    </div>
+    <h2>Algorithmic minimization (layer 2)</h2>
+    <p>A second layer strips filler phrases from tool outputs before forwarding them — removing the noise before it reaches the model, not after. Code blocks are passed through unchanged.</p>
+    <p>Stripped phrase patterns (case-insensitive): "It looks like", "I'll help you with", "Certainly!", "Of course!", "Let me know if", "I hope this helps", "Feel free to", "Is there anything else", "Happy to help", "I'd be happy to".</p>
 
-    <h2 style="margin-top:32px;">Config file</h2>
-    <pre class="code"><span class="c">// ~/.senkani/config.json</span>
-{
-  <span class="k">"retention"</span>: {
-    <span class="k">"token_events_days"</span>: <span class="e">90</span>,
-    <span class="k">"sandboxed_results_hours"</span>: <span class="e">24</span>
-  },
-  <span class="k">"budget"</span>: {
-    <span class="k">"daily_usd"</span>: <span class="e">5.00</span>,
-    <span class="k">"weekly_usd"</span>: <span class="e">25.00</span>
-  }
-}</pre>
+    <h2>Synergy</h2>
+    <p>Terse works synergistically with F/C/S/I: those reduce <strong>input</strong> tokens; T reduces <strong>output</strong> tokens. Combined effect on a typical session: 40–65% total token reduction vs no compression.</p>
+
+    <h2>Env var</h2>
+    <p><code>SENKANI_TERSE=on|off</code> — default <strong>off</strong>. Enable it when you want tight, machine-readable responses; disable it when you're pair-programming and want the model's explanations intact.</p>
+
+    <div class="seealso"><h3>See also</h3><ul>
+      <li><a href="../../../docs/reference/options/fcsit.html">FCSIT overview</a></li>
+      <li><a href="../../../docs/concepts/compression-layer.html">Where terse fits in the compression stack</a></li>
+    </ul></div>
+
   </article>
 </main>
 <footer class="site-foot">

@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Docs — senkani</title>
-<meta name="description" content="Wiki root: concepts, reference, guides, status, about, changelog.">
+<title>About — senkani</title>
+<meta name="description" content="License, credits, the name (閃蟹 — fast claw).">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -48,19 +48,37 @@
   </aside>
   <article class="wiki-main">
     <nav class="crumb" aria-label="Breadcrumb">
-      <a href="../">Home</a> <span class="sep">›</span> <span class="here">Docs</span>
+      <a href="../">Home</a> <span class="sep">›</span> <span class="here">About</span>
     </nav>
-    <h1 class="page-title">Docs</h1>
-    <p class="lede">The senkani wiki. Every MCP tool, CLI command, option, and pane has its own page. Concepts explain the why; guides walk you through how-tos; reference answers what-does-this-do.</p>
+    <h1 class="page-title">About</h1>
 
-    <div class="card-grid">
-      <a class="card" href="../docs/what-is-senkani.html"><h3>What is senkani?</h3><p>The product in one page — category, positioning, who it's for.</p></a>
-      <a class="card" href="../docs/concepts/"><h3>Concepts</h3><p>Explanation. Why the three-layer stack, how the hook relay works, how compound learning mines your sessions.</p></a>
-      <a class="card" href="../docs/reference/"><h3>Reference</h3><p>Every <code>senkani_*</code> MCP tool, every CLI command, every FCSIT option, every pane type.</p></a>
-      <a class="card" href="../docs/guides/"><h3>Guides</h3><p>How-tos. Install, wire up Claude Code, set up budgets, review learned proposals, clean uninstall.</p></a>
-      <a class="card" href="../docs/status.html"><h3>Status</h3><p>What's shipped in v0.2.0 + test count + feature checklist.</p></a>
-      <a class="card" href="../docs/changelog.html"><h3>Changelog</h3><p>Release-by-release notes.</p></a>
-    </div>
+    <h2>The name</h2>
+    <p><strong lang="zh">閃蟹</strong> — "senkani" — literally <em>flash crab</em>, or "fast claw." The crab is a pincer; Senkani is the pincer between your agent and your filesystem. Snap, compress, return.</p>
+
+    <h2>License</h2>
+    <p>Core: <strong>MIT</strong>. See <a href="https://github.com/ckluis/senkani/blob/main/LICENSE">LICENSE</a>.</p>
+
+    <h2>Built with</h2>
+    <ul>
+      <li><strong>Swift 6.0+</strong> — Sources/Core, Sources/Filter, Sources/Indexer, Sources/MCPServer, Sources/Bundle, Sources/HookRelay, Sources/CLI, SenkaniApp.</li>
+      <li><strong>SwiftUI + SwiftTerm</strong> — the workspace.</li>
+      <li><strong>tree-sitter</strong> — 25 vendored grammars for symbol extraction.</li>
+      <li><strong>SQLite + FTS5</strong> — session DB, knowledge graph index, bench results.</li>
+      <li><strong>Apple MLX</strong> — MiniLM embeddings, Gemma vision, Gemma rationale rewriter.</li>
+    </ul>
+
+    <h2>Platform</h2>
+    <p>macOS 14+, Apple Silicon native universal binary. Intel macs run the core but not the MLX-accelerated tools.</p>
+
+    <h2>Telemetry</h2>
+    <p><strong>Off by default.</strong> Senkani does not send telemetry, usage data, or model outputs anywhere. The session database is local to your machine; <code>senkani export</code> is the only way data leaves the device, and only when you invoke it.</p>
+
+    <h2>Links</h2>
+    <ul>
+      <li><a href="https://github.com/ckluis/senkani">GitHub</a></li>
+      <li><a href="../docs/changelog.html">Changelog</a></li>
+      <li><a href="https://github.com/ckluis/senkani/blob/main/LICENSE">LICENSE</a></li>
+    </ul>
   </article>
 </main>
 <footer class="site-foot">

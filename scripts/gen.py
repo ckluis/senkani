@@ -41,11 +41,11 @@ HEAD = '''<!DOCTYPE html>
   <a class="wordmark" href="__BASE__">sen<span class="accent">kani</span><small>compression layer for AI coding agents</small></a>
   <button class="topnav-hamburger" aria-label="Open navigation menu" aria-expanded="false" aria-controls="topnav-links"><span></span><span></span><span></span></button>
   <div class="topnav-links" id="topnav-links">
-    <a href="__BASE__docs/what-is-senkani/">What is it?</a>
+    <a href="__BASE__docs/what-is-senkani.html">What is it?</a>
     <a href="__BASE__docs/concepts/">Concepts</a>
     <a href="__BASE__docs/reference/">Reference</a>
     <a href="__BASE__docs/guides/">Guides</a>
-    <a href="__BASE__docs/status/">Status</a>
+    <a href="__BASE__docs/status.html">Status</a>
     <div class="topnav-search"><input type="search" id="site-search" placeholder="Search · /" aria-label="Search the site"></div>
     <a href="https://github.com/ckluis/senkani" class="btn-nav">GitHub →</a>
   </div>
@@ -58,13 +58,13 @@ FOOT = '''<footer class="site-foot">
       <div class="foot-wordmark">sen<span class="accent">kani</span></div>
       <p class="foot-tagline"><span lang="zh">閃蟹</span> — "fast claw." A native macOS binary written in Swift.</p>
     </div>
-    <div class="foot-col"><h4>Product</h4><ul><li><a href="__BASE__docs/what-is-senkani/">What is it?</a></li><li><a href="__BASE__docs/concepts/">Concepts</a></li><li><a href="__BASE__docs/reference/">Reference</a></li><li><a href="__BASE__docs/guides/">Guides</a></li><li><a href="__BASE__docs/status/">Status</a></li></ul></div>
-    <div class="foot-col"><h4>Reference</h4><ul><li><a href="__BASE__docs/reference/mcp/">MCP tools</a></li><li><a href="__BASE__docs/reference/cli/">CLI commands</a></li><li><a href="__BASE__docs/reference/options/">Options &amp; env</a></li><li><a href="__BASE__docs/reference/panes/">Panes</a></li><li><a href="__BASE__docs/changelog/">Changelog</a></li></ul></div>
-    <div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li><li><a href="__BASE__docs/guides/install/">Install</a></li><li><a href="__BASE__docs/guides/troubleshooting/">Troubleshooting</a></li><li><a href="__BASE__docs/about/">About &amp; license</a></li></ul></div>
+    <div class="foot-col"><h4>Product</h4><ul><li><a href="__BASE__docs/what-is-senkani.html">What is it?</a></li><li><a href="__BASE__docs/concepts/">Concepts</a></li><li><a href="__BASE__docs/reference/">Reference</a></li><li><a href="__BASE__docs/guides/">Guides</a></li><li><a href="__BASE__docs/status.html">Status</a></li></ul></div>
+    <div class="foot-col"><h4>Reference</h4><ul><li><a href="__BASE__docs/reference/mcp/">MCP tools</a></li><li><a href="__BASE__docs/reference/cli/">CLI commands</a></li><li><a href="__BASE__docs/reference/options/">Options &amp; env</a></li><li><a href="__BASE__docs/reference/panes/">Panes</a></li><li><a href="__BASE__docs/changelog.html">Changelog</a></li></ul></div>
+    <div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li><li><a href="__BASE__docs/guides/install.html">Install</a></li><li><a href="__BASE__docs/guides/troubleshooting.html">Troubleshooting</a></li><li><a href="__BASE__docs/about.html">About &amp; license</a></li></ul></div>
   </div>
   <div class="foot-meta">
     <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
-    <span><a href="__BASE__docs/changelog/">v0.2.0 changelog</a></span>
+    <span><a href="__BASE__docs/changelog.html">v0.2.0 changelog</a></span>
   </div>
 </footer>
 <script src="__BASE__assets/app.js" defer></script>
@@ -97,10 +97,10 @@ MCP_TOOLS = [
 ]''',
         behavior="Cache key is `(path, mtime)` — unchanged files return instantly from memory. The SecretDetector short-circuits on no-match inputs (1 MB benign file: ~25 ms). When the outline is empty (file not in index), falls back to reading full content up to `limit`.",
         security="All text-returning tools pass through SecretDetector. 13 secret families + entropy-based fallback.",
-        related=[("senkani_fetch", "/reference/mcp/senkani_fetch/", "Read a single symbol's lines instead of the whole file."),
-                 ("senkani_outline", "/reference/mcp/senkani_outline/", "Just the outline, no content toggle."),
-                 ("senkani_search", "/reference/mcp/senkani_search/", "Find where a symbol is defined before reading."),
-                 ("cache (C toggle)", "/reference/options/cache/", "Disable the read cache per-pane.")],
+        related=[("senkani_fetch", "__BASE__docs/reference/mcp/senkani_fetch.html", "Read a single symbol's lines instead of the whole file."),
+                 ("senkani_outline", "__BASE__docs/reference/mcp/senkani_outline.html", "Just the outline, no content toggle."),
+                 ("senkani_search", "__BASE__docs/reference/mcp/senkani_search.html", "Find where a symbol is defined before reading."),
+                 ("cache (C toggle)", "__BASE__docs/reference/options/cache.html", "Disable the read cache per-pane.")],
         source="Sources/MCPServer/Tools/ReadTool.swift"
     ),
     dict(
@@ -122,9 +122,9 @@ MCP_TOOLS = [
 <span class="c">// savings: 99.5%</span>''',
         behavior="Rule set covers git (status/diff/log/clone/pull), npm/yarn/pnpm install, pip, make, cargo, swift build, curl, ssh, docker pull, terraform plan, and ~14 more. Each rule is tested under `Tests/FilterTests/`. Rules are a pure function of `(cmd, stdout, stderr)` — no side effects.",
         security="Commands and their output pass through SecretDetector before the agent sees them. The `event_counters` row `command_redactions` increments on each redaction (visible via `senkani stats --security`).",
-        related=[("Filter toggle (F)", "/reference/options/filter/", "Disable the filter pipeline per-pane."),
-                 ("senkani exec CLI", "/reference/cli/senkani-exec/", "Same filter, scriptable from the shell."),
-                 ("Compound learning", "/concepts/compound-learning/", "New filter rules learned from your own sessions.")],
+        related=[("Filter toggle (F)", "__BASE__docs/reference/options/filter.html", "Disable the filter pipeline per-pane."),
+                 ("senkani exec CLI", "__BASE__docs/reference/cli/senkani-exec.html", "Same filter, scriptable from the shell."),
+                 ("Compound learning", "__BASE__docs/concepts/compound-learning.html", "New filter rules learned from your own sessions.")],
         source="Sources/MCPServer/Tools/ExecTool.swift + Sources/Filter/FilterEngine.swift"
     ),
     dict(
@@ -146,10 +146,10 @@ MCP_TOOLS = [
 [{<span class="k">"name"</span>:<span class="v">"OrderRepository"</span>,<span class="k">"file"</span>:<span class="v">"src/orders/repo.ts"</span>,<span class="k">"line"</span>:<span class="e">12</span>,<span class="k">"kind"</span>:<span class="v">"class"</span>}]''',
         behavior="FTS5 operator syntax is stripped from the query before execution (prevents FTS injection). The index rebuilds incrementally via FSEvents; cold search < 5 ms, cached < 1 ms. 25 tree-sitter grammars supply the symbol extraction.",
         security="Search queries never reach the model — only sanitized outputs do.",
-        related=[("senkani_fetch", "/reference/mcp/senkani_fetch/", "Read a symbol's source after finding it."),
-                 ("senkani_outline", "/reference/mcp/senkani_outline/", "All symbols in a file, no query."),
-                 ("Indexer toggle (I)", "/reference/options/indexer/", "Disable the indexer per-pane."),
-                 ("Symbol indexer concept", "/concepts/mcp-intelligence/", "How the index is built.")],
+        related=[("senkani_fetch", "__BASE__docs/reference/mcp/senkani_fetch.html", "Read a symbol's source after finding it."),
+                 ("senkani_outline", "__BASE__docs/reference/mcp/senkani_outline.html", "All symbols in a file, no query."),
+                 ("Indexer toggle (I)", "__BASE__docs/reference/options/indexer.html", "Disable the indexer per-pane."),
+                 ("Symbol indexer concept", "__BASE__docs/concepts/mcp-intelligence.html", "How the index is built.")],
         source="Sources/MCPServer/Tools/SearchTool.swift + Sources/Indexer/"
     ),
     dict(
@@ -167,9 +167,9 @@ MCP_TOOLS = [
 <span class="c">// returns only lines 12–94, not the full file</span>''',
         behavior="SecretDetector + ANSI strip applied to the slice. If the symbol resolves to multiple candidates, returns the highest-scoring match and a note about alternatives.",
         security="Path validated against workspace root. SecretDetector scans output.",
-        related=[("senkani_search", "/reference/mcp/senkani_search/", "Find the symbol first."),
-                 ("senkani_read", "/reference/mcp/senkani_read/", "Full file read when you need more than one symbol."),
-                 ("senkani_outline", "/reference/mcp/senkani_outline/", "See all symbols in a file.")],
+        related=[("senkani_search", "__BASE__docs/reference/mcp/senkani_search.html", "Find the symbol first."),
+                 ("senkani_read", "__BASE__docs/reference/mcp/senkani_read.html", "Full file read when you need more than one symbol."),
+                 ("senkani_outline", "__BASE__docs/reference/mcp/senkani_outline.html", "See all symbols in a file.")],
         source="Sources/MCPServer/Tools/FetchTool.swift"
     ),
     dict(
@@ -185,8 +185,8 @@ MCP_TOOLS = [
         output="Nodes (file paths) + edges (source, target, kind). ~500 tokens for a typical entry point.",
         example='''{<span class="k">"tool"</span>:<span class="v">"senkani_explore"</span>,<span class="k">"args"</span>:{<span class="k">"entry"</span>:<span class="v">"src/server.ts"</span>,<span class="k">"depth"</span>:<span class="e">2</span>}}''',
         behavior="Graph is built from tree-sitter AST at index time; 15+ languages supply import parsers. Incremental updates via FSEvents.",
-        related=[("senkani_deps", "/reference/mcp/senkani_deps/", "Direct edge queries instead of a subgraph."),
-                 ("senkani_search", "/reference/mcp/senkani_search/", "Find a starting symbol first.")],
+        related=[("senkani_deps", "__BASE__docs/reference/mcp/senkani_deps.html", "Direct edge queries instead of a subgraph."),
+                 ("senkani_search", "__BASE__docs/reference/mcp/senkani_search.html", "Find a starting symbol first.")],
         source="Sources/Indexer/DependencyExtractor.swift"
     ),
     dict(
@@ -201,8 +201,8 @@ MCP_TOOLS = [
         output="List of file paths with import-kind annotation.",
         example='''{<span class="k">"tool"</span>:<span class="v">"senkani_deps"</span>,<span class="k">"args"</span>:{<span class="k">"file"</span>:<span class="v">"src/auth.ts"</span>,<span class="k">"direction"</span>:<span class="v">"imported_by"</span>}}''',
         behavior="Edge kinds: `static-import`, `dynamic-import`, `re-export`, `require`. Swift imports include the module name.",
-        related=[("senkani_explore", "/reference/mcp/senkani_explore/", "Multi-hop subgraph instead of direct neighbors."),
-                 ("senkani_outline", "/reference/mcp/senkani_outline/", "What's inside a file, not who uses it.")],
+        related=[("senkani_explore", "__BASE__docs/reference/mcp/senkani_explore.html", "Multi-hop subgraph instead of direct neighbors."),
+                 ("senkani_outline", "__BASE__docs/reference/mcp/senkani_outline.html", "What's inside a file, not who uses it.")],
         source="Sources/Indexer/DependencyExtractor.swift"
     ),
     dict(
@@ -217,8 +217,8 @@ MCP_TOOLS = [
         output="Array of `{{name, kind, line_start, line_end, container}}`.",
         example='''{<span class="k">"tool"</span>:<span class="v">"senkani_outline"</span>,<span class="k">"args"</span>:{<span class="k">"file"</span>:<span class="v">"src/repo.ts"</span>}}''',
         behavior="Orders results by `line_start`. Container hierarchy preserved for nested classes/modules.",
-        related=[("senkani_read", "/reference/mcp/senkani_read/", "Same outline in `full: false` mode + content toggle."),
-                 ("senkani_fetch", "/reference/mcp/senkani_fetch/", "Read a specific symbol's source.")],
+        related=[("senkani_read", "__BASE__docs/reference/mcp/senkani_read.html", "Same outline in `full: false` mode + content toggle."),
+                 ("senkani_fetch", "__BASE__docs/reference/mcp/senkani_fetch.html", "Read a specific symbol's source.")],
         source="Sources/MCPServer/Tools/OutlineTool.swift"
     ),
     dict(
@@ -235,8 +235,8 @@ MCP_TOOLS = [
         example='''{<span class="k">"tool"</span>:<span class="v">"senkani_validate"</span>,<span class="k">"args"</span>:{<span class="k">"file"</span>:<span class="v">"src/api.ts"</span>}}
 <span class="ok">// ok — 0 errors</span>''',
         behavior="Validation is pure parse — not type-check. Doesn't catch type errors, semantic bugs, or lint issues. Fast (~50 ms for a 2k-line file).",
-        related=[("senkani_parse", "/reference/mcp/senkani_parse/", "Full AST dump for deeper analysis."),
-                 ("senkani validate CLI", "/reference/cli/senkani-validate/", "Scriptable from the shell.")],
+        related=[("senkani_parse", "__BASE__docs/reference/mcp/senkani_parse.html", "Full AST dump for deeper analysis."),
+                 ("senkani validate CLI", "__BASE__docs/reference/cli/senkani-validate.html", "Scriptable from the shell.")],
         source="Sources/MCPServer/Tools/ValidateTool.swift + Sources/Indexer/TreeSitterBackends/"
     ),
     dict(
@@ -252,8 +252,8 @@ MCP_TOOLS = [
         output="JSON: `{{type, range, children[]}}` recursively.",
         example='''{<span class="k">"tool"</span>:<span class="v">"senkani_parse"</span>,<span class="k">"args"</span>:{<span class="k">"file"</span>:<span class="v">"src/api.ts"</span>,<span class="k">"max_depth"</span>:<span class="e">3</span>}}''',
         behavior="Output can be large; use `max_depth` aggressively. For symbol-level needs prefer `senkani_outline` or `senkani_fetch`.",
-        related=[("senkani_validate", "/reference/mcp/senkani_validate/", "Same parser, but returns pass/errors only."),
-                 ("senkani_outline", "/reference/mcp/senkani_outline/", "Pre-extracted symbol list.")],
+        related=[("senkani_validate", "__BASE__docs/reference/mcp/senkani_validate.html", "Same parser, but returns pass/errors only."),
+                 ("senkani_outline", "__BASE__docs/reference/mcp/senkani_outline.html", "Pre-extracted symbol list.")],
         source="Sources/MCPServer/Tools/ParseTool.swift"
     ),
     dict(
@@ -269,8 +269,8 @@ MCP_TOOLS = [
         example='''{<span class="k">"tool"</span>:<span class="v">"senkani_embed"</span>,<span class="k">"args"</span>:{<span class="k">"texts"</span>:[<span class="v">"orders"</span>,<span class="v">"payments"</span>]}}''',
         behavior="First call loads the model (~80 MB) into unified memory; subsequent calls reuse it. Idle models drop on memory pressure.",
         security="Fully offline once the model is downloaded. No outbound traffic.",
-        related=[("senkani_vision", "/reference/mcp/senkani_vision/", "Local vision inference via Gemma."),
-                 ("Model Manager pane", "/reference/panes/model-manager/", "Download and inspect local models.")],
+        related=[("senkani_vision", "__BASE__docs/reference/mcp/senkani_vision.html", "Local vision inference via Gemma."),
+                 ("Model Manager pane", "__BASE__docs/reference/panes/model-manager.html", "Download and inspect local models.")],
         source="Sources/MCPServer/Tools/EmbedTool.swift + Sources/MLX/"
     ),
     dict(
@@ -286,8 +286,8 @@ MCP_TOOLS = [
         output="Text or a JSON object matching your prompt's schema.",
         example='''{<span class="k">"tool"</span>:<span class="v">"senkani_vision"</span>,<span class="k">"args"</span>:{<span class="k">"image"</span>:<span class="v">"/tmp/screenshot.png"</span>,<span class="k">"prompt"</span>:<span class="v">"Extract UI text."</span>}}''',
         behavior="Gemma model loads on first call; idle drops on memory pressure.",
-        related=[("senkani_embed", "/reference/mcp/senkani_embed/", "Local text embeddings."),
-                 ("Model Manager pane", "/reference/panes/model-manager/", "Manage local models.")],
+        related=[("senkani_embed", "__BASE__docs/reference/mcp/senkani_embed.html", "Local text embeddings."),
+                 ("Model Manager pane", "__BASE__docs/reference/panes/model-manager.html", "Manage local models.")],
         source="Sources/MCPServer/Tools/VisionTool.swift"
     ),
     dict(
@@ -302,7 +302,7 @@ MCP_TOOLS = [
         output="List of `{{path, kind, timestamp}}`. Advances cursor in the response so the next call picks up exactly where this left off.",
         example='''{<span class="k">"tool"</span>:<span class="v">"senkani_watch"</span>,<span class="k">"args"</span>:{<span class="k">"glob"</span>:<span class="v">"src/**/*.ts"</span>}}''',
         behavior="Ring buffer drops oldest on overflow — for long sessions, poll more often or widen the limit.",
-        related=[("senkani_session", "/reference/mcp/senkani_session/", "Other per-session state.")],
+        related=[("senkani_session", "__BASE__docs/reference/mcp/senkani_session.html", "Other per-session state.")],
         source="Sources/MCPServer/Tools/WatchTool.swift"
     ),
     dict(
@@ -317,9 +317,9 @@ MCP_TOOLS = [
         output="Markdown-formatted AXTree: headings, text blocks, links, interactive controls.",
         example='''{<span class="k">"tool"</span>:<span class="v">"senkani_web"</span>,<span class="k">"args"</span>:{<span class="k">"url"</span>:<span class="v">"https://docs.example.com"</span>}}''',
         security="SSRF guard applies to the main nav AND every subresource. Override for internal doc servers: `SENKANI_WEB_ALLOW_PRIVATE=on`. Bypassing this is on the operator.",
-        related=[("senkani_read", "/reference/mcp/senkani_read/", "For local files; file:// not accepted here."),
-                 ("senkani_repo", "/reference/mcp/senkani_repo/", "Structured GitHub repo access (allowlisted)."),
-                 ("Security env vars", "/reference/options/security/", "All SENKANI_WEB_* overrides.")],
+        related=[("senkani_read", "__BASE__docs/reference/mcp/senkani_read.html", "For local files; file:// not accepted here."),
+                 ("senkani_repo", "__BASE__docs/reference/mcp/senkani_repo.html", "Structured GitHub repo access (allowlisted)."),
+                 ("Security env vars", "__BASE__docs/reference/options/security.html", "All SENKANI_WEB_* overrides.")],
         source="Sources/MCPServer/Tools/WebTool.swift"
     ),
     dict(
@@ -335,8 +335,8 @@ MCP_TOOLS = [
         example='''{<span class="k">"tool"</span>:<span class="v">"senkani_pane"</span>,<span class="k">"args"</span>:{<span class="k">"action"</span>:<span class="v">"open"</span>,<span class="k">"pane_type"</span>:<span class="v">"Analytics"</span>}}''',
         behavior="Requires the app to be running. If the socket is absent or the app is not a managed target, returns an error.",
         security="Socket auth via `SENKANI_SOCKET_AUTH=on` requires a handshake frame matching `~/.senkani/.token` (mode 0600, rotated on start).",
-        related=[("Pane reference", "/reference/panes/", "What pane types exist."),
-                 ("Socket auth option", "/reference/options/security/", "Enable the handshake.")],
+        related=[("Pane reference", "__BASE__docs/reference/panes/", "What pane types exist."),
+                 ("Socket auth option", "__BASE__docs/reference/options/security.html", "Enable the handshake.")],
         source="Sources/MCPServer/Tools/PaneTool.swift + SenkaniApp/IPC/"
     ),
     dict(
@@ -351,8 +351,8 @@ MCP_TOOLS = [
         output="Depends on action. `stats` returns lifetime + session metrics; `pins` returns the pinned symbol list.",
         example='''{<span class="k">"tool"</span>:<span class="v">"senkani_session"</span>,<span class="k">"args"</span>:{<span class="k">"action"</span>:<span class="v">"stats"</span>}}''',
         behavior="Toggle changes persist to `~/.senkani/panes/{{paneId}}.env` and take effect immediately — no restart.",
-        related=[("FCSIT toggles", "/reference/options/fcsit/", "Same controls, UI surface."),
-                 ("senkani stats CLI", "/reference/cli/senkani-stats/", "CLI version for scripting.")],
+        related=[("FCSIT toggles", "__BASE__docs/reference/options/fcsit.html", "Same controls, UI surface."),
+                 ("senkani stats CLI", "__BASE__docs/reference/cli/senkani-stats.html", "CLI version for scripting.")],
         source="Sources/MCPServer/Tools/SessionTool.swift"
     ),
     dict(
@@ -367,9 +367,9 @@ MCP_TOOLS = [
         output="Entity or link records; search returns BM25-ranked hits.",
         example='''{<span class="k">"tool"</span>:<span class="v">"senkani_knowledge"</span>,<span class="k">"args"</span>:{<span class="k">"action"</span>:<span class="v">"search_knowledge"</span>,<span class="k">"query"</span>:<span class="v">"auth middleware"</span>}}''',
         behavior="SQLite index is rebuilt if corrupt (`KBLayer1Coordinator`). Markdown at `.senkani/knowledge/` is the source of truth — hand-edits are safe.",
-        related=[("Knowledge base concept", "/concepts/knowledge-base/", "How it's built + maintained."),
-                 ("senkani kb CLI", "/reference/cli/senkani-kb/", "CLI version."),
-                 ("Compound learning", "/concepts/compound-learning/", "KB ↔ learning bridge.")],
+        related=[("Knowledge base concept", "__BASE__docs/concepts/knowledge-base.html", "How it's built + maintained."),
+                 ("senkani kb CLI", "__BASE__docs/reference/cli/senkani-kb.html", "CLI version."),
+                 ("Compound learning", "__BASE__docs/concepts/compound-learning.html", "KB ↔ learning bridge.")],
         source="Sources/MCPServer/Tools/KnowledgeTool.swift + Sources/KB/"
     ),
     dict(
@@ -380,7 +380,7 @@ MCP_TOOLS = [
         output="`{{server_version, tool_schemas_version, schema_db_version, tools: [...]}}`. Includes every tool's name, input schema hash, and status.",
         example='''{<span class="k">"tool"</span>:<span class="v">"senkani_version"</span>}''',
         behavior="Always safe to call; zero side effects. Good canary during upgrades.",
-        related=[("senkani doctor", "/reference/cli/senkani-doctor/", "Diagnose + repair registration and version mismatches.")],
+        related=[("senkani doctor", "__BASE__docs/reference/cli/senkani-doctor.html", "Diagnose + repair registration and version mismatches.")],
         source="Sources/MCPServer/Tools/VersionTool.swift"
     ),
     dict(
@@ -396,8 +396,8 @@ MCP_TOOLS = [
         output="Markdown document or a `BundleDocument` JSON.",
         example='''{<span class="k">"tool"</span>:<span class="v">"senkani_bundle"</span>,<span class="k">"args"</span>:{<span class="k">"budget_tokens"</span>:<span class="e">6000</span>}}''',
         security="Host allowlist (api.github.com, raw.githubusercontent.com) + SecretDetector on every scanned file.",
-        related=[("senkani_repo", "/reference/mcp/senkani_repo/", "Remote bundle's underlying GitHub access."),
-                 ("Knowledge base concept", "/concepts/knowledge-base/", "What KB entities end up in the bundle.")],
+        related=[("senkani_repo", "__BASE__docs/reference/mcp/senkani_repo.html", "Remote bundle's underlying GitHub access."),
+                 ("Knowledge base concept", "__BASE__docs/concepts/knowledge-base.html", "What KB entities end up in the bundle.")],
         source="Sources/Bundle/BundleComposer.swift"
     ),
     dict(
@@ -413,8 +413,8 @@ MCP_TOOLS = [
         output="Depends on action. `tree` → file list; `file` → contents; `readme` → rendered readme; `search` → BM25-ranked hits.",
         example='''{<span class="k">"tool"</span>:<span class="v">"senkani_repo"</span>,<span class="k">"args"</span>:{<span class="k">"action"</span>:<span class="v">"tree"</span>,<span class="k">"repo"</span>:<span class="v">"ckluis/senkani"</span>}}''',
         security="Never follows redirects outside the allowlist. Every fetched file is SecretDetector-scanned before being returned.",
-        related=[("senkani_bundle", "/reference/mcp/senkani_bundle/", "Budget-bounded remote snapshot."),
-                 ("senkani_web", "/reference/mcp/senkani_web/", "General web fetch (different guard).")],
+        related=[("senkani_bundle", "__BASE__docs/reference/mcp/senkani_bundle.html", "Budget-bounded remote snapshot."),
+                 ("senkani_web", "__BASE__docs/reference/mcp/senkani_web.html", "General web fetch (different guard).")],
         source="Sources/MCPServer/Tools/RepoTool.swift"
     ),
 ]
@@ -430,8 +430,8 @@ CLI_COMMANDS = [
 On branch main · working tree clean''',
          flags=[("-- <cmd>", "Required. Everything after `--` is the command."),
                 ("--no-filter", "Bypass the filter (sanity check).")],
-         related=[("senkani_exec tool", "/reference/mcp/senkani_exec/"),
-                  ("Filter toggle (F)", "/reference/options/filter/")],
+         related=[("senkani_exec tool", "__BASE__docs/reference/mcp/senkani_exec.html"),
+                  ("Filter toggle (F)", "__BASE__docs/reference/options/filter.html")],
          source="Sources/CLI/ExecCommand.swift"),
     dict(slug="senkani-search", name="senkani search", syntax="senkani search <symbol>",
          summary="Symbol lookup from the tree-sitter index.",
@@ -442,7 +442,7 @@ src/orders/repo.ts:12  class OrderRepository''',
                 ("--file <glob>", "Restrict to matching paths."),
                 ("--container <c>", "Restrict to symbols inside a container."),
                 ("--limit N", "Max results. Default 20.")],
-         related=[("senkani_search tool", "/reference/mcp/senkani_search/")],
+         related=[("senkani_search tool", "__BASE__docs/reference/mcp/senkani_search.html")],
          source="Sources/CLI/SearchCommand.swift"),
     dict(slug="senkani-fetch", name="senkani fetch", syntax="senkani fetch <symbol>",
          summary="Read a symbol's source lines by name.",
@@ -450,7 +450,7 @@ src/orders/repo.ts:12  class OrderRepository''',
          example="$ senkani fetch OrderRepository",
          flags=[("--file <path>", "Disambiguate when the symbol is not unique."),
                 ("--container <c>", "Restrict by enclosing type.")],
-         related=[("senkani_fetch tool", "/reference/mcp/senkani_fetch/")],
+         related=[("senkani_fetch tool", "__BASE__docs/reference/mcp/senkani_fetch.html")],
          source="Sources/CLI/FetchCommand.swift"),
     dict(slug="senkani-explore", name="senkani explore", syntax="senkani explore [--root path]",
          summary="Navigate the codebase via the import graph from an entry point.",
@@ -459,7 +459,7 @@ src/orders/repo.ts:12  class OrderRepository''',
          flags=[("--root <path>", "Entry point file."),
                 ("--depth N", "Hops in each direction."),
                 ("--limit N", "Max nodes.")],
-         related=[("senkani_explore tool", "/reference/mcp/senkani_explore/")],
+         related=[("senkani_explore tool", "__BASE__docs/reference/mcp/senkani_explore.html")],
          source="Sources/CLI/ExploreCommand.swift"),
     dict(slug="senkani-index", name="senkani index", syntax="senkani index [--root path]",
          summary="Build or update the symbol index manually.",
@@ -467,7 +467,7 @@ src/orders/repo.ts:12  class OrderRepository''',
          example="$ senkani index --root .",
          flags=[("--root <path>", "Root to index."),
                 ("--force", "Full rebuild even if FSEvents cursor is current.")],
-         related=[("Indexer toggle (I)", "/reference/options/indexer/")],
+         related=[("Indexer toggle (I)", "__BASE__docs/reference/options/indexer.html")],
          source="Sources/CLI/IndexCommand.swift"),
     dict(slug="senkani-validate", name="senkani validate", syntax="senkani validate <file>",
          summary="Local syntax validation across 25 languages. Zero API calls.",
@@ -475,7 +475,7 @@ src/orders/repo.ts:12  class OrderRepository''',
          example="$ senkani validate src/api.ts",
          flags=[("--lang <name>", "Override language detection."),
                 ("--full", "Return complete error detail.")],
-         related=[("senkani_validate tool", "/reference/mcp/senkani_validate/")],
+         related=[("senkani_validate tool", "__BASE__docs/reference/mcp/senkani_validate.html")],
          source="Sources/CLI/ValidateCommand.swift"),
     dict(slug="senkani-stats", name="senkani stats", syntax="senkani stats [--search term]",
          summary="Lifetime metrics from the session database. FTS5 search over tool output history.",
@@ -486,8 +486,8 @@ lifetime: 2.3M tokens saved · $14.20 · 94% compliance''',
                 ("--security", "Show security event counters."),
                 ("--verbose", "Per-project rows."),
                 ("--json", "JSON output.")],
-         related=[("senkani_session tool", "/reference/mcp/senkani_session/"),
-                  ("Session database concept", "/concepts/three-layer-stack/")],
+         related=[("senkani_session tool", "__BASE__docs/reference/mcp/senkani_session.html"),
+                  ("Session database concept", "__BASE__docs/concepts/three-layer-stack.html")],
          source="Sources/CLI/StatsCommand.swift"),
     dict(slug="senkani-export", name="senkani export",
          syntax="senkani export --output <file> [--since DATE] [--redact]",
@@ -497,7 +497,7 @@ lifetime: 2.3M tokens saved · $14.20 · 94% compliance''',
          flags=[("--output <file>", "Destination file or `-` for stdout."),
                 ("--since <date>", "ISO date filter."),
                 ("--redact", "Redact absolute paths.")],
-         related=[("Privacy concept", "/concepts/security-posture/")],
+         related=[("Privacy concept", "__BASE__docs/concepts/security-posture.html")],
          source="Sources/CLI/ExportCommand.swift"),
     dict(slug="senkani-wipe", name="senkani wipe",
          syntax="senkani wipe [--yes] [--include-config]",
@@ -506,8 +506,8 @@ lifetime: 2.3M tokens saved · $14.20 · 94% compliance''',
          example="$ senkani wipe     # dry-run\n$ senkani wipe --yes",
          flags=[("--yes", "Required to actually delete."),
                 ("--include-config", "Also delete ~/.senkani/config.json.")],
-         related=[("senkani uninstall", "/reference/cli/senkani-uninstall/"),
-                  ("Uninstall guide", "/guides/uninstall/")],
+         related=[("senkani uninstall", "__BASE__docs/reference/cli/senkani-uninstall.html"),
+                  ("Uninstall guide", "__BASE__docs/guides/uninstall.html")],
          source="Sources/CLI/WipeCommand.swift"),
     dict(slug="senkani-bench", name="senkani bench",
          syntax="senkani bench [--iterations N]",
@@ -517,7 +517,7 @@ lifetime: 2.3M tokens saved · $14.20 · 94% compliance''',
          flags=[("--iterations N", "Default 256."),
                 ("--json", "Emit full results."),
                 ("--scenario <name>", "Run one scenario only.")],
-         related=[("Savings Test pane", "/reference/panes/savings-test/")],
+         related=[("Savings Test pane", "__BASE__docs/reference/panes/savings-test.html")],
          source="Sources/Bench/"),
     dict(slug="senkani-init", name="senkani init",
          syntax="senkani init [--hooks-only]",
@@ -526,9 +526,9 @@ lifetime: 2.3M tokens saved · $14.20 · 94% compliance''',
          example="$ senkani init            # Claude Code\n$ senkani init --hooks-only   # Cursor / Copilot",
          flags=[("--hooks-only", "Skip MCP server registration."),
                 ("--dry-run", "Print intended changes without writing.")],
-         related=[("Install guide", "/guides/install/"),
-                  ("Claude Code guide", "/guides/claude-code/"),
-                  ("Cursor / Copilot guide", "/guides/cursor-copilot/")],
+         related=[("Install guide", "__BASE__docs/guides/install.html"),
+                  ("Claude Code guide", "__BASE__docs/guides/claude-code.html"),
+                  ("Cursor / Copilot guide", "__BASE__docs/guides/cursor-copilot.html")],
          source="Sources/CLI/InitCommand.swift"),
     dict(slug="senkani-doctor", name="senkani doctor",
          syntax="senkani doctor [--fix]",
@@ -536,8 +536,8 @@ lifetime: 2.3M tokens saved · $14.20 · 94% compliance''',
          detail="Checks: MCP server entry, hook registration, binary path resolution, grammar staleness (non-blocking advisory — PASS for recent, SKIP for stale >30 d, never FAIL).",
          example="$ senkani doctor --fix",
          flags=[("--fix", "Attempt repair for each failing check.")],
-         related=[("senkani init", "/reference/cli/senkani-init/"),
-                  ("Troubleshooting guide", "/guides/troubleshooting/")],
+         related=[("senkani init", "__BASE__docs/reference/cli/senkani-init.html"),
+                  ("Troubleshooting guide", "__BASE__docs/guides/troubleshooting.html")],
          source="Sources/CLI/DoctorCommand.swift"),
     dict(slug="senkani-compare", name="senkani compare",
          syntax="senkani compare <a> <b>",
@@ -545,8 +545,8 @@ lifetime: 2.3M tokens saved · $14.20 · 94% compliance''',
          detail="Useful for comparing agent-produced diffs to raw diffs.",
          example="$ senkani compare HEAD~1 HEAD",
          flags=[("--no-filter", "Disable filter for the comparison.")],
-         related=[("senkani_exec tool", "/reference/mcp/senkani_exec/"),
-                  ("Diff Viewer pane", "/reference/panes/diff-viewer/")],
+         related=[("senkani_exec tool", "__BASE__docs/reference/mcp/senkani_exec.html"),
+                  ("Diff Viewer pane", "__BASE__docs/reference/panes/diff-viewer.html")],
          source="Sources/CLI/CompareCommand.swift"),
     dict(slug="senkani-grammars", name="senkani grammars",
          syntax="senkani grammars",
@@ -554,7 +554,7 @@ lifetime: 2.3M tokens saved · $14.20 · 94% compliance''',
          detail="Also: `senkani grammars check` compares vendored versions against upstream tags (cached 24 h).",
          example="$ senkani grammars check",
          flags=[("check", "Subcommand: compare vendored vs upstream.")],
-         related=[("Tree-sitter concept", "/concepts/mcp-intelligence/")],
+         related=[("Tree-sitter concept", "__BASE__docs/concepts/mcp-intelligence.html")],
          source="Sources/CLI/GrammarsCommand.swift"),
     dict(slug="senkani-schedule", name="senkani schedule",
          syntax="senkani schedule <cron>",
@@ -563,7 +563,7 @@ lifetime: 2.3M tokens saved · $14.20 · 94% compliance''',
          example="$ senkani schedule \"0 9 * * *\" -- senkani kb get audit",
          flags=[("list", "Show active schedules."),
                 ("remove <id>", "Delete a schedule.")],
-         related=[("Schedules pane", "/reference/panes/schedules/")],
+         related=[("Schedules pane", "__BASE__docs/reference/panes/schedules.html")],
          source="Sources/CLI/ScheduleCommand.swift"),
     dict(slug="senkani-uninstall", name="senkani uninstall",
          syntax="senkani uninstall [--yes] [--keep-data]",
@@ -572,8 +572,8 @@ lifetime: 2.3M tokens saved · $14.20 · 94% compliance''',
          example="$ senkani uninstall --yes --keep-data",
          flags=[("--yes", "Required to actually uninstall."),
                 ("--keep-data", "Preserve the session database.")],
-         related=[("Uninstall guide", "/guides/uninstall/"),
-                  ("senkani wipe", "/reference/cli/senkani-wipe/")],
+         related=[("Uninstall guide", "__BASE__docs/guides/uninstall.html"),
+                  ("senkani wipe", "__BASE__docs/reference/cli/senkani-wipe.html")],
          source="Sources/CLI/UninstallCommand.swift + UninstallArtifactScanner.swift"),
     dict(slug="senkani-kb", name="senkani kb",
          syntax="senkani kb [list|get|search|rollback|history|timeline]",
@@ -586,8 +586,8 @@ lifetime: 2.3M tokens saved · $14.20 · 94% compliance''',
                 ("rollback <id>", "Revert the last enrichment."),
                 ("history <id>", "Show enrichment history."),
                 ("timeline", "Chronological timeline of KB changes.")],
-         related=[("senkani_knowledge tool", "/reference/mcp/senkani_knowledge/"),
-                  ("Knowledge base concept", "/concepts/knowledge-base/")],
+         related=[("senkani_knowledge tool", "__BASE__docs/reference/mcp/senkani_knowledge.html"),
+                  ("Knowledge base concept", "__BASE__docs/concepts/knowledge-base.html")],
          source="Sources/CLI/KBCommand.swift"),
     dict(slug="senkani-eval", name="senkani eval",
          syntax="senkani eval [--update-baseline]",
@@ -597,7 +597,7 @@ lifetime: 2.3M tokens saved · $14.20 · 94% compliance''',
          flags=[("--update-baseline", "Lock in current numbers as the new baseline."),
                 ("--strict", "Nonzero exit on regression."),
                 ("--json", "JSON output.")],
-         related=[("senkani bench", "/reference/cli/senkani-bench/")],
+         related=[("senkani bench", "__BASE__docs/reference/cli/senkani-bench.html")],
          source="Sources/CLI/EvalCommand.swift"),
     dict(slug="senkani-learn", name="senkani learn",
          syntax="senkani learn [status|apply|reject|sweep|enrich|config|review|audit]",
@@ -612,8 +612,8 @@ lifetime: 2.3M tokens saved · $14.20 · 94% compliance''',
                 ("config {show,set}", "Tune thresholds."),
                 ("review [--days N]", "Sprint cadence."),
                 ("audit [--idle D]", "Quarterly currency review.")],
-         related=[("Compound learning concept", "/concepts/compound-learning/"),
-                  ("Sprint Review pane", "/reference/panes/sprint-review/")],
+         related=[("Compound learning concept", "__BASE__docs/concepts/compound-learning.html"),
+                  ("Sprint Review pane", "__BASE__docs/reference/panes/sprint-review.html")],
          source="Sources/CLI/LearnCommand.swift"),
 ]
 
@@ -665,7 +665,7 @@ PANES = [
 def wiki_nav_mcp(active_slug: str) -> str:
     def line(t):
         cls = ' class="active"' if t["slug"] == active_slug else ''
-        return f'        <li><a href="__BASE__docs/reference/mcp/{t["slug"]}/"{cls}><code>{t["slug"]}</code></a></li>'
+        return f'        <li><a href="__BASE__docs/reference/mcp/{t["slug"]}.html"{cls}><code>{t["slug"]}</code></a></li>'
     items = "\n".join(line(t) for t in MCP_TOOLS)
     return f'''  <aside class="wiki-nav" aria-label="MCP tools navigation">
     <div class="wiki-nav-group">
@@ -690,7 +690,7 @@ def wiki_nav_mcp(active_slug: str) -> str:
 def wiki_nav_cli(active_slug: str) -> str:
     def line(c):
         cls = ' class="active"' if c["slug"] == active_slug else ''
-        return f'        <li><a href="__BASE__docs/reference/cli/{c["slug"]}/"{cls}><code>{c["name"]}</code></a></li>'
+        return f'        <li><a href="__BASE__docs/reference/cli/{c["slug"]}.html"{cls}><code>{c["name"]}</code></a></li>'
     items = "\n".join(line(c) for c in CLI_COMMANDS)
     return f'''  <aside class="wiki-nav" aria-label="CLI commands navigation">
     <div class="wiki-nav-group">
@@ -715,7 +715,7 @@ def wiki_nav_cli(active_slug: str) -> str:
 def wiki_nav_panes(active_slug: str) -> str:
     def line(p):
         cls = ' class="active"' if p[0] == active_slug else ''
-        return f'        <li><a href="__BASE__docs/reference/panes/{p[0]}/"{cls}>{p[1]}</a></li>'
+        return f'        <li><a href="__BASE__docs/reference/panes/{p[0]}.html"{cls}>{p[1]}</a></li>'
     items = "\n".join(line(p) for p in PANES)
     return f'''  <aside class="wiki-nav" aria-label="Pane navigation">
     <div class="wiki-nav-group">
@@ -898,8 +898,8 @@ def render_pane(p: tuple) -> str:
     <h2>Related</h2>
     <ul>
       <li><a href="__BASE__docs/reference/panes/">All pane types</a></li>
-      <li><a href="__BASE__docs/reference/options/fcsit/">FCSIT per-pane toggles</a></li>
-      <li><a href="__BASE__docs/reference/mcp/senkani_pane/"><code>senkani_pane</code> — programmatic control</a></li>
+      <li><a href="__BASE__docs/reference/options/fcsit.html">FCSIT per-pane toggles</a></li>
+      <li><a href="__BASE__docs/reference/mcp/senkani_pane.html"><code>senkani_pane</code> — programmatic control</a></li>
     </ul>
   </article>
 </main>
@@ -944,9 +944,9 @@ def wiki_nav_reference(active: str) -> str:
     <div class="wiki-nav-group">
       <h4>Start</h4>
       <ul>
-        <li><a href="__BASE__docs/what-is-senkani/">What is it?</a></li>
+        <li><a href="__BASE__docs/what-is-senkani.html">What is it?</a></li>
         <li><a href="__BASE__docs/concepts/">Concepts</a></li>
-        <li><a href="__BASE__docs/guides/install/">Install</a></li>
+        <li><a href="__BASE__docs/guides/install.html">Install</a></li>
       </ul>
     </div>
   </aside>'''
@@ -963,12 +963,12 @@ def wiki_nav_concepts(active: str) -> str:
         ("security-posture", "Security posture"),
     ]
     def cls(s): return ' class="active"' if s == active else ''
-    items = "\n".join(f'        <li><a href="__BASE__docs/concepts/{s}/"{cls(s)}>{n}</a></li>' for s, n in concepts)
+    items = "\n".join(f'        <li><a href="__BASE__docs/concepts/{s}.html"{cls(s)}>{n}</a></li>' for s, n in concepts)
     return f'''  <aside class="wiki-nav" aria-label="Concepts navigation">
     <div class="wiki-nav-group">
       <h4>Overview</h4>
       <ul>
-        <li><a href="__BASE__docs/what-is-senkani/">What is senkani?</a></li>
+        <li><a href="__BASE__docs/what-is-senkani.html">What is senkani?</a></li>
         <li><a href="__BASE__docs/concepts/"{cls("index")}>All concepts</a></li>
       </ul>
     </div>
@@ -982,7 +982,7 @@ def wiki_nav_concepts(active: str) -> str:
       <h4>Next</h4>
       <ul>
         <li><a href="__BASE__docs/reference/">Reference index</a></li>
-        <li><a href="__BASE__docs/guides/install/">Install</a></li>
+        <li><a href="__BASE__docs/guides/install.html">Install</a></li>
       </ul>
     </div>
   </aside>'''
@@ -1001,7 +1001,7 @@ def wiki_nav_guides(active: str) -> str:
         ("troubleshooting", "Troubleshooting"),
     ]
     def cls(s): return ' class="active"' if s == active else ''
-    items = "\n".join(f'        <li><a href="__BASE__docs/guides/{s}/"{cls(s)}>{n}</a></li>' for s, n in guides)
+    items = "\n".join(f'        <li><a href="__BASE__docs/guides/{s}.html"{cls(s)}>{n}</a></li>' for s, n in guides)
     return f'''  <aside class="wiki-nav" aria-label="Guides navigation">
     <div class="wiki-nav-group">
       <h4>Guides</h4>
@@ -1034,7 +1034,7 @@ def wiki_nav_options(active: str) -> str:
         ("compound-learning", "Compound-learning env"),
     ]
     def cls(s): return ' class="active"' if s == active else ''
-    items = "\n".join(f'        <li><a href="__BASE__docs/reference/options/{s}/"{cls(s)}>{n}</a></li>' for s, n in opts)
+    items = "\n".join(f'        <li><a href="__BASE__docs/reference/options/{s}.html"{cls(s)}>{n}</a></li>' for s, n in opts)
     return f'''  <aside class="wiki-nav" aria-label="Options navigation">
     <div class="wiki-nav-group">
       <h4>Reference</h4>
@@ -1056,7 +1056,7 @@ def render_hub_reference():
     title = "Reference — senkani"
     desc = "Reference for every MCP tool, CLI command, option, pane type."
     mcp_rows = "\n".join(
-        f'      <a class="listing-row" href="__BASE__docs/reference/mcp/{t["slug"]}/"><div class="listing-name">{t["slug"]}</div>'
+        f'      <a class="listing-row" href="__BASE__docs/reference/mcp/{t["slug"]}.html"><div class="listing-name">{t["slug"]}</div>'
         f'<div class="listing-desc">{html.escape(t["overview"])}</div>'
         f'<div class="listing-savings{" na" if not t.get("savings") else ""}">{t.get("savings", "—")}</div>'
         f'<div class="listing-status"><span class="badge badge-live">Live</span></div></a>'
@@ -1102,8 +1102,8 @@ def render_hub_reference():
     <h2 style="margin-top:32px;">Next</h2>
     <ul>
       <li><a href="__BASE__docs/reference/cli/">Browse CLI commands →</a></li>
-      <li><a href="__BASE__docs/reference/options/fcsit/">Start with FCSIT toggles</a> (the five per-pane feature switches).</li>
-      <li><a href="__BASE__docs/concepts/three-layer-stack/">Understand the three-layer stack</a>.</li>
+      <li><a href="__BASE__docs/reference/options/fcsit.html">Start with FCSIT toggles</a> (the five per-pane feature switches).</li>
+      <li><a href="__BASE__docs/concepts/three-layer-stack.html">Understand the three-layer stack</a>.</li>
     </ul>
   </article>
 </main>
@@ -1115,7 +1115,7 @@ def render_hub_mcp():
     title = "MCP tools — reference"
     desc = f"Reference for all {len(MCP_TOOLS)} senkani MCP tools."
     rows = "\n".join(
-        f'      <a class="listing-row" href="__BASE__docs/reference/mcp/{t["slug"]}/"><div class="listing-name">{t["slug"]}</div>'
+        f'      <a class="listing-row" href="__BASE__docs/reference/mcp/{t["slug"]}.html"><div class="listing-name">{t["slug"]}</div>'
         f'<div class="listing-desc">{html.escape(t["overview"])}</div>'
         f'<div class="listing-savings{" na" if not t.get("savings") else ""}">{t.get("savings", "—")}</div>'
         f'<div class="listing-status"><span class="badge badge-live">Live</span></div></a>'
@@ -1142,7 +1142,7 @@ def render_hub_mcp():
 
     <div class="callout callout-info">
       <span class="callout-icon">⚐</span>
-      <div>All tools auto-register via <a href="__BASE__docs/reference/cli/senkani-init/"><code>senkani init</code></a>. Non-Senkani terminals never see the tools — activation is gated on <code>SENKANI_PANE_ID</code>, which the app injects only into managed panes.</div>
+      <div>All tools auto-register via <a href="__BASE__docs/reference/cli/senkani-init.html"><code>senkani init</code></a>. Non-Senkani terminals never see the tools — activation is gated on <code>SENKANI_PANE_ID</code>, which the app injects only into managed panes.</div>
     </div>
   </article>
 </main>
@@ -1154,7 +1154,7 @@ def render_hub_cli():
     title = "CLI commands — reference"
     desc = f"Reference for all {len(CLI_COMMANDS)} senkani CLI commands."
     rows = "\n".join(
-        f'      <a class="listing-row" href="__BASE__docs/reference/cli/{c["slug"]}/"><div class="listing-name">{c["name"]}</div>'
+        f'      <a class="listing-row" href="__BASE__docs/reference/cli/{c["slug"]}.html"><div class="listing-name">{c["name"]}</div>'
         f'<div class="listing-desc">{html.escape(c["summary"])}</div>'
         f'<div class="listing-savings na">—</div>'
         f'<div class="listing-status"><span class="badge badge-live">Live</span></div></a>'
@@ -1188,7 +1188,7 @@ def render_hub_panes():
     title = "Panes — reference"
     desc = f"All {len(PANES)} senkani workspace pane types."
     rows = "\n".join(
-        f'      <a class="card" href="__BASE__docs/reference/panes/{p[0]}/"><h4>{p[1]}</h4><p>{p[3]}</p></a>'
+        f'      <a class="card" href="__BASE__docs/reference/panes/{p[0]}.html"><h4>{p[1]}</h4><p>{p[3]}</p></a>'
         for p in PANES
     )
     body = f'''<main id="main" class="wiki-layout">
@@ -1217,8 +1217,8 @@ def render_hub_panes():
     <div class="seealso">
       <h3>See also</h3>
       <ul>
-        <li><a href="__BASE__docs/reference/options/fcsit/">FCSIT per-pane toggles</a></li>
-        <li><a href="__BASE__docs/reference/mcp/senkani_pane/"><code>senkani_pane</code> — programmatic pane control</a></li>
+        <li><a href="__BASE__docs/reference/options/fcsit.html">FCSIT per-pane toggles</a></li>
+        <li><a href="__BASE__docs/reference/mcp/senkani_pane.html"><code>senkani_pane</code> — programmatic pane control</a></li>
       </ul>
     </div>
   </article>
@@ -1244,20 +1244,20 @@ def render_hub_options():
 
     <h2>FCSIT — per-pane feature toggles</h2>
     <div class="fcsit-card">
-      <a class="fcsit-letter f" href="__BASE__docs/reference/options/filter/"><span class="ltr">F</span><span class="name">Filter</span><span class="default">default on</span></a>
-      <a class="fcsit-letter c" href="__BASE__docs/reference/options/cache/"><span class="ltr">C</span><span class="name">Cache</span><span class="default">default on</span></a>
-      <a class="fcsit-letter s" href="__BASE__docs/reference/options/secrets/"><span class="ltr">S</span><span class="name">Secrets</span><span class="default">default on</span></a>
-      <a class="fcsit-letter i" href="__BASE__docs/reference/options/indexer/"><span class="ltr">I</span><span class="name">Indexer</span><span class="default">default on</span></a>
-      <a class="fcsit-letter t" href="__BASE__docs/reference/options/terse/"><span class="ltr">T</span><span class="name">Terse</span><span class="default">default off</span></a>
+      <a class="fcsit-letter f" href="__BASE__docs/reference/options/filter.html"><span class="ltr">F</span><span class="name">Filter</span><span class="default">default on</span></a>
+      <a class="fcsit-letter c" href="__BASE__docs/reference/options/cache.html"><span class="ltr">C</span><span class="name">Cache</span><span class="default">default on</span></a>
+      <a class="fcsit-letter s" href="__BASE__docs/reference/options/secrets.html"><span class="ltr">S</span><span class="name">Secrets</span><span class="default">default on</span></a>
+      <a class="fcsit-letter i" href="__BASE__docs/reference/options/indexer.html"><span class="ltr">I</span><span class="name">Indexer</span><span class="default">default on</span></a>
+      <a class="fcsit-letter t" href="__BASE__docs/reference/options/terse.html"><span class="ltr">T</span><span class="name">Terse</span><span class="default">default off</span></a>
     </div>
-    <p><a href="__BASE__docs/reference/options/fcsit/">Read the FCSIT overview →</a></p>
+    <p><a href="__BASE__docs/reference/options/fcsit.html">Read the FCSIT overview →</a></p>
 
     <h2>Env-var families</h2>
     <div class="card-grid">
-      <a class="card" href="__BASE__docs/reference/options/budget/"><h4>Budget caps</h4><p>Daily + weekly spend ceilings enforced at the hook layer. <code>SENKANI_BUDGET_DAILY</code>, <code>SENKANI_BUDGET_WEEKLY</code>.</p></a>
-      <a class="card" href="__BASE__docs/reference/options/security/"><h4>Security env vars</h4><p>Prompt-injection guard, SSRF overrides, socket auth, structured JSON logs, retention tuning.</p></a>
-      <a class="card" href="__BASE__docs/reference/options/web/"><h4>Web env vars</h4><p>Overrides for the <code>senkani_web</code> SSRF guard, subresource blocklist, allowlisted hosts.</p></a>
-      <a class="card" href="__BASE__docs/reference/options/compound-learning/"><h4>Compound-learning env</h4><p>Confidence thresholds, recurrence gates, Gemma enrichment rate limits.</p></a>
+      <a class="card" href="__BASE__docs/reference/options/budget.html"><h4>Budget caps</h4><p>Daily + weekly spend ceilings enforced at the hook layer. <code>SENKANI_BUDGET_DAILY</code>, <code>SENKANI_BUDGET_WEEKLY</code>.</p></a>
+      <a class="card" href="__BASE__docs/reference/options/security.html"><h4>Security env vars</h4><p>Prompt-injection guard, SSRF overrides, socket auth, structured JSON logs, retention tuning.</p></a>
+      <a class="card" href="__BASE__docs/reference/options/web.html"><h4>Web env vars</h4><p>Overrides for the <code>senkani_web</code> SSRF guard, subresource blocklist, allowlisted hosts.</p></a>
+      <a class="card" href="__BASE__docs/reference/options/compound-learning.html"><h4>Compound-learning env</h4><p>Confidence thresholds, recurrence gates, Gemma enrichment rate limits.</p></a>
     </div>
 
     <h2 style="margin-top:32px;">Config file</h2>
@@ -1289,16 +1289,16 @@ def render_hub_concepts():
     </nav>
     <span class="quadrant concept">Concept · Explanation</span>
     <h1 class="page-title">Concepts</h1>
-    <p class="lede">Explanation pages — the <em>why</em> behind senkani. Reference tells you what each tool does; concepts tell you why the system works. Start with <a href="__BASE__docs/what-is-senkani/">What is senkani?</a> if this is your first visit.</p>
+    <p class="lede">Explanation pages — the <em>why</em> behind senkani. Reference tells you what each tool does; concepts tell you why the system works. Start with <a href="__BASE__docs/what-is-senkani.html">What is senkani?</a> if this is your first visit.</p>
 
     <div class="card-grid">
-      <a class="card" href="__BASE__docs/concepts/compression-layer/"><h4>Compression layer</h4><p>Three places Senkani compresses: input (before the LLM sees it), redundancy (before the tool runs), output (before responses grow). Why all three.</p></a>
-      <a class="card" href="__BASE__docs/concepts/hook-relay/"><h4>Hook relay</h4><p>How the <code>senkani-hook</code> binary intercepts your agent's Read/Bash/Grep, routes to senkani equivalents, and denies with cached results when appropriate.</p></a>
-      <a class="card" href="__BASE__docs/concepts/mcp-intelligence/"><h4>MCP intelligence</h4><p>What "MCP tool" means and why senkani has 19 of them. How tree-sitter + FTS5 + MiniLM compose into sub-5 ms symbol search.</p></a>
-      <a class="card" href="__BASE__docs/concepts/three-layer-stack/"><h4>Three-layer stack</h4><p>Layer 1 tools, Layer 2 hooks, Layer 3 smart denials. Why denial-with-cached-result is the biggest win on pathological sessions.</p></a>
-      <a class="card" href="__BASE__docs/concepts/compound-learning/"><h4>Compound learning</h4><p>Four artifact types — filter rules, context docs, instruction patches, workflow playbooks — mined from your own sessions. The <code>.recurring → .staged → .applied</code> flow.</p></a>
-      <a class="card" href="__BASE__docs/concepts/knowledge-base/"><h4>Knowledge base</h4><p>Project entities + decisions + links. Markdown as source-of-truth, SQLite as rebuilt index. How it stays coherent when you hand-edit.</p></a>
-      <a class="card" href="__BASE__docs/concepts/security-posture/"><h4>Security posture</h4><p>v0.2.0 defaults: prompt-injection guard on, SSRF hardening on, secret redaction on, socket auth opt-in. Why senkani is a trust boundary and what that means concretely.</p></a>
+      <a class="card" href="__BASE__docs/concepts/compression-layer.html"><h4>Compression layer</h4><p>Three places Senkani compresses: input (before the LLM sees it), redundancy (before the tool runs), output (before responses grow). Why all three.</p></a>
+      <a class="card" href="__BASE__docs/concepts/hook-relay.html"><h4>Hook relay</h4><p>How the <code>senkani-hook</code> binary intercepts your agent's Read/Bash/Grep, routes to senkani equivalents, and denies with cached results when appropriate.</p></a>
+      <a class="card" href="__BASE__docs/concepts/mcp-intelligence.html"><h4>MCP intelligence</h4><p>What "MCP tool" means and why senkani has 19 of them. How tree-sitter + FTS5 + MiniLM compose into sub-5 ms symbol search.</p></a>
+      <a class="card" href="__BASE__docs/concepts/three-layer-stack.html"><h4>Three-layer stack</h4><p>Layer 1 tools, Layer 2 hooks, Layer 3 smart denials. Why denial-with-cached-result is the biggest win on pathological sessions.</p></a>
+      <a class="card" href="__BASE__docs/concepts/compound-learning.html"><h4>Compound learning</h4><p>Four artifact types — filter rules, context docs, instruction patches, workflow playbooks — mined from your own sessions. The <code>.recurring → .staged → .applied</code> flow.</p></a>
+      <a class="card" href="__BASE__docs/concepts/knowledge-base.html"><h4>Knowledge base</h4><p>Project entities + decisions + links. Markdown as source-of-truth, SQLite as rebuilt index. How it stays coherent when you hand-edit.</p></a>
+      <a class="card" href="__BASE__docs/concepts/security-posture.html"><h4>Security posture</h4><p>v0.2.0 defaults: prompt-injection guard on, SSRF hardening on, secret redaction on, socket auth opt-in. Why senkani is a trust boundary and what that means concretely.</p></a>
     </div>
   </article>
 </main>
@@ -1320,15 +1320,15 @@ def render_hub_guides():
     <p class="lede">Numbered, paste-runnable guides with expected-output blocks. Every shell command has been verified against a clean checkout.</p>
 
     <div class="card-grid">
-      <a class="card" href="__BASE__docs/guides/install/"><h4>Install</h4><p>Clone, build with Swift Package Manager, register hooks, launch the workspace. Three minutes end-to-end.</p></a>
-      <a class="card" href="__BASE__docs/guides/claude-code/"><h4>Wire up Claude Code</h4><p>How <code>senkani init</code> modifies <code>~/.claude/settings.json</code>; what the MCP entry looks like; how to verify the integration.</p></a>
-      <a class="card" href="__BASE__docs/guides/cursor-copilot/"><h4>Wire up Cursor / Copilot</h4><p><code>senkani init --hooks-only</code> for non-Claude agents. What changes, what doesn't.</p></a>
-      <a class="card" href="__BASE__docs/guides/first-session/"><h4>Your first session</h4><p>Open the workspace, kick off a coding agent, read the Analytics pane. What the numbers mean and how to read them.</p></a>
-      <a class="card" href="__BASE__docs/guides/budget-setup/"><h4>Budget setup</h4><p>Daily + weekly caps, dual-layer enforcement, and what happens when you hit them.</p></a>
-      <a class="card" href="__BASE__docs/guides/compound-learning/"><h4>Reviewing learned proposals</h4><p>How to use <code>senkani learn review</code> and the Sprint Review pane to accept/reject staged proposals.</p></a>
-      <a class="card" href="__BASE__docs/guides/kb-workflow/"><h4>Knowledge-base workflow</h4><p>Day-to-day with <code>senkani kb</code>: seeding entities, editing the source markdown, running the audit.</p></a>
-      <a class="card" href="__BASE__docs/guides/uninstall/"><h4>Clean uninstall</h4><p><code>senkani uninstall</code> + <code>senkani wipe</code>. What each removes and what to keep.</p></a>
-      <a class="card" href="__BASE__docs/guides/troubleshooting/"><h4>Troubleshooting</h4><p>Hook not registering, MCP not activating, grammar staleness, rebuild-index steps.</p></a>
+      <a class="card" href="__BASE__docs/guides/install.html"><h4>Install</h4><p>Clone, build with Swift Package Manager, register hooks, launch the workspace. Three minutes end-to-end.</p></a>
+      <a class="card" href="__BASE__docs/guides/claude-code.html"><h4>Wire up Claude Code</h4><p>How <code>senkani init</code> modifies <code>~/.claude/settings.json</code>; what the MCP entry looks like; how to verify the integration.</p></a>
+      <a class="card" href="__BASE__docs/guides/cursor-copilot.html"><h4>Wire up Cursor / Copilot</h4><p><code>senkani init --hooks-only</code> for non-Claude agents. What changes, what doesn't.</p></a>
+      <a class="card" href="__BASE__docs/guides/first-session.html"><h4>Your first session</h4><p>Open the workspace, kick off a coding agent, read the Analytics pane. What the numbers mean and how to read them.</p></a>
+      <a class="card" href="__BASE__docs/guides/budget-setup.html"><h4>Budget setup</h4><p>Daily + weekly caps, dual-layer enforcement, and what happens when you hit them.</p></a>
+      <a class="card" href="__BASE__docs/guides/compound-learning.html"><h4>Reviewing learned proposals</h4><p>How to use <code>senkani learn review</code> and the Sprint Review pane to accept/reject staged proposals.</p></a>
+      <a class="card" href="__BASE__docs/guides/kb-workflow.html"><h4>Knowledge-base workflow</h4><p>Day-to-day with <code>senkani kb</code>: seeding entities, editing the source markdown, running the audit.</p></a>
+      <a class="card" href="__BASE__docs/guides/uninstall.html"><h4>Clean uninstall</h4><p><code>senkani uninstall</code> + <code>senkani wipe</code>. What each removes and what to keep.</p></a>
+      <a class="card" href="__BASE__docs/guides/troubleshooting.html"><h4>Troubleshooting</h4><p>Hook not registering, MCP not activating, grammar staleness, rebuild-index steps.</p></a>
     </div>
   </article>
 </main>
@@ -1350,7 +1350,7 @@ def render_hub_status():
     <p class="lede">Current release: <strong>v0.2.0</strong>. <strong>1,510</strong> unit tests passing. All features below are live + tested + reproducible on your hardware.</p>
 
     <div class="card-grid">
-      <div class="stat-card"><div class="num">v<em>0.2</em>.0</div><div class="label">Current release — <a href="__BASE__docs/changelog/">changelog</a></div></div>
+      <div class="stat-card"><div class="num">v<em>0.2</em>.0</div><div class="label">Current release — <a href="__BASE__docs/changelog.html">changelog</a></div></div>
       <div class="stat-card"><div class="num"><em>1,510</em></div><div class="label">Passing tests</div></div>
       <div class="stat-card"><div class="num"><em>{len(MCP_TOOLS)}</em></div><div class="label">MCP tools — <a href="__BASE__docs/reference/mcp/">reference</a></div></div>
       <div class="stat-card"><div class="num"><em>{len(CLI_COMMANDS)}</em></div><div class="label">CLI commands — <a href="__BASE__docs/reference/cli/">reference</a></div></div>
@@ -1373,9 +1373,9 @@ def render_hub_status():
 
     <h2>Links</h2>
     <ul>
-      <li><a href="__BASE__docs/changelog/">Full changelog</a></li>
+      <li><a href="__BASE__docs/changelog.html">Full changelog</a></li>
       <li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li>
-      <li><a href="__BASE__docs/about/">About + license</a></li>
+      <li><a href="__BASE__docs/about.html">About + license</a></li>
     </ul>
   </article>
 </main>
@@ -1418,7 +1418,7 @@ def render_about():
     <h2>Links</h2>
     <ul>
       <li><a href="https://github.com/ckluis/senkani">GitHub</a></li>
-      <li><a href="__BASE__docs/changelog/">Changelog</a></li>
+      <li><a href="__BASE__docs/changelog.html">Changelog</a></li>
       <li><a href="https://github.com/ckluis/senkani/blob/main/LICENSE">LICENSE</a></li>
     </ul>
   </article>
@@ -1440,12 +1440,12 @@ def render_docs_root():
     <p class="lede">The senkani wiki. Every MCP tool, CLI command, option, and pane has its own page. Concepts explain the why; guides walk you through how-tos; reference answers what-does-this-do.</p>
 
     <div class="card-grid">
-      <a class="card" href="__BASE__docs/what-is-senkani/"><h3>What is senkani?</h3><p>The product in one page — category, positioning, who it's for.</p></a>
+      <a class="card" href="__BASE__docs/what-is-senkani.html"><h3>What is senkani?</h3><p>The product in one page — category, positioning, who it's for.</p></a>
       <a class="card" href="__BASE__docs/concepts/"><h3>Concepts</h3><p>Explanation. Why the three-layer stack, how the hook relay works, how compound learning mines your sessions.</p></a>
       <a class="card" href="__BASE__docs/reference/"><h3>Reference</h3><p>Every <code>senkani_*</code> MCP tool, every CLI command, every FCSIT option, every pane type.</p></a>
       <a class="card" href="__BASE__docs/guides/"><h3>Guides</h3><p>How-tos. Install, wire up Claude Code, set up budgets, review learned proposals, clean uninstall.</p></a>
-      <a class="card" href="__BASE__docs/status/"><h3>Status</h3><p>What's shipped in v0.2.0 + test count + feature checklist.</p></a>
-      <a class="card" href="__BASE__docs/changelog/"><h3>Changelog</h3><p>Release-by-release notes.</p></a>
+      <a class="card" href="__BASE__docs/status.html"><h3>Status</h3><p>What's shipped in v0.2.0 + test count + feature checklist.</p></a>
+      <a class="card" href="__BASE__docs/changelog.html"><h3>Changelog</h3><p>Release-by-release notes.</p></a>
     </div>
   </article>
 </main>
@@ -1500,7 +1500,7 @@ def render_what_is_senkani():
       <div class="no">A per-request API middleman that adds new costs.</div>
 
       <div class="label">Outputs</div>
-      <div class="yes">A <a href="__BASE__docs/concepts/knowledge-base/">knowledge graph</a>, a session DB, and <a href="__BASE__docs/concepts/compound-learning/">learned artifacts</a> you can inspect.</div>
+      <div class="yes">A <a href="__BASE__docs/concepts/knowledge-base.html">knowledge graph</a>, a session DB, and <a href="__BASE__docs/concepts/compound-learning.html">learned artifacts</a> you can inspect.</div>
       <div class="no">A black box; every decision is logged, tunable, and reversible.</div>
     </div>
 
@@ -1515,8 +1515,8 @@ def render_what_is_senkani():
     <p>Senkani has three layers, and all three ship in the same binary:</p>
     <ol>
       <li><a href="__BASE__docs/reference/mcp/">MCP tools</a> — 19 tools the agent can call directly. Compressed reads, filtered shells, symbol lookups, sandboxed parse, local embed/vision.</li>
-      <li><a href="__BASE__docs/concepts/hook-relay/">Hook relay</a> — intercepts the agent's built-in Read/Bash/Grep and routes to senkani equivalents or denies with cached results.</li>
-      <li><a href="__BASE__docs/concepts/three-layer-stack/">Smart denials</a> — re-read suppression, command replay, trivial routing, search upgrade. The filter decides a tool call doesn't need to run at all.</li>
+      <li><a href="__BASE__docs/concepts/hook-relay.html">Hook relay</a> — intercepts the agent's built-in Read/Bash/Grep and routes to senkani equivalents or denies with cached results.</li>
+      <li><a href="__BASE__docs/concepts/three-layer-stack.html">Smart denials</a> — re-read suppression, command replay, trivial routing, search upgrade. The filter decides a tool call doesn't need to run at all.</li>
     </ol>
 
     <h2>What it replaces (or augments)</h2>
@@ -1524,19 +1524,19 @@ def render_what_is_senkani():
       <li><code>Read</code> → <code>senkani_read</code> (compressed, cached, redacted) or <code>senkani_fetch</code> (symbol-only).</li>
       <li><code>Grep</code> → <code>senkani_search</code> (local tree-sitter index; 99% fewer tokens than text grep).</li>
       <li><code>Bash</code> → <code>senkani_exec</code> (24+ command-specific filter rules; mutating commands pass through unchanged).</li>
-      <li>Per-repo briefs → <a href="__BASE__docs/reference/mcp/senkani_bundle/"><code>senkani_bundle</code></a> (budget-bounded Markdown or JSON).</li>
-      <li>Cloud embed / vision API calls → <a href="__BASE__docs/reference/mcp/senkani_embed/"><code>senkani_embed</code></a> + <a href="__BASE__docs/reference/mcp/senkani_vision/"><code>senkani_vision</code></a> on Apple Silicon.</li>
+      <li>Per-repo briefs → <a href="__BASE__docs/reference/mcp/senkani_bundle.html"><code>senkani_bundle</code></a> (budget-bounded Markdown or JSON).</li>
+      <li>Cloud embed / vision API calls → <a href="__BASE__docs/reference/mcp/senkani_embed.html"><code>senkani_embed</code></a> + <a href="__BASE__docs/reference/mcp/senkani_vision.html"><code>senkani_vision</code></a> on Apple Silicon.</li>
     </ul>
 
     <div class="callout callout-info">
       <span class="callout-icon">⚐</span>
-      <div><strong>Savings multipliers vary.</strong> The <code>80.37×</code> figure on the landing page is the synthetic fixture ceiling. Live sessions typically land in the 3–15× range depending on workflow. The <a href="__BASE__docs/reference/panes/savings-test/">Savings Test pane</a> shows both side by side, and the live number is the honest one.</div>
+      <div><strong>Savings multipliers vary.</strong> The <code>80.37×</code> figure on the landing page is the synthetic fixture ceiling. Live sessions typically land in the 3–15× range depending on workflow. The <a href="__BASE__docs/reference/panes/savings-test.html">Savings Test pane</a> shows both side by side, and the live number is the honest one.</div>
     </div>
 
     <h2>Next</h2>
     <ul>
-      <li><a href="__BASE__docs/guides/install/">Install senkani</a> — clone, build, <code>init</code>, launch.</li>
-      <li><a href="__BASE__docs/concepts/three-layer-stack/">Read about the three-layer stack</a>.</li>
+      <li><a href="__BASE__docs/guides/install.html">Install senkani</a> — clone, build, <code>init</code>, launch.</li>
+      <li><a href="__BASE__docs/concepts/three-layer-stack.html">Read about the three-layer stack</a>.</li>
       <li><a href="__BASE__docs/reference/mcp/">Browse the MCP tool reference</a>.</li>
     </ul>
   </article>
@@ -1555,11 +1555,11 @@ def render_changelog():
       <a href="__BASE__">Home</a> <span class="sep">›</span> <span class="here">Changelog</span>
     </nav>
     <h1 class="page-title">Changelog</h1>
-    <p class="lede">Release notes per server version (reported by <a href="__BASE__docs/reference/mcp/senkani_version/"><code>senkani_version</code></a>). Full detail lives in <a href="https://github.com/ckluis/senkani/blob/main/CHANGELOG.md">CHANGELOG.md</a> in the repo — this page is a curated summary.</p>
+    <p class="lede">Release notes per server version (reported by <a href="__BASE__docs/reference/mcp/senkani_version.html"><code>senkani_version</code></a>). Full detail lives in <a href="https://github.com/ckluis/senkani/blob/main/CHANGELOG.md">CHANGELOG.md</a> in the repo — this page is a curated summary.</p>
 
     <h2>v0.2.0 (current) — April 2026</h2>
     <ul>
-      <li><strong>Website rebuild</strong> — multi-page wiki + tightened landing page. 19 MCP tools + 19 CLI commands + 17 panes each have their own URL. <a href="__BASE__docs/what-is-senkani/">Start here</a>.</li>
+      <li><strong>Website rebuild</strong> — multi-page wiki + tightened landing page. 19 MCP tools + 19 CLI commands + 17 panes each have their own URL. <a href="__BASE__docs/what-is-senkani.html">Start here</a>.</li>
       <li><strong>Security hardening (v0.2.0 release)</strong> — prompt-injection guard on, SSRF guard on (DNS pre-resolution + redirect re-validation + subresource blocklist), secret detection on (13 families + entropy), socket-auth opt-in, structured JSON logs opt-in with sink redaction, retention scheduler.</li>
       <li><strong>Compound learning + KB master plan</strong> — nine-round landing 2026-04-17: H+2b context signals, H+2c instruction/workflow generators with Schneier never-auto-apply, H+2d sprint + quarterly cadence, F+1 Layer-1 rebuild coordinator, F+2 entity tracker, F+3 enrichment validator + KB rollback, F+4 KB timeline, F+5 KB↔learning bridge.</li>
       <li><strong><code>senkani_repo</code></strong> — query any public GitHub repo without cloning. Host-allowlisted, SecretDetector-scanned, TTL-cached.</li>
@@ -1604,21 +1604,21 @@ OPT_FCSIT = ("fcsit", "FCSIT — five per-pane toggles",
              "Each pane in the workspace carries five feature switches: <strong>F</strong>ilter, <strong>C</strong>ache, <strong>S</strong>ecrets, <strong>I</strong>ndexer, <strong>T</strong>erse. Set per-pane; persist to <code>~/.senkani/panes/{paneId}.env</code>; take effect immediately without a restart.",
              '''
     <div class="fcsit-card">
-      <a class="fcsit-letter f" href="__BASE__docs/reference/options/filter/"><span class="ltr">F</span><span class="name">Filter</span><span class="default">default on</span></a>
-      <a class="fcsit-letter c" href="__BASE__docs/reference/options/cache/"><span class="ltr">C</span><span class="name">Cache</span><span class="default">default on</span></a>
-      <a class="fcsit-letter s" href="__BASE__docs/reference/options/secrets/"><span class="ltr">S</span><span class="name">Secrets</span><span class="default">default on</span></a>
-      <a class="fcsit-letter i" href="__BASE__docs/reference/options/indexer/"><span class="ltr">I</span><span class="name">Indexer</span><span class="default">default on</span></a>
-      <a class="fcsit-letter t" href="__BASE__docs/reference/options/terse/"><span class="ltr">T</span><span class="name">Terse</span><span class="default">default off</span></a>
+      <a class="fcsit-letter f" href="__BASE__docs/reference/options/filter.html"><span class="ltr">F</span><span class="name">Filter</span><span class="default">default on</span></a>
+      <a class="fcsit-letter c" href="__BASE__docs/reference/options/cache.html"><span class="ltr">C</span><span class="name">Cache</span><span class="default">default on</span></a>
+      <a class="fcsit-letter s" href="__BASE__docs/reference/options/secrets.html"><span class="ltr">S</span><span class="name">Secrets</span><span class="default">default on</span></a>
+      <a class="fcsit-letter i" href="__BASE__docs/reference/options/indexer.html"><span class="ltr">I</span><span class="name">Indexer</span><span class="default">default on</span></a>
+      <a class="fcsit-letter t" href="__BASE__docs/reference/options/terse.html"><span class="ltr">T</span><span class="name">Terse</span><span class="default">default off</span></a>
     </div>
 
     <h2>What each letter controls</h2>
     <div class="ref-io-table">
       <div class="head">Letter</div><div class="head">Feature</div><div class="head">Default</div><div class="head">What it does</div>
-      <div class="k">F</div><div class="t">Filter</div><div class="default">on</div><div class="desc"><a href="__BASE__docs/reference/options/filter/">Filter pipeline</a> — 24 command-specific output rules applied to <code>senkani_exec</code>.</div>
-      <div class="k">C</div><div class="t">Cache</div><div class="default">on</div><div class="desc"><a href="__BASE__docs/reference/options/cache/">Read cache</a> — keyed on (path, mtime); unchanged files return from memory.</div>
-      <div class="k">S</div><div class="t">Secrets</div><div class="default">on</div><div class="desc"><a href="__BASE__docs/reference/options/secrets/">SecretDetector</a> — 13 regex families + entropy fallback on every tool output.</div>
-      <div class="k">I</div><div class="t">Indexer</div><div class="default">on</div><div class="desc"><a href="__BASE__docs/reference/options/indexer/">Symbol indexer</a> — <code>senkani_search</code>, <code>senkani_fetch</code>, <code>senkani_outline</code> active.</div>
-      <div class="k">T</div><div class="t">Terse</div><div class="default">off</div><div class="desc"><a href="__BASE__docs/reference/options/terse/">Terse mode</a> — output-token reduction via system-prompt injection + phrase strip.</div>
+      <div class="k">F</div><div class="t">Filter</div><div class="default">on</div><div class="desc"><a href="__BASE__docs/reference/options/filter.html">Filter pipeline</a> — 24 command-specific output rules applied to <code>senkani_exec</code>.</div>
+      <div class="k">C</div><div class="t">Cache</div><div class="default">on</div><div class="desc"><a href="__BASE__docs/reference/options/cache.html">Read cache</a> — keyed on (path, mtime); unchanged files return from memory.</div>
+      <div class="k">S</div><div class="t">Secrets</div><div class="default">on</div><div class="desc"><a href="__BASE__docs/reference/options/secrets.html">SecretDetector</a> — 13 regex families + entropy fallback on every tool output.</div>
+      <div class="k">I</div><div class="t">Indexer</div><div class="default">on</div><div class="desc"><a href="__BASE__docs/reference/options/indexer.html">Symbol indexer</a> — <code>senkani_search</code>, <code>senkani_fetch</code>, <code>senkani_outline</code> active.</div>
+      <div class="k">T</div><div class="t">Terse</div><div class="default">off</div><div class="desc"><a href="__BASE__docs/reference/options/terse.html">Terse mode</a> — output-token reduction via system-prompt injection + phrase strip.</div>
     </div>
 
     <h2>How to toggle</h2>
@@ -1653,10 +1653,10 @@ OPT_FILTER = ("filter", "F — Filter pipeline",
     <p><strong>60–90%</strong> on read-only commands (<code>git status</code>, <code>npm install</code>, <code>git diff</code>). <strong>0%</strong> on mutating commands (by design).</p>
 
     <div class="seealso"><h3>See also</h3><ul>
-      <li><a href="__BASE__docs/reference/mcp/senkani_exec/"><code>senkani_exec</code> — the MCP tool</a></li>
-      <li><a href="__BASE__docs/reference/cli/senkani-exec/"><code>senkani exec</code> — the CLI wrapper</a></li>
-      <li><a href="__BASE__docs/concepts/compression-layer/">Why we compress at the filter layer</a></li>
-      <li><a href="__BASE__docs/concepts/compound-learning/">New rules mined from your sessions</a></li>
+      <li><a href="__BASE__docs/reference/mcp/senkani_exec.html"><code>senkani_exec</code> — the MCP tool</a></li>
+      <li><a href="__BASE__docs/reference/cli/senkani-exec.html"><code>senkani exec</code> — the CLI wrapper</a></li>
+      <li><a href="__BASE__docs/concepts/compression-layer.html">Why we compress at the filter layer</a></li>
+      <li><a href="__BASE__docs/concepts/compound-learning.html">New rules mined from your sessions</a></li>
     </ul></div>
 ''')
 
@@ -1673,8 +1673,8 @@ OPT_CACHE = ("cache", "C — Read cache",
     <p>In-process only. Cleared on pane close. To wipe explicitly: <code>senkani_session</code> with <code>action:"clear-cache"</code>.</p>
 
     <div class="seealso"><h3>See also</h3><ul>
-      <li><a href="__BASE__docs/reference/mcp/senkani_read/"><code>senkani_read</code></a></li>
-      <li><a href="__BASE__docs/concepts/three-layer-stack/">Layer 3: re-read suppression</a></li>
+      <li><a href="__BASE__docs/reference/mcp/senkani_read.html"><code>senkani_read</code></a></li>
+      <li><a href="__BASE__docs/concepts/three-layer-stack.html">Layer 3: re-read suppression</a></li>
     </ul></div>
 ''')
 
@@ -1691,8 +1691,8 @@ OPT_SECRETS = ("secrets", "S — Secret detection",
     <p><code>SENKANI_SECRETS=on|off</code> — default <strong>on</strong>. Don't turn this off unless you're running a test fixture that intentionally produces secret-shaped strings.</p>
 
     <div class="seealso"><h3>See also</h3><ul>
-      <li><a href="__BASE__docs/reference/options/security/">Full security env-var reference</a></li>
-      <li><a href="__BASE__docs/concepts/security-posture/">Security posture concept</a></li>
+      <li><a href="__BASE__docs/reference/options/security.html">Full security env-var reference</a></li>
+      <li><a href="__BASE__docs/concepts/security-posture.html">Security posture concept</a></li>
     </ul></div>
 ''')
 
@@ -1709,9 +1709,9 @@ OPT_INDEXER = ("indexer", "I — Symbol indexer",
     <p>TypeScript, JavaScript, Python, Go, Rust, Swift, Java, Kotlin, Ruby, C, C++, C#, PHP, Scala, OCaml, Haskell, Elixir, Erlang, Dart, TOML, YAML, JSON, HTML, CSS, GraphQL. Run <code>senkani grammars</code> to see the vendored list.</p>
 
     <div class="seealso"><h3>See also</h3><ul>
-      <li><a href="__BASE__docs/reference/mcp/senkani_search/"><code>senkani_search</code></a></li>
-      <li><a href="__BASE__docs/reference/cli/senkani-grammars/"><code>senkani grammars</code></a></li>
-      <li><a href="__BASE__docs/concepts/mcp-intelligence/">How the index is built</a></li>
+      <li><a href="__BASE__docs/reference/mcp/senkani_search.html"><code>senkani_search</code></a></li>
+      <li><a href="__BASE__docs/reference/cli/senkani-grammars.html"><code>senkani grammars</code></a></li>
+      <li><a href="__BASE__docs/concepts/mcp-intelligence.html">How the index is built</a></li>
     </ul></div>
 ''')
 
@@ -1739,8 +1739,8 @@ unchanged — only prose is compressed.</span></pre>
     <p><code>SENKANI_TERSE=on|off</code> — default <strong>off</strong>. Enable it when you want tight, machine-readable responses; disable it when you're pair-programming and want the model's explanations intact.</p>
 
     <div class="seealso"><h3>See also</h3><ul>
-      <li><a href="__BASE__docs/reference/options/fcsit/">FCSIT overview</a></li>
-      <li><a href="__BASE__docs/concepts/compression-layer/">Where terse fits in the compression stack</a></li>
+      <li><a href="__BASE__docs/reference/options/fcsit.html">FCSIT overview</a></li>
+      <li><a href="__BASE__docs/concepts/compression-layer.html">Where terse fits in the compression stack</a></li>
     </ul></div>
 ''')
 
@@ -1761,8 +1761,8 @@ OPT_BUDGET = ("budget", "Budget caps",
     <p>Daily resets at midnight local. Weekly resets Monday 00:00 local. No manual reset — the cap is a ceiling on lifetime spend, not a bank.</p>
 
     <div class="seealso"><h3>See also</h3><ul>
-      <li><a href="__BASE__docs/guides/budget-setup/">Budget setup guide</a></li>
-      <li><a href="__BASE__docs/reference/cli/senkani-stats/"><code>senkani stats</code> — see your spend</a></li>
+      <li><a href="__BASE__docs/guides/budget-setup.html">Budget setup guide</a></li>
+      <li><a href="__BASE__docs/reference/cli/senkani-stats.html"><code>senkani stats</code> — see your spend</a></li>
     </ul></div>
 ''')
 
@@ -1785,9 +1785,9 @@ OPT_SECURITY = ("security", "Security env vars",
     <p>Every security-defense site increments an <code>event_counters</code> row (migration v2): injection detections, SSRF blocks, socket handshake rejections, schema migrations, retention prunes, command redactions. Read them via <code>senkani stats --security</code>.</p>
 
     <div class="seealso"><h3>See also</h3><ul>
-      <li><a href="__BASE__docs/concepts/security-posture/">Security posture concept</a></li>
-      <li><a href="__BASE__docs/reference/options/web/">Web-specific SSRF overrides</a></li>
-      <li><a href="__BASE__docs/reference/options/secrets/">Secret detection (FCSIT S)</a></li>
+      <li><a href="__BASE__docs/concepts/security-posture.html">Security posture concept</a></li>
+      <li><a href="__BASE__docs/reference/options/web.html">Web-specific SSRF overrides</a></li>
+      <li><a href="__BASE__docs/reference/options/secrets.html">Secret detection (FCSIT S)</a></li>
     </ul></div>
 ''')
 
@@ -1803,11 +1803,11 @@ OPT_WEB = ("web", "Web env vars",
     </div>
 
     <h2>Scheme scope</h2>
-    <p><code>file://</code> is never accepted by <code>senkani_web</code>. Use <a href="__BASE__docs/reference/mcp/senkani_read/"><code>senkani_read</code></a> for local files.</p>
+    <p><code>file://</code> is never accepted by <code>senkani_web</code>. Use <a href="__BASE__docs/reference/mcp/senkani_read.html"><code>senkani_read</code></a> for local files.</p>
 
     <div class="seealso"><h3>See also</h3><ul>
-      <li><a href="__BASE__docs/reference/mcp/senkani_web/"><code>senkani_web</code> — behavior + security</a></li>
-      <li><a href="__BASE__docs/concepts/security-posture/">Trust boundary concept</a></li>
+      <li><a href="__BASE__docs/reference/mcp/senkani_web.html"><code>senkani_web</code> — behavior + security</a></li>
+      <li><a href="__BASE__docs/concepts/security-posture.html">Trust boundary concept</a></li>
     </ul></div>
 ''')
 
@@ -1828,9 +1828,9 @@ OPT_CL = ("compound-learning", "Compound-learning env",
     <p>Gemma 4 optionally enriches rationale strings (H+2a). Contained to a dedicated <code>enrichedRationale</code> field — never enters <code>FilterPipeline</code>.</p>
 
     <div class="seealso"><h3>See also</h3><ul>
-      <li><a href="__BASE__docs/concepts/compound-learning/">Compound learning concept</a></li>
-      <li><a href="__BASE__docs/reference/cli/senkani-learn/"><code>senkani learn</code> CLI</a></li>
-      <li><a href="__BASE__docs/guides/compound-learning/">Reviewing proposals guide</a></li>
+      <li><a href="__BASE__docs/concepts/compound-learning.html">Compound learning concept</a></li>
+      <li><a href="__BASE__docs/reference/cli/senkani-learn.html"><code>senkani learn</code> CLI</a></li>
+      <li><a href="__BASE__docs/guides/compound-learning.html">Reviewing proposals guide</a></li>
     </ul></div>
 ''')
 
@@ -1876,17 +1876,17 @@ CONCEPTS = [
     <h2>Surface 1 — input compression (FCSIT F + I)</h2>
     <p>Every tool output that comes <em>back</em> to the model runs through the relevant reducer:</p>
     <ul>
-      <li><strong><a href="__BASE__docs/reference/mcp/senkani_exec/"><code>senkani_exec</code></a></strong> applies 24+ command-specific rules. <code>npm install</code>: 428 lines → 2. <code>git clone</code>: 312 → 4. <code>git diff</code>: adaptive truncation + dedup.</li>
-      <li><strong><a href="__BASE__docs/reference/mcp/senkani_read/"><code>senkani_read</code></a></strong> returns outlines (symbols + line numbers) by default, not full content. Full mode requires <code>full: true</code>.</li>
-      <li><strong><a href="__BASE__docs/reference/mcp/senkani_search/"><code>senkani_search</code></a></strong> returns ~50 tokens from the local tree-sitter index instead of ~5,000 from grepping.</li>
-      <li><strong><a href="__BASE__docs/reference/mcp/senkani_fetch/"><code>senkani_fetch</code></a></strong> returns only a single symbol's line range.</li>
+      <li><strong><a href="__BASE__docs/reference/mcp/senkani_exec.html"><code>senkani_exec</code></a></strong> applies 24+ command-specific rules. <code>npm install</code>: 428 lines → 2. <code>git clone</code>: 312 → 4. <code>git diff</code>: adaptive truncation + dedup.</li>
+      <li><strong><a href="__BASE__docs/reference/mcp/senkani_read.html"><code>senkani_read</code></a></strong> returns outlines (symbols + line numbers) by default, not full content. Full mode requires <code>full: true</code>.</li>
+      <li><strong><a href="__BASE__docs/reference/mcp/senkani_search.html"><code>senkani_search</code></a></strong> returns ~50 tokens from the local tree-sitter index instead of ~5,000 from grepping.</li>
+      <li><strong><a href="__BASE__docs/reference/mcp/senkani_fetch.html"><code>senkani_fetch</code></a></strong> returns only a single symbol's line range.</li>
     </ul>
 
     <h2>Surface 2 — redundancy elimination (hook Layer 3)</h2>
-    <p>The hook relay keeps a short-term memory of what the agent has already asked. When the same question comes in again, the hook answers from cache — or denies with a message pointing at the cached result. See <a href="__BASE__docs/concepts/three-layer-stack/">three-layer stack</a> for the five denial patterns.</p>
+    <p>The hook relay keeps a short-term memory of what the agent has already asked. When the same question comes in again, the hook answers from cache — or denies with a message pointing at the cached result. See <a href="__BASE__docs/concepts/three-layer-stack.html">three-layer stack</a> for the five denial patterns.</p>
 
     <h2>Surface 3 — output compression (FCSIT T)</h2>
-    <p><a href="__BASE__docs/reference/options/terse/">Terse mode</a> shrinks the model's <em>output</em>, not just its input. Two layers: a system-prompt injection that tells the model to strip filler, and a post-filter that strips filler phrases from tool outputs on the way <em>in</em> (so the model doesn't learn to mimic them).</p>
+    <p><a href="__BASE__docs/reference/options/terse.html">Terse mode</a> shrinks the model's <em>output</em>, not just its input. Two layers: a system-prompt injection that tells the model to strip filler, and a post-filter that strips filler phrases from tool outputs on the way <em>in</em> (so the model doesn't learn to mimic them).</p>
 
     <h2>Why all three</h2>
     <p>Each surface addresses a different waste mode:</p>
@@ -1895,22 +1895,22 @@ CONCEPTS = [
       <li>Surface 2 — agents re-ask. Don't run the call at all.</li>
       <li>Surface 3 — models are verbose. Shrink the response.</li>
     </ul>
-    <p>Skipping any one leaves measurable tokens on the table. The fixture benchmark (<a href="__BASE__docs/reference/cli/senkani-bench/"><code>senkani bench</code></a>) isolates each surface; the <a href="__BASE__docs/reference/panes/savings-test/">Savings Test pane</a> shows live-session breakdowns by source.</p>
+    <p>Skipping any one leaves measurable tokens on the table. The fixture benchmark (<a href="__BASE__docs/reference/cli/senkani-bench.html"><code>senkani bench</code></a>) isolates each surface; the <a href="__BASE__docs/reference/panes/savings-test.html">Savings Test pane</a> shows live-session breakdowns by source.</p>
 
     <h2>What it's not</h2>
     <p>Senkani is not a lossy summarizer. It doesn't paraphrase your code; it doesn't drop information the model legitimately needs. Every elided line is either byte-level redundancy (repeated ANSI codes, blank-line runs, progress bars) or structural redundancy (outline instead of body when the body wasn't asked for). If the agent needs the full file, it passes <code>full: true</code>.</p>
 ''',
-     [("senkani_exec (filter)", "/reference/mcp/senkani_exec/"),
-      ("senkani_read (outline)", "/reference/mcp/senkani_read/"),
-      ("Three-layer stack", "/concepts/three-layer-stack/"),
-      ("Terse mode (options)", "/reference/options/terse/"),
-      ("Filter option (F)", "/reference/options/filter/")]),
+     [("senkani_exec (filter)", "__BASE__docs/reference/mcp/senkani_exec.html"),
+      ("senkani_read (outline)", "__BASE__docs/reference/mcp/senkani_read.html"),
+      ("Three-layer stack", "__BASE__docs/concepts/three-layer-stack.html"),
+      ("Terse mode (options)", "__BASE__docs/reference/options/terse.html"),
+      ("Filter option (F)", "__BASE__docs/reference/options/filter.html")]),
 
     ("hook-relay", "Hook relay",
      "The <code>senkani-hook</code> binary is a zero-dependency Mach-O that Claude Code (and other MCP-capable agents) runs before every Read/Bash/Grep/Write/Edit tool call. It decides: allow, allow-with-rewrite, or deny.",
      '''
     <h2>What it intercepts</h2>
-    <p>Registered during <a href="__BASE__docs/reference/cli/senkani-init/"><code>senkani init</code></a> with matcher <code>Read|Bash|Grep|Write|Edit</code>. Claude Code fires PreToolUse hook → the hook binary runs (&lt; 5 ms active, &lt; 1 ms passthrough) → the hook returns a decision.</p>
+    <p>Registered during <a href="__BASE__docs/reference/cli/senkani-init.html"><code>senkani init</code></a> with matcher <code>Read|Bash|Grep|Write|Edit</code>. Claude Code fires PreToolUse hook → the hook binary runs (&lt; 5 ms active, &lt; 1 ms passthrough) → the hook returns a decision.</p>
 
     <h2>The three outcomes</h2>
     <ol>
@@ -1931,9 +1931,9 @@ CONCEPTS = [
     <h2>Socket-auth handshake</h2>
     <p>With <code>SENKANI_SOCKET_AUTH=on</code>, every hook connection sends a length-prefixed handshake frame matching the token at <code>~/.senkani/.token</code> (mode 0600, rotated on every server start). Ambient same-UID attackers can no longer talk to the sockets; they'd need to read the token file too.</p>
 ''',
-     [("senkani init CLI", "/reference/cli/senkani-init/"),
-      ("Three-layer stack", "/concepts/three-layer-stack/"),
-      ("Socket auth (security env)", "/reference/options/security/")]),
+     [("senkani init CLI", "__BASE__docs/reference/cli/senkani-init.html"),
+      ("Three-layer stack", "__BASE__docs/concepts/three-layer-stack.html"),
+      ("Socket auth (security env)", "__BASE__docs/reference/options/security.html")]),
 
     ("mcp-intelligence", "MCP intelligence",
      "MCP — Model Context Protocol — is the standard JSON-RPC interface an LLM agent uses to call tools. Senkani exposes 19 MCP tools specifically designed for the friction points of agent-driven coding sessions.",
@@ -1943,13 +1943,13 @@ CONCEPTS = [
 
     <h2>The 19 tools, classified</h2>
     <ul>
-      <li><strong>Perception</strong> — <a href="__BASE__docs/reference/mcp/senkani_read/"><code>senkani_read</code></a>, <a href="__BASE__docs/reference/mcp/senkani_fetch/"><code>senkani_fetch</code></a>, <a href="__BASE__docs/reference/mcp/senkani_outline/"><code>senkani_outline</code></a>, <a href="__BASE__docs/reference/mcp/senkani_search/"><code>senkani_search</code></a>, <a href="__BASE__docs/reference/mcp/senkani_deps/"><code>senkani_deps</code></a>, <a href="__BASE__docs/reference/mcp/senkani_explore/"><code>senkani_explore</code></a>.</li>
-      <li><strong>Action</strong> — <a href="__BASE__docs/reference/mcp/senkani_exec/"><code>senkani_exec</code></a>, <a href="__BASE__docs/reference/mcp/senkani_validate/"><code>senkani_validate</code></a>, <a href="__BASE__docs/reference/mcp/senkani_parse/"><code>senkani_parse</code></a>.</li>
-      <li><strong>External</strong> — <a href="__BASE__docs/reference/mcp/senkani_web/"><code>senkani_web</code></a>, <a href="__BASE__docs/reference/mcp/senkani_repo/"><code>senkani_repo</code></a>.</li>
-      <li><strong>Local ML</strong> — <a href="__BASE__docs/reference/mcp/senkani_embed/"><code>senkani_embed</code></a>, <a href="__BASE__docs/reference/mcp/senkani_vision/"><code>senkani_vision</code></a>.</li>
-      <li><strong>Session + state</strong> — <a href="__BASE__docs/reference/mcp/senkani_session/"><code>senkani_session</code></a>, <a href="__BASE__docs/reference/mcp/senkani_watch/"><code>senkani_watch</code></a>, <a href="__BASE__docs/reference/mcp/senkani_pane/"><code>senkani_pane</code></a>.</li>
-      <li><strong>Knowledge</strong> — <a href="__BASE__docs/reference/mcp/senkani_knowledge/"><code>senkani_knowledge</code></a>, <a href="__BASE__docs/reference/mcp/senkani_bundle/"><code>senkani_bundle</code></a>.</li>
-      <li><strong>Meta</strong> — <a href="__BASE__docs/reference/mcp/senkani_version/"><code>senkani_version</code></a>.</li>
+      <li><strong>Perception</strong> — <a href="__BASE__docs/reference/mcp/senkani_read.html"><code>senkani_read</code></a>, <a href="__BASE__docs/reference/mcp/senkani_fetch.html"><code>senkani_fetch</code></a>, <a href="__BASE__docs/reference/mcp/senkani_outline.html"><code>senkani_outline</code></a>, <a href="__BASE__docs/reference/mcp/senkani_search.html"><code>senkani_search</code></a>, <a href="__BASE__docs/reference/mcp/senkani_deps.html"><code>senkani_deps</code></a>, <a href="__BASE__docs/reference/mcp/senkani_explore.html"><code>senkani_explore</code></a>.</li>
+      <li><strong>Action</strong> — <a href="__BASE__docs/reference/mcp/senkani_exec.html"><code>senkani_exec</code></a>, <a href="__BASE__docs/reference/mcp/senkani_validate.html"><code>senkani_validate</code></a>, <a href="__BASE__docs/reference/mcp/senkani_parse.html"><code>senkani_parse</code></a>.</li>
+      <li><strong>External</strong> — <a href="__BASE__docs/reference/mcp/senkani_web.html"><code>senkani_web</code></a>, <a href="__BASE__docs/reference/mcp/senkani_repo.html"><code>senkani_repo</code></a>.</li>
+      <li><strong>Local ML</strong> — <a href="__BASE__docs/reference/mcp/senkani_embed.html"><code>senkani_embed</code></a>, <a href="__BASE__docs/reference/mcp/senkani_vision.html"><code>senkani_vision</code></a>.</li>
+      <li><strong>Session + state</strong> — <a href="__BASE__docs/reference/mcp/senkani_session.html"><code>senkani_session</code></a>, <a href="__BASE__docs/reference/mcp/senkani_watch.html"><code>senkani_watch</code></a>, <a href="__BASE__docs/reference/mcp/senkani_pane.html"><code>senkani_pane</code></a>.</li>
+      <li><strong>Knowledge</strong> — <a href="__BASE__docs/reference/mcp/senkani_knowledge.html"><code>senkani_knowledge</code></a>, <a href="__BASE__docs/reference/mcp/senkani_bundle.html"><code>senkani_bundle</code></a>.</li>
+      <li><strong>Meta</strong> — <a href="__BASE__docs/reference/mcp/senkani_version.html"><code>senkani_version</code></a>.</li>
     </ul>
 
     <h2>How the indexer backs Perception</h2>
@@ -1961,10 +1961,10 @@ CONCEPTS = [
     <h2>Version negotiation</h2>
     <p><code>senkani_version</code> returns <code>server_version</code>, <code>tool_schemas_version</code>, and <code>schema_db_version</code>. Clients cache tool schemas keyed on <code>tool_schemas_version</code>; that number increments only on breaking changes. <code>schema_db_version</code> surfaces <code>PRAGMA user_version</code> on the session DB for migration diagnostics.</p>
 ''',
-     [("All MCP tools", "/reference/mcp/"),
-      ("Tree-sitter grammars (senkani grammars)", "/reference/cli/senkani-grammars/"),
-      ("Model Manager pane", "/reference/panes/model-manager/"),
-      ("Compression layer", "/concepts/compression-layer/")]),
+     [("All MCP tools", "__BASE__docs/reference/mcp/"),
+      ("Tree-sitter grammars (senkani grammars)", "__BASE__docs/reference/cli/senkani-grammars.html"),
+      ("Model Manager pane", "__BASE__docs/reference/panes/model-manager.html"),
+      ("Compression layer", "__BASE__docs/concepts/compression-layer.html")]),
 
     ("three-layer-stack", "The three-layer stack",
      "Senkani compresses at three places — Layer 1 (MCP tools), Layer 2 (smart hooks), Layer 3 (preemptive interception). Each layer catches waste the other layers can't.",
@@ -1991,15 +1991,15 @@ CONCEPTS = [
     <h2>How denials feel to the model</h2>
     <p>A denial is not a failure — it's a structured response. The model sees the reason (e.g., "read 42s ago, unchanged"), often with the cached content inline. It continues with the real answer, not a retry. No training signal needed; the agent just reads the deny reason like any other tool result.</p>
 ''',
-     [("Hook relay", "/concepts/hook-relay/"),
-      ("senkani_read", "/reference/mcp/senkani_read/"),
-      ("Compression layer", "/concepts/compression-layer/")]),
+     [("Hook relay", "__BASE__docs/concepts/hook-relay.html"),
+      ("senkani_read", "__BASE__docs/reference/mcp/senkani_read.html"),
+      ("Compression layer", "__BASE__docs/concepts/compression-layer.html")]),
 
     ("compound-learning", "Compound learning",
      "Senkani mines your own sessions for patterns and surfaces four artifact types: filter rules, context docs, instruction patches, workflow playbooks. Patterns flow <code>.recurring → .staged → .applied</code>.",
      '''
     <h2>The lifecycle</h2>
-    <p>Every session's tool calls, outputs, and retries are logged to the session DB. A daily sweep (lazy — runs at session start) looks at the recurring set and promotes any pattern meeting <code>recurrence ≥ 3 AND confidence ≥ 0.7</code> (Laplace-smoothed) to <code>.staged</code>. You review staged proposals in the <a href="__BASE__docs/reference/panes/sprint-review/">Sprint Review pane</a> or via <a href="__BASE__docs/reference/cli/senkani-learn/"><code>senkani learn review</code></a>. Accepted proposals move to <code>.applied</code>; applied artifacts take effect on the next session.</p>
+    <p>Every session's tool calls, outputs, and retries are logged to the session DB. A daily sweep (lazy — runs at session start) looks at the recurring set and promotes any pattern meeting <code>recurrence ≥ 3 AND confidence ≥ 0.7</code> (Laplace-smoothed) to <code>.staged</code>. You review staged proposals in the <a href="__BASE__docs/reference/panes/sprint-review.html">Sprint Review pane</a> or via <a href="__BASE__docs/reference/cli/senkani-learn.html"><code>senkani learn review</code></a>. Accepted proposals move to <code>.applied</code>; applied artifacts take effect on the next session.</p>
 
     <h2>Filter rules (H, H+1)</h2>
     <p>The post-session waste analyzer notices when output from <code>command X</code> gets repeatedly truncated to its first N lines or has a substring stripped. It proposes a filter rule (<code>head(50)</code>, <code>stripMatching("progress")</code>) for future invocations. Regression-gated on real <code>commands.output_preview</code> samples — the proposed rule must not break outputs that previously passed through cleanly.</p>
@@ -2023,12 +2023,12 @@ CONCEPTS = [
     </ul>
 
     <h2>KB ↔ learning bridge</h2>
-    <p>High-mention entities from the <a href="__BASE__docs/concepts/knowledge-base/">knowledge base</a> boost compound-learning confidence; applied context docs seed KB entity stubs; rolling back a KB entity cascades to invalidate derived context docs. The two systems are not isolated — they're sources for each other.</p>
+    <p>High-mention entities from the <a href="__BASE__docs/concepts/knowledge-base.html">knowledge base</a> boost compound-learning confidence; applied context docs seed KB entity stubs; rolling back a KB entity cascades to invalidate derived context docs. The two systems are not isolated — they're sources for each other.</p>
 ''',
-     [("senkani learn CLI", "/reference/cli/senkani-learn/"),
-      ("Sprint Review pane", "/reference/panes/sprint-review/"),
-      ("Compound-learning env vars", "/reference/options/compound-learning/"),
-      ("Knowledge base", "/concepts/knowledge-base/")]),
+     [("senkani learn CLI", "__BASE__docs/reference/cli/senkani-learn.html"),
+      ("Sprint Review pane", "__BASE__docs/reference/panes/sprint-review.html"),
+      ("Compound-learning env vars", "__BASE__docs/reference/options/compound-learning.html"),
+      ("Knowledge base", "__BASE__docs/concepts/knowledge-base.html")]),
 
     ("knowledge-base", "Knowledge base",
      "Project entities, decisions, and links live in <code>.senkani/knowledge/*.md</code> — markdown as source of truth. SQLite is a rebuilt index. <code>KBLayer1Coordinator</code> detects staleness and recovers from corruption.",
@@ -2056,12 +2056,12 @@ CONCEPTS = [
     <p><code>KBLayer1Coordinator</code> detects SQLite index staleness (markdown newer than indexed) and corruption (unreadable pragmas). In either case it rebuilds from markdown without stopping the MCP server. Hand-edits to <code>.senkani/knowledge/*.md</code> are safe — the index follows.</p>
 
     <h2>Bridge to compound learning</h2>
-    <p>See <a href="__BASE__docs/concepts/compound-learning/">compound learning</a> for the KB ↔ learning bridge: entity-mention counts boost proposal confidence; applied context docs seed entity stubs; rolling back an entity invalidates derived context docs.</p>
+    <p>See <a href="__BASE__docs/concepts/compound-learning.html">compound learning</a> for the KB ↔ learning bridge: entity-mention counts boost proposal confidence; applied context docs seed entity stubs; rolling back an entity invalidates derived context docs.</p>
 ''',
-     [("senkani_knowledge MCP tool", "/reference/mcp/senkani_knowledge/"),
-      ("senkani kb CLI", "/reference/cli/senkani-kb/"),
-      ("Compound learning", "/concepts/compound-learning/"),
-      ("Knowledge Base pane", "/reference/panes/knowledge-base/")]),
+     [("senkani_knowledge MCP tool", "__BASE__docs/reference/mcp/senkani_knowledge.html"),
+      ("senkani kb CLI", "__BASE__docs/reference/cli/senkani-kb.html"),
+      ("Compound learning", "__BASE__docs/concepts/compound-learning.html"),
+      ("Knowledge Base pane", "__BASE__docs/reference/panes/knowledge-base.html")]),
 
     ("security-posture", "Security posture",
      "Senkani is a trust boundary. v0.2.0 defaults are all secure: prompt-injection guard on, SSRF hardening on, secret redaction on, schema migrations versioned + crash-safe. Opt-outs are explicit env vars, not hidden flags.",
@@ -2073,7 +2073,7 @@ CONCEPTS = [
     <p><code>SENKANI_INJECTION_GUARD=on</code> by default. Scans every MCP tool response for instruction-override patterns ("ignore previous instructions", "you are now…"), tool-call injection (fake function-call syntax inside returned text), context-manipulation (zero-width chars, homoglyph substitutions), and exfiltration (base64-looking blobs that decode to URLs or credentials). Anti-evasion normalization: lowercase, zero-width-char strip, Cyrillic→Latin homoglyph fold, NFKC normalization. Single linear pass.</p>
 
     <h2>SSRF hardening</h2>
-    <p><a href="__BASE__docs/reference/mcp/senkani_web/"><code>senkani_web</code></a> resolves the target host via <code>getaddrinfo</code> before fetch and blocks any address in private/link-local/CGNAT/multicast ranges (including IPv4-mapped IPv6, octal/hex IPv4, IPv4-compatible IPv6). Redirects are re-validated via <code>WKNavigationDelegate.decidePolicyFor</code> — a 3xx Location header to <code>10.x</code>, <code>169.254.169.254</code>, or <code>::ffff:…</code> is cancelled. A <code>WKContentRuleList</code> blocks subresource requests (img/script/xhr) to the same ranges, so a hostile HTML page embedding <code>&lt;img src="http://169.254.169.254/…"&gt;</code> cannot reach cloud metadata through WebKit's auto-rendering. <code>file://</code> scheme is rejected entirely.</p>
+    <p><a href="__BASE__docs/reference/mcp/senkani_web.html"><code>senkani_web</code></a> resolves the target host via <code>getaddrinfo</code> before fetch and blocks any address in private/link-local/CGNAT/multicast ranges (including IPv4-mapped IPv6, octal/hex IPv4, IPv4-compatible IPv6). Redirects are re-validated via <code>WKNavigationDelegate.decidePolicyFor</code> — a 3xx Location header to <code>10.x</code>, <code>169.254.169.254</code>, or <code>::ffff:…</code> is cancelled. A <code>WKContentRuleList</code> blocks subresource requests (img/script/xhr) to the same ranges, so a hostile HTML page embedding <code>&lt;img src="http://169.254.169.254/…"&gt;</code> cannot reach cloud metadata through WebKit's auto-rendering. <code>file://</code> scheme is rejected entirely.</p>
 
     <h2>Secret redaction</h2>
     <p>13 regex families + entropy-based fallback. Short-circuits with <code>firstMatch</code> so no-match inputs don't pay the full regex cost (1 MB benign input: ~25 ms). Every tool output runs through before reaching the model. The counter <code>command_redactions</code> on <code>event_counters</code> increments on each redaction.</p>
@@ -2091,12 +2091,12 @@ CONCEPTS = [
     <p>Every security-defense site increments an <code>event_counters</code> row: injection detections, SSRF blocks, socket handshake rejections, schema migrations, retention prunes, command redactions. Surfaced via <code>senkani stats --security</code> with Gelman-style <code>count/total (pct%)</code> rate annotation, or the <code>senkani_session action:"stats"</code> MCP action.</p>
 
     <h2>Data portability</h2>
-    <p><a href="__BASE__docs/reference/cli/senkani-export/"><code>senkani export</code></a> streams sessions + commands + token_events as JSONL via a read-only SQLite connection — doesn't block the live MCP server. <code>--redact</code> collapses user paths. GDPR-adjacent by design, not by regulation.</p>
+    <p><a href="__BASE__docs/reference/cli/senkani-export.html"><code>senkani export</code></a> streams sessions + commands + token_events as JSONL via a read-only SQLite connection — doesn't block the live MCP server. <code>--redact</code> collapses user paths. GDPR-adjacent by design, not by regulation.</p>
 ''',
-     [("senkani_web (SSRF guard)", "/reference/mcp/senkani_web/"),
-      ("Security env vars", "/reference/options/security/"),
-      ("Web env vars", "/reference/options/web/"),
-      ("senkani doctor (verify posture)", "/reference/cli/senkani-doctor/")]),
+     [("senkani_web (SSRF guard)", "__BASE__docs/reference/mcp/senkani_web.html"),
+      ("Security env vars", "__BASE__docs/reference/options/security.html"),
+      ("Web env vars", "__BASE__docs/reference/options/web.html"),
+      ("senkani doctor (verify posture)", "__BASE__docs/reference/cli/senkani-doctor.html")]),
 ]
 
 
@@ -2168,7 +2168,7 @@ swift build -c release</pre>
     <pre class="code">.build/release/senkani init --hooks-only</pre>
     <p>You get the filter pipeline and smart denials, but not the 19 MCP tools.</p>
 ''',
-     ("Wire up Claude Code", "/guides/claude-code/")),
+     ("Wire up Claude Code", "__BASE__docs/guides/claude-code.html")),
 
     ("claude-code", "Wire up Claude Code",
      "Senkani's MCP server registers globally with Claude Code via <code>senkani init</code>. No config files to maintain.",
@@ -2205,7 +2205,7 @@ swift build -c release</pre>
       <div>MCP activation is gated on <code>SENKANI_PANE_ID</code>, which the app injects <em>only</em> into managed panes. Run <code>claude</code> in a non-Senkani terminal and it won't see the senkani tools — by design.</div>
     </div>
 ''',
-     ("Your first session", "/guides/first-session/")),
+     ("Your first session", "__BASE__docs/guides/first-session.html")),
 
     ("cursor-copilot", "Wire up Cursor / Copilot",
      "Cursor and Copilot don't speak MCP. Install the hooks-only variant so you still get the filter pipeline + smart denials on their built-in Read/Bash.",
@@ -2237,7 +2237,7 @@ swift build -c release</pre>
       <div>If your agent later adds MCP support, re-run <code>senkani init</code> (without <code>--hooks-only</code>) to add the server entry. Idempotent; no harm done.</div>
     </div>
 ''',
-     ("Your first session", "/guides/first-session/")),
+     ("Your first session", "__BASE__docs/guides/first-session.html")),
 
     ("first-session", "Your first session",
      "Launch the workspace, run an agent, read the numbers. What you'll see and how to interpret it.",
@@ -2292,7 +2292,7 @@ swift build -c release</pre>
     <h2>If compliance is low</h2>
     <p>The agent is bypassing senkani tools. Run <code>senkani doctor</code> to check registration; make sure the MCP server entry in <code>~/.claude/settings.json</code> is present; make sure you launched <code>claude</code> <em>inside</em> a Senkani-managed Terminal pane (the one the app opened, not a random shell).</p>
 ''',
-     ("Budget setup", "/guides/budget-setup/")),
+     ("Budget setup", "__BASE__docs/guides/budget-setup.html")),
 
     ("budget-setup", "Budget setup",
      "Daily and weekly spend caps, dual-layer enforcement, and what happens when you hit a cap.",
@@ -2313,7 +2313,7 @@ swift build -c release</pre>
     <p>Before every tool call, the PreToolUse hook queries <code>costForToday()</code> and <code>costForWeek()</code> from the session DB. If either exceeds the cap, the hook denies the call with a structured message the agent sees.</p>
 
     <h2>Dual-layer</h2>
-    <p>Enforcement runs at both the hook AND the MCP server — the agent can't bypass by switching to built-in tools. See <a href="__BASE__docs/concepts/three-layer-stack/">three-layer stack</a>.</p>
+    <p>Enforcement runs at both the hook AND the MCP server — the agent can't bypass by switching to built-in tools. See <a href="__BASE__docs/concepts/three-layer-stack.html">three-layer stack</a>.</p>
 
     <h2>Reset</h2>
     <p>Daily resets at midnight local. Weekly resets Monday 00:00 local. There's no manual reset — the cap is a ceiling on lifetime spend, not a bank.</p>
@@ -2328,7 +2328,7 @@ swift build -c release</pre>
 Tool call denied. To continue today, raise SENKANI_BUDGET_DAILY or wait until midnight.</span></pre>
     <p>The agent typically stops cleanly and tells you. It's not a silent failure.</p>
 ''',
-     ("Reviewing learned proposals", "/guides/compound-learning/")),
+     ("Reviewing learned proposals", "__BASE__docs/guides/compound-learning.html")),
 
     ("compound-learning", "Reviewing learned proposals",
      "How to use <code>senkani learn review</code> and the Sprint Review pane to accept, reject, or defer staged proposals.",
@@ -2354,7 +2354,7 @@ Tool call denied. To continue today, raise SENKANI_BUDGET_DAILY or wait until mi
     <pre class="code">senkani learn audit --idle 90</pre>
     <p>Lists applied artifacts that haven't fired in N days. Retire stale entries so the live artifact pool stays fresh.</p>
 ''',
-     ("Knowledge-base workflow", "/guides/kb-workflow/")),
+     ("Knowledge-base workflow", "__BASE__docs/guides/kb-workflow.html")),
 
     ("kb-workflow", "Knowledge-base workflow",
      "Day-to-day with <code>senkani kb</code>: seed entities, hand-edit markdown, run the audit. The markdown at <code>.senkani/knowledge/</code> is the source of truth.",
@@ -2380,7 +2380,7 @@ senkani kb list --type class --sort freshness</pre>
     <pre class="code">senkani kb timeline --days 30</pre>
     <p>Chronological view of all KB mutations — additions, enrichments, rollbacks.</p>
 ''',
-     ("Uninstall", "/guides/uninstall/")),
+     ("Uninstall", "__BASE__docs/guides/uninstall.html")),
 
     ("uninstall", "Clean uninstall",
      "<code>senkani uninstall</code> removes everything it registered. <code>senkani wipe</code> additionally removes the session DB.",
@@ -2412,7 +2412,7 @@ senkani kb list --type class --sort freshness</pre>
       <div><strong>Uninstall is idempotent.</strong> Running it twice is safe — the second run finds nothing to remove. But there's no undo; once wiped, session history is gone. Export first if you want a record: <code>senkani export --output ~/senkani-archive.jsonl --redact</code>.</div>
     </div>
 ''',
-     ("Troubleshooting", "/guides/troubleshooting/")),
+     ("Troubleshooting", "__BASE__docs/guides/troubleshooting.html")),
 
     ("troubleshooting", "Troubleshooting",
      "Common fixes: hook not registering, MCP not activating, grammar staleness, index rebuild.",
@@ -2463,27 +2463,27 @@ def main():
     # MCP tool pages
     print(f"MCP tools: {len(MCP_TOOLS)}")
     for t in MCP_TOOLS:
-        write(ROOT / "docs" / "reference" / "mcp" / t["slug"] / "index.html", render_mcp_tool(t))
+        write(ROOT / "docs" / "reference" / "mcp" / f'{t["slug"]}.html', render_mcp_tool(t))
     # CLI command pages
     print(f"CLI commands: {len(CLI_COMMANDS)}")
     for c in CLI_COMMANDS:
-        write(ROOT / "docs" / "reference" / "cli" / c["slug"] / "index.html", render_cli(c))
+        write(ROOT / "docs" / "reference" / "cli" / f'{c["slug"]}.html', render_cli(c))
     # Pane pages
     print(f"Panes: {len(PANES)}")
     for p in PANES:
-        write(ROOT / "docs" / "reference" / "panes" / p[0] / "index.html", render_pane(p))
+        write(ROOT / "docs" / "reference" / "panes" / f'{p[0]}.html', render_pane(p))
     # Options pages
     print(f"Options: {len(ALL_OPTS)}")
     for slug, title, lede, body in ALL_OPTS:
-        write(ROOT / "docs" / "reference" / "options" / slug / "index.html", render_opt(slug, title, lede, body))
+        write(ROOT / "docs" / "reference" / "options" / f'{slug}.html', render_opt(slug, title, lede, body))
     # Concept pages
     print(f"Concepts: {len(CONCEPTS)}")
     for slug, title, lede, body, sa in CONCEPTS:
-        write(ROOT / "docs" / "concepts" / slug / "index.html", render_concept(slug, title, lede, body, sa))
+        write(ROOT / "docs" / "concepts" / f'{slug}.html', render_concept(slug, title, lede, body, sa))
     # Guide pages
     print(f"Guides: {len(GUIDES)}")
     for slug, title, lede, body, nxt in GUIDES:
-        write(ROOT / "docs" / "guides" / slug / "index.html", render_guide(slug, title, lede, body, nxt))
+        write(ROOT / "docs" / "guides" / f'{slug}.html', render_guide(slug, title, lede, body, nxt))
     # Hub pages
     print("Hubs")
     write(ROOT / "docs" / "reference" / "index.html", render_hub_reference())
@@ -2493,10 +2493,10 @@ def main():
     write(ROOT / "docs" / "reference" / "options" / "index.html", render_hub_options())
     write(ROOT / "docs" / "concepts" / "index.html", render_hub_concepts())
     write(ROOT / "docs" / "guides" / "index.html", render_hub_guides())
-    write(ROOT / "docs" / "status" / "index.html", render_hub_status())
-    write(ROOT / "docs" / "about" / "index.html", render_about())
-    write(ROOT / "docs" / "changelog" / "index.html", render_changelog())
-    write(ROOT / "docs" / "what-is-senkani" / "index.html", render_what_is_senkani())
+    write(ROOT / "docs" / "status.html", render_hub_status())
+    write(ROOT / "docs" / "about.html", render_about())
+    write(ROOT / "docs" / "changelog.html", render_changelog())
+    write(ROOT / "docs" / "what-is-senkani.html", render_what_is_senkani())
     # Docs root hub — an index.html at /docs/
     write(ROOT / "docs" / "index.html", render_docs_root())
     print("Done.")

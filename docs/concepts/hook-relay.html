@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Concepts — understanding senkani</title>
-<meta name="description" content="Explanation pages: why senkani compresses where it compresses, how the hook relay works, how compound learning mines your own sessions, and how the knowledge base stays coherent.">
+<title>Hook relay — concept</title>
+<meta name="description" content="The &lt;code&gt;senkani-hook&lt;/code&gt; binary is a zero-dependency Mach-O that Claude Code (and other MCP-capable agents) runs before every Read/Bash/Grep/Wr">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -31,14 +31,14 @@
       <h4>Overview</h4>
       <ul>
         <li><a href="../../docs/what-is-senkani.html">What is senkani?</a></li>
-        <li><a href="../../docs/concepts/" class="active">All concepts</a></li>
+        <li><a href="../../docs/concepts/">All concepts</a></li>
       </ul>
     </div>
     <div class="wiki-nav-group">
       <h4>Concepts</h4>
       <ul>
         <li><a href="../../docs/concepts/compression-layer.html">Compression layer</a></li>
-        <li><a href="../../docs/concepts/hook-relay.html">Hook relay</a></li>
+        <li><a href="../../docs/concepts/hook-relay.html" class="active">Hook relay</a></li>
         <li><a href="../../docs/concepts/mcp-intelligence.html">MCP intelligence</a></li>
         <li><a href="../../docs/concepts/three-layer-stack.html">Three-layer stack</a></li>
         <li><a href="../../docs/concepts/compound-learning.html">Compound learning</a></li>
@@ -56,21 +56,41 @@
   </aside>
   <article class="wiki-main">
     <nav class="crumb" aria-label="Breadcrumb">
-      <a href="../../">Home</a> <span class="sep">›</span> <span class="here">Concepts</span>
+      <a href="../../">Home</a> <span class="sep">›</span>
+      <a href="../../docs/concepts/">Concepts</a> <span class="sep">›</span>
+      <span class="here">Hook relay</span>
     </nav>
     <span class="quadrant concept">Concept · Explanation</span>
-    <h1 class="page-title">Concepts</h1>
-    <p class="lede">Explanation pages — the <em>why</em> behind senkani. Reference tells you what each tool does; concepts tell you why the system works. Start with <a href="../../docs/what-is-senkani.html">What is senkani?</a> if this is your first visit.</p>
+    <h1 class="page-title">Hook relay</h1>
+    <p class="lede">The <code>senkani-hook</code> binary is a zero-dependency Mach-O that Claude Code (and other MCP-capable agents) runs before every Read/Bash/Grep/Write/Edit tool call. It decides: allow, allow-with-rewrite, or deny.</p>
 
-    <div class="card-grid">
-      <a class="card" href="../../docs/concepts/compression-layer.html"><h4>Compression layer</h4><p>Three places Senkani compresses: input (before the LLM sees it), redundancy (before the tool runs), output (before responses grow). Why all three.</p></a>
-      <a class="card" href="../../docs/concepts/hook-relay.html"><h4>Hook relay</h4><p>How the <code>senkani-hook</code> binary intercepts your agent's Read/Bash/Grep, routes to senkani equivalents, and denies with cached results when appropriate.</p></a>
-      <a class="card" href="../../docs/concepts/mcp-intelligence.html"><h4>MCP intelligence</h4><p>What "MCP tool" means and why senkani has 19 of them. How tree-sitter + FTS5 + MiniLM compose into sub-5 ms symbol search.</p></a>
-      <a class="card" href="../../docs/concepts/three-layer-stack.html"><h4>Three-layer stack</h4><p>Layer 1 tools, Layer 2 hooks, Layer 3 smart denials. Why denial-with-cached-result is the biggest win on pathological sessions.</p></a>
-      <a class="card" href="../../docs/concepts/compound-learning.html"><h4>Compound learning</h4><p>Four artifact types — filter rules, context docs, instruction patches, workflow playbooks — mined from your own sessions. The <code>.recurring → .staged → .applied</code> flow.</p></a>
-      <a class="card" href="../../docs/concepts/knowledge-base.html"><h4>Knowledge base</h4><p>Project entities + decisions + links. Markdown as source-of-truth, SQLite as rebuilt index. How it stays coherent when you hand-edit.</p></a>
-      <a class="card" href="../../docs/concepts/security-posture.html"><h4>Security posture</h4><p>v0.2.0 defaults: prompt-injection guard on, SSRF hardening on, secret redaction on, socket auth opt-in. Why senkani is a trust boundary and what that means concretely.</p></a>
-    </div>
+    <h2>What it intercepts</h2>
+    <p>Registered during <a href="../../docs/reference/cli/senkani-init.html"><code>senkani init</code></a> with matcher <code>Read|Bash|Grep|Write|Edit</code>. Claude Code fires PreToolUse hook → the hook binary runs (&lt; 5 ms active, &lt; 1 ms passthrough) → the hook returns a decision.</p>
+
+    <h2>The three outcomes</h2>
+    <ol>
+      <li><strong>Allow + pass through.</strong> The tool runs as requested. Common for <code>Write</code>, <code>Edit</code>, and mutating <code>Bash</code>.</li>
+      <li><strong>Allow + rewrite.</strong> The tool still runs, but output is post-processed (secret redaction, ANSI strip, filter rules). Common for <code>Read</code> and <code>Bash</code>.</li>
+      <li><strong>Deny with a reason.</strong> The tool does not run. The reason string goes to the model — often with a cached answer inline. Common for re-reads of unchanged files, <code>ls</code>/<code>pwd</code>, redundant build re-runs.</li>
+    </ol>
+
+    <h2>Why a separate binary</h2>
+    <p>Claude Code's hook protocol spawns a fresh process per tool call. Swift apps with full MLX linkage take tens of milliseconds to start; that's too slow to sit in front of every tool call. So the hook is a minimal binary (<code>Sources/Hook</code>), zero MLX dependency, IPC-connects to the long-running MCP server via a Unix-domain socket.</p>
+
+    <h2>The shared HookRelay library</h2>
+    <p><code>Sources/HookRelay/</code> is imported by both <code>senkani-hook</code> (the standalone binary) and the main app's <code>--hook</code> mode (useful during testing). Same decision logic, same socket wire format.</p>
+
+    <h2>SENKANI_PANE_ID gating</h2>
+    <p>MCP tools are only active in Senkani-managed terminals — the app injects <code>SENKANI_PANE_ID=&lt;id&gt;</code> when it spawns a pane's shell. Non-Senkani terminals never see senkani tools even if the MCP server is running globally. This prevents pollution and keeps the trust boundary well-defined.</p>
+
+    <h2>Socket-auth handshake</h2>
+    <p>With <code>SENKANI_SOCKET_AUTH=on</code>, every hook connection sends a length-prefixed handshake frame matching the token at <code>~/.senkani/.token</code> (mode 0600, rotated on every server start). Ambient same-UID attackers can no longer talk to the sockets; they'd need to read the token file too.</p>
+
+    <div class="seealso"><h3>See also</h3><ul>
+        <li><a href="../../docs/reference/cli/senkani-init.html">senkani init CLI</a></li>
+        <li><a href="../../docs/concepts/three-layer-stack.html">Three-layer stack</a></li>
+        <li><a href="../../docs/reference/options/security.html">Socket auth (security env)</a></li>
+    </ul></div>
   </article>
 </main>
 <footer class="site-foot">

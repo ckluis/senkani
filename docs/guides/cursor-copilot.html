@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Guides — how to set up and run senkani</title>
-<meta name="description" content="Numbered, paste-runnable guides: install, wire up Claude Code, wire up Cursor/Copilot, first session, budget setup, and more.">
+<title>Wire up Cursor / Copilot — guide</title>
+<meta name="description" content="Cursor and Copilot don&#x27;t speak MCP. Install the hooks-only variant so you still get the filter pipeline + smart denials on their built-in Read/Bash.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -30,10 +30,10 @@
     <div class="wiki-nav-group">
       <h4>Guides</h4>
       <ul>
-        <li><a href="../../docs/guides/" class="active">All guides</a></li>
+        <li><a href="../../docs/guides/">All guides</a></li>
         <li><a href="../../docs/guides/install.html">Install</a></li>
         <li><a href="../../docs/guides/claude-code.html">Claude Code</a></li>
-        <li><a href="../../docs/guides/cursor-copilot.html">Cursor / Copilot</a></li>
+        <li><a href="../../docs/guides/cursor-copilot.html" class="active">Cursor / Copilot</a></li>
         <li><a href="../../docs/guides/first-session.html">First session</a></li>
         <li><a href="../../docs/guides/budget-setup.html">Budget setup</a></li>
         <li><a href="../../docs/guides/compound-learning.html">Reviewing proposals</a></li>
@@ -52,23 +52,42 @@
   </aside>
   <article class="wiki-main">
     <nav class="crumb" aria-label="Breadcrumb">
-      <a href="../../">Home</a> <span class="sep">›</span> <span class="here">Guides</span>
+      <a href="../../">Home</a> <span class="sep">›</span>
+      <a href="../../docs/guides/">Guides</a> <span class="sep">›</span>
+      <span class="here">Wire up Cursor / Copilot</span>
     </nav>
     <span class="quadrant guide">Guide · How-to</span>
-    <h1 class="page-title">Guides</h1>
-    <p class="lede">Numbered, paste-runnable guides with expected-output blocks. Every shell command has been verified against a clean checkout.</p>
+    <h1 class="page-title">Wire up Cursor / Copilot</h1>
+    <p class="lede">Cursor and Copilot don't speak MCP. Install the hooks-only variant so you still get the filter pipeline + smart denials on their built-in Read/Bash.</p>
 
-    <div class="card-grid">
-      <a class="card" href="../../docs/guides/install.html"><h4>Install</h4><p>Clone, build with Swift Package Manager, register hooks, launch the workspace. Three minutes end-to-end.</p></a>
-      <a class="card" href="../../docs/guides/claude-code.html"><h4>Wire up Claude Code</h4><p>How <code>senkani init</code> modifies <code>~/.claude/settings.json</code>; what the MCP entry looks like; how to verify the integration.</p></a>
-      <a class="card" href="../../docs/guides/cursor-copilot.html"><h4>Wire up Cursor / Copilot</h4><p><code>senkani init --hooks-only</code> for non-Claude agents. What changes, what doesn't.</p></a>
-      <a class="card" href="../../docs/guides/first-session.html"><h4>Your first session</h4><p>Open the workspace, kick off a coding agent, read the Analytics pane. What the numbers mean and how to read them.</p></a>
-      <a class="card" href="../../docs/guides/budget-setup.html"><h4>Budget setup</h4><p>Daily + weekly caps, dual-layer enforcement, and what happens when you hit them.</p></a>
-      <a class="card" href="../../docs/guides/compound-learning.html"><h4>Reviewing learned proposals</h4><p>How to use <code>senkani learn review</code> and the Sprint Review pane to accept/reject staged proposals.</p></a>
-      <a class="card" href="../../docs/guides/kb-workflow.html"><h4>Knowledge-base workflow</h4><p>Day-to-day with <code>senkani kb</code>: seeding entities, editing the source markdown, running the audit.</p></a>
-      <a class="card" href="../../docs/guides/uninstall.html"><h4>Clean uninstall</h4><p><code>senkani uninstall</code> + <code>senkani wipe</code>. What each removes and what to keep.</p></a>
-      <a class="card" href="../../docs/guides/troubleshooting.html"><h4>Troubleshooting</h4><p>Hook not registering, MCP not activating, grammar staleness, rebuild-index steps.</p></a>
+    <h2>Install hooks only</h2>
+    <pre class="code">senkani init --hooks-only</pre>
+    <p>This skips the MCP server registration in <code>~/.claude/settings.json</code> but still:</p>
+    <ul>
+      <li>Writes <code>~/.senkani/bin/senkani-hook</code>.</li>
+      <li>Registers Senkani's PreToolUse + PostToolUse hooks for Cursor/Copilot's Read/Bash/Grep equivalents where supported.</li>
+      <li>Runs the filter pipeline + secret redaction on intercepted tool output.</li>
+    </ul>
+
+    <h2>What you get</h2>
+    <ul>
+      <li>✓ Compression via the filter pipeline (F toggle).</li>
+      <li>✓ Secret redaction (S toggle).</li>
+      <li>✓ Smart denials — re-read suppression, command replay, trivial routing.</li>
+      <li>✗ <strong>No</strong> <code>senkani_*</code> MCP tools. Your agent can't call them.</li>
+      <li>✗ <strong>No</strong> symbol search / fetch. Text-grep is the fallback.</li>
+      <li>✗ <strong>No</strong> terse mode (T toggle relies on MCP system-prompt injection).</li>
+    </ul>
+
+    <h2>Tradeoff</h2>
+    <p>You keep ~40% of the savings. Not as good as Claude Code + full MCP; better than nothing.</p>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">⚐</span>
+      <div>If your agent later adds MCP support, re-run <code>senkani init</code> (without <code>--hooks-only</code>) to add the server entry. Idempotent; no harm done.</div>
     </div>
+
+    <h2>Next</h2><p><a href="../../docs/guides/first-session.html">Your first session →</a></p>
   </article>
 </main>
 <footer class="site-foot">

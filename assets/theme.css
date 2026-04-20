@@ -1244,18 +1244,19 @@ footer.site-foot {
 .viz-grid-item:hover { border-color: var(--accent); background: #fff; }
 .viz-grid-item .code-name {
   display: block;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
   color: var(--accent-lo);
-  margin-bottom: 4px;
+  margin-bottom: 5px;
   word-break: break-all;
 }
 .viz-grid-item .code-tag {
   display: block;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--ink-mute);
   text-transform: uppercase;
-  letter-spacing: 0.4px;
+  letter-spacing: 0.5px;
+  font-weight: 600;
 }
 .product-band.dark .viz-grid { background: var(--app-panel); border-color: var(--app-rule); }
 .product-band.dark .viz-grid-item { background: var(--app-elev); border-color: var(--app-rule); }
@@ -1373,9 +1374,9 @@ footer.site-foot {
   line-height: 1.5;
 }
 .viz-kb-entity .links {
-  margin-top: 8px;
+  margin-top: 10px;
   font-family: var(--font-code);
-  font-size: 12px;
+  font-size: 13px;
   color: var(--ink-mute);
 }
 
@@ -1403,16 +1404,16 @@ footer.site-foot {
 .viz-pane-tile.cyan { border-top-color: var(--app-cyan); }
 .viz-pane-tile .name {
   display: block;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
   color: var(--app-text);
-  margin-bottom: 2px;
+  margin-bottom: 4px;
 }
 .viz-pane-tile .desc {
   display: block;
-  font-size: 11px;
-  color: var(--app-mute);
-  line-height: 1.4;
+  font-size: 13px;
+  color: var(--app-soft);
+  line-height: 1.45;
 }
 
 .viz-before-after {
@@ -1428,33 +1429,35 @@ footer.site-foot {
 .viz-col {
   background: var(--app-panel);
   border-radius: 6px;
-  padding: 16px 14px;
+  padding: 18px 16px;
   font-family: var(--font-code);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.65;
+  color: var(--app-text);
 }
 .viz-col .viz-col-head {
   font-family: var(--font-body);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 1px;
   text-transform: uppercase;
-  color: var(--app-mute);
-  margin-bottom: 12px;
+  color: var(--app-soft);
+  margin-bottom: 14px;
 }
 .viz-col.after .viz-col-head { color: var(--tog-c); }
 .viz-col .viz-line {
-  font-size: 12px;
-  line-height: 1.7;
+  font-size: 14px;
+  line-height: 1.75;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  color: var(--app-text);
 }
 .viz-col .viz-line.highlight { color: var(--tog-c); }
 .viz-col .viz-total {
-  margin-top: 14px;
-  padding-top: 10px;
+  margin-top: 16px;
+  padding-top: 12px;
   border-top: 1px solid var(--app-rule);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--app-amber);
 }

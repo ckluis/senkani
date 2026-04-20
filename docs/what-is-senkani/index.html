@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>What is senkani? — positioning + overview</title>
+<meta name="description" content="Senkani is a native macOS trust boundary between your AI coding agent and your filesystem. Positioning + overview.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/theme.css">
+</head>
+<body>
+<a href="#main" class="skip-nav">Skip to main content</a>
+<nav class="topnav" aria-label="Primary navigation">
+  <a class="wordmark" href="../../">sen<span class="accent">kani</span><small>compression layer for AI coding agents</small></a>
+  <button class="topnav-hamburger" aria-label="Open navigation menu" aria-expanded="false" aria-controls="topnav-links"><span></span><span></span><span></span></button>
+  <div class="topnav-links" id="topnav-links">
+    <a href="../../docs/what-is-senkani/">What is it?</a>
+    <a href="../../docs/concepts/">Concepts</a>
+    <a href="../../docs/reference/">Reference</a>
+    <a href="../../docs/guides/">Guides</a>
+    <a href="../../docs/status/">Status</a>
+    <div class="topnav-search"><input type="search" id="site-search" placeholder="Search · /" aria-label="Search the site"></div>
+    <a href="https://github.com/ckluis/senkani" class="btn-nav">GitHub →</a>
+  </div>
+</nav>
+<main id="main" class="wiki-layout">
+  <aside class="wiki-nav" aria-label="Concepts navigation">
+    <div class="wiki-nav-group">
+      <h4>Overview</h4>
+      <ul>
+        <li><a href="../../docs/what-is-senkani/">What is senkani?</a></li>
+        <li><a href="../../docs/concepts/">All concepts</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>Concepts</h4>
+      <ul>
+        <li><a href="../../docs/concepts/compression-layer/">Compression layer</a></li>
+        <li><a href="../../docs/concepts/hook-relay/">Hook relay</a></li>
+        <li><a href="../../docs/concepts/mcp-intelligence/">MCP intelligence</a></li>
+        <li><a href="../../docs/concepts/three-layer-stack/">Three-layer stack</a></li>
+        <li><a href="../../docs/concepts/compound-learning/">Compound learning</a></li>
+        <li><a href="../../docs/concepts/knowledge-base/">Knowledge base</a></li>
+        <li><a href="../../docs/concepts/security-posture/">Security posture</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>Next</h4>
+      <ul>
+        <li><a href="../../docs/reference/">Reference index</a></li>
+        <li><a href="../../docs/guides/install/">Install</a></li>
+      </ul>
+    </div>
+  </aside>
+  <article class="wiki-main">
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../">Home</a> <span class="sep">›</span>
+      <a href="../../docs/">Docs</a> <span class="sep">›</span>
+      <span class="here">What is senkani?</span>
+    </nav>
+    <span class="quadrant concept">Concept · Explanation</span>
+    <h1 class="page-title">What is senkani?</h1>
+    <p class="lede">Senkani is a native macOS binary that sits between your AI coding agent (Claude Code, Cursor, Copilot, any MCP-compatible tool) and your filesystem. Every tool call — read, grep, shell, build, search — is intercepted by a hook relay, answered by a local symbol index or filter pipeline where possible, and forwarded with only the output that matters.</p>
+
+    <h2>The one-sentence version</h2>
+    <p><strong>Senkani is a trust boundary.</strong> Your agent on one side, your filesystem on the other; the boundary compresses, redacts, caches, and learns.</p>
+
+    <h2>The category</h2>
+    <p>Senkani is a new category of developer tool. It is <em>not</em> a new coding agent, not an IDE plugin, not a cloud service, not a framework your code imports. It is a local compression-and-context layer that makes the agent you already use cheaper, faster, and safer — by intercepting the tool calls the agent makes on your behalf.</p>
+
+    <div class="positioning-table" role="table" aria-label="Positioning">
+      <div class="head">Dimension</div>
+      <div class="head">Senkani is</div>
+      <div class="head">Senkani is not</div>
+
+      <div class="label">Category</div>
+      <div class="yes">A token-compression + context layer for existing agents.</div>
+      <div class="no">A new coding agent, IDE, editor, or chatbot.</div>
+
+      <div class="label">Runtime</div>
+      <div class="yes">One local macOS binary, fully offline after install.</div>
+      <div class="no">A cloud service, SaaS, or plugin marketplace.</div>
+
+      <div class="label">Trust</div>
+      <div class="yes">A boundary: SSRF guard, secret redaction, injection guard, socket auth.</div>
+      <div class="no">A model with opinions. The model on the far side is whatever you choose.</div>
+
+      <div class="label">Integration</div>
+      <div class="yes">Hooks + MCP server registered once in <code>~/.claude/settings.json</code>.</div>
+      <div class="no">A wrapper, proxy, router, or replacement for Claude, Cursor, Copilot, Codex.</div>
+
+      <div class="label">Locality</div>
+      <div class="yes">On-device inference where local is enough (MiniLM embeds, Gemma vision).</div>
+      <div class="no">A per-request API middleman that adds new costs.</div>
+
+      <div class="label">Outputs</div>
+      <div class="yes">A <a href="../../docs/concepts/knowledge-base/">knowledge graph</a>, a session DB, and <a href="../../docs/concepts/compound-learning/">learned artifacts</a> you can inspect.</div>
+      <div class="no">A black box; every decision is logged, tunable, and reversible.</div>
+    </div>
+
+    <h2>Who it's for</h2>
+    <ul>
+      <li><strong>Developers running coding agents on real codebases.</strong> If your Claude Code session is eating 40k+ tokens on a medium refactor, the compression layer pays for itself on the first prompt.</li>
+      <li><strong>Operators who care about trust boundaries.</strong> Secret redaction, SSRF hardening, prompt-injection scanning, and socket-auth handshakes all ship on by default.</li>
+      <li><strong>People tired of configuring LLM stacks.</strong> <code>senkani init</code>, one command, idempotent, zero config files required.</li>
+    </ul>
+
+    <h2>How the pieces connect</h2>
+    <p>Senkani has three layers, and all three ship in the same binary:</p>
+    <ol>
+      <li><a href="../../docs/reference/mcp/">MCP tools</a> — 19 tools the agent can call directly. Compressed reads, filtered shells, symbol lookups, sandboxed parse, local embed/vision.</li>
+      <li><a href="../../docs/concepts/hook-relay/">Hook relay</a> — intercepts the agent's built-in Read/Bash/Grep and routes to senkani equivalents or denies with cached results.</li>
+      <li><a href="../../docs/concepts/three-layer-stack/">Smart denials</a> — re-read suppression, command replay, trivial routing, search upgrade. The filter decides a tool call doesn't need to run at all.</li>
+    </ol>
+
+    <h2>What it replaces (or augments)</h2>
+    <ul>
+      <li><code>Read</code> → <code>senkani_read</code> (compressed, cached, redacted) or <code>senkani_fetch</code> (symbol-only).</li>
+      <li><code>Grep</code> → <code>senkani_search</code> (local tree-sitter index; 99% fewer tokens than text grep).</li>
+      <li><code>Bash</code> → <code>senkani_exec</code> (24+ command-specific filter rules; mutating commands pass through unchanged).</li>
+      <li>Per-repo briefs → <a href="../../docs/reference/mcp/senkani_bundle/"><code>senkani_bundle</code></a> (budget-bounded Markdown or JSON).</li>
+      <li>Cloud embed / vision API calls → <a href="../../docs/reference/mcp/senkani_embed/"><code>senkani_embed</code></a> + <a href="../../docs/reference/mcp/senkani_vision/"><code>senkani_vision</code></a> on Apple Silicon.</li>
+    </ul>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">⚐</span>
+      <div><strong>Savings multipliers vary.</strong> The <code>80.37×</code> figure on the landing page is the synthetic fixture ceiling. Live sessions typically land in the 3–15× range depending on workflow. The <a href="../../docs/reference/panes/savings-test/">Savings Test pane</a> shows both side by side, and the live number is the honest one.</div>
+    </div>
+
+    <h2>Next</h2>
+    <ul>
+      <li><a href="../../docs/guides/install/">Install senkani</a> — clone, build, <code>init</code>, launch.</li>
+      <li><a href="../../docs/concepts/three-layer-stack/">Read about the three-layer stack</a>.</li>
+      <li><a href="../../docs/reference/mcp/">Browse the MCP tool reference</a>.</li>
+    </ul>
+  </article>
+</main>
+<footer class="site-foot">
+  <div class="foot-grid">
+    <div>
+      <div class="foot-wordmark">sen<span class="accent">kani</span></div>
+      <p class="foot-tagline"><span lang="zh">閃蟹</span> — "fast claw." A native macOS binary written in Swift.</p>
+    </div>
+    <div class="foot-col"><h4>Product</h4><ul><li><a href="../../docs/what-is-senkani/">What is it?</a></li><li><a href="../../docs/concepts/">Concepts</a></li><li><a href="../../docs/reference/">Reference</a></li><li><a href="../../docs/guides/">Guides</a></li><li><a href="../../docs/status/">Status</a></li></ul></div>
+    <div class="foot-col"><h4>Reference</h4><ul><li><a href="../../docs/reference/mcp/">MCP tools</a></li><li><a href="../../docs/reference/cli/">CLI commands</a></li><li><a href="../../docs/reference/options/">Options &amp; env</a></li><li><a href="../../docs/reference/panes/">Panes</a></li><li><a href="../../docs/changelog/">Changelog</a></li></ul></div>
+    <div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li><li><a href="../../docs/guides/install/">Install</a></li><li><a href="../../docs/guides/troubleshooting/">Troubleshooting</a></li><li><a href="../../docs/about/">About &amp; license</a></li></ul></div>
+  </div>
+  <div class="foot-meta">
+    <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
+    <span><a href="../../docs/changelog/">v0.2.0 changelog</a></span>
+  </div>
+</footer>
+<script src="../../assets/app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FCSIT — five per-pane toggles — options reference</title>
+<meta name="description" content="Each pane in the workspace carries five feature switches: &lt;strong&gt;F&lt;/strong&gt;ilter, &lt;strong&gt;C&lt;/strong&gt;ache, &lt;strong&gt;S&lt;/strong&gt">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../../../assets/theme.css">
+</head>
+<body>
+<a href="#main" class="skip-nav">Skip to main content</a>
+<nav class="topnav" aria-label="Primary navigation">
+  <a class="wordmark" href="../../../../">sen<span class="accent">kani</span><small>compression layer for AI coding agents</small></a>
+  <button class="topnav-hamburger" aria-label="Open navigation menu" aria-expanded="false" aria-controls="topnav-links"><span></span><span></span><span></span></button>
+  <div class="topnav-links" id="topnav-links">
+    <a href="../../../../docs/what-is-senkani/">What is it?</a>
+    <a href="../../../../docs/concepts/">Concepts</a>
+    <a href="../../../../docs/reference/">Reference</a>
+    <a href="../../../../docs/guides/">Guides</a>
+    <a href="../../../../docs/status/">Status</a>
+    <div class="topnav-search"><input type="search" id="site-search" placeholder="Search · /" aria-label="Search the site"></div>
+    <a href="https://github.com/ckluis/senkani" class="btn-nav">GitHub →</a>
+  </div>
+</nav>
+<main id="main" class="wiki-layout">
+  <aside class="wiki-nav" aria-label="Options navigation">
+    <div class="wiki-nav-group">
+      <h4>Reference</h4>
+      <ul>
+        <li><a href="../../../../docs/reference/">All reference</a></li>
+        <li><a href="../../../../docs/reference/options/">Options index</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>Options &amp; env</h4>
+      <ul>
+        <li><a href="../../../../docs/reference/options/fcsit/" class="active">FCSIT overview</a></li>
+        <li><a href="../../../../docs/reference/options/filter/">F — Filter</a></li>
+        <li><a href="../../../../docs/reference/options/cache/">C — Cache</a></li>
+        <li><a href="../../../../docs/reference/options/secrets/">S — Secrets</a></li>
+        <li><a href="../../../../docs/reference/options/indexer/">I — Indexer</a></li>
+        <li><a href="../../../../docs/reference/options/terse/">T — Terse</a></li>
+        <li><a href="../../../../docs/reference/options/budget/">Budget caps</a></li>
+        <li><a href="../../../../docs/reference/options/security/">Security env vars</a></li>
+        <li><a href="../../../../docs/reference/options/web/">Web env vars</a></li>
+        <li><a href="../../../../docs/reference/options/compound-learning/">Compound-learning env</a></li>
+      </ul>
+    </div>
+  </aside>
+  <article class="wiki-main">
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../../">Home</a> <span class="sep">›</span>
+      <a href="../../../../docs/reference/">Reference</a> <span class="sep">›</span>
+      <a href="../../../../docs/reference/options/">Options &amp; env</a> <span class="sep">›</span>
+      <span class="here">FCSIT — five per-pane toggles</span>
+    </nav>
+    <span class="quadrant reference">Reference · Information</span>
+    <h1 class="page-title">FCSIT — five per-pane toggles</h1>
+    <p class="lede">Each pane in the workspace carries five feature switches: <strong>F</strong>ilter, <strong>C</strong>ache, <strong>S</strong>ecrets, <strong>I</strong>ndexer, <strong>T</strong>erse. Set per-pane; persist to <code>~/.senkani/panes/{paneId}.env</code>; take effect immediately without a restart.</p>
+
+    <div class="fcsit-card">
+      <a class="fcsit-letter f" href="../../../../docs/reference/options/filter/"><span class="ltr">F</span><span class="name">Filter</span><span class="default">default on</span></a>
+      <a class="fcsit-letter c" href="../../../../docs/reference/options/cache/"><span class="ltr">C</span><span class="name">Cache</span><span class="default">default on</span></a>
+      <a class="fcsit-letter s" href="../../../../docs/reference/options/secrets/"><span class="ltr">S</span><span class="name">Secrets</span><span class="default">default on</span></a>
+      <a class="fcsit-letter i" href="../../../../docs/reference/options/indexer/"><span class="ltr">I</span><span class="name">Indexer</span><span class="default">default on</span></a>
+      <a class="fcsit-letter t" href="../../../../docs/reference/options/terse/"><span class="ltr">T</span><span class="name">Terse</span><span class="default">default off</span></a>
+    </div>
+
+    <h2>What each letter controls</h2>
+    <div class="ref-io-table">
+      <div class="head">Letter</div><div class="head">Feature</div><div class="head">Default</div><div class="head">What it does</div>
+      <div class="k">F</div><div class="t">Filter</div><div class="default">on</div><div class="desc"><a href="../../../../docs/reference/options/filter/">Filter pipeline</a> — 24 command-specific output rules applied to <code>senkani_exec</code>.</div>
+      <div class="k">C</div><div class="t">Cache</div><div class="default">on</div><div class="desc"><a href="../../../../docs/reference/options/cache/">Read cache</a> — keyed on (path, mtime); unchanged files return from memory.</div>
+      <div class="k">S</div><div class="t">Secrets</div><div class="default">on</div><div class="desc"><a href="../../../../docs/reference/options/secrets/">SecretDetector</a> — 13 regex families + entropy fallback on every tool output.</div>
+      <div class="k">I</div><div class="t">Indexer</div><div class="default">on</div><div class="desc"><a href="../../../../docs/reference/options/indexer/">Symbol indexer</a> — <code>senkani_search</code>, <code>senkani_fetch</code>, <code>senkani_outline</code> active.</div>
+      <div class="k">T</div><div class="t">Terse</div><div class="default">off</div><div class="desc"><a href="../../../../docs/reference/options/terse/">Terse mode</a> — output-token reduction via system-prompt injection + phrase strip.</div>
+    </div>
+
+    <h2>How to toggle</h2>
+    <ul>
+      <li><strong>UI:</strong> click the letter in the pane header — it highlights when on.</li>
+      <li><strong>Env var:</strong> <code>SENKANI_FILTER=on|off</code>, <code>SENKANI_CACHE=on|off</code>, <code>SENKANI_SECRETS=on|off</code>, <code>SENKANI_INDEXER=on|off</code>, <code>SENKANI_TERSE=on|off</code>.</li>
+      <li><strong>MCP:</strong> <code>senkani_session</code> with <code>action:"toggle", feature:"filter"</code>.</li>
+    </ul>
+
+    <h2>Per-pane vs global</h2>
+    <p>FCSIT is <strong>per-pane</strong>. Different panes can run different combinations — a terse-mode research pane alongside a full-fidelity build pane. Global defaults come from <code>~/.senkani/config.json</code>; env vars override per pane; the UI toggle is the final say for the current session.</p>
+
+  </article>
+</main>
+<footer class="site-foot">
+  <div class="foot-grid">
+    <div>
+      <div class="foot-wordmark">sen<span class="accent">kani</span></div>
+      <p class="foot-tagline"><span lang="zh">閃蟹</span> — "fast claw." A native macOS binary written in Swift.</p>
+    </div>
+    <div class="foot-col"><h4>Product</h4><ul><li><a href="../../../../docs/what-is-senkani/">What is it?</a></li><li><a href="../../../../docs/concepts/">Concepts</a></li><li><a href="../../../../docs/reference/">Reference</a></li><li><a href="../../../../docs/guides/">Guides</a></li><li><a href="../../../../docs/status/">Status</a></li></ul></div>
+    <div class="foot-col"><h4>Reference</h4><ul><li><a href="../../../../docs/reference/mcp/">MCP tools</a></li><li><a href="../../../../docs/reference/cli/">CLI commands</a></li><li><a href="../../../../docs/reference/options/">Options &amp; env</a></li><li><a href="../../../../docs/reference/panes/">Panes</a></li><li><a href="../../../../docs/changelog/">Changelog</a></li></ul></div>
+    <div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li><li><a href="../../../../docs/guides/install/">Install</a></li><li><a href="../../../../docs/guides/troubleshooting/">Troubleshooting</a></li><li><a href="../../../../docs/about/">About &amp; license</a></li></ul></div>
+  </div>
+  <div class="foot-meta">
+    <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
+    <span><a href="../../../../docs/changelog/">v0.2.0 changelog</a></span>
+  </div>
+</footer>
+<script src="../../../../assets/app.js" defer></script>
+</body>
+</html>

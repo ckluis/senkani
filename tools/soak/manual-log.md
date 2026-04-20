@@ -12,6 +12,52 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Website redesign wave 2 — hero stack + /docs/ move (shipped 2026-04-19)
+
+Second operator-directed round on the website. Three deliverables:
+landing redesigned as a hero-per-major-feature stack (Apple-style),
+all doc folders moved under `/docs/` to unpollute the root, and
+font sizes bumped a tier across the board (nothing readable below
+14px now). Wave 1's pending validations still apply; these are
+additive.
+
+- **Visual walk of the new landing.** Each hero is a full band with
+  headline + bullets + CTA + custom illustration. Scroll the whole
+  landing: does each band have visual identity? Do the alternating
+  light/dark bands hold rhythm? Do the illustrations (before/after
+  terminal, MCP grid, pane tiles, compound-learning flow, KB
+  entity cards, security shield) read at a glance?
+- **Every "Learn more →" link lands on its detail page.** Click
+  through: Compression → `/docs/concepts/compression-layer/`. MCP
+  intelligence → `/docs/reference/mcp/`. Workspace →
+  `/docs/reference/panes/`. Compound learning →
+  `/docs/concepts/compound-learning/`. KB →
+  `/docs/concepts/knowledge-base/`. Security →
+  `/docs/concepts/security-posture/`.
+- **Root cleanup verification.** `ls` the repo root — you should
+  see `index.html`, `assets/`, `docs/`, `scripts/`, plus code/spec
+  dirs. No more `/concepts/`, `/reference/`, `/guides/`, `/status/`,
+  `/about/`, `/changelog/`, `/what-is-senkani/` at root.
+- **Font sanity pass.** Every block of reading text should be
+  ≥14px; reference tables ≥15px; code blocks ≥15px; badges + tags
+  ≥13px. Put your face close; do captions, meta rows, source
+  pointers, search hit paths, code-copy buttons all read
+  comfortably?
+- **Subpath deploy sanity.** The relative-paths architecture now
+  spans an extra depth level (most pages moved from depth 1 → 2,
+  deep refs from 3 → 4). Push to a preview branch, enable GH Pages,
+  confirm `ckluis.github.io/senkani/` loads the landing + that
+  `ckluis.github.io/senkani/docs/reference/mcp/senkani_read/` also
+  loads its CSS/JS correctly.
+- **Mobile narrow-width heroes.** At 360–600 px, each product-hero
+  should collapse to single-column, visual below text, bullets
+  still readable, the CTA still prominent. Check each of the 6
+  feature heroes.
+- **Contrast on dark hero bands.** Heroes 2 (MCP) and 5 (KB) are
+  dark (`--ink` background, `--bg` text). Verify WCAG AA on copy,
+  bullet check marks, the "Learn more →" CTA (accent-hi on ink),
+  and the illustration tiles.
+
 ### Website rebuild — visual + a11y validation (shipped 2026-04-19)
 
 The full github-pages rebuild landed in one operator-directed round

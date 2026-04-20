@@ -6,6 +6,43 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 19 — Website redesign: hero stack + /docs/ consolidation + font bumps
+- Landing page redesigned as a hero stack — one full-width "product
+  hero" per major feature, Apple-product-page style. Each hero
+  pairs a headline + 3 bulleted value props + a "Learn more →"
+  link with a custom illustration (before/after terminal pair, MCP
+  tool grid, pane tile grid, compound-learning flow diagram,
+  knowledge-base entity cards, security shield checklist).
+- Heroes shipped: Compression layer · MCP intelligence · Workspace ·
+  Compound learning · Knowledge base · Security posture. Alternating
+  light/dark bands. Plus the project hero on top, a stat strip, and
+  a tightened install CTA. Landing is 377 lines HTML, still well
+  under the 600-line target.
+- All doc folders moved under `/docs/`. Root now contains only
+  `index.html`, `assets/`, `docs/`, `scripts/`, and the code/spec
+  directories — no more `/concepts/`, `/reference/`, `/guides/`,
+  `/status/`, `/about/`, `/changelog/`, `/what-is-senkani/` at the
+  repo root. Depths all increased by 1; `scripts/gen.py` computes
+  per-page `../` prefixes so links resolve under both `file://`
+  and the project-subpath deploy at `ckluis.github.io/senkani/`.
+  A new `/docs/` index hub renders links to every wiki section.
+- Font bumps across the board — nothing readable is below 14px
+  anymore. Badges 12→13, overlines 12→13, tags 12→13, breadcrumb
+  13→14, wordmark small 13→14, topnav search + btn 14→15, wiki-nav
+  headers 12→13 + links 14→15, listing rows 15→16 + head 12→13 +
+  desc 15→16, ref-io-table header 12→13 + type/default/desc 14→16,
+  code blocks 14→15, callouts 15→16, source-pointer 14→15, mockup
+  pane title 13→14 + ctx 12→13 + body 13→14 + term lines 13→14 +
+  tb-title 13→14, FCSIT button 10→12, step num 13→14 + body 16→17
+  + code 14→15, feature-list name 15→16 + desc 14→15, search hit
+  14→15 + path 12→13, code-copy 11→13, positioning-table 15→16 +
+  head 12→13, stat-strip num 48→52 + label 14→15, teaser num 13→14
+  + h3 22→24 + p 15→16 + more 13→14, gallery link 15→16.
+- Legacy anchor redirects updated to point at `/docs/*` paths
+  (`#how-it-works` → `docs/concepts/`, `#mcp-tools` →
+  `docs/reference/mcp/`, etc.). `assets/app.js` legacyMap.
+- No Swift code changes. No test delta (1510 → 1510).
+
 ### April 19 — Website rebuild (items 1–9 shipped in one megaround)
 - Operator-directed bundle of the entire website-rebuild chain from
   `spec/website_rebuild.md`. 94 HTML files shipped across a Diátaxis-

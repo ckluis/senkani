@@ -44,26 +44,26 @@
   // relative to the site root, so compute a prefix from the current
   // page back to root.
   const legacyMap = {
-    'how-it-works':   'concepts/',
-    'hook-architecture': 'concepts/hook-relay/',
-    'filter-pipeline':   'concepts/compression-layer/',
-    'smart-denials':     'concepts/three-layer-stack/',
-    'intelligence':   'concepts/mcp-intelligence/',
-    'symbol-indexer': 'concepts/mcp-intelligence/',
-    'read-cache':     'reference/mcp/senkani_read/',
-    'local-ml':       'concepts/mcp-intelligence/',
-    'control':        'reference/options/',
-    'budget':         'reference/options/budget/',
-    'terse':          'reference/options/terse/',
-    'session-db':     'concepts/three-layer-stack/',
-    'interface':      'reference/',
-    'mcp-tools':      'reference/mcp/',
-    'cli':            'reference/cli/',
-    'workspace':      'reference/panes/',
-    'configuration':  'reference/options/',
-    'status':         'status/',
-    'whats-built':    'status/',
-    'install':        'guides/install/'
+    'how-it-works':   'docs/concepts/',
+    'hook-architecture': 'docs/concepts/hook-relay/',
+    'filter-pipeline':   'docs/concepts/compression-layer/',
+    'smart-denials':     'docs/concepts/three-layer-stack/',
+    'intelligence':   'docs/concepts/mcp-intelligence/',
+    'symbol-indexer': 'docs/concepts/mcp-intelligence/',
+    'read-cache':     'docs/reference/mcp/senkani_read/',
+    'local-ml':       'docs/concepts/mcp-intelligence/',
+    'control':        'docs/reference/options/',
+    'budget':         'docs/reference/options/budget/',
+    'terse':          'docs/reference/options/terse/',
+    'session-db':     'docs/concepts/three-layer-stack/',
+    'interface':      'docs/reference/',
+    'mcp-tools':      'docs/reference/mcp/',
+    'cli':            'docs/reference/cli/',
+    'workspace':      'docs/reference/panes/',
+    'configuration':  'docs/reference/options/',
+    'status':         'docs/status/',
+    'whats-built':    'docs/status/',
+    'install':        'docs/guides/install/'
   };
   const hash = window.location.hash.replace(/^#/, '');
   if (hash && legacyMap[hash] && /index\.html?$|\/$/.test(window.location.pathname)) {

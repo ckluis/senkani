@@ -1,0 +1,562 @@
+{
+"docs": [
+{
+"id": "0",
+"title": "About",
+"path": "docs/about.html",
+"body": "Reference All reference MCP tools (19) CLI commands (19) Options &amp; env Panes (17) Start What is it? Concepts Install Home › About About The name 閃蟹 — \"senkani\" — literally flash crab , or \"fast claw.\" The crab is a pincer; Senkani is the pincer between your agent and your filesystem. Snap, compress, return. License Core: MIT . See LICENSE . Built with Swift 6.0+ — Sources/Core, Sources/Filter, Sources/Indexer, Sources/MCPServer, Sources/Bundle, Sources/HookRelay, Sources/CLI, SenkaniApp. SwiftUI + SwiftTerm — the workspace. tree-sitter — 25 vendored grammars for symbol extraction. SQLite + FTS5 — session DB, knowledge graph index, bench results. Apple MLX — MiniLM embeddings, Gemma vision, Gemma rationale rewriter. Platform macOS 14+, Apple Silicon native universal binary. Intel macs r"
+},
+{
+"id": "1",
+"title": "Changelog",
+"path": "docs/changelog.html",
+"body": "Reference All reference MCP tools (19) CLI commands (19) Options &amp; env Panes (17) Start What is it? Concepts Install Home › Changelog Changelog Release notes per server version (reported by senkani_version ). Full detail lives in CHANGELOG.md in the repo — this page is a curated summary. v0.2.0 (current) — April 2026 Website rebuild — multi-page wiki + tightened landing page. 19 MCP tools + 19 CLI commands + 17 panes each have their own URL. Start here . Security hardening (v0.2.0 release) — prompt-injection guard on, SSRF guard on (DNS pre-resolution + redirect re-validation + subresource blocklist), secret detection on (13 families + entropy), socket-auth opt-in, structured JSON logs opt-in with sink redaction, retention scheduler. Compound learning + KB master plan — nine-round land"
+},
+{
+"id": "2",
+"title": "Compound learning · concept",
+"path": "docs/concepts/compound-learning.html",
+"body": "Overview What is senkani? All concepts Concepts Compression layer Hook relay MCP intelligence Three-layer stack Compound learning Knowledge base Security posture Next Reference index Install Home › Concepts › Compound learning Concept · Explanation Compound learning Senkani mines your own sessions for patterns and surfaces four artifact types: filter rules, context docs, instruction patches, workflow playbooks. Patterns flow .recurring → .staged → .applied . The lifecycle Every session's tool calls, outputs, and retries are logged to the session DB. A daily sweep (lazy — runs at session start) looks at the recurring set and promotes any pattern meeting recurrence ≥ 3 AND confidence ≥ 0.7 (Laplace-smoothed) to .staged . You review staged proposals in the Sprint Review pane or via senkani le"
+},
+{
+"id": "3",
+"title": "Compression layer · concept",
+"path": "docs/concepts/compression-layer.html",
+"body": "Overview What is senkani? All concepts Concepts Compression layer Hook relay MCP intelligence Three-layer stack Compound learning Knowledge base Security posture Next Reference index Install Home › Concepts › Compression layer Concept · Explanation Compression layer Senkani compresses at three places, not one. Input compression shrinks tool outputs before the LLM sees them; redundancy elimination stops redundant tool calls from running; output compression (terse mode) shrinks what the model emits. All three run in the same binary, toggleable per pane. The three compression surfaces A naïve \"LLM token reducer\" would just filter tool outputs. Senkani does that, but it's not enough on its own. A session that reads the same file 5 times costs 5× no matter how compressed each read is. A session"
+},
+{
+"id": "4",
+"title": "Hook relay · concept",
+"path": "docs/concepts/hook-relay.html",
+"body": "Overview What is senkani? All concepts Concepts Compression layer Hook relay MCP intelligence Three-layer stack Compound learning Knowledge base Security posture Next Reference index Install Home › Concepts › Hook relay Concept · Explanation Hook relay The senkani-hook binary is a zero-dependency Mach-O that Claude Code (and other MCP-capable agents) runs before every Read/Bash/Grep/Write/Edit tool call. It decides: allow, allow-with-rewrite, or deny. What it intercepts Registered during senkani init with matcher Read|Bash|Grep|Write|Edit . Claude Code fires PreToolUse hook → the hook binary runs (&lt; 5 ms active, &lt; 1 ms passthrough) → the hook returns a decision. The three outcomes Allow + pass through. The tool runs as requested. Common for Write , Edit , and mutating Bash . Allow + "
+},
+{
+"id": "5",
+"title": "Knowledge base · concept",
+"path": "docs/concepts/knowledge-base.html",
+"body": "Overview What is senkani? All concepts Concepts Compression layer Hook relay MCP intelligence Three-layer stack Compound learning Knowledge base Security posture Next Reference index Install Home › Concepts › Knowledge base Concept · Explanation Knowledge base Project entities, decisions, and links live in .senkani/knowledge/*.md — markdown as source of truth. SQLite is a rebuilt index. KBLayer1Coordinator detects staleness and recovers from corruption. Why markdown + rebuilt index Markdown is diff-able, review-able, and human-editable. SQLite is fast. Senkani keeps the markdown as the source of truth and the SQLite index as a derivable artifact — if the index gets corrupt or stale, rebuild it from markdown. This is the inverse of the usual pattern (\"DB is truth, exports are stale\") and it"
+},
+{
+"id": "6",
+"title": "MCP intelligence · concept",
+"path": "docs/concepts/mcp-intelligence.html",
+"body": "Overview What is senkani? All concepts Concepts Compression layer Hook relay MCP intelligence Three-layer stack Compound learning Knowledge base Security posture Next Reference index Install Home › Concepts › MCP intelligence Concept · Explanation MCP intelligence MCP — Model Context Protocol — is the standard JSON-RPC interface an LLM agent uses to call tools. Senkani exposes 19 MCP tools specifically designed for the friction points of agent-driven coding sessions. Why MCP An MCP-aware agent doesn't hard-code tool definitions; it asks the server what tools exist and what their schemas look like. Senkani's MCP server registers once via senkani init , and every MCP-compatible agent (Claude Code, Cursor if you wire it up, Copilot if you wire it up, any custom client) can call the same 19 to"
+},
+{
+"id": "7",
+"title": "Security posture · concept",
+"path": "docs/concepts/security-posture.html",
+"body": "Overview What is senkani? All concepts Concepts Compression layer Hook relay MCP intelligence Three-layer stack Compound learning Knowledge base Security posture Next Reference index Install Home › Concepts › Security posture Concept · Explanation Security posture Senkani is a trust boundary. v0.2.0 defaults are all secure: prompt-injection guard on, SSRF hardening on, secret redaction on, schema migrations versioned + crash-safe. Opt-outs are explicit env vars, not hidden flags. What \"trust boundary\" means The agent on one side; your filesystem, network, and secrets on the other. Everything that crosses the boundary is scanned, redacted, validated, or rejected. The boundary is not a feature; it's the product. Prompt-injection guard SENKANI_INJECTION_GUARD=on by default. Scans every MCP to"
+},
+{
+"id": "8",
+"title": "The three-layer stack · concept",
+"path": "docs/concepts/three-layer-stack.html",
+"body": "Overview What is senkani? All concepts Concepts Compression layer Hook relay MCP intelligence Three-layer stack Compound learning Knowledge base Security posture Next Reference index Install Home › Concepts › The three-layer stack Concept · Explanation The three-layer stack Senkani compresses at three places — Layer 1 (MCP tools), Layer 2 (smart hooks), Layer 3 (preemptive interception). Each layer catches waste the other layers can't. Layer 1 — MCP tools The agent calls senkani_read instead of Read , senkani_exec instead of Bash , senkani_search instead of Grep . Each tool is cached, compressed, and secret-redacted by construction. This is the happy path. Layer 2 — Smart hooks Not every agent cooperates. Sometimes an agent calls built-in Read directly instead of senkani_read . Layer 2 int"
+},
+{
+"id": "9",
+"title": "Concepts · understanding senkani",
+"path": "docs/concepts.html",
+"body": "Overview What is senkani? All concepts Concepts Compression layer Hook relay MCP intelligence Three-layer stack Compound learning Knowledge base Security posture Next Reference index Install Home › Concepts Concept · Explanation Concepts Explanation pages — the why behind senkani. Reference tells you what each tool does; concepts tell you why the system works. Start with What is senkani? if this is your first visit. Compression layer Three places Senkani compresses: input (before the LLM sees it), redundancy (before the tool runs), output (before responses grow). Why all three. Hook relay How the senkani-hook binary intercepts your agent's Read/Bash/Grep, routes to senkani equivalents, and denies with cached results when appropriate. MCP intelligence What \"MCP tool\" means and why senkani h"
+},
+{
+"id": "10",
+"title": "Budget setup · guide",
+"path": "docs/guides/budget-setup.html",
+"body": "Guides All guides Install Claude Code Cursor / Copilot First session Budget setup Reviewing proposals Knowledge-base workflow Uninstall Troubleshooting Next Reference Concepts Home › Guides › Budget setup Guide · How-to Budget setup Daily and weekly spend caps, dual-layer enforcement, and what happens when you hit a cap. Set the caps # in your shell profile: export SENKANI_BUDGET_DAILY=5.00 export SENKANI_BUDGET_WEEKLY=25.00 Or in ~/.senkani/config.json : {{ \"budget\" : {{ \"daily_usd\" : 5.00 , \"weekly_usd\" : 25.00 }} }} How enforcement fires Before every tool call, the PreToolUse hook queries costForToday() and costForWeek() from the session DB. If either exceeds the cap, the hook denies the call with a structured message the agent sees. Dual-layer Enforcement runs at both the hook AND the "
+},
+{
+"id": "11",
+"title": "Wire up Claude Code · guide",
+"path": "docs/guides/claude-code.html",
+"body": "Guides All guides Install Claude Code Cursor / Copilot First session Budget setup Reviewing proposals Knowledge-base workflow Uninstall Troubleshooting Next Reference Concepts Home › Guides › Wire up Claude Code Guide · How-to Wire up Claude Code Senkani's MCP server registers globally with Claude Code via senkani init . No config files to maintain. What senkani init modifies Writes ~/.senkani/bin/senkani-hook (the compiled Mach-O hook binary, zero deps, &lt; 5 ms startup). Appends an entry to ~/.claude/settings.json under mcpServers : \"mcpServers\" : {{ \"senkani\" : {{ \"command\" : \"/Users/you/.senkani/bin/senkani\" , \"args\" : [] }} }} Appends PreToolUse + PostToolUse hook entries with matcher Read|Bash|Grep|Write|Edit . Does not touch any other settings. Does not require sudo. Does not modif"
+},
+{
+"id": "12",
+"title": "Reviewing learned proposals · guide",
+"path": "docs/guides/compound-learning.html",
+"body": "Guides All guides Install Claude Code Cursor / Copilot First session Budget setup Reviewing proposals Knowledge-base workflow Uninstall Troubleshooting Next Reference Concepts Home › Guides › Reviewing learned proposals Guide · How-to Reviewing learned proposals How to use senkani learn review and the Sprint Review pane to accept, reject, or defer staged proposals. Weekly (sprint) cadence senkani learn review --days 7 Lists everything that moved from .recurring to .staged in the last week. In the Sprint Review pane Open ⌘K → \"Sprint Review\". Each proposal shows: Type — filter rule / context doc / instruction patch / workflow playbook. Evidence — sessions + token cost that produced the recurrence. Confidence — Laplace-smoothed, 0.0–1.0. Rationale — why the system thinks this pattern is wort"
+},
+{
+"id": "13",
+"title": "Wire up Cursor / Copilot · guide",
+"path": "docs/guides/cursor-copilot.html",
+"body": "Guides All guides Install Claude Code Cursor / Copilot First session Budget setup Reviewing proposals Knowledge-base workflow Uninstall Troubleshooting Next Reference Concepts Home › Guides › Wire up Cursor / Copilot Guide · How-to Wire up Cursor / Copilot Cursor and Copilot don't speak MCP. Install the hooks-only variant so you still get the filter pipeline + smart denials on their built-in Read/Bash. Install hooks only senkani init --hooks-only This skips the MCP server registration in ~/.claude/settings.json but still: Writes ~/.senkani/bin/senkani-hook . Registers Senkani's PreToolUse + PostToolUse hooks for Cursor/Copilot's Read/Bash/Grep equivalents where supported. Runs the filter pipeline + secret redaction on intercepted tool output. What you get ✓ Compression via the filter pipel"
+},
+{
+"id": "14",
+"title": "Your first session · guide",
+"path": "docs/guides/first-session.html",
+"body": "Guides All guides Install Claude Code Cursor / Copilot First session Budget setup Reviewing proposals Knowledge-base workflow Uninstall Troubleshooting Next Reference Concepts Home › Guides › Your first session Guide · How-to Your first session Launch the workspace, run an agent, read the numbers. What you'll see and how to interpret it. Step 1 Open the workspace senkani Or open SenkaniApp from /Applications if you dragged it there. A single empty canvas appears. Step 2 Open three panes ⌘K → type \"Terminal\" → Enter. ⌘K → \"Analytics\". ⌘K → \"Agent Timeline\". Three panes side by side. Step 3 Start the agent In the Terminal pane: claude Claude Code starts; MCP handshake happens automatically (you can confirm via the \"MCP connected\" indicator in the status bar). Step 4 Ask for something real As"
+},
+{
+"id": "15",
+"title": "Install senkani · guide",
+"path": "docs/guides/install.html",
+"body": "Guides All guides Install Claude Code Cursor / Copilot First session Budget setup Reviewing proposals Knowledge-base workflow Uninstall Troubleshooting Next Reference Concepts Home › Guides › Install senkani Guide · How-to Install senkani Clone the repo, build with Swift Package Manager, register hooks, launch the workspace. Three minutes end-to-end on Apple Silicon. Prerequisites macOS 14+ Swift 6.0+ (ships with Xcode 15+) Xcode Command Line Tools ( xcode-select --install if you don't already have them) Step 1 · Clone + build git clone https://github.com/ckluis/senkani cd senkani swift build -c release First build takes ~4 minutes. Subsequent builds are incremental. Step 2 · Register .build/release/senkani init Writes the hook binary to ~/.senkani/bin/senkani-hook , appends an MCP server "
+},
+{
+"id": "16",
+"title": "Knowledge-base workflow · guide",
+"path": "docs/guides/kb-workflow.html",
+"body": "Guides All guides Install Claude Code Cursor / Copilot First session Budget setup Reviewing proposals Knowledge-base workflow Uninstall Troubleshooting Next Reference Concepts Home › Guides › Knowledge-base workflow Guide · How-to Knowledge-base workflow Day-to-day with senkani kb : seed entities, hand-edit markdown, run the audit. The markdown at .senkani/knowledge/ is the source of truth. Seed an entity senkani kb add \"OrderRepository\" Creates .senkani/knowledge/order_repository.md . Edit it with any text editor; the SQLite index picks up the change on the next query. Query senkani kb search \"pagination\" senkani kb get order_repository senkani kb list --type class --sort freshness Enrich senkani learn enrich Runs Gemma enrichment on high-mention entities (≥ 5× per session). EnrichmentVal"
+},
+{
+"id": "17",
+"title": "Troubleshooting · guide",
+"path": "docs/guides/troubleshooting.html",
+"body": "Guides All guides Install Claude Code Cursor / Copilot First session Budget setup Reviewing proposals Knowledge-base workflow Uninstall Troubleshooting Next Reference Concepts Home › Guides › Troubleshooting Guide · How-to Troubleshooting Common fixes: hook not registering, MCP not activating, grammar staleness, index rebuild. Start here senkani doctor --fix Checks every expected file, every registration entry, every grammar version. --fix attempts repair for each amber/red finding. Hook not registering Symptom: tool calls go through but no compression happens, or the Agent Timeline pane stays empty. Confirm ~/.claude/settings.json has PreToolUse + PostToolUse entries pointing at ~/.senkani/bin/senkani-hook . Confirm the hook binary exists and is executable: ls -l ~/.senkani/bin/senkani-ho"
+},
+{
+"id": "18",
+"title": "Clean uninstall · guide",
+"path": "docs/guides/uninstall.html",
+"body": "Guides All guides Install Claude Code Cursor / Copilot First session Budget setup Reviewing proposals Knowledge-base workflow Uninstall Troubleshooting Next Reference Concepts Home › Guides › Clean uninstall Guide · How-to Clean uninstall senkani uninstall removes everything it registered. senkani wipe additionally removes the session DB. Dry-run first senkani uninstall Without --yes , prints the deletion list without acting. Gives you a chance to confirm. Commit senkani uninstall --yes --keep-data Removes: MCP server entry from ~/.claude/settings.json . PreToolUse + PostToolUse hook entries from ~/.claude/settings.json . Project-level hooks in every .claude/ Senkani touched. ~/.senkani/bin/senkani-hook . ~/.senkani/ runtime dir. senkani launchd plists (if any senkani schedule jobs exist)."
+},
+{
+"id": "19",
+"title": "Guides · how to set up and run senkani",
+"path": "docs/guides.html",
+"body": "Guides All guides Install Claude Code Cursor / Copilot First session Budget setup Reviewing proposals Knowledge-base workflow Uninstall Troubleshooting Next Reference Concepts Home › Guides Guide · How-to Guides Numbered, paste-runnable guides with expected-output blocks. Every shell command has been verified against a clean checkout. Install Clone, build with Swift Package Manager, register hooks, launch the workspace. Three minutes end-to-end. Wire up Claude Code How senkani init modifies ~/.claude/settings.json ; what the MCP entry looks like; how to verify the integration. Wire up Cursor / Copilot senkani init --hooks-only for non-Claude agents. What changes, what doesn't. Your first session Open the workspace, kick off a coding agent, read the Analytics pane. What the numbers mean and"
+},
+{
+"id": "20",
+"title": "Docs",
+"path": "docs/",
+"body": "Reference All reference MCP tools (19) CLI commands (19) Options &amp; env Panes (17) Start What is it? Concepts Install Home › Docs Docs The senkani wiki. Every MCP tool, CLI command, option, and pane has its own page. Concepts explain the why; guides walk you through how-tos; reference answers what-does-this-do. What is senkani? The product in one page — category, positioning, who it's for. Concepts Explanation. Why the three-layer stack, how the hook relay works, how compound learning mines your sessions. Reference Every senkani_* MCP tool, every CLI command, every FCSIT option, every pane type. Guides How-tos. Install, wire up Claude Code, set up budgets, review learned proposals, clean uninstall. Status What's shipped in v0.2.0 + test count + feature checklist. Changelog Release-by-re"
+},
+{
+"id": "21",
+"title": "senkani bench · CLI reference",
+"path": "docs/reference/cli/senkani-bench.html",
+"body": "Reference All reference MCP tools CLI commands index Options &amp; env Panes CLI commands (19) senkani exec senkani search senkani fetch senkani explore senkani index senkani validate senkani stats senkani export senkani wipe senkani bench senkani init senkani doctor senkani compare senkani grammars senkani schedule senkani uninstall senkani kb senkani eval senkani learn Home › Reference › CLI commands › senkani bench Reference · Information senkani bench Live Run the benchmark suite: 10 tasks × 7 configs. Syntax senkani bench [--iterations N] Behavior Reproduces the 80.37× fixture-suite figure on your hardware. Writes JSON results; prints a summary. Example $ senkani bench --iterations 256 Flags Flag Description --iterations N Default 256. --json Emit full results. --scenario &lt;name&gt;"
+},
+{
+"id": "22",
+"title": "senkani compare · CLI reference",
+"path": "docs/reference/cli/senkani-compare.html",
+"body": "Reference All reference MCP tools CLI commands index Options &amp; env Panes CLI commands (19) senkani exec senkani search senkani fetch senkani explore senkani index senkani validate senkani stats senkani export senkani wipe senkani bench senkani init senkani doctor senkani compare senkani grammars senkani schedule senkani uninstall senkani kb senkani eval senkani learn Home › Reference › CLI commands › senkani compare Reference · Information senkani compare Live Diff two files or git revisions through the filter pipeline. Syntax senkani compare Behavior Useful for comparing agent-produced diffs to raw diffs. Example $ senkani compare HEAD~1 HEAD Flags Flag Description --no-filter Disable filter for the comparison. See also senkani_exec tool Diff Viewer pane Source: Sources/CLI/CompareCom"
+},
+{
+"id": "23",
+"title": "senkani doctor · CLI reference",
+"path": "docs/reference/cli/senkani-doctor.html",
+"body": "Reference All reference MCP tools CLI commands index Options &amp; env Panes CLI commands (19) senkani exec senkani search senkani fetch senkani explore senkani index senkani validate senkani stats senkani export senkani wipe senkani bench senkani init senkani doctor senkani compare senkani grammars senkani schedule senkani uninstall senkani kb senkani eval senkani learn Home › Reference › CLI commands › senkani doctor Reference · Information senkani doctor Live Diagnose and optionally repair hook registration, binary paths, grammar versions, config. Syntax senkani doctor [--fix] Behavior Checks: MCP server entry, hook registration, binary path resolution, grammar staleness (non-blocking advisory — PASS for recent, SKIP for stale >30 d, never FAIL). Example $ senkani doctor --fix Flags Fla"
+},
+{
+"id": "24",
+"title": "senkani eval · CLI reference",
+"path": "docs/reference/cli/senkani-eval.html",
+"body": "Reference All reference MCP tools CLI commands index Options &amp; env Panes CLI commands (19) senkani exec senkani search senkani fetch senkani explore senkani index senkani validate senkani stats senkani export senkani wipe senkani bench senkani init senkani doctor senkani compare senkani grammars senkani schedule senkani uninstall senkani kb senkani eval senkani learn Home › Reference › CLI commands › senkani eval Reference · Information senkani eval Live Quality gates: bench savings + KB health + regression detection. Syntax senkani eval [--update-baseline] Behavior `--strict` for CI (nonzero exit on regression). `--json` for scripting. Example $ senkani eval --strict Flags Flag Description --update-baseline Lock in current numbers as the new baseline. --strict Nonzero exit on regressi"
+},
+{
+"id": "25",
+"title": "senkani exec · CLI reference",
+"path": "docs/reference/cli/senkani-exec.html",
+"body": "Reference All reference MCP tools CLI commands index Options &amp; env Panes CLI commands (19) senkani exec senkani search senkani fetch senkani explore senkani index senkani validate senkani stats senkani export senkani wipe senkani bench senkani init senkani doctor senkani compare senkani grammars senkani schedule senkani uninstall senkani kb senkani eval senkani learn Home › Reference › CLI commands › senkani exec Reference · Information senkani exec Live Run a command with the filter pipeline applied to output. Mutating commands pass through unchanged. Syntax senkani exec -- Behavior The CLI counterpart to `senkani_exec`. Same FilterEngine, same 24+ rules, same SecretDetector. Use in scripts and CI where you want the compression without running an agent. Example $ senkani exec -- git s"
+},
+{
+"id": "26",
+"title": "senkani explore · CLI reference",
+"path": "docs/reference/cli/senkani-explore.html",
+"body": "Reference All reference MCP tools CLI commands index Options &amp; env Panes CLI commands (19) senkani exec senkani search senkani fetch senkani explore senkani index senkani validate senkani stats senkani export senkani wipe senkani bench senkani init senkani doctor senkani compare senkani grammars senkani schedule senkani uninstall senkani kb senkani eval senkani learn Home › Reference › CLI commands › senkani explore Reference · Information senkani explore Live Navigate the codebase via the import graph from an entry point. Syntax senkani explore [--root path] Behavior Returns a bounded subgraph (imports + imported-by) up to a depth. Default entry point is auto-detected from `Package.swift` / `package.json` / `Cargo.toml`. Example $ senkani explore --root src/server.ts --depth 2 Flags F"
+},
+{
+"id": "27",
+"title": "senkani export · CLI reference",
+"path": "docs/reference/cli/senkani-export.html",
+"body": "Reference All reference MCP tools CLI commands index Options &amp; env Panes CLI commands (19) senkani exec senkani search senkani fetch senkani explore senkani index senkani validate senkani stats senkani export senkani wipe senkani bench senkani init senkani doctor senkani compare senkani grammars senkani schedule senkani uninstall senkani kb senkani eval senkani learn Home › Reference › CLI commands › senkani export Reference · Information senkani export Live JSONL dump of sessions + commands + token_events. GDPR-adjacent data portability. Syntax senkani export --output [--since DATE] [--redact] Behavior Uses a read-only SQLite connection so it doesn't block the live MCP server. `--redact` collapses user paths. `--output -` streams to stdout for piping. Example $ senkani export --output"
+},
+{
+"id": "28",
+"title": "senkani fetch · CLI reference",
+"path": "docs/reference/cli/senkani-fetch.html",
+"body": "Reference All reference MCP tools CLI commands index Options &amp; env Panes CLI commands (19) senkani exec senkani search senkani fetch senkani explore senkani index senkani validate senkani stats senkani export senkani wipe senkani bench senkani init senkani doctor senkani compare senkani grammars senkani schedule senkani uninstall senkani kb senkani eval senkani learn Home › Reference › CLI commands › senkani fetch Reference · Information senkani fetch Live Read a symbol's source lines by name. Syntax senkani fetch Behavior Outputs just the symbol body. Pair with `senkani search` to discover the exact name. Example $ senkani fetch OrderRepository Flags Flag Description --file &lt;path&gt; Disambiguate when the symbol is not unique. --container &lt;c&gt; Restrict by enclosing type. See a"
+},
+{
+"id": "29",
+"title": "senkani grammars · CLI reference",
+"path": "docs/reference/cli/senkani-grammars.html",
+"body": "Reference All reference MCP tools CLI commands index Options &amp; env Panes CLI commands (19) senkani exec senkani search senkani fetch senkani explore senkani index senkani validate senkani stats senkani export senkani wipe senkani bench senkani init senkani doctor senkani compare senkani grammars senkani schedule senkani uninstall senkani kb senkani eval senkani learn Home › Reference › CLI commands › senkani grammars Reference · Information senkani grammars Live Show installed tree-sitter grammar versions. Syntax senkani grammars Behavior Also: `senkani grammars check` compares vendored versions against upstream tags (cached 24 h). Example $ senkani grammars check Flags Flag Description check Subcommand: compare vendored vs upstream. See also Tree-sitter concept Source: Sources/CLI/Gra"
+},
+{
+"id": "30",
+"title": "senkani index · CLI reference",
+"path": "docs/reference/cli/senkani-index.html",
+"body": "Reference All reference MCP tools CLI commands index Options &amp; env Panes CLI commands (19) senkani exec senkani search senkani fetch senkani explore senkani index senkani validate senkani stats senkani export senkani wipe senkani bench senkani init senkani doctor senkani compare senkani grammars senkani schedule senkani uninstall senkani kb senkani eval senkani learn Home › Reference › CLI commands › senkani index Reference · Information senkani index Live Build or update the symbol index manually. Syntax senkani index [--root path] Behavior Normally runs incrementally via FSEvents. This command forces a full rebuild — useful after switching branches or if the index gets out of sync. Example $ senkani index --root . Flags Flag Description --root &lt;path&gt; Root to index. --force Full"
+},
+{
+"id": "31",
+"title": "senkani init · CLI reference",
+"path": "docs/reference/cli/senkani-init.html",
+"body": "Reference All reference MCP tools CLI commands index Options &amp; env Panes CLI commands (19) senkani exec senkani search senkani fetch senkani explore senkani index senkani validate senkani stats senkani export senkani wipe senkani bench senkani init senkani doctor senkani compare senkani grammars senkani schedule senkani uninstall senkani kb senkani eval senkani learn Home › Reference › CLI commands › senkani init Reference · Information senkani init Live Register MCP server + hooks with Claude Code. Idempotent. Syntax senkani init [--hooks-only] Behavior Writes the hook binary to `~/.senkani/bin/senkani-hook`, appends an MCP server entry to `~/.claude/settings.json`, and registers PreToolUse + PostToolUse hooks with matcher `Read|Bash|Grep|Write|Edit`. `--hooks-only` skips the MCP entr"
+},
+{
+"id": "32",
+"title": "senkani kb · CLI reference",
+"path": "docs/reference/cli/senkani-kb.html",
+"body": "Reference All reference MCP tools CLI commands index Options &amp; env Panes CLI commands (19) senkani exec senkani search senkani fetch senkani explore senkani index senkani validate senkani stats senkani export senkani wipe senkani bench senkani init senkani doctor senkani compare senkani grammars senkani schedule senkani uninstall senkani kb senkani eval senkani learn Home › Reference › CLI commands › senkani kb Reference · Information senkani kb Live Query and manage the project knowledge base. Syntax senkani kb [list|get|search|rollback|history|timeline] Behavior Subcommands mirror `senkani_knowledge` + rollback/history/timeline from the enrichment layer. Flags: `--sort`, `--type`, `--limit`, `--root`. Example $ senkani kb search \"auth middleware\" Flags Flag Description list List enti"
+},
+{
+"id": "33",
+"title": "senkani learn · CLI reference",
+"path": "docs/reference/cli/senkani-learn.html",
+"body": "Reference All reference MCP tools CLI commands index Options &amp; env Panes CLI commands (19) senkani exec senkani search senkani fetch senkani explore senkani index senkani validate senkani stats senkani export senkani wipe senkani bench senkani init senkani doctor senkani compare senkani grammars senkani schedule senkani uninstall senkani kb senkani eval senkani learn Home › Reference › CLI commands › senkani learn Reference · Information senkani learn Live Compound learning CLI — review staged proposals, accept/reject, audit. Syntax senkani learn [status|apply|reject|sweep|enrich|config|review|audit] Behavior Subcommands match the four artifact types (filter rules, context docs, instruction patches, workflow playbooks) and cadence cycles (sprint review, quarterly audit). See `/concepts"
+},
+{
+"id": "34",
+"title": "senkani schedule · CLI reference",
+"path": "docs/reference/cli/senkani-schedule.html",
+"body": "Reference All reference MCP tools CLI commands index Options &amp; env Panes CLI commands (19) senkani exec senkani search senkani fetch senkani explore senkani index senkani validate senkani stats senkani export senkani wipe senkani bench senkani init senkani doctor senkani compare senkani grammars senkani schedule senkani uninstall senkani kb senkani eval senkani learn Home › Reference › CLI commands › senkani schedule Reference · Information senkani schedule Live Schedule recurring commands via launchd. Syntax senkani schedule Behavior Generates a launchd plist per schedule. Each fire gets its own worktree + pane pair. Budget cap per run. Example $ senkani schedule \"0 9 * * *\" -- senkani kb get audit Flags Flag Description list Show active schedules. remove &lt;id&gt; Delete a schedule."
+},
+{
+"id": "35",
+"title": "senkani search · CLI reference",
+"path": "docs/reference/cli/senkani-search.html",
+"body": "Reference All reference MCP tools CLI commands index Options &amp; env Panes CLI commands (19) senkani exec senkani search senkani fetch senkani explore senkani index senkani validate senkani stats senkani export senkani wipe senkani bench senkani init senkani doctor senkani compare senkani grammars senkani schedule senkani uninstall senkani kb senkani eval senkani learn Home › Reference › CLI commands › senkani search Reference · Information senkani search Live Symbol lookup from the tree-sitter index. Syntax senkani search Behavior Same index as `senkani_search`. Output is human-readable by default; `--json` for scripting. Example $ senkani search OrderRepository src/orders/repo.ts:12 class OrderRepository Flags Flag Description --kind &lt;k&gt; Filter by kind: class, function, method, e"
+},
+{
+"id": "36",
+"title": "senkani stats · CLI reference",
+"path": "docs/reference/cli/senkani-stats.html",
+"body": "Reference All reference MCP tools CLI commands index Options &amp; env Panes CLI commands (19) senkani exec senkani search senkani fetch senkani explore senkani index senkani validate senkani stats senkani export senkani wipe senkani bench senkani init senkani doctor senkani compare senkani grammars senkani schedule senkani uninstall senkani kb senkani eval senkani learn Home › Reference › CLI commands › senkani stats Reference · Information senkani stats Live Lifetime metrics from the session database. FTS5 search over tool output history. Syntax senkani stats [--search term] Behavior Default view shows lifetime tokens saved, cost saved, compliance rate, top filter rules by hit. `--search` hits the FTS5-indexed `commands.output_preview`. `--security` surfaces event counters. Example $ sen"
+},
+{
+"id": "37",
+"title": "senkani uninstall · CLI reference",
+"path": "docs/reference/cli/senkani-uninstall.html",
+"body": "Reference All reference MCP tools CLI commands index Options &amp; env Panes CLI commands (19) senkani exec senkani search senkani fetch senkani explore senkani index senkani validate senkani stats senkani export senkani wipe senkani bench senkani init senkani doctor senkani compare senkani grammars senkani schedule senkani uninstall senkani kb senkani eval senkani learn Home › Reference › CLI commands › senkani uninstall Reference · Information senkani uninstall Live Clean removal of all senkani config, hooks, and MCP entries. Syntax senkani uninstall [--yes] [--keep-data] Behavior Removes: MCP server entry, PreToolUse/PostToolUse hook entries, `~/.senkani/`, app-support DB (unless `--keep-data`), launchd plists, per-project `.senkani/` dirs. Idempotent. Example $ senkani uninstall --yes "
+},
+{
+"id": "38",
+"title": "senkani validate · CLI reference",
+"path": "docs/reference/cli/senkani-validate.html",
+"body": "Reference All reference MCP tools CLI commands index Options &amp; env Panes CLI commands (19) senkani exec senkani search senkani fetch senkani explore senkani index senkani validate senkani stats senkani export senkani wipe senkani bench senkani init senkani doctor senkani compare senkani grammars senkani schedule senkani uninstall senkani kb senkani eval senkani learn Home › Reference › CLI commands › senkani validate Reference · Information senkani validate Live Local syntax validation across 25 languages. Zero API calls. Syntax senkani validate Behavior Fast parse via tree-sitter. Exit code 0 on pass, nonzero on errors. Example $ senkani validate src/api.ts Flags Flag Description --lang &lt;name&gt; Override language detection. --full Return complete error detail. See also senkani_val"
+},
+{
+"id": "39",
+"title": "senkani wipe · CLI reference",
+"path": "docs/reference/cli/senkani-wipe.html",
+"body": "Reference All reference MCP tools CLI commands index Options &amp; env Panes CLI commands (19) senkani exec senkani search senkani fetch senkani explore senkani index senkani validate senkani stats senkani export senkani wipe senkani bench senkani init senkani doctor senkani compare senkani grammars senkani schedule senkani uninstall senkani kb senkani eval senkani learn Home › Reference › CLI commands › senkani wipe Reference · Information senkani wipe Live Destructive: delete session DB + socket-auth token. Syntax senkani wipe [--yes] [--include-config] Behavior Dry-run prints the deletion list without acting. `--yes` is required to delete. `--include-config` also removes `~/.senkani/config.json`. Example $ senkani wipe # dry-run $ senkani wipe --yes Flags Flag Description --yes Required"
+},
+{
+"id": "40",
+"title": "CLI commands · reference",
+"path": "docs/reference/cli.html",
+"body": "Reference All reference MCP tools CLI commands index Options &amp; env Panes CLI commands (19) senkani exec senkani search senkani fetch senkani explore senkani index senkani validate senkani stats senkani export senkani wipe senkani bench senkani init senkani doctor senkani compare senkani grammars senkani schedule senkani uninstall senkani kb senkani eval senkani learn Home › Reference › CLI commands Reference · Information CLI commands Every MCP tool has a CLI equivalent for shell use: senkani exec , senkani search , senkani fetch , senkani bench , senkani kb , senkani learn . Scriptable, pipeable, CI-friendly. Command What it does Status senkani exec Run a command with the filter pipeline applied to output. Mutating commands pass through unchanged. — Live senkani search Symbol lookup f"
+},
+{
+"id": "41",
+"title": "senkani_bundle · MCP tool reference",
+"path": "docs/reference/mcp/senkani_bundle.html",
+"body": "Reference All reference MCP tools index CLI commands Options &amp; env Panes MCP tools (19) senkani_read senkani_exec senkani_search senkani_fetch senkani_explore senkani_deps senkani_outline senkani_validate senkani_parse senkani_embed senkani_vision senkani_watch senkani_web senkani_pane senkani_session senkani_knowledge senkani_version senkani_bundle senkani_repo Home › Reference › MCP tools › senkani_bundle Reference · Information senkani_bundle Live Savings repo-level Budget-bounded repo snapshot — symbol outlines + dep graph + KB entities + README in a canonical, truncation-robust order. Local or remote. Signature senkani_mcp.call(tool=\"senkani_bundle\", args={...}) Behavior `BundleComposer` composes outputs within a fixed token budget. Sections order is canonical so partial truncatio"
+},
+{
+"id": "42",
+"title": "senkani_deps · MCP tool reference",
+"path": "docs/reference/mcp/senkani_deps.html",
+"body": "Reference All reference MCP tools index CLI commands Options &amp; env Panes MCP tools (19) senkani_read senkani_exec senkani_search senkani_fetch senkani_explore senkani_deps senkani_outline senkani_validate senkani_parse senkani_embed senkani_vision senkani_watch senkani_web senkani_pane senkani_session senkani_knowledge senkani_version senkani_bundle senkani_repo Home › Reference › MCP tools › senkani_deps Reference · Information senkani_deps Live Replaces Read ×N Query the bidirectional dependency graph: what imports X, what does X import. Signature senkani_mcp.call(tool=\"senkani_deps\", args={...}) Behavior Direct lookup in the edge set built by `DependencyExtractor`. No traversal — returns the immediate neighbors. For multi-hop exploration, use `senkani_explore`. Inputs Name Type Defa"
+},
+{
+"id": "43",
+"title": "senkani_embed · MCP tool reference",
+"path": "docs/reference/mcp/senkani_embed.html",
+"body": "Reference All reference MCP tools index CLI commands Options &amp; env Panes MCP tools (19) senkani_read senkani_exec senkani_search senkani_fetch senkani_explore senkani_deps senkani_outline senkani_validate senkani_parse senkani_embed senkani_vision senkani_watch senkani_web senkani_pane senkani_session senkani_knowledge senkani_version senkani_bundle senkani_repo Home › Reference › MCP tools › senkani_embed Reference · Information senkani_embed Live Replaces API call Savings $0/call Text embeddings on Apple Silicon via MLX. MiniLM-L6-v2 → 384-dim Float32. Zero API cost. Signature senkani_mcp.call(tool=\"senkani_embed\", args={...}) Behavior Runs on the Neural Engine through MLX. Sub-200 ms per call on M-series. Shared `MLXInferenceLock` FIFO-serializes every MLX call and drops loaded mode"
+},
+{
+"id": "44",
+"title": "senkani_exec · MCP tool reference",
+"path": "docs/reference/mcp/senkani_exec.html",
+"body": "Reference All reference MCP tools index CLI commands Options &amp; env Panes MCP tools (19) senkani_read senkani_exec senkani_search senkani_fetch senkani_explore senkani_deps senkani_outline senkani_validate senkani_parse senkani_embed senkani_vision senkani_watch senkani_web senkani_pane senkani_session senkani_knowledge senkani_version senkani_bundle senkani_repo Home › Reference › MCP tools › senkani_exec Reference · Information senkani_exec Live Replaces Bash Savings 60–90% Shell execution with 24+ command-specific filter rules applied to output. Mutating commands pass through unchanged; read commands (git status, npm install, make, curl) get heavily compressed. Signature senkani_mcp.call(tool=\"senkani_exec\", args={...}) Behavior FilterEngine matches `(command, subcommand)` pairs to r"
+},
+{
+"id": "45",
+"title": "senkani_explore · MCP tool reference",
+"path": "docs/reference/mcp/senkani_explore.html",
+"body": "Reference All reference MCP tools index CLI commands Options &amp; env Panes MCP tools (19) senkani_read senkani_exec senkani_search senkani_fetch senkani_explore senkani_deps senkani_outline senkani_validate senkani_parse senkani_embed senkani_vision senkani_watch senkani_web senkani_pane senkani_session senkani_knowledge senkani_version senkani_bundle senkani_repo Home › Reference › MCP tools › senkani_explore Reference · Information senkani_explore Live Replaces Read ×N Savings 90%+ Navigate a codebase via the bidirectional import/dependency graph. Returns a subgraph from a starting file — not a file list. Signature senkani_mcp.call(tool=\"senkani_explore\", args={...}) Behavior `DependencyExtractor` builds edges during indexing. Given an entry point, returns a bounded subgraph (both impo"
+},
+{
+"id": "46",
+"title": "senkani_fetch · MCP tool reference",
+"path": "docs/reference/mcp/senkani_fetch.html",
+"body": "Reference All reference MCP tools index CLI commands Options &amp; env Panes MCP tools (19) senkani_read senkani_exec senkani_search senkani_fetch senkani_explore senkani_deps senkani_outline senkani_validate senkani_parse senkani_embed senkani_vision senkani_watch senkani_web senkani_pane senkani_session senkani_knowledge senkani_version senkani_bundle senkani_repo Home › Reference › MCP tools › senkani_fetch Reference · Information senkani_fetch Live Replaces Read Savings 50–99% Read only a symbol's exact source lines, not the entire file. Token cost is proportional to the symbol, not to the file. Signature senkani_mcp.call(tool=\"senkani_fetch\", args={...}) Behavior Uses `startLine`/`endLine` from the IndexEntry to slice the symbol's lines from the ReadCache (warm) or disk (cold). Ideal "
+},
+{
+"id": "47",
+"title": "senkani_knowledge · MCP tool reference",
+"path": "docs/reference/mcp/senkani_knowledge.html",
+"body": "Reference All reference MCP tools index CLI commands Options &amp; env Panes MCP tools (19) senkani_read senkani_exec senkani_search senkani_fetch senkani_explore senkani_deps senkani_outline senkani_validate senkani_parse senkani_embed senkani_vision senkani_watch senkani_web senkani_pane senkani_session senkani_knowledge senkani_version senkani_bundle senkani_repo Home › Reference › MCP tools › senkani_knowledge Reference · Information senkani_knowledge Live Query and update the project knowledge graph — entities, links, decisions, FTS5 search. Signature senkani_mcp.call(tool=\"senkani_knowledge\", args={...}) Behavior Seven actions: `upsert_entity`, `get_entity`, `list_entities`, `upsert_link`, `search_knowledge` (FTS5), `list_decisions`, `graph`. The knowledge base is stored at `.senkani"
+},
+{
+"id": "48",
+"title": "senkani_outline · MCP tool reference",
+"path": "docs/reference/mcp/senkani_outline.html",
+"body": "Reference All reference MCP tools index CLI commands Options &amp; env Panes MCP tools (19) senkani_read senkani_exec senkani_search senkani_fetch senkani_explore senkani_deps senkani_outline senkani_validate senkani_parse senkani_embed senkani_vision senkani_watch senkani_web senkani_pane senkani_session senkani_knowledge senkani_version senkani_bundle senkani_repo Home › Reference › MCP tools › senkani_outline Reference · Information senkani_outline Live Replaces Read File-level structure: all top-level functions, classes, types. Names + line numbers only. Signature senkani_mcp.call(tool=\"senkani_outline\", args={...}) Behavior Queries `IndexEntry` for entries matching the file path. Returns names + line numbers with no bodies. ~10× smaller than reading the file. Inputs Name Type Default "
+},
+{
+"id": "49",
+"title": "senkani_pane · MCP tool reference",
+"path": "docs/reference/mcp/senkani_pane.html",
+"body": "Reference All reference MCP tools index CLI commands Options &amp; env Panes MCP tools (19) senkani_read senkani_exec senkani_search senkani_fetch senkani_explore senkani_deps senkani_outline senkani_validate senkani_parse senkani_embed senkani_vision senkani_watch senkani_web senkani_pane senkani_session senkani_knowledge senkani_version senkani_bundle senkani_repo Home › Reference › MCP tools › senkani_pane Reference · Information senkani_pane Live Control the workspace panes from a tool call — open, close, focus, resize. Signature senkani_mcp.call(tool=\"senkani_pane\", args={...}) Behavior Sends IPC messages to the SwiftUI app via a local Unix-domain socket (`~/.senkani/sockets/pane.sock`). Pane mutations execute on the app's main thread. Inputs Name Type Default Description action strin"
+},
+{
+"id": "50",
+"title": "senkani_parse · MCP tool reference",
+"path": "docs/reference/mcp/senkani_parse.html",
+"body": "Reference All reference MCP tools index CLI commands Options &amp; env Panes MCP tools (19) senkani_read senkani_exec senkani_search senkani_fetch senkani_explore senkani_deps senkani_outline senkani_validate senkani_parse senkani_embed senkani_vision senkani_watch senkani_web senkani_pane senkani_session senkani_knowledge senkani_version senkani_bundle senkani_repo Home › Reference › MCP tools › senkani_parse Reference · Information senkani_parse Live Return the tree-sitter AST for a file or snippet as structured JSON. Signature senkani_mcp.call(tool=\"senkani_parse\", args={...}) Behavior Runs the appropriate tree-sitter parser and returns the node tree. Useful for agent tasks that need to reason about code structure explicitly (rather than by regex or text match). Inputs Name Type Default"
+},
+{
+"id": "51",
+"title": "senkani_read · MCP tool reference",
+"path": "docs/reference/mcp/senkani_read.html",
+"body": "Reference All reference MCP tools index CLI commands Options &amp; env Panes MCP tools (19) senkani_read senkani_exec senkani_search senkani_fetch senkani_explore senkani_deps senkani_outline senkani_validate senkani_parse senkani_embed senkani_vision senkani_watch senkani_web senkani_pane senkani_session senkani_knowledge senkani_version senkani_bundle senkani_repo Home › Reference › MCP tools › senkani_read Reference · Information senkani_read Live Replaces Read Savings 50–99% Compressed file reads with session caching, outline-by-default, and secret redaction. The single most-called tool in a typical session. Signature senkani_mcp.call(tool=\"senkani_read\", args={...}) Behavior Returns an outline (symbols + line numbers) by default — ~99% smaller than the raw file. Pass `full: true` for "
+},
+{
+"id": "52",
+"title": "senkani_repo · MCP tool reference",
+"path": "docs/reference/mcp/senkani_repo.html",
+"body": "Reference All reference MCP tools index CLI commands Options &amp; env Panes MCP tools (19) senkani_read senkani_exec senkani_search senkani_fetch senkani_explore senkani_deps senkani_outline senkani_validate senkani_parse senkani_embed senkani_vision senkani_watch senkani_web senkani_pane senkani_session senkani_knowledge senkani_version senkani_bundle senkani_repo Home › Reference › MCP tools › senkani_repo Reference · Information senkani_repo Live Savings query-level Query any public GitHub repo without cloning. Actions: tree, file, readme, search. Signature senkani_mcp.call(tool=\"senkani_repo\", args={...}) Behavior Host-allowlisted to api.github.com + raw.githubusercontent.com. Anonymous by default (60 req/h); `GITHUB_TOKEN` env raises the limit. All responses pass through SecretDetect"
+},
+{
+"id": "53",
+"title": "senkani_search · MCP tool reference",
+"path": "docs/reference/mcp/senkani_search.html",
+"body": "Reference All reference MCP tools index CLI commands Options &amp; env Panes MCP tools (19) senkani_read senkani_exec senkani_search senkani_fetch senkani_explore senkani_deps senkani_outline senkani_validate senkani_parse senkani_embed senkani_vision senkani_watch senkani_web senkani_pane senkani_session senkani_knowledge senkani_version senkani_bundle senkani_repo Home › Reference › MCP tools › senkani_search Reference · Information senkani_search Live Replaces Grep Savings 99% Symbol lookup from the local tree-sitter index, BM25-ranked and FTS5-backed. Returns `file:line`, kind, container — ~50 tokens vs ~5,000 for grepping. Signature senkani_mcp.call(tool=\"senkani_search\", args={...}) Behavior In-memory `IndexEntry` array backed by FTS5 + optional RRF fusion with MiniLM file embeddings"
+},
+{
+"id": "54",
+"title": "senkani_session · MCP tool reference",
+"path": "docs/reference/mcp/senkani_session.html",
+"body": "Reference All reference MCP tools index CLI commands Options &amp; env Panes MCP tools (19) senkani_read senkani_exec senkani_search senkani_fetch senkani_explore senkani_deps senkani_outline senkani_validate senkani_parse senkani_embed senkani_vision senkani_watch senkani_web senkani_pane senkani_session senkani_knowledge senkani_version senkani_bundle senkani_repo Home › Reference › MCP tools › senkani_session Reference · Information senkani_session Live Query session metrics, toggle features, and manage session state from within a tool call. Signature senkani_mcp.call(tool=\"senkani_session\", args={...}) Behavior Actions: `stats`, `toggle`, `pane-list`, `clear-cache`, `pin`, `unpin`, `pins`. Writes to `SessionDatabase` and live MCP session state. Inputs Name Type Default Description acti"
+},
+{
+"id": "55",
+"title": "senkani_validate · MCP tool reference",
+"path": "docs/reference/mcp/senkani_validate.html",
+"body": "Reference All reference MCP tools index CLI commands Options &amp; env Panes MCP tools (19) senkani_read senkani_exec senkani_search senkani_fetch senkani_explore senkani_deps senkani_outline senkani_validate senkani_parse senkani_embed senkani_vision senkani_watch senkani_web senkani_pane senkani_session senkani_knowledge senkani_version senkani_bundle senkani_repo Home › Reference › MCP tools › senkani_validate Reference · Information senkani_validate Live Replaces Bash build Savings 100% Local syntax validation across 25 languages. Catch typos without running a build. Signature senkani_mcp.call(tool=\"senkani_validate\", args={...}) Behavior Passes source to the tree-sitter parser for the detected language; parse errors → structured error list. Success → zero API calls consumed. `full: tr"
+},
+{
+"id": "56",
+"title": "senkani_version · MCP tool reference",
+"path": "docs/reference/mcp/senkani_version.html",
+"body": "Reference All reference MCP tools index CLI commands Options &amp; env Panes MCP tools (19) senkani_read senkani_exec senkani_search senkani_fetch senkani_explore senkani_deps senkani_outline senkani_validate senkani_parse senkani_embed senkani_vision senkani_watch senkani_web senkani_pane senkani_session senkani_knowledge senkani_version senkani_bundle senkani_repo Home › Reference › MCP tools › senkani_version Reference · Information senkani_version Live Version negotiation: server_version, tool_schemas_version, schema_db_version, and the list of exposed tools. Signature senkani_mcp.call(tool=\"senkani_version\", args={...}) Behavior Clients cache tool schemas keyed on `tool_schemas_version`. That number increments on any breaking change to a tool's input schema or output contract. `schema"
+},
+{
+"id": "57",
+"title": "senkani_vision · MCP tool reference",
+"path": "docs/reference/mcp/senkani_vision.html",
+"body": "Reference All reference MCP tools index CLI commands Options &amp; env Panes MCP tools (19) senkani_read senkani_exec senkani_search senkani_fetch senkani_explore senkani_deps senkani_outline senkani_validate senkani_parse senkani_embed senkani_vision senkani_watch senkani_web senkani_pane senkani_session senkani_knowledge senkani_version senkani_bundle senkani_repo Home › Reference › MCP tools › senkani_vision Reference · Information senkani_vision Live Replaces API call Savings $0/call Vision model on Apple Silicon via MLX (Gemma). OCR, UI analysis, screenshot reading. Zero API cost. Signature senkani_mcp.call(tool=\"senkani_vision\", args={...}) Behavior Input: image path or base64 PNG. Output: text or structured JSON. Sub-500 ms on M-series. Fully offline after model download. Same `MLXI"
+},
+{
+"id": "58",
+"title": "senkani_watch · MCP tool reference",
+"path": "docs/reference/mcp/senkani_watch.html",
+"body": "Reference All reference MCP tools index CLI commands Options &amp; env Panes MCP tools (19) senkani_read senkani_exec senkani_search senkani_fetch senkani_explore senkani_deps senkani_outline senkani_validate senkani_parse senkani_embed senkani_vision senkani_watch senkani_web senkani_pane senkani_session senkani_knowledge senkani_version senkani_bundle senkani_repo Home › Reference › MCP tools › senkani_watch Reference · Information senkani_watch Live Query recently-changed files via an FSEvents ring buffer, filtered by cursor + glob. Signature senkani_mcp.call(tool=\"senkani_watch\", args={...}) Behavior 500-entry ring buffer on `MCPSession`. Query by timestamp cursor + glob pattern; returns changed file paths since last check. Zero polling cost — the buffer fills from FSEvents in the back"
+},
+{
+"id": "59",
+"title": "senkani_web · MCP tool reference",
+"path": "docs/reference/mcp/senkani_web.html",
+"body": "senkani_web — MCP tool reference Skip to main content sen kani compression layer for AI coding agents What is it? Concepts Reference Guides Status GitHub → Reference All reference MCP tools index CLI commands Options &amp; env Panes MCP tools (19) senkani_read senkani_exec senkani_search senkani_fetch senkani_explore senkani_deps senkani_outline senkani_validate senkani_parse senkani_embed senkani_vision senkani_watch senkani_web senkani_pane senkani_session senkani_knowledge senkani_version senkani_bundle senkani_repo Home › Reference › MCP tools › senkani_web Reference · Information senkani_web Live Savings ~99% vs raw HTML Render http:// / https:// pages with full JavaScript and return an AXTree-style Markdown extraction. Signature senkani_mcp.call(tool=\"senkani_web\", args={...}) Behavi"
+},
+{
+"id": "60",
+"title": "MCP tools · reference",
+"path": "docs/reference/mcp.html",
+"body": "Reference All reference MCP tools index CLI commands Options &amp; env Panes MCP tools (19) senkani_read senkani_exec senkani_search senkani_fetch senkani_explore senkani_deps senkani_outline senkani_validate senkani_parse senkani_embed senkani_vision senkani_watch senkani_web senkani_pane senkani_session senkani_knowledge senkani_version senkani_bundle senkani_repo Home › Reference › MCP tools Reference · Information MCP tools 19 tools that sit between your agent and your filesystem. Each tool has its own page with inputs, outputs, examples, security notes, and source pointers. Pick any. Tool What it does Savings Status senkani_read Compressed file reads with session caching, outline-by-default, and secret redaction. The single most-called tool in a typical session. 50–99% Live senkani_ex"
+},
+{
+"id": "61",
+"title": "Budget caps · options reference",
+"path": "docs/reference/options/budget.html",
+"body": "Reference All reference Options index Options &amp; env FCSIT overview F — Filter C — Cache S — Secrets I — Indexer T — Terse Budget caps Security env vars Web env vars Compound-learning env Home › Reference › Options &amp; env › Budget caps Reference · Information Budget caps Daily and weekly spend ceilings enforced at the hook layer. When you hit a cap, new tool calls are denied with a clear message. Env vars SENKANI_BUDGET_DAILY=5.00 — daily spend cap in USD (default $5.00 ). SENKANI_BUDGET_WEEKLY=25.00 — weekly spend cap in USD (default $25.00 ). How enforcement works The hook layer queries costForToday() and costForWeek() from the session DB (aggregated from token_events ) before approving a tool call. When a cap is exceeded, the hook denies with a structured error message that the ag"
+},
+{
+"id": "62",
+"title": "C · Read cache · options reference",
+"path": "docs/reference/options/cache.html",
+"body": "Reference All reference Options index Options &amp; env FCSIT overview F — Filter C — Cache S — Secrets I — Indexer T — Terse Budget caps Security env vars Web env vars Compound-learning env Home › Reference › Options &amp; env › C — Read cache Reference · Information C — Read cache Session-scoped file-read cache keyed on (path, mtime) . Unchanged files return instantly from memory. What it does Every senkani_read (and every intercepted built-in Read ) populates the cache. Subsequent reads of the same path with the same mtime return from memory — zero tokens, zero disk I/O. A file change (touch, edit) evicts its entry. Env var SENKANI_CACHE=on|off — default on . Where it lives In-process only. Cleared on pane close. To wipe explicitly: senkani_session with action:\"clear-cache\" . See also s"
+},
+{
+"id": "63",
+"title": "Compound-learning env · options reference",
+"path": "docs/reference/options/compound-learning.html",
+"body": "Reference All reference Options index Options &amp; env FCSIT overview F — Filter C — Cache S — Secrets I — Indexer T — Terse Budget caps Security env vars Web env vars Compound-learning env Home › Reference › Options &amp; env › Compound-learning env Reference · Information Compound-learning env Confidence thresholds, recurrence gates, Gemma enrichment rate limits. Tune via ~/.senkani/compound-learning.json or SENKANI_COMPOUND_* env vars. Thresholds SENKANI_COMPOUND_RECURRENCE=3 — min distinct sessions for a pattern to promote from .recurring to .staged . Default 3 . SENKANI_COMPOUND_CONFIDENCE=0.7 — min Laplace-smoothed confidence (0.0–1.0) for promotion. Default 0.7 . SENKANI_COMPOUND_SWEEP_CRON=… — when to run the daily recurrence sweep. Default: lazy, at session start. Instruction-pat"
+},
+{
+"id": "64",
+"title": "FCSIT · five per-pane toggles · options reference",
+"path": "docs/reference/options/fcsit.html",
+"body": "Reference All reference Options index Options &amp; env FCSIT overview F — Filter C — Cache S — Secrets I — Indexer T — Terse Budget caps Security env vars Web env vars Compound-learning env Home › Reference › Options &amp; env › FCSIT — five per-pane toggles Reference · Information FCSIT — five per-pane toggles Each pane in the workspace carries five feature switches: F ilter, C ache, S ecrets, I ndexer, T erse. Set per-pane; persist to ~/.senkani/panes/{paneId}.env ; take effect immediately without a restart. F Filter default on C Cache default on S Secrets default on I Indexer default on T Terse default off What each letter controls Letter Feature Default What it does F Filter on Filter pipeline — 24 command-specific output rules applied to senkani_exec . C Cache on Read cache — keyed o"
+},
+{
+"id": "65",
+"title": "F · Filter pipeline · options reference",
+"path": "docs/reference/options/filter.html",
+"body": "Reference All reference Options index Options &amp; env FCSIT overview F — Filter C — Cache S — Secrets I — Indexer T — Terse Budget caps Security env vars Web env vars Compound-learning env Home › Reference › Options &amp; env › F — Filter pipeline Reference · Information F — Filter pipeline The 24 command-specific rules that compress senkani_exec output. Mutating commands pass through unchanged. What it does Matches (command, subcommand) pairs to rule chains. git status , git diff , git log , npm install , yarn install , pnpm install , pip install , make , cargo build , swift build , curl -v , docker pull , terraform plan , and ~11 more. Each rule is a pure function of (cmd, stdout, stderr) and has regression tests. What it doesn't touch git commit , git push , git reset — mutating. rm ,"
+},
+{
+"id": "66",
+"title": "I · Symbol indexer · options reference",
+"path": "docs/reference/options/indexer.html",
+"body": "Reference All reference Options index Options &amp; env FCSIT overview F — Filter C — Cache S — Secrets I — Indexer T — Terse Budget caps Security env vars Web env vars Compound-learning env Home › Reference › Options &amp; env › I — Symbol indexer Reference · Information I — Symbol indexer Tree-sitter-backed symbol index. Enables senkani_search , senkani_fetch , senkani_outline , senkani_deps , senkani_explore . What it does Extracts symbols from source files via 25 vendored tree-sitter grammars; keeps the index in memory; updates incrementally via FSEvents; persists BM25 + FTS5 search index. Cold search &lt; 5 ms, cached &lt; 1 ms. Env var SENKANI_INDEXER=on|off — default on . Off disables symbol tools for the pane; agents fall back to text-grep (expensive). Languages TypeScript, JavaScr"
+},
+{
+"id": "67",
+"title": "S · Secret detection · options reference",
+"path": "docs/reference/options/secrets.html",
+"body": "Reference All reference Options index Options &amp; env FCSIT overview F — Filter C — Cache S — Secrets I — Indexer T — Terse Budget caps Security env vars Web env vars Compound-learning env Home › Reference › Options &amp; env › S — Secret detection Reference · Information S — Secret detection 13 regex families + entropy fallback on every tool output. On by default; turning off is an explicit statement. What it detects API keys (OpenAI, Anthropic, Stripe, Slack, GitHub, GitLab, npm, AWS, GCP, HuggingFace), bearer tokens, JWTs, SSH private keys, .env -style KEY=value patterns for known-sensitive keys, and high-entropy strings in suspicious contexts. Each hit is replaced with [REDACTED:&lt;family&gt;] before the agent sees it. Performance The detector short-circuits with firstMatch so no-ma"
+},
+{
+"id": "68",
+"title": "Security env vars · options reference",
+"path": "docs/reference/options/security.html",
+"body": "Reference All reference Options index Options &amp; env FCSIT overview F — Filter C — Cache S — Secrets I — Indexer T — Terse Budget caps Security env vars Web env vars Compound-learning env Home › Reference › Options &amp; env › Security env vars Reference · Information Security env vars Every SENKANI_* variable that affects the trust boundary. Defaults are secure; overrides are explicit. Prompt-injection guard SENKANI_INJECTION_GUARD=on|off — default on . Scans every MCP tool response for instruction-override, tool-call injection, context-manipulation, and exfiltration patterns, with anti-evasion normalization (lowercase, zero-width strip, Cyrillic→Latin homoglyphs). Single linear pass. Socket authentication SENKANI_SOCKET_AUTH=on — default off (v0.2.0; flipping to on next release). Gene"
+},
+{
+"id": "69",
+"title": "T · Terse mode · options reference",
+"path": "docs/reference/options/terse.html",
+"body": "Reference All reference Options index Options &amp; env FCSIT overview F — Filter C — Cache S — Secrets I — Indexer T — Terse Budget caps Security env vars Web env vars Compound-learning env Home › Reference › Options &amp; env › T — Terse mode Reference · Information T — Terse mode Output-token reduction. Two layers: a system-prompt injection that asks the model to strip filler, and a post-filter that strips filler phrases from tool outputs before they reach the model. System-prompt injection (layer 1) When T is enabled for a pane, the MCP session prepends this message to every tool result: // Injected before every tool result when T is on CRITICAL: You are in TERSE MODE. ALL responses must minimize output tokens ruthlessly. No preamble, no summaries, no apologies, no \"I'll help you with\""
+},
+{
+"id": "70",
+"title": "Web env vars · options reference",
+"path": "docs/reference/options/web.html",
+"body": "Reference All reference Options index Options &amp; env FCSIT overview F — Filter C — Cache S — Secrets I — Indexer T — Terse Budget caps Security env vars Web env vars Compound-learning env Home › Reference › Options &amp; env › Web env vars Reference · Information Web env vars Overrides for the senkani_web SSRF guard. Only touch these if you know what you're doing. SSRF guard bypass SENKANI_WEB_ALLOW_PRIVATE=on — default off . Normally, senkani_web blocks any address in private/link-local/CGNAT/multicast ranges (including IPv4-mapped IPv6 and octal/hex IPv4). Redirects are re-validated. Subresources (img/script/xhr/etc.) to the same ranges are blocked via WKContentRuleList . Setting this env var to on lifts the private-range block — use only for internal doc servers on a trusted network."
+},
+{
+"id": "71",
+"title": "Options & env vars · reference",
+"path": "docs/reference/options.html",
+"body": "Reference All reference Options index Options &amp; env FCSIT overview F — Filter C — Cache S — Secrets I — Indexer T — Terse Budget caps Security env vars Web env vars Compound-learning env Home › Reference › Options &amp; env Reference · Information Options &amp; env vars Resolution order: CLI flag &gt; env var &gt; ~/.senkani/config.json &gt; default . Any toggle can be overridden at any level without touching other settings. FCSIT — per-pane feature toggles F Filter default on C Cache default on S Secrets default on I Indexer default on T Terse default off Read the FCSIT overview → Env-var families Budget caps Daily + weekly spend ceilings enforced at the hook layer. SENKANI_BUDGET_DAILY , SENKANI_BUDGET_WEEKLY . Security env vars Prompt-injection guard, SSRF overrides, socket auth, st"
+},
+{
+"id": "72",
+"title": "Agent Timeline pane · reference",
+"path": "docs/reference/panes/agent-timeline.html",
+"body": "Reference All reference MCP tools CLI commands Options &amp; env Panes index Pane types (17) Terminal Dashboard Code Editor Browser Markdown Preview Analytics Model Manager Savings Test Agent Timeline Knowledge Base Diff Viewer Log Viewer Scratchpad Schedules Skill Library Sprint Review Settings Home › Reference › Panes › Agent Timeline Reference · Information Agent Timeline Live Pane type Timeline of optimization events, interactive tool calls, and scheduled-task runs. Start/end/blocked states. Scrubbable. Keyboard Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas). Related All pane types FCSIT per-pane toggles senkani_pane — programmatic control"
+},
+{
+"id": "73",
+"title": "Analytics pane · reference",
+"path": "docs/reference/panes/analytics.html",
+"body": "Reference All reference MCP tools CLI commands Options &amp; env Panes index Pane types (17) Terminal Dashboard Code Editor Browser Markdown Preview Analytics Model Manager Savings Test Agent Timeline Knowledge Base Diff Viewer Log Viewer Scratchpad Schedules Skill Library Sprint Review Settings Home › Reference › Panes › Analytics Reference · Information Analytics Live Pane type Token + cost savings with charts, persistent across restarts. Compression breakdown by source (filter / indexer / intercept). Compliance rate meter. Keyboard Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas). Related All pane types FCSIT per-pane toggles senkani_pane — programmatic control"
+},
+{
+"id": "74",
+"title": "Browser pane · reference",
+"path": "docs/reference/panes/browser.html",
+"body": "Reference All reference MCP tools CLI commands Options &amp; env Panes index Pane types (17) Terminal Dashboard Code Editor Browser Markdown Preview Analytics Model Manager Savings Test Agent Timeline Knowledge Base Diff Viewer Log Viewer Scratchpad Schedules Skill Library Sprint Review Settings Home › Reference › Panes › Browser Reference · Information Browser Live Pane type Embedded WKWebView. Localhost or any URL. Optional click-to-capture Design Mode (env-gate `SENKANI_BROWSER_DESIGN=on`, ⌥⇧D toggles) — click an element, get a fixed-schema Markdown block on the clipboard. Keyboard Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas). Related All pane types FCSIT per-pane toggles senkani_pane — programmatic control"
+},
+{
+"id": "75",
+"title": "Code Editor pane · reference",
+"path": "docs/reference/panes/code-editor.html",
+"body": "Reference All reference MCP tools CLI commands Options &amp; env Panes index Pane types (17) Terminal Dashboard Code Editor Browser Markdown Preview Analytics Model Manager Savings Test Agent Timeline Knowledge Base Diff Viewer Log Viewer Scratchpad Schedules Skill Library Sprint Review Settings Home › Reference › Panes › Code Editor Reference · Information Code Editor Live Pane type NSTextView with tree-sitter syntax highlighting across 25 languages. Cmd+click for symbol navigation. Token-intelligence overlays show live compression counts per file. Keyboard Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas). Related All pane types FCSIT per-pane toggles senkani_pane — programmatic control"
+},
+{
+"id": "76",
+"title": "Dashboard pane · reference",
+"path": "docs/reference/panes/dashboard.html",
+"body": "Reference All reference MCP tools CLI commands Options &amp; env Panes index Pane types (17) Terminal Dashboard Code Editor Browser Markdown Preview Analytics Model Manager Savings Test Agent Timeline Knowledge Base Diff Viewer Log Viewer Scratchpad Schedules Skill Library Sprint Review Settings Home › Reference › Panes › Dashboard Reference · Information Dashboard Live Pane type Multi-project portfolio: total savings across every workspace, project-level table, per-feature charts, and insights (top filter rule by hit, freshest KB entity, etc.). Keyboard Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas). Related All pane types FCSIT per-pane toggles senkani_pane — programmatic control"
+},
+{
+"id": "77",
+"title": "Diff Viewer pane · reference",
+"path": "docs/reference/panes/diff-viewer.html",
+"body": "Reference All reference MCP tools CLI commands Options &amp; env Panes index Pane types (17) Terminal Dashboard Code Editor Browser Markdown Preview Analytics Model Manager Savings Test Agent Timeline Knowledge Base Diff Viewer Log Viewer Scratchpad Schedules Skill Library Sprint Review Settings Home › Reference › Panes › Diff Viewer Reference · Information Diff Viewer Live Pane type Side-by-side LCS diff — correct insertions, deletions, replacements. Works with file pairs or git revisions. Keyboard Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas). Related All pane types FCSIT per-pane toggles senkani_pane — programmatic control"
+},
+{
+"id": "78",
+"title": "Knowledge Base pane · reference",
+"path": "docs/reference/panes/knowledge-base.html",
+"body": "Reference All reference MCP tools CLI commands Options &amp; env Panes index Pane types (17) Terminal Dashboard Code Editor Browser Markdown Preview Analytics Model Manager Savings Test Agent Timeline Knowledge Base Diff Viewer Log Viewer Scratchpad Schedules Skill Library Sprint Review Settings Home › Reference › Panes › Knowledge Base Reference · Information Knowledge Base Live Pane type Project knowledge entities with freshness indicators. Click to open the markdown file. Quick-search via `senkani_knowledge`. Keyboard Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas). Related All pane types FCSIT per-pane toggles senkani_pane — programmatic control"
+},
+{
+"id": "79",
+"title": "Log Viewer pane · reference",
+"path": "docs/reference/panes/log-viewer.html",
+"body": "Reference All reference MCP tools CLI commands Options &amp; env Panes index Pane types (17) Terminal Dashboard Code Editor Browser Markdown Preview Analytics Model Manager Savings Test Agent Timeline Knowledge Base Diff Viewer Log Viewer Scratchpad Schedules Skill Library Sprint Review Settings Home › Reference › Panes › Log Viewer Reference · Information Log Viewer Live Pane type Searchable log output. Tail mode, regex filter, persistent search history. Keyboard Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas). Related All pane types FCSIT per-pane toggles senkani_pane — programmatic control"
+},
+{
+"id": "80",
+"title": "Markdown Preview pane · reference",
+"path": "docs/reference/panes/markdown-preview.html",
+"body": "Reference All reference MCP tools CLI commands Options &amp; env Panes index Pane types (17) Terminal Dashboard Code Editor Browser Markdown Preview Analytics Model Manager Savings Test Agent Timeline Knowledge Base Diff Viewer Log Viewer Scratchpad Schedules Skill Library Sprint Review Settings Home › Reference › Panes › Markdown Preview Reference · Information Markdown Preview Live Pane type Live render from a file, updating on save. Supports GFM tables, fenced code, and ` ` with sanitization. Keyboard Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas). Related All pane types FCSIT per-pane toggles senkani_pane — programmatic control"
+},
+{
+"id": "81",
+"title": "Model Manager pane · reference",
+"path": "docs/reference/panes/model-manager.html",
+"body": "Reference All reference MCP tools CLI commands Options &amp; env Panes index Pane types (17) Terminal Dashboard Code Editor Browser Markdown Preview Analytics Model Manager Savings Test Agent Timeline Knowledge Base Diff Viewer Log Viewer Scratchpad Schedules Skill Library Sprint Review Settings Home › Reference › Panes › Model Manager Reference · Information Model Manager Live Pane type Download, verify, and delete local LLMs (Gemma, MiniLM). Shows disk usage + last-used time. Triggers background memory-pressure-aware loading. Keyboard Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas). Related All pane types FCSIT per-pane toggles senkani_pane — programmatic control"
+},
+{
+"id": "82",
+"title": "Savings Test pane · reference",
+"path": "docs/reference/panes/savings-test.html",
+"body": "Reference All reference MCP tools CLI commands Options &amp; env Panes index Pane types (17) Terminal Dashboard Code Editor Browser Markdown Preview Analytics Model Manager Savings Test Agent Timeline Knowledge Base Diff Viewer Log Viewer Scratchpad Schedules Skill Library Sprint Review Settings Home › Reference › Panes › Savings Test Reference · Information Savings Test Live Pane type Fixture benchmark + live session replay + scenario simulator. Shows the fixture ceiling and the live multiplier side by side — the live number is the honest one. Keyboard Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas). Related All pane types FCSIT per-pane toggles senkani_pane — programmatic control"
+},
+{
+"id": "83",
+"title": "Schedules pane · reference",
+"path": "docs/reference/panes/schedules.html",
+"body": "Reference All reference MCP tools CLI commands Options &amp; env Panes index Pane types (17) Terminal Dashboard Code Editor Browser Markdown Preview Analytics Model Manager Savings Test Agent Timeline Knowledge Base Diff Viewer Log Viewer Scratchpad Schedules Skill Library Sprint Review Settings Home › Reference › Panes › Schedules Reference · Information Schedules Live Pane type Manage recurring tasks via launchd. View fire history, next-run times, worktree artifacts, budget ledger. Keyboard Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas). Related All pane types FCSIT per-pane toggles senkani_pane — programmatic control"
+},
+{
+"id": "84",
+"title": "Scratchpad pane · reference",
+"path": "docs/reference/panes/scratchpad.html",
+"body": "Reference All reference MCP tools CLI commands Options &amp; env Panes index Pane types (17) Terminal Dashboard Code Editor Browser Markdown Preview Analytics Model Manager Savings Test Agent Timeline Knowledge Base Diff Viewer Log Viewer Scratchpad Schedules Skill Library Sprint Review Settings Home › Reference › Panes › Scratchpad Reference · Information Scratchpad Live Pane type Auto-saving markdown notepad. One per project. Search across all scratchpads via ⌘K. Keyboard Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas). Related All pane types FCSIT per-pane toggles senkani_pane — programmatic control"
+},
+{
+"id": "85",
+"title": "Settings pane · reference",
+"path": "docs/reference/panes/settings.html",
+"body": "Reference All reference MCP tools CLI commands Options &amp; env Panes index Pane types (17) Terminal Dashboard Code Editor Browser Markdown Preview Analytics Model Manager Savings Test Agent Timeline Knowledge Base Diff Viewer Log Viewer Scratchpad Schedules Skill Library Sprint Review Settings Home › Reference › Panes › Settings Reference · Information Settings Live Pane type Global app preferences: theme, font size, default FCSIT, key bindings, telemetry (off by default). Keyboard Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas). Related All pane types FCSIT per-pane toggles senkani_pane — programmatic control"
+},
+{
+"id": "86",
+"title": "Skill Library pane · reference",
+"path": "docs/reference/panes/skill-library.html",
+"body": "Reference All reference MCP tools CLI commands Options &amp; env Panes index Pane types (17) Terminal Dashboard Code Editor Browser Markdown Preview Analytics Model Manager Savings Test Agent Timeline Knowledge Base Diff Viewer Log Viewer Scratchpad Schedules Skill Library Sprint Review Settings Home › Reference › Panes › Skill Library Reference · Information Skill Library Live Pane type Browse, install, and manage AI agent skills discovered in the project or shipped globally. Zero-install enable/disable. Keyboard Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas). Related All pane types FCSIT per-pane toggles senkani_pane — programmatic control"
+},
+{
+"id": "87",
+"title": "Sprint Review pane · reference",
+"path": "docs/reference/panes/sprint-review.html",
+"body": "Reference All reference MCP tools CLI commands Options &amp; env Panes index Pane types (17) Terminal Dashboard Code Editor Browser Markdown Preview Analytics Model Manager Savings Test Agent Timeline Knowledge Base Diff Viewer Log Viewer Scratchpad Schedules Skill Library Sprint Review Settings Home › Reference › Panes › Sprint Review Reference · Information Sprint Review Live Pane type GUI counterpart to `senkani learn review`. Accept/reject staged compound-learning proposals (filter rules, context docs, instruction patches, workflow playbooks) plus a stale-applied section mirroring the quarterly audit. Keyboard Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas). Related All pane types FCSIT per-pane toggles senkani_pane — programmatic"
+},
+{
+"id": "88",
+"title": "Terminal pane · reference",
+"path": "docs/reference/panes/terminal.html",
+"body": "Reference All reference MCP tools CLI commands Options &amp; env Panes index Pane types (17) Terminal Dashboard Code Editor Browser Markdown Preview Analytics Model Manager Savings Test Agent Timeline Knowledge Base Diff Viewer Log Viewer Scratchpad Schedules Skill Library Sprint Review Settings Home › Reference › Panes › Terminal Reference · Information Terminal Live Pane type SwiftTerm-backed terminal with Senkani's FCSIT controls. Configurable font size. Kill/restart buttons. Broadcast mode for running the same command across selected panes. Defaults F=on (filter) · C=on (cache) · S=on (secrets) · I=on (indexer) · T=off (terse) Keyboard Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas). Related All pane types FCSIT per-pane toggles s"
+},
+{
+"id": "89",
+"title": "Panes · reference",
+"path": "docs/reference/panes.html",
+"body": "Reference All reference MCP tools CLI commands Options &amp; env Panes index Pane types (17) Terminal Dashboard Code Editor Browser Markdown Preview Analytics Model Manager Savings Test Agent Timeline Knowledge Base Diff Viewer Log Viewer Scratchpad Schedules Skill Library Sprint Review Settings Home › Reference › Panes Reference · Information Panes A horizontal canvas of typed panes. Each pane type is a primitive; arrange any combination for the project you're in. Senkani persists the layout per project. Terminal SwiftTerm-backed terminal with Senkani's FCSIT controls. Configurable font size. Kill/restart buttons. Broadcast mode for running the same command across selected panes. Dashboard Multi-project portfolio: total savings across every workspace, project-level table, per-feature char"
+},
+{
+"id": "90",
+"title": "Reference",
+"path": "docs/reference.html",
+"body": "Reference All reference MCP tools (19) CLI commands (19) Options &amp; env Panes (17) Start What is it? Concepts Install Home › Reference Reference · Information Reference Every MCP tool, CLI command, option, and pane type has its own page. This index links to every reference section. Bookmark any URL. MCP tools 19 Every senkani_* tool your agent can call — read, exec, search, fetch, explore, web, knowledge, bundle, repo, and more. CLI commands 19 The same filter and index, scriptable from the shell: senkani exec , senkani search , senkani bench , senkani learn , senkani kb , and more. Options &amp; env FCSIT per-pane toggles, budget caps, security env vars, web SSRF overrides, compound-learning thresholds. Every SENKANI_* variable documented. Panes 17 17 workspace pane types: Terminal, Co"
+},
+{
+"id": "91",
+"title": "Status · what's built",
+"path": "docs/status.html",
+"body": "Reference All reference MCP tools (19) CLI commands (19) Options &amp; env Panes (17) Start What is it? Concepts Install Home › Status Reference · Information Status Current release: v0.2.0 . 1,510 unit tests passing. All features below are live + tested + reproducible on your hardware. v 0.2 .0 Current release — changelog 1,510 Passing tests 19 MCP tools — reference 19 CLI commands — reference 17 Pane types — reference 25 Tree-sitter languages indexed Shipped this release (v0.2.0) Hook relay + filter pipeline — 24 command-specific rules; Layer 3 smart denials (re-read suppression, command replay, trivial routing, symbol upgrade, redundant validation); 80.37× fixture-suite reduction. Symbol indexer — 25 tree-sitter grammars, FTS5 search, dependency graph, container hierarchy, incremental F"
+},
+{
+"id": "92",
+"title": "What is senkani? · positioning + overview",
+"path": "docs/what-is-senkani.html",
+"body": "Overview What is senkani? All concepts Concepts Compression layer Hook relay MCP intelligence Three-layer stack Compound learning Knowledge base Security posture Next Reference index Install Home › Docs › What is senkani? Concept · Explanation What is senkani? Senkani is a native macOS binary that sits between your AI coding agent (Claude Code, Cursor, Copilot, any MCP-compatible tool) and your filesystem. Every tool call — read, grep, shell, build, search — is intercepted by a hook relay, answered by a local symbol index or filter pipeline where possible, and forwarded with only the output that matters. The one-sentence version Senkani is a trust boundary. Your agent on one side, your filesystem on the other; the boundary compresses, redacts, caches, and learns. The category Senkani is a "
+}
+]
+}

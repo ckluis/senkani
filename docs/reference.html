@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reference — senkani</title>
+<meta name="description" content="Reference for every MCP tool, CLI command, option, pane type.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/theme.css">
+</head>
+<body>
+<a href="#main" class="skip-nav">Skip to main content</a>
+<nav class="topnav" aria-label="Primary navigation">
+  <a class="wordmark" href="../">sen<span class="accent">kani</span><small>compression layer for AI coding agents</small></a>
+  <button class="topnav-hamburger" aria-label="Open navigation menu" aria-expanded="false" aria-controls="topnav-links"><span></span><span></span><span></span></button>
+  <div class="topnav-links" id="topnav-links">
+    <a href="../docs/what-is-senkani.html">What is it?</a>
+    <a href="../docs/concepts.html">Concepts</a>
+    <a href="../docs/reference.html">Reference</a>
+    <a href="../docs/guides.html">Guides</a>
+    <a href="../docs/status.html">Status</a>
+    <div class="topnav-search"><input type="search" id="site-search" placeholder="Search · /" aria-label="Search the site"></div>
+    <a href="https://github.com/ckluis/senkani" class="btn-nav">GitHub →</a>
+  </div>
+</nav>
+<main id="main" class="wiki-layout">
+  <aside class="wiki-nav" aria-label="Reference navigation">
+    <div class="wiki-nav-group">
+      <h4>Reference</h4>
+      <ul>
+        <li><a href="../docs/reference.html" class="active">All reference</a></li>
+        <li><a href="../docs/reference/mcp.html">MCP tools (19)</a></li>
+        <li><a href="../docs/reference/cli.html">CLI commands (19)</a></li>
+        <li><a href="../docs/reference/options.html">Options &amp; env</a></li>
+        <li><a href="../docs/reference/panes.html">Panes (17)</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>Start</h4>
+      <ul>
+        <li><a href="../docs/what-is-senkani.html">What is it?</a></li>
+        <li><a href="../docs/concepts.html">Concepts</a></li>
+        <li><a href="../docs/guides/install.html">Install</a></li>
+      </ul>
+    </div>
+  </aside>
+  <article class="wiki-main">
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../">Home</a> <span class="sep">›</span> <span class="here">Reference</span>
+    </nav>
+    <span class="quadrant reference">Reference · Information</span>
+    <h1 class="page-title">Reference</h1>
+    <p class="lede">Every MCP tool, CLI command, option, and pane type has its own page. This index links to every reference section. Bookmark any URL.</p>
+
+    <div class="card-grid">
+      <a class="card" href="../docs/reference/mcp.html">
+        <h3>MCP tools <span class="tag tag-orange" style="margin-left:8px;">19</span></h3>
+        <p>Every <code>senkani_*</code> tool your agent can call — read, exec, search, fetch, explore, web, knowledge, bundle, repo, and more.</p>
+      </a>
+      <a class="card" href="../docs/reference/cli.html">
+        <h3>CLI commands <span class="tag tag-orange" style="margin-left:8px;">19</span></h3>
+        <p>The same filter and index, scriptable from the shell: <code>senkani exec</code>, <code>senkani search</code>, <code>senkani bench</code>, <code>senkani learn</code>, <code>senkani kb</code>, and more.</p>
+      </a>
+      <a class="card" href="../docs/reference/options.html">
+        <h3>Options &amp; env</h3>
+        <p>FCSIT per-pane toggles, budget caps, security env vars, web SSRF overrides, compound-learning thresholds. Every <code>SENKANI_*</code> variable documented.</p>
+      </a>
+      <a class="card" href="../docs/reference/panes.html">
+        <h3>Panes <span class="tag tag-orange" style="margin-left:8px;">17</span></h3>
+        <p>17 workspace pane types: Terminal, Code Editor, Browser, Analytics, Agent Timeline, Sprint Review, Knowledge Base, and more.</p>
+      </a>
+    </div>
+
+    <h2 style="margin-top:32px;">All MCP tools</h2>
+    <div class="listing">
+      <div class="listing-row head">
+        <div>Tool</div><div>What it does</div><div>Savings</div><div>Status</div>
+      </div>
+      <a class="listing-row" href="../docs/reference/mcp/senkani_read.html"><div class="listing-name">senkani_read</div><div class="listing-desc">Compressed file reads with session caching, outline-by-default, and secret redaction. The single most-called tool in a typical session.</div><div class="listing-savings">50–99%</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../docs/reference/mcp/senkani_exec.html"><div class="listing-name">senkani_exec</div><div class="listing-desc">Shell execution with 24+ command-specific filter rules applied to output. Mutating commands pass through unchanged; read commands (git status, npm install, make, curl) get heavily compressed.</div><div class="listing-savings">60–90%</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../docs/reference/mcp/senkani_search.html"><div class="listing-name">senkani_search</div><div class="listing-desc">Symbol lookup from the local tree-sitter index, BM25-ranked and FTS5-backed. Returns `file:line`, kind, container — ~50 tokens vs ~5,000 for grepping.</div><div class="listing-savings">99%</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../docs/reference/mcp/senkani_fetch.html"><div class="listing-name">senkani_fetch</div><div class="listing-desc">Read only a symbol&#x27;s exact source lines, not the entire file. Token cost is proportional to the symbol, not to the file.</div><div class="listing-savings">50–99%</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../docs/reference/mcp/senkani_explore.html"><div class="listing-name">senkani_explore</div><div class="listing-desc">Navigate a codebase via the bidirectional import/dependency graph. Returns a subgraph from a starting file — not a file list.</div><div class="listing-savings">90%+</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../docs/reference/mcp/senkani_deps.html"><div class="listing-name">senkani_deps</div><div class="listing-desc">Query the bidirectional dependency graph: what imports X, what does X import.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../docs/reference/mcp/senkani_outline.html"><div class="listing-name">senkani_outline</div><div class="listing-desc">File-level structure: all top-level functions, classes, types. Names + line numbers only.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../docs/reference/mcp/senkani_validate.html"><div class="listing-name">senkani_validate</div><div class="listing-desc">Local syntax validation across 25 languages. Catch typos without running a build.</div><div class="listing-savings">100%</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../docs/reference/mcp/senkani_parse.html"><div class="listing-name">senkani_parse</div><div class="listing-desc">Return the tree-sitter AST for a file or snippet as structured JSON.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../docs/reference/mcp/senkani_embed.html"><div class="listing-name">senkani_embed</div><div class="listing-desc">Text embeddings on Apple Silicon via MLX. MiniLM-L6-v2 → 384-dim Float32. Zero API cost.</div><div class="listing-savings">$0/call</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../docs/reference/mcp/senkani_vision.html"><div class="listing-name">senkani_vision</div><div class="listing-desc">Vision model on Apple Silicon via MLX (Gemma). OCR, UI analysis, screenshot reading. Zero API cost.</div><div class="listing-savings">$0/call</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../docs/reference/mcp/senkani_watch.html"><div class="listing-name">senkani_watch</div><div class="listing-desc">Query recently-changed files via an FSEvents ring buffer, filtered by cursor + glob.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../docs/reference/mcp/senkani_web.html"><div class="listing-name">senkani_web</div><div class="listing-desc">Render http:// / https:// pages with full JavaScript and return an AXTree-style Markdown extraction.</div><div class="listing-savings">~99% vs raw HTML</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../docs/reference/mcp/senkani_pane.html"><div class="listing-name">senkani_pane</div><div class="listing-desc">Control the workspace panes from a tool call — open, close, focus, resize.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../docs/reference/mcp/senkani_session.html"><div class="listing-name">senkani_session</div><div class="listing-desc">Query session metrics, toggle features, and manage session state from within a tool call.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../docs/reference/mcp/senkani_knowledge.html"><div class="listing-name">senkani_knowledge</div><div class="listing-desc">Query and update the project knowledge graph — entities, links, decisions, FTS5 search.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../docs/reference/mcp/senkani_version.html"><div class="listing-name">senkani_version</div><div class="listing-desc">Version negotiation: server_version, tool_schemas_version, schema_db_version, and the list of exposed tools.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../docs/reference/mcp/senkani_bundle.html"><div class="listing-name">senkani_bundle</div><div class="listing-desc">Budget-bounded repo snapshot — symbol outlines + dep graph + KB entities + README in a canonical, truncation-robust order. Local or remote.</div><div class="listing-savings">repo-level</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../docs/reference/mcp/senkani_repo.html"><div class="listing-name">senkani_repo</div><div class="listing-desc">Query any public GitHub repo without cloning. Actions: tree, file, readme, search.</div><div class="listing-savings">query-level</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+    </div>
+
+    <h2 style="margin-top:32px;">Next</h2>
+    <ul>
+      <li><a href="../docs/reference/cli.html">Browse CLI commands →</a></li>
+      <li><a href="../docs/reference/options/fcsit.html">Start with FCSIT toggles</a> (the five per-pane feature switches).</li>
+      <li><a href="../docs/concepts/three-layer-stack.html">Understand the three-layer stack</a>.</li>
+    </ul>
+  </article>
+</main>
+<footer class="site-foot">
+  <div class="foot-grid">
+    <div>
+      <div class="foot-wordmark">sen<span class="accent">kani</span></div>
+      <p class="foot-tagline"><span lang="zh">閃蟹</span> — "fast claw." A native macOS binary written in Swift.</p>
+    </div>
+    <div class="foot-col"><h4>Product</h4><ul><li><a href="../docs/what-is-senkani.html">What is it?</a></li><li><a href="../docs/concepts.html">Concepts</a></li><li><a href="../docs/reference.html">Reference</a></li><li><a href="../docs/guides.html">Guides</a></li><li><a href="../docs/status.html">Status</a></li></ul></div>
+    <div class="foot-col"><h4>Reference</h4><ul><li><a href="../docs/reference/mcp.html">MCP tools</a></li><li><a href="../docs/reference/cli.html">CLI commands</a></li><li><a href="../docs/reference/options.html">Options &amp; env</a></li><li><a href="../docs/reference/panes.html">Panes</a></li><li><a href="../docs/changelog.html">Changelog</a></li></ul></div>
+    <div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li><li><a href="../docs/guides/install.html">Install</a></li><li><a href="../docs/guides/troubleshooting.html">Troubleshooting</a></li><li><a href="../docs/about.html">About &amp; license</a></li></ul></div>
+  </div>
+  <div class="foot-meta">
+    <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
+    <span><a href="../docs/changelog.html">v0.2.0 changelog</a></span>
+  </div>
+</footer>
+<script src="../assets/app.js" defer></script>
+</body>
+</html>

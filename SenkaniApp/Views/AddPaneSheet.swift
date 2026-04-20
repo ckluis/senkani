@@ -158,6 +158,15 @@ struct AddPaneSheet: View {
                 defaultTitle: "Timeline",
                 defaultCommand: ""
             ),
+            PaneEntry(
+                id: .sprintReview, type: .sprintReview,
+                name: SenkaniTheme.displayName(for: .sprintReview),
+                description: SenkaniTheme.description(for: .sprintReview),
+                icon: SenkaniTheme.iconName(for: .sprintReview),
+                accent: SenkaniTheme.accentColor(for: .sprintReview),
+                defaultTitle: "Sprint Review",
+                defaultCommand: ""
+            ),
         ]
 
         if searchText.isEmpty { return all }

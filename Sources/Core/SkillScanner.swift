@@ -38,37 +38,51 @@ public final class SkillScanner: Sendable {
     /// Asynchronous scan with cancellation support. Prefer this over the synchronous
     /// variant when calling from the main thread or UI code.
     public static func scanAsync() async -> [SkillInfo] {
+        let home = NSHomeDirectory()
+        let cwd = FileManager.default.currentDirectoryPath
+        return await scanAsync(homeDir: home, cwd: cwd)
+    }
+
+    /// Asynchronous scan with explicit roots. For tests + non-UI callers that
+    /// want fixture injection; UI code should prefer the zero-arg form.
+    public static func scanAsync(homeDir: String, cwd: String) async -> [SkillInfo] {
         await Task.detached(priority: .utility) {
-            scan()
+            scan(homeDir: homeDir, cwd: cwd)
         }.value
     }
 
-    /// Synchronously scan all known directories and return discovered skills.
-    /// FIXME: Call scanAsync() from UI code to avoid blocking the main thread
-    /// if dotfile directories are large.
+    /// Synchronously scan all known directories under the user's home + cwd.
+    /// UI callers MUST use `scanAsync()` to avoid stalling the main thread
+    /// on large dotfile trees; the non-deprecated parameterized overload
+    /// below stays available for tests and CLI.
+    @available(*, deprecated, message: "UI callers must use scanAsync() to avoid main-thread stalls")
     public static func scan() -> [SkillInfo] {
+        scan(homeDir: NSHomeDirectory(), cwd: FileManager.default.currentDirectoryPath)
+    }
+
+    /// Synchronously scan under explicit home + cwd roots. Safe for non-UI
+    /// callers (tests, CLI); UI callers should use `scanAsync(homeDir:cwd:)`.
+    public static func scan(homeDir: String, cwd: String) -> [SkillInfo] {
         var skills: [SkillInfo] = []
         let fm = FileManager.default
-        let home = NSHomeDirectory()
 
         // 1. Claude Code: ~/.claude/
-        let claudeDir = (home as NSString).appendingPathComponent(".claude")
+        let claudeDir = (homeDir as NSString).appendingPathComponent(".claude")
         skills.append(contentsOf: scanClaudeDir(claudeDir, fm: fm))
 
         // 2. Cursor: ~/.cursor/
-        let cursorDir = (home as NSString).appendingPathComponent(".cursor")
+        let cursorDir = (homeDir as NSString).appendingPathComponent(".cursor")
         skills.append(contentsOf: scanCursorDir(cursorDir, fm: fm))
 
         // 3. Continue.dev: ~/.continue/
-        let continueDir = (home as NSString).appendingPathComponent(".continue")
+        let continueDir = (homeDir as NSString).appendingPathComponent(".continue")
         skills.append(contentsOf: scanContinueDir(continueDir, fm: fm))
 
         // 4. Project-level files in current directory
-        let cwd = fm.currentDirectoryPath
         skills.append(contentsOf: scanProjectDir(cwd, fm: fm))
 
         // 5. Senkani WARP.md skills: ~/.senkani/skills/ (global only; CWD is unreliable here)
-        let senkaniGlobalDir = (home as NSString).appendingPathComponent(".senkani/skills")
+        let senkaniGlobalDir = (homeDir as NSString).appendingPathComponent(".senkani/skills")
         skills.append(contentsOf: scanSenkaniSkillsDir(senkaniGlobalDir, fm: fm))
 
         // Deduplicate: prefer project-local over global.

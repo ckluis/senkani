@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Security env vars — options reference</title>
+<meta name="description" content="Every &lt;code&gt;SENKANI_*&lt;/code&gt; variable that affects the trust boundary. Defaults are secure; overrides are explicit.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../../assets/theme.css">
+</head>
+<body>
+<a href="#main" class="skip-nav">Skip to main content</a>
+<nav class="topnav" aria-label="Primary navigation">
+  <a class="wordmark" href="../../../">sen<span class="accent">kani</span><small>compression layer for AI coding agents</small></a>
+  <button class="topnav-hamburger" aria-label="Open navigation menu" aria-expanded="false" aria-controls="topnav-links"><span></span><span></span><span></span></button>
+  <div class="topnav-links" id="topnav-links">
+    <a href="../../../docs/what-is-senkani.html">What is it?</a>
+    <a href="../../../docs/concepts.html">Concepts</a>
+    <a href="../../../docs/reference.html">Reference</a>
+    <a href="../../../docs/guides.html">Guides</a>
+    <a href="../../../docs/status.html">Status</a>
+    <div class="topnav-search"><input type="search" id="site-search" placeholder="Search · /" aria-label="Search the site"></div>
+    <a href="https://github.com/ckluis/senkani" class="btn-nav">GitHub →</a>
+  </div>
+</nav>
+<main id="main" class="wiki-layout">
+  <aside class="wiki-nav" aria-label="Options navigation">
+    <div class="wiki-nav-group">
+      <h4>Reference</h4>
+      <ul>
+        <li><a href="../../../docs/reference.html">All reference</a></li>
+        <li><a href="../../../docs/reference/options.html">Options index</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>Options &amp; env</h4>
+      <ul>
+        <li><a href="../../../docs/reference/options/fcsit.html">FCSIT overview</a></li>
+        <li><a href="../../../docs/reference/options/filter.html">F — Filter</a></li>
+        <li><a href="../../../docs/reference/options/cache.html">C — Cache</a></li>
+        <li><a href="../../../docs/reference/options/secrets.html">S — Secrets</a></li>
+        <li><a href="../../../docs/reference/options/indexer.html">I — Indexer</a></li>
+        <li><a href="../../../docs/reference/options/terse.html">T — Terse</a></li>
+        <li><a href="../../../docs/reference/options/budget.html">Budget caps</a></li>
+        <li><a href="../../../docs/reference/options/security.html" class="active">Security env vars</a></li>
+        <li><a href="../../../docs/reference/options/web.html">Web env vars</a></li>
+        <li><a href="../../../docs/reference/options/compound-learning.html">Compound-learning env</a></li>
+      </ul>
+    </div>
+  </aside>
+  <article class="wiki-main">
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../">Home</a> <span class="sep">›</span>
+      <a href="../../../docs/reference.html">Reference</a> <span class="sep">›</span>
+      <a href="../../../docs/reference/options.html">Options &amp; env</a> <span class="sep">›</span>
+      <span class="here">Security env vars</span>
+    </nav>
+    <span class="quadrant reference">Reference · Information</span>
+    <h1 class="page-title">Security env vars</h1>
+    <p class="lede">Every <code>SENKANI_*</code> variable that affects the trust boundary. Defaults are secure; overrides are explicit.</p>
+
+    <h2>Prompt-injection guard</h2>
+    <p><code>SENKANI_INJECTION_GUARD=on|off</code> — default <strong>on</strong>. Scans every MCP tool response for instruction-override, tool-call injection, context-manipulation, and exfiltration patterns, with anti-evasion normalization (lowercase, zero-width strip, Cyrillic→Latin homoglyphs). Single linear pass.</p>
+
+    <h2>Socket authentication</h2>
+    <p><code>SENKANI_SOCKET_AUTH=on</code> — default <strong>off</strong> (v0.2.0; flipping to on next release). Generates a 32-byte random token at <code>~/.senkani/.token</code> (mode 0600), rotated on every server start. Every connection to <code>mcp.sock</code>/<code>hook.sock</code>/<code>pane.sock</code> must send a length-prefixed handshake frame matching the token before normal protocol begins. Raises the bar from ambient same-UID socket access to must-read-token-file.</p>
+
+    <h2>Structured JSON logs</h2>
+    <p><code>SENKANI_LOG_JSON=1</code> — default off. When on, emits one JSON object per critical event to stderr. Every <code>.string(_)</code> log field passes through <code>SecretDetector.scan</code> at emit time — a stray API key in a log field is automatically <code>[REDACTED:…]</code>'d.</p>
+
+    <h2>Instructions payload byte cap</h2>
+    <p><code>SENKANI_INSTRUCTIONS_BUDGET_BYTES</code> — default <strong>2048</strong>. The <code>instructions</code> string injected at MCP server start (repo map + session brief + skills) is capped at 2 KB by default. Prevents the per-session-start token tax from growing with project size.</p>
+
+    <h2>Observability counters</h2>
+    <p>Every security-defense site increments an <code>event_counters</code> row (migration v2): injection detections, SSRF blocks, socket handshake rejections, schema migrations, retention prunes, command redactions. Read them via <code>senkani stats --security</code>.</p>
+
+    <div class="seealso"><h3>See also</h3><ul>
+      <li><a href="../../../docs/concepts/security-posture.html">Security posture concept</a></li>
+      <li><a href="../../../docs/reference/options/web.html">Web-specific SSRF overrides</a></li>
+      <li><a href="../../../docs/reference/options/secrets.html">Secret detection (FCSIT S)</a></li>
+    </ul></div>
+
+  </article>
+</main>
+<footer class="site-foot">
+  <div class="foot-grid">
+    <div>
+      <div class="foot-wordmark">sen<span class="accent">kani</span></div>
+      <p class="foot-tagline"><span lang="zh">閃蟹</span> — "fast claw." A native macOS binary written in Swift.</p>
+    </div>
+    <div class="foot-col"><h4>Product</h4><ul><li><a href="../../../docs/what-is-senkani.html">What is it?</a></li><li><a href="../../../docs/concepts.html">Concepts</a></li><li><a href="../../../docs/reference.html">Reference</a></li><li><a href="../../../docs/guides.html">Guides</a></li><li><a href="../../../docs/status.html">Status</a></li></ul></div>
+    <div class="foot-col"><h4>Reference</h4><ul><li><a href="../../../docs/reference/mcp.html">MCP tools</a></li><li><a href="../../../docs/reference/cli.html">CLI commands</a></li><li><a href="../../../docs/reference/options.html">Options &amp; env</a></li><li><a href="../../../docs/reference/panes.html">Panes</a></li><li><a href="../../../docs/changelog.html">Changelog</a></li></ul></div>
+    <div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li><li><a href="../../../docs/guides/install.html">Install</a></li><li><a href="../../../docs/guides/troubleshooting.html">Troubleshooting</a></li><li><a href="../../../docs/about.html">About &amp; license</a></li></ul></div>
+  </div>
+  <div class="foot-meta">
+    <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
+    <span><a href="../../../docs/changelog.html">v0.2.0 changelog</a></span>
+  </div>
+</footer>
+<script src="../../../assets/app.js" defer></script>
+</body>
+</html>

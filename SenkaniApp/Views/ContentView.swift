@@ -207,7 +207,6 @@ struct ContentView: View {
         }
         // Always start metrics AFTER restore, so projects array is populated.
         // Safe even if restore fails — default project may still exist.
-        print("🚨 [CONTENT-VIEW] restoreWorkspace done: \(workspace.projects.count) projects")
         MetricsStore.shared.start(projects: workspace.projects)
     }
 
@@ -365,6 +364,7 @@ struct ContentView: View {
             "savingsTest": .savingsTest, "codeEditor": .codeEditor,
             "agentTimeline": .agentTimeline,
             "dashboard": .dashboard,
+            "sprintReview": .sprintReview,
         ]
         guard let type = typeMap[typeId] else { return }
         addPane(type: type, title: type == .terminal ? "Terminal" : typeId.capitalized, command: "")

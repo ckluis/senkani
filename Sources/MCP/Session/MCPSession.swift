@@ -341,9 +341,10 @@ final class MCPSession: @unchecked Sendable {
             .flatMap { Int($0) }
         let budget = budgetBytes ?? envBudget ?? 2048
 
-        let briefBudget  = min(700, budget / 3)
-        let skillsBudget = min(400, budget / 5)
-        let repoBudget   = max(0, budget - briefBudget - skillsBudget)
+        let briefBudget     = min(700, budget / 3)
+        let paneDiaryBudget = min(800, budget / 3)
+        let skillsBudget    = min(400, budget / 5)
+        let repoBudget      = max(0, budget - briefBudget - paneDiaryBudget - skillsBudget)
 
         let brief = MCPSession.truncate(
             sessionBrief(),
@@ -361,13 +362,25 @@ final class MCPSession: @unchecked Sendable {
             return capped.isEmpty ? "" : "\n\nProject structure:\n" + capped
         }()
 
+        // Round-3 pane diary injection. Reads SENKANI_WORKSPACE_SLUG +
+        // SENKANI_PANE_SLUG from the process env and loads the prior
+        // diary from `~/.senkani/diaries/<ws>/<pane>.md`. Empty when
+        // either env var is missing, the env gate is off, or no diary
+        // exists yet. `PaneDiaryInjection` swallows read failures so a
+        // bad diary can't block MCP server start.
+        let paneDiary = MCPSession.truncate(
+            PaneDiaryInjection.instructionsSection(),
+            to: paneDiaryBudget,
+            marker: "\n[pane diary truncated]"
+        )
+
         let skills = MCPSession.truncate(
             skillsPrompt(),
             to: skillsBudget,
             marker: "\n[skills truncated — call senkani_knowledge for details]"
         )
 
-        return base + repoMapText + brief + skills
+        return base + repoMapText + brief + paneDiary + skills
     }
 
     /// Truncate `text` to fit in `maxBytes` of UTF-8, appending `marker` when cut.
@@ -940,6 +953,16 @@ final class MCPSession: @unchecked Sendable {
         for job in jobs where job.isRunning {
             job.process.terminate()
         }
+        // Round-3 pane diary regeneration. Best-effort — a write
+        // failure (disk full, permission denied, missing slug env)
+        // is swallowed by `PaneDiaryInjection.persist` so pane close
+        // never hangs on the diary write. Runs BEFORE `endSession`
+        // so the token_events used to compose the brief are still
+        // from this session's window.
+        let recentRows = SessionDatabase.shared.recentTokenEvents(
+            projectRoot: projectRoot, limit: 100
+        )
+        PaneDiaryInjection.persist(rows: recentRows)
         if let sid = sessionId {
             SessionDatabase.shared.endSession(sessionId: sid)
             let root = projectRoot

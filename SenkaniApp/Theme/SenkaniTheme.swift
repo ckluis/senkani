@@ -178,6 +178,7 @@ enum SenkaniTheme {
         case .agentTimeline: return accentAnalytics
         case .codeEditor: return accentAnalytics
         case .dashboard: return savingsGreen
+        case .sprintReview: return accentSkillLibrary
         }
     }
 
@@ -200,6 +201,7 @@ enum SenkaniTheme {
         case .agentTimeline: return "waveform.path"
         case .codeEditor: return "chevron.left.forwardslash.chevron.right"
         case .dashboard: return "chart.bar.doc.horizontal"
+        case .sprintReview: return "sparkles.rectangle.stack"
         }
     }
 
@@ -222,6 +224,7 @@ enum SenkaniTheme {
         case .agentTimeline: return "Live feed of optimization events"
         case .codeEditor: return "View code with syntax highlighting"
         case .dashboard: return "Multi-project portfolio overview"
+        case .sprintReview: return "Review staged compound-learning proposals"
         }
     }
 
@@ -243,6 +246,7 @@ enum SenkaniTheme {
         case .agentTimeline: return "Agent Timeline"
         case .codeEditor: return "Code Editor"
         case .dashboard: return "Dashboard"
+        case .sprintReview: return "Sprint Review"
         }
     }
 }

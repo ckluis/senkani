@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>senkani_fetch — MCP tool reference</title>
+<meta name="description" content="Read only a symbol&#x27;s exact source lines, not the entire file. Token cost is proportional to the symbol, not to the file.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../../assets/theme.css">
+</head>
+<body>
+<a href="#main" class="skip-nav">Skip to main content</a>
+<nav class="topnav" aria-label="Primary navigation">
+  <a class="wordmark" href="../../../">sen<span class="accent">kani</span><small>compression layer for AI coding agents</small></a>
+  <button class="topnav-hamburger" aria-label="Open navigation menu" aria-expanded="false" aria-controls="topnav-links"><span></span><span></span><span></span></button>
+  <div class="topnav-links" id="topnav-links">
+    <a href="../../../docs/what-is-senkani.html">What is it?</a>
+    <a href="../../../docs/concepts.html">Concepts</a>
+    <a href="../../../docs/reference.html">Reference</a>
+    <a href="../../../docs/guides.html">Guides</a>
+    <a href="../../../docs/status.html">Status</a>
+    <div class="topnav-search"><input type="search" id="site-search" placeholder="Search · /" aria-label="Search the site"></div>
+    <a href="https://github.com/ckluis/senkani" class="btn-nav">GitHub →</a>
+  </div>
+</nav>
+<main id="main" class="wiki-layout">
+  <aside class="wiki-nav" aria-label="MCP tools navigation">
+    <div class="wiki-nav-group">
+      <h4>Reference</h4>
+      <ul>
+        <li><a href="../../../docs/reference.html">All reference</a></li>
+        <li><a href="../../../docs/reference/mcp.html">MCP tools index</a></li>
+        <li><a href="../../../docs/reference/cli.html">CLI commands</a></li>
+        <li><a href="../../../docs/reference/options.html">Options &amp; env</a></li>
+        <li><a href="../../../docs/reference/panes.html">Panes</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>MCP tools (19)</h4>
+      <ul>
+        <li><a href="../../../docs/reference/mcp/senkani_read.html"><code>senkani_read</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_exec.html"><code>senkani_exec</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_search.html"><code>senkani_search</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_fetch.html" class="active"><code>senkani_fetch</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_explore.html"><code>senkani_explore</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_deps.html"><code>senkani_deps</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_outline.html"><code>senkani_outline</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_validate.html"><code>senkani_validate</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_parse.html"><code>senkani_parse</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_embed.html"><code>senkani_embed</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_vision.html"><code>senkani_vision</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_watch.html"><code>senkani_watch</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_web.html"><code>senkani_web</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_pane.html"><code>senkani_pane</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_session.html"><code>senkani_session</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_knowledge.html"><code>senkani_knowledge</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_version.html"><code>senkani_version</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_bundle.html"><code>senkani_bundle</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_repo.html"><code>senkani_repo</code></a></li>
+      </ul>
+    </div>
+  </aside>
+  <article class="wiki-main">
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../">Home</a> <span class="sep">›</span>
+      <a href="../../../docs/reference.html">Reference</a> <span class="sep">›</span>
+      <a href="../../../docs/reference/mcp.html">MCP tools</a> <span class="sep">›</span>
+      <span class="here"><code>senkani_fetch</code></span>
+    </nav>
+    <span class="quadrant reference">Reference · Information</span>
+    <h1 class="page-title"><code style="background:none;padding:0;color:var(--accent-lo);font-size:0.82em;">senkani_fetch</code></h1>
+    <div class="tag-row" style="margin-bottom:18px;">
+      <span class="badge badge-live">Live</span>
+      <span class="tag">Replaces <code>Read</code></span>
+      <span class="tag tag-green">Savings 50–99%</span>
+    </div>
+
+    <p class="lede">Read only a symbol's exact source lines, not the entire file. Token cost is proportional to the symbol, not to the file.</p>
+
+    <h2>Signature</h2>
+    <div class="ref-signature">senkani_mcp.call(tool="senkani_fetch", args={...})</div>
+
+    <h2>Behavior</h2>
+    <p>Uses `startLine`/`endLine` from the IndexEntry to slice the symbol's lines from the ReadCache (warm) or disk (cold). Ideal after a `senkani_search` that located a function you want to read.</p>
+
+
+    <h2>Inputs</h2>
+    <div class="ref-io-table">
+      <div class="head">Name</div><div class="head">Type</div><div class="head">Default</div><div class="head">Description</div>
+      <div class="k">symbol</div><div class="t">string</div><div class="default">—</div><div class="desc">Exact symbol name. Use `senkani_search` first if unsure.</div><div class="k">file</div><div class="t">string</div><div class="default">—</div><div class="desc">File the symbol lives in. Disambiguates if the symbol name is not unique.</div><div class="k">container</div><div class="t">string</div><div class="default">any</div><div class="desc">Container (e.g., class name) for further disambiguation.</div>
+    </div>
+
+    <h2>Output</h2>
+    <p>The symbol's source lines as a string, plus `{{line_start, line_end, file}}` metadata.</p>
+
+    <h2>Example</h2>
+    <pre class="code">{<span class="k">"tool"</span>:<span class="v">"senkani_fetch"</span>,<span class="k">"args"</span>:{<span class="k">"symbol"</span>:<span class="v">"OrderRepository"</span>,<span class="k">"file"</span>:<span class="v">"src/orders/repo.ts"</span>}}
+<span class="c">// returns only lines 12–94, not the full file</span></pre>
+
+    <h2>Details</h2>
+    <p>SecretDetector + ANSI strip applied to the slice. If the symbol resolves to multiple candidates, returns the highest-scoring match and a note about alternatives.</p>
+
+    <div class="callout callout-security"><span class="callout-icon">⚔</span><div>Path validated against workspace root. SecretDetector scans output.</div></div>
+
+    <div class="seealso">
+      <h3>See also</h3>
+      <ul>
+        <li><a href="../../../docs/reference/mcp/senkani_search.html"><code>senkani_search</code></a> — Find the symbol first.</li>
+        <li><a href="../../../docs/reference/mcp/senkani_read.html"><code>senkani_read</code></a> — Full file read when you need more than one symbol.</li>
+        <li><a href="../../../docs/reference/mcp/senkani_outline.html"><code>senkani_outline</code></a> — See all symbols in a file.</li>
+      </ul>
+    </div>
+
+    <div class="source-pointer">
+      <strong>Source:</strong> <code>Sources/MCPServer/Tools/FetchTool.swift</code>
+    </div>
+  </article>
+</main>
+<footer class="site-foot">
+  <div class="foot-grid">
+    <div>
+      <div class="foot-wordmark">sen<span class="accent">kani</span></div>
+      <p class="foot-tagline"><span lang="zh">閃蟹</span> — "fast claw." A native macOS binary written in Swift.</p>
+    </div>
+    <div class="foot-col"><h4>Product</h4><ul><li><a href="../../../docs/what-is-senkani.html">What is it?</a></li><li><a href="../../../docs/concepts.html">Concepts</a></li><li><a href="../../../docs/reference.html">Reference</a></li><li><a href="../../../docs/guides.html">Guides</a></li><li><a href="../../../docs/status.html">Status</a></li></ul></div>
+    <div class="foot-col"><h4>Reference</h4><ul><li><a href="../../../docs/reference/mcp.html">MCP tools</a></li><li><a href="../../../docs/reference/cli.html">CLI commands</a></li><li><a href="../../../docs/reference/options.html">Options &amp; env</a></li><li><a href="../../../docs/reference/panes.html">Panes</a></li><li><a href="../../../docs/changelog.html">Changelog</a></li></ul></div>
+    <div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li><li><a href="../../../docs/guides/install.html">Install</a></li><li><a href="../../../docs/guides/troubleshooting.html">Troubleshooting</a></li><li><a href="../../../docs/about.html">About &amp; license</a></li></ul></div>
+  </div>
+  <div class="foot-meta">
+    <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
+    <span><a href="../../../docs/changelog.html">v0.2.0 changelog</a></span>
+  </div>
+</footer>
+<script src="../../../assets/app.js" defer></script>
+</body>
+</html>

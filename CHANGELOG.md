@@ -6,6 +6,497 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 19 — Website redesign: hero stack + /docs/ consolidation + font bumps
+- Landing page redesigned as a hero stack — one full-width "product
+  hero" per major feature, Apple-product-page style. Each hero
+  pairs a headline + 3 bulleted value props + a "Learn more →"
+  link with a custom illustration (before/after terminal pair, MCP
+  tool grid, pane tile grid, compound-learning flow diagram,
+  knowledge-base entity cards, security shield checklist).
+- Heroes shipped: Compression layer · MCP intelligence · Workspace ·
+  Compound learning · Knowledge base · Security posture. Alternating
+  light/dark bands. Plus the project hero on top, a stat strip, and
+  a tightened install CTA. Landing is 377 lines HTML, still well
+  under the 600-line target.
+- All doc folders moved under `/docs/`. Root now contains only
+  `index.html`, `assets/`, `docs/`, `scripts/`, and the code/spec
+  directories — no more `/concepts/`, `/reference/`, `/guides/`,
+  `/status/`, `/about/`, `/changelog/`, `/what-is-senkani/` at the
+  repo root. Depths all increased by 1; `scripts/gen.py` computes
+  per-page `../` prefixes so links resolve under both `file://`
+  and the project-subpath deploy at `ckluis.github.io/senkani/`.
+  A new `/docs/` index hub renders links to every wiki section.
+- Font bumps across the board — nothing readable is below 14px
+  anymore. Badges 12→13, overlines 12→13, tags 12→13, breadcrumb
+  13→14, wordmark small 13→14, topnav search + btn 14→15, wiki-nav
+  headers 12→13 + links 14→15, listing rows 15→16 + head 12→13 +
+  desc 15→16, ref-io-table header 12→13 + type/default/desc 14→16,
+  code blocks 14→15, callouts 15→16, source-pointer 14→15, mockup
+  pane title 13→14 + ctx 12→13 + body 13→14 + term lines 13→14 +
+  tb-title 13→14, FCSIT button 10→12, step num 13→14 + body 16→17
+  + code 14→15, feature-list name 15→16 + desc 14→15, search hit
+  14→15 + path 12→13, code-copy 11→13, positioning-table 15→16 +
+  head 12→13, stat-strip num 48→52 + label 14→15, teaser num 13→14
+  + h3 22→24 + p 15→16 + more 13→14, gallery link 15→16.
+- Legacy anchor redirects updated to point at `/docs/*` paths
+  (`#how-it-works` → `docs/concepts/`, `#mcp-tools` →
+  `docs/reference/mcp/`, etc.). `assets/app.js` legacyMap.
+- No Swift code changes. No test delta (1510 → 1510).
+
+### April 19 — Website rebuild (items 1–9 shipped in one megaround)
+- Operator-directed bundle of the entire website-rebuild chain from
+  `spec/website_rebuild.md`. 94 HTML files shipped across a Diátaxis-
+  structured wiki: 19 MCP tool pages, 19 CLI command pages, 17 pane
+  pages, 10 option pages, 7 concept pages, 9 guide pages, 10 hub
+  pages, plus a rewritten landing at 280 lines (target was ≤600).
+  Every page has its own URL — bookmarkable, linkable, searchable.
+- `assets/theme.css` (~900 lines) implements the Section 4
+  typography scale (all reading text ≥14px, tables ≥15px, code
+  ≥14px, badges ≥12px), the contrast-adjusted ink tokens
+  (`--ink-mute` moved from #706c66 → #5a5652 for WCAG AA on body
+  text), focus rings on every interactive element, skip-link, and
+  `prefers-reduced-motion` honoring across animations + terminal-
+  cursor blink. Every text/bg pair in the new palette passes AA.
+- `scripts/gen.py` (~1000 lines, stdlib-only Python) renders the
+  templated pages (MCP, CLI, panes, options, concepts, guides,
+  hubs) from in-file data tables. No framework, no npm, no package
+  manager. Regenerate via `python3 scripts/gen.py`.
+- Relative-path architecture: every page computes its own `../`
+  prefix from the output path depth so links resolve correctly
+  under both `file://` local viewing AND GitHub Pages project-
+  subpath deploys (`ckluis.github.io/senkani/`). `.nojekyll`
+  added to skip Jekyll processing.
+- Legacy anchor redirects preserved in `assets/app.js`: inbound
+  links to `/#how-it-works`, `/#mcp-tools`, `/#install`, `/#terse`,
+  etc. now redirect to the corresponding new wiki URLs.
+- Pending in follow-up rounds: `website-rebuild-10-search` (Lunr
+  index generation + vendoring), `website-rebuild-11-content-pass`
+  (editorial + closing audit), `website-rebuild-12-claude-prototype-
+  review` (operator's auth-walled Claude Design prototype extract).
+- No Swift code changes; no test delta (1510 → 1510). Manual
+  validation queue added to `tools/soak/manual-log.md` (visual
+  inspection, axe-core-cli pass, Lighthouse, keyboard traversal,
+  mobile layout, cross-browser, live deploy preview).
+
+### April 19 — Website rebuild plan (Luminary planning round)
+- New `spec/website_rebuild.md` (~420 lines) — the umbrella spec for
+  splitting the single-page `index.html` into a ~75-page Diátaxis-
+  structured wiki + a tightened landing page. Operator-directed
+  planning round run through
+  `/luminaryReview:marketing + /luminaryReview:ux + default`
+  (combined starting roster per `ckluis.github.io/luminaryTeam/`).
+  Final 10-member roster: Jobs, Torvalds, Norman, Zhuo, Morville,
+  Butterick, Procida, Dunford, Handley, Sutton. Four red flags
+  fired — Morville (single-page IA, USER IMPACT); Butterick (sub-
+  14px reference tables, USER IMPACT + COMPLIANCE); Sutton
+  (multiple WCAG AA contrast fails, COMPLIANCE — `--ink-mute:
+  #706c66` on `--bg: #f5f1e8` measures ~3.9:1); Procida
+  (reference + explanation fusion, Diátaxis anti-pattern, USER
+  IMPACT).
+- Spec covers: diagnosis with `index.html` line citations;
+  target sitemap (one URL per MCP tool, per CLI command, per
+  FCSIT option, per pane type — ~75 pages total); typography
+  scale (all reading text ≥14px, badges ≥12px, code blocks
+  ≥14px); color tokens (`--ink-mute` moves to `#5a5652` so every
+  text/bg pair passes WCAG AA); per-page skeletons for
+  concept / reference / guide / landing; build harness
+  (`scripts/build.sh` + `assets/theme.css` + partials, no
+  framework, no npm on CI); voice rubric (Handley + Dunford);
+  staged execution plan; out-of-scope list (dark mode, l10n, CMS,
+  pixel trackers); closing success criteria (axe-core 0 AA,
+  Lighthouse a11y ≥ 95 + perf ≥ 90, landing ≤ 600 lines HTML,
+  search returns any MCP tool in ≤ 2 keystrokes).
+- `spec/autonomous-backlog.yaml` — umbrella landed as
+  `website-rebuild-0-spec` (completed 2026-04-19); 12 new
+  `pending` items queued (`website-rebuild-1-typography-tokens`
+  through `website-rebuild-12-claude-prototype-review`) with
+  `blocked_by` chains that enforce the execution order. Umbrella
+  is DELIVERED when items 1–11 ship green (item 12 is a parallel
+  Claude Design prototype extract with no hard blockers).
+- No source code changes; no test delta. Implementation ships
+  incrementally in rounds 1–11.
+
+### April 19 — `senkani doctor`: grammar staleness advisory (non-blocking)
+- New `Sources/Indexer/GrammarStaleness.swift` — pure
+  `advise(cached:today:thresholdDays:)` helper returns one of
+  `.noUpstreamData`, `.allFresh`, `.recentUpdatesAvailable(count:)`, or
+  `.stale([StaleEntry])`. Stale = upstream has a newer version AND the
+  grammar has been vendored for more than 30 days. Under the 30-day
+  window, outdated grammars roll up as PASS ("recent update available")
+  so routine upstream churn cannot red-light `senkani doctor`. Over the
+  window, the advisory reports SKIP (not FAIL) — the check is a
+  non-blocking warning so it can't false-alarm CI per
+  `spec/tree_sitter.md:80`. `today:` is injectable for deterministic
+  tests; `parseVendoredDate` parses ISO `YYYY-MM-DD` without
+  allocating a DateFormatter.
+- `DoctorCommand.checkGrammars` rewritten to switch on the advisory:
+  offline path (no cache) → SKIP with "run senkani grammars check"
+  hint; all-fresh → PASS with full language list; recent-updates → PASS
+  with a count of how many grammars are waiting in the 30-day window;
+  stale → SKIP listing each language with its current + latest version
+  + days-stale. Reuses the existing 24h GitHub-version cache — no new
+  network paths.
+- New `Tests/SenkaniTests/GrammarStalenessTests.swift` — 12 tests
+  (+1498 → 1510): offline (nil cache), empty cache, all-fresh,
+  recent-updates-within-window, stale-beyond-window (99 days),
+  exact-30-day boundary is NOT stale, 31-day first-past-boundary,
+  mixed-cache lists only stale entries sorted alphabetically,
+  outdated-without-latestVersion is skipped defensively,
+  custom-threshold parameter, ISO date parse happy-path, and
+  malformed-date rejection. All injected `today:` fixtures, zero
+  network I/O.
+
+### April 19 — `senkani uninstall` automated smoke — narrows cleanup.md #15 gap
+- New `Sources/CLI/UninstallArtifactScanner.swift` (~160 LOC) —
+  testable artifact discovery + removal factored out of
+  `UninstallCommand`. Takes explicit `homeDir` + `appSupportDir`, so
+  tests can seed a fixture HOME under a tmp dir without ever touching
+  the operator's real `$HOME`. All seven categories mirror the old
+  inline logic: global MCP registration, project-level hooks,
+  `~/.senkani/bin/senkani-hook`, the `~/.senkani/` runtime dir, the
+  session DB in `~/Library/Application Support/Senkani/`, senkani
+  launchd plists, and per-project `.senkani/` dirs.
+- `UninstallCommand.scanForArtifacts` is now a five-line wrapper that
+  builds the scanner with real paths. Public CLI behavior is
+  byte-identical (same icons, same descriptions, same ordering, same
+  `--keep-data` semantics). `removeGlobalMCPEntry` + the project-hook
+  cleanup helper moved onto the scanner as static methods.
+- Schneier gate: the new filter-boundary test seeds non-senkani hook
+  files + non-senkani launchd plists and asserts the scanner does NOT
+  flag them — prevents the refactor from silently widening deletion
+  scope beyond `senkani*`/`senkani-daemon` and `com.senkani.*.plist`.
+- New `Tests/SenkaniTests/UninstallSmokeTests.swift` — 6 tests
+  (+1492 → 1498): full-seed produces all 7 categories, `--keep-data`
+  omits `sessionDatabase`, default run includes it, pristine HOME is
+  empty, removal → re-scan is idempotent, non-senkani hooks/plists
+  aren't flagged. Every test isolates itself under a unique tmp dir.
+- `tools/soak/manual-log.md` keeps the "real install" half of
+  cleanup.md #15 on the queue — this round fences the synthetic half
+  against regression, the real-machine validation still wants
+  operator hands.
+
+### April 19 — Pane diaries (round 3/3): MCP injection + pane-close regen — umbrella DELIVERED
+- New `Sources/Core/PaneDiaryInjection.swift` — Core-level glue
+  between `PaneDiaryStore` (I/O) + `PaneDiaryGenerator` (composition)
+  and the MCP subprocess. Two entry points: `instructionsSection(env:home:)`
+  (called on MCP server start — loads the prior diary into the
+  instructions payload) and `persist(rows:env:home:lastError:)`
+  (called on MCP server shutdown — regenerates + writes the diary).
+  Both honor `SENKANI_PANE_DIARY=off`, both require
+  `SENKANI_WORKSPACE_SLUG` + `SENKANI_PANE_SLUG` to be set +
+  non-empty, both swallow all failure paths so a bad diary cannot
+  block MCP server start or pane close (pane-open-never-hangs +
+  pane-close-never-hangs invariants from the acceptance).
+- `MCPSession.instructionsPayload` now interpolates the pane diary
+  between `sessionBrief()` and `skillsPrompt()` with a dedicated
+  `paneDiaryBudget = min(800, budget/3)` slice. Truncation marker
+  `[pane diary truncated]` fires only if a pathologically large
+  diary blows past the budget (generator caps at 200 tokens ≈ 800
+  bytes, so dual-bounded in practice).
+- `MCPSession.shutdown()` fetches the last 100 `token_events` rows
+  for the session's project root via `recentTokenEvents(projectRoot:limit:)`
+  and calls `PaneDiaryInjection.persist` BEFORE `endSession` — the
+  generator window is the just-closed session's activity. The write
+  is best-effort and non-blocking.
+- `SenkaniApp/Views/PaneContainerView.swift` now sets
+  `SENKANI_WORKSPACE_SLUG` (derived from the pane's working
+  directory — last two path components joined with `-`, mirroring
+  the metrics-file-path convention) and `SENKANI_PANE_SLUG` (the
+  `PaneType.rawValue`) on every terminal pane spawn. Stable across
+  pane-id recycles, so reopening a terminal in the same project
+  surfaces the same diary.
+- Schneier gate: no path-traversal attack surface — `PaneDiaryStore`
+  already hard-rejects `..`/`/`/`\` slugs, env-var poisoning can only
+  pick a different file under `~/.senkani/diaries/` (never outside).
+  Written files stay mode 0600 from the round-1 store contract. The
+  injection's swallow-errors pattern is intentional: it's the right
+  failure mode for a best-effort resume hint.
+- +10 tests (1482 → 1492): read-side injects prior diary with
+  `Pane context:\n` section header, env-off produces empty section
+  even when diary exists, missing/partial slug env produces empty,
+  no-diary-on-disk produces empty, malformed slug (`..`) degrades
+  to empty (no throw), write-side persists a brief composed from
+  real rows (round-trip verifies via store), write-side is no-op
+  when env-off / slugs-missing / rows-empty, persist→inject
+  round-trip recovers the written section on the next read.
+- Umbrella `pane-diaries-cross-session-memory` DELIVERED 2026-04-19
+  (3/3 sub-items shipped; cumulative 1466 → 1492, +26 tests across
+  the three rounds).
+
+### April 19 — Pane diaries (round 2/3): `PaneDiaryGenerator` brief composer
+- New `Sources/Core/PaneDiaryGenerator.swift` — pure composition half
+  of the cross-session per-pane memory feature. Given `token_events`
+  rows for a pane-slug (plus an optional caller-supplied `lastError`),
+  returns a terse brief the round-3 pane-open path can inject into
+  MCP instructions. No disk I/O, no DB access — round 3 wires the
+  fetch side.
+- API: single `generate(rows:paneSlug:lastError:maxTokens:)` static
+  method on a `public enum`. Output sections (priority order, earlier
+  survives truncation): header (`Last time in '<slug>':`), optional
+  `Error:` line, `Last:` (most-recent command), `Files:` (top-3
+  unique paths from read/edit-like rows, recency-first, basenames
+  only), `Cost:` (summed input+output tokens), `Recent:` (up to 5
+  commands, dropped first on overflow).
+- Token cap: hard 200-token default enforced via
+  `ModelPricing.bytesToTokens` (4 bytes/token — the senkani-wide
+  estimator). Overflow handled at section granularity — sections land
+  whole or are dropped whole, so output always terminates on a
+  section boundary, never mid-word.
+- Round 2 kept the "last error" input optional + caller-supplied
+  rather than synthesized from the row stream: `TimelineEvent` has
+  no error column, and the round-3 fetch layer is the natural place
+  to derive it. This keeps the generator pure and testable.
+- +8 tests (1474 → 1482): empty rows + no error → empty brief,
+  small rows surface header + last + files + cost + recent inside
+  the cap, caller-supplied error lands below the header, error with
+  no rows still produces header + error, 200-row flood respects the
+  cap exactly and every output line is a recognized section prefix
+  (no mid-line truncation), tight 30-token budget drops `Recent:`
+  before core sections, file dedupe keeps the most-recent occurrence
+  only, non-file tools (`exec`, `grep`) never leak into the `Files:`
+  section.
+- No callers yet — generator ships standalone. Umbrella
+  `pane-diaries-cross-session-memory` now 2/3 shipped; round 3
+  (pane-open MCP injection + pane-close regen) remains.
+
+### April 19 — Pane diaries (round 1/3): `PaneDiaryStore` I/O half
+- New `Sources/Core/PaneDiaryStore.swift` — disk I/O half of the
+  cross-session per-pane memory feature. Owns the on-disk contract at
+  `~/.senkani/diaries/<workspaceSlug>/<paneSlug>.md`; round 2 lands
+  `PaneDiaryGenerator` (brief composition from `token_events`); round 3
+  wires generator + store into the pane-open MCP path.
+- API: `read(workspaceSlug:paneSlug:home:env:)`, `write(_:workspaceSlug:paneSlug:home:env:)`,
+  `delete(workspaceSlug:paneSlug:home:env:)`, `isEnabled(env:)`,
+  `diaryPath(workspaceSlug:paneSlug:home:)`. Pure static functions on
+  a `public enum` — no instance state, home/env override seams for
+  fixture-driven tests.
+- Safety invariants: env gate `SENKANI_PANE_DIARY=off` short-circuits
+  read/write/delete (case-insensitive; default ON); `SecretDetector.scan`
+  runs on every write AND every read (defense-in-depth for diaries
+  written by older versions or hand-edited on disk); slug validation
+  hard-rejects `..`, `/`, `\`, and empty slugs via a typed
+  `StoreError.invalidSlug(field:value:)`; atomic write via PID-
+  suffixed tmp file + `replaceItemAt`/`moveItem` so a crashed or
+  permission-denied write cannot corrupt an existing diary; written
+  files land at mode 0600 (mirrors `SocketAuthToken` — diaries are
+  user-local command history on a potentially multi-user machine and
+  the regex defense is not complete).
+- +8 tests (1466 → 1474): round-trip read/write, env-off short-circuits
+  all three operations (write/read/delete) + isEnabled semantics,
+  write redacts a planted `sk-ant-…` Anthropic key, read re-redacts
+  a pre-seeded `sk-proj-…` secret (simulating a hand-edited file),
+  slug keying isolates diaries across workspace × pane combinations
+  and delete is scoped, atomic write preserves existing content when
+  the parent dir is chmod'd read-only mid-round, slug rejection for
+  `..` / `/` / `\` / empty / whitespace-only across both fields and
+  no bogus files land on disk, 0600 permission bit asserted on-disk
+  via `FileManager.attributesOfItem`.
+- No callers yet — store ships standalone. Umbrella
+  `pane-diaries-cross-session-memory` still 1/3 shipped; rounds 2
+  (`PaneDiaryGenerator`) and 3 (pane-open MCP injection + close-time
+  regen) remain.
+
+### April 19 — Sprint Review pane: GUI for `senkani learn review`
+- New 17th pane type: `Sprint Review`. SwiftUI surface for
+  compound-learning review — lists staged artifacts across all four
+  types (filter rule / context doc / instruction patch / workflow
+  playbook) for a configurable window (default 14 days), with
+  accept/reject per row plus a stale-applied section sourced from
+  the quarterly audit heuristics (`CompoundLearningReview.quarterlyAuditFlags`).
+- Registered everywhere a pane type needs to be known: `PaneType.sprintReview`
+  enum case, `SenkaniTheme` accent/icon/description/name, `PaneModel`
+  default columnWidth, `PaneContainerView` view + context-label
+  switches, `AddPaneSheet` card grid, `CommandEntryBuilder.paneEntries()`
+  for ⌘K palette, `ContentView.addPaneByTypeId` palette typeId map.
+- Architecture split: pure view-model + types in
+  `Sources/Core/SprintReviewViewModel.swift` (testable from
+  SenkaniTests, which does not depend on SenkaniApp). Presentation
+  in `SenkaniApp/Views/SprintReviewPane.swift`. Accept/reject
+  route through the canonical `CompoundLearning.apply*` /
+  `LearnedRulesStore.reject*` paths — no new write paths, no new
+  SQL, no new DB migration, no new secret-scan boundaries. The
+  backlog said "LearnedRulesStore.promote(...)" / "LearnedRulesStore.reject(...)";
+  the real method names are kind-specific (`apply` / `applyContextDoc`
+  / `applyInstructionPatch` / `applyWorkflowPlaybook`), so the view
+  model dispatches on `SprintReviewArtifactKind`.
+- +13 view-model tests (1453 → 1466): empty-store snapshot,
+  four-kind grouping, filter-rule command/sub shaping with rationale,
+  workflow step-count pluralization, window cutoff, applied-stale
+  flag surfacing, accept routing for each of the four kinds (filter
+  rule → state only; context doc + workflow playbook verify
+  `.md` landed on disk; instruction patch → state), reject routing
+  per kind, all-four reject round-trip, and rejected item no longer
+  in next snapshot. Existing `CommandPaletteTests.paneEntriesIncludeAllTypes`
+  count assertion bumped 16 → 17 to match the new palette entry.
+- Deferred to `tools/soak/manual-log.md`: live GUI validation
+  (visual pass on empty/populated states, stepper behavior, accept
+  writes through on real install, error banner), and the
+  `liveToolNames` plumbing (quarterly audit's instruction-patch
+  staleness heuristic currently defaults to an empty set, matching
+  the CLI — wiring it to the live `ToolRouter.allTools()` list from
+  the MCP server would surface extra stale flags but requires
+  cross-process state the GUI doesn't have).
+- Closes `sprint-review-pane` backlog item; compound-learning
+  spec's "non-autonomous Sprint-review pane UI" line (Round 9
+  consolidation) no longer applies — the CLI + GUI both ship.
+
+### April 19 — ContentView: strip stray restoreWorkspace debug print (follow-up)
+- One-line follow-up to `metricsrefresher-debug-print-cleanup`.
+  Deleted the 🚨-tagged `print("[CONTENT-VIEW] restoreWorkspace
+  done: …")` call at `SenkaniApp/Views/ContentView.swift:210`. Same
+  provenance as the MetricsStore prints (a 2026-04 troubleshooting
+  pass). No replacement Logger.log() — `restoreWorkspace` runs once
+  at app launch; a startup banner adds no operational signal.
+- All emoji-tagged `print()` calls are now gone from
+  `SenkaniApp/`. Future regressions can be caught with
+  `grep -rn "print(.*🚨\|print(.*💀" SenkaniApp/`.
+- Build clean. Tests unchanged.
+
+### April 19 — MetricsStore: strip leftover debugging prints (cleanup.md #11 closed)
+- `SenkaniApp/Services/MetricsRefresher.swift` dropped from 79 → 60
+  LOC. Five emoji-tagged `print()` lines (🚨🚨🚨 / 💀) left over from
+  a 2026-04 troubleshooting pass — the start banner, per-project
+  enumeration loop, self-nil dying, tick-counter heartbeat, and
+  task-cancelled lifecycle line — all deleted. Heartbeat fired every
+  refresh tick (1 Hz), so on real installs every operator's stderr
+  was getting one observability-noise line per second per started
+  MetricsStore. The `weak self` capture and `guard let self else
+  { return }` semantics are preserved; behavior is identical.
+- Closes the staleness review on cleanup.md #11. Verified during
+  this round: there is no caching layer in MetricsStore — `@Observable`
+  + a 1-second refresh task that writes `projectStats`/`allStats`
+  directly is all there is, so the UI cannot lag the DB by more
+  than one refresh tick. The original spec implied a TTL the
+  implementation never had.
+- Tests: 1453 → 1453 (no test changes — hygiene pass). Full suite
+  green under `swift test --no-parallel` (the 5 known
+  `BundleRemote*`/`RemoteRepoClient*` parallel-mode URLProtocol
+  failures are pre-existing and documented in the
+  `mlx-inference-lock` round notes).
+
+### April 18 — Browser Design Mode wedge: click-to-capture (scope-reduced from FUTURE)
+- Default-off, env-gated feature on the Browser pane. Set
+  `SENKANI_BROWSER_DESIGN=on` in the environment and ⌥⇧D toggles a
+  click-to-capture mode on the active BrowserPaneView. Click an
+  element and a fixed-schema Markdown block lands on the clipboard.
+  CEO review 2026-04-18 reduced the original three-round plan
+  (MVP → direct-pin → screenshot/annotation) to a single instrumented
+  wedge — larger scope is explicitly gated on
+  `browser_design.entered` reaching the median of existing feature
+  gates over a 30-day window. If unused, the wedge DELETES rather
+  than expands.
+- Selector generator: `#id` if unique → `tag.class1.class2` if
+  unique → `nil` with `fallbackReason: "no unique anchor"`. **No
+  nth-of-type recursion** — the highest-bug-density code in the
+  original plan, deferred. Shadow DOM and cross-origin iframe
+  elements emit a clear "Can't capture — element is inside a shadow
+  DOM" / "cross-origin iframe" toast instead of a malformed capture.
+- Triple SecretDetector scan: `innerText` truncated to 300 chars
+  then redacted; classes scanned as defense logging; final
+  serialized Markdown run through one more sink-side scan so a
+  secret embedded in a class name can't leak via the rendered
+  `tag:` line (test 9 proves the sink catches a `sk_live_…`
+  planted class name).
+- Mode lifecycle torn down on navigation AND on pane close — guards
+  the leak-across-navigation failure mode. `WKUserContentController`
+  gets `removeAllUserScripts()` + `removeScriptMessageHandler(forName:)`
+  on every exit path. Pure-Swift state machine (Core.BrowserDesignMode.State)
+  covers the transition contract in unit tests so the App-side
+  integration can't drift.
+- Four `event_counters` rows declared:
+  `browser_design.entered`, `browser_design.captured`,
+  `browser_design.shadow_dom_skipped`, `browser_design.keyboard_conflict`.
+  The first three are recorded by the App-side controller on the
+  matching transitions. `keyboard_conflict` stays declared in the
+  counter enum but unrecorded — the spec's detection path
+  ("page captures ⌥⇧D before WKUserScript") doesn't apply because
+  the Swift NSEvent monitor runs out-of-band from page JS;
+  scaffolding stays in place for v1.1+.
+- 2 new files, 1 modified. Pure logic in
+  `Sources/Core/BrowserDesignMode.swift` (env gate, selector gen,
+  capture payload processing, Markdown formatter, state machine,
+  injected-JS source) keeps SenkaniTests coverage possible.
+  `SenkaniApp/Views/BrowserDesignController.swift` owns the
+  WKUserScript + WKScriptMessageHandler lifecycle, toast state, and
+  clipboard write. `BrowserPaneView.swift` wires the ⌥⇧D NSEvent
+  monitor (guarded on first-responder so the chord only toggles when
+  the pane's WKWebView is focused) and passes an
+  `onDidStartNavigation` closure down to the WKNavigationDelegate
+  coordinator so the controller can tear down.
+- 16 new tests (1438 → 1454): id-anchor + class-anchor + no-anchor
+  selector; non-unique-id fallthrough; shadow-DOM and cross-origin
+  iframe guards; SecretDetector redaction on innerText; class-name
+  secret caught by sink-side Markdown scan; innerText truncation
+  bound; Markdown byte-stable snapshot vs a fixed `CapturedElement`;
+  Markdown fallback line when selector is nil; state machine
+  lifecycle (enter → navigate → discard; enter → pane close →
+  discard); navigation on a non-active pane is a no-op; env-var
+  gate accepts only `on`/`ON` and `State.enter(featureEnabled:false)`
+  is a no-op; counter vocabulary matches the four declared rows;
+  injected JS bundle sanity (message handler name, elementFromPoint,
+  getRootNode, Escape, re-entrancy guard).
+- Manual-log entries seeded for real-machine validation (live
+  WKWebView ⌥⇧D capture, shadow DOM page, cross-origin iframe,
+  page-JS keyboard hostility, ⌘C vs our clipboard write).
+
+### April 18 — Budget enforcement: symmetric tests for the MCP + Hook gates (cleanup.md #9)
+- Budget enforcement fires at two independent layers: `ToolRouter` uses
+  `session.checkBudget()` before any MCP-routed tool call;
+  `HookRouter.handle` uses the daily/weekly gate before any non-MCP
+  tool call (Read / Bash / Grep via the hook relay). Before this
+  round only the MCP side had unit-test coverage — a regression on
+  the hook side could land without any test failure.
+- New `Tests/SenkaniTests/BudgetEnforcementDualLayerTests.swift` —
+  9 tests exercising both gates independently: MCP gate blocks on
+  global per-session hard limit, MCP gate warns at 80% soft limit,
+  hook gate blocks on daily limit, hook gate blocks on weekly limit,
+  pane-cap fires at MCP layer with no global config, below-limit
+  call passes both layers, hook gate short-circuits when
+  `projectRoot` is nil, hook gate short-circuits when no daily /
+  weekly limit configured, MCP gate fires with no hook plumbing at
+  all (cross-layer independence).
+- Two production-code changes enable the tests without touching
+  behavior: (a) `BudgetConfig.withTestOverride(_:_:)` — sync-only,
+  `NSRecursiveLock`-serialized test slot that `load()` /
+  `forceReload()` consult before disk + env + cache; same-thread
+  reentry works (so a body that calls the gate under test can
+  itself re-enter `load()` without deadlocking); (b) the hook
+  budget block inside `HookRouter.handle` factored out into a
+  public helper `checkHookBudgetGate(projectRoot:config:costForToday:costForWeek:)`
+  with closure defaults pointing at `SessionDatabase.shared` — tests
+  inject fabricated cost functions to exercise the gate without
+  polluting the real DB. Production call-site is a one-liner now,
+  same observable behavior.
+- 9 new tests (1428 → 1437). All existing budget tests pass
+  unchanged.
+
+### April 18 — SkillScanner: scanAsync() wired into the Skill Browser (FIXME resolution)
+- `SkillBrowserView.loadSkills()` now calls `SkillScanner.scanAsync()`
+  instead of the synchronous `scan()`. SwiftUI's `.task { ... }`
+  inherits the MainActor, so the previous call stalled the UI thread
+  for the duration of the scan — a silent trap on machines with a
+  large `~/.claude/` tree. `scanAsync` hops to
+  `Task.detached(priority: .utility)` so the scan runs on a
+  background executor and the main actor stays responsive.
+- The FIXME at `SkillScanner.swift:47` is gone. The zero-arg
+  synchronous `scan()` is retained for CLI / non-UI use but is now
+  `@available(*, deprecated, message: "UI callers must use
+  scanAsync() to avoid main-thread stalls")` — any future UI
+  regression that reverts to `scan()` trips a yellow build warning
+  on the call-site.
+- New `scan(homeDir:cwd:)` and `scanAsync(homeDir:cwd:)` overloads
+  parameterize the scan roots for fixture-driven tests (the old
+  signatures hit `NSHomeDirectory()` + `fm.currentDirectoryPath`
+  directly, so tests could not isolate from the host machine).
+  Production continues to call the zero-arg forms.
+- 4 new tests (1424 → 1428): scan on empty fixture returns empty;
+  scanAsync matches scan on a seeded fixture (Claude commands +
+  Cursor rule + Senkani skill; key-order parity); scanAsync on 80+
+  seeded files finishes under a 2-second wall-clock bound
+  (regression guard against accidental resync, not a micro-benchmark);
+  scanAsync runs in parallel with a concurrent async task without
+  blocking it (rules out a regression that awaits inline).
+
 ### April 18 — Pane Display settings: font-family picker + persistence
 - The Display section of the pane settings panel now ships a
   monospace font-family picker alongside the existing size slider and

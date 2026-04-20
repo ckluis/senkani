@@ -22,32 +22,14 @@ final class MetricsStore {
 
     /// Start the 1-second refresh loop for the given projects.
     func start(projects: [ProjectModel]) {
-        // Cancel any existing loop
         refreshTask?.cancel()
 
-        print("🚨🚨🚨 [METRICS-STORE] START called with \(projects.count) projects:")
-        for p in projects {
-            print("🚨 [METRICS-STORE]   project: \(p.name) path: \(p.path)")
-        }
-
         refreshTask = Task { [weak self] in
-            var tickCount = 0
             while !Task.isCancelled {
-                guard let self else {
-                    print("💀 [METRICS-STORE] self is nil — task dying")
-                    return
-                }
-                tickCount += 1
+                guard let self else { return }
                 self.refresh(projects: projects)
-
-                // Print every tick for the first 5, then every 10th
-                if tickCount <= 5 || tickCount % 10 == 0 {
-                    print("🚨 [METRICS-STORE] tick #\(tickCount)")
-                }
-
                 try? await Task.sleep(for: .seconds(1))
             }
-            print("💀 [METRICS-STORE] Task cancelled after \(tickCount) ticks")
         }
     }
 

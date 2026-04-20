@@ -12,6 +12,421 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Website redesign wave 2 — hero stack + /docs/ move (shipped 2026-04-19)
+
+Second operator-directed round on the website. Three deliverables:
+landing redesigned as a hero-per-major-feature stack (Apple-style),
+all doc folders moved under `/docs/` to unpollute the root, and
+font sizes bumped a tier across the board (nothing readable below
+14px now). Wave 1's pending validations still apply; these are
+additive.
+
+- **Visual walk of the new landing.** Each hero is a full band with
+  headline + bullets + CTA + custom illustration. Scroll the whole
+  landing: does each band have visual identity? Do the alternating
+  light/dark bands hold rhythm? Do the illustrations (before/after
+  terminal, MCP grid, pane tiles, compound-learning flow, KB
+  entity cards, security shield) read at a glance?
+- **Every "Learn more →" link lands on its detail page.** Click
+  through: Compression → `/docs/concepts/compression-layer/`. MCP
+  intelligence → `/docs/reference/mcp/`. Workspace →
+  `/docs/reference/panes/`. Compound learning →
+  `/docs/concepts/compound-learning/`. KB →
+  `/docs/concepts/knowledge-base/`. Security →
+  `/docs/concepts/security-posture/`.
+- **Root cleanup verification.** `ls` the repo root — you should
+  see `index.html`, `assets/`, `docs/`, `scripts/`, plus code/spec
+  dirs. No more `/concepts/`, `/reference/`, `/guides/`, `/status/`,
+  `/about/`, `/changelog/`, `/what-is-senkani/` at root.
+- **Font sanity pass.** Every block of reading text should be
+  ≥14px; reference tables ≥15px; code blocks ≥15px; badges + tags
+  ≥13px. Put your face close; do captions, meta rows, source
+  pointers, search hit paths, code-copy buttons all read
+  comfortably?
+- **Subpath deploy sanity.** The relative-paths architecture now
+  spans an extra depth level (most pages moved from depth 1 → 2,
+  deep refs from 3 → 4). Push to a preview branch, enable GH Pages,
+  confirm `ckluis.github.io/senkani/` loads the landing + that
+  `ckluis.github.io/senkani/docs/reference/mcp/senkani_read/` also
+  loads its CSS/JS correctly.
+- **Mobile narrow-width heroes.** At 360–600 px, each product-hero
+  should collapse to single-column, visual below text, bullets
+  still readable, the CTA still prominent. Check each of the 6
+  feature heroes.
+- **Contrast on dark hero bands.** Heroes 2 (MCP) and 5 (KB) are
+  dark (`--ink` background, `--bg` text). Verify WCAG AA on copy,
+  bullet check marks, the "Learn more →" CTA (accent-hi on ink),
+  and the illustration tiles.
+
+### Website rebuild — visual + a11y validation (shipped 2026-04-19)
+
+The full github-pages rebuild landed in one operator-directed round
+(umbrella `website-rebuild-0-spec` + items 1–9). 94 HTML files across
+a Diátaxis-structured wiki: 19 MCP tool pages, 19 CLI command pages,
+17 pane pages, 10 option pages, 7 concept pages, 9 guide pages, plus
+10 hub pages and a rewritten landing. Everything deploys from the
+repo root via GitHub Pages with `.nojekyll` present; all internal
+paths are relative so it works both over `file://` and at
+`ckluis.github.io/senkani/`. Automated a11y tooling wasn't run in the
+round — needs a real machine with Node / axe-core-cli available.
+
+- **Visual inspection on a mid-tier display.** Open <code>index.html</code>
+  via `python3 -m http.server 8080` (NOT `file://` — relative paths
+  now work there, but some browsers block `fetch()` on `file://`).
+  Skim hero, positioning, teasers, stat strip, gallery. Look for:
+  unreadable text, broken cards, broken dark-mockup legibility,
+  misaligned grids, missing spacing.
+- **Nav sanity walk.** Click through: Home → What is it? →
+  Concepts → each concept page → Reference → MCP tools index →
+  `senkani_read` → `senkani_web` → Options → FCSIT → Terse →
+  Guides → Install → Troubleshooting. Every breadcrumb, every
+  wiki-nav entry, every "see also" link should resolve without
+  404s.
+- **axe-core-cli pass on every page.** Install via `npm i -g
+  @axe-core/cli` and run: `axe http://localhost:8080/ --exit`,
+  then spot-check a representative deep page
+  (`axe http://localhost:8080/reference/mcp/senkani_read/`).
+  Target: 0 AA violations per page. If anything fires, update
+  `assets/theme.css` tokens and re-run.
+- **Lighthouse perf + a11y per page.** Open Chrome DevTools →
+  Lighthouse → run against landing + one deep reference page.
+  Target: perf ≥ 90 (mid-tier), a11y ≥ 95. The biggest drag is
+  the Google Fonts stylesheet; `preconnect` is in place but if
+  perf misses, consider `font-display: swap` hints or self-
+  hosting.
+- **Mobile (360–780px) layout.** Open any page in devtools
+  mobile mode. The hamburger menu should work; wiki-nav should
+  collapse to a stacked list above content; the hero type should
+  scale sanely; the tool listing should reflow to single-column.
+- **Keyboard-only traversal.** Tab through the landing. Skip-link
+  should be the first focusable element. Every link/button should
+  show the orange focus ring. Nothing trap-focused.
+- **Legacy anchor redirects.** Hit
+  `http://localhost:8080/#how-it-works` — should redirect to
+  `/concepts/`. Same for `#mcp-tools` (→ `/reference/mcp/`),
+  `#install` (→ `/guides/install/`), `#terse` (→
+  `/reference/options/terse/`). See `assets/app.js` legacyMap.
+- **Search stub.** The search input in the top nav currently has
+  no index (`assets/search-index.json` and `assets/lunr.min.js`
+  aren't vendored yet — that's `website-rebuild-10-search`
+  pending). Confirm the input at least doesn't throw JS errors
+  on focus (it should quietly fail the fetch and do nothing).
+- **Deploy preview.** Push to a branch, enable GitHub Pages for
+  that branch, open `https://ckluis.github.io/senkani/`. All
+  relative paths should resolve under the `/senkani/` subpath.
+  Confirm CSS loads, deep links work, external GitHub links
+  still go to `github.com/ckluis/senkani`.
+- **Safari + Firefox cross-browser.** Every page built + tested
+  in Chrome by default; Safari/Firefox should just work since
+  there's no exotic CSS, but confirm. Especially mockup chrome
+  (mockup gradients, pane dots, FCSIT button pills).
+- **`prefers-reduced-motion`.** Toggle macOS Reduce Motion →
+  reload landing. Terminal-cursor blink in the hero mockup
+  should stop; smooth-scroll should disable. Both are in
+  `assets/theme.css`.
+
+### `senkani uninstall` — real-install validation (synthetic smoke shipped 2026-04-19)
+
+`Tests/SenkaniTests/UninstallSmokeTests.swift` now fences the
+discovery + filter + removal logic against a fixture HOME (6 tests).
+That covers refactor-induced regressions. What synthetic tests
+*can't* catch: a newly-added runtime artifact path that the scanner
+doesn't know about yet. So the real-install pass still matters:
+
+- **Run `senkani uninstall` on a real dev install.** With a Senkani
+  app that has actually been registered (MCP entry in
+  `~/.claude/settings.json`, hooks in project settings, something in
+  `~/.senkani/`, optionally a launchd plist from `senkani schedule`).
+  Default run (no flags) — confirm the artifact list shows only the
+  categories you expect, cancel with `N`, verify nothing on disk
+  changed.
+- **`senkani uninstall --keep-data`.** Verify the list omits the
+  session database line; re-run, accept, confirm that
+  `~/Library/Application Support/Senkani/` survives while the other
+  six categories go.
+- **`senkani uninstall --yes` (full wipe).** Run twice. First run
+  removes everything the scanner found; second run prints "Nothing
+  to uninstall" (idempotent). `claude` in a plain terminal should
+  show no Senkani tools. Re-launching SenkaniApp should re-register
+  everything (reversibility).
+- **Look for artifacts the scanner missed.** After a `--yes` run, do
+  a quick sweep: `ls ~/.senkani/`, `ls ~/Library/LaunchAgents/com.senkani.*`,
+  `grep -l senkani ~/.claude/settings.json ~/.claude/projects/*/settings.json`,
+  `ls ~/Library/Application Support/Senkani/`. If anything is still
+  there, file a note — that's a new category the synthetic fixture
+  needs to grow to cover.
+
+### PaneDiaryInjection — round 3 of pane-diaries (shipped 2026-04-19, umbrella DELIVERED)
+
+Round 3 wires generator + store into the MCP subprocess (read on
+server start, write on shutdown) and sets the workspace/pane slug env
+vars in SenkaniApp. Everything below the process boundary is unit
+tested — what unit tests can't exercise until a real session runs end-
+to-end:
+
+- **Actual "reopen a terminal in the same project" UX.** Launch
+  SenkaniApp, open a terminal pane in a project (say
+  `~/Desktop/projects/senkani`), run `claude` or a few tool calls so
+  token_events accumulate, close the pane (or quit the app). Reopen
+  the pane. The MCP subprocess spawns with
+  `SENKANI_WORKSPACE_SLUG=projects-senkani` +
+  `SENKANI_PANE_SLUG=terminal`; its `instructionsPayload` should now
+  include a `Pane context:` section summarizing the last session's
+  last command, files touched, token cost, and recent commands. Check
+  the MCP server stderr around startup for the line printed by the
+  payload, or inspect the on-disk diary at
+  `~/.senkani/diaries/projects-senkani/terminal.md`.
+- **Multi-terminal collision inside one workspace.** Open two terminal
+  panes in the same project. Both spawn with the same pane-slug
+  (`terminal`) — intended behavior, per the cross-session-slot design
+  — so their close events write the SAME diary file. Verify the
+  last-closed pane's content wins (current diary reflects whichever
+  pane shut down last). If this feels wrong in practice, file a
+  backlog item to include an index suffix in the slug (e.g.,
+  `terminal-1` / `terminal-2`). Left as an intentional trade-off for
+  now: diaries are a "resume the slot" hint, not a "resume exactly
+  this pane instance" guarantee.
+- **Disk permission failure on pane close.** Remove write on
+  `~/.senkani/diaries/` (`chmod -w`). Close a terminal pane. The MCP
+  shutdown should NOT hang — `PaneDiaryInjection.persist` swallows
+  the throw and moves on to `endSession` normally. Confirm via
+  process exit latency (should be the usual <500 ms) and MCP stderr
+  (no unhandled throws).
+- **Slug edge cases in real workspaces.** Open panes in projects
+  whose working directories contain `..` resolution, symlinks, or
+  unusual chars (spaces, parentheses, emoji). The slug helper in
+  PaneContainerView strips `..` + backslashes before joining; confirm
+  the resulting env var works end-to-end (diary file lands at the
+  expected path). If a project path produces an empty slug, the
+  helper falls back to `"workspace"` — verify that too if you've got
+  an exotic dev dir.
+- **SENKANI_PANE_DIARY=off mid-session.** Export the env and relaunch
+  SenkaniApp. Confirm (a) no new diaries are written on pane close
+  and (b) existing diaries are not injected on pane open. Flip the
+  env back off (unset), relaunch, confirm behavior returns.
+
+### PaneDiaryGenerator — round 2 of pane-diaries (shipped 2026-04-19)
+
+The composition half lands standalone — no callers yet. Round 3 wires
+the DB fetch (pane-slug → session_ids → `[TimelineEvent]`) and the
+pane-open MCP injection. What unit tests can't exercise on a real
+install until round 3 arrives:
+
+- **Real-row token budget realism.** Unit tests assert the hard
+  200-token cap with synthetic rows. On a real install with 100+ real
+  `token_events` rows carrying real filenames and argv strings, visually
+  confirm the produced brief reads like a useful resume note rather
+  than a truncated data dump. Eyeball: last command is meaningful,
+  `Files:` basenames are recognizable, `Cost:` total reflects real
+  activity, `Recent:` doesn't trail off awkwardly.
+- **Unicode / wide-char content.** Rows whose `command` column holds
+  CJK / emoji / RTL text should land in the brief without breaking
+  the 4-bytes-per-token estimator's actual byte count. Run
+  `PaneDiaryGenerator.generate` (via a small harness once round 3 is
+  in, or via Swift REPL now) on a fixture with mixed scripts; confirm
+  the output is still ≤200 tokens by the `ModelPricing` definition.
+- **Caller-supplied error formatting.** The generator renders any
+  `lastError: String?` verbatim (truncated at 140 chars). Round 3
+  callers should pass a pre-cleaned one-line summary — if they pass
+  the raw SQLite error message or a multi-line stack trace, the brief
+  will contain linebreak garbage that the section-labeled format
+  can't parse. Sanity-check the round-3 error-derivation code once
+  it lands.
+
+### PaneDiaryStore — round 1 of pane-diaries (shipped 2026-04-19)
+
+The I/O half lands standalone — no callers yet. Round 2
+(`PaneDiaryGenerator`) and round 3 (pane-open MCP injection + pane-close
+regen) will produce the real user-visible behavior. What unit tests
+can't exercise on a real install:
+
+- **File permissions under a real umask.** Test `writtenFileIsMode0600`
+  asserts `chmod(2)` lands, but it runs inside a tempdir with no
+  umask surprises. On a real `$HOME` with an unusual umask
+  (0077 / 0022 / 0002 variants), confirm a fresh diary
+  (`~/.senkani/diaries/<ws>/<pane>.md`) reports `-rw-------` under
+  `ls -l`, not `-rw-r--r--` or `-rw-rw-rw-`.
+- **Multi-FS rename edge.** `replaceItemAt` is atomic on a single
+  filesystem; if a user's `$HOME` is on an exotic mount (tmpfs,
+  encrypted overlay, symlinked into APFS snapshot), confirm
+  write+read round-trip still works without the tmp file left behind.
+  `ls -la ~/.senkani/diaries/<ws>/` after a fresh write should show
+  only `<pane>.md`, no `.pane.md.tmp.<pid>` stragglers.
+- **Env gate flips cleanly mid-session.** Set `SENKANI_PANE_DIARY=off`
+  in the launch env of a senkani daemon that already wrote diaries.
+  Start the daemon, write a diary via a future direct caller (or the
+  round-3 MCP path once it lands). Expect no disk writes and no reads
+  surfaced into the pane-open brief. Flip the env back (relaunch),
+  confirm old diaries are still readable and the feature is enabled.
+- **Redaction of novel secret patterns.** Paste a hand-authored secret
+  style that the current `SecretDetector.patterns` set doesn't cover
+  (e.g., an internal-format token) directly into a diary on disk.
+  Trigger a read. Confirm the read returns the raw token (as expected
+  — redaction only catches known patterns). File a backlog item to
+  extend `SecretDetector.patterns` if the internal format is common
+  enough to warrant a regex.
+- **Slug stability across pane-id recycles.** Round 3 will wire the
+  actual pane-slug derivation from `PaneType` + workspace slot.
+  Until then, the I/O layer takes the slug as a caller-supplied
+  string; no real-machine test is possible for round 1. Defer the
+  "reopens-same-slot produces-same-diary" behavioral check to round 3.
+
+### Sprint Review pane (shipped 2026-04-19)
+
+Unit tests cover the view-model routing (accept/reject dispatch per
+artifact kind, window filter, staleness flag mapping, file side effects
+for context doc + workflow playbook). What they cannot exercise is the
+SwiftUI pane end-to-end in a running SenkaniApp:
+
+- Launch SenkaniApp. Open ⌘K. Filter by "sprint". Expect a
+  "New Sprint Review" row under Panes. Hit enter — a new Sprint
+  Review pane lands in the active workstream. Also verify
+  "+" toolbar button → "Sprint Review" card in the grid.
+- On an install with no staged compound-learning artifacts, expect
+  the empty state ("No staged proposals") with the secondary line
+  about the daily sweep promoting from `.recurring`. No errors.
+- Populate staged artifacts via the CLI (or run a real session to
+  seed them). Reopen the pane. Expect four sections collapsed by
+  kind, each row showing title + subtitle + confidence pill + `×N`
+  recurrence. Adjust the window stepper (7d / 14d / …); the visible
+  row set should narrow/widen per the `lastSeenAt` cutoff.
+- Click Accept on a filter-rule row. Expect: row disappears
+  (status → applied). No filesystem change. `senkani learn status`
+  from the CLI confirms the transition.
+- Click Accept on a context-doc row. Expect: row disappears, a
+  new `<projectRoot>/.senkani/context/<slug>.md` lands on disk.
+  Open it — body matches the staged body. A second open of the same
+  pane after a session should show the doc surfacing through
+  SessionBriefGenerator.
+- Click Accept on a workflow-playbook row. Expect:
+  `<projectRoot>/.senkani/playbooks/learned/<slug>.md` lands on
+  disk. Content matches.
+- Click Accept on an instruction-patch row. Expect: state-only
+  transition (no file write — instruction patches are
+  Schneier-constrained).
+- Click Reject on any row. Expect: row disappears, status →
+  .rejected. Re-rejecting via `senkani learn reject <id>` is a no-op.
+- Trigger an error path — delete `~/.senkani/learned-rules.json`
+  mid-click, click Accept. Expect: orange error banner with
+  `Accept failed: …`. Dismissing the banner via × clears it. Pane
+  remains interactive.
+- Fire a quarterly audit in the absence of any applied artifacts
+  (clean install). Expect: the "Stale applied artifacts (N)"
+  section is hidden. With stale artifacts present (e.g. an applied
+  filter rule with `lastSeenAt` back-dated > 60 days), the section
+  renders with amber accents and a Retire button per row.
+- Confirm the `liveToolNames` default — in the current wiring, the
+  pane passes an empty `Set<String>`, so the quarterly audit skips
+  the instruction-patch-tool-missing heuristic. If the operator
+  decides to wire this to `ToolRouter.allTools().map(\.name)` from
+  SenkaniApp (requires cross-process state the GUI doesn't have
+  today), a new manual-log entry will supersede this one.
+
+### Browser Design Mode — click-to-capture wedge (shipped 2026-04-18)
+
+Unit tests cover the pure logic (selector generation, Markdown schema,
+state machine, SecretDetector sink passes). What they cannot exercise
+is the actual WKWebView + WKUserScript + clipboard + NSEvent flow in a
+running SenkaniApp. Real-session sanity checks:
+
+- Launch SenkaniApp with `SENKANI_BROWSER_DESIGN=on` in the
+  environment. Open a Browser pane on a real site (e.g.
+  https://developer.mozilla.org/en-US/docs/Web/HTML/Element/button).
+  Press ⌥⇧D. Expect: the URL-bar indicator flips to orange; cursor
+  becomes a crosshair when hovering the web content; hover outlines
+  elements with a 1px amber border. Press ⌥⇧D again OR Escape —
+  the mode exits, indicator goes gray.
+- With mode on, click a `<button>` element. Expect: a ~2s toast at
+  the top of the pane ("Captured <selector> — copied to clipboard.");
+  paste into any other editor and verify the Markdown schema —
+  `## Browser element (senkani design mode)` header, `selector`,
+  `tag`, `text`, `captured: <ISO8601>` lines. Verify the text is
+  truncated at 300 chars on a long-text element.
+- Navigate the webview to a different URL while Design Mode is on.
+  Expect: the URL-bar indicator flips back to gray (mode exited);
+  no toast persists; subsequent click does NOT capture. Confirms the
+  WKUserScript + message handler were removed on navigation (guards
+  Torvalds' leak-across-navigation flag).
+- Find or build a page with a shadow-DOM component (e.g. a custom
+  element using `attachShadow({mode:'open'})`) and click something
+  inside. Expect: the toast reads "Can't capture — element is
+  inside a shadow DOM." — not a malformed capture. Verify
+  `senkani stats events` shows `browser_design.shadow_dom_skipped`
+  incremented.
+- Close the Browser pane while Design Mode is on. Expect: no crash,
+  no lingering mode on the next opened Browser pane. Verify
+  `~/.senkani/events.log` (or whatever surface is plumbed) shows the
+  three recorded counters (`entered`, `captured`,
+  `shadow_dom_skipped`) and that `keyboard_conflict` is NOT recorded
+  from routine use — it's declared but the Swift NSEvent monitor
+  runs out-of-band from page JS so it never increments in practice.
+- Clipboard sanity: with Design Mode on, capture an element, then
+  immediately hit ⌘C (system Copy) with text selected elsewhere.
+  Expect: ⌘C overwrites our capture. This is expected — we write
+  to the standard pasteboard; system Copy wins. Worth confirming so
+  the UX isn't surprising.
+- Keyboard guard: with Design Mode NOT installed (env var unset),
+  press ⌥⇧D inside a Browser pane. Expect: no-op, no WKUserScript
+  installs, no `entered` counter. The env gate is what makes this a
+  default-off wedge.
+
+### Budget enforcement — dual-layer symmetric tests (shipped 2026-04-18)
+
+Unit tests now cover both the MCP gate (`session.checkBudget()`) and
+the hook gate (`HookRouter.checkHookBudgetGate`) symmetrically via the
+new `BudgetConfig.withTestOverride` + injectable cost closures. These
+are pure-function tests — they don't exercise the real budget
+`~/.senkani/budget.json` on disk or the real
+`SessionDatabase.costForToday()` query. Real-session sanity checks:
+
+- Configure a real `~/.senkani/budget.json` with a low daily cap
+  (say $0.50). Run Senkani for a session that crosses the cap. Verify:
+  (1) MCP tool calls return `"Budget exceeded: Daily budget …"` with
+  `isError: true`; (2) non-MCP Read/Bash/Grep via the hook relay
+  return `permissionDecision: deny` with the same reason string.
+  The CHANGELOG text is the contract — if Claude Code sees a
+  different message for the same condition across the two paths,
+  flag it.
+- With the same config, confirm the 80% soft-limit warning surfaces
+  on MCP tool calls with a `[Budget Warning]` prefix but still
+  executes the tool — and does NOT surface on the hook path (hook
+  gate only has block/passthrough today, no warn prefix).
+- Pane-cap path: set `SENKANI_PANE_BUDGET_SESSION` in a pane env,
+  exceed it. MCP tool calls should block with a "Pane session
+  budget exceeded" message. Non-MCP hook-routed tools in the SAME
+  pane will NOT block on the pane cap (by design — pane cap is
+  MCP-session-scoped; the asymmetry is encoded in
+  `checkHookBudgetGate` passing `sessionCents: 0`).
+
+### SkillScanner — scanAsync() wired into Skill Browser (shipped 2026-04-18)
+
+Unit tests cover the async dispatch (Task.detached priority .utility),
+fixture-root parity with sync scan, and a timing-sanity upper bound.
+Real-machine validation — specifically to confirm the UI no longer
+stalls on large home directories — can only be done in the running app:
+
+- Seed or confirm presence of a non-trivial `~/.claude/` tree
+  (≥ 50 command files + several nested SKILL.md subdirectories — the
+  author's machine has ≈ 120 commands + 40 skills, which stalls the
+  old sync path visibly). Open Senkani → Skill Browser pane. The
+  "Scanning for skills…" spinner should appear smoothly (no frozen
+  window title-bar, no beachball) and resolve within ~1 second on
+  modern hardware. Hover the window chrome and drag during the scan —
+  the main thread must remain responsive; pre-fix this dragged only
+  after the scan completed.
+- Click the Rescan button with the same tree. Spinner → list refresh
+  cycle should feel identical to initial load. No duplicate entries,
+  no stale flicker of the previous list.
+- Point Senkani at a machine with a dotfile tree that symlinks back
+  into itself (historically rare but possible via
+  `~/.claude/commands/mirror -> ~/.claude`). The existing symlink
+  loop guard in `scanRecursive` should still terminate; scanAsync
+  must return the deduped result without blocking the UI.
+- Regression guard: If the Skill Browser ever starts feeling sluggish
+  again, grep for `SkillScanner.scan()` (no args) in `SenkaniApp/`.
+  A deprecation warning should already fire at build time; this
+  check is the "operator sanity" version.
+
 ### Display settings — font-family picker + persistence (shipped 2026-04-18)
 
 Unit tests cover the pure `Core.PaneFontSettings` type (clamp, resolve,

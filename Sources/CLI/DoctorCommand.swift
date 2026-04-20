@@ -464,21 +464,22 @@ struct Doctor: ParsableCommand {
     private func checkGrammars(_ results: inout Results) {
         let count = GrammarManifest.grammars.count
         let languages = GrammarManifest.sorted.map { "\($0.language) v\($0.version)" }.joined(separator: ", ")
+        let cached = GrammarVersionChecker.cachedResults()
 
-        // Use cached results only — no network calls in doctor
-        if let cached = GrammarVersionChecker.cachedResults() {
-            let outdated = cached.filter { $0.isOutdated }
-            if outdated.isEmpty {
-                printStatus(.pass, "Grammars: \(count) vendored (\(languages)), all up to date")
-                results.passed += 1
-            } else {
-                let names = outdated.map { "\($0.grammar.language) v\($0.grammar.version) \u{2192} v\($0.latestVersion ?? "?")" }
-                printStatus(.fail, "Grammars: \(names.joined(separator: ", ")) outdated. Run: senkani grammars check")
-                results.failed += 1
-            }
-        } else {
-            printStatus(.pass, "Grammars: \(count) vendored (\(languages)). Run 'senkani grammars check' for updates")
+        switch GrammarStaleness.advise(cached: cached) {
+        case .noUpstreamData:
+            printStatus(.skip, "Grammars: \(count) vendored — no upstream data. Run 'senkani grammars check' for updates")
+            results.skipped += 1
+        case .allFresh:
+            printStatus(.pass, "Grammars: \(count) vendored (\(languages)), all up to date")
             results.passed += 1
+        case .recentUpdatesAvailable(let n):
+            printStatus(.pass, "Grammars: \(count) vendored, \(n) recent update(s) available (within \(GrammarStaleness.defaultThresholdDays)-day window)")
+            results.passed += 1
+        case .stale(let entries):
+            let names = entries.map { "\($0.language) v\($0.vendoredVersion) \u{2192} v\($0.latestVersion) (\($0.daysStale)d stale)" }
+            printStatus(.skip, "Grammars stale (>\(GrammarStaleness.defaultThresholdDays)d behind): \(names.joined(separator: ", ")). Run: senkani grammars check")
+            results.skipped += 1
         }
     }
 

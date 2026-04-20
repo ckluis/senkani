@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Your first session — guide</title>
+<meta name="description" content="Launch the workspace, run an agent, read the numbers. What you&#x27;ll see and how to interpret it.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/theme.css">
+</head>
+<body>
+<a href="#main" class="skip-nav">Skip to main content</a>
+<nav class="topnav" aria-label="Primary navigation">
+  <a class="wordmark" href="../../">sen<span class="accent">kani</span><small>compression layer for AI coding agents</small></a>
+  <button class="topnav-hamburger" aria-label="Open navigation menu" aria-expanded="false" aria-controls="topnav-links"><span></span><span></span><span></span></button>
+  <div class="topnav-links" id="topnav-links">
+    <a href="../../docs/what-is-senkani.html">What is it?</a>
+    <a href="../../docs/concepts.html">Concepts</a>
+    <a href="../../docs/reference.html">Reference</a>
+    <a href="../../docs/guides.html">Guides</a>
+    <a href="../../docs/status.html">Status</a>
+    <div class="topnav-search"><input type="search" id="site-search" placeholder="Search · /" aria-label="Search the site"></div>
+    <a href="https://github.com/ckluis/senkani" class="btn-nav">GitHub →</a>
+  </div>
+</nav>
+<main id="main" class="wiki-layout">
+  <aside class="wiki-nav" aria-label="Guides navigation">
+    <div class="wiki-nav-group">
+      <h4>Guides</h4>
+      <ul>
+        <li><a href="../../docs/guides.html">All guides</a></li>
+        <li><a href="../../docs/guides/install.html">Install</a></li>
+        <li><a href="../../docs/guides/claude-code.html">Claude Code</a></li>
+        <li><a href="../../docs/guides/cursor-copilot.html">Cursor / Copilot</a></li>
+        <li><a href="../../docs/guides/first-session.html" class="active">First session</a></li>
+        <li><a href="../../docs/guides/budget-setup.html">Budget setup</a></li>
+        <li><a href="../../docs/guides/compound-learning.html">Reviewing proposals</a></li>
+        <li><a href="../../docs/guides/kb-workflow.html">Knowledge-base workflow</a></li>
+        <li><a href="../../docs/guides/uninstall.html">Uninstall</a></li>
+        <li><a href="../../docs/guides/troubleshooting.html">Troubleshooting</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>Next</h4>
+      <ul>
+        <li><a href="../../docs/reference.html">Reference</a></li>
+        <li><a href="../../docs/concepts.html">Concepts</a></li>
+      </ul>
+    </div>
+  </aside>
+  <article class="wiki-main">
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../">Home</a> <span class="sep">›</span>
+      <a href="../../docs/guides.html">Guides</a> <span class="sep">›</span>
+      <span class="here">Your first session</span>
+    </nav>
+    <span class="quadrant guide">Guide · How-to</span>
+    <h1 class="page-title">Your first session</h1>
+    <p class="lede">Launch the workspace, run an agent, read the numbers. What you'll see and how to interpret it.</p>
+
+    <div class="step">
+      <div class="step-num">Step 1</div>
+      <h3>Open the workspace</h3>
+      <pre class="code">senkani</pre>
+      <p>Or open SenkaniApp from /Applications if you dragged it there. A single empty canvas appears.</p>
+    </div>
+
+    <div class="step">
+      <div class="step-num">Step 2</div>
+      <h3>Open three panes</h3>
+      <p>⌘K → type "Terminal" → Enter. ⌘K → "Analytics". ⌘K → "Agent Timeline". Three panes side by side.</p>
+    </div>
+
+    <div class="step">
+      <div class="step-num">Step 3</div>
+      <h3>Start the agent</h3>
+      <p>In the Terminal pane:</p>
+      <pre class="code">claude</pre>
+      <p>Claude Code starts; MCP handshake happens automatically (you can confirm via the "MCP connected" indicator in the status bar).</p>
+    </div>
+
+    <div class="step">
+      <div class="step-num">Step 4</div>
+      <h3>Ask for something real</h3>
+      <p>Ask the agent to do something that involves reading your project:</p>
+      <pre class="code">&gt; Find the function that handles order pagination.</pre>
+      <p>Watch the Agent Timeline pane fill with tool calls (<code>senkani_search</code> → <code>senkani_fetch</code> → possibly <code>senkani_read</code>). Each line shows the tool, target, and compression ratio.</p>
+    </div>
+
+    <div class="step">
+      <div class="step-num">Step 5</div>
+      <h3>Read the Analytics pane</h3>
+      <ul>
+        <li><strong>Tokens saved</strong> — bytes that would have been sent to the LLM but weren't.</li>
+        <li><strong>Cost saved</strong> — tokens × model rate (from the pane's model preset).</li>
+        <li><strong>Compliance rate</strong> — fraction of tool calls that went through Senkani vs the agent's built-ins. High is good.</li>
+        <li><strong>Per-feature breakdown</strong> — F / C / S / I / T contributions.</li>
+      </ul>
+    </div>
+
+    <h2>What "good" looks like</h2>
+    <ul>
+      <li>Compliance &gt; 80% — the agent is using <code>senkani_*</code> tools.</li>
+      <li>Live multiplier &gt; 3× — you're saving meaningful tokens.</li>
+      <li>Agent Timeline is mostly <code>senkani_*</code> entries, not raw Read/Bash/Grep.</li>
+    </ul>
+
+    <h2>If compliance is low</h2>
+    <p>The agent is bypassing senkani tools. Run <code>senkani doctor</code> to check registration; make sure the MCP server entry in <code>~/.claude/settings.json</code> is present; make sure you launched <code>claude</code> <em>inside</em> a Senkani-managed Terminal pane (the one the app opened, not a random shell).</p>
+
+    <h2>Next</h2><p><a href="../../docs/guides/budget-setup.html">Budget setup →</a></p>
+  </article>
+</main>
+<footer class="site-foot">
+  <div class="foot-grid">
+    <div>
+      <div class="foot-wordmark">sen<span class="accent">kani</span></div>
+      <p class="foot-tagline"><span lang="zh">閃蟹</span> — "fast claw." A native macOS binary written in Swift.</p>
+    </div>
+    <div class="foot-col"><h4>Product</h4><ul><li><a href="../../docs/what-is-senkani.html">What is it?</a></li><li><a href="../../docs/concepts.html">Concepts</a></li><li><a href="../../docs/reference.html">Reference</a></li><li><a href="../../docs/guides.html">Guides</a></li><li><a href="../../docs/status.html">Status</a></li></ul></div>
+    <div class="foot-col"><h4>Reference</h4><ul><li><a href="../../docs/reference/mcp.html">MCP tools</a></li><li><a href="../../docs/reference/cli.html">CLI commands</a></li><li><a href="../../docs/reference/options.html">Options &amp; env</a></li><li><a href="../../docs/reference/panes.html">Panes</a></li><li><a href="../../docs/changelog.html">Changelog</a></li></ul></div>
+    <div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li><li><a href="../../docs/guides/install.html">Install</a></li><li><a href="../../docs/guides/troubleshooting.html">Troubleshooting</a></li><li><a href="../../docs/about.html">About &amp; license</a></li></ul></div>
+  </div>
+  <div class="foot-meta">
+    <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
+    <span><a href="../../docs/changelog.html">v0.2.0 changelog</a></span>
+  </div>
+</footer>
+<script src="../../assets/app.js" defer></script>
+</body>
+</html>

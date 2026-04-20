@@ -39,6 +39,7 @@ public enum CommandEntryBuilder {
             ("codeEditor", "New Code Editor", "Tree-sitter syntax highlighting", "curlybraces"),
             ("agentTimeline", "New Agent Timeline", "Tool call history", "clock.arrow.circlepath"),
             ("dashboard", "New Dashboard", "Multi-project portfolio overview", "chart.bar.doc.horizontal"),
+            ("sprintReview", "New Sprint Review", "Review staged compound-learning proposals", "sparkles.rectangle.stack"),
         ]
         return types.map { t in
             CommandEntryData(id: "pane:\(t.id)", title: t.name, subtitle: t.desc, icon: t.icon, category: "Panes")

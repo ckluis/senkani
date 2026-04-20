@@ -40,12 +40,46 @@ public struct BudgetConfig: Codable, Sendable {
 
     /// Load budget config, using a 30-second cache to avoid repeated disk reads.
     public static func load() -> BudgetConfig {
+        if let override = currentTestOverride() { return override }
         return cache.load()
     }
 
     /// Force-reload from disk, bypassing the cache. Used in tests.
     public static func forceReload() -> BudgetConfig {
+        if let override = currentTestOverride() { return override }
         return cache.forceReload()
+    }
+
+    // MARK: - Test override
+
+    /// Serialized test-only override slot. When set, `load()` / `forceReload()`
+    /// return this config directly — bypassing disk, env, and the 30s cache.
+    /// Concurrent test cases are serialized via `testOverrideLock` so no two
+    /// tests can race on the slot. The lock is an `NSRecursiveLock` so
+    /// `withTestOverride` can hold it across a body that itself calls
+    /// `load()` (via the gate under test) without deadlocking on same-thread
+    /// reentry.
+    nonisolated(unsafe) private static var _testOverride: BudgetConfig?
+    private static let testOverrideLock = NSRecursiveLock()
+
+    private static func currentTestOverride() -> BudgetConfig? {
+        testOverrideLock.lock()
+        defer { testOverrideLock.unlock() }
+        return _testOverride
+    }
+
+    /// Test-only: run `body` with `config` installed as the `load()` result,
+    /// restoring the prior state on exit. Holds `testOverrideLock` for the
+    /// whole body so concurrent sync test cases serialize on the override
+    /// slot — matches `LearnedRulesStore.withPath` + `ScheduleStore.withTestDirs`.
+    /// Sync only: NSLock isn't safe across `await` boundaries in Swift 6.
+    public static func withTestOverride<T>(_ config: BudgetConfig, _ body: () throws -> T) rethrows -> T {
+        testOverrideLock.lock()
+        defer { testOverrideLock.unlock() }
+        let prev = _testOverride
+        _testOverride = config
+        defer { _testOverride = prev }
+        return try body()
     }
 
     // MARK: - Decision Logic

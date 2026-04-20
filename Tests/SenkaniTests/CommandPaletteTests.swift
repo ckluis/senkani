@@ -7,7 +7,7 @@ struct CommandPaletteTests {
 
     @Test func paneEntriesIncludeAllTypes() {
         let entries = CommandEntryBuilder.paneEntries()
-        #expect(entries.count == 16, "Should have 16 pane types, got \(entries.count)")
+        #expect(entries.count == 17, "Should have 17 pane types, got \(entries.count)")
     }
 
     @Test func searchFilteringWorks() {

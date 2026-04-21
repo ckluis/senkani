@@ -772,7 +772,7 @@ struct EventCountersTests {
         let rootCopy: String = root
         LearnedRulesStore.withPath(temp) {
             let sem = DispatchSemaphore(value: 0)
-            Task.detached { [db] in
+            Task { [db] in
                 await CompoundLearning.runPostSession(
                     sessionId: sidCopy, projectRoot: rootCopy, db: db)
                 sem.signal()

@@ -6,10 +6,9 @@ private final class ResultBox<U>: @unchecked Sendable {
     var value: U?
 }
 
-/// Helper: block the current thread on a `Task.value`. Swift 6 blocks
-/// NSLock across `await`, so tests that need path isolation for an
-/// async body wrap the body in a `Task.detached` and use this to
-/// synchronously wait for completion while holding `withPath`'s lock.
+/// Helper: block the current thread on a `Task.value`. The outer task
+/// must be created via non-detached `Task { ... }` inside the enclosing
+/// `LearnedRulesStore.withPath(_:)` so the `@TaskLocal` scope propagates.
 private func blockingWait<T: Sendable>(_ task: Task<T, Never>) -> T {
     let sem = DispatchSemaphore(value: 0)
     let box = ResultBox<T>()
@@ -404,9 +403,7 @@ struct DailySweepEnrichmentTests {
 
             let enricher = GemmaRationaleRewriter(
                 llm: MockRationaleLLM(.success("One-sentence enrichment.")))
-            // Swift 6: can't hold NSLock across await, so block on a
-            // Task.value synchronously while we hold withPath's lock.
-            let task = Task.detached { () -> Int in
+            let task = Task { () -> Int in
                 await CompoundLearning.enrichStagedRules(
                     enricher: enricher, db: db)
             }
@@ -439,7 +436,7 @@ struct DailySweepEnrichmentTests {
 
             let enricher = GemmaRationaleRewriter(
                 llm: MockRationaleLLM(.success("new enrichment")))
-            let task = Task.detached { () -> Int in
+            let task = Task { () -> Int in
                 await CompoundLearning.enrichStagedRules(
                     enricher: enricher, db: db)
             }

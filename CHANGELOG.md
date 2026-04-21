@@ -6,6 +6,47 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 21 — Test harness hang: migrate NSLock helpers to `@TaskLocal` (`test-harness-tasklocal-migration`)
+- Root-cause fix for two of the three frozen frames from the
+  2026-04-21 sigtrap-repro sample. `ScheduleWorktree.withTestDir`
+  and `LearnedRulesStore.withPath` no longer take an `NSLock` —
+  both are now `@TaskLocal`-scoped. Parallel `@Test` tasks each
+  get their own scoped value with structured-concurrency
+  propagation, so cooperative-pool starvation on these helpers is
+  structurally impossible.
+- `LearnedRulesStore`: task-local is a `Scoped` ref-type box
+  holding the (path, cache) pair, so per-test mutation of the
+  `shared` singleton via the existing `shared = file` call sites
+  is isolated to each parallel suite without a process lock.
+  Computed `shared` getter/setter routes through the scoped box
+  when a scope is active, else the process-wide default.
+- Dead-code removal: deprecated `LearnedRulesStore.withPathAsync`
+  (zero call sites) deleted. Three tests changed
+  `Task.detached { ... }` → `Task { ... }` inside their `withPath`
+  body so the task-local scope propagates via structured
+  concurrency (inheritance behavior only `Task { ... }` honors).
+  Touched: `CompoundLearningH1Tests:775`,
+  `CompoundLearningH2aTests:409/442`, `CompoundLearningH2bTests:473`.
+- `.serialized` trait removed from `ScheduleWorktreeTests` and
+  `WatchRingBufferTests`. `PaneSocketMigrationTests` retains
+  `.serialized` until the DispatchGroup → TaskGroup rewrite in
+  `pane-socket-migration-taskgroup` lands.
+- One more timing flake widened (parallel-mode headroom):
+  `DependencyGraphTests` "Real project graph builds fast"
+  2s → 5s. Same rationale as the prior TreeSitter / SkillScanner
+  widenings.
+- `swift test` (parallel) no longer hangs — the 50+ min wait is
+  gone. `tools/test-safe.sh` retained as belt-and-suspenders
+  (and now the authoritative green baseline: 1617 tests in ~20 s).
+- Accepted risks: parallel mode surfaces other pre-existing
+  flakes (URLProtocol-stub registration races in
+  `RemoteRepoClientTests` / `BundleRemoteTests`, occasional
+  `swiftpm-testing-helper` SIGTRAP). These predate this round —
+  NSLock-induced serialization previously hid them. Tracked as
+  follow-ups in `spec/testing.md`.
+- Tests: 1617 tests green via `tools/test-safe.sh` (unchanged
+  count — rewrite of existing helpers, no new tests).
+
 ### April 21 — Test harness hang: `.serialized` + `tools/test-safe.sh` (`test-harness-sigtrap-repro`)
 - Three consecutive DB-split rounds (split-2/3/4) fell back to
   targeted regressions because `swift test` hangs 50+ minutes at

@@ -383,68 +383,65 @@ public enum LearnedRulesStore {
     /// the shared file under parallel execution.
     public static let defaultPath: String = NSHomeDirectory() + "/.senkani/learned-rules.json"
 
-    nonisolated(unsafe) private static var _path: String = defaultPath
+    nonisolated(unsafe) private static var _defaultPath: String = defaultPath
+    nonisolated(unsafe) private static var _defaultShared: LearnedRulesFile = {
+        let url = URL(fileURLWithPath: _defaultPath)
+        guard let data = try? Data(contentsOf: url) else { return .empty }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode(LearnedRulesFile.self, from: data)) ?? .empty
+    }()
 
-    /// Serializes all writes through the store. Tests call `withPath` which
-    /// redirects the global `_path` for the body's duration — without the
-    /// lock, concurrent suites would race on `_path` and one test's `save`
-    /// would land in another test's temp file.
-    nonisolated(unsafe) private static let writeLock = NSLock()
-
-    /// Current on-disk path. Test-only setters use `withPath(_:)`.
-    public static var path: String { _path }
-
-    /// TEST ONLY: redirect persistence to `temp` for the duration of
-    /// `body`, then restore the prior path and singleton state. Holds
-    /// `writeLock` for the whole body so concurrent sync callers
-    /// serialize. Async callers MUST wrap through a sync body —
-    /// `withPath(temp) { Task { await yourAsync() }.value }` — since
-    /// Swift 6 blocks NSLock across suspension points.
-    public static func withPath<T>(_ temp: String, _ body: () throws -> T) rethrows -> T {
-        writeLock.lock()
-        defer { writeLock.unlock() }
-        let prior = _path
-        let priorShared = shared
-        _path = temp
-        shared = load() ?? .empty
-        defer {
-            _path = prior
-            shared = priorShared
+    /// Task-local scoped override for tests. A reference-type box lets each
+    /// `withPath` body mutate its own (path, cache) pair without colliding
+    /// with parallel suites — no NSLock, no cooperative-pool blocking.
+    final class Scoped: @unchecked Sendable {
+        var path: String
+        var cache: LearnedRulesFile
+        init(path: String, cache: LearnedRulesFile) {
+            self.path = path
+            self.cache = cache
         }
-        return try body()
     }
 
-    /// TEST ONLY (async variant): DEPRECATED — use `withPath(...) { Task { ... }.value }`
-    /// instead. Swift 6 blocks NSLock / DispatchSemaphore across async
-    /// suspension points, and async tests that need path isolation
-    /// should wrap a Task inside a sync `withPath` block rather than
-    /// try to hold a lock across `await`.
-    ///
-    /// Left as a nominal stub so existing callers don't break — it
-    /// runs the body WITHOUT cross-suite synchronization, so callers
-    /// should migrate.
-    @available(*, deprecated, message: "Swift 6: NSLock can't span await. Wrap your async body: LearnedRulesStore.withPath(temp) { Task { await yourAsync() }.value }")
-    public static func withPathAsync<T>(
-        _ temp: String,
-        _ body: () async throws -> T
-    ) async rethrows -> T {
-        let prior = _path
-        let priorShared = shared
-        _path = temp
-        shared = load() ?? .empty
-        defer {
-            _path = prior
-            shared = priorShared
-        }
-        return try await body()
+    @TaskLocal static var scoped: Scoped?
+
+    /// Current on-disk path. Inside a `withPath(_:)` scope this returns
+    /// the scoped temp path; otherwise the production default.
+    public static var path: String { Self.scoped?.path ?? _defaultPath }
+
+    /// TEST ONLY: redirect persistence to `temp` for the duration of
+    /// `body`. Scoping is per-task (via `@TaskLocal`), so concurrent
+    /// parallel suites each get their own isolated (path, cache) box —
+    /// no shared lock. Child tasks spawned under structured concurrency
+    /// inherit the scope; `Task.detached` does not, by design.
+    public static func withPath<T>(_ temp: String, _ body: () throws -> T) rethrows -> T {
+        let box = Scoped(path: temp, cache: loadFrom(temp) ?? .empty)
+        return try $scoped.withValue(box, operation: body)
+    }
+
+    private static func loadFrom(_ path: String) -> LearnedRulesFile? {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(LearnedRulesFile.self, from: data)
     }
 
     // MARK: - Singleton
 
-    /// In-process cache — loaded once. Tests should call `reload()` after writing to disk.
-    nonisolated(unsafe) public static var shared: LearnedRulesFile = {
-        load() ?? .empty
-    }()
+    /// In-process cache. Inside a `withPath(_:)` scope this reads/writes the
+    /// task-local box; otherwise the process-wide default. Tests should call
+    /// `reload()` after writing to disk.
+    public static var shared: LearnedRulesFile {
+        get { Self.scoped?.cache ?? _defaultShared }
+        set {
+            if let box = Self.scoped {
+                box.cache = newValue
+            } else {
+                _defaultShared = newValue
+            }
+        }
+    }
 
     // MARK: - Persistence
 

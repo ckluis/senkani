@@ -28,27 +28,23 @@ public enum ScheduleWorktree {
         }
     }
 
-    // MARK: - Test-only override (mirrors ScheduleStore.withTestDirs)
+    // MARK: - Test-only override
 
-    nonisolated(unsafe) private static var _baseDirOverride: String?
-    private static let testLock = NSLock()
+    /// Task-local override for `baseDir`. `withTestDir` sets this via
+    /// `$baseDirOverride.withValue(...)`, so each parallel `@Test` task
+    /// gets its own scoped value — no lock, no cooperative-pool blocking,
+    /// structured-concurrency propagation to child tasks.
+    @TaskLocal static var baseDirOverride: String?
 
     public static var baseDir: String {
-        _baseDirOverride ?? FileManager.default.homeDirectoryForCurrentUser.path
+        Self.baseDirOverride ?? FileManager.default.homeDirectoryForCurrentUser.path
             + "/.senkani/schedules/worktrees"
     }
 
     /// TEST ONLY: redirect `baseDir` to `base` for the duration of `body`.
-    /// Holds `testLock` so concurrent callers serialize.
+    /// Task-local scoping isolates parallel tests without a process-wide lock.
     public static func withTestDir<T>(_ base: String, _ body: () throws -> T) rethrows -> T {
-        testLock.lock()
-        let prior = _baseDirOverride
-        _baseDirOverride = base
-        defer {
-            _baseDirOverride = prior
-            testLock.unlock()
-        }
-        return try body()
+        try $baseDirOverride.withValue(base, operation: body)
     }
 
     // MARK: - Public API

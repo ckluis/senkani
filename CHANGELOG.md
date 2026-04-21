@@ -6,6 +6,45 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 20 — SessionDatabase split plan: retire phantom HookEventStore (`sessiondb-split-1-hookeventstore`)
+- Round 1 of the `sessiondatabase-split` umbrella (Luminary P2-11)
+  ran under an expanded Luminary roster (Torvalds, Jobs, Evans,
+  Kleppmann, Celko, Carmack, Bach, Majors, Allspaw) after the
+  operator lifted the P2-11 "second contributor needs to touch the
+  DB layer" gate. The round SKIPPED at pre-audit with a unanimous
+  finding that shifts the split chain.
+- Finding: the top-of-file comment on `Sources/Core/SessionDatabase.swift`
+  had been listing `hook_events` as a seventh table. `grep`
+  revealed the table does not exist — `recordHookEvent`
+  (`SessionDatabase.swift:2062–2083`) writes into `token_events`
+  with `source='hook'`. Hook telemetry is a SOURCE discriminator
+  on an existing table, not a separate aggregate. Extracting a
+  `HookEventStore` with no table of its own would have shipped
+  either a no-op wrapper or a fabricated schema migration, both
+  in violation of the round's acceptance criteria.
+- Shipped: corrected the top-of-file comment on
+  `Sources/Core/SessionDatabase.swift:4-64`. Removed `hook_events`
+  + `HookEventStore` from the table list and carve-up plan; noted
+  the correction inline so future readers see why the phantom
+  entry is gone. Updated `spec/autonomous-backlog.yaml` so (a) the
+  umbrella `sessiondatabase-split` now tracks four real rounds,
+  (b) `sessiondb-split-2-commandstore` is unblocked and absorbs
+  the "first extraction proves the pattern" charter, (c)
+  `sessiondb-split-3-tokeneventstore` explicitly owns
+  `recordHookEvent` (the rows live in `token_events`), (d)
+  `complianceRate()`'s single-table `source IN ('mcp','hook')`
+  query is called out as cross-store composition the final round
+  must preserve (Majors' observability flag).
+- No Swift source logic changed; no tests added or removed. The
+  split chain is now 4 extractions + 1 façade-thin wrap-up (was
+  5 + 1).
+- **Accepted risks**: none. The stale comment had no runtime
+  impact; it only misled pre-audit readers. If a dedicated
+  `hook_events` table is ever desired later (e.g. for retention
+  partitioning or tighter compliance-rate queries), that is a
+  P2 future backlog item that must weigh the cost of fracturing
+  `complianceRate()`.
+
 ### April 20 — Ollama pane: pin the MCP env contract (`mcp-in-ollama-pane-verify`)
 - `mcp-in-ollama-pane-verify` closes round 5 of the
   `ollama-pane-discovery-models-bundle` umbrella. The operator flagged

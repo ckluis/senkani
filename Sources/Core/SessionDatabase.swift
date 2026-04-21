@@ -1,18 +1,22 @@
 import Foundation
 import SQLite3
 
-// MARK: - Split plan (Luminary P2-11, deferred)
+// MARK: - Split plan (Luminary P2-11, in progress)
 //
-// This file is the single façade for everything in the session SQLite DB:
-// sessions, commands, FTS5, token_events, sandboxed_results,
-// validation_results, hook_events, event_counters, migrations, retention.
-// It passed the 2026-04 Luminary audit as "too large but not yet dangerous";
-// the split was deferred until the conditions below are met, and this comment
-// is the handoff for whoever picks it up.
+// This file is the single façade for everything in the session SQLite DB.
+// Real tables (as of 2026-04-20): sessions, commands, commands_fts (FTS5),
+// token_events, claude_session_cursors, sandboxed_results, validation_results,
+// event_counters, schema_migrations.
+//
+// NOTE: a prior version of this comment listed `hook_events` as a seventh
+// table. That was wrong — `recordHookEvent` writes into `token_events` with
+// `source='hook'`; there is no separate table. Corrected 2026-04-20 under
+// sessiondb-split-1-hookeventstore (skipped; see that item's notes).
 //
 // Gate (all three required before splitting):
 //   1. Wave 2 migration system landed.               ✅ 2026-04-15
-//   2. A second contributor needs to touch the DB layer.
+//   2. A second contributor needs to touch the DB layer. (gate lifted
+//      2026-04-20 by operator — split rounds now run autonomously.)
 //   3. Bounded contexts clarified by a concrete feature ask.
 //
 // Target carve-up (Evans / Kleppmann): each store owns its own transaction
@@ -21,17 +25,23 @@ import SQLite3
 //   CommandStore       — sessions, commands, commands_fts, recordCommand
 //                        (the FTS5 sync already uses BEGIN IMMEDIATE — keep
 //                        that transactional boundary in the carve-out).
+//                        Also validates the extraction pattern for the
+//                        remaining stores (this was sub-item 1's original
+//                        charter before the phantom HookEventStore was
+//                        removed from the plan).
 //   TokenEventStore    — token_events, claude_session_cursors,
-//                        tokenStats*, hotFiles, liveSessionMultiplier.
+//                        tokenStats*, hotFiles, liveSessionMultiplier,
+//                        recordHookEvent (the hook-telemetry write site
+//                        lives here because the rows live in token_events).
 //   SandboxStore       — sandboxed_results + prune-on-start.
 //   ValidationStore    — validation_results + AutoValidate integration.
-//   HookEventStore     — hook_events (interception telemetry).
 //
 // What stays on `SessionDatabase`:
 //   - The `Connection`/`DatabaseQueue` lifecycle.
 //   - `MigrationRunner` invocation (flock + kill-switch).
 //   - Cross-store aggregates that today exist as SQL JOINs
-//     (`lifetimeStats`, `tokenStatsForProject` joining sessions ↔ events).
+//     (`lifetimeStats`, `tokenStatsForProject` joining sessions ↔ events,
+//     `complianceRate` counting `source IN ('mcp','hook')` against total).
 //     These become thin façade methods that call the stores and compose.
 //
 // What deliberately does NOT move (Torvalds):
@@ -40,11 +50,13 @@ import SQLite3
 //     counter. Keep on the façade.
 //   - `schema_migrations` read/write — owned by the migration runner.
 //
-// When you do split, land it in three commits so reverts stay scoped:
+// When you do split, land it in four commits so reverts stay scoped:
 //   1. Extract `CommandStore` (biggest, lowest cross-table coupling).
-//   2. Extract `TokenEventStore` (depends on session id but not command id).
-//   3. Extract the two 24-h prune stores together (they share the retention
-//      scheduler cadence).
+//   2. Extract `TokenEventStore` (depends on session id but not command id;
+//      owns recordHookEvent because hook rows live in token_events).
+//   3. Extract `SandboxStore`.
+//   4. Extract `ValidationStore` (can share a RetentionScheduler with
+//      SandboxStore if one falls out naturally).
 //
 // Do not split in a feature branch that also changes schema. The migration
 // system is the other half of the contract and must stay stable across the

@@ -9,7 +9,7 @@ import Darwin.POSIX
 /// Tests for the JSONL → Unix socket migration on the pane IPC path.
 /// Exercises `PaneIPC.sendFireAndForget` against a real bound UDS listener
 /// in a temp directory — no libc mocking, no SocketServerManager dependency.
-@Suite("PaneIPC — socket migration (fire-and-forget)", .serialized)
+@Suite("PaneIPC — socket migration (fire-and-forget)")
 struct PaneSocketMigrationTests {
 
     // MARK: - Helpers
@@ -192,7 +192,7 @@ struct PaneSocketMigrationTests {
     }
 
     @Test("concurrent: 4 fire-and-forget writes from distinct queues all land")
-    func concurrentWritesAllDelivered() throws {
+    func concurrentWritesAllDelivered() async throws {
         let path = Self.tempSocketPath()
         let listenFD = try Self.bindListener(at: path, backlog: 8)
         defer {
@@ -200,35 +200,25 @@ struct PaneSocketMigrationTests {
             unlink(path)
         }
 
-        final class Counter: @unchecked Sendable {
-            private let lock = NSLock()
-            private var count = 0
-            func inc() {
-                lock.lock(); defer { lock.unlock() }
-                count += 1
-            }
-            var value: Int {
-                lock.lock(); defer { lock.unlock() }
-                return count
-            }
-        }
-        let successes = Counter()
-
-        let group = DispatchGroup()
-        for i in 0..<4 {
-            group.enter()
-            DispatchQueue.global().async {
-                let cmd = PaneIPCCommand(action: .setBudgetStatus, params: [
-                    "pane_id": "pane-\(i)"
-                ])
-                if PaneIPC.sendFireAndForget(cmd, socketPath: path) == .written {
-                    successes.inc()
+        // TaskGroup, not DispatchGroup: `group.wait()` on the cooperative
+        // pool thread starves swift-testing's scheduler (spec/testing.md
+        // "Full-suite hang"). Using `await group.next()` keeps it yielding.
+        let successes = await withTaskGroup(of: Bool.self) { group in
+            for i in 0..<4 {
+                group.addTask {
+                    let cmd = PaneIPCCommand(action: .setBudgetStatus, params: [
+                        "pane_id": "pane-\(i)"
+                    ])
+                    return PaneIPC.sendFireAndForget(cmd, socketPath: path) == .written
                 }
-                group.leave()
             }
+            var ok = 0
+            while let written = await group.next() {
+                if written { ok += 1 }
+            }
+            return ok
         }
-        group.wait()
-        #expect(successes.value == 4)
+        #expect(successes == 4)
 
         // Drain all 4 frames; each arrives on its own accepted connection.
         var seenPaneIDs = Set<String>()
@@ -243,7 +233,7 @@ struct PaneSocketMigrationTests {
     }
 
     @Test("large frame: multi-KB payload writes and reads back cleanly")
-    func largeFrameRoundTrip() throws {
+    func largeFrameRoundTrip() async throws {
         let path = Self.tempSocketPath()
         let listenFD = try Self.bindListener(at: path)
         defer {
@@ -255,28 +245,24 @@ struct PaneSocketMigrationTests {
         // kernel buffer size so the write must drain through. Production
         // drains continuously via SocketServerManager.acceptPaneConnection;
         // this test mirrors that by accepting + reading in a parallel
-        // queue while the sender writes.
+        // task while the sender writes.
         var params: [String: String] = [:]
         for i in 0..<200 {
             params["k\(i)"] = String(repeating: "x", count: 40)
         }
         let cmd = PaneIPCCommand(action: .list, params: params)
 
-        // Drain-side background task: accept, read length, drain payload.
-        final class FrameBox: @unchecked Sendable {
-            var data: Data?
-        }
-        let box = FrameBox()
-        let done = DispatchSemaphore(value: 0)
-        DispatchQueue.global(qos: .userInitiated).async {
-            box.data = try? Self.acceptAndReadOneFrame(on: listenFD, timeoutMs: 2000)
-            done.signal()
-        }
+        // Drain runs concurrently with the send. `async let` over a
+        // detached task replaces DispatchSemaphore.wait, which has the
+        // same pool-starvation hazard as DispatchGroup.wait above once
+        // this suite is no longer `.serialized`.
+        async let frameData: Data? = Task.detached(priority: .userInitiated) {
+            try? Self.acceptAndReadOneFrame(on: listenFD, timeoutMs: 2000)
+        }.value
 
         #expect(PaneIPC.sendFireAndForget(cmd, socketPath: path) == .written)
-        _ = done.wait(timeout: .now() + .seconds(3))
 
-        let frame = try #require(box.data)
+        let frame = try #require(await frameData)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let decoded = try decoder.decode(PaneIPCCommand.self, from: frame)

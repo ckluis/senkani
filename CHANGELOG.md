@@ -6,6 +6,20 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 21 — `PaneSocketMigrationTests`: DispatchGroup → TaskGroup (`pane-socket-migration-taskgroup`)
+- Rewrote `concurrentWritesAllDelivered` on `withTaskGroup(of: Bool.self)`
+  with `await group.next()` draining. Closes the last of the three
+  cooperative-pool-starvation frames from the 2026-04-21 hang sample
+  (line 230's `DispatchGroup.wait()`). The `Counter`/`NSLock` helper
+  is gone — subtasks return `Bool`, the parent sums them.
+- Rewrote `largeFrameRoundTrip` the same way: `DispatchQueue.global` +
+  `DispatchSemaphore.wait` → `async let` over `Task.detached` +
+  `await`. Same hazard class, surfaced the moment the suite stopped
+  being `.serialized`. `FrameBox` helper deleted.
+- `.serialized` trait removed from the `PaneSocketMigrationTests`
+  suite. All 9 tests run in parallel; the suite finishes in 7 ms
+  under `--parallel`. Full suite still 1617 green in ~20 s.
+
 ### April 21 — Test harness hang: migrate NSLock helpers to `@TaskLocal` (`test-harness-tasklocal-migration`)
 - Root-cause fix for two of the three frozen frames from the
   2026-04-21 sigtrap-repro sample. `ScheduleWorktree.withTestDir`

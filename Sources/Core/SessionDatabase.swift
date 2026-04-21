@@ -42,7 +42,13 @@ import SQLite3
 //                        (`tokenStatsByAgent`, `lastSessionActivity`,
 //                        `lastExecResult`) and `complianceRate` stay on
 //                        this façade as composition per the split's scope.
-//   SandboxStore       — sandboxed_results + prune-on-start.
+//   SandboxStore       ✅ extracted 2026-04-21 (sessiondb-split-4).
+//                        Lives at Sources/Core/Stores/SandboxStore.swift.
+//                        Owns sandboxed_results (schema + two indexes) and
+//                        the store/retrieve/prune API. 24-h prune cadence
+//                        is driven by RetentionScheduler (same helper that
+//                        owns the 90-day token_events cadence and will
+//                        shortly own the 24-h validation_results cadence).
 //   ValidationStore    — validation_results + AutoValidate integration.
 //
 // What stays on `SessionDatabase`:
@@ -130,6 +136,7 @@ public final class SessionDatabase: @unchecked Sendable {
     // parent's connection/queue.
     private var commandStore: CommandStore!
     private var tokenEventStore: TokenEventStore!
+    private var sandboxStore: SandboxStore!
 
     // MARK: - Init
 
@@ -152,7 +159,8 @@ public final class SessionDatabase: @unchecked Sendable {
         commandStore.setupSchema()
         tokenEventStore = TokenEventStore(parent: self)
         tokenEventStore.setupSchema()
-        createSandboxedResultsTable()
+        sandboxStore = SandboxStore(parent: self)
+        sandboxStore.setupSchema()
         createValidationResultsTable()
         runMigrations(path: dbPath)
     }
@@ -172,7 +180,8 @@ public final class SessionDatabase: @unchecked Sendable {
         commandStore.setupSchema()
         tokenEventStore = TokenEventStore(parent: self)
         tokenEventStore.setupSchema()
-        createSandboxedResultsTable()
+        sandboxStore = SandboxStore(parent: self)
+        sandboxStore.setupSchema()
         createValidationResultsTable()
         runMigrations(path: path)
     }
@@ -1294,93 +1303,28 @@ public final class SessionDatabase: @unchecked Sendable {
         }
     }
 
-    // MARK: - Sandboxed Results Table
+    // Sandboxed Results schema lives in SandboxStore.setupSchema() — called
+    // from init. See Sources/Core/Stores/SandboxStore.swift.
 
-    private func createSandboxedResultsTable() {
-        queue.sync {
-            exec("""
-                CREATE TABLE IF NOT EXISTS sandboxed_results (
-                    id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    created_at REAL NOT NULL,
-                    command TEXT NOT NULL,
-                    full_output TEXT NOT NULL,
-                    line_count INTEGER NOT NULL,
-                    byte_count INTEGER NOT NULL
-                );
-            """)
-            execSilent("CREATE INDEX IF NOT EXISTS idx_sandboxed_results_session ON sandboxed_results(session_id);")
-            execSilent("CREATE INDEX IF NOT EXISTS idx_sandboxed_results_time ON sandboxed_results(created_at);")
-        }
-    }
-
-    // MARK: - Sandboxed Results API
+    // MARK: - Sandboxed Results API (delegated to SandboxStore)
 
     /// Store a large command output and return a retrieve ID.
     /// The ID uses a `r_` prefix + 12-char UUID segment for compactness.
     public func storeSandboxedResult(sessionId: String, command: String, output: String) -> String {
-        let resultId = "r_" + UUID().uuidString.prefix(12).lowercased()
-        let now = Date().timeIntervalSince1970
-        let lineCount = output.components(separatedBy: "\n").count
-        let byteCount = output.utf8.count
-
-        queue.sync {
-            guard let db = db else { return }
-            let sql = """
-                INSERT INTO sandboxed_results (id, session_id, created_at, command, full_output, line_count, byte_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?);
-            """
-            var stmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-            defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (resultId as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (sessionId as NSString).utf8String, -1, nil)
-            sqlite3_bind_double(stmt, 3, now)
-            sqlite3_bind_text(stmt, 4, (command as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 5, (output as NSString).utf8String, -1, nil)
-            sqlite3_bind_int64(stmt, 6, Int64(lineCount))
-            sqlite3_bind_int64(stmt, 7, Int64(byteCount))
-            sqlite3_step(stmt)
-        }
-
-        return resultId
+        return sandboxStore.storeSandboxedResult(sessionId: sessionId, command: command, output: output)
     }
 
     /// Retrieve a sandboxed result by its ID.
     /// Returns nil if not found (expired or invalid ID).
     public func retrieveSandboxedResult(resultId: String) -> (command: String, output: String, lineCount: Int, byteCount: Int)? {
-        return queue.sync {
-            guard let db = db else { return nil }
-            let sql = "SELECT command, full_output, line_count, byte_count FROM sandboxed_results WHERE id = ?;"
-            var stmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
-            defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (resultId as NSString).utf8String, -1, nil)
-
-            guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
-            let command = String(cString: sqlite3_column_text(stmt, 0))
-            let output = String(cString: sqlite3_column_text(stmt, 1))
-            let lineCount = Int(sqlite3_column_int64(stmt, 2))
-            let byteCount = Int(sqlite3_column_int64(stmt, 3))
-            return (command, output, lineCount, byteCount)
-        }
+        return sandboxStore.retrieveSandboxedResult(resultId: resultId)
     }
 
     /// Delete sandboxed results older than a given interval (default: 24 hours).
-    /// Call on session startup to prevent unbounded growth.
+    /// Called from `RetentionScheduler.tick` and from session startup.
     @discardableResult
     public func pruneSandboxedResults(olderThan interval: TimeInterval = 86400) -> Int {
-        let cutoff = Date().timeIntervalSince1970 - interval
-        return queue.sync {
-            guard let db = db else { return 0 }
-            let sql = "DELETE FROM sandboxed_results WHERE created_at < ?;"
-            var stmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
-            defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_double(stmt, 1, cutoff)
-            sqlite3_step(stmt)
-            return Int(sqlite3_changes(db))
-        }
+        return sandboxStore.pruneSandboxedResults(olderThan: interval)
     }
 
     // MARK: - FTS5 Query Sanitization

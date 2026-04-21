@@ -6,6 +6,46 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 21 — SessionDatabase split: extract SandboxStore (`sessiondb-split-4-sandboxstore`)
+- Round 3 of 5 under the `sessiondatabase-split` umbrella
+  (Luminary P2-11). New `Sources/Core/Stores/SandboxStore.swift`
+  (138 LOC) owns the `sandboxed_results` table end-to-end: schema
+  + the two existing indexes
+  (`idx_sandboxed_results_session`, `idx_sandboxed_results_time`)
+  + the `r_`-prefix ID mint, the store/retrieve path, and the
+  24-h prune that `RetentionScheduler` invokes hourly. The store
+  shares the parent's `DispatchQueue` and raw SQLite connection —
+  no second handle, same `unowned let parent` pattern as
+  `CommandStore` and `TokenEventStore`.
+- Methods now delegated through the façade:
+  `storeSandboxedResult`, `retrieveSandboxedResult`,
+  `pruneSandboxedResults`. All callers
+  (`ExecTool`, `WebFetchTool`, `SessionTool`, `MCPSession`,
+  `RetentionScheduler`) continue to use
+  `SessionDatabase.shared.<method>` — the extraction is
+  byte-identical.
+- `SessionDatabase.swift` dropped from 1598 → 1542 LOC (−56).
+  Three of the four planned stores
+  (CommandStore 384 + TokenEventStore 860 + SandboxStore 138 =
+  1382 LOC) now own their own files; the façade is on track for
+  the round-5 ≤800-LOC target once `ValidationStore` also
+  extracts.
+- New `Tests/SenkaniTests/SandboxStoreTests.swift` @Suite
+  "SandboxStore — writes, reads, prune" adds 6 tests:
+  ID shape (`r_` prefix + 14 chars + hex charset), round-trip of
+  command/output/line-count/byte-count, prune-by-age deletes old
+  rows and returns the delete count, prune keeps rows younger
+  than the cutoff, `retrieveSandboxedResult` returns nil for an
+  unknown ID, and multi-session isolation. The pre-existing
+  `OutputSandboxingTests.swift` suites (11 tests across storage,
+  summary builder, and mode logic) continue to pass unchanged —
+  the façade contract they rely on is preserved.
+- Targeted regression: 129 tests green across
+  `SandboxStore` + `OutputSandboxing` + `MCPSession` +
+  `RetentionScheduler` + `ExecTool` + `SessionTool` +
+  `WebFetch` + `SessionDatabase` + `CommandStore` +
+  `TokenEventStore` + `AutoValidate` + `DiagnosticRewriter`.
+
 ### April 21 — SessionDatabase split: extract TokenEventStore (`sessiondb-split-3-tokeneventstore`)
 - Round 3 of 5 under the `sessiondatabase-split` umbrella
   (Luminary P2-11). New `Sources/Core/Stores/TokenEventStore.swift`

@@ -6,6 +6,66 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 21 — SessionDatabase split: extract TokenEventStore (`sessiondb-split-3-tokeneventstore`)
+- Round 3 of 5 under the `sessiondatabase-split` umbrella
+  (Luminary P2-11). New `Sources/Core/Stores/TokenEventStore.swift`
+  (860 LOC) owns the `token_events` + `claude_session_cursors`
+  tables end-to-end: schema + indexes + the one
+  `model_tier`-column migration + the 90-day `pruneTokenEvents`
+  cadence. The store shares the parent's `DispatchQueue` and raw
+  SQLite connection — no second handle.
+- Methods that moved behind the façade via delegation:
+  `recordTokenEvent`, `recordHookEvent` (hook rows still live in
+  `token_events` with `source='hook'`, not a separate table — see
+  round 1's note),
+  `tokenStatsForProject` / `tokenStatsAllProjects` /
+  `tokenStatsByFeature` / `tokenStatsByFeatureAllProjects`,
+  `liveSessionMultiplier`, `savingsTimeSeries` /
+  `savingsTimeSeriesAllProjects`, `recentTokenEvents` /
+  `recentTokenEventsAllProjects` (+ private
+  `parseTimelineRows` helper), `lastReadTimestamp`, `hotFiles`,
+  `sessionSummaries`, `unfilteredExecCommands`,
+  `recurringFileMentions`, `instructionRetryPatterns`,
+  `workflowPairPatterns`, `getSessionCursor`, `setSessionCursor`,
+  `pruneTokenEvents`, `dumpTokenEvents` (DEBUG).
+- Cross-store composition deliberately STAYS on the
+  `SessionDatabase` façade per the round's scope — these methods
+  JOIN across tables owned by different stores and live on the
+  thin façade that knows both: `lastSessionActivity`
+  (sessions → token_events), `lastExecResult` (token_events ↔
+  commands), `tokenStatsByAgent` (token_events ⋈ sessions),
+  `complianceRate` (called out explicitly). The façade still owns
+  `recordBudgetDecision` (writes commands) and `event_counters`
+  (trivially shared; moving would mean every defense site imports
+  a new store just to bump a counter).
+- `SessionDatabase.swift` drops from 2213 → 1598 LOC (28% smaller,
+  −615 LOC). `CommandStore` + `TokenEventStore` now own 1244 LOC
+  between them; façade is heading toward the round-5 ≤800-LOC
+  target.
+- Public API is byte-identical — every existing callsite
+  (AgentTimeline pane, Dashboard, SavingsTest pane, `senkani eval`,
+  BudgetConfig gates, ScheduleTelemetry, ClaudeSessionReader,
+  HookRouter's re-read suppression, WasteAnalyzer's
+  compound-learning queries, ContextSignalGenerator's H+2b
+  recurring-file flow) keeps working without edits.
+- New `Tests/SenkaniTests/TokenEventStoreTests.swift` with 9 tests
+  covering: recordTokenEvent persistence of all fields;
+  recordHookEvent landing in token_events with `source='hook'`;
+  tokenStatsForProject aggregation; tokenStatsByFeature sort
+  order; liveSessionMultiplier nil-on-empty and raw/compressed
+  math; hotFiles frequency ranking; session cursor upsert
+  (get → 0,0 / set → get round-trip / set-again overwrites);
+  pruneTokenEvents 90-day cutoff. Targeted regression suite
+  (AgentTracking + LiveMultiplier + TieredContext +
+  BudgetEnforcement + HookRouter + Dashboard + FeatureSavings +
+  ObservabilityCounters + CommandStore) passes green (116/116),
+  plus CompoundLearning + ClaudeSessionReader + RetentionScheduler
+  + MigrationRunner + SecurityEvents (152/152).
+- Accepted risks: none material. The extraction is
+  byte-identical; divergence would surface in the 1129-test
+  suite.
+- Next: `sessiondb-split-4-sandboxstore` — now unblocked.
+
 ### April 20 — SessionDatabase split: extract CommandStore (`sessiondb-split-2-commandstore`)
 - First real extraction under the `sessiondatabase-split` umbrella
   (Luminary P2-11). New `Sources/Core/Stores/CommandStore.swift`

@@ -301,7 +301,7 @@ struct ElixirRealisticTests {
 @Suite("TreeSitterBackend — Elixir Performance")
 struct ElixirPerformanceTests {
 
-    @Test("Elixir file parses under 10ms")
+    @Test("Elixir file parses under 50ms")
     func elixirFileParsesUnder10ms() {
         var source = "defmodule BigModule do\n"
         for i in 0..<30 {
@@ -318,7 +318,8 @@ struct ElixirPerformanceTests {
             let entries = indexElixir(source)
             #expect(entries.count > 0)
         }
-        #expect(elapsed < .milliseconds(10))
+        // See TreeSitterKotlinTests for the 10ms → 50ms widen rationale.
+        #expect(elapsed < .milliseconds(50))
     }
 
     @Test("Elixir coexists with other languages")

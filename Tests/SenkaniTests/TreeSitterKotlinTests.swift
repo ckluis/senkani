@@ -383,7 +383,7 @@ struct KotlinRealisticTests {
 @Suite("TreeSitterBackend — Kotlin Performance")
 struct KotlinPerformanceTests {
 
-    @Test("Kotlin file parses under 10ms")
+    @Test("Kotlin file parses under 50ms")
     func kotlinFileParsesUnder10ms() {
         var source = "package com.example\n\n"
         for i in 0..<5 {
@@ -406,7 +406,12 @@ struct KotlinPerformanceTests {
             let entries = indexKotlin(source)
             #expect(entries.count > 0)
         }
-        #expect(elapsed < .milliseconds(10))
+        // Widened 10ms → 50ms 2026-04-21: original 10ms bound flakes on
+        // loaded machines (see spec/testing.md "Harness hang"). 50ms still
+        // catches a real regression — a reverted tree-sitter parse costs
+        // ~500ms — without false-firing when a sibling @Test hogs the
+        // cooperative pool.
+        #expect(elapsed < .milliseconds(50))
     }
 }
 

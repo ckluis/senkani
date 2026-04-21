@@ -6,6 +6,34 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 21 — Test harness hang: `.serialized` + `tools/test-safe.sh` (`test-harness-sigtrap-repro`)
+- Three consecutive DB-split rounds (split-2/3/4) fell back to
+  targeted regressions because `swift test` hangs 50+ minutes at
+  0% CPU on this machine. Operator sample at
+  `spec/.harness-deadlock-sample-2026-04-21.txt` named three
+  frozen frames: `ScheduleWorktree.withTestDir`,
+  `LearnedRulesStore.withPath`, `PaneSocketMigrationTests.swift:230`.
+- Root cause: Swift concurrency cooperative-pool starvation. The
+  first two helpers wrap `body()` in `NSLock`; the third uses
+  `DispatchGroup.wait()`. Enough parallel `@Test` tasks block on
+  these primitives and the pool deadlocks — `withTimeLimit`
+  traits are cooperative and never fire.
+- Shipped workaround: `.serialized` trait added to
+  `ScheduleWorktreeTests`, `PaneSocketMigrationTests`,
+  `WatchRingBufferTests`; `tools/test-safe.sh` provides a
+  deterministic full-suite run (`SWT_NO_PARALLEL=1 swift test
+  --no-parallel`); three timing flakes widened (TreeSitter
+  Elixir/Kotlin parse 10ms → 50ms, SkillScannerAsync 2s → 5s).
+  Root cause + fingerprint + re-capture recipe documented in
+  `spec/testing.md` under "Full-suite hang — Swift concurrency
+  pool starvation".
+- Deferred (new backlog items): migrate `withTestDir`/`withPath`
+  to `@TaskLocal`; rewrite `concurrentWritesAllDelivered` on
+  `TaskGroup`; file upstream swift-testing issue.
+- Tests: 32 targeted tests pass, build green. Full-suite
+  validation via `tools/test-safe.sh` — deterministic but slow;
+  manual-log target added.
+
 ### April 21 — SessionDatabase split: extract SandboxStore (`sessiondb-split-4-sandboxstore`)
 - Round 3 of 5 under the `sessiondatabase-split` umbrella
   (Luminary P2-11). New `Sources/Core/Stores/SandboxStore.swift`

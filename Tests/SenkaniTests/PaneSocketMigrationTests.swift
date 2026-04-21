@@ -9,7 +9,7 @@ import Darwin.POSIX
 /// Tests for the JSONL → Unix socket migration on the pane IPC path.
 /// Exercises `PaneIPC.sendFireAndForget` against a real bound UDS listener
 /// in a temp directory — no libc mocking, no SocketServerManager dependency.
-@Suite("PaneIPC — socket migration (fire-and-forget)")
+@Suite("PaneIPC — socket migration (fire-and-forget)", .serialized)
 struct PaneSocketMigrationTests {
 
     // MARK: - Helpers

@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import Core
 
-@Suite("ScheduleWorktree") struct ScheduleWorktreeTests {
+@Suite("ScheduleWorktree", .serialized) struct ScheduleWorktreeTests {
 
     // MARK: - Test helpers
 

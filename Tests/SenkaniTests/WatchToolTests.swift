@@ -4,7 +4,7 @@ import Foundation
 
 // MARK: - Ring Buffer Tests
 
-@Suite("senkani_watch — Ring Buffer")
+@Suite("senkani_watch — Ring Buffer", .serialized)
 struct WatchRingBufferTests {
 
     private func makeSession() -> MCPSession {

@@ -12,6 +12,39 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Test harness hang workaround (shipped 2026-04-21)
+
+Round `test-harness-sigtrap-repro`. `.serialized` trait added to three
+parallel-hostile suites, `tools/test-safe.sh` added for deterministic
+full-suite runs. Targeted regression (32 tests) is green under
+parallel `swift test`. What the unit tests cannot cover: a full-suite
+run on a real machine, end-to-end. These steps close that loop.
+
+- **`./tools/test-safe.sh` completes end-to-end.** Run from a clean
+  worktree on the original hang-reproducing machine. Expect:
+  wall-clock 10–30 min (slow but deterministic), exit code 0, no
+  SIGINT needed. Confirms the `SWT_NO_PARALLEL=1 --no-parallel`
+  incantation resolves the hang on this machine. If it hangs: the
+  operator's hang repro is broader than the three suites named in
+  `spec/testing.md` "Full-suite hang"; re-capture frames via
+  `sample <pid>` and file a new backlog item.
+
+- **`swift test` (default parallel) no longer hangs on the three
+  named suites.** Run `swift test --filter "ScheduleWorktreeTests|
+  PaneSocketMigrationTests|WatchRingBufferTests"` from the
+  hang-reproducing machine. Expect: terminates in <10s with all
+  tests green. Confirms the `.serialized` traits converted the
+  intra-suite parallelism into sequential access to the
+  `NSLock`-protected helpers.
+
+- **Timing-flake thresholds don't mask regressions.** Run
+  `swift test --filter "kotlinFileParses|elixirFileParses|timingSanity"`
+  three times in a row; all bounds should pass with >10x headroom
+  under normal machine load. A single failure on an idle machine
+  means the threshold is too tight; three in a row means a real
+  regression. Either way: file a backlog item, do not silently
+  widen further.
+
 ### Ollama pane: MCP tool reachability (shipped 2026-04-20)
 
 Round 5 of the `ollama-pane-discovery-models-bundle` umbrella. Pre-audit

@@ -178,9 +178,18 @@ Prerequisites: macOS 14+, Swift 6.0+, Xcode 15+
 ```bash
 swift build          # debug
 swift build -c release
-swift test           # 1433 tests
+swift test           # parallel run (fast; see caveat below)
+./tools/test-safe.sh # deterministic full-suite run (slower but always terminates)
 senkani doctor       # verify grammar and database setup
 ```
+
+> **Test harness caveat:** default `swift test` can hang during
+> parallel startup on some machines due to Swift concurrency
+> pool starvation in a handful of NSLock-wrapped test helpers.
+> See [spec/testing.md](spec/testing.md) — "Full-suite hang" for
+> root cause + workaround. `./tools/test-safe.sh` is the
+> documented deterministic path until the underlying helpers are
+> migrated off cooperative-pool blocking primitives.
 
 The GUI target (`SenkaniApp`) includes SwiftUI, SwiftTerm, and MLX. The CLI (`senkani`) and hook (`senkani-hook`) targets are lean — no MLX, no SwiftUI.
 

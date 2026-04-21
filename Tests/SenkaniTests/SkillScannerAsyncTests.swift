@@ -101,11 +101,12 @@ struct SkillScannerAsyncTests {
         let elapsed = Date().timeIntervalSince(start)
 
         #expect(skills.count >= 80)
-        // 2s is ~1000x the real scan time for 80 tiny files. A regression
-        // that reverts scanAsync to synchronous would still pass this bound
-        // — the real value is ruling out deadlock / infinite-recursion
-        // regressions, not micro-benchmarking.
-        #expect(elapsed < 2.0)
+        // Widened 2s → 5s 2026-04-21: machine-load-dependent flake (see
+        // spec/testing.md "Harness hang"). 5s still rules out deadlock /
+        // infinite-recursion regressions — the true failure mode this
+        // guard exists for — without flaking under cooperative-pool
+        // contention.
+        #expect(elapsed < 5.0)
     }
 
     @Test("scanAsync does not stall concurrent main-actor work")

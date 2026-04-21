@@ -22,13 +22,13 @@ import SQLite3
 // Target carve-up (Evans / Kleppmann): each store owns its own transaction
 // boundary and is reachable from Core only through this file.
 //
-//   CommandStore       — sessions, commands, commands_fts, recordCommand
-//                        (the FTS5 sync already uses BEGIN IMMEDIATE — keep
-//                        that transactional boundary in the carve-out).
-//                        Also validates the extraction pattern for the
-//                        remaining stores (this was sub-item 1's original
-//                        charter before the phantom HookEventStore was
-//                        removed from the plan).
+//   CommandStore       ✅ extracted 2026-04-20 (sessiondb-split-2).
+//                        Lives at Sources/Core/Stores/CommandStore.swift.
+//                        Owns sessions + commands + commands_fts + triggers
+//                        + the BEGIN IMMEDIATE transaction boundary around
+//                        the FTS5 sync. Extraction validates the pattern
+//                        for the remaining three stores (token events,
+//                        sandbox, validation).
 //   TokenEventStore    — token_events, claude_session_cursors,
 //                        tokenStats*, hotFiles, liveSessionMultiplier,
 //                        recordHookEvent (the hook-telemetry write site
@@ -110,8 +110,16 @@ public struct PaneTokenStats: Sendable, Equatable {
 public final class SessionDatabase: @unchecked Sendable {
     public static let shared = SessionDatabase()
 
-    private var db: OpaquePointer?
-    private let queue = DispatchQueue(label: "com.senkani.sessiondb", qos: .utility)
+    // `internal` (not `private`) so that extracted stores living under
+    // `Sources/Core/Stores/` can share the connection + queue without opening
+    // a second handle. External callers still go through the public API —
+    // Core is not a place to reach into the raw SQLite pointer.
+    internal var db: OpaquePointer?
+    internal let queue = DispatchQueue(label: "com.senkani.sessiondb", qos: .utility)
+
+    // Extracted stores. Each owns its tables end-to-end and shares the
+    // parent's connection/queue.
+    private var commandStore: CommandStore!
 
     // MARK: - Init
 
@@ -130,7 +138,8 @@ public final class SessionDatabase: @unchecked Sendable {
             db = nil
         }
         enableWAL()
-        createTables()
+        commandStore = CommandStore(parent: self)
+        commandStore.setupSchema()
         createTokenEventsTable()
         createSandboxedResultsTable()
         createValidationResultsTable()
@@ -148,7 +157,8 @@ public final class SessionDatabase: @unchecked Sendable {
             db = nil
         }
         enableWAL()
-        createTables()
+        commandStore = CommandStore(parent: self)
+        commandStore.setupSchema()
         createTokenEventsTable()
         createSandboxedResultsTable()
         createValidationResultsTable()
@@ -331,80 +341,10 @@ public final class SessionDatabase: @unchecked Sendable {
     }
 
     // MARK: - Schema
-
-    private func createTables() {
-        let stmts = [
-            """
-            CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                started_at REAL NOT NULL,
-                ended_at REAL,
-                duration_seconds REAL,
-                total_raw_bytes INTEGER DEFAULT 0,
-                total_saved_bytes INTEGER DEFAULT 0,
-                command_count INTEGER DEFAULT 0,
-                pane_count INTEGER DEFAULT 0,
-                cost_saved_cents INTEGER DEFAULT 0
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS commands (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL REFERENCES sessions(id),
-                timestamp REAL NOT NULL,
-                tool_name TEXT NOT NULL,
-                command TEXT,
-                raw_bytes INTEGER NOT NULL,
-                compressed_bytes INTEGER NOT NULL,
-                feature TEXT,
-                output_preview TEXT
-            );
-            """,
-            """
-            CREATE VIRTUAL TABLE IF NOT EXISTS commands_fts USING fts5(
-                tool_name, command, output_preview,
-                content=commands, content_rowid=id
-            );
-            """,
-            """
-            CREATE TRIGGER IF NOT EXISTS commands_ai AFTER INSERT ON commands BEGIN
-                INSERT INTO commands_fts(rowid, tool_name, command, output_preview)
-                VALUES (new.id, new.tool_name, new.command, new.output_preview);
-            END;
-            """,
-            """
-            CREATE TRIGGER IF NOT EXISTS commands_ad AFTER DELETE ON commands BEGIN
-                INSERT INTO commands_fts(commands_fts, rowid, tool_name, command, output_preview)
-                VALUES ('delete', old.id, old.tool_name, old.command, old.output_preview);
-            END;
-            """,
-            """
-            CREATE TRIGGER IF NOT EXISTS commands_au AFTER UPDATE ON commands BEGIN
-                INSERT INTO commands_fts(commands_fts, rowid, tool_name, command, output_preview)
-                VALUES ('delete', old.id, old.tool_name, old.command, old.output_preview);
-                INSERT INTO commands_fts(rowid, tool_name, command, output_preview)
-                VALUES (new.id, new.tool_name, new.command, new.output_preview);
-            END;
-            """,
-        ]
-
-        // Schema migrations — add columns that may not exist yet.
-        let migrations = [
-            "ALTER TABLE commands ADD COLUMN budget_decision TEXT;",
-            "ALTER TABLE sessions ADD COLUMN project_root TEXT;",
-            // Migration 4: agent type tracking (AXI.3)
-            "ALTER TABLE sessions ADD COLUMN agent_type TEXT;",
-        ]
-        queue.sync {
-            for sql in stmts {
-                exec(sql)
-            }
-            // Run migrations — ALTER TABLE will fail silently if column already exists
-            for migration in migrations {
-                execSilent(migration)
-            }
-        }
-    }
+    //
+    // Sessions / commands / commands_fts schema lives in CommandStore.setupSchema()
+    // — called from init after the connection is open. See
+    // Sources/Core/Stores/CommandStore.swift.
 
     // MARK: - Token Events Table
 
@@ -435,7 +375,6 @@ public final class SessionDatabase: @unchecked Sendable {
             execSilent("ALTER TABLE token_events ADD COLUMN model_tier TEXT;")
             // Indexes for session continuity queries
             execSilent("CREATE INDEX IF NOT EXISTS idx_token_events_session ON token_events(session_id);")
-            execSilent("CREATE INDEX IF NOT EXISTS idx_sessions_project_ended ON sessions(project_root, ended_at);")
             // Migration 5: session cursor table for ClaudeSessionReader (AXI.3 Tier 1)
             exec("""
                 CREATE TABLE IF NOT EXISTS claude_session_cursors (
@@ -445,50 +384,28 @@ public final class SessionDatabase: @unchecked Sendable {
                     updated_at REAL NOT NULL
                 );
             """)
-            // Index for per-agent analytics
-            execSilent("CREATE INDEX IF NOT EXISTS idx_sessions_agent_type ON sessions(agent_type);")
             // Composite index for hotFiles() range scan
             execSilent("CREATE INDEX IF NOT EXISTS idx_token_events_project_tool_time ON token_events(project_root, tool_name, timestamp);")
+            // NOTE: idx_sessions_project_ended + idx_sessions_agent_type were
+            // previously created here. They moved to CommandStore.setupSchema()
+            // with the rest of the sessions-table schema (2026-04-20,
+            // sessiondb-split-2-commandstore).
         }
     }
 
-    // MARK: - Public API
+    // MARK: - Public API (delegated to CommandStore)
 
     /// Create a new session and return its ID.
     @discardableResult
     public func createSession(paneCount: Int = 0, projectRoot: String? = nil, agentType: AgentType? = nil) -> String {
-        let id = UUID().uuidString
-        let normalizedRoot = Self.normalizePath(projectRoot)
-        let now = Date().timeIntervalSince1970
-        return queue.sync {
-            let sql = "INSERT INTO sessions (id, started_at, pane_count, project_root, agent_type) VALUES (?, ?, ?, ?, ?);"
-            var stmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return id }
-            defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, nil)
-            sqlite3_bind_double(stmt, 2, now)
-            sqlite3_bind_int(stmt, 3, Int32(paneCount))
-            if let root = normalizedRoot {
-                sqlite3_bind_text(stmt, 4, (root as NSString).utf8String, -1, nil)
-            } else {
-                sqlite3_bind_null(stmt, 4)
-            }
-            if let agent = agentType {
-                sqlite3_bind_text(stmt, 5, (agent.rawValue as NSString).utf8String, -1, nil)
-            } else {
-                sqlite3_bind_null(stmt, 5)
-            }
-            sqlite3_step(stmt)
-            return id
-        }
+        return commandStore.createSession(paneCount: paneCount, projectRoot: projectRoot, agentType: agentType)
     }
 
     /// Record a single command within a session.
     ///
-    /// P3-13: wrapped in BEGIN IMMEDIATE / COMMIT so the INSERT into `commands` (plus
-    /// the FTS5 trigger sync) and the UPDATE of `sessions` aggregates are atomic.
-    /// Before this: 3 separate sqlite syncs per call, and a crash between them could
-    /// leave stats out-of-sync with the command history.
+    /// P3-13: wrapped in BEGIN IMMEDIATE / COMMIT inside CommandStore so the INSERT
+    /// into `commands` (plus the FTS5 trigger sync) and the UPDATE of `sessions`
+    /// aggregates are atomic.
     public func recordCommand(
         sessionId: String,
         toolName: String,
@@ -498,209 +415,33 @@ public final class SessionDatabase: @unchecked Sendable {
         feature: String? = nil,
         outputPreview: String? = nil
     ) {
-        let now = Date().timeIntervalSince1970
-        // C1 (Cavoukian privacy pass 2026-04-16): redact secrets from the
-        // command string before persistence. `output_preview` is already
-        // filtered (built post-pipeline), but the raw command text was
-        // landing unredacted — a user running
-        //   senkani_exec "curl -H 'Authorization: Bearer sk-ant-…' …"
-        // previously left the literal API key in `commands.command`
-        // forever. SecretDetector short-circuits on no-match so the
-        // benign-case cost is negligible.
-        let scanResult = command.map { SecretDetector.scan($0) }
-        let redactedCommand = scanResult?.redacted
-        let didRedact = !(scanResult?.patterns.isEmpty ?? true)
-        let preview = outputPreview.map { String($0.prefix(500)) }
-        queue.async { [weak self] in
-            guard let self, let db = self.db else { return }
-
-            // Open transaction. If anything in the block fails, rollback.
-            guard sqlite3_exec(db, "BEGIN IMMEDIATE;", nil, nil, nil) == SQLITE_OK else { return }
-            var committed = false
-            defer {
-                if !committed {
-                    sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
-                }
-            }
-
-            let sql = """
-                INSERT INTO commands (session_id, timestamp, tool_name, command, raw_bytes, compressed_bytes, feature, output_preview)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-                """
-            var stmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
-            sqlite3_bind_double(stmt, 2, now)
-            sqlite3_bind_text(stmt, 3, (toolName as NSString).utf8String, -1, nil)
-            if let cmd = redactedCommand {
-                sqlite3_bind_text(stmt, 4, (cmd as NSString).utf8String, -1, nil)
-            } else {
-                sqlite3_bind_null(stmt, 4)
-            }
-            sqlite3_bind_int64(stmt, 5, Int64(rawBytes))
-            sqlite3_bind_int64(stmt, 6, Int64(compressedBytes))
-            if let feat = feature {
-                sqlite3_bind_text(stmt, 7, (feat as NSString).utf8String, -1, nil)
-            } else {
-                sqlite3_bind_null(stmt, 7)
-            }
-            if let prev = preview {
-                sqlite3_bind_text(stmt, 8, (prev as NSString).utf8String, -1, nil)
-            } else {
-                sqlite3_bind_null(stmt, 8)
-            }
-            let insertRC = sqlite3_step(stmt)
-            sqlite3_finalize(stmt)
-            guard insertRC == SQLITE_DONE else { return }
-
-            // Update session aggregates
-            let updateSQL = """
-                UPDATE sessions SET
-                    total_raw_bytes = total_raw_bytes + ?,
-                    total_saved_bytes = total_saved_bytes + ?,
-                    command_count = command_count + 1,
-                    cost_saved_cents = cost_saved_cents + ?
-                WHERE id = ?;
-                """
-            var updateStmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, updateSQL, -1, &updateStmt, nil) == SQLITE_OK else { return }
-            let saved = rawBytes - compressedBytes
-            let costCents = ModelPricing.costSavedCents(bytes: saved)
-            sqlite3_bind_int64(updateStmt, 1, Int64(rawBytes))
-            sqlite3_bind_int64(updateStmt, 2, Int64(saved))
-            sqlite3_bind_int(updateStmt, 3, Int32(costCents))
-            sqlite3_bind_text(updateStmt, 4, (sessionId as NSString).utf8String, -1, nil)
-            let updateRC = sqlite3_step(updateStmt)
-            sqlite3_finalize(updateStmt)
-            guard updateRC == SQLITE_DONE else { return }
-
-            if sqlite3_exec(db, "COMMIT;", nil, nil, nil) == SQLITE_OK {
-                committed = true
-            }
-        }
-        // Observability: count redactions as a privacy-health signal.
-        // Emitted outside the recordCommand queue block so it enqueues its
-        // own update — keeps the commands-insert transaction minimal.
-        if didRedact {
-            recordEvent(type: "security.command.redacted", projectRoot: nil)
-        }
+        commandStore.recordCommand(
+            sessionId: sessionId,
+            toolName: toolName,
+            command: command,
+            rawBytes: rawBytes,
+            compressedBytes: compressedBytes,
+            feature: feature,
+            outputPreview: outputPreview
+        )
     }
 
     /// End a session, recording its end time and duration.
     public func endSession(sessionId: String) {
-        let now = Date().timeIntervalSince1970
-        queue.async { [weak self] in
-            guard let self, let db = self.db else { return }
-            let sql = """
-                UPDATE sessions SET
-                    ended_at = ?,
-                    duration_seconds = ? - started_at
-                WHERE id = ?;
-                """
-            var stmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-            defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_double(stmt, 1, now)
-            sqlite3_bind_double(stmt, 2, now)
-            sqlite3_bind_text(stmt, 3, (sessionId as NSString).utf8String, -1, nil)
-            sqlite3_step(stmt)
-        }
+        commandStore.endSession(sessionId: sessionId)
     }
 
     /// Load recent session summaries.
     /// SECURITY: Limit parameter is capped at 500 to prevent resource exhaustion.
     public func loadSessions(limit: Int = 50) -> [SessionSummaryRow] {
-        return queue.sync {
-            guard let db = db else { return [] }
-            let sql = """
-                SELECT id, started_at, duration_seconds, total_raw_bytes, total_saved_bytes,
-                       command_count, pane_count, cost_saved_cents
-                FROM sessions
-                ORDER BY started_at DESC
-                LIMIT ?;
-                """
-            var stmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
-            defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_int(stmt, 1, Int32(min(limit, 500)))
-
-            var rows: [SessionSummaryRow] = []
-            while sqlite3_step(stmt) == SQLITE_ROW {
-                let id = String(cString: sqlite3_column_text(stmt, 0))
-                let startedAt = sqlite3_column_double(stmt, 1)
-                let duration = sqlite3_column_type(stmt, 2) == SQLITE_NULL ? 0 : sqlite3_column_double(stmt, 2)
-                let rawBytes = Int(sqlite3_column_int64(stmt, 3))
-                let savedBytes = Int(sqlite3_column_int64(stmt, 4))
-                let cmdCount = Int(sqlite3_column_int(stmt, 5))
-                let paneCount = Int(sqlite3_column_int(stmt, 6))
-                let costCents = Int(sqlite3_column_int(stmt, 7))
-
-                rows.append(SessionSummaryRow(
-                    id: id,
-                    timestamp: Date(timeIntervalSince1970: startedAt),
-                    duration: duration,
-                    totalRaw: rawBytes,
-                    totalSaved: savedBytes,
-                    commandCount: cmdCount,
-                    paneCount: paneCount,
-                    costSavedCents: costCents
-                ))
-            }
-            return rows
-        }
+        return commandStore.loadSessions(limit: limit)
     }
 
     /// Full-text search across commands.
     /// SECURITY: The query is sanitized for FTS5 — special operators are stripped
-    /// and terms are quoted to prevent FTS5 query injection (e.g., column filters,
-    /// NEAR/OR/NOT abuse, or DoS via complex expressions).
+    /// and terms are quoted to prevent FTS5 query injection.
     public func search(query: String, limit: Int = 50) -> [CommandSearchResult] {
-        let sanitized = Self.sanitizeFTS5Query(query)
-        guard !sanitized.isEmpty else { return [] }
-
-        return queue.sync {
-            guard let db = db else { return [] }
-            let sql = """
-                SELECT c.id, c.session_id, c.timestamp, c.tool_name, c.command,
-                       c.raw_bytes, c.compressed_bytes, c.feature, c.output_preview
-                FROM commands c
-                JOIN commands_fts f ON c.id = f.rowid
-                WHERE commands_fts MATCH ?
-                ORDER BY c.timestamp DESC
-                LIMIT ?;
-                """
-            var stmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
-            defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (sanitized as NSString).utf8String, -1, nil)
-            sqlite3_bind_int(stmt, 2, Int32(min(limit, 200)))
-
-            var results: [CommandSearchResult] = []
-            while sqlite3_step(stmt) == SQLITE_ROW {
-                let rowId = Int(sqlite3_column_int64(stmt, 0))
-                let sessionId = String(cString: sqlite3_column_text(stmt, 1))
-                let ts = sqlite3_column_double(stmt, 2)
-                let toolName = String(cString: sqlite3_column_text(stmt, 3))
-                let cmd = sqlite3_column_type(stmt, 4) == SQLITE_NULL ? nil : String(cString: sqlite3_column_text(stmt, 4))
-                let raw = Int(sqlite3_column_int64(stmt, 5))
-                let compressed = Int(sqlite3_column_int64(stmt, 6))
-                let feat = sqlite3_column_type(stmt, 7) == SQLITE_NULL ? nil : String(cString: sqlite3_column_text(stmt, 7))
-                let preview = sqlite3_column_type(stmt, 8) == SQLITE_NULL ? nil : String(cString: sqlite3_column_text(stmt, 8))
-
-                results.append(CommandSearchResult(
-                    id: rowId,
-                    sessionId: sessionId,
-                    timestamp: Date(timeIntervalSince1970: ts),
-                    toolName: toolName,
-                    command: cmd,
-                    rawBytes: raw,
-                    compressedBytes: compressed,
-                    feature: feat,
-                    outputPreview: preview
-                ))
-            }
-            return results
-        }
+        return commandStore.search(query: query, limit: limit)
     }
 
     /// Lifetime stats across all sessions.
@@ -2248,31 +1989,12 @@ public final class SessionDatabase: @unchecked Sendable {
 
     // MARK: - FTS5 Query Sanitization
 
-    /// SECURITY: Sanitize user input for FTS5 MATCH queries.
-    /// Strips FTS5 operators (OR, AND, NOT, NEAR, column filters, prefix *)
-    /// and wraps each term in double-quotes to prevent query injection.
-    /// Empty or all-whitespace input returns empty string (caller should skip query).
+    /// SECURITY: Sanitize user input for FTS5 MATCH queries. Implementation
+    /// lives in CommandStore (owner of the commands_fts surface); kept here as
+    /// a static for the SearchSecurity / KnowledgeStore callsites that already
+    /// reference `SessionDatabase.sanitizeFTS5Query`.
     static func sanitizeFTS5Query(_ raw: String) -> String {
-        // Strip characters that have special meaning in FTS5 query syntax
-        let stripped = raw.unicodeScalars.filter { scalar in
-            // Allow alphanumerics, spaces, and basic punctuation (dash, underscore, dot)
-            // Reject: " * ^ ~ ( ) { } : + | \ and control chars
-            CharacterSet.alphanumerics.contains(scalar)
-                || scalar == " " || scalar == "-" || scalar == "_" || scalar == "."
-        }
-        let cleaned = String(stripped)
-
-        // Split into terms, remove FTS5 keywords, quote each term
-        let ftsKeywords: Set<String> = ["AND", "OR", "NOT", "NEAR"]
-        let terms = cleaned.split(separator: " ")
-            .map { String($0) }
-            .filter { !$0.isEmpty && !ftsKeywords.contains($0.uppercased()) }
-
-        guard !terms.isEmpty else { return "" }
-
-        // Each term wrapped in double-quotes prevents operator interpretation
-        // Double-quotes inside terms are already stripped above
-        return terms.map { "\"\($0)\"" }.joined(separator: " ")
+        return CommandStore.sanitizeFTS5Query(raw)
     }
 
     // MARK: - Validation Results Table

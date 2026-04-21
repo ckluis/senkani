@@ -6,6 +6,50 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 20 — SessionDatabase split: extract CommandStore (`sessiondb-split-2-commandstore`)
+- First real extraction under the `sessiondatabase-split` umbrella
+  (Luminary P2-11). New `Sources/Core/Stores/CommandStore.swift`
+  owns the `sessions`, `commands`, and `commands_fts` tables
+  end-to-end: CREATE TABLE / FTS5 trigger set / column migrations /
+  `createSession` / `recordCommand` / `endSession` / `loadSessions`
+  / `search` / `sanitizeFTS5Query`. The store shares the parent's
+  `DatabaseQueue` and raw connection — never opens a second handle.
+- `SessionDatabase`'s public API is byte-identical. Every callsite
+  (`MCPSession.swift`, dashboard, `senkani eval`, compound-learning
+  tests, AgentTracking tests, CavoukianPrivacy tests, etc.) keeps
+  working without edits — the façade now forwards to
+  `commandStore.…`. The P3-13 BEGIN IMMEDIATE transaction boundary
+  around the FTS5 sync travels with `recordCommand` into the store,
+  preserving the "commands, FTS index, session aggregate" atomicity
+  contract that makes search results consistent under concurrent
+  writes.
+- Sessions-table indexes that were previously created from
+  `createTokenEventsTable` (`idx_sessions_project_ended`,
+  `idx_sessions_agent_type`) moved into
+  `CommandStore.setupSchema()` alongside the rest of the sessions
+  schema. `createTokenEventsTable` now only owns token_events and
+  `claude_session_cursors` indexes — one less bounded-context leak
+  for TokenEventStore's round to inherit.
+- `SessionDatabase.sanitizeFTS5Query(_:)` kept as a static delegate
+  so the two external callsites (`SearchSecurity.swift:35`,
+  `KnowledgeStore.swift:530`) continue compiling. Source of truth
+  is now `CommandStore.sanitizeFTS5Query`.
+- New `Tests/SenkaniTests/CommandStoreTests.swift` with 10 tests:
+  createSession persists + round-trips; recordCommand updates
+  session aggregates; secret redaction keeps API keys out of FTS;
+  endSession sets duration; loadSessions caps at 500; FTS finds
+  recorded commands; search sanitizes FTS5 operators (colon,
+  asterisk, caret, parentheses, AND/OR/NOT/NEAR); 25-writes
+  serial-consistency probe (FTS row count = commandCount = N);
+  schemaSurvivesReopen regression. Every existing test passes
+  unchanged (no test-file edits outside the new suite).
+- **Accepted risks**: none. The extraction is byte-identical; any
+  divergence would have surfaced in the 1129-test suite.
+- Next: `sessiondb-split-3-tokeneventstore` — now unblocked. It
+  will absorb `recordHookEvent` (rows live in `token_events` with
+  `source='hook'`) and the full `tokenStats*` / `hotFiles` /
+  `liveSessionMultiplier` surface.
+
 ### April 20 — SessionDatabase split plan: retire phantom HookEventStore (`sessiondb-split-1-hookeventstore`)
 - Round 1 of the `sessiondatabase-split` umbrella (Luminary P2-11)
   ran under an expanded Luminary roster (Torvalds, Jobs, Evans,

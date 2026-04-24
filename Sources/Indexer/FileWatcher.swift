@@ -35,6 +35,13 @@ public final class FileWatcher: @unchecked Sendable {
     }
 
     deinit {
+        // Defensive: if the owner forgot to call stop(), at least invalidate
+        // the FSEvents stream from deinit. FSEvents holds a +1 retain on self
+        // (see start() — passRetained context info), so reaching deinit means
+        // either start() was never called, or the +1 was already released by
+        // the FSEvents release callback. Either way, the stream pointer here
+        // is either nil or stopped-but-not-yet-released, and stop() handles
+        // both cases idempotently.
         stop()
     }
 
@@ -44,11 +51,23 @@ public final class FileWatcher: @unchecked Sendable {
         defer { lock.unlock() }
         guard stream == nil else { return }
 
+        // FSEvents holds the `info` pointer for the lifetime of the stream
+        // and dispatches callbacks asynchronously on `self.queue`. To prevent
+        // a use-after-free between a callback that's already in flight and
+        // a concurrent deinit, we hand FSEvents a strong retain on self via
+        // `passRetained` and provide a paired release callback. The +1 is
+        // dropped only after `FSEventStreamInvalidate` has drained any
+        // in-flight callback — so any callback executing on the queue is
+        // guaranteed to see a live `self`.
+        let retainedSelf = Unmanaged.passRetained(self).toOpaque()
         var context = FSEventStreamContext(
             version: 0,
-            info: Unmanaged.passUnretained(self).toOpaque(),
+            info: retainedSelf,
             retain: nil,
-            release: nil,
+            release: { ptr in
+                guard let ptr else { return }
+                Unmanaged<FileWatcher>.fromOpaque(ptr).release()
+            },
             copyDescription: nil
         )
 
@@ -62,7 +81,11 @@ public final class FileWatcher: @unchecked Sendable {
         guard let newStream = FSEventStreamCreate(
             kCFAllocatorDefault,
             { (_, info, numEvents, eventPaths, eventFlags, _) in
-                guard let info = info else { return }
+                guard let info else { return }
+                // `takeUnretainedValue` is safe here: FSEvents' own +1
+                // (set via passRetained in the context) keeps `self` alive
+                // until the release callback fires — which only happens
+                // after FSEventStreamInvalidate has drained queued events.
                 let watcher = Unmanaged<FileWatcher>.fromOpaque(info).takeUnretainedValue()
                 let paths = unsafeBitCast(eventPaths, to: NSArray.self) as! [String]
                 let flagsBuffer = UnsafeBufferPointer(start: eventFlags, count: numEvents)
@@ -74,6 +97,9 @@ public final class FileWatcher: @unchecked Sendable {
             0.05,
             flags
         ) else {
+            // FSEventStreamCreate didn't take ownership of our +1 — release it
+            // ourselves so we don't leak.
+            Unmanaged<FileWatcher>.fromOpaque(retainedSelf).release()
             fputs("[senkani] FileWatcher: FSEventStreamCreate failed\n", stderr)
             return
         }
@@ -86,10 +112,19 @@ public final class FileWatcher: @unchecked Sendable {
     }
 
     /// Stop watching. Idempotent.
+    ///
+    /// After this returns, no further callbacks will fire and any callback
+    /// that was in flight at call time has completed. Safe to call from
+    /// `deinit` because we drop the lock before draining the dispatch queue.
     public func stop() {
         lock.lock()
-        defer { lock.unlock() }
-        guard let activeStream = stream else { return }
+        guard let activeStream = stream else {
+            lock.unlock()
+            return
+        }
+        // Tear down FSEvents first so no new callbacks are scheduled. The
+        // release callback installed in start() drops the FSEvents-owned +1
+        // on self once invalidation has drained queued callbacks.
         FSEventStreamStop(activeStream)
         FSEventStreamInvalidate(activeStream)
         FSEventStreamRelease(activeStream)
@@ -98,6 +133,18 @@ public final class FileWatcher: @unchecked Sendable {
         debounceWorkItem?.cancel()
         debounceWorkItem = nil
         pendingChanges.removeAll()
+        // Release the lock BEFORE draining: an in-flight handleEvents on the
+        // queue acquires the same lock, so holding it across the drain would
+        // deadlock.
+        lock.unlock()
+
+        // Synchronously drain the watcher's serial queue. Any FSEvents
+        // callback that was already submitted runs to completion before
+        // this returns; new callbacks won't arrive because we invalidated
+        // the stream above. This closes the use-after-free window observed
+        // as `Object … of class FileWatcher deallocated with non-zero
+        // retain count 2` during fast test teardown.
+        queue.sync { /* drain */ }
     }
 
     /// Whether the watcher is currently running.

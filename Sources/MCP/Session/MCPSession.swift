@@ -167,6 +167,18 @@ final class MCPSession: @unchecked Sendable {
         }
     }
 
+    /// Defensive teardown for callers that don't drive the full `shutdown()`
+    /// path (notably tests, which construct ad-hoc sessions). Without this,
+    /// a session's `FileWatcher` could outlive its owner and the FSEvents
+    /// dispatch queue could fire a callback into a half-deinitialized
+    /// instance — observed in soak as
+    /// "Object … of class FileWatcher deallocated with non-zero retain
+    /// count 2" followed by SIGSEGV at process teardown. `stopFileWatcher`
+    /// is idempotent and synchronously drains any in-flight callback.
+    deinit {
+        stopFileWatcher()
+    }
+
     /// Resolve session config from environment.
     static func resolve() -> MCPSession {
         let rawRoot = ProcessInfo.processInfo.environment["SENKANI_PROJECT_ROOT"]

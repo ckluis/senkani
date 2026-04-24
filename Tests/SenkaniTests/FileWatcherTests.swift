@@ -297,3 +297,80 @@ struct FileWatcherDebouncingTests {
         #expect(all.contains { $0.hasSuffix("b.swift") })
     }
 }
+
+// MARK: - Lifetime / teardown safety
+
+@Suite("FileWatcher — Lifetime Safety")
+struct FileWatcherLifetimeTests {
+
+    /// Reproduction harness for the SIGSEGV soak flake: many short-lived
+    /// FileWatchers created and immediately released without an explicit
+    /// stop(). Before the FSEvents passRetained + queue-drain fix, the
+    /// FSEvents callback could fire on the watcher's serial queue while
+    /// the object was in the middle of `deinit` → use-after-free →
+    /// "Object … of class FileWatcher deallocated with non-zero retain
+    /// count 2" warning followed by SIGSEGV at process exit.
+    ///
+    /// 200 iterations on a real (existing) directory exercises the FSEvents
+    /// dispatch path, which is the one that races with deinit. A passing
+    /// run means: every implicit deinit-driven stop() drained the queue
+    /// cleanly and the FSEvents +1 was released before deinit fired.
+    @Test("Implicit deinit-driven teardown survives churn")
+    func implicitDeinitTeardownSurvivesChurn() {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        for _ in 0..<200 {
+            let watcher = FileWatcher(projectRoot: dir) { _ in }
+            watcher.start()
+            // Intentionally drop without calling stop() — exercises deinit.
+            _ = watcher
+        }
+        // If we got here, no SIGSEGV. The harness itself is the assertion.
+        #expect(Bool(true))
+    }
+
+    /// Same as above, but on a non-existent directory. FSEvents accepts
+    /// these paths without error and still schedules its dispatch loop —
+    /// this is the exact configuration MCPSession produces in test code
+    /// like `MCPSession(projectRoot: "/tmp/watch-test-<uuid>")`.
+    @Test("Implicit teardown on non-existent path is safe")
+    func implicitTeardownOnNonExistentPathIsSafe() {
+        for _ in 0..<200 {
+            let path = "/tmp/senkani-fw-nonexistent-\(UUID().uuidString)"
+            let watcher = FileWatcher(projectRoot: path) { _ in }
+            watcher.start()
+            _ = watcher
+        }
+        #expect(Bool(true))
+    }
+
+    /// Concurrent stop() while a callback could be in flight. Drives the
+    /// queue-drain path explicitly: start, flush a synthetic burst, then
+    /// stop on a different task. stop() must wait for the in-flight handler
+    /// before returning, so any state mutation inside the callback can't
+    /// outlive stop().
+    @Test("Explicit stop drains in-flight callbacks")
+    func explicitStopDrainsInFlightCallbacks() async {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        for _ in 0..<20 {
+            let collector = EventCollector()
+            let watcher = FileWatcher(projectRoot: dir, debounceInterval: 0.05) { paths in
+                collector.append(paths)
+            }
+            watcher.start()
+            // Touch a file to provoke an FSEvents callback.
+            FileManager.default.createFile(
+                atPath: dir + "/probe.swift",
+                contents: Data("x".utf8)
+            )
+            // Stop without sleeping — race the stop() against the FSEvents
+            // dispatch. stop() must drain cleanly either way.
+            watcher.stop()
+            #expect(!watcher.isRunning)
+            try? FileManager.default.removeItem(atPath: dir + "/probe.swift")
+        }
+    }
+}

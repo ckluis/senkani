@@ -35,16 +35,16 @@ struct ReadCachePinningTests {
 
         // Pin and store first (oldest lastAccess)
         cache.pin(pinnedPath)
-        cache.store(path: pinnedPath, mtime: mtime, content: "pinned", rawBytes: 6)
+        cache.store(path: pinnedPath, mtime: mtime, mode: .testDefault, content: "pinned", rawBytes: 6)
 
         // Fill to maxEntries (500 total)
         for i in 1..<500 {
-            cache.store(path: "/tmp/ephem-pin-\(i)", mtime: Date(), content: "x", rawBytes: 1)
+            cache.store(path: "/tmp/ephem-pin-\(i)", mtime: Date(), mode: .testDefault, content: "x", rawBytes: 1)
         }
         // 501st entry triggers eviction — oldest non-pinned should be removed
-        cache.store(path: "/tmp/ephem-pin-trigger", mtime: Date(), content: "y", rawBytes: 1)
+        cache.store(path: "/tmp/ephem-pin-trigger", mtime: Date(), mode: .testDefault, content: "y", rawBytes: 1)
 
-        #expect(cache.lookup(path: pinnedPath) != nil, "Pinned entry must survive LRU eviction")
+        #expect(cache.lookup(path: pinnedPath, mode: .testDefault) != nil, "Pinned entry must survive LRU eviction")
     }
 
     @Test func unpinnedEntryIsEvicted() throws {
@@ -57,15 +57,15 @@ struct ReadCachePinningTests {
         let mtime = (try? fm.attributesOfItem(atPath: targetPath))?[.modificationDate] as? Date ?? Date()
 
         // Store target first (oldest lastAccess, not pinned)
-        cache.store(path: targetPath, mtime: mtime, content: "target", rawBytes: 6)
+        cache.store(path: targetPath, mtime: mtime, mode: .testDefault, content: "target", rawBytes: 6)
 
         for i in 1..<500 {
-            cache.store(path: "/tmp/ephem-npin-\(i)", mtime: Date(), content: "x", rawBytes: 1)
+            cache.store(path: "/tmp/ephem-npin-\(i)", mtime: Date(), mode: .testDefault, content: "x", rawBytes: 1)
         }
-        cache.store(path: "/tmp/ephem-npin-trigger", mtime: Date(), content: "y", rawBytes: 1)
+        cache.store(path: "/tmp/ephem-npin-trigger", mtime: Date(), mode: .testDefault, content: "y", rawBytes: 1)
 
         // Oldest non-pinned entry must have been evicted — lookup returns nil
-        #expect(cache.lookup(path: targetPath) == nil, "Oldest unpinned entry must be evicted")
+        #expect(cache.lookup(path: targetPath, mode: .testDefault) == nil, "Oldest unpinned entry must be evicted")
     }
 
     @Test func clearAlsoClearsPins() throws {
@@ -78,21 +78,28 @@ struct ReadCachePinningTests {
         let mtime = (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date ?? Date()
 
         cache.pin(path)
-        cache.store(path: path, mtime: mtime, content: "cleartest", rawBytes: 9)
+        cache.store(path: path, mtime: mtime, mode: .testDefault, content: "cleartest", rawBytes: 9)
         cache.clear()
 
         // Entry is gone after clear
-        #expect(cache.lookup(path: path) == nil, "Entry must be nil after clear")
+        #expect(cache.lookup(path: path, mode: .testDefault) == nil, "Entry must be nil after clear")
 
         // Re-store the same path without pin — if pins were cleared, this entry is now evictable
-        cache.store(path: path, mtime: mtime, content: "cleartest", rawBytes: 9)
+        cache.store(path: path, mtime: mtime, mode: .testDefault, content: "cleartest", rawBytes: 9)
         for i in 1..<500 {
-            cache.store(path: "/tmp/ephem-clr-\(i)", mtime: Date(), content: "x", rawBytes: 1)
+            cache.store(path: "/tmp/ephem-clr-\(i)", mtime: Date(), mode: .testDefault, content: "x", rawBytes: 1)
         }
-        cache.store(path: "/tmp/ephem-clr-trigger", mtime: Date(), content: "y", rawBytes: 1)
+        cache.store(path: "/tmp/ephem-clr-trigger", mtime: Date(), mode: .testDefault, content: "y", rawBytes: 1)
 
         // path was stored first (oldest lastAccess), no pin after clear → must be evicted
-        #expect(cache.lookup(path: path) == nil, "Entry stored without pin after clear must be evictable")
+        #expect(cache.lookup(path: path, mode: .testDefault) == nil, "Entry stored without pin after clear must be evictable")
+    }
+}
+
+extension ReadProcessingMode {
+    /// Convenience default for tests that don't exercise mode semantics.
+    static var testDefault: ReadProcessingMode {
+        ReadProcessingMode(filter: false, secrets: false, terse: false)
     }
 }
 

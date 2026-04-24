@@ -51,11 +51,19 @@ final class SandboxStore: @unchecked Sendable {
 
     /// Store a large command output and return a retrieve ID.
     /// The ID uses a `r_` prefix + 12-char UUID segment for compactness.
+    ///
+    /// Redaction: both `command` and `output` pass through
+    /// `PersistenceRedaction.redact` before being written. A `cat .env`
+    /// output would otherwise live on disk for 24 h in plaintext.
+    /// Line/byte counts are computed on the redacted form so the summary
+    /// matches what the caller will later retrieve.
     func storeSandboxedResult(sessionId: String, command: String, output: String) -> String {
         let resultId = "r_" + UUID().uuidString.prefix(12).lowercased()
         let now = Date().timeIntervalSince1970
-        let lineCount = output.components(separatedBy: "\n").count
-        let byteCount = output.utf8.count
+        let redactedCommand = PersistenceRedaction.redactedString(command) ?? command
+        let redactedOutput = PersistenceRedaction.redactedString(output) ?? output
+        let lineCount = redactedOutput.components(separatedBy: "\n").count
+        let byteCount = redactedOutput.utf8.count
 
         parent.queue.sync {
             guard let db = parent.db else { return }
@@ -69,8 +77,8 @@ final class SandboxStore: @unchecked Sendable {
             sqlite3_bind_text(stmt, 1, (resultId as NSString).utf8String, -1, nil)
             sqlite3_bind_text(stmt, 2, (sessionId as NSString).utf8String, -1, nil)
             sqlite3_bind_double(stmt, 3, now)
-            sqlite3_bind_text(stmt, 4, (command as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 5, (output as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 4, (redactedCommand as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 5, (redactedOutput as NSString).utf8String, -1, nil)
             sqlite3_bind_int64(stmt, 6, Int64(lineCount))
             sqlite3_bind_int64(stmt, 7, Int64(byteCount))
             sqlite3_step(stmt)

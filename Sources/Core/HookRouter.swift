@@ -282,22 +282,130 @@ public enum HookRouter {
     }
 
     /// Commands eligible for replay — deterministic, read-only, no side effects.
+    ///
+    /// The previous implementation used `hasPrefix` which let dangerous
+    /// variants slip through: `swift test; rm -rf tmp` would prefix-match
+    /// and replay. The hardened version requires:
+    ///   1. A recognized base command (allowlist).
+    ///   2. No shell metacharacters (`|`, `>`, `;`, `&&`, backticks, `$(…)`,
+    ///      `&`, quotes).
+    ///   3. No env-var prefix (`FOO=bar <cmd>`).
+    ///   4. No flag from the "non-deterministic" blocklist (`--watch`,
+    ///      `--interactive`, `--inspect`, `--debug`, `--`, etc.).
+    /// Positional arguments (`swift test --filter Foo`, `go test ./...`,
+    /// `eslint src/`) remain replayable because the command *string itself*
+    /// is the cache key — replaying the same string with no source changes
+    /// is safe.
     static func isReplayable(_ command: String) -> Bool {
-        let prefixes = [
-            "swift test", "swift build",
-            "npm test", "npm run test", "npx jest", "npx vitest", "npx tsc",
-            "cargo test", "cargo build", "cargo check", "cargo clippy",
-            "go test", "go build", "go vet",
-            "pytest", "python -m pytest", "python -m unittest",
-            "make test", "make build", "make check",
-            "tsc", "tsc --noEmit",
-            "eslint", "ruff", "flake8", "mypy", "pylint", "swiftlint", "rubocop",
-        ]
-        for prefix in prefixes {
-            if command.hasPrefix(prefix) { return true }
+        let trimmed = command.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return false }
+
+        // Shell metacharacters that make the "same command" claim unsafe.
+        // Reject backgrounding (&), chaining (;, &&, ||), piping (|),
+        // redirection (<, >), subshells (`…`, $(…)), variable expansion
+        // ($VAR), and quoting (which usually signals an argument we can't
+        // inspect). `\` would enable escapes that bypass tokenization.
+        let badChars: Set<Character> = [";", "|", "&", ">", "<", "`", "$", "'", "\"", "\\", "(", ")", "{", "}"]
+        if trimmed.contains(where: { badChars.contains($0) }) { return false }
+
+        // Env-var prefix like `FOO=bar swift test` is forbidden — the
+        // assignment changes behavior and the cache key wouldn't catch it.
+        let firstToken = trimmed.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? trimmed
+        if firstToken.contains("=") { return false }
+
+        let tokens = trimmed.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        guard !tokens.isEmpty else { return false }
+
+        // Must match a known base command exactly on its leading tokens.
+        guard let baseLen = matchReplayableBase(tokens: tokens) else { return false }
+
+        // Every remaining token must not be in the non-deterministic blocklist.
+        let extras = tokens.dropFirst(baseLen)
+        for extra in extras where nonDeterministicFlags.contains(extra) {
+            return false
         }
-        return false
+        // The bare `--` separator forwards everything that follows to a
+        // subcommand. We can't reason about what's after it without
+        // tool-specific parsing, so bail out.
+        if extras.contains("--") { return false }
+        // Block tokens that start with `--watch` / `--inspect` / `--debug`
+        // even with a suffix like `--watchAll` or `--inspect-brk`.
+        for extra in extras {
+            let lower = extra.lowercased()
+            if lower.hasPrefix("--watch") { return false }
+            if lower.hasPrefix("--inspect") { return false }
+            if lower.hasPrefix("--debug") { return false }
+            if lower.hasPrefix("--interactive") { return false }
+        }
+        return true
     }
+
+    /// Return the number of tokens consumed by a matching base command,
+    /// or nil if none match. The longest-matching base wins so
+    /// `python -m pytest` is picked up before `python`.
+    private static func matchReplayableBase(tokens: [String]) -> Int? {
+        var bestMatch: Int? = nil
+        for base in replayableBaseCommands {
+            guard tokens.count >= base.count else { continue }
+            var ok = true
+            for (i, part) in base.enumerated() where tokens[i] != part {
+                ok = false
+                break
+            }
+            if ok {
+                if let current = bestMatch, base.count <= current { continue }
+                bestMatch = base.count
+            }
+        }
+        return bestMatch
+    }
+
+    /// Exact base-command token sequences that are deterministic enough
+    /// to cache + replay. The command STRING is the cache key, so a
+    /// positional argument like `--filter Foo` is fine — replaying
+    /// identical input gives identical output when source hasn't changed.
+    private static let replayableBaseCommands: [[String]] = [
+        ["swift", "test"],
+        ["swift", "build"],
+        ["npm", "test"],
+        ["npm", "run", "test"],
+        ["npx", "jest"],
+        ["npx", "vitest"],
+        ["npx", "tsc"],
+        ["cargo", "test"],
+        ["cargo", "build"],
+        ["cargo", "check"],
+        ["cargo", "clippy"],
+        ["go", "test"],
+        ["go", "build"],
+        ["go", "vet"],
+        ["pytest"],
+        ["python", "-m", "pytest"],
+        ["python", "-m", "unittest"],
+        ["python3", "-m", "pytest"],
+        ["python3", "-m", "unittest"],
+        ["make", "test"],
+        ["make", "build"],
+        ["make", "check"],
+        ["tsc"],
+        ["eslint"],
+        ["ruff", "check"],
+        ["ruff"],
+        ["flake8"],
+        ["mypy"],
+        ["pylint"],
+        ["swiftlint"],
+        ["rubocop"],
+    ]
+
+    /// Flags that make a command non-deterministic (watch loops, debuggers,
+    /// interactive prompts). Exact-token match; prefix matches for
+    /// `--watch*`, `--inspect*`, `--debug*`, `--interactive*` are handled
+    /// separately in `isReplayable`.
+    private static let nonDeterministicFlags: Set<String> = [
+        "-i",
+        "--fix",              // linters: mutates files
+    ]
 
     private static func handleGrep(pattern: String, eventName: String) -> Data {
         guard !pattern.isEmpty else { return passthroughResponse }
@@ -363,13 +471,22 @@ public enum HookRouter {
             // Only handle bare ls or ls <simple-path> — no flags
             if !args.isEmpty && args.hasPrefix("-") { return nil }
 
+            // Resolve the target directory through ProjectSecurity so an
+            // absolute path outside the root (or a `..` escape) cannot
+            // short-circuit into a directory listing. `ls /Users/otheruser`
+            // would otherwise leak a listing of someone else's home.
+            guard let root = projectRoot else { return nil }
             let dir: String
-            if args.isEmpty {
-                dir = projectRoot ?? FileManager.default.currentDirectoryPath
-            } else if args.hasPrefix("/") {
-                dir = args
-            } else {
-                dir = (projectRoot ?? FileManager.default.currentDirectoryPath) + "/" + args
+            do {
+                if args.isEmpty {
+                    dir = try ProjectSecurity.resolveProjectFile(".", projectRoot: root)
+                } else {
+                    dir = try ProjectSecurity.resolveProjectFile(args, projectRoot: root)
+                }
+            } catch {
+                // Out-of-root listing requests fall through to the original
+                // tool rather than being answered locally.
+                return nil
             }
 
             if let entries = try? FileManager.default.contentsOfDirectory(atPath: dir) {

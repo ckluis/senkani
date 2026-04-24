@@ -143,6 +143,109 @@ struct ReadToolCacheTests {
         #expect(result.isError == true, "absolute path outside root must be rejected")
     }
 
+    // MARK: - Processing-mode isolation
+
+    /// Hostile case: an agent starts with secrets redaction OFF, reads a
+    /// .env-looking file that the filesystem actually contains, then the
+    /// session operator toggles secrets ON. A second read must NOT serve
+    /// the unredacted cached content back. Before the mode-aware cache,
+    /// the cache key ignored processing flags and this was a real leak.
+    @Test func secretsOffFirstReadDoesNotPoisonSecretsOnRead() throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        let file = dir + "/app.env"
+        try "API_KEY=sk-ant-api03-abcdefghijklmnopqrstuvwxyz\n".write(toFile: file, atomically: true, encoding: .utf8)
+
+        let unsafeSession = MCPSession(
+            projectRoot: dir,
+            filterEnabled: false, secretsEnabled: false, indexerEnabled: false,
+            cacheEnabled: true, terseEnabled: false
+        )
+        let unsafe = ReadTool.handle(arguments: ["path": .string("app.env"), "full": .bool(true)], session: unsafeSession)
+        #expect(textOf(unsafe).contains("sk-ant-api03-abcdefghijklmnopqrstuvwxyz"),
+                "baseline: secrets OFF read returns raw content")
+
+        // Separate session with the SAME cache (simulating in-process toggle):
+        // a fresh session with secrets enabled must not see the unsafe entry.
+        let safeSession = MCPSession(
+            projectRoot: dir,
+            filterEnabled: false, secretsEnabled: true, indexerEnabled: false,
+            cacheEnabled: true, terseEnabled: false,
+            readCache: unsafeSession.readCache
+        )
+        let safe = ReadTool.handle(arguments: ["path": .string("app.env"), "full": .bool(true)], session: safeSession)
+        let text = textOf(safe)
+        #expect(!text.contains("sk-ant-api03-abcdefghijklmnopqrstuvwxyz"),
+                "secrets-on read must not serve unredacted cached bytes, got: \(text.prefix(200))")
+        #expect(text.contains("[REDACTED:"),
+                "secrets-on read must actually redact, got: \(text.prefix(200))")
+    }
+
+    @Test func sameModeStillHitsCache() throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        try "hello\n".write(toFile: dir + "/a.txt", atomically: true, encoding: .utf8)
+        let session = MCPSession(
+            projectRoot: dir,
+            filterEnabled: true, secretsEnabled: true, indexerEnabled: false,
+            cacheEnabled: true, terseEnabled: false
+        )
+        _ = ReadTool.handle(arguments: ["path": .string("a.txt"), "full": .bool(true)], session: session)
+        let second = ReadTool.handle(arguments: ["path": .string("a.txt"), "full": .bool(true)], session: session)
+        #expect(textOf(second).contains("cached"), "same-mode re-read must hit cache")
+    }
+
+    @Test func terseToggleDoesNotReuseIncompatibleCache() throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        let body = "aaa bbb ccc ddd eee fff ggg\n"
+        try body.write(toFile: dir + "/a.txt", atomically: true, encoding: .utf8)
+
+        let terseOff = MCPSession(
+            projectRoot: dir,
+            filterEnabled: false, secretsEnabled: false, indexerEnabled: false,
+            cacheEnabled: true, terseEnabled: false
+        )
+        _ = ReadTool.handle(arguments: ["path": .string("a.txt"), "full": .bool(true)], session: terseOff)
+
+        let terseOn = MCPSession(
+            projectRoot: dir,
+            filterEnabled: false, secretsEnabled: false, indexerEnabled: false,
+            cacheEnabled: true, terseEnabled: true,
+            readCache: terseOff.readCache
+        )
+        let result = ReadTool.handle(arguments: ["path": .string("a.txt"), "full": .bool(true)], session: terseOn)
+        // Terse path takes the fresh branch — no "cached" marker.
+        #expect(!textOf(result).contains("cached"),
+                "terse-on read must not reuse terse-off cached output, got: \(textOf(result).prefix(200))")
+    }
+
+    @Test func mtimeStillInvalidatesAllModes() throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        let file = dir + "/v.txt"
+        try "v1\n".write(toFile: file, atomically: true, encoding: .utf8)
+
+        let session = MCPSession(
+            projectRoot: dir,
+            filterEnabled: false, secretsEnabled: false, indexerEnabled: false,
+            cacheEnabled: true, terseEnabled: false
+        )
+        _ = ReadTool.handle(arguments: ["path": .string("v.txt"), "full": .bool(true)], session: session)
+
+        let future = Date().addingTimeInterval(30)
+        try "v2\n".write(toFile: file, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: future], ofItemAtPath: file)
+
+        let result = ReadTool.handle(arguments: ["path": .string("v.txt"), "full": .bool(true)], session: session)
+        #expect(textOf(result).contains("v2"), "mtime change must force re-read across modes")
+        #expect(!textOf(result).contains("cached"), "mtime change must invalidate the cache entry")
+    }
+
     @Test func dotDotEscapeRejected() throws {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }

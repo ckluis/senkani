@@ -542,7 +542,11 @@ final class MCPSession: @unchecked Sendable {
                 let attrs = try? FileManager.default.attributesOfItem(atPath: absPath)
                 let mtime = (attrs?[.modificationDate] as? Date) ?? Date()
                 if index < 5 { readCache.pin(absPath) }
-                readCache.store(path: absPath, mtime: mtime, content: content, rawBytes: content.utf8.count)
+                // Pre-cache stores raw file content — only served to callers
+                // that also request no processing. Secrets/filter/terse
+                // callers will miss and take the full processing path.
+                let rawMode = ReadProcessingMode(filter: false, secrets: false, terse: false)
+                readCache.store(path: absPath, mtime: mtime, mode: rawMode, content: content, rawBytes: content.utf8.count)
                 if index < 5 { l0Count += 1 } else { l1Count += 1 }
             }
             if l0Count + l1Count > 0 {

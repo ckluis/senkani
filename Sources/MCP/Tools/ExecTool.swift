@@ -82,7 +82,11 @@ enum ExecTool {
         process.arguments = ["-c", command]
         process.standardOutput = outPipe
         process.standardError = errPipe
-        process.environment = ProcessInfo.processInfo.environment
+        // Sanitize inherited env: strip TOKEN/SECRET/API_KEY/cloud creds before
+        // handing them to an arbitrary shell command. A hostile postinstall
+        // script or prompt-injected command would otherwise read the parent
+        // shell's secrets verbatim. See Core.SensitiveEnvironmentPolicy.
+        process.environment = SensitiveEnvironmentPolicy.sanitize(ProcessInfo.processInfo.environment)
         process.currentDirectoryURL = URL(fileURLWithPath: session.projectRoot)
 
         do {

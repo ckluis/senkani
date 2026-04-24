@@ -363,6 +363,73 @@ struct CommandReplayTests {
         #expect(result != nil, "No source changes since exec → replay should fire")
     }
 
+    // MARK: - Replay eligibility hardening
+
+    @Test func rejectsChaining() {
+        #expect(HookRouter.isReplayable("swift test; rm -rf tmp") == false)
+        #expect(HookRouter.isReplayable("swift test && echo done") == false)
+        #expect(HookRouter.isReplayable("swift test || true") == false)
+    }
+
+    @Test func rejectsRedirection() {
+        #expect(HookRouter.isReplayable("swift test > out.txt") == false)
+        #expect(HookRouter.isReplayable("swift test 2> err.txt") == false)
+        #expect(HookRouter.isReplayable("swift test < input") == false)
+    }
+
+    @Test func rejectsPipes() {
+        #expect(HookRouter.isReplayable("swift test | tee log") == false)
+        #expect(HookRouter.isReplayable("npm test | grep pass") == false)
+    }
+
+    @Test func rejectsEnvPrefix() {
+        #expect(HookRouter.isReplayable("FOO=bar swift test") == false)
+        #expect(HookRouter.isReplayable("RUST_BACKTRACE=1 cargo test") == false)
+    }
+
+    @Test func rejectsCdPrefix() {
+        // `cd subdir && swift test` contains &&, which is rejected.
+        // Separately, `cd` as the first token is not in the allowlist.
+        #expect(HookRouter.isReplayable("cd subdir && swift test") == false)
+        #expect(HookRouter.isReplayable("cd subdir") == false)
+    }
+
+    @Test func rejectsWatchFlags() {
+        #expect(HookRouter.isReplayable("npm test -- --watch") == false)
+        #expect(HookRouter.isReplayable("npx vitest --watch") == false)
+        #expect(HookRouter.isReplayable("npx jest --watchAll") == false)
+        #expect(HookRouter.isReplayable("cargo test --watch") == false)
+    }
+
+    @Test func rejectsSubshellsAndBackticks() {
+        #expect(HookRouter.isReplayable("swift test $(echo hi)") == false)
+        #expect(HookRouter.isReplayable("swift test `whoami`") == false)
+    }
+
+    @Test func rejectsBackgrounding() {
+        #expect(HookRouter.isReplayable("swift test &") == false)
+    }
+
+    @Test func rejectsUnknownTrailingFlags() {
+        // --debug / --interactive / -i / a path argument all change behavior
+        // enough that replaying cached output is wrong.
+        #expect(HookRouter.isReplayable("swift test --debug") == false)
+        #expect(HookRouter.isReplayable("npm test --inspect") == false)
+        #expect(HookRouter.isReplayable("cargo test -- --ignored") == false)
+    }
+
+    @Test func keepsCanonicalReplayCasesGreen() {
+        #expect(HookRouter.isReplayable("swift test"))
+        #expect(HookRouter.isReplayable("swift build"))
+        #expect(HookRouter.isReplayable("npm test"))
+        #expect(HookRouter.isReplayable("npx jest"))
+        #expect(HookRouter.isReplayable("cargo test"))
+        #expect(HookRouter.isReplayable("cargo build --release"))
+        #expect(HookRouter.isReplayable("go test"))
+        #expect(HookRouter.isReplayable("pytest"))
+        #expect(HookRouter.isReplayable("tsc --noEmit"))
+    }
+
     @Test func postToolUseNeverReplays() {
         // PostToolUse is handled at the top of HookRouter.handle() — always passthrough.
         // Verify via the full handle() path.

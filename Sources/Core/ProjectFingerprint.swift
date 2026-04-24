@@ -39,17 +39,76 @@ public enum ProjectFingerprint {
         "ex", "exs",
         "hs", "lhs",
         "html", "htm", "css",
-        "dart", "toml",
+        "dart",
         "graphql", "gql",
     ]
 
-    /// Returns the max modification date across all tracked source files
+    /// Basenames (case-sensitive, exact match) of build/test inputs that
+    /// also contribute to the fingerprint. A change to any of these shifts
+    /// build or test behavior even when no source file was touched, so the
+    /// command-replay path must invalidate cached output.
+    ///
+    /// `.env` is deliberately excluded — it typically holds secrets, and
+    /// tracking it would read its mtime on every Bash hook call. `.env.example`
+    /// is harmless, but we'd need a second rule to include only that one; not
+    /// worth the weight.
+    public static let trackedBasenames: Set<String> = [
+        // Swift
+        "Package.swift", "Package.resolved",
+        // Node / TS
+        "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+        "bun.lockb", "bun.lock", "tsconfig.json", "tsconfig.base.json",
+        "vite.config.js", "vite.config.ts", "vite.config.mjs",
+        "webpack.config.js", "rollup.config.js",
+        // Go
+        "go.mod", "go.sum",
+        // Rust
+        "Cargo.toml", "Cargo.lock",
+        // Python
+        "pyproject.toml", "poetry.lock", "Pipfile", "Pipfile.lock",
+        "setup.py", "setup.cfg", "requirements.txt",
+        "requirements-dev.txt", "requirements-test.txt",
+        // Ruby
+        "Gemfile", "Gemfile.lock", "Rakefile",
+        // Make / CMake
+        "Makefile", "GNUmakefile", "CMakeLists.txt",
+        // Docker / compose
+        "Dockerfile", "docker-compose.yml", "docker-compose.yaml",
+        // Root-level Senkani config (affects tool routing)
+        "senkani.json",
+    ]
+
+    /// Trailing-filename patterns that are tracked. Keeps `docker-compose.dev.yml`
+    /// etc. in scope without exhaustively listing them.
+    public static let trackedBasenameSuffixes: [String] = [
+        ".Dockerfile",             // e.g. multi-stage aliases
+    ]
+
+    /// Relative-path predicate: any file under `.github/workflows/*.yml`
+    /// counts. These change CI behavior and indirectly test outcomes.
+    public static func isTrackedCIPath(_ relativePath: String) -> Bool {
+        guard relativePath.hasPrefix(".github/workflows/") else { return false }
+        return relativePath.hasSuffix(".yml") || relativePath.hasSuffix(".yaml")
+    }
+
+    /// `true` when a file at the given relative path + basename should
+    /// contribute to the fingerprint.
+    public static func isTracked(relativePath: String, basename: String, ext: String) -> Bool {
+        if trackedExtensions.contains(ext) { return true }
+        if trackedBasenames.contains(basename) { return true }
+        for suffix in trackedBasenameSuffixes where basename.hasSuffix(suffix) { return true }
+        if isTrackedCIPath(relativePath) { return true }
+        return false
+    }
+
+    /// Returns the max modification date across all tracked project inputs
     /// under `projectRoot`, or nil if none were found.
     ///
-    /// Walks using `FileManager.enumerator` with `.skipsHiddenFiles`, pruning
-    /// any path whose directory segment is in `skipDirs`. The walk is
-    /// bounded by project size and is intentionally cheap to call from the
-    /// hook path — a moderate project finishes in well under 10ms.
+    /// Walks using `FileManager.enumerator` WITHOUT `.skipsHiddenFiles`
+    /// because we deliberately want to include `.github/workflows/*.yml`.
+    /// Skip-dir pruning still runs first, so `.git` / `.senkani` / `.build`
+    /// never enter the walk. Symlink ambiguity (`/tmp` ↔ `/private/tmp`) is
+    /// handled on both sides of the prefix check.
     public static func maxSourceMtime(projectRoot: String) -> Date? {
         let fm = FileManager.default
         let rootURL = URL(fileURLWithPath: projectRoot)
@@ -57,7 +116,7 @@ public enum ProjectFingerprint {
         guard let enumerator = fm.enumerator(
             at: rootURL,
             includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
-            options: [.skipsHiddenFiles]
+            options: []
         ) else { return nil }
 
         // Symlink resolution matters on macOS: /tmp ↔ /private/tmp. The
@@ -83,24 +142,23 @@ public enum ProjectFingerprint {
             guard let rel else { continue }
 
             let components = rel.split(separator: "/").map(String.init)
-            if components.dropLast().contains(where: { skipDirs.contains($0) }) {
-                continue
-            }
-            if let top = components.first, skipDirs.contains(top), components.count == 1 {
-                // Skip-dir encountered at top level — prune its subtree so we
-                // don't even stat its descendants.
-                enumerator.skipDescendants()
-                continue
-            }
             if let top = components.first, skipDirs.contains(top) {
+                // Skip-dir encountered — prune and skip descendants. Applies
+                // at every depth because a skip-dir at any level is still a
+                // skip-dir.
+                if components.count == 1 { enumerator.skipDescendants() }
+                continue
+            }
+            if components.dropLast().contains(where: { skipDirs.contains($0) }) {
                 continue
             }
 
             guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey]),
                   values.isRegularFile == true else { continue }
 
+            let basename = url.lastPathComponent
             let ext = url.pathExtension.lowercased()
-            guard trackedExtensions.contains(ext) else { continue }
+            guard isTracked(relativePath: rel, basename: basename, ext: ext) else { continue }
 
             if let mtime = values.contentModificationDate {
                 if maxDate == nil || mtime > maxDate! {

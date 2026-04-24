@@ -65,6 +65,11 @@ final class TokenEventStore: @unchecked Sendable {
     // MARK: - Writes
 
     /// Record a token event (from MCP tool call, hook intercept, or ClaudeSessionReader).
+    ///
+    /// Redaction: `command` can carry agent-supplied text like
+    /// `export API_KEY=sk_live_...` or a `curl -H "Authorization: Bearer …"`
+    /// invocation. `PersistenceRedaction.redact` strips those before the row
+    /// hits disk so a session-db export never contains a live key.
     func recordTokenEvent(
         sessionId: String,
         paneId: String?,
@@ -82,6 +87,7 @@ final class TokenEventStore: @unchecked Sendable {
     ) {
         let normalizedRoot = SessionDatabase.normalizePath(projectRoot)
         let now = Date().timeIntervalSince1970
+        let redactedCommand = PersistenceRedaction.redactedString(command)
         parent.queue.async { [weak parent] in
             guard let parent, let db = parent.db else { return }
             let sql = """
@@ -106,7 +112,7 @@ final class TokenEventStore: @unchecked Sendable {
             sqlite3_bind_int64(stmt, 10, Int64(savedTokens))
             sqlite3_bind_int64(stmt, 11, Int64(costCents))
             Self.bindOptionalText(stmt, 12, feature)
-            Self.bindOptionalText(stmt, 13, command)
+            Self.bindOptionalText(stmt, 13, redactedCommand)
             Self.bindOptionalText(stmt, 14, modelTier)
 
             sqlite3_step(stmt)

@@ -145,11 +145,16 @@ final class CommandStore: @unchecked Sendable {
     ) {
         let now = Date().timeIntervalSince1970
         // C1 (Cavoukian privacy pass 2026-04-16): redact secrets from the
-        // command string before persistence.
-        let scanResult = command.map { SecretDetector.scan($0) }
-        let redactedCommand = scanResult?.redacted
-        let didRedact = !(scanResult?.patterns.isEmpty ?? true)
-        let preview = outputPreview.map { String($0.prefix(500)) }
+        // command string before persistence. Routed through the shared
+        // PersistenceRedaction helper so this store, TokenEventStore, and
+        // SandboxStore all follow the same policy.
+        let cmdRedaction = PersistenceRedaction.redact(command)
+        let redactedCommand = cmdRedaction.redacted
+        let didRedact = cmdRedaction.patternsMatched > 0
+        // Output preview also gets redacted — it's capped at 500 chars but
+        // a single `Authorization: Bearer ey...` line fits inside that cap.
+        let previewRedaction = PersistenceRedaction.redact(outputPreview.map { String($0.prefix(500)) })
+        let preview = previewRedaction.redacted
         parent.queue.async { [weak parent] in
             guard let parent, let db = parent.db else { return }
 

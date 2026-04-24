@@ -23,10 +23,16 @@ enum ReadTool {
         let wantsFull = arguments?["full"]?.boolValue == true
         let hasRange = arguments?["offset"]?.intValue != nil || arguments?["limit"]?.intValue != nil
 
-        // Cache stores the full post-processed output. Only full reads can be
-        // served from cache — range reads must be re-sliced from source to
-        // honor the requested window.
-        if wantsFull, session.cacheEnabled, let cached = session.readCache.lookup(path: absPath) {
+        // Cache key includes the processing mode so a secrets-off first read
+        // cannot satisfy a secrets-on re-read (which would leak unredacted
+        // content). Only full reads can be served from cache — range reads
+        // re-slice from source to honor the requested window.
+        let mode = ReadProcessingMode(
+            filter: session.filterEnabled,
+            secrets: session.secretsEnabled,
+            terse: session.terseEnabled
+        )
+        if wantsFull, session.cacheEnabled, let cached = session.readCache.lookup(path: absPath, mode: mode) {
             session.recordCacheSaving(bytes: cached.rawBytes)
             let header = "// senkani: cached \(cached.rawBytes) bytes saved (unchanged since last read)\n"
             return .init(content: [.text(text: header + cached.content, annotations: nil, _meta: nil)])
@@ -75,10 +81,11 @@ enum ReadTool {
         let compressedBytes = output.utf8.count
         let savedPct = rawBytes > 0 ? Int(Double(rawBytes - compressedBytes) / Double(rawBytes) * 100) : 0
 
-        // Cache
-        if session.cacheEnabled {
+        // Cache — only stored for full reads. Range reads skip the cache so
+        // a windowed output never gets reused for a full-read request.
+        if session.cacheEnabled && !hasRange {
             let mtime = (try? FileManager.default.attributesOfItem(atPath: absPath))?[.modificationDate] as? Date ?? Date()
-            session.readCache.store(path: absPath, mtime: mtime, content: output, rawBytes: rawBytes)
+            session.readCache.store(path: absPath, mtime: mtime, mode: mode, content: output, rawBytes: rawBytes)
         }
 
         session.recordMetrics(rawBytes: rawBytes, compressedBytes: compressedBytes, feature: "read",

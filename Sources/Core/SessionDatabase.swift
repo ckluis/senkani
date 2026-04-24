@@ -60,7 +60,12 @@ public final class SessionDatabase: @unchecked Sendable {
 
         if sqlite3_open(dbPath, &db) != SQLITE_OK {
             let err = db.flatMap { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
-            print("[SessionDatabase] Failed to open: \(err)")
+            Logger.log("db.session.open_failed", fields: [
+                "mode": .string("default"),
+                "path": .path(dbPath),
+                "error": .string(err),
+                "outcome": .string("error"),
+            ])
             db = nil
         }
         enableWAL()
@@ -82,7 +87,12 @@ public final class SessionDatabase: @unchecked Sendable {
 
         if sqlite3_open(path, &db) != SQLITE_OK {
             let err = db.flatMap { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
-            print("[SessionDatabase] Failed to open test DB: \(err)")
+            Logger.log("db.session.open_failed", fields: [
+                "mode": .string("test"),
+                "path": .path(path),
+                "error": .string(err),
+                "outcome": .string("error"),
+            ])
             db = nil
         }
         enableWAL()
@@ -220,12 +230,22 @@ public final class SessionDatabase: @unchecked Sendable {
                 let report = try MigrationRunner.run(db: db, dbPath: path)
                 applied = report.appliedVersions
                 if !applied.isEmpty {
-                    print("[SessionDatabase] Applied migrations: \(applied)")
+                    Logger.log("db.session.migrations_applied", fields: [
+                        "versions": .string(applied.map(String.init).joined(separator: ",")),
+                        "count": .int(applied.count),
+                        "outcome": .string("success"),
+                    ])
                 }
             } catch let e as MigrationError {
-                print("[SessionDatabase] Migration failed: \(e.description)")
+                Logger.log("db.session.migration_failed", fields: [
+                    "error": .string(e.description),
+                    "outcome": .string("error"),
+                ])
             } catch {
-                print("[SessionDatabase] Migration failed: \(error)")
+                Logger.log("db.session.migration_failed", fields: [
+                    "error": .string("\(error)"),
+                    "outcome": .string("error"),
+                ])
             }
         }
         // Observability: count each migration that ran in this process. Only

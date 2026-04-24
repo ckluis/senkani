@@ -6,6 +6,39 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 24 — Core DB log routing (`luminary-2026-04-24-1-unify-core-logging`)
+- Luminary P0. Database init and per-store error paths used to write
+  `print("[SessionDatabase] …")` / `print("[CommandStore] SQL error: …")`
+  to stdout, bypassing the structured `Logger.log` pipeline that
+  MCP/SocketServer/retention already use. Failures operators most
+  need to see (DB open failure, SQL errors, schema migration drift)
+  were invisible to telemetry and JSON-mode log capture.
+- Replaced 8 `print(...)` sites in `Sources/Core/SessionDatabase.swift`,
+  `Sources/Core/Stores/CommandStore.swift`, `Sources/Core/Stores/SandboxStore.swift`,
+  `Sources/Core/Stores/ValidationStore.swift` with `Logger.log`
+  emissions following a stable `db.<scope>.<outcome>` vocabulary:
+  `db.session.open_failed`, `db.session.migrations_applied`,
+  `db.session.migration_failed`, `db.command.sql_error`,
+  `db.sandbox.sql_error`, `db.validation.sql_error`. Each event tags
+  `outcome=success|error`; open events also tag `mode=default|test`
+  and use `.path(...)` so home-dir prefixes are redacted at emit.
+- Allowlist (intentional stdout retained, out of scope this round):
+  `Sources/Core/ModelManager.swift:628` (security warning), and
+  `Sources/Core/Stores/TokenEventStore.swift` `dumpTokenEvents()`
+  under `#if DEBUG` (operator debug helper).
+- New `Logger._setTestSink(_:)` test-only observation hook (a tee:
+  the sink runs alongside the regular stderr write, so production
+  behavior is unchanged). Lets tests assert routing without dup2-ing
+  fd 2.
+- New `Tests/SenkaniTests/LoggerRoutingTests.swift` with 8 cases:
+  open-failed-on-bad-path, migrations-applied-on-fresh-DB,
+  no-double-fire on already-migrated DB, mode-tag contract,
+  per-store no-emit on clean init, regression anchor (no legacy
+  `print("[…]")` in scoped files), sink-round-trip, and field-shape
+  contract.
+- Test count: 1720 → 1728 (+8). Full `tools/test-safe.sh` suite
+  green at 20.8s.
+
 ### April 24 — Live-session multiplier gate (`luminary-2026-04-24-0-live-session-multiplier-gate`)
 - Luminary P0 follow-up from the 2026-04-24 spec-vs-codebase review.
   The 80.37× figure is a fixture-bench ceiling; the live-session

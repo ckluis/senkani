@@ -638,7 +638,10 @@ final class CommandStore: @unchecked Sendable {
         var err: UnsafeMutablePointer<CChar>?
         if sqlite3_exec(db, sql, nil, nil, &err) != SQLITE_OK {
             let msg = err.map { String(cString: $0) } ?? "unknown"
-            print("[CommandStore] SQL error: \(msg)")
+            Logger.log("db.command.sql_error", fields: [
+                "error": .string(msg),
+                "outcome": .string("error"),
+            ])
             sqlite3_free(err)
         }
     }

@@ -224,9 +224,17 @@ public enum HookRouter {
     }
 
     /// Check if a command can be replayed from a recent cached result.
-    /// Extracted as internal static for testability — tests pass a temp DB.
+    /// Extracted as internal static for testability — tests pass a temp DB
+    /// and optionally a fingerprint override.
     /// Returns a deny response if replay conditions are met, nil otherwise.
-    static func checkCommandReplay(command: String, projectRoot: String, sessionId: String?, eventName: String, db: SessionDatabase) -> Data? {
+    static func checkCommandReplay(
+        command: String,
+        projectRoot: String,
+        sessionId: String?,
+        eventName: String,
+        db: SessionDatabase,
+        projectMaxMtime: (String) -> Date? = { ProjectFingerprint.maxSourceMtime(projectRoot: $0) }
+    ) -> Data? {
         guard isReplayable(command) else { return nil }
 
         guard let lastExec = db.lastExecResult(command: command, projectRoot: projectRoot) else { return nil }
@@ -234,11 +242,13 @@ public enum HookRouter {
         let age = Date().timeIntervalSince(lastExec.timestamp)
         guard age < 300 else { return nil }
 
-        // Check if any files in the project changed since the last exec.
-        // macOS updates parent directory mtime when any child file changes.
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: projectRoot),
-              let dirMtime = attrs[.modificationDate] as? Date,
-              dirMtime < lastExec.timestamp else { return nil }
+        // Only replay if NO tracked source file has been modified since the
+        // last exec. Root directory mtime is unreliable — it doesn't change
+        // when nested files are edited — so we walk the tree for the true
+        // max source mtime. Empty project (no tracked files) is treated as
+        // unchanged.
+        let latest = projectMaxMtime(projectRoot) ?? .distantPast
+        guard latest < lastExec.timestamp else { return nil }
 
         let ageStr = age < 60 ? "\(Int(age))s" : "\(Int(age / 60))m"
         let preview = lastExec.outputPreview ?? "(no output preview available)"

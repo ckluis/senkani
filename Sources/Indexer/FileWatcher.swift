@@ -100,15 +100,24 @@ public final class FileWatcher: @unchecked Sendable {
             // FSEventStreamCreate didn't take ownership of our +1 — release it
             // ourselves so we don't leak.
             Unmanaged<FileWatcher>.fromOpaque(retainedSelf).release()
-            fputs("[senkani] FileWatcher: FSEventStreamCreate failed\n", stderr)
+            fputs("[senkani] FileWatcher: FSEventStreamCreate failed for \(Self.redactPath(projectRoot))\n", stderr)
             return
         }
 
         FSEventStreamSetDispatchQueue(newStream, queue)
-        FSEventStreamStart(newStream)
+        // FSEventStreamStart returns false if the stream could not be scheduled.
+        // When that happens, the stream must be invalidated + released here;
+        // otherwise FSEvents would hold the +1 on self indefinitely and no
+        // callbacks (including the release callback) would ever fire.
+        guard FSEventStreamStart(newStream) else {
+            FSEventStreamInvalidate(newStream)
+            FSEventStreamRelease(newStream)
+            // FSEventStreamRelease drops the stream's retain on the `info`
+            // pointer — which is the +1 we handed it. No extra release needed.
+            fputs("[senkani] FileWatcher: FSEventStreamStart failed for \(Self.redactPath(projectRoot))\n", stderr)
+            return
+        }
         stream = newStream
-
-        fputs("[senkani] FileWatcher started for \(projectRoot)\n", stderr)
     }
 
     /// Stop watching. Idempotent.
@@ -202,6 +211,17 @@ public final class FileWatcher: @unchecked Sendable {
     }
 
     // MARK: - Filtering
+
+    /// Redact `/Users/<name>` → `/Users/***` in log output. Indexer can't
+    /// depend on Core, so this is a minimal inline mirror of
+    /// `ProjectSecurity.redactPath`.
+    static func redactPath(_ p: String) -> String {
+        let comps = p.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard comps.count >= 2, comps[0] == "Users" else { return p }
+        var redacted = comps
+        redacted[1] = "***"
+        return "/" + redacted.joined(separator: "/")
+    }
 
     /// Determine if a path should trigger re-indexing.
     private func shouldTrack(path: String) -> Bool {

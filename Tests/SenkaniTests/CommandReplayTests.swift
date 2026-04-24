@@ -255,6 +255,114 @@ struct CommandReplayTests {
                 "Deny message should contain the output preview")
     }
 
+    // MARK: - Project fingerprint (ProjectFingerprint-backed invalidation)
+
+    @Test func nestedFileModificationInvalidatesReplay() throws {
+        let (db, dbPath) = makeTempDB()
+        let dir = makeTempDir()
+        defer { cleanupDB(dbPath); try? FileManager.default.removeItem(atPath: dir) }
+
+        // Create a nested source file BEFORE the exec.
+        let nested = dir + "/src"
+        try FileManager.default.createDirectory(atPath: nested, withIntermediateDirectories: true)
+        let file = nested + "/app.swift"
+        try "let x = 1\n".write(toFile: file, atomically: true, encoding: .utf8)
+        let before = Date().addingTimeInterval(-120)
+        try FileManager.default.setAttributes([.modificationDate: before], ofItemAtPath: file)
+
+        insertExecEvent(db: db, command: "swift test", projectRoot: dir)
+
+        // Now modify the nested file AFTER the exec. macOS does NOT bump the
+        // root directory's mtime for a nested write — the old root-mtime
+        // check would have missed this and replayed stale output.
+        try "let x = 2\n".write(toFile: file, atomically: true, encoding: .utf8)
+        let after = Date().addingTimeInterval(10)
+        try FileManager.default.setAttributes([.modificationDate: after], ofItemAtPath: file)
+
+        let result = HookRouter.checkCommandReplay(
+            command: "swift test",
+            projectRoot: dir,
+            sessionId: nil,
+            eventName: "PreToolUse",
+            db: db
+        )
+        #expect(result == nil, "Nested source change must invalidate replay")
+    }
+
+    @Test func nestedFileCreationInvalidatesReplay() throws {
+        let (db, dbPath) = makeTempDB()
+        let dir = makeTempDir()
+        defer { cleanupDB(dbPath); try? FileManager.default.removeItem(atPath: dir) }
+
+        try FileManager.default.createDirectory(atPath: dir + "/src", withIntermediateDirectories: true)
+        insertExecEvent(db: db, command: "swift test", projectRoot: dir)
+
+        // Create a brand new source file deep in the tree after the exec.
+        try "let y = 1\n".write(toFile: dir + "/src/new.swift", atomically: true, encoding: .utf8)
+
+        let result = HookRouter.checkCommandReplay(
+            command: "swift test",
+            projectRoot: dir,
+            sessionId: nil,
+            eventName: "PreToolUse",
+            db: db
+        )
+        #expect(result == nil, "Creating a source file must invalidate replay")
+    }
+
+    @Test func ignoredDirectoryChangesDoNotInvalidateReplay() throws {
+        let (db, dbPath) = makeTempDB()
+        let dir = makeTempDir()
+        defer { cleanupDB(dbPath); try? FileManager.default.removeItem(atPath: dir) }
+
+        // Tracked file, frozen well before the exec.
+        let src = dir + "/app.swift"
+        try "let x = 1\n".write(toFile: src, atomically: true, encoding: .utf8)
+        let frozen = Date().addingTimeInterval(-300)
+        try FileManager.default.setAttributes([.modificationDate: frozen], ofItemAtPath: src)
+
+        insertExecEvent(db: db, command: "swift test", projectRoot: dir)
+
+        // Changes inside .git / node_modules / .build should NOT invalidate.
+        for skip in [".git", "node_modules", ".build"] {
+            let skipDir = dir + "/" + skip
+            try FileManager.default.createDirectory(atPath: skipDir, withIntermediateDirectories: true)
+            try "junk".write(toFile: skipDir + "/HEAD.swift", atomically: true, encoding: .utf8)
+        }
+
+        let result = HookRouter.checkCommandReplay(
+            command: "swift test",
+            projectRoot: dir,
+            sessionId: nil,
+            eventName: "PreToolUse",
+            db: db
+        )
+        #expect(result != nil, "Changes in ignored dirs must NOT invalidate replay")
+    }
+
+    @Test func noSourceChangesReplaysWithFreshFingerprint() throws {
+        let (db, dbPath) = makeTempDB()
+        let dir = makeTempDir()
+        defer { cleanupDB(dbPath); try? FileManager.default.removeItem(atPath: dir) }
+
+        // A tracked source file frozen BEFORE the exec — fingerprint is old.
+        let src = dir + "/app.swift"
+        try "let x = 1\n".write(toFile: src, atomically: true, encoding: .utf8)
+        let frozen = Date().addingTimeInterval(-120)
+        try FileManager.default.setAttributes([.modificationDate: frozen], ofItemAtPath: src)
+
+        insertExecEvent(db: db, command: "swift test", projectRoot: dir)
+
+        let result = HookRouter.checkCommandReplay(
+            command: "swift test",
+            projectRoot: dir,
+            sessionId: nil,
+            eventName: "PreToolUse",
+            db: db
+        )
+        #expect(result != nil, "No source changes since exec → replay should fire")
+    }
+
     @Test func postToolUseNeverReplays() {
         // PostToolUse is handled at the top of HookRouter.handle() — always passthrough.
         // Verify via the full handle() path.

@@ -198,6 +198,107 @@ public enum ProjectSecurity {
 
     // MARK: - Path Redaction for Logging
 
+    // MARK: - Project-Contained File Resolution
+
+    public enum FileResolutionError: Error, CustomStringConvertible {
+        case emptyPath
+        case nullByte
+        case pathTraversal(String)
+        case absoluteOutsideRoot(requested: String, root: String)
+        case relativeOutsideRoot(requested: String, root: String)
+        case symlinkEscape(resolved: String, root: String)
+
+        public var description: String {
+            switch self {
+            case .emptyPath:
+                return "Empty path"
+            case .nullByte:
+                return "Path contains null byte"
+            case .pathTraversal(let p):
+                return "Path contains traversal components: \(ProjectSecurity.redactPath(p))"
+            case .absoluteOutsideRoot(let requested, let root):
+                return "Absolute path outside project root: \(ProjectSecurity.redactPath(requested)) not under \(ProjectSecurity.redactPath(root))"
+            case .relativeOutsideRoot(let requested, let root):
+                return "Resolved path outside project root: \(ProjectSecurity.redactPath(requested)) not under \(ProjectSecurity.redactPath(root))"
+            case .symlinkEscape(let resolved, let root):
+                return "Symlink target escapes project root: \(ProjectSecurity.redactPath(resolved)) not under \(ProjectSecurity.redactPath(root))"
+            }
+        }
+    }
+
+    /// Resolve a requested file path against a project root, rejecting anything
+    /// that would escape the root.
+    ///
+    /// Rules:
+    /// 1. Reject empty paths and null bytes.
+    /// 2. Reject any `..` components (pre- or post-standardization).
+    /// 3. Absolute paths must already start with the standardized project root.
+    /// 4. Relative paths are joined onto the project root.
+    /// 5. After standardization, the final path must start with the project root.
+    /// 6. If the final path exists, resolve symlinks and verify the resolved
+    ///    target is still under the root.
+    /// 7. Non-existent files are allowed (the caller may be about to create
+    ///    them); the symlink check is skipped in that case.
+    ///
+    /// Returns the resolved absolute path as a String. Callers should use the
+    /// returned string for any file operations — do NOT re-derive from the raw
+    /// input.
+    public static func resolveProjectFile(_ path: String, projectRoot: String) throws -> String {
+        guard !path.isEmpty else { throw FileResolutionError.emptyPath }
+        guard !path.contains("\0") else { throw FileResolutionError.nullByte }
+
+        // Reject traversal in the raw input before any standardization. `..` in
+        // a relative path against a deep root could still land inside the root
+        // after standardization — we explicitly reject it anyway because the
+        // caller had no reason to send it.
+        let rawComponents = path.split(separator: "/").map(String.init)
+        if rawComponents.contains("..") {
+            throw FileResolutionError.pathTraversal(path)
+        }
+
+        let rootURL = URL(fileURLWithPath: projectRoot).standardized
+        let rootPath = rootURL.path
+        let rootWithSlash = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+
+        let candidate: String
+        if path.hasPrefix("/") {
+            candidate = path
+        } else {
+            candidate = rootPath + "/" + path
+        }
+
+        let standardized = URL(fileURLWithPath: candidate).standardized.path
+
+        // Defense in depth: reject remaining `..` after standardization.
+        if standardized.split(separator: "/").map(String.init).contains("..") {
+            throw FileResolutionError.pathTraversal(path)
+        }
+
+        guard standardized == rootPath || standardized.hasPrefix(rootWithSlash) else {
+            if path.hasPrefix("/") {
+                throw FileResolutionError.absoluteOutsideRoot(requested: standardized, root: rootPath)
+            } else {
+                throw FileResolutionError.relativeOutsideRoot(requested: standardized, root: rootPath)
+            }
+        }
+
+        // Symlink check — only meaningful when the file exists. Resolve the
+        // deepest existing ancestor plus any symlinks along the way, then verify
+        // the resolved path still lives inside the root. `resolvingSymlinksInPath`
+        // is a no-op when the file doesn't exist, which is acceptable here — a
+        // non-existent target cannot "escape" because there is no link to follow.
+        if FileManager.default.fileExists(atPath: standardized) {
+            let resolved = URL(fileURLWithPath: standardized).resolvingSymlinksInPath().path
+            let resolvedRoot = rootURL.resolvingSymlinksInPath().path
+            let resolvedRootWithSlash = resolvedRoot.hasSuffix("/") ? resolvedRoot : resolvedRoot + "/"
+            guard resolved == resolvedRoot || resolved.hasPrefix(resolvedRootWithSlash) else {
+                throw FileResolutionError.symlinkEscape(resolved: resolved, root: resolvedRoot)
+            }
+        }
+
+        return standardized
+    }
+
     /// Redacts sensitive information from paths before logging or displaying in diagnostics.
     ///
     /// Replaces the home directory path with ~ and obscures the username.

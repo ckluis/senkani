@@ -846,7 +846,7 @@ final class TokenEventStore: @unchecked Sendable {
         var err: UnsafeMutablePointer<CChar>?
         if sqlite3_exec(db, sql, nil, nil, &err) != SQLITE_OK {
             let msg = err.map { String(cString: $0) } ?? "unknown"
-            print("[TokenEventStore] SQL error: \(msg)")
+            Logger.log("token_event_store.sql_error", fields: ["error": .string(msg)])
             sqlite3_free(err)
         }
     }

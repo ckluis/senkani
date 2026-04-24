@@ -118,12 +118,18 @@ enum ExecTool {
         // Timeout: kill the process after 30 seconds to prevent MCP server stalls
         let timeoutWork = DispatchWorkItem {
             if process.isRunning {
-                print("[EXEC] Command timeout after 30s, sending SIGTERM: \(command)")
+                Logger.log("exec.timeout", fields: [
+                    "signal": .string("SIGTERM"),
+                    "outcome": .string("terminating"),
+                ])
                 process.terminate() // SIGTERM
                 // If still running after 5 more seconds, SIGKILL
                 DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
                     if process.isRunning {
-                        print("[EXEC] SIGKILL: \(command)")
+                        Logger.log("exec.timeout", fields: [
+                            "signal": .string("SIGKILL"),
+                            "outcome": .string("killed"),
+                        ])
                         kill(process.processIdentifier, SIGKILL)
                     }
                 }

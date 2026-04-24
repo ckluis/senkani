@@ -10,14 +10,26 @@ enum ReadTool {
             return .init(content: [.text(text: "Error: 'path' is required", annotations: nil, _meta: nil)], isError: true)
         }
 
-        let absPath = path.hasPrefix("/") ? path : session.projectRoot + "/" + path
+        let absPath: String
+        do {
+            absPath = try ProjectSecurity.resolveProjectFile(path, projectRoot: session.projectRoot)
+        } catch {
+            return .init(
+                content: [.text(text: "Error: \(error)", annotations: nil, _meta: nil)],
+                isError: true
+            )
+        }
+
         let wantsFull = arguments?["full"]?.boolValue == true
         let hasRange = arguments?["offset"]?.intValue != nil || arguments?["limit"]?.intValue != nil
 
-        // Check cache (always returns full content — skip for outline-only)
-        if (wantsFull || hasRange), session.cacheEnabled, let cached = session.readCache.lookup(path: absPath) {
+        // Cache stores the full post-processed output. Only full reads can be
+        // served from cache — range reads must be re-sliced from source to
+        // honor the requested window.
+        if wantsFull, session.cacheEnabled, let cached = session.readCache.lookup(path: absPath) {
             session.recordCacheSaving(bytes: cached.rawBytes)
-            return .init(content: [.text(text: "// senkani: cached (\(cached.rawBytes) bytes saved)\n[unchanged since last read]", annotations: nil, _meta: nil)])
+            let header = "// senkani: cached \(cached.rawBytes) bytes saved (unchanged since last read)\n"
+            return .init(content: [.text(text: header + cached.content, annotations: nil, _meta: nil)])
         }
 
         // Outline-first: if not full and no range, try returning outline from index

@@ -110,16 +110,29 @@ enum ToolRouter {
             }
         } catch is ToolTimeoutError {
             let elapsed = Date().timeIntervalSince(start)
-            FileHandle.standardError.write(Data("🔴 [TOOL-TIMEOUT] \(params.name) after \(String(format: "%.1f", elapsed))s\n".utf8))
+            Logger.log("tool.timeout", fields: [
+                "tool": .string(params.name),
+                "duration_ms": .int(Int(elapsed * 1000)),
+                "outcome": .string("error"),
+            ])
             return .init(content: [.text(text: "Tool timed out after \(toolTimeoutSeconds)s: \(params.name)", annotations: nil, _meta: nil)], isError: true)
         } catch {
             let elapsed = Date().timeIntervalSince(start)
-            FileHandle.standardError.write(Data("🔴 [TOOL-ERROR] \(params.name) after \(String(format: "%.1f", elapsed))s: \(error)\n".utf8))
+            Logger.log("tool.error", fields: [
+                "tool": .string(params.name),
+                "duration_ms": .int(Int(elapsed * 1000)),
+                "error": .string(error.localizedDescription),
+                "outcome": .string("error"),
+            ])
             return .init(content: [.text(text: "Tool error: \(error.localizedDescription)", annotations: nil, _meta: nil)], isError: true)
         }
 
         let elapsed = Date().timeIntervalSince(start)
-        FileHandle.standardError.write(Data("🟢 [TOOL-DONE] \(params.name) in \(String(format: "%.2f", elapsed))s\n".utf8))
+        Logger.log("tool.done", fields: [
+            "tool": .string(params.name),
+            "duration_ms": .int(Int(elapsed * 1000)),
+            "outcome": .string("success"),
+        ])
         return result
     }
 

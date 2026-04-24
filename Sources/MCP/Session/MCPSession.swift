@@ -221,15 +221,22 @@ final class MCPSession: @unchecked Sendable {
         let promoted = CompoundLearning.runDailySweep(
             db: .shared, projectRoot: root, enricher: enricher)
         if promoted > 0 {
-            FileHandle.standardError.write(Data(
-                "[compound_learning] daily sweep promoted \(promoted) rule(s) → staged\n".utf8))
+            Logger.log("compound_learning.daily_sweep", fields: [
+                "promoted": .int(promoted),
+                "outcome": .string("staged")
+            ])
         }
 
         let agentType = AgentDetector.detect(environment: ProcessInfo.processInfo.environment)
         let sessionId: String? = SessionDatabase.shared.createSession(projectRoot: root, agentType: agentType)
         let paneId = ProcessInfo.processInfo.environment["SENKANI_PANE_ID"]
 
-        FileHandle.standardError.write(Data("🔴 MCPSession.resolve(): rawRoot=\(rawRoot) normalized=\(root) metrics=\(metricsFile) pane=\(paneId ?? "nil") session=\(sessionId ?? "nil")\n".utf8))
+        Logger.log("mcp.session.resolved", fields: [
+            "project_root": .path(root),
+            "metrics_file": .path(metricsFile),
+            "has_pane_id": .bool(paneId != nil),
+            "has_session_id": .bool(sessionId != nil),
+        ])
 
         let configFile = ProcessInfo.processInfo.environment["SENKANI_CONFIG_FILE"]
 
@@ -894,7 +901,6 @@ final class MCPSession: @unchecked Sendable {
         lock.unlock()
 
         let savedBytes = rawBytes - compressedBytes
-        FileHandle.standardError.write(Data("🟢 RECORD METRICS: raw=\(rawBytes) compressed=\(compressedBytes) saved=\(savedBytes) feature=\(feature) command=\(command ?? "?")\n".utf8))
 
         // JSONL write — matches MetricEntry format expected by MetricsWatcher
         if let path = metricsFilePath {
@@ -922,11 +928,11 @@ final class MCPSession: @unchecked Sendable {
                     }
                 }
             }
-            let fSize = (try? FileManager.default.attributesOfItem(atPath: path)[.size]) ?? 0
-            FileHandle.standardError.write(Data("🔵 JSONL WRITE: path=\(path) exists=\(FileManager.default.fileExists(atPath: path)) size=\(fSize)\n".utf8))
         } else {
-            FileHandle.standardError.write(Data("⛔ METRICS FILE PATH IS NIL — JSONL will NOT be written\n".utf8))
-            FileHandle.standardError.write(Data("⛔ SENKANI_METRICS_FILE env var was not set when the MCP server started\n".utf8))
+            Logger.log("mcp.metrics.path_missing", fields: [
+                "feature": .string(feature),
+                "outcome": .string("jsonl_skipped"),
+            ])
         }
 
         // SessionDatabase: write to legacy commands table
@@ -947,8 +953,6 @@ final class MCPSession: @unchecked Sendable {
         let outputTokens = compressedBytes / 4
         let savedTokens = savedBytes / 4
         let costCents = Int(Double(savedBytes) / 4.0 / 1_000_000.0 * 300.0)
-
-        FileHandle.standardError.write(Data("💾 [MCP-WRITE] recordTokenEvent: project=\(projectRoot) pane=\(paneId ?? "nil") in=\(inputTokens) out=\(outputTokens) saved=\(savedTokens) feature=\(feature)\n".utf8))
 
         SessionDatabase.shared.recordTokenEvent(
             sessionId: sessionId ?? "unknown",

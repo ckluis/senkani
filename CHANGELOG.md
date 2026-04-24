@@ -6,6 +6,41 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 24 — Live-session multiplier gate (`luminary-2026-04-24-0-live-session-multiplier-gate`)
+- Luminary P0 follow-up from the 2026-04-24 spec-vs-codebase review.
+  The 80.37× figure is a fixture-bench ceiling; the live-session
+  median is pending Phase G capture. External-facing copy must not
+  quote either multiplier without an explicit fixture/live/pending
+  qualifier. Round makes the rule automated and gap-closes three
+  residual unpaired surfaces.
+- New `tools/check-multiplier-claims.sh` (POSIX bash + awk, no deps):
+  scans `README.md`, `index.html`, `docs/**/*.html`, `spec/spec.md`,
+  `spec/roadmap.md`, `spec/testing.md` for bare multiplier claims
+  (`80x`, `80.37`, `5-10x`, `5 to 10x`, `5x-10x`) and fails if any
+  are unpaired with a fixture / live / synthetic / pending /
+  benchmark / replay / caveat / ceiling qualifier within ±4 lines.
+  Zero dependencies; runs in tens of ms.
+- Wired into `tools/test-safe.sh` as a pre-flight check. Running the
+  safe suite now also enforces the claim gate. Bypass via
+  `SKIP_MULTIPLIER_CHECK=1` if a rare edit needs to land without the
+  gate (not recommended).
+- `index.html` hero stat strip: added a paired **Live-session median
+  (pending)** tile next to the 80.37× fixture tile, with a link to
+  the Savings Test pane and a 2026-05-31 target date.
+- `spec/spec.md` "The Solution" close: rewrote the headline claim
+  from `5-10x cost reduction measured, not claimed` to the paired
+  framing — 80.37× fixture measured, live pending Phase G (expected
+  5-10× range), both reported as a pair. Links to the
+  testing.md caveat.
+- `spec/testing.md` "Live Session Caveat" section: added owner
+  (Chris Kluis), target capture date (2026-05-31), explicit
+  "done when" criteria, and an inline description of the automated
+  gate.
+- New `Tests/SenkaniTests/MultiplierClaimGateTests.swift` with 4
+  Swift Testing cases (unpaired fails, fixture-paired passes,
+  pending-paired passes, current repo state passes). Full safe
+  suite: green.
+
 ### April 24 — SessionDatabase split: thin façade + close P2-11 (`sessiondb-split-6-facade-thin`)
 - Final round under the `sessiondatabase-split` umbrella (Luminary
   P2-11). `Sources/Core/SessionDatabase.swift` is now the lifecycle

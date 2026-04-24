@@ -26,6 +26,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Pre-flight: fail fast if any external-facing surface has an unpaired
+# multiplier claim (Luminary P0 round 2026-04-24-0). Cheap; runs in
+# tens of milliseconds.
+if [ -z "${SKIP_MULTIPLIER_CHECK:-}" ]; then
+  ./tools/check-multiplier-claims.sh
+fi
+
 export SWT_NO_PARALLEL=1
 
 exec swift test --no-parallel "$@"

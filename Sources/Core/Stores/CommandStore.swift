@@ -345,6 +345,269 @@ final class CommandStore: @unchecked Sendable {
         }
     }
 
+    // MARK: - Stats + analytics
+
+    /// Lifetime stats across all sessions.
+    func totalStats() -> LifetimeStats {
+        return parent.queue.sync {
+            guard let db = parent.db else {
+                return LifetimeStats(totalSessions: 0, totalCommands: 0, totalRawBytes: 0, totalSavedBytes: 0, totalCostSavedCents: 0)
+            }
+            let sql = """
+                SELECT COUNT(*), COALESCE(SUM(command_count),0), COALESCE(SUM(total_raw_bytes),0),
+                       COALESCE(SUM(total_saved_bytes),0), COALESCE(SUM(cost_saved_cents),0)
+                FROM sessions;
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                return LifetimeStats(totalSessions: 0, totalCommands: 0, totalRawBytes: 0, totalSavedBytes: 0, totalCostSavedCents: 0)
+            }
+            defer { sqlite3_finalize(stmt) }
+
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                return LifetimeStats(
+                    totalSessions: Int(sqlite3_column_int(stmt, 0)),
+                    totalCommands: Int(sqlite3_column_int64(stmt, 1)),
+                    totalRawBytes: Int(sqlite3_column_int64(stmt, 2)),
+                    totalSavedBytes: Int(sqlite3_column_int64(stmt, 3)),
+                    totalCostSavedCents: Int(sqlite3_column_int64(stmt, 4))
+                )
+            }
+            return LifetimeStats(totalSessions: 0, totalCommands: 0, totalRawBytes: 0, totalSavedBytes: 0, totalCostSavedCents: 0)
+        }
+    }
+
+    /// Aggregate stats for a specific project root. Used by the GUI to poll metrics.
+    func statsForProject(_ projectRoot: String) -> LifetimeStats {
+        return parent.queue.sync {
+            guard let db = parent.db else {
+                return LifetimeStats(totalSessions: 0, totalCommands: 0, totalRawBytes: 0, totalSavedBytes: 0, totalCostSavedCents: 0)
+            }
+            let sql = """
+                SELECT COUNT(*), COALESCE(SUM(command_count),0), COALESCE(SUM(total_raw_bytes),0),
+                       COALESCE(SUM(total_saved_bytes),0), COALESCE(SUM(cost_saved_cents),0)
+                FROM sessions WHERE project_root = ?;
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                return LifetimeStats(totalSessions: 0, totalCommands: 0, totalRawBytes: 0, totalSavedBytes: 0, totalCostSavedCents: 0)
+            }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (projectRoot as NSString).utf8String, -1, nil)
+
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                return LifetimeStats(
+                    totalSessions: Int(sqlite3_column_int(stmt, 0)),
+                    totalCommands: Int(sqlite3_column_int64(stmt, 1)),
+                    totalRawBytes: Int(sqlite3_column_int64(stmt, 2)),
+                    totalSavedBytes: Int(sqlite3_column_int64(stmt, 3)),
+                    totalCostSavedCents: Int(sqlite3_column_int64(stmt, 4))
+                )
+            }
+            return LifetimeStats(totalSessions: 0, totalCommands: 0, totalRawBytes: 0, totalSavedBytes: 0, totalCostSavedCents: 0)
+        }
+    }
+
+    /// Aggregate stats for commands in the database since a timestamp.
+    func recentStats(since: Date) -> LifetimeStats {
+        return parent.queue.sync {
+            guard let db = parent.db else {
+                return LifetimeStats(totalSessions: 0, totalCommands: 0, totalRawBytes: 0, totalSavedBytes: 0, totalCostSavedCents: 0)
+            }
+            let sql = """
+                SELECT COUNT(*), COALESCE(SUM(command_count),0), COALESCE(SUM(total_raw_bytes),0),
+                       COALESCE(SUM(total_saved_bytes),0), COALESCE(SUM(cost_saved_cents),0)
+                FROM sessions WHERE started_at >= ?;
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                return LifetimeStats(totalSessions: 0, totalCommands: 0, totalRawBytes: 0, totalSavedBytes: 0, totalCostSavedCents: 0)
+            }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_double(stmt, 1, since.timeIntervalSince1970)
+
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                return LifetimeStats(
+                    totalSessions: Int(sqlite3_column_int(stmt, 0)),
+                    totalCommands: Int(sqlite3_column_int64(stmt, 1)),
+                    totalRawBytes: Int(sqlite3_column_int64(stmt, 2)),
+                    totalSavedBytes: Int(sqlite3_column_int64(stmt, 3)),
+                    totalCostSavedCents: Int(sqlite3_column_int64(stmt, 4))
+                )
+            }
+            return LifetimeStats(totalSessions: 0, totalCommands: 0, totalRawBytes: 0, totalSavedBytes: 0, totalCostSavedCents: 0)
+        }
+    }
+
+    /// Per-command breakdown for bar charts.
+    func commandBreakdown(projectRoot: String) -> [(command: String, rawBytes: Int, compressedBytes: Int)] {
+        let normalized = SessionDatabase.normalizePath(projectRoot) ?? projectRoot
+        return parent.queue.sync {
+            guard let db = parent.db else { return [] }
+            let sql = """
+                SELECT c.command, SUM(c.raw_bytes), SUM(c.compressed_bytes)
+                FROM commands c
+                JOIN sessions s ON c.session_id = s.id
+                WHERE s.project_root = ?
+                AND c.command IS NOT NULL AND c.command != ''
+                GROUP BY c.command
+                ORDER BY SUM(c.raw_bytes) - SUM(c.compressed_bytes) DESC
+                LIMIT 20;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+
+            var results: [(command: String, rawBytes: Int, compressedBytes: Int)] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                guard sqlite3_column_type(stmt, 0) != SQLITE_NULL else { continue }
+                let cmd = String(cString: sqlite3_column_text(stmt, 0))
+                let raw = Int(sqlite3_column_int64(stmt, 1))
+                let compressed = Int(sqlite3_column_int64(stmt, 2))
+                results.append((command: cmd, rawBytes: raw, compressedBytes: compressed))
+            }
+            return results
+        }
+    }
+
+    /// Return recent `commands.output_preview` rows for regression-gate sampling.
+    func outputPreviewsForCommand(
+        projectRoot: String?,
+        commandPrefix: String,
+        limit: Int = 20
+    ) -> [String] {
+        let likePattern = commandPrefix + "%"
+        return parent.queue.sync {
+            guard let db = parent.db else { return [] }
+
+            let sql: String
+            if projectRoot != nil {
+                sql = """
+                    SELECT c.output_preview
+                    FROM commands c
+                    JOIN sessions s ON s.id = c.session_id
+                    WHERE c.tool_name = 'exec'
+                      AND c.output_preview IS NOT NULL
+                      AND c.output_preview != ''
+                      AND (c.command = ? OR c.command LIKE ?)
+                      AND s.project_root = ?
+                    ORDER BY c.timestamp DESC
+                    LIMIT ?;
+                """
+            } else {
+                sql = """
+                    SELECT output_preview
+                    FROM commands
+                    WHERE tool_name = 'exec'
+                      AND output_preview IS NOT NULL
+                      AND output_preview != ''
+                      AND (command = ? OR command LIKE ?)
+                    ORDER BY timestamp DESC
+                    LIMIT ?;
+                """
+            }
+
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+
+            sqlite3_bind_text(stmt, 1, (commandPrefix as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 2, (likePattern as NSString).utf8String, -1, nil)
+            var nextBind: Int32 = 3
+            if let root = projectRoot {
+                let normalized = SessionDatabase.normalizePath(root) ?? root
+                sqlite3_bind_text(stmt, nextBind, (normalized as NSString).utf8String, -1, nil)
+                nextBind += 1
+            }
+            sqlite3_bind_int(stmt, nextBind, Int32(limit))
+
+            var rows: [String] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                if let ptr = sqlite3_column_text(stmt, 0) {
+                    rows.append(String(cString: ptr))
+                }
+            }
+            return rows
+        }
+    }
+
+    // MARK: - Budget queries
+
+    /// Total cost_saved_cents for sessions started today (UTC).
+    func costForToday() -> Int {
+        return parent.queue.sync {
+            guard let db = parent.db else { return 0 }
+            let sql = """
+                SELECT COALESCE(SUM(cost_saved_cents), 0)
+                FROM sessions
+                WHERE date(started_at, 'unixepoch') = date('now');
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                return Int(sqlite3_column_int64(stmt, 0))
+            }
+            return 0
+        }
+    }
+
+    /// Total cost_saved_cents for sessions started in the last 7 days (UTC).
+    func costForWeek() -> Int {
+        return parent.queue.sync {
+            guard let db = parent.db else { return 0 }
+            let sql = """
+                SELECT COALESCE(SUM(cost_saved_cents), 0)
+                FROM sessions
+                WHERE started_at >= strftime('%s', 'now', '-7 days');
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                return Int(sqlite3_column_int64(stmt, 0))
+            }
+            return 0
+        }
+    }
+
+    /// Record a budget decision for a command.
+    func recordBudgetDecision(
+        sessionId: String,
+        toolName: String,
+        decision: String,
+        rawBytes: Int = 0,
+        compressedBytes: Int = 0
+    ) {
+        let now = Date().timeIntervalSince1970
+        parent.queue.async { [weak parent] in
+            guard let parent, let db = parent.db else { return }
+            let sql = """
+                INSERT INTO commands (session_id, timestamp, tool_name, raw_bytes, compressed_bytes, budget_decision)
+                VALUES (?, ?, ?, ?, ?, ?);
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_double(stmt, 2, now)
+            sqlite3_bind_text(stmt, 3, (toolName as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(stmt, 4, Int64(rawBytes))
+            sqlite3_bind_int64(stmt, 5, Int64(compressedBytes))
+            sqlite3_bind_text(stmt, 6, (decision as NSString).utf8String, -1, nil)
+            sqlite3_step(stmt)
+        }
+    }
+
+    /// Execute a raw SQL statement (for tests that backdate or shape fixtures).
+    func executeRawSQL(_ sql: String) {
+        parent.queue.sync {
+            guard let db = parent.db else { return }
+            sqlite3_exec(db, sql, nil, nil, nil)
+        }
+    }
+
     // MARK: - FTS5 sanitizer
 
     /// SECURITY: Sanitize user input for FTS5 MATCH queries.

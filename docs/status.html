@@ -67,7 +67,7 @@
     <ul>
       <li><strong>Hook relay + filter pipeline</strong> — 24 command-specific rules; Layer 3 smart denials (re-read suppression, command replay, trivial routing, symbol upgrade, redundant validation); 80.37× fixture-suite reduction.</li>
       <li><strong>Symbol indexer</strong> — 25 tree-sitter grammars, FTS5 search, dependency graph, container hierarchy, incremental FSEvents updates; cold &lt; 5 ms / cached &lt; 1 ms.</li>
-      <li><strong>Session DB + analytics</strong> — SQLite + FTS5; per-call token tracking; budget enforcement at hook layer; BM25+RRF search fusion; @-mention context pinning; session continuity; JSONL data export.</li>
+      <li><strong>Session DB + analytics</strong> — SQLite + FTS5; four-store SessionDatabase façade; per-call token tracking; budget enforcement at hook layer; BM25+RRF search fusion; @-mention context pinning; session continuity; JSONL data export.</li>
       <li><strong>Local ML</strong> — MiniLM embeddings (384-dim) + Gemma vision via MLX on Neural Engine; fully offline after download; L0/L1/L2 tiered context pre-warming.</li>
       <li><strong>Compound learning</strong> — recurring→staged→applied with Laplace-smoothed confidence; four artifact types; Schneier gate on instruction-patch auto-apply.</li>
       <li><strong>Knowledge base</strong> — markdown source-of-truth + rebuilt SQLite index; enrichment validator, rollback, timeline; KB↔learning bridge.</li>

@@ -6,6 +6,31 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 24 — SessionDatabase split: thin façade + close P2-11 (`sessiondb-split-6-facade-thin`)
+- Final round under the `sessiondatabase-split` umbrella (Luminary
+  P2-11). `Sources/Core/SessionDatabase.swift` is now the lifecycle
+  and composition façade only: connection/WAL setup, store wiring,
+  `MigrationRunner`, schema-version diagnostics, retained
+  `event_counters`, and the cross-store composition SQL
+  (`lastExecResult`, `lastSessionActivity`, `tokenStatsByAgent`,
+  `complianceRate`).
+- Public forwarding moved into focused extension files:
+  `SessionDatabase+CommandAPI.swift`,
+  `SessionDatabase+TokenEventAPI.swift`,
+  `SessionDatabase+SandboxAPI.swift`, and
+  `SessionDatabase+ValidationAPI.swift`. Public callsites still use
+  `SessionDatabase.shared.<method>`.
+- Command-table-only helper SQL moved behind `CommandStore`
+  (`totalStats`, `statsForProject`, `recentStats`,
+  `commandBreakdown`, `outputPreviewsForCommand`,
+  `costForToday`, `costForWeek`, `recordBudgetDecision`,
+  `executeRawSQL`), so the façade no longer owns table-local command
+  queries.
+- `SessionDatabase.swift` dropped from 1493 → 587 LOC in this round
+  (2479 → 587 across the split chain). No new tests were needed; the
+  refactor is covered by the existing database surface. Targeted
+  database suite passed 105/105; full safe suite passed 1716/1716.
+
 ### April 24 — SessionDatabase split: extract ValidationStore (`sessiondb-split-5-validationstore`)
 - Round 4 of 5 under the `sessiondatabase-split` umbrella
   (Luminary P2-11). New `Sources/Core/Stores/ValidationStore.swift`

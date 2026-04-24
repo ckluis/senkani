@@ -6,6 +6,28 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 24 — SessionDatabase split: extract ValidationStore (`sessiondb-split-5-validationstore`)
+- Round 4 of 5 under the `sessiondatabase-split` umbrella
+  (Luminary P2-11). New `Sources/Core/Stores/ValidationStore.swift`
+  owns `validation_results` setup, attempt persistence,
+  pending-advisory reads, inspection queries, surfaced marking,
+  legacy destructive fetch compatibility, and the 24-h prune method.
+- `SessionDatabase` keeps the public compatibility boundary and now
+  delegates all validation-result APIs. `AutoValidateQueue`,
+  `HookRouter`, and `RetentionScheduler` callsites stay unchanged,
+  so delivery policy and retention orchestration remain outside the
+  store.
+- Data-integrity constraints are preserved: `ValidationStore` shares
+  the parent SQLite handle and serial queue, migration v3 remains the
+  owner of `outcome`, `reason`, and `surfaced_at`, and pending reads
+  remain non-destructive until HookRouter appends an advisory to a
+  visible response.
+- New `Tests/SenkaniTests/ValidationStoreTests.swift` adds 6 tests
+  for non-destructive pending reads, surfaced marking, clean/dropped
+  inspection, session-scoped 10-row pending limit, prune cutoff
+  behavior, and legacy destructive fetch. Targeted validation surface
+  is 33/33 green; full suite is 1716/1716 green.
+
 ### April 24 — Scheduled presets: day-1 catalogue of installable templates (`schedule-preset-library`)
 - Ships five JSON-backed presets (`log-rotation`, `morning-brief`,
   `autoresearch`, `competitive-scan`, `senkani-improve`) as templates

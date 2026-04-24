@@ -17,6 +17,13 @@ private func cleanupDB(_ path: String) {
     try? fm.removeItem(atPath: path + "-shm")
 }
 
+private func eventCount(_ db: SessionDatabase, _ type: String, projectRoot: String? = nil) -> Int {
+    db.flushWrites()
+    return db.eventCounts(projectRoot: projectRoot, prefix: type)
+        .filter { $0.eventType == type }
+        .reduce(0) { $0 + $1.count }
+}
+
 private func parseResponse(_ data: Data) -> (decision: String?, reason: String?) {
     guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let hookOutput = json["hookSpecificOutput"] as? [String: Any] else {
@@ -112,12 +119,13 @@ struct ValidationResultsDBTests {
             exitCode: 1, rawOutput: "error: cannot find 'bar'",
             advisory: "'bar' is undefined.", durationMs: 120
         )
-        Thread.sleep(forTimeInterval: 0.1)  // flush async write
+        db.flushWrites()
 
-        let results = db.fetchAndMarkDelivered(sessionId: sid)
+        let results = db.pendingValidationAdvisories(sessionId: sid)
         #expect(results.count == 1, "Should fetch 1 undelivered result")
         #expect(results.first?.advisory == "'bar' is undefined.")
         #expect(results.first?.exitCode == 1)
+        #expect(results.first?.outcome == "advisory")
     }
 
     @Test func fetchMarksDelivered() {
@@ -131,13 +139,20 @@ struct ValidationResultsDBTests {
             exitCode: 1, rawOutput: nil,
             advisory: "error found", durationMs: 50
         )
-        Thread.sleep(forTimeInterval: 0.1)
+        db.flushWrites()
 
-        let first = db.fetchAndMarkDelivered(sessionId: sid)
+        let first = db.pendingValidationAdvisories(sessionId: sid)
         #expect(first.count == 1, "First fetch should return the result")
 
-        let second = db.fetchAndMarkDelivered(sessionId: sid)
-        #expect(second.isEmpty, "Second fetch should be empty (already delivered)")
+        let stillPending = db.pendingValidationAdvisories(sessionId: sid)
+        #expect(stillPending.count == 1, "Fetch alone must not mark surfaced")
+
+        db.markValidationAdvisoriesSurfaced(ids: first.map(\.id))
+        db.flushWrites()
+
+        let second = db.pendingValidationAdvisories(sessionId: sid)
+        #expect(second.isEmpty, "After mark surfaced, pending fetch should be empty")
+        #expect(db.validationResults(sessionId: sid).first?.surfacedAt != nil)
     }
 
     @Test func onlyErrorsReturned() {
@@ -158,11 +173,39 @@ struct ValidationResultsDBTests {
             exitCode: 1, rawOutput: "error found",
             advisory: "fix this", durationMs: 40
         )
-        Thread.sleep(forTimeInterval: 0.1)
+        db.flushWrites()
 
-        let results = db.fetchAndMarkDelivered(sessionId: sid)
+        let results = db.pendingValidationAdvisories(sessionId: sid)
         #expect(results.count == 1, "Should only return errors, not successes")
         #expect(results.first?.advisory == "fix this")
+    }
+
+    @Test func cleanAndDroppedOutcomesInspectableButNotPending() {
+        let (db, dbPath) = makeTempDB()
+        defer { cleanupDB(dbPath) }
+        let sid = db.createSession(projectRoot: "/tmp/test")
+
+        db.insertValidationResult(
+            sessionId: sid, filePath: "/tmp/test/ok.swift",
+            validatorName: "swiftc", category: "syntax",
+            exitCode: 0, rawOutput: nil,
+            advisory: "", durationMs: 10,
+            outcome: "clean"
+        )
+        db.insertValidationResult(
+            sessionId: sid, filePath: "/tmp/test/spawn.swift",
+            validatorName: "swiftc", category: "syntax",
+            exitCode: -1, rawOutput: "spawn failed",
+            advisory: "spawn failed", durationMs: 1,
+            outcome: "dropped", reason: "spawn_failed"
+        )
+        db.flushWrites()
+
+        #expect(db.pendingValidationAdvisories(sessionId: sid).isEmpty)
+        #expect(db.validationResults(sessionId: sid, outcome: "clean").count == 1)
+        let dropped = db.validationResults(sessionId: sid, outcome: "dropped")
+        #expect(dropped.count == 1)
+        #expect(dropped.first?.reason == "spawn_failed")
     }
 
     @Test func pruneOldResults() {
@@ -176,24 +219,23 @@ struct ValidationResultsDBTests {
             exitCode: 1, rawOutput: nil,
             advisory: "old error", durationMs: 10
         )
-        Thread.sleep(forTimeInterval: 0.1)
+        db.flushWrites()
 
         // Backdate the result
         db.executeRawSQL("UPDATE validation_results SET created_at = \(Date().addingTimeInterval(-100000).timeIntervalSince1970)")
-        Thread.sleep(forTimeInterval: 0.05)
 
         // Prune
         db.pruneValidationResults(olderThanHours: 24)
-        Thread.sleep(forTimeInterval: 0.1)
+        db.flushWrites()
 
-        let results = db.fetchAndMarkDelivered(sessionId: sid)
+        let results = db.pendingValidationAdvisories(sessionId: sid)
         #expect(results.isEmpty, "Old results should be pruned")
     }
 }
 
 // MARK: - Suite 4: HookRouter Integration
 
-@Suite("HookRouter — Auto-Validate Integration")
+@Suite("HookRouter — Auto-Validate Integration", .serialized)
 struct HookRouterAutoValidateTests {
 
     @Test func postToolUseEditReturnsPassthrough() {
@@ -225,28 +267,97 @@ struct HookRouterAutoValidateTests {
         #expect(json == "{}", "PostToolUse Write should passthrough")
     }
 
-    @Test func preToolUseAdvisoryAppended() {
+    @Test func pendingAdvisorySurvivesPassthroughPreToolUse() {
         let (db, dbPath) = makeTempDB()
         defer { cleanupDB(dbPath) }
+        defer { HookRouter.validationDatabase = .shared }
 
-        // Insert an undelivered validation result
         let sid = "advisory-test-session"
-        _ = db.createSession(projectRoot: "/tmp/test")
+        HookRouter.validationDatabase = db
         db.insertValidationResult(
             sessionId: sid, filePath: "/tmp/test/broken.swift",
             validatorName: "swiftc", category: "type",
             exitCode: 1, rawOutput: "error at line 12",
             advisory: "'bar' is undefined. Add import Bar.", durationMs: 80
         )
-        Thread.sleep(forTimeInterval: 0.1)
+        db.flushWrites()
 
-        // Fetch and verify
-        let results = db.fetchAndMarkDelivered(sessionId: sid)
-        #expect(!results.isEmpty, "Should have undelivered results")
+        let event: [String: Any] = [
+            "tool_name": "Bash",
+            "hook_event_name": "PreToolUse",
+            "tool_input": ["command": "git commit --dry-run"],
+            "cwd": "/tmp/test",
+            "session_id": sid,
+        ]
+        let eventData = try! JSONSerialization.data(withJSONObject: event)
+        let response = HookRouter.handle(eventJSON: eventData)
+        #expect(response == HookRouter.passthroughResponse)
+        db.flushWrites()
+        #expect(db.pendingValidationAdvisories(sessionId: sid).count == 1,
+                "passthrough response must not consume advisory")
+    }
 
-        // Format the advisory
-        let advisory = results.map(\.advisory).joined(separator: "\n")
-        #expect(advisory.contains("'bar' is undefined"), "Advisory should contain the diagnostic")
+    @Test func pendingAdvisoryAppendsOnceToDenyResponse() {
+        let (db, dbPath) = makeTempDB()
+        defer { cleanupDB(dbPath) }
+        defer { HookRouter.validationDatabase = .shared }
+
+        let sid = "advisory-deny-session"
+        HookRouter.validationDatabase = db
+        db.insertValidationResult(
+            sessionId: sid, filePath: "/tmp/test/broken.swift",
+            validatorName: "swiftc", category: "type",
+            exitCode: 1, rawOutput: "error at line 12",
+            advisory: "'bar' is undefined. Add import Bar.", durationMs: 80
+        )
+        db.flushWrites()
+
+        let event: [String: Any] = [
+            "tool_name": "Read",
+            "hook_event_name": "PreToolUse",
+            "tool_input": ["file_path": "broken.swift"],
+            "cwd": "/tmp/test",
+            "session_id": sid,
+        ]
+        let eventData = try! JSONSerialization.data(withJSONObject: event)
+        let response = HookRouter.handle(eventJSON: eventData)
+        let parsed = parseResponse(response)
+        #expect(parsed.decision == "deny")
+        #expect(parsed.reason?.contains("'bar' is undefined") == true)
+        db.flushWrites()
+        #expect(db.pendingValidationAdvisories(sessionId: sid).isEmpty)
+        #expect(eventCount(db, "auto_validate.delivered", projectRoot: "/tmp/test") == 1)
+
+        let second = HookRouter.handle(eventJSON: eventData)
+        let secondParsed = parseResponse(second)
+        #expect(secondParsed.reason?.contains("'bar' is undefined") == false,
+                "surfaced advisory must not repeat")
+    }
+
+    @Test func advisoryScopeDoesNotCrossSessions() {
+        let (db, dbPath) = makeTempDB()
+        defer { cleanupDB(dbPath) }
+        defer { HookRouter.validationDatabase = .shared }
+
+        HookRouter.validationDatabase = db
+        db.insertValidationResult(
+            sessionId: "other-session", filePath: "/tmp/test/broken.swift",
+            validatorName: "swiftc", category: "type",
+            exitCode: 1, rawOutput: "error",
+            advisory: "other session diagnostic", durationMs: 1
+        )
+        db.flushWrites()
+
+        let event: [String: Any] = [
+            "tool_name": "Read",
+            "hook_event_name": "PreToolUse",
+            "tool_input": ["file_path": "broken.swift"],
+            "cwd": "/tmp/test",
+            "session_id": "current-session",
+        ]
+        let response = HookRouter.handle(eventJSON: try! JSONSerialization.data(withJSONObject: event))
+        let parsed = parseResponse(response)
+        #expect(parsed.reason?.contains("other session diagnostic") == false)
     }
 }
 
@@ -259,7 +370,8 @@ struct AutoValidateWorkerTests {
         let registry = ValidatorRegistry(validators: [
             ValidatorDef(
                 name: "fake", language: "test", command: "/nonexistent/binary",
-                args: [], extensions: ["test"], category: "syntax"
+                args: [], extensions: ["test"], category: "syntax",
+                installed: true
             )
         ])
 
@@ -271,9 +383,50 @@ struct AutoValidateWorkerTests {
             registry: registry
         )
 
-        // Should not crash — may return empty (if extension check fails) or error result
-        // The key assertion: no crash occurred
-        #expect(true, "Should handle missing binary without crash")
+        #expect(results.isEmpty, "Missing validator binaries should not produce user advisories")
+    }
+
+    @Test func missingBinaryProducesDroppedAttempt() {
+        let registry = ValidatorRegistry(validators: [
+            ValidatorDef(
+                name: "fake", language: "test", command: "/nonexistent/binary",
+                args: [], extensions: ["test"], category: "syntax",
+                installed: true
+            )
+        ])
+
+        let attempts = AutoValidateWorker.validateAttempts(
+            path: "/tmp/test.test",
+            projectRoot: "/tmp",
+            categories: ["syntax"],
+            timeoutMs: 5000,
+            registry: registry
+        )
+
+        #expect(attempts.count == 1)
+        #expect(attempts.first?.outcome == .dropped)
+        #expect(attempts.first?.reason == "spawn_failed")
+    }
+
+    @Test func cleanRunProducesCleanAttempt() {
+        let registry = ValidatorRegistry(validators: [
+            ValidatorDef(
+                name: "clean-sh", language: "test", command: "/bin/sh",
+                args: ["-c", "exit 0"], extensions: ["test"], category: "syntax",
+                installed: true
+            )
+        ])
+
+        let attempts = AutoValidateWorker.validateAttempts(
+            path: "/tmp/test.test",
+            projectRoot: "/tmp",
+            categories: ["syntax"],
+            timeoutMs: 5000,
+            registry: registry
+        )
+
+        #expect(attempts.count == 1)
+        #expect(attempts.first?.outcome == .clean)
     }
 
     @Test func categoryFilteringApplied() {
@@ -304,37 +457,80 @@ struct AutoValidateWorkerTests {
 struct AutoValidateQueueTests {
 
     @Test func excludedPathSkipped() async {
-        let queue = AutoValidateQueue()
-        await queue.updateConfig(AutoValidateConfig(
-            enabled: true,
-            excludePaths: ["node_modules/**"]
-        ))
+        let (db, dbPath) = makeTempDB()
+        defer { cleanupDB(dbPath) }
+        let root = "/tmp/project"
+        let queue = AutoValidateQueue(
+            database: db,
+            configLoader: { _ in AutoValidateConfig(enabled: true, excludePaths: ["node_modules/**"]) }
+        )
 
         // Enqueue a file in node_modules — should be skipped
         await queue.enqueue(
             path: "/tmp/project/node_modules/foo.ts",
             sessionId: "test",
-            projectRoot: "/tmp/project"
+            projectRoot: root
         )
+        await queue.drainForTesting()
 
         // Queue should have nothing running
         let count = await queue.runningCount
         #expect(count == 0, "Excluded path should not enqueue")
+        #expect(eventCount(db, "auto_validate.skipped_excluded", projectRoot: root) == 1)
     }
 
     @Test func unknownExtensionSkipped() async {
-        let queue = AutoValidateQueue()
-        await queue.updateConfig(AutoValidateConfig(enabled: true))
+        let (db, dbPath) = makeTempDB()
+        defer { cleanupDB(dbPath) }
+        let root = "/tmp/project"
+        let queue = AutoValidateQueue(
+            database: db,
+            configLoader: { _ in AutoValidateConfig(enabled: true) }
+        )
 
         // .xyz has no validators registered
         await queue.enqueue(
             path: "/tmp/project/readme.xyz",
             sessionId: "test",
-            projectRoot: "/tmp/project"
+            projectRoot: root
         )
+        await queue.drainForTesting()
 
         let count = await queue.runningCount
         #expect(count == 0, "Unknown extension should not enqueue")
+        #expect(eventCount(db, "auto_validate.skipped_no_validator", projectRoot: root) == 1)
+    }
+
+    @Test func cleanValidationPersistsOutcomeAndCounters() async {
+        let (db, dbPath) = makeTempDB()
+        defer { cleanupDB(dbPath) }
+        let root = "/tmp/senkani-queue-clean-\(UUID().uuidString)"
+        try? FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let sid = "queue-clean"
+        let registry = ValidatorRegistry(validators: [
+            ValidatorDef(
+                name: "clean-sh", language: "test", command: "/bin/sh",
+                args: ["-c", "exit 0"], extensions: ["test"], category: "syntax",
+                installed: true
+            )
+        ])
+        let queue = AutoValidateQueue(
+            database: db,
+            registry: registry,
+            configLoader: { _ in AutoValidateConfig(enabled: true, debounceMs: 50, timeoutMs: 1000, maxConcurrent: 1) }
+        )
+
+        let filePath = "\(root)/ok.test"
+        FileManager.default.createFile(atPath: filePath, contents: Data("ok\n".utf8))
+        await queue.enqueue(path: filePath, sessionId: sid, projectRoot: root)
+        await queue.drainForTesting()
+
+        let rows = db.validationResults(sessionId: sid, outcome: "clean")
+        #expect(rows.count == 1)
+        #expect(eventCount(db, "auto_validate.enqueued", projectRoot: root) == 1)
+        #expect(eventCount(db, "auto_validate.started", projectRoot: root) == 1)
+        #expect(eventCount(db, "auto_validate.clean", projectRoot: root) == 1)
     }
 }
 

@@ -63,5 +63,39 @@ public enum MigrationRegistry {
                 throw MigrationError.sqlFailed(stage: "v2", detail: msg)
             }
         },
+        Migration(version: 3, description: "validation delivery outcome metadata") { db in
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v3", detail: msg)
+            }
+
+            // Migration tests exercise the runner directly against historical
+            // partial schemas, so this migration must be self-contained rather
+            // than assuming SessionDatabase.createValidationResultsTable ran.
+            try exec("""
+                CREATE TABLE IF NOT EXISTS validation_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    validator_name TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    exit_code INTEGER NOT NULL,
+                    raw_output TEXT,
+                    advisory TEXT NOT NULL,
+                    duration_ms INTEGER NOT NULL,
+                    created_at REAL NOT NULL,
+                    delivered INTEGER DEFAULT 0
+                );
+                """)
+            try exec("ALTER TABLE validation_results ADD COLUMN outcome TEXT NOT NULL DEFAULT 'advisory';", allowDuplicateColumn: true)
+            try exec("ALTER TABLE validation_results ADD COLUMN reason TEXT;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE validation_results ADD COLUMN surfaced_at REAL;", allowDuplicateColumn: true)
+            try exec("CREATE INDEX IF NOT EXISTS idx_validation_session_outcome_surface ON validation_results(session_id, outcome, surfaced_at);")
+        },
     ]
 }

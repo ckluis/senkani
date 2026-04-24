@@ -37,6 +37,9 @@ public enum HookRouter {
     /// nil in stdio-mode MCP server and hook-relay mode (graceful no-op).
     nonisolated(unsafe) public static var entityObserver: ((_ toolName: String, _ toolInput: [String: Any]) -> Void)?
 
+    /// Test seam for validation advisory delivery. Production uses `.shared`.
+    nonisolated(unsafe) static var validationDatabase: SessionDatabase = .shared
+
     /// Process a hook event JSON and return a response JSON.
     /// Returns `{}` (passthrough) for unrecognized or unroutable events.
     public static func handle(eventJSON: Data) -> Data {
@@ -71,18 +74,26 @@ public enum HookRouter {
             return passthroughResponse
         }
 
-        // Fetch pending validation advisories (atomic: marks delivered)
+        // Fetch pending validation advisories without mutating delivery state.
+        // Rows are marked surfaced only after the advisory is appended to a
+        // hook response the agent will actually see.
+        var validationRows: [SessionDatabase.ValidationResultRow] = []
         var validationAdvisory = ""
         if let sid = sessionId {
-            let results = SessionDatabase.shared.fetchAndMarkDelivered(sessionId: sid)
-            if !results.isEmpty {
-                validationAdvisory = formatValidationAdvisory(results)
+            validationRows = validationDatabase.pendingValidationAdvisories(sessionId: sid)
+            if !validationRows.isEmpty {
+                validationAdvisory = formatValidationAdvisory(validationRows)
             }
         }
 
         // Budget enforcement on the hook path
         if case .block(let reason) = checkHookBudgetGate(projectRoot: projectRoot) {
-            return blockResponse(reason, eventName: eventName)
+            return appendAndMarkValidationIfSurfaced(
+                blockResponse(reason, eventName: eventName),
+                advisory: validationAdvisory,
+                rows: validationRows,
+                projectRoot: projectRoot
+            )
         }
 
         // Route the tool call
@@ -100,12 +111,13 @@ public enum HookRouter {
             response = passthroughResponse
         }
 
-        // Phase J: Append validation advisory to deny responses
-        if !validationAdvisory.isEmpty, response != passthroughResponse {
-            response = appendAdvisoryToResponse(response, advisory: validationAdvisory)
-        }
-
-        return response
+        // Phase J: append validation advisory to visible deny responses.
+        return appendAndMarkValidationIfSurfaced(
+            response,
+            advisory: validationAdvisory,
+            rows: validationRows,
+            projectRoot: projectRoot
+        )
     }
 
     // MARK: - Search Upgrade (Phase I)
@@ -598,15 +610,35 @@ public enum HookRouter {
     }
 
     /// Append advisory text to an existing deny response JSON.
-    private static func appendAdvisoryToResponse(_ response: Data, advisory: String) -> Data {
+    private static func appendAdvisoryToResponse(_ response: Data, advisory: String) -> (data: Data, appended: Bool) {
         guard var json = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
               var hookOutput = json["hookSpecificOutput"] as? [String: Any],
               let reason = hookOutput["permissionDecisionReason"] as? String
-        else { return response }
+        else { return (response, false) }
 
         hookOutput["permissionDecisionReason"] = reason + advisory
         json["hookSpecificOutput"] = hookOutput
-        return (try? JSONSerialization.data(withJSONObject: json)) ?? response
+        guard let data = try? JSONSerialization.data(withJSONObject: json) else {
+            return (response, false)
+        }
+        return (data, true)
+    }
+
+    private static func appendAndMarkValidationIfSurfaced(
+        _ response: Data,
+        advisory: String,
+        rows: [SessionDatabase.ValidationResultRow],
+        projectRoot: String?
+    ) -> Data {
+        guard !advisory.isEmpty, !rows.isEmpty, response != passthroughResponse else {
+            return response
+        }
+        let result = appendAdvisoryToResponse(response, advisory: advisory)
+        if result.appended {
+            validationDatabase.markValidationAdvisoriesSurfaced(ids: rows.map(\.id))
+            validationDatabase.recordEvent(type: "auto_validate.delivered", projectRoot: projectRoot)
+        }
+        return result.data
     }
 
     // MARK: - Budget Gate (testable)

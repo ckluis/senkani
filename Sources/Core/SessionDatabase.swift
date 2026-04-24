@@ -1373,6 +1373,9 @@ public final class SessionDatabase: @unchecked Sendable {
         public let advisory: String
         public let durationMs: Int
         public let createdAt: Date
+        public let outcome: String
+        public let reason: String?
+        public let surfacedAt: Date?
     }
 
     /// Store a validation result from auto-validate.
@@ -1384,18 +1387,27 @@ public final class SessionDatabase: @unchecked Sendable {
         exitCode: Int32,
         rawOutput: String?,
         advisory: String,
-        durationMs: Int
+        durationMs: Int,
+        outcome: String? = nil,
+        reason: String? = nil
     ) {
         let now = Date().timeIntervalSince1970
+        let resolvedOutcome = outcome ?? (exitCode == 0 ? "clean" : "advisory")
         queue.async { [weak self] in
             guard let self, let db = self.db else { return }
             let sql = """
                 INSERT INTO validation_results
-                (session_id, file_path, validator_name, category, exit_code, raw_output, advisory, duration_ms, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                (session_id, file_path, validator_name, category, exit_code, raw_output, advisory, duration_ms, created_at, outcome, reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
             var stmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                Logger.log("auto_validate.db_write.prepare_failed", fields: [
+                    "table": .string("validation_results"),
+                    "operation": .string("insert"),
+                ])
+                return
+            }
             defer { sqlite3_finalize(stmt) }
             sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
             sqlite3_bind_text(stmt, 2, (filePath as NSString).utf8String, -1, nil)
@@ -1406,54 +1418,139 @@ public final class SessionDatabase: @unchecked Sendable {
             sqlite3_bind_text(stmt, 7, (advisory as NSString).utf8String, -1, nil)
             sqlite3_bind_int(stmt, 8, Int32(durationMs))
             sqlite3_bind_double(stmt, 9, now)
-            sqlite3_step(stmt)
+            sqlite3_bind_text(stmt, 10, (resolvedOutcome as NSString).utf8String, -1, nil)
+            Self.bindOptionalText(stmt, 11, reason)
+            if sqlite3_step(stmt) != SQLITE_DONE {
+                Logger.log("auto_validate.db_write.step_failed", fields: [
+                    "table": .string("validation_results"),
+                    "operation": .string("insert"),
+                ])
+            }
         }
     }
 
     /// Fetch undelivered validation results with errors for a session.
-    /// Atomically marks them as delivered to prevent repeat advisories.
-    public func fetchAndMarkDelivered(sessionId: String) -> [ValidationResultRow] {
+    /// Does not mutate delivery state; callers must mark rows surfaced only
+    /// after the advisory is actually included in a hook response.
+    public func pendingValidationAdvisories(sessionId: String) -> [ValidationResultRow] {
         return queue.sync {
             guard let db = db else { return [] }
 
-            // SELECT undelivered errors
             let selectSql = """
-                SELECT id, file_path, validator_name, category, exit_code, advisory, duration_ms, created_at
+                SELECT id, file_path, validator_name, category, exit_code, advisory, duration_ms, created_at, outcome, reason, surfaced_at
                 FROM validation_results
-                WHERE session_id = ? AND delivered = 0 AND exit_code != 0
+                WHERE session_id = ?
+                  AND outcome = 'advisory'
+                  AND surfaced_at IS NULL
+                  AND delivered = 0
+                  AND exit_code != 0
                 ORDER BY created_at DESC
                 LIMIT 10;
-            """
+                """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, selectSql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
             sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
 
             var results: [ValidationResultRow] = []
-            var ids: [Int64] = []
             while sqlite3_step(stmt) == SQLITE_ROW {
-                let id = sqlite3_column_int64(stmt, 0)
-                ids.append(id)
-                results.append(ValidationResultRow(
-                    id: id,
-                    filePath: String(cString: sqlite3_column_text(stmt, 1)),
-                    validatorName: String(cString: sqlite3_column_text(stmt, 2)),
-                    category: String(cString: sqlite3_column_text(stmt, 3)),
-                    exitCode: sqlite3_column_int(stmt, 4),
-                    advisory: String(cString: sqlite3_column_text(stmt, 5)),
-                    durationMs: Int(sqlite3_column_int(stmt, 6)),
-                    createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 7))
-                ))
+                results.append(readValidationResultRow(stmt))
             }
-
-            // Mark as delivered atomically (same queue.sync block)
-            if !ids.isEmpty {
-                let idList = ids.map(String.init).joined(separator: ",")
-                exec("UPDATE validation_results SET delivered = 1 WHERE id IN (\(idList));")
-            }
-
             return results
         }
+    }
+
+    /// Fetch validation rows for inspection/diagnostics. Unlike
+    /// pendingValidationAdvisories this includes clean/dropped outcomes and
+    /// already-surfaced rows.
+    public func validationResults(sessionId: String, outcome: String? = nil) -> [ValidationResultRow] {
+        return queue.sync {
+            guard let db = db else { return [] }
+            var sql = """
+                SELECT id, file_path, validator_name, category, exit_code, advisory, duration_ms, created_at, outcome, reason, surfaced_at
+                FROM validation_results
+                WHERE session_id = ?
+                """
+            if outcome != nil {
+                sql += " AND outcome = ?"
+            }
+            sql += " ORDER BY created_at DESC;"
+
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            if let outcome {
+                sqlite3_bind_text(stmt, 2, (outcome as NSString).utf8String, -1, nil)
+            }
+
+            var results: [ValidationResultRow] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                results.append(readValidationResultRow(stmt))
+            }
+            return results
+        }
+    }
+
+    /// Mark advisory rows as surfaced after their text was placed into a hook
+    /// response. `delivered` remains updated for compatibility with older UI
+    /// queries, but `surfaced_at` is the source of truth for the new contract.
+    public func markValidationAdvisoriesSurfaced(ids: [Int64]) {
+        guard !ids.isEmpty else { return }
+        let ts = Date().timeIntervalSince1970
+        queue.async { [weak self] in
+            guard let self, let db = self.db else { return }
+            let idList = ids.map(String.init).joined(separator: ",")
+            let sql = "UPDATE validation_results SET delivered = 1, surfaced_at = ? WHERE id IN (\(idList));"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                Logger.log("auto_validate.db_write.prepare_failed", fields: [
+                    "table": .string("validation_results"),
+                    "operation": .string("mark_surfaced"),
+                ])
+                return
+            }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_double(stmt, 1, ts)
+            if sqlite3_step(stmt) != SQLITE_DONE {
+                Logger.log("auto_validate.db_write.step_failed", fields: [
+                    "table": .string("validation_results"),
+                    "operation": .string("mark_surfaced"),
+                ])
+            }
+        }
+    }
+
+    /// Legacy compatibility helper for callers/tests that explicitly want the
+    /// old destructive read. Hook routing must use pendingValidationAdvisories
+    /// + markValidationAdvisoriesSurfaced instead.
+    public func fetchAndMarkDelivered(sessionId: String) -> [ValidationResultRow] {
+        let rows = pendingValidationAdvisories(sessionId: sessionId)
+        markValidationAdvisoriesSurfaced(ids: rows.map(\.id))
+        flushWrites()
+        return rows
+    }
+
+    private func readValidationResultRow(_ stmt: OpaquePointer?) -> ValidationResultRow {
+        let surfacedAt: Date? = sqlite3_column_type(stmt, 10) == SQLITE_NULL
+            ? nil
+            : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 10))
+        let reason: String? = sqlite3_column_type(stmt, 9) == SQLITE_NULL
+            ? nil
+            : String(cString: sqlite3_column_text(stmt, 9))
+        return ValidationResultRow(
+            id: sqlite3_column_int64(stmt, 0),
+            filePath: String(cString: sqlite3_column_text(stmt, 1)),
+            validatorName: String(cString: sqlite3_column_text(stmt, 2)),
+            category: String(cString: sqlite3_column_text(stmt, 3)),
+            exitCode: sqlite3_column_int(stmt, 4),
+            advisory: String(cString: sqlite3_column_text(stmt, 5)),
+            durationMs: Int(sqlite3_column_int(stmt, 6)),
+            createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 7)),
+            outcome: String(cString: sqlite3_column_text(stmt, 8)),
+            reason: reason,
+            surfacedAt: surfacedAt
+        )
     }
 
     /// Prune old validation results.
@@ -1470,6 +1567,12 @@ public final class SessionDatabase: @unchecked Sendable {
             sqlite3_step(stmt)
             return Int(sqlite3_changes(db))
         }
+    }
+
+    /// Test/support seam: waits until all prior async DB writes on the serial
+    /// queue have completed.
+    public func flushWrites() {
+        queue.sync { }
     }
 
     /// Prune token_events older than N days (default: 90) to prevent unbounded growth.

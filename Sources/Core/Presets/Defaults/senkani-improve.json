@@ -1,0 +1,13 @@
+{
+  "name": "senkani-improve",
+  "version": 1,
+  "cronPattern": "0 21 * * *",
+  "command": "senkani improve --iterations 20 --pre-score 'swift test && swift run -c release senkani bench --json' --post-score 'swift test && swift run -c release senkani bench --json' --merge-on score_up --discard-on score_down --log ~/.senkani/improve/$(date +%F).md",
+  "budgetLimitCents": 500,
+  "worktree": true,
+  "notify": { "onSuccess": "attention", "onFailure": "attention" },
+  "engine": "claude",
+  "description": "Nightly 21:00 autoimprove run inside a fresh worktree: 20 iterations, merge on score-up, discard on score-down.",
+  "docUrl": "/docs/reference/cli/schedule/presets/senkani-improve.html",
+  "prerequisites": ["senkani-improve-cli", "guard-autoimprove"]
+}

@@ -78,7 +78,7 @@ A horizontal canvas of panes. Each pane is a primitive type; you arrange them ho
 - **Diff Viewer** — side-by-side LCS diff (correct insertions, deletions, replacements)
 - **Log Viewer** — searchable log output
 - **Scratchpad** — auto-saving markdown notepad
-- **Schedules** — manage recurring tasks via launchd
+- **Schedules** — manage recurring tasks via launchd. Ships with five day-1 presets (`log-rotation`, `morning-brief`, `autoresearch`, `competitive-scan`, `senkani-improve`) installable from the pane or via `senkani schedule preset install <name>`; each preset's resolved command is secret-scanned before install, and missing companion prerequisites (Ollama daemon, `guard-research` hook preset, `senkani brief` CLI, …) surface as warnings, not blockers.
 - **Skill Library** — browse, install, and manage AI agent skills
 - **Sprint Review** — GUI counterpart to `senkani learn review`: accept/reject staged compound-learning proposals (filter rules, context docs, instruction patches, workflow playbooks) plus a stale-applied section mirroring the quarterly audit
 - **Ollama** — first-class local-LLM launcher: availability-gated, per-pane default-model selector, same MCP env injection terminal panes get. Header **download** button opens a curated-catalog drawer: pick from 5 LLMs (llama3.1:8b, qwen2.5-coder:7b, deepseek-r1:7b, mistral:7b, gemma2:2b), each row discloses size before the pull click and streams `ollama pull` progress into the UI. Install CTA when the daemon isn't running.

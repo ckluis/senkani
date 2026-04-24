@@ -6,6 +6,40 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 24 — Scheduled presets: day-1 catalogue of installable templates (`schedule-preset-library`)
+- Ships five JSON-backed presets (`log-rotation`, `morning-brief`,
+  `autoresearch`, `competitive-scan`, `senkani-improve`) as templates
+  over the already-shipped scheduling spine. Zero new infrastructure —
+  each preset emits the same `ScheduledTask` that
+  `senkani schedule create` already accepts.
+- New CLI surface: `senkani schedule preset list` /
+  `preset show <name>` / `preset install <name> [--topic … |
+  --competitor … | --budget … | --cron …]`. The `install` subcommand
+  resolves angle-bracket placeholders against the CLI overrides, runs
+  the resolved command through `PresetSecretDetector` (which delegates
+  to the shared `SecretDetector`), and calls the new reusable
+  `PresetInstaller` helper that also backs `senkani schedule create`
+  — one launchd plist generator for both paths.
+- `PresetPrerequisiteCheck` warns (does NOT block) on missing
+  companion surfaces: Ollama daemon reachability for local-LLM
+  presets, `senkani brief` / `senkani improve` CLIs, and hook-preset
+  IDs (`guard-research`, `guard-autoimprove`) + planned MCP tools
+  (`senkani_search_web`, `pushover-notification-sink`) that haven't
+  shipped yet. The detector has a `withProbes(_:_:)` test hook so
+  suites don't touch the network.
+- `PresetDoctor.check(tasks:presets:)` pairs installed schedules
+  against shipped preset prerequisites — intended as the Doctor
+  integration hook; `senkani doctor` wiring is a follow-up item.
+- Schedules pane gains a "Install preset" button in the header that
+  opens a sheet listing the shipped + user presets with descriptions,
+  engine class (shell / claude / local-LLM), and per-row prerequisite
+  readiness. Install button shells out to `senkani schedule preset
+  install` so the UI and CLI stay single-sourced.
+- 20 new tests across `PresetCatalogTests` (6),
+  `PresetInstallCommandTests` (4), `PresetHookPrerequisiteTests` (4),
+  `PresetSecretDetectorTests` (4), `PresetDoctorTests` (2). Full suite
+  1617 → 1637 in ~20 s under `tools/test-safe.sh`.
+
 ### April 21 — `PaneSocketMigrationTests`: DispatchGroup → TaskGroup (`pane-socket-migration-taskgroup`)
 - Rewrote `concurrentWritesAllDelivered` on `withTaskGroup(of: Bool.self)`
   with `await group.next()` draining. Closes the last of the three

@@ -293,7 +293,14 @@ let package = Package(
         .target(
             name: "Core",
             dependencies: ["Filter"],
-            path: "Sources/Core"
+            path: "Sources/Core",
+            resources: [
+                .copy("Presets/Defaults/log-rotation.json"),
+                .copy("Presets/Defaults/morning-brief.json"),
+                .copy("Presets/Defaults/autoresearch.json"),
+                .copy("Presets/Defaults/competitive-scan.json"),
+                .copy("Presets/Defaults/senkani-improve.json"),
+            ]
         ),
         .target(
             name: "Bench",

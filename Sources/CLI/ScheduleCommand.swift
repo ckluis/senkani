@@ -6,7 +6,7 @@ struct Schedule: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "schedule",
         abstract: "Manage scheduled tasks powered by macOS launchd.",
-        subcommands: [Create.self, ListTasks.self, Remove.self, Run.self]
+        subcommands: [Create.self, ListTasks.self, Remove.self, Run.self, Preset.self]
     )
 }
 
@@ -63,104 +63,15 @@ extension Schedule {
                 worktree: worktree
             )
 
-            // Save task config
-            try ScheduleStore.save(task)
-            print("Saved schedule config: ~/.senkani/schedules/\(name).json")
-
-            // Generate and load launchd plist
-            try generateAndLoadPlist(task: task)
-            print("Loaded launchd plist: com.senkani.schedule.\(name)")
-            print("Schedule: \(CronToLaunchd.humanReadable(cron))")
-        }
-
-        private func generateAndLoadPlist(task: ScheduledTask) throws {
-            let fm = FileManager.default
-
-            // Ensure logs directory exists
-            let logsDir = ScheduleStore.logsDir
-            if !fm.fileExists(atPath: logsDir) {
-                try fm.createDirectory(atPath: logsDir, withIntermediateDirectories: true)
-            }
-
-            // Find the senkani binary path
-            let binaryPath = ProcessInfo.processInfo.arguments.first ?? "/usr/local/bin/senkani"
-
-            // Convert cron to launchd intervals
-            guard let intervals = CronToLaunchd.convert(task.cronPattern) else {
-                throw ValidationError("Failed to convert cron expression to launchd intervals.")
-            }
-
-            // Build plist XML
-            let label = ScheduleStore.plistLabel(for: task.name)
-            var xml = """
-            <?xml version="1.0" encoding="UTF-8"?>
-            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-            <plist version="1.0">
-            <dict>
-                <key>Label</key>
-                <string>\(label)</string>
-                <key>ProgramArguments</key>
-                <array>
-                    <string>\(binaryPath)</string>
-                    <string>schedule</string>
-                    <string>run</string>
-                    <string>--name</string>
-                    <string>\(task.name)</string>
-                </array>
-                <key>StartCalendarInterval</key>
-
-            """
-
-            if intervals.count == 1 {
-                xml += "    <dict>\n"
-                for (key, value) in intervals[0].sorted(by: { $0.key < $1.key }) {
-                    xml += "        <key>\(key)</key>\n"
-                    xml += "        <integer>\(value)</integer>\n"
-                }
-                xml += "    </dict>\n"
-            } else {
-                xml += "    <array>\n"
-                for interval in intervals {
-                    xml += "        <dict>\n"
-                    for (key, value) in interval.sorted(by: { $0.key < $1.key }) {
-                        xml += "            <key>\(key)</key>\n"
-                        xml += "            <integer>\(value)</integer>\n"
-                    }
-                    xml += "        </dict>\n"
-                }
-                xml += "    </array>\n"
-            }
-
-            let home = fm.homeDirectoryForCurrentUser.path
-            xml += """
-                <key>StandardOutPath</key>
-                <string>\(home)/.senkani/logs/\(task.name).log</string>
-                <key>StandardErrorPath</key>
-                <string>\(home)/.senkani/logs/\(task.name).err</string>
-            </dict>
-            </plist>
-
-            """
-
-            // Write plist
-            let plistPath = ScheduleStore.launchAgentsDir + "/\(label).plist"
-            let launchAgentsDir = ScheduleStore.launchAgentsDir
-            if !fm.fileExists(atPath: launchAgentsDir) {
-                try fm.createDirectory(atPath: launchAgentsDir, withIntermediateDirectories: true)
-            }
-            try xml.write(toFile: plistPath, atomically: true, encoding: .utf8)
-
-            // Load with launchctl
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            process.arguments = ["load", plistPath]
-            try process.run()
-            process.waitUntilExit()
-
-            if process.terminationStatus != 0 {
-                FileHandle.standardError.write(
-                    Data("Warning: launchctl load exited with status \(process.terminationStatus)\n".utf8)
-                )
+            do {
+                _ = try PresetInstaller.install(task: task)
+                print("Saved schedule config: ~/.senkani/schedules/\(name).json")
+                print("Loaded launchd plist: com.senkani.schedule.\(name)")
+                print("Schedule: \(CronToLaunchd.humanReadable(cron))")
+            } catch PresetInstaller.InstallError.invalidCronPattern(let c) {
+                throw ValidationError("Failed to convert cron expression to launchd intervals: \"\(c)\".")
+            } catch PresetInstaller.InstallError.writeFailed(let msg) {
+                throw ValidationError(msg)
             }
         }
     }
@@ -380,6 +291,157 @@ extension Schedule {
 
             if let result = task.lastRunResult, result != "success" {
                 throw ExitCode(1)
+            }
+        }
+    }
+}
+
+// MARK: - Preset
+
+extension Schedule {
+    struct Preset: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "preset",
+            abstract: "Install one of the shipped schedule presets (log-rotation, morning-brief, autoresearch, competitive-scan, senkani-improve).",
+            subcommands: [ListPresets.self, Show.self, Install.self]
+        )
+    }
+}
+
+extension Schedule.Preset {
+    struct ListPresets: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "list",
+            abstract: "List shipped + user scheduled presets."
+        )
+
+        func run() throws {
+            let presets = PresetCatalog.all()
+            if presets.isEmpty {
+                print("No presets available.")
+                return
+            }
+
+            let nameW = 22
+            let engineW = 10
+            let descW = 60
+            let readyW = 12
+
+            let header = [
+                "NAME".padding(toLength: nameW, withPad: " ", startingAt: 0),
+                "ENGINE".padding(toLength: engineW, withPad: " ", startingAt: 0),
+                "READY".padding(toLength: readyW, withPad: " ", startingAt: 0),
+                "DESCRIPTION".padding(toLength: descW, withPad: " ", startingAt: 0)
+            ].joined(separator: "  ")
+            print(header)
+            print(String(repeating: "-", count: header.count))
+
+            for preset in presets {
+                let ready = PresetPrerequisiteCheck.check(preset)
+                let readyCol = ready.fullyReady ? "yes" : "\(ready.warnings.count) warn"
+                let descText = preset.description.count > descW
+                    ? String(preset.description.prefix(descW - 3)) + "..."
+                    : preset.description
+                let marker = PresetCatalog.isShipped(preset.name) ? "" : " (user)"
+                let nameCol = (preset.name + marker).padding(toLength: nameW, withPad: " ", startingAt: 0)
+                let row = [
+                    nameCol,
+                    preset.engine.rawValue.padding(toLength: engineW, withPad: " ", startingAt: 0),
+                    readyCol.padding(toLength: readyW, withPad: " ", startingAt: 0),
+                    descText.padding(toLength: descW, withPad: " ", startingAt: 0)
+                ].joined(separator: "  ")
+                print(row)
+            }
+        }
+    }
+}
+
+extension Schedule.Preset {
+    struct Show: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "show",
+            abstract: "Print the raw JSON record for a preset (no placeholder substitution)."
+        )
+
+        @Argument(help: "Name of the preset to show.")
+        var name: String
+
+        func run() throws {
+            guard let preset = PresetCatalog.find(name) else {
+                throw ValidationError("No preset named `\(name)`. Try `senkani schedule preset list`.")
+            }
+            let data = try PresetCatalog.encode(preset)
+            if let s = String(data: data, encoding: .utf8) {
+                print(s)
+            }
+        }
+    }
+}
+
+extension Schedule.Preset {
+    struct Install: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "install",
+            abstract: "Install a preset as a running ScheduledTask (with placeholder + budget + cron overrides)."
+        )
+
+        @Argument(help: "Name of the preset to install.")
+        var name: String
+
+        @Option(name: .long, help: "Topic for autoresearch-style presets (substitutes `<topic>`).")
+        var topic: String?
+
+        @Option(name: .long, help: "Competitor for competitive-scan-style presets (substitutes `<competitor>`).")
+        var competitor: String?
+
+        @Option(name: .long, help: "Override the preset's budget cap in cents.")
+        var budget: Int?
+
+        @Option(name: .long, help: "Override the preset's cron pattern.")
+        var cron: String?
+
+        func run() throws {
+            guard let preset = PresetCatalog.find(name) else {
+                throw ValidationError("No preset named `\(name)`. Try `senkani schedule preset list`.")
+            }
+
+            var overrides: [String: String] = [:]
+            if let topic { overrides["topic"] = topic }
+            if let competitor { overrides["competitor"] = competitor }
+
+            let task = preset.toScheduledTask(
+                overrides: overrides,
+                budgetOverride: budget,
+                cronOverride: cron
+            )
+
+            // Security gate — secret-scan the resolved command.
+            switch PresetSecretDetector.scan(resolvedCommand: task.command) {
+            case .clear:
+                break
+            case .block(let patterns):
+                throw ValidationError(PresetSecretDetector.blockMessage(preset: name, patterns: patterns))
+            }
+
+            // Install via the shared plist generator.
+            do {
+                _ = try PresetInstaller.install(task: task)
+            } catch PresetInstaller.InstallError.invalidCronPattern(let c) {
+                throw ValidationError("Preset `\(name)` has an invalid cron pattern: \"\(c)\".")
+            } catch PresetInstaller.InstallError.writeFailed(let msg) {
+                throw ValidationError("Preset `\(name)` install failed: \(msg)")
+            }
+
+            print("Installed preset `\(name)` as schedule `\(task.name)` (cron: \(CronToLaunchd.humanReadable(task.cronPattern))).")
+
+            // Prerequisite warnings — non-blocking.
+            let result = PresetPrerequisiteCheck.check(preset)
+            if let summary = PresetPrerequisiteCheck.summaryMessage(result) {
+                print("")
+                print(summary)
+                for w in result.warnings {
+                    print("  - \(w.message)")
+                }
             }
         }
     }

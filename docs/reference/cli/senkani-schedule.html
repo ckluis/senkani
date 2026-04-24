@@ -79,16 +79,34 @@
     <div class="ref-signature">senkani schedule <cron></div>
 
     <h2>Behavior</h2>
-    <p>Generates a launchd plist per schedule. Each fire gets its own worktree + pane pair. Budget cap per run.</p>
+    <p>Generates a launchd plist per schedule. Each fire gets its own worktree + pane pair. Budget cap per run. <code>preset install</code> reuses the same <code>PresetInstaller</code> plist generator as <code>create</code>, so the two code paths produce byte-identical plists.</p>
 
     <h2>Example</h2>
-    <pre class="code">$ senkani schedule "0 9 * * *" -- senkani kb get audit</pre>
+    <pre class="code">$ senkani schedule create --name nightly-lint --cron "0 3 * * *" --command "swift test"
+$ senkani schedule preset list
+$ senkani schedule preset install autoresearch --topic "AI workstation"</pre>
 
-    <h2>Flags</h2>
+    <h2>Subcommands</h2>
     <div class="ref-io-table">
-      <div class="head">Flag</div><div class="head"></div><div class="head"></div><div class="head">Description</div>
-      <div class="k">list</div><div class="t"></div><div class="default"></div><div class="desc">Show active schedules.</div><div class="k">remove &lt;id&gt;</div><div class="t"></div><div class="default"></div><div class="desc">Delete a schedule.</div>
+      <div class="head">Subcommand</div><div class="head"></div><div class="head"></div><div class="head">Description</div>
+      <div class="k">create</div><div class="t"></div><div class="default"></div><div class="desc">Create a scheduled task from --name / --cron / --command / --budget / --worktree.</div>
+      <div class="k">list</div><div class="t"></div><div class="default"></div><div class="desc">Show active schedules.</div>
+      <div class="k">remove --name &lt;n&gt;</div><div class="t"></div><div class="default"></div><div class="desc">Delete a schedule.</div>
+      <div class="k">run --name &lt;n&gt;</div><div class="t"></div><div class="default"></div><div class="desc">Execute a scheduled task (called by launchd).</div>
+      <div class="k">preset list</div><div class="t"></div><div class="default"></div><div class="desc">List shipped + user presets with engine class and prerequisite readiness.</div>
+      <div class="k">preset show &lt;name&gt;</div><div class="t"></div><div class="default"></div><div class="desc">Print the raw JSON record for a preset.</div>
+      <div class="k">preset install &lt;name&gt;</div><div class="t"></div><div class="default"></div><div class="desc">Install a preset as a running ScheduledTask. Accepts --topic / --competitor / --budget / --cron overrides; secret-scans the resolved command; warns on missing prerequisites.</div>
     </div>
+
+    <h2>Shipped presets</h2>
+    <p>Five installable presets ship by default under <code>Sources/Core/Presets/Defaults/</code>:</p>
+    <ul>
+      <li><code>log-rotation</code> — shell, Sunday 03:00 sweep of old worktrees / logs / research.</li>
+      <li><code>morning-brief</code> — claude, daily 06:30 brief + Pushover push (budget 25¢).</li>
+      <li><code>autoresearch</code> — local-LLM, daily 06:00 topic scan through <code>senkani_search_web</code> + ollama.</li>
+      <li><code>competitive-scan</code> — local-LLM, Monday 08:00 competitor roll-up.</li>
+      <li><code>senkani-improve</code> — claude, nightly 21:00 autoimprove run inside a worktree (budget 500¢).</li>
+    </ul>
 
     <div class="seealso">
       <h3>See also</h3>

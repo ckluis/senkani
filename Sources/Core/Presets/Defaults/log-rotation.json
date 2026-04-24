@@ -1,0 +1,13 @@
+{
+  "name": "log-rotation",
+  "version": 1,
+  "cronPattern": "0 3 * * 0",
+  "command": "find ~/.senkani/schedules/worktrees -type d -mtime +3 -print -exec rm -rf {} + ; find ~/.senkani/logs -type f -mtime +30 -delete ; find ~/.senkani/research -type f -mtime +90 -delete",
+  "budgetLimitCents": null,
+  "worktree": false,
+  "notify": { "onSuccess": "none", "onFailure": "attention" },
+  "engine": "shell",
+  "description": "Sunday 03:00 sweep: purge old worktrees, 30-day-old logs, 90-day-old research notes.",
+  "docUrl": "/docs/reference/cli/schedule/presets/log-rotation.html",
+  "prerequisites": []
+}

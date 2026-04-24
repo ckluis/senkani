@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Terminal pane — reference</title>
-<meta name="description" content="SwiftTerm-backed terminal with Senkani&#x27;s FCSIT controls. Configurable font size. Kill/restart buttons. Broadcast mode for running the same command across s">
+<title>Ollama pane — reference</title>
+<meta name="description" content="Local LLM chat via Ollama with a tri-state availability gate (detecting → absent-CTA → connected-terminal). Header download button opens a curated-catalog drawe">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -40,7 +40,7 @@
     <div class="wiki-nav-group">
       <h4>Pane types (18)</h4>
       <ul>
-        <li><a href="../../../docs/reference/panes/terminal.html" class="active">Terminal</a></li>
+        <li><a href="../../../docs/reference/panes/terminal.html">Terminal</a></li>
         <li><a href="../../../docs/reference/panes/dashboard.html">Dashboard</a></li>
         <li><a href="../../../docs/reference/panes/code-editor.html">Code Editor</a></li>
         <li><a href="../../../docs/reference/panes/browser.html">Browser</a></li>
@@ -57,7 +57,7 @@
         <li><a href="../../../docs/reference/panes/skill-library.html">Skill Library</a></li>
         <li><a href="../../../docs/reference/panes/sprint-review.html">Sprint Review</a></li>
         <li><a href="../../../docs/reference/panes/settings.html">Settings</a></li>
-        <li><a href="../../../docs/reference/panes/ollama-launcher.html">Ollama</a></li>
+        <li><a href="../../../docs/reference/panes/ollama-launcher.html" class="active">Ollama</a></li>
       </ul>
     </div>
   </aside>
@@ -66,18 +66,17 @@
       <a href="../../../">Home</a> <span class="sep">›</span>
       <a href="../../../docs/reference.html">Reference</a> <span class="sep">›</span>
       <a href="../../../docs/reference/panes.html">Panes</a> <span class="sep">›</span>
-      <span class="here">Terminal</span>
+      <span class="here">Ollama</span>
     </nav>
     <span class="quadrant reference">Reference · Information</span>
-    <h1 class="page-title">Terminal</h1>
+    <h1 class="page-title">Ollama</h1>
     <div class="tag-row" style="margin-bottom:18px;">
       <span class="badge badge-live">Live</span>
       <span class="tag tag-orange">Pane type</span>
     </div>
 
-    <p class="lede">SwiftTerm-backed terminal with Senkani's FCSIT controls. Configurable font size. Kill/restart buttons. Broadcast mode for running the same command across selected panes.</p>
+    <p class="lede">Local LLM chat via Ollama with a tri-state availability gate (detecting → absent-CTA → connected-terminal). Header download button opens a curated-catalog drawer: pick from 5 LLMs (llama3.1:8b, qwen2.5-coder:7b, deepseek-r1:7b, mistral:7b, gemma2:2b), each row discloses size before the pull click and streams `ollama pull` progress into the UI. The same Senkani MCP env that terminal panes get flows through to the subprocess.</p>
 
-    <h2>Defaults</h2><p>F=on (filter) · C=on (cache) · S=on (secrets) · I=on (indexer) · T=off (terse)</p>
 
     <h2>Keyboard</h2>
     <p>Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas).</p>

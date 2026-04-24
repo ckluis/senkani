@@ -31,6 +31,7 @@ struct AddPaneSheet: View {
         "browser": .browser,
         "diffViewer": .diffViewer,
         "scratchpad": .scratchpad,
+        "ollamaLauncher": .ollamaLauncher,
     ]
 
     private var filteredGroups: [(category: String, entries: [PaneGalleryEntry])] {

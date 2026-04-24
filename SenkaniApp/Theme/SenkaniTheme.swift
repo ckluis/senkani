@@ -160,6 +160,10 @@ enum SenkaniTheme {
     static var accentLogViewer: Color { accentKnowledgeBase }
     /// Scratchpad accent — warm gray
     static var accentScratchpad: Color { textSecondary }
+    /// Ollama launcher accent — warm orange (ollama brand cue),
+    /// distinct from Terminal's green so the pane reads as a different
+    /// context even in the accent line.
+    static var accentOllamaLauncher: Color { Color(red: 0.933, green: 0.498, blue: 0.192) }
 
     static func accentColor(for type: PaneType) -> Color {
         switch type {
@@ -179,6 +183,7 @@ enum SenkaniTheme {
         case .codeEditor: return accentAnalytics
         case .dashboard: return savingsGreen
         case .sprintReview: return accentSkillLibrary
+        case .ollamaLauncher: return accentOllamaLauncher
         }
     }
 
@@ -202,6 +207,7 @@ enum SenkaniTheme {
         case .codeEditor: return "chevron.left.forwardslash.chevron.right"
         case .dashboard: return "chart.bar.doc.horizontal"
         case .sprintReview: return "sparkles.rectangle.stack"
+        case .ollamaLauncher: return "cpu.fill"
         }
     }
 
@@ -225,6 +231,7 @@ enum SenkaniTheme {
         case .codeEditor: return "View code with syntax highlighting"
         case .dashboard: return "Multi-project portfolio overview"
         case .sprintReview: return "Review staged compound-learning proposals"
+        case .ollamaLauncher: return "Local LLM chat via Ollama"
         }
     }
 
@@ -247,6 +254,7 @@ enum SenkaniTheme {
         case .codeEditor: return "Code Editor"
         case .dashboard: return "Dashboard"
         case .sprintReview: return "Sprint Review"
+        case .ollamaLauncher: return "Ollama"
         }
     }
 }

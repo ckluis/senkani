@@ -66,6 +66,10 @@ public enum PaneGalleryBuilder {
                 description: "Review staged compound-learning proposals",
                 icon: "sparkles.rectangle.stack", category: "AI & Models",
                 defaultTitle: "Sprint Review"),
+            PaneGalleryEntry(id: "ollamaLauncher", name: "Ollama",
+                description: "Local LLM chat via Ollama",
+                icon: "cpu.fill", category: "AI & Models",
+                defaultTitle: "Ollama"),
 
             // Data & Insights — where you MEASURE and schedule
             PaneGalleryEntry(id: "dashboard", name: "Dashboard",

@@ -656,6 +656,8 @@ PANES = [
      "GUI counterpart to `senkani learn review`. Accept/reject staged compound-learning proposals (filter rules, context docs, instruction patches, workflow playbooks) plus a stale-applied section mirroring the quarterly audit.", []),
     ("settings", "Settings", "blue",
      "Global app preferences: theme, font size, default FCSIT, key bindings, telemetry (off by default).", []),
+    ("ollama-launcher", "Ollama", "orange",
+     "Local LLM chat via Ollama with a tri-state availability gate (detecting → absent-CTA → connected-terminal). Header download button opens a curated-catalog drawer: pick from 5 LLMs (llama3.1:8b, qwen2.5-coder:7b, deepseek-r1:7b, mistral:7b, gemma2:2b), each row discloses size before the pull click and streams `ollama pull` progress into the UI. The same Senkani MCP env that terminal panes get flows through to the subprocess.", []),
 ]
 
 # ============================================================
@@ -1087,7 +1089,7 @@ def render_hub_reference():
       </a>
       <a class="card" href="__BASE__docs/reference/panes.html">
         <h3>Panes <span class="tag tag-orange" style="margin-left:8px;">{len(PANES)}</span></h3>
-        <p>17 workspace pane types: Terminal, Code Editor, Browser, Analytics, Agent Timeline, Sprint Review, Knowledge Base, and more.</p>
+        <p>{len(PANES)} workspace pane types: Terminal, Code Editor, Browser, Analytics, Agent Timeline, Sprint Review, Knowledge Base, Ollama, and more.</p>
       </a>
     </div>
 
@@ -1347,11 +1349,11 @@ def render_hub_status():
     </nav>
     <span class="quadrant reference">Reference · Information</span>
     <h1 class="page-title">Status</h1>
-    <p class="lede">Current release: <strong>v0.2.0</strong>. <strong>1,510</strong> unit tests passing. All features below are live + tested + reproducible on your hardware.</p>
+    <p class="lede">Current release: <strong>v0.2.0</strong>. <strong>1,575</strong> unit tests passing. All features below are live + tested + reproducible on your hardware.</p>
 
     <div class="card-grid">
       <div class="stat-card"><div class="num">v<em>0.2</em>.0</div><div class="label">Current release — <a href="__BASE__docs/changelog.html">changelog</a></div></div>
-      <div class="stat-card"><div class="num"><em>1,510</em></div><div class="label">Passing tests</div></div>
+      <div class="stat-card"><div class="num"><em>1,575</em></div><div class="label">Passing tests</div></div>
       <div class="stat-card"><div class="num"><em>{len(MCP_TOOLS)}</em></div><div class="label">MCP tools — <a href="__BASE__docs/reference/mcp.html">reference</a></div></div>
       <div class="stat-card"><div class="num"><em>{len(CLI_COMMANDS)}</em></div><div class="label">CLI commands — <a href="__BASE__docs/reference/cli.html">reference</a></div></div>
       <div class="stat-card"><div class="num"><em>{len(PANES)}</em></div><div class="label">Pane types — <a href="__BASE__docs/reference/panes.html">reference</a></div></div>
@@ -1559,7 +1561,9 @@ def render_changelog():
 
     <h2>v0.2.0 (current) — April 2026</h2>
     <ul>
-      <li><strong>Website rebuild</strong> — multi-page wiki + tightened landing page. 19 MCP tools + 19 CLI commands + 17 panes each have their own URL. <a href="__BASE__docs/what-is-senkani.html">Start here</a>.</li>
+      <li><strong>Ollama: first-class pane + curated LLM catalog</strong> (April 20) — new <code>.ollamaLauncher</code> PaneType with a settings drawer listing 5 curated LLMs (llama3.1, qwen2.5-coder, deepseek-r1, mistral, gemma2). Size disclosed before click; click-to-pull streams <code>ollama pull</code> progress into the UI and captures the digest. Absent-state deep-links to ollama.com/download. Bounded contexts stay separate: user-facing LLMs live here, senkani-internal ML (minilm / gemma4) stays in Model Manager.</li>
+      <li><strong>Add-pane gallery redesign</strong> (April 20) — categorized pane picker (Shell &amp; Agents / AI &amp; Models / Data &amp; Insights / Docs &amp; Code). Missing Dashboard entry restored.</li>
+      <li><strong>Website rebuild</strong> — multi-page wiki + tightened landing page. 19 MCP tools + 19 CLI commands + {len(PANES)} panes each have their own URL. <a href="__BASE__docs/what-is-senkani.html">Start here</a>.</li>
       <li><strong>Security hardening (v0.2.0 release)</strong> — prompt-injection guard on, SSRF guard on (DNS pre-resolution + redirect re-validation + subresource blocklist), secret detection on (13 families + entropy), socket-auth opt-in, structured JSON logs opt-in with sink redaction, retention scheduler.</li>
       <li><strong>Compound learning + KB master plan</strong> — nine-round landing 2026-04-17: H+2b context signals, H+2c instruction/workflow generators with Schneier never-auto-apply, H+2d sprint + quarterly cadence, F+1 Layer-1 rebuild coordinator, F+2 entity tracker, F+3 enrichment validator + KB rollback, F+4 KB timeline, F+5 KB↔learning bridge.</li>
       <li><strong><code>senkani_repo</code></strong> — query any public GitHub repo without cloning. Host-allowlisted, SecretDetector-scanned, TTL-cached.</li>

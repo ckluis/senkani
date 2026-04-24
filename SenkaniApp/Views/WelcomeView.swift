@@ -1,9 +1,15 @@
 import SwiftUI
+import Core
 
 /// First-run experience when no panes are open.
 /// Auto-detects available AI tools and grays out unavailable options.
 struct WelcomeView: View {
+    /// Terminal launch (Claude Code shell, Plain Shell).
     let onStart: (String, String) -> Void  // (title, command)
+    /// Ollama launch: opens a first-class `ollamaLauncher` pane rather
+    /// than shelling out `ollama run <hardcoded>` via a terminal pane.
+    /// The pane owns its default-model selector + availability gate.
+    let onStartOllama: () -> Void
 
     @State private var claudeAvailable: Bool?
     @State private var ollamaAvailable: Bool?
@@ -49,7 +55,7 @@ struct WelcomeView: View {
                     detecting: ollamaAvailable == nil,
                     installURL: URL(string: "https://ollama.com")
                 ) {
-                    onStart("Ollama", "ollama run llama3")
+                    onStartOllama()
                 }
 
                 AgentCard(
@@ -116,17 +122,11 @@ struct WelcomeView: View {
         }
     }
 
-    /// Check if Ollama is running by hitting its local API.
+    /// Check if Ollama is running by hitting its local API. Delegates
+    /// to the Core-level probe so the same check powers the
+    /// `OllamaLauncherPane`'s availability gate.
     private func detectOllama() async -> Bool {
-        guard let url = URL(string: "http://localhost:11434/api/version") else { return false }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 2
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            return (response as? HTTPURLResponse)?.statusCode == 200
-        } catch {
-            return false
-        }
+        await OllamaAvailability.detect()
     }
 }
 

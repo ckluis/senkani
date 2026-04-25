@@ -6,6 +6,40 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 25 — Rewrite Principle No. 6 to reconcile invisible optimization with the on-demand workspace (`luminary-2026-04-24-7-principle-6-rewrite`)
+- Luminary P1 (Jobs-flagged). Principle No. 6 in `spec/spec.md`
+  ("The App Disappears") read as "Senkani has no UI" and put every
+  observability feature on the back foot — the 18-pane workspace,
+  Dashboard, Agent Timeline, Sprint Review, Models pane, Ollama
+  launcher, Knowledge Base, Savings Test, and `senkani doctor` were
+  all in tension with the principle's "they may never know why" line.
+- Principle No. 6 retitled **Invisible Optimization, On-Demand
+  Inspection** and rewritten as a dual thesis: the *optimization
+  layer* (Layers 1/2/3 — MCP tools, smart hooks, intent interception)
+  is invisible and always-on; the *telemetry / inspection surface*
+  (the panes, status bar, `doctor`, sprint review, savings test) is
+  rich and on-demand. Names both users explicitly — the AI-session
+  user (sees optimization invisibly) and the operator (lifts the
+  hood deliberately) — and rejects the "Senkani has no UI"
+  misreading on the record.
+- New section "Invisible Optimization vs On-Demand Inspection" added
+  to the top of `spec/app.md`, ahead of the pane catalogue. Links
+  back to the principle so every pane below is justified by the
+  second half of the contract: optimization does not interrupt, and
+  inspection does not run unless asked.
+- README.md audited and untouched: line 3's hero already leads with
+  the dual thesis ("native multi-pane workspace … and an MCP
+  intelligence layer that cuts 50–90% of the tokens your AI spends
+  on perception") and never leaned on the old "may never know why"
+  phrasing, so the acceptance criterion's "if it currently leans"
+  clause was honored by skipping the edit.
+- Spec edit only: zero source files touched, zero tests added.
+  Re-audit (Jobs/Evans/Torres/Norman): PASS clean — the dual thesis
+  is named, the two domain concepts have crisp ubiquitous-language
+  labels, both user roles are surfaced, and the workspace's
+  complexity is now justified by the principle rather than at war
+  with it.
+
 ### April 25 — Split `LearnedRulesStore.swift` (844 → 360 LOC façade) into four per-artifact extensions (`luminary-2026-04-24-6-learnedrulesstore-split`)
 - Luminary P1. `Sources/Core/LearnedRulesStore.swift` had grown to 844
   LOC mixing four artifact lifecycles (`LearnedFilterRule`,

@@ -6,6 +6,29 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 25 — Vision-eval image fixtures (`gemma4-vision-image-fixtures`)
+- Follow-up to `luminary-2026-04-24-4-gemma-tier-quality-eval`. The 10
+  vision tasks in `MLTierEvalTasks.visionTasks()` referenced PNGs by
+  `imageRef` but the files themselves didn't ship — the vision half of
+  the per-tier eval couldn't run end-to-end.
+- New `Sources/Bench/Resources/MLEvalImages/` with 10 PNGs (5–12 KB
+  each) covering each descriptor: terminal error, unified diff, Swift
+  function signature, labelled chart axes, test-failure output, build
+  log with warning count, UI mockup with primary button, multi-pane
+  Senkani window, crash-report stack trace, download progress bar.
+- `Sources/Bench/MLTierEvalTask.imageURL` resolves `imageRef` to a real
+  `URL` via `Bundle.module`. `Package.swift` adds the directory as a
+  `.copy` resource on the Bench target.
+- Generator script at `tools/render-ml-eval-fixtures.py` (PIL-based,
+  ≤200 KB cap enforced) so future descriptor changes can re-render
+  the set deterministically.
+- 2 new tests: `testEveryVisionTaskImageRefResolvesToARealFile` pins
+  every vision task to a real PNG via `Bundle.module`, and
+  `testRationaleTaskImageURLIsNil` pins the negative case. Suite total
+  1744 → 1746 (+2).
+- Doc fix: `MLTierEvalTask.imageRef` doc-comment claimed SHA-256 but
+  the codebase uses stable string IDs; updated to match reality.
+
 ### April 24 — Per-RAM-tier Gemma 4 quality eval harness (`luminary-2026-04-24-4-gemma-tier-quality-eval`)
 - Luminary P1 from the 2026-04-24 review. Gemma 4 auto-selects an
   install tier by available RAM (APEX 26B at ≥16 GB, E4B at ≥8 GB,

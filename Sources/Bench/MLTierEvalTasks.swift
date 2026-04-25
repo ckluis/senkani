@@ -17,9 +17,10 @@ public struct MLTierEvalTask: Sendable, Identifiable, Codable {
     public let id: String
     public let category: MLTierEvalCategory
     public let prompt: String
-    /// SHA-256 hex of the fixture image, when category == .vision. The
-    /// runner resolves this against `Sources/Bench/Resources/MLEvalImages/`
-    /// (added separately — see `tools/soak/manual-log.md`).
+    /// Stable filename ID of the fixture image (without the `.png`
+    /// extension), when category == .vision. Resolved at runtime via
+    /// `imageURL` against `Sources/Bench/Resources/MLEvalImages/<imageRef>.png`,
+    /// shipped through SwiftPM's `Bundle.module`.
     public let imageRef: String?
     /// One-of substring match; case-insensitive. A response that contains
     /// any string in this list passes.
@@ -42,6 +43,22 @@ public struct MLTierEvalTask: Sendable, Identifiable, Codable {
     public func passes(response: String) -> Bool {
         let lower = response.lowercased()
         return expectedAnyOf.contains { !$0.isEmpty && lower.contains($0.lowercased()) }
+    }
+
+    /// Resolve `imageRef` to a real PNG `URL` shipped via SwiftPM resources.
+    ///
+    /// Returns `nil` for tasks without an `imageRef` (i.e. rationale tasks)
+    /// or when the bundle does not contain a matching `<imageRef>.png`.
+    /// The Bench target's `Sources/Bench/Resources/MLEvalImages/` directory
+    /// is shipped as a `.copy` resource so every fixture lives under
+    /// `Bundle.module`.
+    public var imageURL: URL? {
+        guard let ref = imageRef else { return nil }
+        return Bundle.module.url(
+            forResource: ref,
+            withExtension: "png",
+            subdirectory: "MLEvalImages"
+        )
     }
 }
 
@@ -121,10 +138,12 @@ public enum MLTierEvalTasks {
         ]
     }
 
-    /// Ten vision tasks. Each references an image fixture by SHA-256;
-    /// the actual PNGs ship under `Sources/Bench/Resources/MLEvalImages/`
-    /// when the operator runs the fixture-prep step on a real machine.
-    /// In CI the tests cover task structure, not inference.
+    /// Ten vision tasks. Each references an image fixture by stable
+    /// filename ID; the PNGs ship under
+    /// `Sources/Bench/Resources/MLEvalImages/<imageRef>.png` and are
+    /// rendered from `tools/render-ml-eval-fixtures.py`. Resolve at
+    /// runtime via `MLTierEvalTask.imageURL`. In CI the tests cover task
+    /// structure + fixture presence, not inference.
     public static func visionTasks() -> [MLTierEvalTask] {
         return [
             .init(

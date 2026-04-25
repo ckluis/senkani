@@ -309,7 +309,10 @@ let package = Package(
                 "Filter",
                 "Indexer",
             ],
-            path: "Sources/Bench"
+            path: "Sources/Bench",
+            resources: [
+                .copy("Resources/MLEvalImages"),
+            ]
         ),
         .target(
             name: "Bundle",

@@ -41,6 +41,25 @@ struct MLTierEvalTests {
         }
     }
 
+    @Test func testEveryVisionTaskImageRefResolvesToARealFile() {
+        for t in MLTierEvalTasks.visionTasks() {
+            guard let url = t.imageURL else {
+                Issue.record("vision task \(t.id) imageRef \(t.imageRef ?? "nil") did not resolve via Bundle.module")
+                continue
+            }
+            #expect(
+                FileManager.default.fileExists(atPath: url.path),
+                "vision task \(t.id) resolved to \(url.path) but file is missing"
+            )
+        }
+    }
+
+    @Test func testRationaleTaskImageURLIsNil() {
+        for t in MLTierEvalTasks.rationaleTasks() {
+            #expect(t.imageURL == nil, "rationale task \(t.id) unexpectedly resolved an imageURL")
+        }
+    }
+
     // MARK: - passes(response:)
 
     @Test func testTaskPassesOnSubstringMatch() {

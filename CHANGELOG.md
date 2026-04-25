@@ -6,6 +6,36 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 25 — Glossary + CLI conventions: pin the ubiquitous language (`luminary-2026-04-24-9-glossary-and-cli-conventions`)
+- Luminary P2 (Evans-flagged). Twelve terms drifted across the spec
+  tree with three different meanings each in some cases ("hook" was
+  Layer 2 enforcement, Layer 3 intercept, *or* a Claude Code shell
+  hook; "session" was pane-session, Claude-session, *or* provider-
+  session; "rule" was built-in filter rule *or* learned filter rule).
+  External contributors had no canonical reference.
+- New `spec/glossary.md`: one entry per term (artifact, hook,
+  intercept, multiplier, pane, project, rule, score, session,
+  sessionDB, tier, tool). Bounded contexts called out explicitly.
+- New `docs/cli-conventions.md`: argument naming (`--root`, `--yes`,
+  kebab-case, no implicit shorts), verb choice for top-level
+  commands, output formats (`--json` vs `--format`), exit codes
+  (`0`/`1`/`2` plus child-process passthrough), stdout vs stderr
+  policy, confirmation prompts, help text style, subcommand
+  grouping, plus an "adding a new subcommand" checklist.
+- Every spec file in `spec/` got a `> Glossary:` banner listing the
+  terms it actually uses, with each term linked to the matching
+  glossary entry. The banner is the file's first use of each term,
+  so the cross-link is structural, not per-paragraph.
+- `spec/spec.md` TOC gained a `glossary.md` row.
+- `Sources/CLI/Senkani.swift` got a top-of-file comment pointing
+  contributors at the conventions doc and listing three current
+  deviations (type-name suffix is missing on 20/22 commands;
+  `WipeCommand` and `UninstallCommand` worded the same `--yes` flag
+  differently; `--json` Bool vs `--format <markdown|json>` is not
+  a strict rule). Build passes.
+- Re-audit (Evans, Grace, Procida, Podmajersky): PASS clean.
+- Spec/docs edit + 1-file source comment; zero tests added.
+
 ### April 25 — Name Phase F's post-AAAK optimization target with explicit Lesson #17 rationale (`luminary-2026-04-24-8-phase-f-target-post-aaak`)
 - Luminary P2 (Evans-flagged). Phase F was reworked April 12 when AAAK
   was dropped, but `spec/roadmap.md` never explicitly named the

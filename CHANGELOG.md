@@ -6,6 +6,84 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 25 — TreeSitterBackend decomposition: C / C++ / C# / Java / Scala migrated (`luminary-2026-04-24-10d-treesitterbackend-c-family`)
+- Luminary P2 (Torvalds/Carmack/Bach-flagged via parent
+  `luminary-2026-04-24-10`). Fourth round of the per-language backend
+  decomposition. Migrates the C-family + Java + Scala — five backends
+  in one round.
+- New `Sources/Indexer/Languages/CBackend.swift` (111 LOC): owns
+  `function_definition` (declarator-chain name extraction),
+  `struct_specifier` / `union_specifier`, `enum_specifier`,
+  `type_definition`, and `declaration` (function prototypes).
+- New `Sources/Indexer/Languages/CppBackend.swift` (183 LOC):
+  preserves the three-tier `function_definition` extraction
+  (extractFunction → extractCppQualifiedMethod → extractCDeclaratorName),
+  plus `class_specifier`, `struct_specifier` / `union_specifier`
+  with body recursion, `enum_specifier`, `type_definition`,
+  `declaration`, `field_declaration` (in-class methods),
+  `namespace_definition` (recurses without setting container), and
+  `alias_declaration`.
+- New `Sources/Indexer/Languages/CSharpBackend.swift` (147 LOC):
+  owns `class_declaration`, `struct_declaration`,
+  `record_declaration` (C# 9+), `interface_declaration`,
+  `enum_declaration`, `delegate_declaration`, `namespace_declaration`,
+  `file_scoped_namespace_declaration`, `method_declaration`,
+  `constructor_declaration`, `destructor_declaration`,
+  `property_declaration`.
+- New `Sources/Indexer/Languages/JavaBackend.swift` (102 LOC):
+  uniform `name`-field extraction via `extractTSDeclaration` for
+  `class_declaration`, `interface_declaration`, `enum_declaration`,
+  `record_declaration` (mapped to .struct), `annotation_type_declaration`
+  (mapped to .protocol). Methods + constructors via `extractFunction`.
+- New `Sources/Indexer/Languages/ScalaBackend.swift` (121 LOC):
+  owns `class_definition` (via `extractPythonClass`),
+  `object_definition` (.class with body recursion),
+  `trait_definition` (.protocol with body recursion),
+  `val_definition` / `var_definition` (.property — name from
+  `pattern` field, not `name`), `type_definition`, and
+  `function_definition` (`def`).
+- `backend(for:)` registers all five: C / C++ / C# / Java / Scala
+  now skip `walkNode` entirely. Dispatcher's C-family-only arms
+  removed: `class_specifier`, `struct_specifier`/`union_specifier`,
+  `enum_specifier`, `field_declaration`, `alias_declaration`,
+  `record_declaration`, `annotation_type_declaration`,
+  `constructor_declaration`, `destructor_declaration`,
+  `struct_declaration`, `delegate_declaration`,
+  `namespace_declaration`, `file_scoped_namespace_declaration`,
+  `object_definition`, `trait_definition`, `val_definition` /
+  `var_definition`. Shared cases (`function_definition`,
+  `type_definition`, `declaration`, `namespace_definition`,
+  `method_declaration`) trimmed of their cpp / c / csharp / java /
+  scala arms.
+- **10c-deferred deletion deferred again to 10e.** The 10d
+  acceptance asked for `class_declaration` + `interface_declaration`
+  + `enum_declaration` case-branch deletions. Pre-audit caught that
+  PHP routes through all three (`class Foo`, `interface Greeter`,
+  `enum Color` in PHP all parse as those node types). The branches
+  stay alive — now serving PHP only — until 10e (when PHP migrates).
+  Same for `property_declaration` (PHP property arm) and
+  `namespace_definition` (PHP arm). The 10c lesson — enumerate every
+  owning language by grep before deleting a walkNode case — paid off
+  again here.
+- Dart's `class_definition` was almost lost in the prune: a
+  full-suite run caught the regression (Dart classes use
+  `class_definition` exactly like Python and Scala did). Restored
+  to the dispatcher; routing comment updated to "Dart routes through
+  here".
+- Two test discoveries during the round (both fixed before re-audit):
+  C# `record_declaration` was previously served by the dispatcher's
+  Java-shared `record_declaration` case — added to `CSharpBackend`
+  alongside `struct_declaration`. Scala's `def` parses as
+  `function_definition` and was getting recursed-but-not-extracted
+  inside `object_definition` bodies — added a `function_definition`
+  case to `ScalaBackend`.
+- Dispatcher dropped 1,114 → 862 LOC (-252). Languages directory now
+  holds 1,830 LOC across 13 files. Two rounds (10e–10f) remain to
+  bring the dispatcher under 500 LOC.
+- Re-audit (Torvalds, Carmack, Bach): PASS clean. 1,806/1,806 tests
+  green; zero behavior delta as designed for a pure refactor (tests
+  target = 0). Full-suite runtime ~20s.
+
 ### April 25 — TreeSitterBackend decomposition: TypeScript / TSX / JavaScript + Kotlin migrated (`luminary-2026-04-24-10c-treesitterbackend-ts-family`)
 - Luminary P2 (Torvalds/Carmack/Bach-flagged via parent
   `luminary-2026-04-24-10`). Third round of the per-language backend

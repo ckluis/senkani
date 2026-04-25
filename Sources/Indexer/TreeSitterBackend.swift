@@ -101,6 +101,11 @@ public enum TreeSitterBackend {
         if PythonBackend.supports(language)     { return PythonBackend.self }
         if TypeScriptBackend.supports(language) { return TypeScriptBackend.self }
         if KotlinBackend.supports(language)     { return KotlinBackend.self }
+        if CBackend.supports(language)          { return CBackend.self }
+        if CppBackend.supports(language)        { return CppBackend.self }
+        if CSharpBackend.supports(language)     { return CSharpBackend.self }
+        if JavaBackend.supports(language)       { return JavaBackend.self }
+        if ScalaBackend.supports(language)      { return ScalaBackend.self }
         return nil
     }
 
@@ -202,22 +207,20 @@ public enum TreeSitterBackend {
         container: String?,
         entries: inout [IndexEntry]
     ) {
-        // GraphQL, TOML, Swift, Python, TypeScript/TSX/JavaScript, and
-        // Kotlin are handled by per-language backends in
-        // `Sources/Indexer/Languages/`. Both entry points
-        // (`extractSymbols(from:source:language:file:)` and
-        // `index(files:language:projectRoot:treeCache:)`) route to those
-        // backends before calling `walkNode`, so `walkNode` never observes
-        // those languages.
+        // GraphQL, TOML, Swift, Python, TypeScript/TSX/JavaScript,
+        // Kotlin, C, C++, C#, Java, and Scala are handled by
+        // per-language backends in `Sources/Indexer/Languages/`. Both
+        // entry points (`extractSymbols(from:source:language:file:)`
+        // and `index(files:language:projectRoot:treeCache:)`) route to
+        // those backends before calling `walkNode`, so `walkNode`
+        // never observes those languages.
         for i in 0..<Int(node.childCount) {
             guard let child = node.child(at: i) else { continue }
             let type = child.nodeType ?? ""
 
             switch type {
             // Lua + Zig need special name extraction; Go / PHP / Bash etc.
-            // fall through to extractFunction (name-field). (Swift / TS / TSX
-            // / JS / Kotlin route via per-language backends and never reach
-            // walkNode.)
+            // fall through to extractFunction (name-field).
             case "function_declaration":
                 if language == "zig" {
                     // Zig: function name is an identifier child, not a "name" field
@@ -246,46 +249,16 @@ public enum TreeSitterBackend {
                     entries.append(entry)
                 }
 
-            // function_definition — Bash and other "name-field" languages
-            // use the leading `extractFunction`; C/C++ have declarator-chain
-            // names so they fall through to the language-specific arms.
-            // (Python's `function_definition` used to land here too; Python
-            //  now routes via `PythonBackend` before walkNode runs.)
+            // function_definition — Bash and other "name-field" languages.
+            // (C/C++ moved to per-language backends in 10d; the cpp/c
+            //  declarator-chain arms went with them.)
             case "function_definition":
                 if let entry = extractFunction(child, file: file, source: source, lines: lines, container: container) {
                     entries.append(entry)
-                } else if language == "cpp" {
-                    // Out-of-class method: void Foo::bar() { }
-                    if let (name, qualContainer) = extractCppQualifiedMethod(child, source: source) {
-                        entries.append(IndexEntry(
-                            name: name, kind: .method, file: file,
-                            startLine: startLine(of: child), endLine: endLine(of: child),
-                            signature: signatureText(lines: lines, line: startLine(of: child)),
-                            container: qualContainer, engine: "tree-sitter"
-                        ))
-                    } else if let name = extractCDeclaratorName(child, source: source) {
-                        // In-class or free function via declarator chain
-                        let kind: SymbolKind = container != nil ? .method : .function
-                        entries.append(IndexEntry(
-                            name: name, kind: kind, file: file,
-                            startLine: startLine(of: child), endLine: endLine(of: child),
-                            signature: signatureText(lines: lines, line: startLine(of: child)),
-                            container: container, engine: "tree-sitter"
-                        ))
-                    }
-                } else if language == "c", let name = extractCDeclaratorName(child, source: source) {
-                    entries.append(IndexEntry(
-                        name: name, kind: .function, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: nil, engine: "tree-sitter"
-                    ))
                 }
 
-            // class_declaration — Java + C# still route through here.
-            // (Swift / TS / TSX / JS / Kotlin all migrated to per-language
-            //  backends; this case will be deleted entirely in 10d once
-            //  Java and C# own backends too.)
+            // class_declaration — PHP routes through here. (Swift / TS / TSX /
+            //  JS / Kotlin / Java / C# all own backends.)
             case "class_declaration":
                 if let (entry, body) = extractTSDeclaration(child, kind: .class, file: file, source: source, lines: lines, container: container) {
                     entries.append(entry)
@@ -294,10 +267,10 @@ public enum TreeSitterBackend {
                     }
                 }
 
-            // class_definition — used by Scala (and previously Python, which
-            // now routes via `PythonBackend`). `extractPythonClass` is named
-            // for its first user but works for any grammar that puts the
-            // class name in a `name` field.
+            // class_definition — Dart routes through here. (Python migrated
+            //  to `PythonBackend`; Scala migrated to `ScalaBackend`.
+            //  `extractPythonClass` is named for its first user but works
+            //  for any grammar that puts the class name in a `name` field.)
             case "class_definition":
                 if let (entry, body) = extractPythonClass(child, file: file, source: source, lines: lines, container: container) {
                     entries.append(entry)
@@ -306,19 +279,10 @@ public enum TreeSitterBackend {
                     }
                 }
 
-            // (Swift's `protocol_declaration` and `init_declaration` cases
-            //  used to live here; both are Swift-only node types and now
-            //  belong to `SwiftBackend`. The dispatcher routes Swift to
-            //  that backend before calling `walkNode`.)
-
-            // C#/PHP property declarations
-            // (Swift's `protocol_property_declaration` and the bare
-            //  `property_declaration` Swift-fallthrough moved to
-            //  `SwiftBackend` in 10b; Kotlin's `property_declaration`
-            //  branch moved to `KotlinBackend` in 10c.)
+            // PHP properties live inside property_element children with variable_name ($foo).
+            // (Swift / Kotlin / C# all moved to per-language backends.)
             case "property_declaration":
                 if language == "php" {
-                    // PHP properties live inside property_element children with variable_name ($foo)
                     for pi in 0..<Int(child.childCount) {
                         guard let propElem = child.child(at: pi),
                               propElem.nodeType == "property_element",
@@ -330,18 +294,11 @@ public enum TreeSitterBackend {
                             container: container, engine: "tree-sitter"
                         ))
                     }
-                } else if language == "csharp", let name = nodeName(child, source: source) {
-                    entries.append(IndexEntry(
-                        name: name, kind: .property, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
                 }
 
-            // interface_declaration — C# still routes through here.
-            // (TypeScript / TSX moved to `TypeScriptBackend` in 10c;
-            //  C# follows in 10d.)
+            // interface_declaration — PHP routes through here.
+            // (TypeScript / TSX moved to `TypeScriptBackend`; C# moved
+            //  to `CSharpBackend`.)
             case "interface_declaration":
                 if let (entry, body) = extractTSDeclaration(child, kind: .interface, file: file, source: source, lines: lines, container: container) {
                     entries.append(entry)
@@ -350,9 +307,9 @@ public enum TreeSitterBackend {
                     }
                 }
 
-            // enum_declaration — C# still routes through here.
-            // (TypeScript / TSX moved to `TypeScriptBackend` in 10c;
-            //  C# follows in 10d.)
+            // enum_declaration — PHP routes through here.
+            // (TypeScript / TSX moved to `TypeScriptBackend`; C# moved
+            //  to `CSharpBackend`.)
             case "enum_declaration":
                 if let (entry, body) = extractTSDeclaration(child, kind: .enum, file: file, source: source, lines: lines, container: container) {
                     entries.append(entry)
@@ -361,11 +318,9 @@ public enum TreeSitterBackend {
                     }
                 }
 
-            // (`type_alias_declaration` and `method_definition` were
-            //  TypeScript/TSX/JavaScript-only and moved to
-            //  `TypeScriptBackend` in 10c.)
-
-            // Go method declarations (receiver-based containers) / Java method declarations (lexical containers)
+            // Go method declarations (receiver-based containers) / PHP method
+            // declarations (lexical containers via extractFunction).
+            // (Java + C# moved to per-language backends in 10d.)
             case "method_declaration":
                 if language == "go" {
                     if let entry = extractGoMethod(child, file: file, source: source, lines: lines) {
@@ -442,88 +397,12 @@ public enum TreeSitterBackend {
                     walkNode(body, language: language, file: file, source: source, lines: lines, container: implContainer, entries: &entries)
                 }
 
-            // Java record declarations (mapped to .struct)
-            case "record_declaration":
-                if let (entry, body) = extractTSDeclaration(child, kind: .struct, file: file, source: source, lines: lines, container: container) {
-                    entries.append(entry)
-                    if let body = body {
-                        walkNode(body, language: language, file: file, source: source, lines: lines, container: entry.name, entries: &entries)
-                    }
-                }
-
-            // Java annotation type declarations (mapped to .protocol)
-            case "annotation_type_declaration":
-                if let (entry, body) = extractTSDeclaration(child, kind: .protocol, file: file, source: source, lines: lines, container: container) {
-                    entries.append(entry)
-                    if let body = body {
-                        walkNode(body, language: language, file: file, source: source, lines: lines, container: entry.name, entries: &entries)
-                    }
-                }
-
-            // Java/C# constructor declarations
-            case "constructor_declaration":
-                if let entry = extractFunction(child, file: file, source: source, lines: lines, container: container) {
-                    entries.append(entry)
-                }
-
-            // C# destructor declarations (~ClassName)
-            case "destructor_declaration":
-                if let entry = extractFunction(child, file: file, source: source, lines: lines, container: container) {
-                    entries.append(entry)
-                }
-
-            // C# struct declarations
-            case "struct_declaration":
-                if let (entry, body) = extractTSDeclaration(child, kind: .struct, file: file, source: source, lines: lines, container: container) {
-                    entries.append(entry)
-                    if let body = body {
-                        walkNode(body, language: language, file: file, source: source, lines: lines, container: entry.name, entries: &entries)
-                    }
-                }
-
-            // C# delegate declarations
-            case "delegate_declaration":
-                if language == "csharp", let name = nodeName(child, source: source) {
-                    entries.append(IndexEntry(
-                        name: name, kind: .type, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
-                }
-
-            // C# namespace declarations
-            case "namespace_declaration":
-                if language == "csharp" {
-                    if let name = nodeName(child, source: source) {
-                        entries.append(IndexEntry(
-                            name: name, kind: .extension, file: file,
-                            startLine: startLine(of: child), endLine: endLine(of: child),
-                            signature: signatureText(lines: lines, line: startLine(of: child)),
-                            container: container, engine: "tree-sitter"
-                        ))
-                    }
-                    if let body = findBody(child) {
-                        walkNode(body, language: language, file: file, source: source, lines: lines, container: container, entries: &entries)
-                    }
-                } else if child.childCount > 0 {
-                    walkNode(child, language: language, file: file, source: source, lines: lines, container: container, entries: &entries)
-                }
-
-            // C# file-scoped namespace declarations (namespace Foo;)
-            case "file_scoped_namespace_declaration":
-                if language == "csharp", let name = nodeName(child, source: source) {
-                    entries.append(IndexEntry(
-                        name: name, kind: .extension, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
-                }
-                // Walk child declarations (classes, etc. inside the file-scoped namespace)
-                if child.childCount > 0 {
-                    walkNode(child, language: language, file: file, source: source, lines: lines, container: container, entries: &entries)
-                }
+            // (Java's `record_declaration`, `annotation_type_declaration`,
+            //  `constructor_declaration`, and the C# variants —
+            //  `destructor_declaration`, `struct_declaration`,
+            //  `delegate_declaration`, `namespace_declaration`,
+            //  `file_scoped_namespace_declaration` — moved to
+            //  `JavaBackend` / `CSharpBackend` in 10d.)
 
             // Ruby class (bare 'class' node — distinct from class_declaration)
             case "class":
@@ -587,155 +466,35 @@ public enum TreeSitterBackend {
                 }
 
             // (`object_declaration` was Kotlin-only and moved to
-            //  `KotlinBackend` in 10c.)
-
-            // Scala object definitions (singletons — act as containers)
-            case "object_definition":
-                if language == "scala", let name = nodeName(child, source: source) {
-                    entries.append(IndexEntry(
-                        name: name, kind: .class, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
-                    if let body = findBody(child) {
-                        walkNode(body, language: language, file: file, source: source, lines: lines, container: name, entries: &entries)
-                    }
-                }
-
-            // Scala trait definitions (mapped to .protocol — interfaces with optional implementations)
-            case "trait_definition":
-                if language == "scala", let name = nodeName(child, source: source) {
-                    entries.append(IndexEntry(
-                        name: name, kind: .protocol, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
-                    if let body = findBody(child) {
-                        walkNode(body, language: language, file: file, source: source, lines: lines, container: name, entries: &entries)
-                    }
-                }
-
-            // Scala val/var definitions (properties — use "pattern" field instead of "name")
-            case "val_definition", "var_definition":
-                if language == "scala",
-                   let patternNode = child.child(byFieldName: "pattern"),
-                   let name = nodeText(patternNode, source: source) {
-                    entries.append(IndexEntry(
-                        name: name, kind: .property, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
-                }
+            //  `KotlinBackend` in 10c. Scala's `object_definition`,
+            //  `trait_definition`, `val_definition`, `var_definition`
+            //  moved to `ScalaBackend` in 10d.)
 
             // (`companion_object` and `type_alias` were Kotlin-only and
-            //  moved to `KotlinBackend` in 10c.)
+            //  moved to `KotlinBackend` in 10c. C++'s `class_specifier`,
+            //  `struct_specifier`, `union_specifier`, `enum_specifier`,
+            //  `field_declaration`, `alias_declaration`, plus
+            //  `type_definition`, `declaration`, and `namespace_definition`
+            //  moved to `CBackend`/`CppBackend` in 10d.)
 
-            // C++ class specifiers
-            case "class_specifier":
-                if language == "cpp", let name = nodeName(child, source: source) {
-                    entries.append(IndexEntry(
-                        name: name, kind: .class, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
-                    if let body = findBody(child) {
-                        walkNode(body, language: language, file: file, source: source, lines: lines, container: name, entries: &entries)
-                    }
-                }
-
-            // C/C++ struct/union specifiers
-            case "struct_specifier", "union_specifier":
-                if let name = nodeName(child, source: source) {
-                    if language == "cpp" {
-                        entries.append(IndexEntry(
-                            name: name, kind: .struct, file: file,
-                            startLine: startLine(of: child), endLine: endLine(of: child),
-                            signature: signatureText(lines: lines, line: startLine(of: child)),
-                            container: container, engine: "tree-sitter"
-                        ))
-                        if let body = findBody(child) {
-                            walkNode(body, language: language, file: file, source: source, lines: lines, container: name, entries: &entries)
-                        }
-                    } else if language == "c" {
-                        entries.append(IndexEntry(
-                            name: name, kind: .struct, file: file,
-                            startLine: startLine(of: child), endLine: endLine(of: child),
-                            signature: signatureText(lines: lines, line: startLine(of: child)),
-                            container: nil, engine: "tree-sitter"
-                        ))
-                    }
-                }
-
-            // C/C++ enum specifiers
-            case "enum_specifier":
-                if (language == "c" || language == "cpp"), let name = nodeName(child, source: source) {
-                    entries.append(IndexEntry(
-                        name: name, kind: .enum, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: nil, engine: "tree-sitter"
-                    ))
-                }
-
-            // C/C++/Scala type definitions
+            // type_definition — non-C/Scala wrapper node (e.g. GraphQL
+            //  uses `type_definition` as a wrapper; we recurse so inner
+            //  definitions are visited).
             case "type_definition":
-                if (language == "c" || language == "cpp"), let name = extractCDeclaratorName(child, source: source) {
-                    entries.append(IndexEntry(
-                        name: name, kind: .type, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: nil, engine: "tree-sitter"
-                    ))
-                } else if language == "scala", let name = nodeName(child, source: source) {
-                    entries.append(IndexEntry(
-                        name: name, kind: .type, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
-                } else if child.childCount > 0 {
-                    // Other languages (e.g. GraphQL) use `type_definition` as a
-                    // wrapper node — recurse so inner definitions are visited.
+                if child.childCount > 0 {
                     walkNode(child, language: language, file: file, source: source, lines: lines, container: container, entries: &entries)
                 }
 
-            // C/C++ declarations (function prototypes, constructor declarations)
+            // declaration — recurse fallthrough only. (C/C++ function
+            //  prototypes moved to `CBackend`/`CppBackend`.)
             case "declaration":
-                if (language == "c" || language == "cpp") && cHasFunctionDeclarator(child) {
-                    if let name = extractCDeclaratorName(child, source: source) {
-                        let kind: SymbolKind = container != nil ? .method : .function
-                        entries.append(IndexEntry(
-                            name: name, kind: kind, file: file,
-                            startLine: startLine(of: child), endLine: endLine(of: child),
-                            signature: signatureText(lines: lines, line: startLine(of: child)),
-                            container: container, engine: "tree-sitter"
-                        ))
-                    }
-                } else if child.childCount > 0 {
+                if child.childCount > 0 {
                     walkNode(child, language: language, file: file, source: source, lines: lines, container: container, entries: &entries)
                 }
 
-            // C++ in-class method declarations (field_declaration with function_declarator)
-            case "field_declaration":
-                if language == "cpp" && cHasFunctionDeclarator(child) {
-                    if let name = extractCDeclaratorName(child, source: source) {
-                        let kind: SymbolKind = container != nil ? .method : .function
-                        entries.append(IndexEntry(
-                            name: name, kind: kind, file: file,
-                            startLine: startLine(of: child), endLine: endLine(of: child),
-                            signature: signatureText(lines: lines, line: startLine(of: child)),
-                            container: container, engine: "tree-sitter"
-                        ))
-                    }
-                }
-
-            // C++/PHP namespace definitions
+            // PHP namespace definitions. (C++ moved to `CppBackend`.)
             case "namespace_definition":
-                if language == "cpp" || language == "php" {
+                if language == "php" {
                     if let name = nodeName(child, source: source) {
                         entries.append(IndexEntry(
                             name: name, kind: .extension, file: file,
@@ -750,17 +509,6 @@ public enum TreeSitterBackend {
                     }
                 } else if child.childCount > 0 {
                     walkNode(child, language: language, file: file, source: source, lines: lines, container: container, entries: &entries)
-                }
-
-            // C++ using aliases (using Foo = Bar;)
-            case "alias_declaration":
-                if language == "cpp", let name = nodeName(child, source: source) {
-                    entries.append(IndexEntry(
-                        name: name, kind: .type, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
                 }
 
             // Haskell declarations scope (top-level, class body, instance body — handles deduplication)

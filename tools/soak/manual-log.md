@@ -12,6 +12,52 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Per-RAM-tier Gemma 4 quality eval (harness shipped 2026-04-24)
+
+Round `luminary-2026-04-24-4-gemma-tier-quality-eval`. Shipped: 20-task
+harness in `Sources/Bench/MLTierEvalTasks.swift` (10 rationale + 10
+vision), `MLTierEvalRunner.evaluate` accepting a caller-provided
+inference closure, JSON persistence at `~/.senkani/ml-tier-eval.json`,
+`senkani doctor` cache-reader, and a Models pane quality badge. The
+harness is **dormant** — Bench has no MLX dependency, so the runner
+needs a caller (the deferred `senkani ml-eval` CLI command) to drive
+real inference. Two follow-up backlog items track the remaining work:
+`gemma4-vision-image-fixtures` for the 10 vision PNGs, and
+`senkani-ml-eval-cli` for the MCP-backed inference adapter. Once both
+land, this manual-log entry's checks become runnable.
+
+- **Real measurements on a machine with ≥1 Gemma 4 tier installed.**
+  Prereq: `senkani-ml-eval-cli` follow-up shipped + at least one
+  Gemma 4 tier (`gemma4-26b-apex` / `gemma4-e4b` / `gemma4-e2b`)
+  downloaded + verified via the Models pane. Run `senkani ml-eval`
+  (TBD command). Expect: writes `~/.senkani/ml-tier-eval.json` with
+  per-tier `passed`, `total`, `medianLatencyMs`, `totalOutputTokens`,
+  `rating`. Re-run `senkani doctor` — the `ml.tier.<id>` line should
+  appear with the rating string. If the lowest tier the machine can
+  load rates `degraded`, doctor exits non-zero with the upgrade hint.
+
+- **8 GB-machine validation: E2B rating is honest.** On a real 8 GB
+  Mac, after running the eval, confirm `gemma4-e2b` is the
+  recommended tier (Models pane shows "Recommended" badge) AND its
+  quality rating is visible inline. If E2B comes back `degraded`,
+  the Models pane should still recommend it (it's the only fitting
+  tier) but the doctor warning is the user's signal to consider an
+  upgrade. Verify the doctor message is non-condescending and
+  actionable.
+
+- **16 GB-machine validation: APEX 26B beats E4B by ≥10 pp.**
+  On a 16 GB+ Mac with both APEX and E4B downloaded, the eval should
+  show APEX 26B at a strictly higher pass rate than E4B (the
+  measured-vs-marketing-claim check). If APEX rates ≤ E4B, that's a
+  signal the APEX install is broken or the harness is off — file a
+  backlog item, don't paper over it.
+
+- **Median latency stays under 1 s for E2B/E4B, under 3 s for APEX.**
+  Per-tier latency ceilings sanity-check the Phase G live-session
+  multiplier model. Anything slower means the Gemma load path
+  regressed and rationale rewriting will materially slow down a
+  live session.
+
 ### Test harness hang workaround (shipped 2026-04-21)
 
 Round `test-harness-sigtrap-repro`. `.serialized` trait added to three

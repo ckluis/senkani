@@ -1,4 +1,5 @@
 import SwiftUI
+import Bench
 import Core
 
 /// View for managing downloadable ML models used by senkani_embed and senkani_vision.
@@ -7,6 +8,7 @@ struct ModelManagerView: View {
     @State private var showDeleteConfirmation = false
     @State private var pendingDeleteId: String?
     @State private var errorMessage: String?
+    @State private var tierEvalReport: MLTierEvalReport?
 
     private var isAnyDownloading: Bool {
         manager.models.contains { $0.status == .downloading || $0.status == .verifying }
@@ -71,6 +73,9 @@ struct ModelManagerView: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: errorMessage != nil)
+        .onAppear {
+            tierEvalReport = MLTierEvalReportStore.load()
+        }
     }
 
     // MARK: - Header
@@ -208,6 +213,7 @@ struct ModelManagerView: View {
                     model: model,
                     isRecommended: model.id == recommended,
                     comparisonNote: modelComparisonNote(model.id),
+                    tierQuality: tierEvalReport?.result(for: model.id),
                     onDownload: { downloadModel(model.id) },
                     onDelete: { confirmDelete(model.id) },
                     onVerify: { verifyModel(model.id) }
@@ -290,6 +296,7 @@ struct ModelCardView: View {
     let model: ModelInfo
     var isRecommended: Bool = false
     var comparisonNote: String? = nil
+    var tierQuality: MLTierEvalResult? = nil
     let onDownload: () -> Void
     let onDelete: () -> Void
     var onVerify: () -> Void = {}
@@ -324,6 +331,10 @@ struct ModelCardView: View {
                             .background(Color.purple.opacity(0.10))
                             .clipShape(RoundedRectangle(cornerRadius: 3))
                     }
+
+                    if let q = tierQuality, q.rating != .notEvaluated {
+                        tierQualityBadge(q)
+                    }
                 }
 
                 if let note = comparisonNote {
@@ -355,6 +366,27 @@ struct ModelCardView: View {
     }
 
     // MARK: - Card Components
+
+    @ViewBuilder
+    private func tierQualityBadge(_ r: MLTierEvalResult) -> some View {
+        let pct = Int((r.passRate * 100).rounded())
+        let (color, label): (Color, String) = {
+            switch r.rating {
+            case .excellent: return (.green, "excellent \(pct)%")
+            case .acceptable: return (.blue, "acceptable \(pct)%")
+            case .degraded: return (.orange, "degraded \(pct)%")
+            case .notEvaluated: return (.secondary, "not evaluated")
+            }
+        }()
+        Text(label)
+            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .foregroundStyle(color)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(color.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+            .help("Output quality: \(r.passed)/\(r.total) tasks passed, median \(Int(r.medianLatencyMs.rounded()))ms")
+    }
 
     @ViewBuilder
     private var statusIcon: some View {

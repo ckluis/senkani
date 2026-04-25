@@ -79,7 +79,8 @@
     <div class="ref-signature">senkani doctor [--fix]</div>
 
     <h2>Behavior</h2>
-    <p>Checks: MCP server entry, hook registration, binary path resolution, grammar staleness (non-blocking advisory — PASS for recent, SKIP for stale >30 d, never FAIL).</p>
+    <p>Checks: MCP server entry, hook registration, binary path resolution, grammar staleness (non-blocking advisory — PASS for recent, SKIP for stale >30 d, never FAIL), and per-RAM-tier ML output quality.</p>
+    <p><strong>ML tier quality (5b):</strong> reads <code>~/.senkani/ml-tier-eval.json</code> and surfaces a per-tier rating for installed Gemma 4 tiers — <code>excellent</code> (≥80% pass), <code>acceptable</code> (≥60%), <code>degraded</code> (&lt;60%, fails check with an "upgrade if RAM allows" hint), or skipped if the report is missing or the tier isn't installed. The harness is <code>Sources/Bench/MLTierEvalTasks.swift</code> (10 rationale + 10 vision tasks).</p>
 
     <h2>Example</h2>
     <pre class="code">$ senkani doctor --fix</pre>

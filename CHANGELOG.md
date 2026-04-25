@@ -6,6 +6,42 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 24 — Per-RAM-tier Gemma 4 quality eval harness (`luminary-2026-04-24-4-gemma-tier-quality-eval`)
+- Luminary P1 from the 2026-04-24 review. Gemma 4 auto-selects an
+  install tier by available RAM (APEX 26B at ≥16 GB, E4B at ≥8 GB,
+  E2B fallback) but the quality-per-tier story was unpublished —
+  8 GB Mac users were silently routed to a materially worse model
+  with no warning. This round ships the harness that surfaces the
+  cost.
+- New `Sources/Bench/MLTierEvalTasks.swift` — 20 tasks (10 rationale
+  + 10 vision) probing concrete reasoning the rationale rewriter
+  uses in production: terseness, causal reasoning, terminology
+  recognition, structured output. Pass criterion is case-insensitive
+  any-of substring match so multiple correct phrasings count.
+- New `Sources/Bench/MLTierEvalRunner.swift` — runner accepts a
+  caller-provided inference closure (Bench has no MLX dependency)
+  and aggregates pass rate, median latency, output tokens. Rating
+  thresholds: ≥80% excellent, ≥60% acceptable, else degraded; tiers
+  the machine can't load report `notEvaluated` with a `skipReason`.
+- `MLTierEvalReportStore` persists results at
+  `~/.senkani/ml-tier-eval.json` (atomic write, ISO-8601 dates).
+- `senkani doctor` reads the cached report and surfaces a per-tier
+  line (`ml.tier.<id>: <rating> (passed/total, %, median ms, tokens)`).
+  Degraded tiers fail the check with an "upgrade if RAM allows" hint;
+  acceptable/excellent pass; absent report → skipped.
+- Models pane shows a quality badge on each Gemma card, color-coded
+  green (excellent) / blue (acceptable) / orange (degraded), with
+  hover tooltip showing pass-count and median latency.
+- 13 new tests pin task fixture shape, rating thresholds, runner
+  accuracy + median computation, JSON round-trip, and missing-file
+  handling. Suite total 1731 → 1744 (+13).
+- Deferred to follow-up rounds: (a) the 10 vision-image fixtures and
+  (b) the MCP-backed inference adapter that drives a real `senkani
+  ml-eval` CLI command. Both are spec'd in
+  `tools/soak/manual-log.md` and tracked as new backlog items so
+  the eval gets real numbers on machines that have Gemma 4 tiers
+  installed.
+
 ### April 24 — SessionDatabase store invariants doc (`luminary-2026-04-24-3-store-invariants-doc`)
 - Luminary P1 from the 2026-04-24 review. The four-store split
   (`CommandStore`, `TokenEventStore`, `SandboxStore`, `ValidationStore`)

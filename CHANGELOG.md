@@ -6,6 +6,37 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 25 — TreeSitterBackend decomposition: Swift + Python migrated to per-language files (`luminary-2026-04-24-10b-treesitterbackend-swift-python`)
+- Luminary P2 (Torvalds/Carmack/Bach-flagged via parent
+  `luminary-2026-04-24-10`). Second round of the per-language backend
+  decomposition started in 10a. Migrates the two languages with the
+  most distinctive extraction logic — Swift (class/struct/enum/actor/
+  extension via `class_declaration` + `protocol_declaration` +
+  `init_declaration` + `property_declaration`/`protocol_property_declaration`)
+  and Python (`function_definition` + `class_definition` + decorated-
+  definition recursion).
+- New `Sources/Indexer/Languages/SwiftBackend.swift` (102 LOC), conforms
+  to the protocol; reuses `extractSwiftClassLike` / `extractProtocol` /
+  `extractFunction` / `extractProperty` shared helpers.
+- New `Sources/Indexer/Languages/PythonBackend.swift` (68 LOC), conforms
+  to the protocol; reuses `extractFunction` / `extractPythonClass` and
+  recurses via the `default:` arm so `decorated_definition` wrappers
+  flow through to inner `function_definition` / `class_definition` nodes.
+- `backend(for:)` registers both: Swift / Python now skip `walkNode`
+  entirely. Dispatcher's Swift-only arms (`protocol_declaration`,
+  `init_declaration`, `protocol_property_declaration`, the Swift arm
+  of `class_declaration`, the Swift fallthrough in `property_declaration`)
+  removed. `class_definition` kept in `walkNode` because Scala also
+  uses it (a one-test fix during the round — the migration spec
+  flagged it as Python-only, but pre-audit caught the cross-language
+  shape).
+- Dispatcher dropped 1,219 → 1,206 LOC (-13). Languages directory
+  now holds 923 LOC across 6 files. Four rounds (10c–10f) remain to
+  bring the dispatcher under 500 LOC.
+- Re-audit (Torvalds, Carmack, Bach): PASS clean. 1,806/1,806 tests
+  green; zero behavior delta as designed for a pure refactor (tests
+  target = 0). Full-suite runtime ~21s.
+
 ### April 25 — TreeSitterBackend decomposition pilot: protocol + Helpers + TOML/GraphQL backends (`luminary-2026-04-24-10a-treesitterbackend-protocol-and-pilot`)
 - Luminary P2 (Torvalds/Carmack/Bach-flagged). Pilot round of the
   per-language backend decomposition — `Sources/Indexer/TreeSitterBackend.swift`

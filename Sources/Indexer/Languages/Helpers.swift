@@ -125,9 +125,12 @@ extension TreeSitterBackend {
         )
     }
 
-    // MARK: - Python Extractors
+    // MARK: - Python / Scala Extractors
 
-    /// Extracts a Python class_definition.
+    /// Extracts a `class_definition` node (Python and Scala both use this
+    /// node type with a `name` field). Named `extractPythonClass` for its
+    /// first user; the dispatcher's `class_definition` case still uses it
+    /// for Scala after the Python migration.
     internal static func extractPythonClass(
         _ node: Node, file: String, source: NSString, lines: [String], container: String?
     ) -> (IndexEntry, Node?)? {

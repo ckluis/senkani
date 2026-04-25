@@ -1,0 +1,11 @@
+# id: aws-keyid-2
+# family: aws_keyid
+# expected: AWS_ACCESS_KEY_ID
+# match_mode: any
+# description: AKIA key embedded in shell credentials file with comments.
+# synthetic: true
+---
+[default]
+# rotate before 2026-12-31
+aws_access_key_id = AKIAZ4Q7W8E9R0T1Y2U3
+region = us-east-1

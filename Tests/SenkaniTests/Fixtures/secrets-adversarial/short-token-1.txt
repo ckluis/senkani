@@ -1,0 +1,9 @@
+# id: short-token-1
+# family: short_token
+# expected: SLACK_TOKEN
+# match_mode: any
+# documented_gap: true
+# description: Truncated Slack bot token below the {10,} char body threshold. Documented gap — scanner cannot match sub-threshold tokens by design. Treat as a lower bound, not a regression candidate.
+# synthetic: true
+---
+debug log: token starts with xoxb-1-2-3

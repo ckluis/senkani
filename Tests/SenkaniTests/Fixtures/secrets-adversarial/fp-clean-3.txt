@@ -1,0 +1,8 @@
+# id: fp-clean-3
+# family: false_positive_guard
+# expected: NONE
+# match_mode: none
+# description: Plain prose with the word "key" but no secret value present.
+# synthetic: true
+---
+The cache key is computed from the file path and modification time. See README.md for details on key formation.

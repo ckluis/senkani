@@ -1,0 +1,8 @@
+# id: high-entropy-1
+# family: high_entropy
+# expected: HIGH_ENTROPY
+# match_mode: any
+# description: 50-char base64 blob with no recognisable prefix — pure entropy detection.
+# synthetic: true
+---
+BLOB=A1B2c3D4e5F6g7H8i9J0kLmNoPqRsTuVwXyZ012345abcdef678

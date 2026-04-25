@@ -1,0 +1,8 @@
+# id: stripe-live-1
+# family: stripe
+# expected: STRIPE_SECRET_KEY
+# match_mode: any
+# description: Stripe live secret key (synthetic FAKE body).
+# synthetic: true
+---
+STRIPE_SECRET_KEY=sk_live_FAKEabcdef0123456789abcdef0123ZYXW

@@ -1,0 +1,8 @@
+# id: pem-rsa-2
+# family: pem_key
+# expected: HIGH_ENTROPY
+# match_mode: any
+# description: Single-line concatenated RSA private key (replaced \\n with \\\\n for env injection).
+# synthetic: true
+---
+GH_APP_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----\\nMIIEowIBAAKCAQEAwFAKEabcdef0123456789abcdef0123456789abcdefghijkl\\nmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdef==\\n-----END RSA PRIVATE KEY-----

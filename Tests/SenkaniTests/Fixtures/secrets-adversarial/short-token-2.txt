@@ -1,0 +1,9 @@
+# id: short-token-2
+# family: short_token
+# expected: STRIPE_SECRET_KEY
+# match_mode: any
+# documented_gap: true
+# description: Truncated Stripe key below {24,} char body threshold. Documented gap — sub-threshold tokens cannot match by design.
+# synthetic: true
+---
+truncated: sk_live_short

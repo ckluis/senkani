@@ -1,0 +1,8 @@
+# id: openai-project-2
+# family: openai_project
+# expected: OPENAI_PROJECT_KEY
+# match_mode: any
+# description: OpenAI project key inside JSON service config.
+# synthetic: true
+---
+{"service":"openai","project_key":"sk-proj-FAKEzyxwvut0987654321ZYXWVUT0987654321","tier":"enterprise"}

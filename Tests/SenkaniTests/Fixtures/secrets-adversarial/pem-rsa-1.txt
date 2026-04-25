@@ -1,0 +1,13 @@
+# id: pem-rsa-1
+# family: pem_key
+# expected: HIGH_ENTROPY
+# match_mode: any
+# description: GitHub App RSA private key in PEM format inline in YAML. Multi-line; per-line entropy on PEM base64 should trigger HIGH_ENTROPY when scanner sees long token.
+# synthetic: true
+---
+github_app:
+  private_key: |
+    -----BEGIN RSA PRIVATE KEY-----
+    MIIEowIBAAKCAQEAwFAKEabcdef0123456789abcdef0123456789abcdef0123456
+    789abcdef0123456789abcdef0123456789abcdefghijklmnopqrstuvwxyzABCD
+    -----END RSA PRIVATE KEY-----

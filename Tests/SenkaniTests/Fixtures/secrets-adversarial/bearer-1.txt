@@ -1,0 +1,8 @@
+# id: bearer-1
+# family: bearer
+# expected: BEARER_TOKEN
+# match_mode: any
+# description: Bearer JWT in Authorization header (header.payload.signature).
+# synthetic: true
+---
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkphbmUgRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c

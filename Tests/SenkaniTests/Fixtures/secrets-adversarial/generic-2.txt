@@ -1,0 +1,8 @@
+# id: generic-2
+# family: generic_api
+# expected: GENERIC_API_KEY,HIGH_ENTROPY
+# match_mode: any
+# description: api-secret with hyphen and JSON quoting. The closing-quote/colon sequence breaks the GENERIC_API_KEY regex (gap), but EntropyScanner catches the value.
+# synthetic: true
+---
+{"api-secret":"FAKEzyxwvuts9876543210ZYXWVUTSRQPONMLK"}

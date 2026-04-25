@@ -1,0 +1,8 @@
+# id: generic-1
+# family: generic_api
+# expected: GENERIC_API_KEY
+# match_mode: any
+# description: Generic api_key=value pattern with quotes.
+# synthetic: true
+---
+api_key = 'super_secret_key_FAKE1234567890abcdef'

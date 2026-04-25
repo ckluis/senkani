@@ -1,0 +1,9 @@
+# id: signed-url-2
+# family: signed_url
+# expected: HIGH_ENTROPY
+# match_mode: any
+# documented_gap: true
+# description: GCS V4 signed URL with X-Goog-Signature. Whole URL is one whitespace-bounded token, EntropyScanner excludes any token with `https://` prefix, so the signature leaks. Documented gap (FN). Closing this needs URL-aware tokenisation that splits on `&` and `=`.
+# synthetic: true
+---
+https://storage.googleapis.com/bucket/object?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=svc-account@proj.iam&X-Goog-Date=20260424T120000Z&X-Goog-Expires=900&X-Goog-Signature=FAKEdeadbeefcafebabe0123456789abcdef0123456789abcdefcafebabedeadbeef

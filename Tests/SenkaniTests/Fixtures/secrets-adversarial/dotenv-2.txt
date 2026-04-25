@@ -1,0 +1,11 @@
+# id: dotenv-2
+# family: dotenv
+# expected: GENERIC_API_KEY
+# match_mode: any
+# description: TOML-style auth_token + a second auth_token to test duplicate redaction.
+# synthetic: true
+---
+[upstream]
+auth_token = "FAKEupstreamtokenABCDEFGHIJKLMN1234"
+[downstream]
+auth_token = "FAKEdownstreamtoken9876543210ZYXWVU"

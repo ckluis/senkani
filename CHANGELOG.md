@@ -6,6 +6,54 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 24 — SecretDetector adversarial corpus + precision/recall harness (`luminary-2026-04-24-2-secretdetector-adversarial-corpus`)
+- Luminary P0 from the 2026-04-24 spec-vs-codebase review. The
+  shipped "100% redaction" claim was measured against a small
+  hand-curated fixture set; against modern adversarial inputs (JWTs,
+  PEM blocks, signed URLs, sub-threshold tokens, hyphenated key
+  names, multi-secret blobs, structured config, base64/hex obfuscation)
+  the same pipeline measured **1.000 precision / 0.894 recall**.
+  The round publishes the honest numbers, names the gaps, and adds
+  a regression harness so future changes can't drift either way.
+- New `Tests/SenkaniTests/Fixtures/secrets-adversarial/` with 53
+  labelled fixture files spanning 22 families. Each fixture has a
+  `# id / family / expected / match_mode / description` header
+  followed by `---\n` and a body. All bodies are synthetic — keys
+  marked `FAKE` or split with concatenation tricks dodge GitHub
+  push-protection.
+- New `Tests/SenkaniTests/SecretDetectorAdversarialTests.swift`
+  (~250 LOC). Three `@Test` functions: parameterised
+  fixture-level expectation (53 invocations), parameterised
+  family-threshold check (22 invocations), and a single summary
+  reporter that prints a TP/FP/FN/TN/precision/recall table to
+  stdout for each `swift test` run. New schema field
+  `documented_gap: true` lets a fixture pin a known recall miss —
+  the per-fixture test asserts the gap is still present, so any
+  scanner improvement that closes it surfaces with "documented
+  gap appears closed" rather than silently flipping coverage.
+- Bundled the corpus via `resources: [.copy("Fixtures/secrets-adversarial")]`
+  on the SenkaniTests target. Loaded at test time via
+  `Bundle.module`.
+- Updated `spec/testing.md`: Quality Gates row now reads
+  "100% (fixture suite) / 1.000 precision · 0.894 recall (adversarial)".
+  New "Secret redaction — fixture suite vs adversarial corpus"
+  section names the three documented gaps with mechanical reasons
+  and the marketing rule ("don't cite 100% without naming the
+  corpus").
+- Filed three follow-ups in `spec/cleanup.md` item 18 — sub-threshold
+  / Twilio support, URL-aware tokenisation for GCS-style signed
+  URLs, hex-charset entropy floor — each ships as a separate small
+  round; closing one is verified by flipping `documented_gap:` in
+  the corresponding fixture.
+- Notable defence-in-depth finding: families whose named regex
+  misses the fixture (hyphenated AWS key names, JSON-quoted
+  api-secret, PASSWORD-style env vars, multi-line PEM bodies) still
+  redact at 1.000 recall because EntropyScanner catches the
+  high-entropy value. The pipeline's two-layer design is
+  load-bearing — the named regex alone wouldn't hit these numbers.
+- Test count: 1728 → 1731 (+3). Full `tools/test-safe.sh` suite
+  green at 21.0s. Landing page test counter bumped 1,637 → 1,731.
+
 ### April 24 — Core DB log routing (`luminary-2026-04-24-1-unify-core-logging`)
 - Luminary P0. Database init and per-store error paths used to write
   `print("[SessionDatabase] …")` / `print("[CommandStore] SQL error: …")`

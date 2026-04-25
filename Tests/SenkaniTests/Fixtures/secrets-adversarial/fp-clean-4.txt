@@ -1,0 +1,9 @@
+# id: fp-clean-4
+# family: false_positive_guard
+# expected: NONE
+# match_mode: none
+# description: File paths and URLs — both excluded from entropy scanner.
+# synthetic: true
+---
+copying /Users/test/Library/Developer/Xcode/DerivedData/Senkani-abc123/Build/Products/Debug/Senkani to /usr/local/bin
+fetching https://api.example.com/v1/status

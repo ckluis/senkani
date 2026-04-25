@@ -1,0 +1,8 @@
+# id: bearer-2
+# family: bearer
+# expected: BEARER_TOKEN
+# match_mode: any
+# description: Lower-case "bearer" prefix (case-insensitive expectation).
+# synthetic: true
+---
+authorization: bearer FAKEabcdefghijklmnopqrstuvwxyzABCDEFGH1234567890

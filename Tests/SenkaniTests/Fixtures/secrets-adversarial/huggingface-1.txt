@@ -1,0 +1,9 @@
+# id: huggingface-1
+# family: huggingface
+# expected: HUGGINGFACE_TOKEN
+# match_mode: any
+# description: Hugging Face access token (hf_) in Python script.
+# synthetic: true
+---
+from huggingface_hub import login
+login(token="hf_FAKEabcdefghijklmnopqrstuvwxyzABCDEFGH")

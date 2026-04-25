@@ -1,0 +1,8 @@
+# id: stripe-test-1
+# family: stripe
+# expected: STRIPE_SECRET_KEY
+# match_mode: any
+# description: Stripe test secret key in JS source.
+# synthetic: true
+---
+const stripe = require("stripe")("sk_test_FAKEzyxwvuts9876543210ZYXWVUTS9876");

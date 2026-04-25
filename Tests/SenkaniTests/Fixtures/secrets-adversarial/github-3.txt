@@ -1,0 +1,8 @@
+# id: github-3
+# family: github
+# expected: GITHUB_TOKEN,HIGH_ENTROPY
+# match_mode: any
+# description: GitHub server-to-server token (ghs_) in shell command. URL contains the token; after named-pattern redaction, the residual host portion is also high-entropy enough to trip the entropy scanner — both detections are correct (defence in depth).
+# synthetic: true
+---
+git remote set-url origin https://oauth2:ghs_FAKEabcdefghijABCDEF1234567890mnopqr@github.com/example/repo

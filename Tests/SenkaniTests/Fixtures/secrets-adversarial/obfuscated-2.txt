@@ -1,0 +1,9 @@
+# id: obfuscated-2
+# family: obfuscated
+# expected: HIGH_ENTROPY
+# match_mode: any
+# documented_gap: true
+# description: 66-char hex-only blob. Pure-hex Shannon entropy peaks at log2(16)=4.0 bits/char, below the 4.5 threshold; the SHA-256 exclusion (exactly 64 hex chars) doesn't apply at 66, but entropy still fails. Documented gap. Closing options: separate threshold for hex-charset tokens, or drop the entropy floor when the charset is hex-only.
+# synthetic: true
+---
+HEX_SECRET=6664fakeabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123

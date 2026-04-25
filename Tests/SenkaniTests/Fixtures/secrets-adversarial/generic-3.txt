@@ -1,0 +1,10 @@
+# id: generic-3
+# family: generic_api
+# expected: GENERIC_API_KEY
+# match_mode: any
+# description: auth_token with TOML-style assignment.
+# synthetic: true
+---
+[service]
+auth_token = "FAKEauthtoken1234567890abcdefABCDEF12"
+timeout_ms = 5000

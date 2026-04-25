@@ -1,0 +1,12 @@
+# id: fp-clean-1
+# family: false_positive_guard
+# expected: NONE
+# match_mode: none
+# description: Git SHA in commit log — must NOT be flagged (40-char hex exclusion).
+# synthetic: true
+---
+commit a3f8b2e9d4c1f5a8b9c0d1e2f3a4b5c6d7e8f9a0
+Author: Jane <jane@example.com>
+Date:   Fri Apr 24 12:00:00 2026 -0700
+
+    chore: tidy autonomous backlog

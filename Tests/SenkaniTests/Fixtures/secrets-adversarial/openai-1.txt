@@ -1,0 +1,8 @@
+# id: openai-1
+# family: openai
+# expected: OPENAI_API_KEY
+# match_mode: any
+# description: Plain OpenAI sk- key in env assignment.
+# synthetic: true
+---
+OPENAI_API_KEY=sk-FAKEABCDEFGHIJKLMNOPQRSTUVWXYZ12345

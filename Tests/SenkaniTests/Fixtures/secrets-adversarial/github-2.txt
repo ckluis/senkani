@@ -1,0 +1,9 @@
+# id: github-2
+# family: github
+# expected: GITHUB_TOKEN
+# match_mode: any
+# description: GitHub OAuth token (gho_) in YAML.
+# synthetic: true
+---
+github:
+  token: gho_FAKE0987654321ZYXWVUTSRQPONMLKJIHGFE

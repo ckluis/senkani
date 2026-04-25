@@ -1,0 +1,8 @@
+# id: github-1
+# family: github
+# expected: GITHUB_TOKEN
+# match_mode: any
+# description: GitHub personal access token (ghp_) in env file.
+# synthetic: true
+---
+GITHUB_TOKEN=ghp_FAKEABCDEFGHIJKLMNOPQRSTUVWXYZabcdef

@@ -1,0 +1,11 @@
+# id: fp-clean-5
+# family: false_positive_guard
+# expected: NONE
+# match_mode: none
+# description: npm/yarn integrity checksums — explicitly excluded by EntropyScanner.
+# synthetic: true
+---
+"foo": {
+  "version": "1.2.3",
+  "integrity": "sha512-abc123FAKE0987654321zyxwvutsrqponmlkjihgfedcbaABCDEFGHIJKLMNOPQRSTUVWXYZ=="
+}

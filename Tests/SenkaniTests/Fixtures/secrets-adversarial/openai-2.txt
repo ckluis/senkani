@@ -1,0 +1,11 @@
+# id: openai-2
+# family: openai
+# expected: OPENAI_API_KEY
+# match_mode: any
+# description: OpenAI key in YAML config block.
+# synthetic: true
+---
+providers:
+  openai:
+    apiKey: "sk-FAKEZYXWVUTSRQPONMLKJIHGFEDCBA09876"
+    org: org-test

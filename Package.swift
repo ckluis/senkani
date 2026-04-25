@@ -397,7 +397,8 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Testing", package: "swift-testing"),
             ],
-            path: "Tests/SenkaniTests"
+            path: "Tests/SenkaniTests",
+            resources: [.copy("Fixtures/secrets-adversarial")]
         ),
     ]
 )

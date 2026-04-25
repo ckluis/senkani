@@ -6,6 +6,52 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 25 — Split `LearnedRulesStore.swift` (844 → 360 LOC façade) into four per-artifact extensions (`luminary-2026-04-24-6-learnedrulesstore-split`)
+- Luminary P1. `Sources/Core/LearnedRulesStore.swift` had grown to 844
+  LOC mixing four artifact lifecycles (`LearnedFilterRule`,
+  `LearnedContextDoc`, `LearnedInstructionPatch`,
+  `LearnedWorkflowPlaybook`). The artifact types are the natural seam
+  — adapt the SessionDatabase / KnowledgeStore split spirit to this
+  JSON-backed substrate.
+- Four per-artifact files extracted under `Sources/Core/LearnedRules/`:
+  - `FilterRuleStore.swift` — owns the `LearnedFilterRule` type +
+    Phase H/H+1/H+2a lifecycle (observe, promoteToStaged, apply,
+    applyAll, reject, setEnrichedRationale, loadApplied,
+    loadRecurring); also keeps the deprecated `stage(_:)` alias.
+  - `ContextDocStore.swift` — Phase H+2b context-doc lifecycle
+    (observe/promote/apply/reject/queries, plus the file-private
+    `mutateContextDoc` helper).
+  - `InstructionPatchStore.swift` — Phase H+2c lifecycle, with the
+    Schneier constraint (no auto-apply path) restated in the header.
+  - `WorkflowPlaybookStore.swift` — Phase H+2c lifecycle, with the
+    "refresh steps + description on re-observation" merge rule.
+- Each new file is a Swift `extension LearnedRulesStore { ... }` so
+  the public API is byte-identical (`LearnedRulesStore.observe(_:)`,
+  `.observeContextDoc(_:)`, etc.). The 20+ caller sites recorded
+  pre-split (`grep -rl LearnedRulesStore\\.` across `Sources/` and
+  `Tests/`) compile unchanged.
+- Façade `LearnedRulesStore.swift` shrinks from 844 → 360 LOC and now
+  owns only the cross-cutting types (`LearnedRuleStatus`,
+  `LearnedArtifact`, `LearnedRulesFile`) plus shared persistence
+  infra (`load`/`save`/`shared` cache, `withPath` test override,
+  `reset`).
+- New `Sources/Core/Stores/INVARIANTS.md` section "LearnedRulesStore
+  invariants" (LRS1–LRS4) documents the single-shared-cache /
+  read-modify-write / single-writer assumption, the public-API
+  byte-identity contract, and the discriminated-union placement rule
+  for adding a fifth artifact type. Calls out the explicit absence of
+  a SessionDatabase-style serial queue (today's writers don't
+  overlap; a future concurrent writer would need to add one before
+  introducing parallelism — Kleppmann's re-audit concern).
+- Tests: 25 new under `Tests/SenkaniTests/LearnedRules/` — one
+  `*StoreTests.swift` per artifact type, each exercising
+  observe/merge/rejected-stickiness/promote/apply/query paths
+  directly against the store API (the `CompoundLearningH*` suites
+  cover the higher-level generator → store integration; this layer
+  was previously only tested transitively).
+- Test count: 1781 → 1806 (+25). Full suite green via
+  `tools/test-safe.sh`.
+
 ### April 25 — Split `KnowledgeStore.swift` (929 → 236 LOC façade) into four sub-stores (`luminary-2026-04-24-5-knowledgestore-split`)
 - Luminary P1. `Sources/Core/KnowledgeStore.swift` had grown to 929 LOC —
   the same trajectory that prompted the SessionDatabase P2-11 split. Apply

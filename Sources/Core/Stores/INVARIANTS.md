@@ -560,3 +560,148 @@ EnrichmentStore
                  (`min(a,b), max(a,b)`) on write so storage has at most
                  one row per unordered pair.
 ```
+
+# LearnedRulesStore invariants
+
+The `LearnedRulesStore` façade
+(`Sources/Core/LearnedRulesStore.swift`) sits over a single
+JSON-on-disk file (`~/.senkani/learned-rules.json`) and four bounded
+contexts that share it. The `luminary-2026-04-24-6-learnedrulesstore-split`
+round (2026-04-25) extracted each artifact's lifecycle into its own
+file under `Sources/Core/LearnedRules/`, mirroring the *spirit* of the
+SessionDatabase P2-11 pattern even though the storage substrate is
+completely different (JSON file, not SQLite). The rules below are
+narrower than I1–I9 because the substrate is simpler, but they are
+load-bearing for every per-artifact extension.
+
+| Bounded context     | File                              | Artifact type            | Dedup key                  |
+|---------------------|-----------------------------------|--------------------------|----------------------------|
+| Filter rules        | `LearnedRules/FilterRuleStore.swift`        | `LearnedFilterRule`        | `(command, subcommand, ops)` |
+| Context docs        | `LearnedRules/ContextDocStore.swift`        | `LearnedContextDoc`        | `title` (sanitized slug)     |
+| Instruction patches | `LearnedRules/InstructionPatchStore.swift`  | `LearnedInstructionPatch`  | `(toolName, hint)`           |
+| Workflow playbooks  | `LearnedRules/WorkflowPlaybookStore.swift`  | `LearnedWorkflowPlaybook`  | `title` (sanitized slug)     |
+
+The façade itself owns the cross-cutting types (`LearnedRuleStatus`,
+`LearnedArtifact`, `LearnedRulesFile`) and the shared persistence
+infrastructure (`load`/`save`/`shared` cache, `withPath` test
+override, `reset`).
+
+## LRS1 — Single shared cache, single shared file
+
+**Rule.** Every per-artifact extension reads from
+`LearnedRulesStore.load() ?? .empty`, mutates the resulting
+`LearnedRulesFile`, then `save()`s the whole file and assigns
+`shared = file`. There is exactly one process-wide on-disk file
+(`learned-rules.json`) and exactly one in-memory cache
+(`_defaultShared`) at any moment outside a `withPath(_:)` scope.
+
+**Why.** All four artifact lifecycles share the same JSON container
+because `LearnedArtifact` is a discriminated union and the file shape
+is `{ "version": N, "artifacts": [{ "type": ..., "payload": ... }] }`.
+Splitting the storage across four files would make migrations and the
+`LearnedRulesFile` v3→v4→v5 evolution incoherent.
+
+**Tests.**
+- `Tests/SenkaniTests/LearnedRules/FilterRuleStoreTests.swift`
+- `Tests/SenkaniTests/LearnedRules/ContextDocStoreTests.swift`
+- `Tests/SenkaniTests/LearnedRules/InstructionPatchStoreTests.swift`
+- `Tests/SenkaniTests/LearnedRules/WorkflowPlaybookStoreTests.swift`
+  Each suite asserts that observe → load → mutate round-trips through
+  the shared cache without losing artifacts of *other* types.
+
+## LRS2 — Mutations are read-modify-write, single-writer assumed
+
+**Rule.** Every mutation method is shaped:
+
+```swift
+var file = load() ?? .empty
+// … mutate file.artifacts in place …
+try save(file)
+shared = file
+```
+
+There is **no** locking, queueing, or transactional boundary. The
+rule the codebase relies on today is "the agent + daily sweep are
+the only writers and they don't overlap." A future concurrent writer
+must add a serial queue **before** introducing parallelism — there is
+no LearnedRulesStore equivalent of SessionDatabase's I1.
+
+**Why.** The on-disk file is small (KB-scale), the access pattern is
+human-tempo, and a single sweep job is the only background writer.
+Making this transactional today would be premature; making it
+explicit in this doc prevents a future contributor from assuming
+otherwise.
+
+**Tests.** No concurrency-stress test today. If a second writer is
+ever introduced, add one that observes interleaved writes against
+two artifact types and asserts no artifact is lost.
+
+## LRS3 — Public API byte-identity (the façade contract)
+
+**Rule.** Callers see only `LearnedRulesStore.<staticMethod>(...)`.
+The split moved methods to extensions on `LearnedRulesStore`, not to
+new types — `FilterRuleStore` etc. are *file labels*, not Swift
+types. Callers don't need to know which file a method lives in. If
+you add a new artifact type, follow the same shape: an extension on
+`LearnedRulesStore` whose methods are namespaced by artifact-name
+suffix (e.g. `observeContextDoc`, not `ContextDocStore.observe`).
+
+**Why.** The 20+ caller sites recorded at refactor time
+(`grep -rl LearnedRulesStore\\.` from
+`luminary-2026-04-24-6-learnedrulesstore-split`) all use the static-API
+shape. Forcing them to a new namespace would have been a flag-day
+change with no observable benefit.
+
+## LRS4 — `LearnedArtifact` discriminated union stays in the façade
+
+**Rule.** The `LearnedArtifact` enum, the `LearnedRulesFile` container,
+and `LearnedRuleStatus` belong to `LearnedRulesStore.swift`. Adding a
+fifth artifact type means: new case in `LearnedArtifact` + new
+view-property on `LearnedRulesFile` + new file under
+`LearnedRules/<Name>Store.swift` + new tests under
+`Tests/SenkaniTests/LearnedRules/<Name>StoreTests.swift`.
+
+**Why.** The discriminated-union tag is the schema contract. Splitting
+it across files would force every per-artifact file to know about
+every other artifact's tag string — the opposite of the bounded
+context split.
+
+## Appendix — LearnedRulesStore quick reference
+
+```
+LearnedRulesStore (façade)
+  Owns         : LearnedRuleStatus, LearnedArtifact, LearnedRulesFile,
+                 _defaultPath / _defaultShared, withPath, load, save,
+                 reload, reset
+  Storage      : ~/.senkani/learned-rules.json (atomic write, pretty + sorted-keys)
+  Cache        : process-wide _defaultShared OR @TaskLocal Scoped box
+                 inside `withPath(_:)`
+  Concurrency  : single-writer assumed (LRS2). No locks, no queues today.
+
+FilterRuleStore     (extension methods on LearnedRulesStore)
+  Methods      : observe, stage (deprecated), promoteToStaged, apply,
+                 applyAll, reject, setEnrichedRationale, loadApplied,
+                 loadRecurring
+  Owns type    : LearnedFilterRule (moved from façade in this round)
+
+ContextDocStore     (extension methods)
+  Methods      : observeContextDoc, promoteContextDocToStaged,
+                 applyContextDoc, rejectContextDoc, contextDocs,
+                 appliedContextDocs
+  Owns helper  : private mutateContextDoc
+
+InstructionPatchStore     (extension methods)
+  Methods      : observeInstructionPatch, promoteInstructionPatchToStaged,
+                 applyInstructionPatch, rejectInstructionPatch,
+                 instructionPatches, appliedInstructionPatches
+  Owns helper  : private mutateInstructionPatch
+  Constraint   : Schneier — apply ONLY moves staged → applied. The daily
+                 sweep promotes recurring → staged but is forbidden from
+                 going staged → applied.
+
+WorkflowPlaybookStore     (extension methods)
+  Methods      : observeWorkflowPlaybook, promoteWorkflowPlaybookToStaged,
+                 applyWorkflowPlaybook, rejectWorkflowPlaybook,
+                 workflowPlaybooks
+  Owns helper  : private mutateWorkflowPlaybook
+```

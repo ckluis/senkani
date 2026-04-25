@@ -6,6 +6,42 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 25 — Split `KnowledgeStore.swift` (929 → 236 LOC façade) into four sub-stores (`luminary-2026-04-24-5-knowledgestore-split`)
+- Luminary P1. `Sources/Core/KnowledgeStore.swift` had grown to 929 LOC —
+  the same trajectory that prompted the SessionDatabase P2-11 split. Apply
+  the same pattern: keep the public class as a thin façade and move
+  table-owned behavior into focused stores under
+  `Sources/Core/KnowledgeStore/` that share the parent's connection +
+  serial dispatch queue.
+- Four sub-stores extracted (each ≤400 LOC):
+  - `EntityStore` — owns `knowledge_entities` + `knowledge_fts`
+    (FTS5 virtual table + 3 sync triggers); entity CRUD, mention-count
+    writes, staleness, FTS5 search.
+  - `LinkStore` — owns `entity_links` + 3 indexes; link CRUD,
+    backlinks, the post-hoc `target_id` resolver.
+  - `DecisionStore` — owns `decision_records` + the `entity_name` index
+    + the partial-unique `idx_decisions_commit` (git_commit dedup).
+  - `EnrichmentStore` — owns `evidence_timeline` + `co_change_coupling`,
+    the two enrichment-pipeline outputs that share an aggregate identity
+    despite different lifecycles (rationale documented in the file
+    header and INVARIANTS.md K3).
+- Public API is byte-identical. Forwarders live in four
+  `KnowledgeStore+*API.swift` extension files so callsites keep the
+  pre-split shape — `SessionDatabase`'s split precedent in
+  `Sources/Core/Stores/` set this convention.
+- 24 new tests (6 per sub-store), each focused on store-level
+  invariants the legacy aggregate suite doesn't cover: schema
+  idempotency under reopen, FK cascade + SET NULL behavior, partial
+  unique-index dedup semantics, mention-count batch atomicity,
+  coupling-pair canonicalisation under burst writes. Suite total
+  1757 → 1781 (+24).
+- `Sources/Core/Stores/INVARIANTS.md` extended with a new
+  "KnowledgeStore store invariants" section (K1–K5) covering connection
+  sharing, the cross-store FK boundaries, the FTS5 trigger contract,
+  the EnrichmentStore composition rationale, and the partial-unique
+  index contract. The two split-rounds (SessionDatabase + KnowledgeStore)
+  now share one invariants doc.
+
 ### April 25 — `senkani ml-eval` CLI + per-tier inference adapter (`senkani-ml-eval-cli`)
 - Second of two follow-ups to `luminary-2026-04-24-4-gemma-tier-quality-eval`.
   The 20-task harness shipped April 24, the vision fixtures shipped earlier

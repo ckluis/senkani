@@ -1,3 +1,22 @@
+# Cross-store invariants
+
+This file documents the shared-connection store-split pattern used by
+two façades:
+
+- **`SessionDatabase`** — the global session DB at
+  `~/Library/Application Support/Senkani/senkani.db`. Stores live
+  under this directory (`Sources/Core/Stores/`).
+- **`KnowledgeStore`** — a per-project knowledge vault at
+  `<projectRoot>/.senkani/vault.db`. Stores live under
+  `Sources/Core/KnowledgeStore/`.
+
+Sections **I1–I9** cover SessionDatabase invariants (kept
+unchanged). Sections **K1–K5** cover KnowledgeStore invariants — the
+`luminary-2026-04-24-5-knowledgestore-split` round (2026-04-25)
+adapted the same pattern to the knowledge vault and discovered which
+of the I-rules apply unchanged, which apply with adjustments, and
+which are unique to the entity-graph shape.
+
 # SessionDatabase store invariants
 
 The compatibility façade `SessionDatabase` (`Sources/Core/SessionDatabase.swift`)
@@ -327,3 +346,217 @@ ValidationStore
 
 These are tracked as follow-ups under "SessionDatabase store
 coverage gaps" in `spec/cleanup.md`.
+
+---
+
+# KnowledgeStore store invariants
+
+The compatibility façade `KnowledgeStore`
+(`Sources/Core/KnowledgeStore.swift`) delegates to four extracted
+stores under `Sources/Core/KnowledgeStore/`:
+
+| Store              | File                          | Tables owned end-to-end                                 |
+|--------------------|-------------------------------|---------------------------------------------------------|
+| `EntityStore`      | `EntityStore.swift`           | `knowledge_entities`, `knowledge_fts` + 3 FTS5 triggers |
+| `LinkStore`        | `LinkStore.swift`             | `entity_links` + 3 indexes                              |
+| `DecisionStore`    | `DecisionStore.swift`         | `decision_records` + `entity_name` index + `idx_decisions_commit` partial unique |
+| `EnrichmentStore`  | `EnrichmentStore.swift`       | `evidence_timeline`, `co_change_coupling` + indexes     |
+
+The façade itself retains the connection / queue lifecycle, the
+WAL + `foreign_keys=ON` pragmas, and the per-store `setupSchema`
+ordering at construction time. Forwarders for the public surface live
+in `Sources/Core/KnowledgeStore+EntityAPI.swift`,
+`+LinkAPI.swift`, `+DecisionAPI.swift`, `+EnrichmentAPI.swift`.
+
+The split was shipped under
+`luminary-2026-04-24-5-knowledgestore-split` (2026-04-25). I1, I2 (in
+its narrower KnowledgeStore form), I3, I7 (relaxed — see K5), I8 (NA
+today) and I9 (NA — there is no `MigrationRunner` for the knowledge
+vault yet) carry over from the SessionDatabase set. The five rules
+below are the KnowledgeStore-specific contract.
+
+## K1 — One connection, one queue (per-vault)
+
+**Rule.** Every KnowledgeStore sub-store shares the parent's `db`
+handle and the parent's serial dispatch queue (`parent.queue`, label
+`com.senkani.knowledgestore`). Sub-stores **must not** open a second
+SQLite handle and **must not** dispatch onto their own queue. All
+reads and writes flow through `parent.queue.sync` or
+`parent.queue.async`.
+
+**Why.** Same reasoning as I1 for SessionDatabase. A second connection
+would race the WAL invariants and bypass the FTS5 trigger ordering
+that EntityStore depends on. The per-project knowledge vault is
+small enough that one writer is the right capacity model.
+
+**Tests.**
+- `KnowledgeEntityStoreTests::ftsSyncRemainsConsistentUnderBackToBackWrites`
+  exercises the serial-queue ordering across the FTS5 triggers.
+- `KnowledgeEntityStoreTests::batchIncrementAppliesAllDeltasOnce`
+  exercises a multi-row write through the same queue.
+
+## K2 — Cross-store FKs are enforced at the connection, not the store
+
+**Rule.** Three sub-store tables hold foreign-key references to
+`knowledge_entities` (owned by EntityStore):
+
+- `entity_links.source_id REFERENCES knowledge_entities(id) ON DELETE CASCADE`
+- `entity_links.target_id REFERENCES knowledge_entities(id) ON DELETE SET NULL`
+- `decision_records.entity_id REFERENCES knowledge_entities(id) ON DELETE CASCADE`
+- `evidence_timeline.entity_id REFERENCES knowledge_entities(id) ON DELETE CASCADE`
+
+These FKs are enforced by SQLite at row-write time once
+`PRAGMA foreign_keys=ON` is set on the connection — which the façade
+does, exactly once, in `enableWAL`. **Cascade behavior is therefore a
+property of the connection, not of any individual store.** Sub-stores
+declare the FK in their `setupSchema` and rely on the façade to keep
+the pragma on.
+
+**Why.** This is the one place where DDL crosses store boundaries.
+Pulling the cascade rule into each store would force them to know
+about each other's tables; relying on SQLite's referential integrity
+keeps the stores ignorant.
+
+**Tests.**
+- `KnowledgeLinkStoreTests::cascadeDeleteOnSourceEntityRemoval`
+- `KnowledgeLinkStoreTests::targetIdSetNullOnTargetEntityDelete`
+- `KnowledgeDecisionStoreTests::cascadeDeleteOnEntityRemoval`
+- `KnowledgeEnrichmentStoreTests::evidenceCascadeDeleteOnEntityRemoval`
+
+If `foreign_keys=ON` is ever lost, all four of these tests fail —
+which is the regression net. Do not move FK enforcement into a
+defensive Swift check; it would be slower and would diverge from the
+SQL contract at the database level.
+
+## K3 — `EnrichmentStore` is a deliberate two-table composition
+
+**Rule.** `EnrichmentStore` owns both `evidence_timeline` (entity-keyed,
+session-derived, append-only) and `co_change_coupling` (pair-keyed,
+git-derived, idempotent upsert). The two tables share an aggregate
+identity — "what we've learned about entities" — but have different
+lifecycles.
+
+**Why.** Both are downstream artifacts of the enrichment pipeline
+(compound learning fills the timeline; the coupling miner fills the
+pair table). Neither is large enough on its own to justify a fifth
+sub-store; merging them keeps the file count reasonable and groups
+the enrichment-pipeline contract in one place.
+
+**What this rule blocks.** Reusing `EnrichmentStore` as a catch-all
+for "anything entity-graph-adjacent." If a future feature needs a
+table that is neither (a) directly fed by the enrichment pipeline nor
+(b) a downstream learned-signal artifact, it must go in a new store
+or get a justified split — not piled into this one.
+
+**Tests.**
+- `KnowledgeEnrichmentStoreTests::schemaSurvivesReopen` exercises
+  both tables on a single reopen.
+- `KnowledgeEnrichmentStoreTests::evidenceCascadeDeleteOnEntityRemoval`
+  pins the timeline lifecycle.
+- `KnowledgeEnrichmentStoreTests::couplingUpsertIdempotentUnderBurst`
+  pins the coupling lifecycle.
+
+## K4 — FTS5 triggers travel with the parent table
+
+**Rule.** The three triggers that keep `knowledge_fts` in sync with
+`knowledge_entities` (`knowledge_fts_ai`, `_ad`, `_au`) are owned by
+`EntityStore` and live in its `setupSchema`. No other store may
+write to `knowledge_entities`, and no other store may add a parallel
+writer to `knowledge_fts`.
+
+**Why.** The FTS5 contract is fragile: a `content=` external-content
+table relies on the triggers to keep its inverted index aligned. A
+parallel writer to `knowledge_entities` outside this store would
+silently bypass the triggers and leave search results stale; a
+parallel writer to `knowledge_fts` would corrupt the BM25 ranks.
+Mirrors the `commands_fts` rule in `CommandStore`.
+
+**Tests.**
+- `KnowledgeEntityStoreTests::ftsSyncRemainsConsistentUnderBackToBackWrites`
+  proves the triggers stay aligned across many serialised inserts.
+- `KnowledgeEntityStoreTests::schemaSurvivesReopen` reopens the DB
+  and exercises a fresh FTS query, proving triggers are present
+  after re-init.
+
+## K5 — Partial unique index dedup is a `DecisionStore` invariant
+
+**Rule.** `DecisionStore` declares an `idx_decisions_commit` partial
+unique index:
+
+```
+CREATE UNIQUE INDEX IF NOT EXISTS idx_decisions_commit
+ON decision_records(entity_name, commit_hash)
+WHERE source = 'git_commit' AND commit_hash IS NOT NULL;
+```
+
+This index is the source of truth for "one decision per
+(entity_name, commit_hash) for git-archaeology rows." It is created
+via `execSilent` because the partial-index syntax can vary between
+SQLite builds; failing to create it is non-fatal (callers tolerate
+duplicate git_commit rows degrading silently to no-op dedup).
+
+`source != 'git_commit'` rows (annotations, agent-emitted decisions,
+CLI-emitted decisions) are NEVER deduped — repeats are intentional
+because they reflect repeated observation.
+
+**Why.** The legacy `KnowledgeStore` already encoded this; the split
+makes the contract local to `DecisionStore` so the rule does not
+diffuse into the façade. Without the partial-unique constraint,
+re-mining the same git history would multiply decision rows linearly
+in passes.
+
+**Tests.**
+- `KnowledgeDecisionStoreTests::nonGitCommitSourcesCanRepeat` —
+  lock down that other sources are never deduped.
+- `KnowledgeDecisionStoreTests::gitCommitDifferentHashAllowed` —
+  same name, different hash → both rows survive.
+- The legacy `KnowledgeStoreDecisionsTests::gitCommitDecisionDeduped`
+  pins the dedup behavior end-to-end via the public façade.
+
+**Logging note (relaxation of I7).** KnowledgeStore sub-stores still
+emit DB errors via `fputs("[KnowledgeStore] …", stderr)` rather than
+`Logger.log("db.<scope>.<outcome>", …)`. The
+`LoggerRoutingTests::sourceHasNoLegacyPrintInScopedFiles` regression
+test scopes only to the SessionDatabase set; aligning the
+KnowledgeStore stores with I7 is filed as a follow-up. New code in
+this directory must keep using `fputs` (not `print`) until that
+follow-up lands so the existing scoped regression net continues to
+hold.
+
+---
+
+## Appendix — KnowledgeStore quick reference
+
+```
+EntityStore
+  Tables       : knowledge_entities, knowledge_fts (+3 FTS5 triggers)
+  project_root : NOT carried (vault is per-project — directory IS the scope)
+  Transactions : `batchIncrementMentions` wraps a prepare-once / step-N pass
+                 in BEGIN/COMMIT for fsync amortisation.
+  Notes        : The FTS5 surface is the only one in the vault. Triggers AI/AD/AU
+                 keep it in sync with knowledge_entities; do not add a parallel
+                 writer.
+
+LinkStore
+  Tables       : entity_links
+  project_root : NOT carried (per-vault)
+  Transactions : single-statement, serialised via parent.queue
+  Notes        : `target_id` is populated lazily by `resolveLinks()`. Cascade
+                 + SET NULL semantics live in the schema (K2).
+
+DecisionStore
+  Tables       : decision_records
+  project_root : NOT carried (per-vault)
+  Transactions : single-statement, serialised via parent.queue
+  Notes        : `idx_decisions_commit` is the partial-unique dedup contract
+                 (K5). Non-git_commit sources are never deduped.
+
+EnrichmentStore
+  Tables       : evidence_timeline, co_change_coupling
+  project_root : NOT carried (per-vault)
+  Transactions : single-statement, serialised via parent.queue
+  Notes        : Two-table composition by deliberate aggregate-identity
+                 grouping (K3). Coupling pairs are canonicalised
+                 (`min(a,b), max(a,b)`) on write so storage has at most
+                 one row per unordered pair.
+```

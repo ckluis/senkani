@@ -6,6 +6,33 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 24 — SessionDatabase store invariants doc (`luminary-2026-04-24-3-store-invariants-doc`)
+- Luminary P1 from the 2026-04-24 review. The four-store split
+  (`CommandStore`, `TokenEventStore`, `SandboxStore`, `ValidationStore`)
+  shipped under `sessiondb-split-2..6` left several invariants
+  enforced "by being in one file" with no written contract. Future
+  splits (`KnowledgeStore` 929 LOC, `LearnedRulesStore` 844 LOC) need
+  the rule-set written down before they begin.
+- New `Sources/Core/Stores/INVARIANTS.md` — nine numbered invariants
+  (I1–I9) covering the shared connection / serial-queue rule,
+  `BEGIN IMMEDIATE` boundary on `recordCommand` (the only multi-
+  statement transaction today), public-API byte-identity contract,
+  `project_root` filter on every cross-project read (with the named
+  asymmetry — `sandboxed_results` and `validation_results` are
+  session-scoped and don't carry it), `token_events` single-source-
+  of-truth and the inventory of every place it's JOINed, mandatory
+  `PersistenceRedaction` on every disk-bound write, the
+  `db.<scope>.<outcome>` Logger contract, cache-key conventions
+  reserved for the next splits, and migration ownership at the
+  façade. Each invariant cites ≥ 1 concrete test that enforces it.
+- `spec/architecture.md` SessionDatabase section now links to
+  `INVARIANTS.md`.
+- `spec/cleanup.md` item 19 records two coverage gaps the audit
+  surfaced: `complianceRate` and `lastExecResult` have no direct
+  unit tests for project isolation. Closes before the next
+  store-extraction round.
+- Pure documentation round — no source changes, no test delta.
+
 ### April 24 — SecretDetector adversarial corpus + precision/recall harness (`luminary-2026-04-24-2-secretdetector-adversarial-corpus`)
 - Luminary P0 from the 2026-04-24 spec-vs-codebase review. The
   shipped "100% redaction" claim was measured against a small

@@ -6,6 +6,47 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 25 — TreeSitterBackend decomposition: TypeScript / TSX / JavaScript + Kotlin migrated (`luminary-2026-04-24-10c-treesitterbackend-ts-family`)
+- Luminary P2 (Torvalds/Carmack/Bach-flagged via parent
+  `luminary-2026-04-24-10`). Third round of the per-language backend
+  decomposition. Migrates the TS-family + Kotlin to per-language files.
+- New `Sources/Indexer/Languages/TypeScriptBackend.swift` (111 LOC):
+  one backend covers `typescript`, `tsx`, and `javascript` because the
+  declaration node types and extraction logic are uniform across all
+  three grammars. Owns `function_declaration` / `generator_function_declaration`
+  / `class_declaration` / `interface_declaration` / `type_alias_declaration`
+  / `enum_declaration` / `method_definition`. JSX is handled by the
+  parser; the walk is identical.
+- New `Sources/Indexer/Languages/KotlinBackend.swift` (139 LOC):
+  Kotlin uses positional children rather than named fields, so name
+  lookups go via `findChildByType` (`simple_identifier` for functions
+  / properties, `type_identifier` for classes / objects / type
+  aliases). Owns `function_declaration` / `class_declaration`
+  (covers class, sealed, data, interface, inner) /
+  `property_declaration` / `object_declaration` / `companion_object`
+  (defaults to "Companion" when unnamed) / `type_alias`.
+- `backend(for:)` registers both: TypeScript / TSX / JavaScript /
+  Kotlin now skip `walkNode` entirely. Dispatcher's TS-only arms
+  (`type_alias_declaration`, `method_definition`) and Kotlin-only
+  arms (`object_declaration`, `companion_object`, `type_alias`,
+  Kotlin branches in `function_declaration` and `property_declaration`)
+  deleted.
+- **Acceptance #4 deferred:** the original spec said the
+  `class_declaration` case branch could be deleted entirely once
+  Swift / TS / TSX / Kotlin all migrated. Pre-existing behavior
+  proved Java + C# also route through `class_declaration` (and C#
+  also through `interface_declaration` + `enum_declaration`), so
+  those three branches stay alive — now serving Java + C# only —
+  until 10d (Java + C# migration round) when they can be deleted.
+  Recorded inline in the dispatcher comments.
+- Dispatcher dropped 1,206 → 1,114 LOC (-92). Languages directory
+  now holds 1,176 LOC across 8 files. Three rounds (10d–10f) remain
+  to bring the dispatcher under 500 LOC.
+- Re-audit (Torvalds, Carmack, Bach): PASS with one accepted scope
+  adjustment (acceptance #4 above). 1,806/1,806 tests green; zero
+  behavior delta as designed for a pure refactor (tests target = 0).
+  Full-suite runtime ~21s.
+
 ### April 25 — TreeSitterBackend decomposition: Swift + Python migrated to per-language files (`luminary-2026-04-24-10b-treesitterbackend-swift-python`)
 - Luminary P2 (Torvalds/Carmack/Bach-flagged via parent
   `luminary-2026-04-24-10`). Second round of the per-language backend

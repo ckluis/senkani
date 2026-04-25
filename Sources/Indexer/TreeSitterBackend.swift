@@ -95,10 +95,12 @@ public enum TreeSitterBackend {
     /// Languages that have not yet been migrated out of the central `walkNode`
     /// switch return `nil` here and fall through to the dispatcher.
     internal static func backend(for language: String) -> TreeSitterLanguageBackend.Type? {
-        if TomlBackend.supports(language)    { return TomlBackend.self }
-        if GraphQLBackend.supports(language) { return GraphQLBackend.self }
-        if SwiftBackend.supports(language)   { return SwiftBackend.self }
-        if PythonBackend.supports(language)  { return PythonBackend.self }
+        if TomlBackend.supports(language)       { return TomlBackend.self }
+        if GraphQLBackend.supports(language)    { return GraphQLBackend.self }
+        if SwiftBackend.supports(language)      { return SwiftBackend.self }
+        if PythonBackend.supports(language)     { return PythonBackend.self }
+        if TypeScriptBackend.supports(language) { return TypeScriptBackend.self }
+        if KotlinBackend.supports(language)     { return KotlinBackend.self }
         return nil
     }
 
@@ -200,8 +202,9 @@ public enum TreeSitterBackend {
         container: String?,
         entries: inout [IndexEntry]
     ) {
-        // GraphQL, TOML, Swift, and Python are handled by per-language
-        // backends in `Sources/Indexer/Languages/`. Both entry points
+        // GraphQL, TOML, Swift, Python, TypeScript/TSX/JavaScript, and
+        // Kotlin are handled by per-language backends in
+        // `Sources/Indexer/Languages/`. Both entry points
         // (`extractSymbols(from:source:language:file:)` and
         // `index(files:language:projectRoot:treeCache:)`) route to those
         // backends before calling `walkNode`, so `walkNode` never observes
@@ -211,23 +214,14 @@ public enum TreeSitterBackend {
             let type = child.nodeType ?? ""
 
             switch type {
-            // Swift + TypeScript/TSX/JavaScript + Kotlin + Lua + Zig function declarations
-            case "function_declaration", "protocol_function_declaration", "generator_function_declaration":
+            // Lua + Zig need special name extraction; Go / PHP / Bash etc.
+            // fall through to extractFunction (name-field). (Swift / TS / TSX
+            // / JS / Kotlin route via per-language backends and never reach
+            // walkNode.)
+            case "function_declaration":
                 if language == "zig" {
                     // Zig: function name is an identifier child, not a "name" field
                     if let nameNode = findChildByType(child, type: "identifier"),
-                       let name = nodeText(nameNode, source: source) {
-                        let kind: SymbolKind = container != nil ? .method : .function
-                        entries.append(IndexEntry(
-                            name: name, kind: kind, file: file,
-                            startLine: startLine(of: child), endLine: endLine(of: child),
-                            signature: signatureText(lines: lines, line: startLine(of: child)),
-                            container: container, engine: "tree-sitter"
-                        ))
-                    }
-                } else if language == "kotlin" {
-                    // Kotlin grammar has no field names — find simple_identifier child
-                    if let nameNode = findChildByType(child, type: "simple_identifier"),
                        let name = nodeText(nameNode, source: source) {
                         let kind: SymbolKind = container != nil ? .method : .function
                         entries.append(IndexEntry(
@@ -288,30 +282,15 @@ public enum TreeSitterBackend {
                     ))
                 }
 
-            // class_declaration — TypeScript/TSX uses it for class only,
-            // Kotlin uses it for class + interface. (Swift's class_declaration
-            // covers class/struct/enum/extension and is handled by SwiftBackend.)
+            // class_declaration — Java + C# still route through here.
+            // (Swift / TS / TSX / JS / Kotlin all migrated to per-language
+            //  backends; this case will be deleted entirely in 10d once
+            //  Java and C# own backends too.)
             case "class_declaration":
-                if language == "kotlin" {
-                    // Kotlin grammar has no field names — find type_identifier child
-                    if let nameNode = findChildByType(child, type: "type_identifier"),
-                       let name = nodeText(nameNode, source: source) {
-                        entries.append(IndexEntry(
-                            name: name, kind: .class, file: file,
-                            startLine: startLine(of: child), endLine: endLine(of: child),
-                            signature: signatureText(lines: lines, line: startLine(of: child)),
-                            container: container, engine: "tree-sitter"
-                        ))
-                        if let body = findBody(child) {
-                            walkNode(body, language: language, file: file, source: source, lines: lines, container: name, entries: &entries)
-                        }
-                    }
-                } else {
-                    if let (entry, body) = extractTSDeclaration(child, kind: .class, file: file, source: source, lines: lines, container: container) {
-                        entries.append(entry)
-                        if let body = body {
-                            walkNode(body, language: language, file: file, source: source, lines: lines, container: entry.name, entries: &entries)
-                        }
+                if let (entry, body) = extractTSDeclaration(child, kind: .class, file: file, source: source, lines: lines, container: container) {
+                    entries.append(entry)
+                    if let body = body {
+                        walkNode(body, language: language, file: file, source: source, lines: lines, container: entry.name, entries: &entries)
                     }
                 }
 
@@ -332,26 +311,13 @@ public enum TreeSitterBackend {
             //  belong to `SwiftBackend`. The dispatcher routes Swift to
             //  that backend before calling `walkNode`.)
 
-            // C#/PHP/Kotlin property declarations
+            // C#/PHP property declarations
             // (Swift's `protocol_property_declaration` and the bare
-            //  `property_declaration` Swift-fallthrough used to live in
-            //  this case; both moved to `SwiftBackend`. `property_declaration`
-            //  remains here because Kotlin/PHP/C# also use it with their
-            //  own grammar shapes.)
+            //  `property_declaration` Swift-fallthrough moved to
+            //  `SwiftBackend` in 10b; Kotlin's `property_declaration`
+            //  branch moved to `KotlinBackend` in 10c.)
             case "property_declaration":
-                if language == "kotlin" {
-                    // Kotlin: property_declaration → variable_declaration → simple_identifier
-                    if let varDecl = findChildByType(child, type: "variable_declaration"),
-                       let nameNode = findChildByType(varDecl, type: "simple_identifier"),
-                       let name = nodeText(nameNode, source: source) {
-                        entries.append(IndexEntry(
-                            name: name, kind: .property, file: file,
-                            startLine: startLine(of: child), endLine: endLine(of: child),
-                            signature: signatureText(lines: lines, line: startLine(of: child)),
-                            container: container, engine: "tree-sitter"
-                        ))
-                    }
-                } else if language == "php" {
+                if language == "php" {
                     // PHP properties live inside property_element children with variable_name ($foo)
                     for pi in 0..<Int(child.childCount) {
                         guard let propElem = child.child(at: pi),
@@ -373,7 +339,9 @@ public enum TreeSitterBackend {
                     ))
                 }
 
-            // TypeScript/TSX interface declarations
+            // interface_declaration — C# still routes through here.
+            // (TypeScript / TSX moved to `TypeScriptBackend` in 10c;
+            //  C# follows in 10d.)
             case "interface_declaration":
                 if let (entry, body) = extractTSDeclaration(child, kind: .interface, file: file, source: source, lines: lines, container: container) {
                     entries.append(entry)
@@ -382,22 +350,9 @@ public enum TreeSitterBackend {
                     }
                 }
 
-            // TypeScript/TSX type alias declarations
-            case "type_alias_declaration":
-                if let name = nodeName(child, source: source) {
-                    entries.append(IndexEntry(
-                        name: name,
-                        kind: .type,
-                        file: file,
-                        startLine: startLine(of: child),
-                        endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container,
-                        engine: "tree-sitter"
-                    ))
-                }
-
-            // TypeScript/TSX enum declarations
+            // enum_declaration — C# still routes through here.
+            // (TypeScript / TSX moved to `TypeScriptBackend` in 10c;
+            //  C# follows in 10d.)
             case "enum_declaration":
                 if let (entry, body) = extractTSDeclaration(child, kind: .enum, file: file, source: source, lines: lines, container: container) {
                     entries.append(entry)
@@ -406,11 +361,9 @@ public enum TreeSitterBackend {
                     }
                 }
 
-            // TypeScript/TSX method definitions (inside class body)
-            case "method_definition":
-                if let entry = extractFunction(child, file: file, source: source, lines: lines, container: container) {
-                    entries.append(entry)
-                }
+            // (`type_alias_declaration` and `method_definition` were
+            //  TypeScript/TSX/JavaScript-only and moved to
+            //  `TypeScriptBackend` in 10c.)
 
             // Go method declarations (receiver-based containers) / Java method declarations (lexical containers)
             case "method_declaration":
@@ -633,21 +586,8 @@ public enum TreeSitterBackend {
                     }
                 }
 
-            // Kotlin object declarations (singletons — act as containers like classes)
-            case "object_declaration":
-                if language == "kotlin",
-                   let nameNode = findChildByType(child, type: "type_identifier"),
-                   let name = nodeText(nameNode, source: source) {
-                    entries.append(IndexEntry(
-                        name: name, kind: .class, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
-                    if let body = findBody(child) {
-                        walkNode(body, language: language, file: file, source: source, lines: lines, container: name, entries: &entries)
-                    }
-                }
+            // (`object_declaration` was Kotlin-only and moved to
+            //  `KotlinBackend` in 10c.)
 
             // Scala object definitions (singletons — act as containers)
             case "object_definition":
@@ -690,40 +630,8 @@ public enum TreeSitterBackend {
                     ))
                 }
 
-            // Kotlin companion objects (static-like container inside a class)
-            case "companion_object":
-                if language == "kotlin" {
-                    // Name is optional — bare `companion object { }` defaults to "Companion"
-                    let name: String
-                    if let nameNode = findChildByType(child, type: "type_identifier"),
-                       let explicitName = nodeText(nameNode, source: source) {
-                        name = explicitName
-                    } else {
-                        name = "Companion"
-                    }
-                    entries.append(IndexEntry(
-                        name: name, kind: .class, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
-                    if let body = findBody(child) {
-                        walkNode(body, language: language, file: file, source: source, lines: lines, container: name, entries: &entries)
-                    }
-                }
-
-            // Kotlin type aliases
-            case "type_alias":
-                if language == "kotlin",
-                   let nameNode = findChildByType(child, type: "type_identifier"),
-                   let name = nodeText(nameNode, source: source) {
-                    entries.append(IndexEntry(
-                        name: name, kind: .type, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
-                }
+            // (`companion_object` and `type_alias` were Kotlin-only and
+            //  moved to `KotlinBackend` in 10c.)
 
             // C++ class specifiers
             case "class_specifier":

@@ -1,0 +1,8 @@
+# id: obfuscated-1
+# family: obfuscated
+# expected: HIGH_ENTROPY,GENERIC_API_KEY
+# match_mode: any
+# description: Base64-wrapped secret blob assigned to a generic config key — expected to trip entropy at minimum.
+# synthetic: true
+---
+config = "c2stYW50LWFwaTAzLUZBS0VrZXlBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWg=="

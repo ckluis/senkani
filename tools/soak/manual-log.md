@@ -12,6 +12,432 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Per-RAM-tier Gemma 4 quality eval — RUNNABLE 2026-04-25
+
+Round `luminary-2026-04-24-4-gemma-tier-quality-eval` (harness 04-24)
++ `gemma4-vision-image-fixtures` (vision PNGs 04-25)
++ `senkani-ml-eval-cli` (CLI + MCP-backed inference adapter 04-25).
+The full chain is now wired end-to-end: 20-task harness in
+`Sources/Bench/MLTierEvalTasks.swift` (10 rationale + 10 vision) with
+`MLTierEvalRunner.evaluate` accepting a caller-provided inference
+closure; `MCPServer.MLTierInferenceAdapter` loads each Gemma 4 tier in
+turn through `VLMModelFactory.shared.loadContainer` and answers tasks
+via `MLXInferenceLock.shared`; `MCPServer.MLTierEvalOrchestrator`
+plans evaluate-vs-skip per tier (allowlists `.verified`/`.downloaded`,
+records `notEvaluated` with named reason for `insufficient RAM` /
+`not installed` / `not in registry`); `senkani ml-eval` CLI shells
+out to `senkani-mcp eval` so the everyday `senkani` binary stays
+MLX-free; JSON written atomically to `~/.senkani/ml-tier-eval.json`;
+`senkani doctor` cache-reader + Models pane quality badge surface
+ratings to the user. The harness is **no longer dormant** — every
+bullet below is exercisable on a machine with at least one Gemma 4
+tier installed.
+
+- **Real measurements on a machine with ≥1 Gemma 4 tier installed.**
+  Prereq: at least one Gemma 4 tier (`gemma4-26b-apex` / `gemma4-e4b`
+  / `gemma4-e2b`) downloaded + verified via the Models pane. Run
+  `senkani ml-eval`. Expect: writes `~/.senkani/ml-tier-eval.json` with
+  per-tier `passed`, `total`, `medianLatencyMs`, `totalOutputTokens`,
+  `rating`. Re-run `senkani doctor` — the `ml.tier.<id>` line should
+  appear with the rating string. If the lowest tier the machine can
+  load rates `degraded`, doctor exits non-zero with the upgrade hint.
+  Tiers above this machine's RAM should appear as `notEvaluated`
+  with reason `insufficient RAM (N GB; tier requires M GB)` rather
+  than be silently absent. Sanity check the `outputTokens` figures —
+  current implementation counts MLX `Generation.chunk`s as a token
+  proxy (doc-commented in `MLTierInferenceAdapter.run`); if MLX gains
+  a precise per-chunk token count, swap the source and refresh the
+  numbers.
+
+- **8 GB-machine validation: E2B rating is honest.** On a real 8 GB
+  Mac, after running the eval, confirm `gemma4-e2b` is the
+  recommended tier (Models pane shows "Recommended" badge) AND its
+  quality rating is visible inline. If E2B comes back `degraded`,
+  the Models pane should still recommend it (it's the only fitting
+  tier) but the doctor warning is the user's signal to consider an
+  upgrade. Verify the doctor message is non-condescending and
+  actionable.
+
+- **16 GB-machine validation: APEX 26B beats E4B by ≥10 pp.**
+  On a 16 GB+ Mac with both APEX and E4B downloaded, the eval should
+  show APEX 26B at a strictly higher pass rate than E4B (the
+  measured-vs-marketing-claim check). If APEX rates ≤ E4B, that's a
+  signal the APEX install is broken or the harness is off — file a
+  backlog item, don't paper over it.
+
+- **Median latency stays under 1 s for E2B/E4B, under 3 s for APEX.**
+  Per-tier latency ceilings sanity-check the Phase G live-session
+  multiplier model. Anything slower means the Gemma load path
+  regressed and rationale rewriting will materially slow down a
+  live session.
+
+### Test harness hang workaround (shipped 2026-04-21)
+
+Round `test-harness-sigtrap-repro`. `.serialized` trait added to three
+parallel-hostile suites, `tools/test-safe.sh` added for deterministic
+full-suite runs. Targeted regression (32 tests) is green under
+parallel `swift test`. What the unit tests cannot cover: a full-suite
+run on a real machine, end-to-end. These steps close that loop.
+
+- **`./tools/test-safe.sh` completes end-to-end.** Run from a clean
+  worktree on the original hang-reproducing machine. Expect:
+  wall-clock 10–30 min (slow but deterministic), exit code 0, no
+  SIGINT needed. Confirms the `SWT_NO_PARALLEL=1 --no-parallel`
+  incantation resolves the hang on this machine. If it hangs: the
+  operator's hang repro is broader than the three suites named in
+  `spec/testing.md` "Full-suite hang"; re-capture frames via
+  `sample <pid>` and file a new backlog item.
+
+- **`swift test` (default parallel) no longer hangs on the three
+  named suites.** Run `swift test --filter "ScheduleWorktreeTests|
+  PaneSocketMigrationTests|WatchRingBufferTests"` from the
+  hang-reproducing machine. Expect: terminates in <10s with all
+  tests green. Confirms the `.serialized` traits converted the
+  intra-suite parallelism into sequential access to the
+  `NSLock`-protected helpers.
+
+- **Timing-flake thresholds don't mask regressions.** Run
+  `swift test --filter "kotlinFileParses|elixirFileParses|timingSanity"`
+  three times in a row; all bounds should pass with >10x headroom
+  under normal machine load. A single failure on an idle machine
+  means the threshold is too tight; three in a row means a real
+  regression. Either way: file a backlog item, do not silently
+  widen further.
+
+### Ollama pane: MCP tool reachability (shipped 2026-04-20)
+
+Round 5 of the `ollama-pane-discovery-models-bundle` umbrella. Pre-audit
+showed the env-injection path is shared with the Terminal pane
+(`TerminalViewRepresentable` merges the caller's env dict onto
+`ProcessInfo.environment` before `startProcess`), and new
+`Tests/SenkaniTests/PaneLaunchEnvTests.swift` pins the cross-type
+parity — so we know the gate keys go in. What the unit tests cannot
+cover: an external `ollama` binary actually answers, and a real MCP
+client attached to the pane's session can reach `senkani_read` /
+`senkani_session`. These soak steps close that loop.
+
+- **Ollama daemon reachable, MCP env present.** Fresh project. Open
+  the AddPaneSheet gallery → **AI & Models** → pick **Ollama**. With
+  Ollama installed and its daemon running on localhost:11434 the
+  pane should transition `Detecting… → connected` (green dot in the
+  header) and start a terminal running `ollama run <default-tag>`.
+  Expected env in that shell: `echo $SENKANI_PANE_ID` prints a UUID;
+  `echo $SENKANI_PROJECT_ROOT` prints the project directory;
+  `echo $SENKANI_OLLAMA_MODEL` prints the resolved tag (e.g.
+  `llama3.1:8b`). Parity check: open a plain Terminal pane in the
+  same workspace, dump the same three env vars — all three should
+  be set on both panes; `SENKANI_OLLAMA_MODEL` is only present in
+  the Ollama pane.
+- **Senkani MCP tools answer from the Ollama pane.** From inside the
+  Ollama pane's shell (either the `ollama` REPL's `!<cmd>` escape
+  or quit back to zsh), run `senkani_read <anyfile>` via a connected
+  MCP client (Claude Code, Cursor, or Codex). Expected: a non-empty
+  response (outline-first by default). Re-run the same command from
+  a plain Terminal pane — result should be equivalent shape (same
+  file, same outline). Repeat with `senkani_session action=stats` —
+  both panes should see the same session.
+- **Ollama daemon absent.** Stop the daemon (`ollama stop` or
+  `launchctl unload` the plist) and add a new Ollama pane. Pane
+  should show the **Get Ollama / Retry** CTA (no terminal spawned).
+  Clicking **Retry** after restarting the daemon should flip the
+  pane to the connected-terminal state without recreating it.
+- **`!<cmd>` escape inheritance (Schneier accepted-risk spot-check).**
+  From inside the ollama REPL, type `!env | grep SENKANI_ | head`.
+  Expected: SENKANI_* keys inherited (POSIX rule — the shell-out
+  child inherits the REPL's env, which is the Terminal pane's env).
+  This matches the Terminal pane's behaviour and is not a new leak
+  path; confirming just documents the observation.
+
+### Models pane: install → verify state machine (shipped 2026-04-20)
+
+Round 4 of the `ollama-pane-discovery-models-bundle` umbrella. The Core
+state machine is fully unit-tested with fake handlers + a planted HF
+snapshot (see `Tests/SenkaniTests/ModelManagerInstallTests.swift`, 7
+tests). What unit tests CANNOT cover: the MCP-registered verification
+handler that calls `EmbedTool.engine.ensureModel()` /
+`VisionTool.engine.ensureModel()` — that path pulls ~90MB–12GB from
+HuggingFace and loads the real MLX `ModelContainer`. These soak steps
+are the gate.
+
+- **Happy path — MiniLM-L6.** Fresh install (delete
+  `~/Documents/huggingface/models/sentence-transformers/all-MiniLM-L6-v2`
+  first). Open the Models pane → click **Install** on MiniLM-L6.
+  Expected: badge progresses `Available → Installing N% → Installed
+  → Verifying… → Ready` with the linear progress bar filling during
+  `Installing`. `senkani doctor` should afterwards print
+  `✓ MiniLM-L6 Embeddings: verified`.
+- **Happy path — Gemma 4 E2B** (lightest vision tier, ≥4GB RAM).
+  Same flow. Expected: progress bar + auto-verify; `Ready` badge +
+  trash button once the MLX container loads cleanly.
+- **Delete + re-install round-trip.** On a verified model, click
+  the trash icon. Expected: confirmation alert with `(N MB freed)`
+  → click **Delete** → badge returns to `Available`, disk usage in
+  the header drops. Click **Install** again → full state progression
+  reaches `Ready`. Cache directory exists again on disk.
+- **Failed verify retry.** Manually corrupt the config
+  (`echo "{}" > ~/Documents/huggingface/models/<repo>/config.json`
+  while `Ready`). Restart the app. Expected: `reconcileWithDisk`
+  keeps it at `Downloaded` (config parses — the integrity check
+  passes). Click **Re-verify** from the Ollama pane row (only shown
+  when state is `broken` — to force `broken`, replace a weight file
+  with zeros while in `Ready`; the MLX `ensureModel()` call should
+  throw on weight-load). Expected: badge flips to
+  `Verification failed`; the orange re-verify arrow appears; a
+  second delete clears + re-install restores.
+- **Offline install.** With Wi-Fi off, click **Install** on an
+  un-cached model. Expected: badge flips to `Error` within a few
+  seconds; the `lastError` copy in the alert banner is a network
+  message. `senkani doctor` prints
+  `✗ <model>: install error — <error>`.
+
+**Carry-over: pre-existing URLProtocol-mock race (accepted risk).**
+`MockURLProtocol.stubs` is `nonisolated(unsafe) static var [String: Stub]`
+mutated from parallel swift-testing contexts. `swift test` on a clean
+tree drops 3–8 flaky failures in
+`RemoteRepoClient — network paths (URLProtocol stub)` and
+`Bundle remote — URLProtocol paths` on busy CI workers. Running those
+filters alone with `--filter RepoNetworkPath` shows the same races
+(different tests fail depending on scheduling). NOT caused by this
+round — grep shows the `@unchecked` storage pre-dates 2026-04. Fix:
+wrap `stubs` in an `NSLock` or a `@_spi(Experimental) nonisolated(safe)`
+actor. Left out of scope for this round; file a new backlog item for
+an isolated fix.
+
+### Ollama: curated LLM catalog + click-to-pull drawer (shipped 2026-04-20)
+
+Round 3 of the `ollama-pane-discovery-models-bundle` umbrella. Unit
+tests pin the pure-Foundation layer (curated-list invariants, pull
+state machine, `ollama pull` output parser, `ollama list` tabular
+parser, digest extraction, argv gating). The subprocess path
+(`OllamaModelDownloadController`'s `Process()` spawn) is NOT
+unit-tested — real `ollama` CLI isn't on the CI runner. These soak
+steps are the gate.
+
+- **Drawer opens from the pane header.** With Ollama.app running,
+  add an Ollama pane (gallery or Welcome). Expected: header shows
+  a `square.and.arrow.down` icon next to the `connected` dot.
+  Click it: a 520×420 sheet appears with 5 model rows
+  (Llama 3.1 8B, Qwen2.5 Coder 7B, DeepSeek-R1 7B, Mistral 7B,
+  Gemma 2 2B). Each row shows name + tag + 1-line use-case +
+  size. The row whose tag matches the pane's current default has
+  an orange **default** chip.
+- **Pull button discloses size BEFORE the click (Podmajersky).**
+  Every un-pulled row's button reads **Pull N.N GB** — never a
+  plain "Pull". Rows with models already on disk show
+  **Current** (disabled) or **Use** (sets as default).
+- **Click-to-pull streams progress.** On a row you haven't pulled,
+  click the **Pull N.N GB** button. Expected: button swaps to
+  **Cancel**, progress-line swaps from the size to a linear
+  ProgressView + `XX% N.N GB`. Monitor Activity Monitor → an
+  `ollama` child subprocess of SenkaniApp appears.
+  On completion (~minutes depending on size + bandwidth), row
+  flips to an **installed · <digest>** line with a green seal
+  icon, button becomes **Use**.
+- **Cancel mid-pull terminates the subprocess.** Start a pull,
+  wait until progress reaches ≥5%, click **Cancel**. Expected:
+  button returns to **Pull N.N GB**, progress-line returns to
+  just the size, subprocess exits (gone from Activity Monitor
+  within a second). `ollama list` at this point must NOT show the
+  tag (partial pull got cleaned up).
+- **Pulled digest matches `ollama list`.** After a successful
+  pull, open Terminal.app and run `ollama list`. The digest
+  shown in the drawer row (first 12 hex chars) must match the
+  `ID` column for that tag. (This proves the parser + fallback
+  list-parse chain wired correctly.)
+- **Absent-state deep-links instead of pulling.** Quit Ollama.app,
+  reopen the drawer (either via the pane header icon or by
+  opening a fresh pane). Expected: every row's button reads
+  **Install Ollama** (no size disclosed — pull is unreachable).
+  Click one: the default browser opens `https://ollama.com/download`.
+- **"Use" swaps the default + restarts chat.** With two or more
+  tags pulled, click **Use** on a row that isn't the current
+  default. Expected: default chip moves to the new row, the
+  drawer stays open, and closing the drawer shows the pane's
+  terminal has restarted (chat history cleared; the new model tag
+  is the running session). The header model Menu also reflects
+  the new selection.
+- **Pull error surfaces cleanly.** Edge test: disconnect
+  networking, start a pull. Expected: row state flips to
+  **failed** with an orange warning icon + the truncated
+  `ollama pull` error message (e.g. "Error: connection refused").
+  Button returns to **Pull N.N GB** so the user can retry once
+  connectivity is back.
+
+**Environmental note (2026-04-20, FIXED in `filewatcher-fsevents-uaf`):**
+The full-suite `swift test` flake originally filed as "SIGTRAP
+(signal code 5) in the tree-sitter / MLX area" was misdiagnosed
+on both counts. The actual signal was **11 (SIGSEGV)**, and the
+faulting subsystem was the FSEvents `FileWatcher` — not
+tree-sitter and not MLX. The crash got buffered into a neighbour
+test's stdout line, which is what made it look like the parser
+had killed the process; targeted `--filter` runs reordered the
+test schedule and avoided the race entirely, which is why
+`--filter Ollama` and `--filter PaneGallery` always stayed green.
+Root cause was an `Unmanaged.passUnretained` use-after-free in
+`Sources/Indexer/FileWatcher.swift::start` — FSEvents could fire
+a callback on the watcher's serial queue while the watcher was
+mid-`deinit`. Fix details + reproduction tests live under the
+`filewatcher-fsevents-uaf` entry in `spec/autonomous-backlog.yaml`.
+Post-fix: 6 consecutive `swift test --no-parallel` runs clean,
+zero SIGSEGV, zero `non-zero retain count` warnings.
+
+### Ollama: first-class `.ollamaLauncher` PaneType (shipped 2026-04-20)
+
+Round 2 of the `ollama-pane-discovery-models-bundle` umbrella. Unit
+tests pin the support layer (tag validator, launch-command builder,
+resolve-with-fallback, default-tag invariants, gallery registration,
+closed-port availability probe), but everything SwiftUI and
+everything involving the real ollama daemon is manual.
+
+- **Absent-state CTA.** Quit Ollama.app. Open SenkaniApp → add an
+  Ollama pane (gallery → **AI & Models** → Ollama OR Welcome card
+  → Start Ollama when no panes exist). Expected: after ~0.5 s the
+  pane shows a `cpu` icon, `Ollama isn't running` headline, an
+  orange **Get Ollama** button (opens https://ollama.com/ in the
+  default browser), and a **Retry** button. Retry re-probes without
+  tearing the pane down.
+- **Connected state.** Start Ollama.app, wait for the tray icon to
+  show active. In the pane, hit **Retry** (or add a fresh pane).
+  Expected: `connected` status dot flips green, the terminal body
+  spawns `ollama run llama3.1:8b` (the default tag), and the pane
+  header shows the selected tag in a monospaced menu button with
+  a dropdown caret.
+- **Model switch restarts the session.** From the pane's header
+  menu pick `gemma2:2b`. Expected: the running `ollama run …`
+  subprocess tears down and a new one spawns with the new tag;
+  the menu shows a checkmark next to `gemma2:2b`; pane context
+  label in the outer header updates to the new tag.
+- **Add-to-existing-project path.** Open an existing project with
+  panes already present. Sidebar **+** → **AI & Models → Ollama**.
+  Expected: pane lands on the active workstream like any other.
+- **Persistence.** Pick a non-default tag, quit Senkani, relaunch.
+  Expected: the pane reopens with your chosen tag, not the default.
+- **MCP env passthrough (manual spot-check; formal verification is
+  sub-item `mcp-in-ollama-pane-verify`).** In the running pane's
+  terminal, hit Ctrl-D to drop back to a shell if ollama exits,
+  then `env | grep SENKANI_`. Expected: `SENKANI_PANE_ID`,
+  `SENKANI_PROJECT_ROOT`, `SENKANI_WORKSPACE_SLUG`,
+  `SENKANI_PANE_SLUG=ollamaLauncher`, `SENKANI_OLLAMA_MODEL=<tag>`
+  are all set. If `SENKANI_PANE_SLUG` is missing in the ollama
+  subprocess specifically, file into sub-item `mcp-in-ollama-pane-verify`.
+- **Welcome card vs gallery parity.** Delete all panes (fresh
+  project), click the **Start Ollama** card on the Welcome
+  screen. Expected: lands a first-class Ollama pane with the
+  default tag — identical to the gallery path. The old
+  `ollama run llama3` hardcoding should NOT appear anywhere
+  (grep confirms at commit time, but the visual confirmation is
+  here).
+- **Accepted-risk follow-up.** Pane-open UI telemetry is NOT
+  recorded in `token_events` this round (bounded-context gate;
+  see the CHANGELOG for the reasoning). If you want a signal that
+  the pane is being used before the dedicated UI telemetry path
+  lands, count `~/.senkani/panes/*.env` files with
+  `SENKANI_PANE_SLUG=ollamaLauncher` in them.
+
+### Pane gallery: categorized add-pane sheet (shipped 2026-04-20)
+
+Round 1 of the `ollama-pane-discovery-models-bundle` umbrella. Unit
+tests pin the data model (17 entries, 4 categories, ≤6 per category,
+filter behavior, regression pin for dashboard-present), but the
+SwiftUI rendering is not covered by automated tests.
+
+- **Visual render check.** Launch SenkaniApp → sidebar bottom bar →
+  click "+ Add Pane" → choose "New Pane...". Expected: sheet at
+  460×560 with four category section headers in order **Shell &
+  Agents / AI & Models / Data & Insights / Docs & Code**, 2-column
+  grid under each, every card shows icon + title + 1–2 line
+  description. Dashboard must be visible under "Data & Insights"
+  (regression pin; it was missing before this round).
+- **Filter behavior.** Type "dash" — only the Dashboard card should
+  remain, under just the "Data & Insights" header. Type "term" —
+  only Terminal (Shell & Agents). Clear the filter — all four
+  categories reappear.
+- **Keyboard affordance (Butterick, accepted risk).** Tab through
+  the sheet; every card should take focus in visual order. SwiftUI
+  Button default focus ring is keyboard-reachable but visually
+  subtle — verify it's still perceptible on the current theme. If
+  the focus ring is invisible against the card hover state, file a
+  follow-up for an explicit ring treatment.
+- **Microcopy consistency (Podmajersky, accepted risk).**
+  Descriptions are currently a mix of verb-first ("Run commands and
+  AI agents") and noun-first ("Live preview .md files"). All are
+  under 80 characters (pinned in tests) but the voice is
+  inconsistent. A future microcopy audit round should normalize to
+  one voice.
+- **Regression check.** The Command Palette (⌘K) pane list should
+  still show 17 entries (shared `PaneType` enum; the palette uses
+  `CommandEntryBuilder` which is unchanged by this round). The
+  sidebar's "+ Add Pane" Menu and its "Claude Code..." entry are
+  also unchanged.
+
+### Website-rebuild item 12 — Claude Design prototype extract (aborted 2026-04-20)
+
+Autonomous round attempted `website-rebuild-12-claude-prototype-review`
+and aborted per the item's own abort path: the share URL
+`claude.ai/design/p/deee4b49-7dc6-48e7-bff1-5eb837dcad89?via=share` is
+auth-walled (WebFetch returns HTTP 403 in a fresh non-interactive
+context). The item was returned to `pending` status with this note; no
+forward blocker exists (no other item lists it in `blocked_by`).
+
+Operator action to unblock, pick ONE:
+
+- **Option A — screenshots.** Open the share link in a logged-in
+  browser, capture each screen of the prototype (landing + every
+  sub-screen), drop the PNGs into a new `spec/assets/claude-prototype/`
+  directory, and re-mark the backlog item `pending`. The next
+  autonomous round will extract visual ideas from the screenshots
+  into `spec/website_rebuild_claude_prototype.md`.
+- **Option B — HTML/MHTML export.** From the logged-in share link,
+  use browser "Save Page As… → Web Page, Complete" (or MHTML) and
+  commit the export under `spec/website_rebuild_claude_prototype_raw/`.
+  The next round can parse the HTML offline.
+- **Option C — drop the item.** If the prototype is no longer
+  informing the rebuild, mark the item `status: skipped` in the
+  backlog with a short note and move on — item 12 has zero
+  downstream blockers.
+
+### Phase S.1 — manifest schema + MCP tool gating (shipped 2026-04-20)
+
+Foundation round of Phase S. The manifest file format and effective-set
+resolution are fully exercised in unit tests, but the end-to-end story
+(agent sees the filtered tool list, disabled-tool calls fail gracefully
+with a usable message) can only be validated against a real Claude Code
+session.
+
+- **Empty-manifest backwards-compat.** In a fresh project, run Senkani
+  MCP with **no** `.senkani/senkani.json`. Agent should see the full
+  tool surface exactly as before — `senkani_read`, `senkani_exec`,
+  `senkani_knowledge`, `senkani_web`, etc. all callable. If any tool
+  is missing, the `manifestPresent: false` fallback broke.
+- **Manifest present gates the advertised list.** Drop a
+  `.senkani/senkani.json` with `{"mcpTools": ["knowledge"]}` into a
+  project. Open a fresh MCP session — `ListTools` should return the
+  four core tools (`read`, `outline`, `deps`, `session`) plus
+  `knowledge`, and nothing else. The agent's tool palette confirms
+  this (fewer tools visible).
+- **Disabled-tool call returns Skills-pane pointer.** With the
+  manifest above, ask the agent to run `senkani_exec` or
+  `senkani_web`. Expected: `isError: true` with the text
+  `"Tool '<name>' is not enabled in this project's manifest. Enable
+  it in the Skills pane (or add it to .senkani/senkani.json)."` No
+  silent dispatch, no crash.
+- **User overrides layer correctly.** Add
+  `~/.senkani/overrides.json` with
+  `{"/abs/path/to/project": {"optOutTools":["knowledge"],"addTools":["exec"]}}`.
+  Same project, fresh session: `knowledge` should disappear even
+  though it's in the team manifest, and `exec` should work even
+  though it isn't. Core tools stay visible.
+- **Different project's overrides stay isolated.** The overrides
+  file is a map keyed by absolute project-root path — confirm that
+  adding an entry for a different project doesn't leak into the
+  project under test. (Unit-tested, but worth spot-checking a real
+  two-project setup.)
+- **YAML migration pressure.** The spec calls for
+  `.senkani/senkani.yaml`; this round ships JSON. Track whether any
+  team that touches the manifest asks for YAML — if so, prioritize
+  a Yams-backed follow-up round. Until then, JSON is the canonical
+  on-disk format.
+
 ### Website redesign wave 2 — hero stack + /docs/ move (shipped 2026-04-19)
 
 Second operator-directed round on the website. Three deliverables:
@@ -106,11 +532,19 @@ round — needs a real machine with Node / axe-core-cli available.
   `/concepts/`. Same for `#mcp-tools` (→ `/reference/mcp/`),
   `#install` (→ `/guides/install/`), `#terse` (→
   `/reference/options/terse/`). See `assets/app.js` legacyMap.
-- **Search stub.** The search input in the top nav currently has
-  no index (`assets/search-index.json` and `assets/lunr.min.js`
-  aren't vendored yet — that's `website-rebuild-10-search`
-  pending). Confirm the input at least doesn't throw JS errors
-  on focus (it should quietly fail the fetch and do nothing).
+- **Search: live Lunr index.** `website-rebuild-10-search` shipped
+  2026-04-20 (see CHANGELOG). Type into the top-nav search. On the
+  first keystroke the network panel should show `lunr.min.js`
+  (~29 KB) and `search-index.json` (~85 KB) fetched. Subsequent
+  queries should not re-fetch. Try: `read` → `senkani_read · MCP
+  tool reference` top. `bench` → `senkani bench · CLI reference`
+  top. `install` → the guide page top. Arrow keys should highlight
+  rows; Enter should navigate; Escape should close. The global
+  `/` hotkey should focus the nav search from any page. Known
+  2-char ambiguities to spot-check: `re` picks one of read/repo,
+  `ex` picks one of exec/explore/export, `pa` picks one of
+  pane/parse, `se` picks one of search/session/setup — both pages
+  should appear in the top 3 regardless.
 - **Deploy preview.** Push to a branch, enable GitHub Pages for
   that branch, open `https://ckluis.github.io/senkani/`. All
   relative paths should resolve under the `/senkani/` subpath.

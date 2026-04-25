@@ -470,7 +470,7 @@ struct ContextOrchestrationTests {
         let rootCopy: String = root
         try LearnedRulesStore.withPath(temp) {
             let sem = DispatchSemaphore(value: 0)
-            Task.detached { [db] in
+            Task { [db] in
                 await CompoundLearning.runPostSession(
                     sessionId: "sid-under-test",
                     projectRoot: rootCopy,

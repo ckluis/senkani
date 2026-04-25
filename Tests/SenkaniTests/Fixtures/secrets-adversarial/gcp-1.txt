@@ -1,0 +1,8 @@
+# id: gcp-1
+# family: gcp
+# expected: GCP_OAUTH_TOKEN
+# match_mode: any
+# description: Google OAuth access token (ya29.) in env var.
+# synthetic: true
+---
+GCP_OAUTH_TOKEN=ya29.FAKEa0AfH6SMBxa0AfH6SMBxa0AfH6SMBxa0AfH6SMBxa0AfH6SMBxa0AfH6SMBxxyz

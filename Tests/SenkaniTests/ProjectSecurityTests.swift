@@ -162,3 +162,104 @@ struct ProjectSecurityTests {
         #expect(ProjectSecurity.redactPath("") == "")
     }
 }
+
+// MARK: - resolveProjectFile
+
+@Suite("ProjectSecurity.resolveProjectFile")
+struct ProjectSecurityResolveFileTests {
+
+    /// /tmp on macOS is really /private/tmp — resolve symlinks so prefix
+    /// comparisons match what `resolveProjectFile` uses internally.
+    private func makeRoot() throws -> String {
+        let raw = "/tmp/ps-resolve-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: raw, withIntermediateDirectories: true)
+        return URL(fileURLWithPath: raw).resolvingSymlinksInPath().path
+    }
+
+    @Test func resolvesRelativePathWithinRoot() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let file = root + "/foo.txt"
+        try "hi".write(toFile: file, atomically: true, encoding: .utf8)
+
+        let out = try ProjectSecurity.resolveProjectFile("foo.txt", projectRoot: root)
+        #expect(out == file)
+    }
+
+    @Test func resolvesAbsolutePathInsideRoot() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let file = root + "/foo.txt"
+        try "hi".write(toFile: file, atomically: true, encoding: .utf8)
+
+        let out = try ProjectSecurity.resolveProjectFile(file, projectRoot: root)
+        #expect(out == file)
+    }
+
+    @Test func rejectsEmptyPath() {
+        #expect(throws: ProjectSecurity.FileResolutionError.self) {
+            _ = try ProjectSecurity.resolveProjectFile("", projectRoot: "/tmp")
+        }
+    }
+
+    @Test func rejectsNullByte() {
+        #expect(throws: ProjectSecurity.FileResolutionError.self) {
+            _ = try ProjectSecurity.resolveProjectFile("foo\0.txt", projectRoot: "/tmp")
+        }
+    }
+
+    @Test func rejectsDotDotEscape() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        do {
+            _ = try ProjectSecurity.resolveProjectFile("../etc/passwd", projectRoot: root)
+            Issue.record("expected pathTraversal")
+        } catch ProjectSecurity.FileResolutionError.pathTraversal {
+            // expected
+        } catch {
+            Issue.record("expected pathTraversal, got \(error)")
+        }
+    }
+
+    @Test func rejectsAbsoluteOutsideRoot() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        do {
+            _ = try ProjectSecurity.resolveProjectFile("/etc/passwd", projectRoot: root)
+            Issue.record("expected absoluteOutsideRoot")
+        } catch ProjectSecurity.FileResolutionError.absoluteOutsideRoot {
+            // expected
+        } catch {
+            Issue.record("expected absoluteOutsideRoot, got \(error)")
+        }
+    }
+
+    @Test func rejectsSymlinkTargetOutsideRoot() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        // Link inside root pointing to /etc/hosts (exists, definitely outside).
+        let link = root + "/escape.txt"
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: "/etc/hosts")
+
+        do {
+            _ = try ProjectSecurity.resolveProjectFile("escape.txt", projectRoot: root)
+            Issue.record("expected symlinkEscape")
+        } catch ProjectSecurity.FileResolutionError.symlinkEscape {
+            // expected
+        } catch {
+            Issue.record("expected symlinkEscape, got \(error)")
+        }
+    }
+
+    @Test func allowsNonexistentFileInsideRoot() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        // File doesn't exist yet — caller may be about to create it. Still allowed.
+        let out = try ProjectSecurity.resolveProjectFile("new.txt", projectRoot: root)
+        #expect(out == root + "/new.txt")
+    }
+}

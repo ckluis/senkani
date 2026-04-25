@@ -1,0 +1,8 @@
+# id: jwt-bare-1
+# family: jwt_bare
+# expected: HIGH_ENTROPY,BEARER_TOKEN,GENERIC_API_KEY
+# match_mode: any
+# description: Bare JWT with no Bearer prefix in HTTP body. Expected to be caught by entropy or generic patterns; current scanner may miss it (gap to surface).
+# synthetic: true
+---
+{"id_token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0LXVzZXIiLCJpYXQiOjE3MTM5MzgwMDB9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"}

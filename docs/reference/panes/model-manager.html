@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Model Manager pane — reference</title>
-<meta name="description" content="Download, verify, and delete local LLMs (Gemma, MiniLM). Shows disk usage + last-used time. Triggers background memory-pressure-aware loading.">
+<meta name="description" content="Install, verify, and delete senkani's on-device ML (MiniLM-L6 + Gemma 4 tiers). One-click Install drives the full Available → Installing → Installed → Verifying → Ready state machine with a real MLX-container fixture.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -38,7 +38,7 @@
       </ul>
     </div>
     <div class="wiki-nav-group">
-      <h4>Pane types (17)</h4>
+      <h4>Pane types (18)</h4>
       <ul>
         <li><a href="../../../docs/reference/panes/terminal.html">Terminal</a></li>
         <li><a href="../../../docs/reference/panes/dashboard.html">Dashboard</a></li>
@@ -57,6 +57,7 @@
         <li><a href="../../../docs/reference/panes/skill-library.html">Skill Library</a></li>
         <li><a href="../../../docs/reference/panes/sprint-review.html">Sprint Review</a></li>
         <li><a href="../../../docs/reference/panes/settings.html">Settings</a></li>
+        <li><a href="../../../docs/reference/panes/ollama-launcher.html">Ollama</a></li>
       </ul>
     </div>
   </aside>
@@ -74,8 +75,20 @@
       <span class="tag tag-orange">Pane type</span>
     </div>
 
-    <p class="lede">Download, verify, and delete local LLMs (Gemma, MiniLM). Shows disk usage + last-used time. Triggers background memory-pressure-aware loading.</p>
+    <p class="lede">Install, verify, and delete senkani's on-device ML (MiniLM-L6 for embeddings + the three Gemma 4 vision tiers). One-click <strong>Install</strong> drives the full state machine; verification loads the model into an MLX container — a real runtime fixture — before flipping to Ready.</p>
 
+    <h2>Install → verify state machine</h2>
+    <p>Every registered model progresses through seven states as you interact with the pane:</p>
+    <ul>
+      <li><strong>Available</strong> — registered in the catalog, not on disk. Click <strong>Install</strong> to start.</li>
+      <li><strong>Installing N%</strong> — handler is streaming bytes; the linear progress bar reflects downloaded fraction.</li>
+      <li><strong>Installed</strong> — files on disk, integrity not yet confirmed. Auto-advances to <em>Verifying</em> (no second click).</li>
+      <li><strong>Verifying…</strong> — the MCP-registered fixture is loading the freshly-downloaded weights into an MLX <code>ModelContainer</code>. Corrupt weights or config mismatch throw here.</li>
+      <li><strong>Ready</strong> — fixture passed. MCP tools (<code>senkani_embed</code>, <code>senkani_vision</code>) gate on this state.</li>
+      <li><strong>Verification failed</strong> — fixture threw. Files still on disk. The <strong>Re-verify</strong> button retries without re-downloading; <strong>Delete</strong> wipes and resets to Available.</li>
+      <li><strong>Error</strong> — download itself threw (network, auth, disk full). The <strong>Install</strong> button retries.</li>
+    </ul>
+    <p><code>senkani doctor</code> check #5 reads this state directly: Verified → pass, Installed → pass with hint, Verification failed / Error → fail with the per-model error message, Available → skip.</p>
 
     <h2>Keyboard</h2>
     <p>Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas).</p>

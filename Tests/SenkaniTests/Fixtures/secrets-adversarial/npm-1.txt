@@ -1,0 +1,9 @@
+# id: npm-1
+# family: npm
+# expected: NPM_TOKEN
+# match_mode: any
+# description: NPM auth token in .npmrc registry config.
+# synthetic: true
+---
+//registry.npmjs.org/:_authToken=npm_FAKEabcdefghijklmnopqrstuvwxyzABCDEFGH12
+//registry.npmjs.org/:always-auth=true

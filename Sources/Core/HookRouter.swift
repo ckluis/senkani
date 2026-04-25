@@ -37,6 +37,9 @@ public enum HookRouter {
     /// nil in stdio-mode MCP server and hook-relay mode (graceful no-op).
     nonisolated(unsafe) public static var entityObserver: ((_ toolName: String, _ toolInput: [String: Any]) -> Void)?
 
+    /// Test seam for validation advisory delivery. Production uses `.shared`.
+    nonisolated(unsafe) static var validationDatabase: SessionDatabase = .shared
+
     /// Process a hook event JSON and return a response JSON.
     /// Returns `{}` (passthrough) for unrecognized or unroutable events.
     public static func handle(eventJSON: Data) -> Data {
@@ -71,18 +74,26 @@ public enum HookRouter {
             return passthroughResponse
         }
 
-        // Fetch pending validation advisories (atomic: marks delivered)
+        // Fetch pending validation advisories without mutating delivery state.
+        // Rows are marked surfaced only after the advisory is appended to a
+        // hook response the agent will actually see.
+        var validationRows: [SessionDatabase.ValidationResultRow] = []
         var validationAdvisory = ""
         if let sid = sessionId {
-            let results = SessionDatabase.shared.fetchAndMarkDelivered(sessionId: sid)
-            if !results.isEmpty {
-                validationAdvisory = formatValidationAdvisory(results)
+            validationRows = validationDatabase.pendingValidationAdvisories(sessionId: sid)
+            if !validationRows.isEmpty {
+                validationAdvisory = formatValidationAdvisory(validationRows)
             }
         }
 
         // Budget enforcement on the hook path
         if case .block(let reason) = checkHookBudgetGate(projectRoot: projectRoot) {
-            return blockResponse(reason, eventName: eventName)
+            return appendAndMarkValidationIfSurfaced(
+                blockResponse(reason, eventName: eventName),
+                advisory: validationAdvisory,
+                rows: validationRows,
+                projectRoot: projectRoot
+            )
         }
 
         // Route the tool call
@@ -100,12 +111,13 @@ public enum HookRouter {
             response = passthroughResponse
         }
 
-        // Phase J: Append validation advisory to deny responses
-        if !validationAdvisory.isEmpty, response != passthroughResponse {
-            response = appendAdvisoryToResponse(response, advisory: validationAdvisory)
-        }
-
-        return response
+        // Phase J: append validation advisory to visible deny responses.
+        return appendAndMarkValidationIfSurfaced(
+            response,
+            advisory: validationAdvisory,
+            rows: validationRows,
+            projectRoot: projectRoot
+        )
     }
 
     // MARK: - Search Upgrade (Phase I)
@@ -224,9 +236,17 @@ public enum HookRouter {
     }
 
     /// Check if a command can be replayed from a recent cached result.
-    /// Extracted as internal static for testability — tests pass a temp DB.
+    /// Extracted as internal static for testability — tests pass a temp DB
+    /// and optionally a fingerprint override.
     /// Returns a deny response if replay conditions are met, nil otherwise.
-    static func checkCommandReplay(command: String, projectRoot: String, sessionId: String?, eventName: String, db: SessionDatabase) -> Data? {
+    static func checkCommandReplay(
+        command: String,
+        projectRoot: String,
+        sessionId: String?,
+        eventName: String,
+        db: SessionDatabase,
+        projectMaxMtime: (String) -> Date? = { ProjectFingerprint.maxSourceMtime(projectRoot: $0) }
+    ) -> Data? {
         guard isReplayable(command) else { return nil }
 
         guard let lastExec = db.lastExecResult(command: command, projectRoot: projectRoot) else { return nil }
@@ -234,11 +254,13 @@ public enum HookRouter {
         let age = Date().timeIntervalSince(lastExec.timestamp)
         guard age < 300 else { return nil }
 
-        // Check if any files in the project changed since the last exec.
-        // macOS updates parent directory mtime when any child file changes.
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: projectRoot),
-              let dirMtime = attrs[.modificationDate] as? Date,
-              dirMtime < lastExec.timestamp else { return nil }
+        // Only replay if NO tracked source file has been modified since the
+        // last exec. Root directory mtime is unreliable — it doesn't change
+        // when nested files are edited — so we walk the tree for the true
+        // max source mtime. Empty project (no tracked files) is treated as
+        // unchanged.
+        let latest = projectMaxMtime(projectRoot) ?? .distantPast
+        guard latest < lastExec.timestamp else { return nil }
 
         let ageStr = age < 60 ? "\(Int(age))s" : "\(Int(age / 60))m"
         let preview = lastExec.outputPreview ?? "(no output preview available)"
@@ -272,22 +294,130 @@ public enum HookRouter {
     }
 
     /// Commands eligible for replay — deterministic, read-only, no side effects.
+    ///
+    /// The previous implementation used `hasPrefix` which let dangerous
+    /// variants slip through: `swift test; rm -rf tmp` would prefix-match
+    /// and replay. The hardened version requires:
+    ///   1. A recognized base command (allowlist).
+    ///   2. No shell metacharacters (`|`, `>`, `;`, `&&`, backticks, `$(…)`,
+    ///      `&`, quotes).
+    ///   3. No env-var prefix (`FOO=bar <cmd>`).
+    ///   4. No flag from the "non-deterministic" blocklist (`--watch`,
+    ///      `--interactive`, `--inspect`, `--debug`, `--`, etc.).
+    /// Positional arguments (`swift test --filter Foo`, `go test ./...`,
+    /// `eslint src/`) remain replayable because the command *string itself*
+    /// is the cache key — replaying the same string with no source changes
+    /// is safe.
     static func isReplayable(_ command: String) -> Bool {
-        let prefixes = [
-            "swift test", "swift build",
-            "npm test", "npm run test", "npx jest", "npx vitest", "npx tsc",
-            "cargo test", "cargo build", "cargo check", "cargo clippy",
-            "go test", "go build", "go vet",
-            "pytest", "python -m pytest", "python -m unittest",
-            "make test", "make build", "make check",
-            "tsc", "tsc --noEmit",
-            "eslint", "ruff", "flake8", "mypy", "pylint", "swiftlint", "rubocop",
-        ]
-        for prefix in prefixes {
-            if command.hasPrefix(prefix) { return true }
+        let trimmed = command.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return false }
+
+        // Shell metacharacters that make the "same command" claim unsafe.
+        // Reject backgrounding (&), chaining (;, &&, ||), piping (|),
+        // redirection (<, >), subshells (`…`, $(…)), variable expansion
+        // ($VAR), and quoting (which usually signals an argument we can't
+        // inspect). `\` would enable escapes that bypass tokenization.
+        let badChars: Set<Character> = [";", "|", "&", ">", "<", "`", "$", "'", "\"", "\\", "(", ")", "{", "}"]
+        if trimmed.contains(where: { badChars.contains($0) }) { return false }
+
+        // Env-var prefix like `FOO=bar swift test` is forbidden — the
+        // assignment changes behavior and the cache key wouldn't catch it.
+        let firstToken = trimmed.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? trimmed
+        if firstToken.contains("=") { return false }
+
+        let tokens = trimmed.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        guard !tokens.isEmpty else { return false }
+
+        // Must match a known base command exactly on its leading tokens.
+        guard let baseLen = matchReplayableBase(tokens: tokens) else { return false }
+
+        // Every remaining token must not be in the non-deterministic blocklist.
+        let extras = tokens.dropFirst(baseLen)
+        for extra in extras where nonDeterministicFlags.contains(extra) {
+            return false
         }
-        return false
+        // The bare `--` separator forwards everything that follows to a
+        // subcommand. We can't reason about what's after it without
+        // tool-specific parsing, so bail out.
+        if extras.contains("--") { return false }
+        // Block tokens that start with `--watch` / `--inspect` / `--debug`
+        // even with a suffix like `--watchAll` or `--inspect-brk`.
+        for extra in extras {
+            let lower = extra.lowercased()
+            if lower.hasPrefix("--watch") { return false }
+            if lower.hasPrefix("--inspect") { return false }
+            if lower.hasPrefix("--debug") { return false }
+            if lower.hasPrefix("--interactive") { return false }
+        }
+        return true
     }
+
+    /// Return the number of tokens consumed by a matching base command,
+    /// or nil if none match. The longest-matching base wins so
+    /// `python -m pytest` is picked up before `python`.
+    private static func matchReplayableBase(tokens: [String]) -> Int? {
+        var bestMatch: Int? = nil
+        for base in replayableBaseCommands {
+            guard tokens.count >= base.count else { continue }
+            var ok = true
+            for (i, part) in base.enumerated() where tokens[i] != part {
+                ok = false
+                break
+            }
+            if ok {
+                if let current = bestMatch, base.count <= current { continue }
+                bestMatch = base.count
+            }
+        }
+        return bestMatch
+    }
+
+    /// Exact base-command token sequences that are deterministic enough
+    /// to cache + replay. The command STRING is the cache key, so a
+    /// positional argument like `--filter Foo` is fine — replaying
+    /// identical input gives identical output when source hasn't changed.
+    private static let replayableBaseCommands: [[String]] = [
+        ["swift", "test"],
+        ["swift", "build"],
+        ["npm", "test"],
+        ["npm", "run", "test"],
+        ["npx", "jest"],
+        ["npx", "vitest"],
+        ["npx", "tsc"],
+        ["cargo", "test"],
+        ["cargo", "build"],
+        ["cargo", "check"],
+        ["cargo", "clippy"],
+        ["go", "test"],
+        ["go", "build"],
+        ["go", "vet"],
+        ["pytest"],
+        ["python", "-m", "pytest"],
+        ["python", "-m", "unittest"],
+        ["python3", "-m", "pytest"],
+        ["python3", "-m", "unittest"],
+        ["make", "test"],
+        ["make", "build"],
+        ["make", "check"],
+        ["tsc"],
+        ["eslint"],
+        ["ruff", "check"],
+        ["ruff"],
+        ["flake8"],
+        ["mypy"],
+        ["pylint"],
+        ["swiftlint"],
+        ["rubocop"],
+    ]
+
+    /// Flags that make a command non-deterministic (watch loops, debuggers,
+    /// interactive prompts). Exact-token match; prefix matches for
+    /// `--watch*`, `--inspect*`, `--debug*`, `--interactive*` are handled
+    /// separately in `isReplayable`.
+    private static let nonDeterministicFlags: Set<String> = [
+        "-i",
+        "--fix",              // linters: mutates files
+    ]
 
     private static func handleGrep(pattern: String, eventName: String) -> Data {
         guard !pattern.isEmpty else { return passthroughResponse }
@@ -353,13 +483,22 @@ public enum HookRouter {
             // Only handle bare ls or ls <simple-path> — no flags
             if !args.isEmpty && args.hasPrefix("-") { return nil }
 
+            // Resolve the target directory through ProjectSecurity so an
+            // absolute path outside the root (or a `..` escape) cannot
+            // short-circuit into a directory listing. `ls /Users/otheruser`
+            // would otherwise leak a listing of someone else's home.
+            guard let root = projectRoot else { return nil }
             let dir: String
-            if args.isEmpty {
-                dir = projectRoot ?? FileManager.default.currentDirectoryPath
-            } else if args.hasPrefix("/") {
-                dir = args
-            } else {
-                dir = (projectRoot ?? FileManager.default.currentDirectoryPath) + "/" + args
+            do {
+                if args.isEmpty {
+                    dir = try ProjectSecurity.resolveProjectFile(".", projectRoot: root)
+                } else {
+                    dir = try ProjectSecurity.resolveProjectFile(args, projectRoot: root)
+                }
+            } catch {
+                // Out-of-root listing requests fall through to the original
+                // tool rather than being answered locally.
+                return nil
             }
 
             if let entries = try? FileManager.default.contentsOfDirectory(atPath: dir) {
@@ -471,15 +610,35 @@ public enum HookRouter {
     }
 
     /// Append advisory text to an existing deny response JSON.
-    private static func appendAdvisoryToResponse(_ response: Data, advisory: String) -> Data {
+    private static func appendAdvisoryToResponse(_ response: Data, advisory: String) -> (data: Data, appended: Bool) {
         guard var json = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
               var hookOutput = json["hookSpecificOutput"] as? [String: Any],
               let reason = hookOutput["permissionDecisionReason"] as? String
-        else { return response }
+        else { return (response, false) }
 
         hookOutput["permissionDecisionReason"] = reason + advisory
         json["hookSpecificOutput"] = hookOutput
-        return (try? JSONSerialization.data(withJSONObject: json)) ?? response
+        guard let data = try? JSONSerialization.data(withJSONObject: json) else {
+            return (response, false)
+        }
+        return (data, true)
+    }
+
+    private static func appendAndMarkValidationIfSurfaced(
+        _ response: Data,
+        advisory: String,
+        rows: [SessionDatabase.ValidationResultRow],
+        projectRoot: String?
+    ) -> Data {
+        guard !advisory.isEmpty, !rows.isEmpty, response != passthroughResponse else {
+            return response
+        }
+        let result = appendAdvisoryToResponse(response, advisory: advisory)
+        if result.appended {
+            validationDatabase.markValidationAdvisoriesSurfaced(ids: rows.map(\.id))
+            validationDatabase.recordEvent(type: "auto_validate.delivered", projectRoot: projectRoot)
+        }
+        return result.data
     }
 
     // MARK: - Budget Gate (testable)

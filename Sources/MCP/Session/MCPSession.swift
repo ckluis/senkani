@@ -76,6 +76,20 @@ final class MCPSession: @unchecked Sendable {
     // Cached session continuity brief (generated once per session)
     private var _sessionBrief: String?
 
+    // Phase S.1 — resolved manifest effective-set (lazy; guarded by `lock`).
+    // Resolves team manifest + user overrides on first read; cached for the
+    // session. Absence of `.senkani/senkani.json` yields an
+    // `EffectiveSet` with `manifestPresent: false`, which signals backwards-
+    // compat (all tools enabled) to ToolRouter.
+    private var _effectiveSet: EffectiveSet?
+    var effectiveSet: EffectiveSet {
+        lock.lock(); defer { lock.unlock() }
+        if let cached = _effectiveSet { return cached }
+        let set = ManifestLoader.load(projectRoot: projectRoot)
+        _effectiveSet = set
+        return set
+    }
+
     // Dependency graph (lazily built on first use)
     private var _dependencyGraph: DependencyGraph?
 
@@ -153,6 +167,18 @@ final class MCPSession: @unchecked Sendable {
         }
     }
 
+    /// Defensive teardown for callers that don't drive the full `shutdown()`
+    /// path (notably tests, which construct ad-hoc sessions). Without this,
+    /// a session's `FileWatcher` could outlive its owner and the FSEvents
+    /// dispatch queue could fire a callback into a half-deinitialized
+    /// instance — observed in soak as
+    /// "Object … of class FileWatcher deallocated with non-zero retain
+    /// count 2" followed by SIGSEGV at process teardown. `stopFileWatcher`
+    /// is idempotent and synchronously drains any in-flight callback.
+    deinit {
+        stopFileWatcher()
+    }
+
     /// Resolve session config from environment.
     static func resolve() -> MCPSession {
         let rawRoot = ProcessInfo.processInfo.environment["SENKANI_PROJECT_ROOT"]
@@ -195,15 +221,22 @@ final class MCPSession: @unchecked Sendable {
         let promoted = CompoundLearning.runDailySweep(
             db: .shared, projectRoot: root, enricher: enricher)
         if promoted > 0 {
-            FileHandle.standardError.write(Data(
-                "[compound_learning] daily sweep promoted \(promoted) rule(s) → staged\n".utf8))
+            Logger.log("compound_learning.daily_sweep", fields: [
+                "promoted": .int(promoted),
+                "outcome": .string("staged")
+            ])
         }
 
         let agentType = AgentDetector.detect(environment: ProcessInfo.processInfo.environment)
         let sessionId: String? = SessionDatabase.shared.createSession(projectRoot: root, agentType: agentType)
         let paneId = ProcessInfo.processInfo.environment["SENKANI_PANE_ID"]
 
-        FileHandle.standardError.write(Data("🔴 MCPSession.resolve(): rawRoot=\(rawRoot) normalized=\(root) metrics=\(metricsFile) pane=\(paneId ?? "nil") session=\(sessionId ?? "nil")\n".utf8))
+        Logger.log("mcp.session.resolved", fields: [
+            "project_root": .path(root),
+            "metrics_file": .path(metricsFile),
+            "has_pane_id": .bool(paneId != nil),
+            "has_session_id": .bool(sessionId != nil),
+        ])
 
         let configFile = ProcessInfo.processInfo.environment["SENKANI_CONFIG_FILE"]
 
@@ -509,7 +542,11 @@ final class MCPSession: @unchecked Sendable {
                 let attrs = try? FileManager.default.attributesOfItem(atPath: absPath)
                 let mtime = (attrs?[.modificationDate] as? Date) ?? Date()
                 if index < 5 { readCache.pin(absPath) }
-                readCache.store(path: absPath, mtime: mtime, content: content, rawBytes: content.utf8.count)
+                // Pre-cache stores raw file content — only served to callers
+                // that also request no processing. Secrets/filter/terse
+                // callers will miss and take the full processing path.
+                let rawMode = ReadProcessingMode(filter: false, secrets: false, terse: false)
+                readCache.store(path: absPath, mtime: mtime, mode: rawMode, content: content, rawBytes: content.utf8.count)
                 if index < 5 { l0Count += 1 } else { l1Count += 1 }
             }
             if l0Count + l1Count > 0 {
@@ -868,7 +905,6 @@ final class MCPSession: @unchecked Sendable {
         lock.unlock()
 
         let savedBytes = rawBytes - compressedBytes
-        FileHandle.standardError.write(Data("🟢 RECORD METRICS: raw=\(rawBytes) compressed=\(compressedBytes) saved=\(savedBytes) feature=\(feature) command=\(command ?? "?")\n".utf8))
 
         // JSONL write — matches MetricEntry format expected by MetricsWatcher
         if let path = metricsFilePath {
@@ -896,11 +932,11 @@ final class MCPSession: @unchecked Sendable {
                     }
                 }
             }
-            let fSize = (try? FileManager.default.attributesOfItem(atPath: path)[.size]) ?? 0
-            FileHandle.standardError.write(Data("🔵 JSONL WRITE: path=\(path) exists=\(FileManager.default.fileExists(atPath: path)) size=\(fSize)\n".utf8))
         } else {
-            FileHandle.standardError.write(Data("⛔ METRICS FILE PATH IS NIL — JSONL will NOT be written\n".utf8))
-            FileHandle.standardError.write(Data("⛔ SENKANI_METRICS_FILE env var was not set when the MCP server started\n".utf8))
+            Logger.log("mcp.metrics.path_missing", fields: [
+                "feature": .string(feature),
+                "outcome": .string("jsonl_skipped"),
+            ])
         }
 
         // SessionDatabase: write to legacy commands table
@@ -921,8 +957,6 @@ final class MCPSession: @unchecked Sendable {
         let outputTokens = compressedBytes / 4
         let savedTokens = savedBytes / 4
         let costCents = Int(Double(savedBytes) / 4.0 / 1_000_000.0 * 300.0)
-
-        FileHandle.standardError.write(Data("💾 [MCP-WRITE] recordTokenEvent: project=\(projectRoot) pane=\(paneId ?? "nil") in=\(inputTokens) out=\(outputTokens) saved=\(savedTokens) feature=\(feature)\n".utf8))
 
         SessionDatabase.shared.recordTokenEvent(
             sessionId: sessionId ?? "unknown",

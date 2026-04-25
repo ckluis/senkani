@@ -1,0 +1,8 @@
+# id: jwt-bare-2
+# family: jwt_bare
+# expected: HIGH_ENTROPY,GENERIC_API_KEY
+# match_mode: any
+# description: Unsigned JWT (alg:none, empty signature) — explicit recall gap candidate.
+# synthetic: true
+---
+session=eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ4eXoiLCJhdWQiOiJ0ZXN0In0.

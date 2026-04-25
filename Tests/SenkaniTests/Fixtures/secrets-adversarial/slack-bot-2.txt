@@ -1,0 +1,10 @@
+# id: slack-bot-2
+# family: slack
+# expected: SLACK_TOKEN
+# match_mode: any
+# description: Slack refresh token (xoxr) in app credentials map.
+# synthetic: true
+---
+slack-app-config:
+  refresh: xoxr-FAKE-REFRESH-fakefakefakefakefakefake
+  scopes: chat:write,channels:read

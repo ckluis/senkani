@@ -1,0 +1,12 @@
+# id: anthropic-2
+# family: anthropic
+# expected: ANTHROPIC_API_KEY
+# match_mode: any
+# description: Anthropic key embedded inside JSON config block.
+# synthetic: true
+---
+{
+  "provider": "anthropic",
+  "key": "sk-ant-api03-FAKE_ABCDEFGHIJKLMNOPQRSTU_VWXYZ012345",
+  "model": "claude-sonnet-4-6"
+}

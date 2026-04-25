@@ -1,0 +1,8 @@
+# id: aws-keyid-1
+# family: aws_keyid
+# expected: AWS_ACCESS_KEY_ID
+# match_mode: any
+# description: AWS access key ID in canonical AKIA shape.
+# synthetic: true
+---
+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE

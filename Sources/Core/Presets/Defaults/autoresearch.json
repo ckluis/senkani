@@ -1,0 +1,13 @@
+{
+  "name": "autoresearch",
+  "version": 1,
+  "cronPattern": "0 6 * * *",
+  "command": "senkani exec --tool senkani_search_web --args '{\"query\":\"<topic>\",\"limit\":8}' | ollama run gemma3:9b \"Summarize these search results in 5 specific bullet points.\" > ~/.senkani/research/$(date +%F).md",
+  "budgetLimitCents": null,
+  "worktree": false,
+  "notify": { "onSuccess": "info", "onFailure": "attention" },
+  "engine": "local-llm",
+  "description": "Daily 06:00 topic scan: search the web, pipe results through a local LLM, land a dated research note.",
+  "docUrl": "/docs/reference/cli/schedule/presets/autoresearch.html",
+  "prerequisites": ["senkani_search_web", "guard-research", "ollama"]
+}

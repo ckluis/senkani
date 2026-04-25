@@ -20,6 +20,7 @@ enum PaneType: String, CaseIterable {
     case codeEditor
     case dashboard
     case sprintReview
+    case ollamaLauncher
 }
 
 /// Budget status for a pane, pushed from the MCP process via IPC.
@@ -120,6 +121,10 @@ final class PaneModel: Identifiable {
     /// Per-pane budget status pushed via IPC from the MCP process.
     /// Cleared on pane restart (processState → .notStarted).
     var budgetStatus: PaneBudgetStatus = .none
+    /// For `ollamaLauncher` panes: the ollama model tag this pane
+    /// launches with. Per-pane, persisted across restarts. Ignored by
+    /// other pane types.
+    var ollamaDefaultModel: String = OllamaLauncherSupport.defaultModelTag
 
     init(title: String = "Terminal",
          paneType: PaneType = .terminal,

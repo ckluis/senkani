@@ -1,0 +1,8 @@
+# id: signed-url-1
+# family: signed_url
+# expected: HIGH_ENTROPY,AWS_ACCESS_KEY_ID
+# match_mode: any
+# description: AWS SigV4 pre-signed URL with X-Amz-Credential=AKIA... and X-Amz-Signature. AKIA fires AWS_ACCESS_KEY_ID; signature blob trips entropy. The signature itself is preserved across the URL boundary because the regex/entropy split tokens at `=` and `&`.
+# synthetic: true
+---
+GET https://s3.amazonaws.com/bucket/object?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE/20260424/us-east-1/s3/aws4_request&X-Amz-Signature=fakesignaturedeadbeef0123456789abcdefdeadbeefcafebabe1234567890abcdef

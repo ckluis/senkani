@@ -169,9 +169,14 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             } else if workspace.panes.isEmpty {
-                WelcomeView { title, command in
-                    addPane(type: .terminal, title: title, command: command)
-                }
+                WelcomeView(
+                    onStart: { title, command in
+                        addPane(type: .terminal, title: title, command: command)
+                    },
+                    onStartOllama: {
+                        addPane(type: .ollamaLauncher, title: "Ollama", command: "")
+                    }
+                )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
@@ -365,6 +370,7 @@ struct ContentView: View {
             "agentTimeline": .agentTimeline,
             "dashboard": .dashboard,
             "sprintReview": .sprintReview,
+            "ollamaLauncher": .ollamaLauncher,
         ]
         guard let type = typeMap[typeId] else { return }
         addPane(type: type, title: type == .terminal ? "Terminal" : typeId.capitalized, command: "")

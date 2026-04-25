@@ -43,8 +43,6 @@ class ClaudeSessionWatcher {
 
     func start() {
         let dir = Self.claudeProjectDir(for: projectRoot)
-        print("🔵 [CLAUDE-WATCHER] Encoded dir: \(dir)")
-        print("🔵 [CLAUDE-WATCHER] Dir exists: \(FileManager.default.fileExists(atPath: dir))")
 
         // Ensure the directory exists (Claude Code may not have created it yet)
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
@@ -61,7 +59,7 @@ class ClaudeSessionWatcher {
     private func startDirectoryWatcher(dir: String) {
         dirFD = open(dir, O_RDONLY | O_EVTONLY)
         guard dirFD >= 0 else {
-            print("🔵 [CLAUDE-WATCHER] Cannot open dir for watching: \(dir)")
+            Logger.log("claude_session_watcher.dir_open_failed", fields: ["dir": .path(dir)])
             return
         }
 
@@ -80,7 +78,6 @@ class ClaudeSessionWatcher {
         }
         src.resume()
         dirSource = src
-        print("🔵 [CLAUDE-WATCHER] Directory watcher active on: \(dir)")
     }
 
     private func checkForNewSession() {
@@ -89,8 +86,6 @@ class ClaudeSessionWatcher {
 
         // Same file we're already watching — no switch needed
         if latest == watchedFile { return }
-
-        print("🔵 [CLAUDE-WATCHER] New session detected: \(latest)")
 
         // Finish reading remaining lines from old file before switching
         if watchedFile != nil {
@@ -117,7 +112,7 @@ class ClaudeSessionWatcher {
         watchedFile = path
 
         guard let fh = FileHandle(forReadingAtPath: path) else {
-            print("🔵 [CLAUDE-WATCHER] Cannot open: \(path)")
+            Logger.log("claude_session_watcher.open_failed", fields: ["path": .path(path)])
             return
         }
         if seekToEnd {
@@ -144,8 +139,6 @@ class ClaudeSessionWatcher {
         }
         src.resume()
         fileSource = src
-
-        print("🔵 [CLAUDE-WATCHER] Watching: \(path) (seekToEnd=\(seekToEnd), offset=\(lastReadOffset))")
 
         // Read any existing content (for new files, this reads from the beginning)
         readNewMessages()
@@ -174,10 +167,7 @@ class ClaudeSessionWatcher {
 
             let inputTokens = usage["input_tokens"] as? Int ?? 0
             let outputTokens = usage["output_tokens"] as? Int ?? 0
-            let cacheRead = usage["cache_read_input_tokens"] as? Int ?? 0
             let model = message["model"] as? String
-
-            print("💾 [CLAUDE-WATCHER] Writing token event: project=\(projectRoot) pane=\(paneId) in=\(inputTokens) out=\(outputTokens) cache=\(cacheRead) model=\(model ?? "?")")
 
             SessionDatabase.shared.recordTokenEvent(
                 sessionId: json["sessionId"] as? String ?? "unknown",

@@ -1,0 +1,10 @@
+# id: gcp-2
+# family: gcp
+# expected: GCP_OAUTH_TOKEN
+# match_mode: any
+# description: GCP OAuth token in HTTP authorization header capture.
+# synthetic: true
+---
+> GET /storage/v1/b/example HTTP/1.1
+> Authorization: Bearer ya29.FAKEzZyXwVuTsRqPoNmLkJiHgFeDcBaZyXwVuTsRqPoNmLkJiHgFeDcBaXYZxyz
+> User-Agent: gcloud-python/3.0

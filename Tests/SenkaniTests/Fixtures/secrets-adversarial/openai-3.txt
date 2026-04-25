@@ -1,0 +1,8 @@
+# id: openai-3
+# family: openai
+# expected: OPENAI_API_KEY
+# match_mode: any
+# description: OpenAI key concatenated into curl command line.
+# synthetic: true
+---
+curl -H "Authorization: Bearer sk-FAKE0987654321ZYXWVUTSRQPONM" https://api.openai.com/v1/chat/completions

@@ -1,0 +1,8 @@
+# id: high-entropy-2
+# family: high_entropy
+# expected: HIGH_ENTROPY
+# match_mode: any
+# description: 64-char hex string that is NOT a SHA-256 (mixed case to break hex digest exclusion).
+# synthetic: true
+---
+RANDOM_BLOB=Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8Ii9Jj0Kk1Ll2Mm3Nn4Oo5Pp6Qq7Rr8Ss9Tt0Uu1Vv

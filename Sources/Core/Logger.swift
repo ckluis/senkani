@@ -67,6 +67,22 @@ public enum Logger {
     nonisolated(unsafe) private static var _isJSON: Bool?
     nonisolated(unsafe) private static let isJSONLock = NSLock()
 
+    /// Test-only observation hook. When set, every `log(...)` call also
+    /// invokes the sink with the raw event + fields BEFORE writing to
+    /// stderr. Production callers never set this; tests register a sink
+    /// to assert routing without dup2-ing fd 2. The stderr write still
+    /// happens — the sink is a tee, not a replacement.
+    nonisolated(unsafe) private static var _testSink: (@Sendable (String, [String: LogValue]) -> Void)?
+    nonisolated(unsafe) private static let testSinkLock = NSLock()
+
+    /// Test-only: install (or clear with `nil`) an observation sink.
+    /// Call from `defer { Logger._setTestSink(nil) }` to avoid leaking
+    /// state between tests.
+    public static func _setTestSink(_ sink: (@Sendable (String, [String: LogValue]) -> Void)?) {
+        testSinkLock.lock(); defer { testSinkLock.unlock() }
+        _testSink = sink
+    }
+
     /// Cached result of `SENKANI_LOG_JSON` env lookup. Env is read once on
     /// first access then memoized for the process lifetime.
     internal static var isJSON: Bool {
@@ -87,6 +103,10 @@ public enum Logger {
     /// Emit an event. Pass fields via `[String: LogValue]` so types are preserved
     /// in JSON mode. The written line always ends with `\n`.
     public static func log(_ event: String, fields: [String: LogValue] = [:]) {
+        testSinkLock.lock()
+        let sink = _testSink
+        testSinkLock.unlock()
+        sink?(event, fields)
         let line = format(event: event, fields: fields) + "\n"
         FileHandle.standardError.write(Data(line.utf8))
     }

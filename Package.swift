@@ -293,7 +293,14 @@ let package = Package(
         .target(
             name: "Core",
             dependencies: ["Filter"],
-            path: "Sources/Core"
+            path: "Sources/Core",
+            resources: [
+                .copy("Presets/Defaults/log-rotation.json"),
+                .copy("Presets/Defaults/morning-brief.json"),
+                .copy("Presets/Defaults/autoresearch.json"),
+                .copy("Presets/Defaults/competitive-scan.json"),
+                .copy("Presets/Defaults/senkani-improve.json"),
+            ]
         ),
         .target(
             name: "Bench",
@@ -302,7 +309,10 @@ let package = Package(
                 "Filter",
                 "Indexer",
             ],
-            path: "Sources/Bench"
+            path: "Sources/Bench",
+            resources: [
+                .copy("Resources/MLEvalImages"),
+            ]
         ),
         .target(
             name: "Bundle",
@@ -332,6 +342,7 @@ let package = Package(
                 "Filter",
                 "Indexer",
                 "Bundle",
+                "Bench",
                 .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "MLXEmbedders", package: "mlx-swift-lm"),
                 .product(name: "MLXVLM", package: "mlx-swift-lm"),
@@ -390,7 +401,8 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Testing", package: "swift-testing"),
             ],
-            path: "Tests/SenkaniTests"
+            path: "Tests/SenkaniTests",
+            resources: [.copy("Fixtures/secrets-adversarial")]
         ),
     ]
 )

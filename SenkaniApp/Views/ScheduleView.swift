@@ -7,6 +7,7 @@ struct ScheduleView: View {
     @State private var isLoading = true
     @State private var taskToDelete: ScheduledTask?
     @State private var showNewScheduleForm = false
+    @State private var showPresetSheet = false
 
     // New schedule form fields
     @State private var newName = ""
@@ -81,6 +82,21 @@ struct ScheduleView: View {
             }
 
             Spacer()
+
+            Button {
+                showPresetSheet = true
+            } label: {
+                Label("Install preset", systemImage: "square.stack.3d.up")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .sheet(isPresented: $showPresetSheet) {
+                PresetInstallSheet(isPresented: $showPresetSheet, onInstalled: {
+                    isLoading = true
+                    loadTasks()
+                })
+            }
 
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {

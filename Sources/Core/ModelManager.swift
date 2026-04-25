@@ -7,8 +7,11 @@ import Combine
 public enum ModelStatus: String, Codable, Sendable {
     case available    // registered, not yet downloaded
     case downloading  // download in progress
-    case downloaded   // on disk, verified
-    case error        // download or verification failed
+    case downloaded   // on disk, integrity unconfirmed
+    case verifying    // running post-install verification fixture
+    case verified     // on disk, verification fixture passed — ready to serve
+    case broken       // on disk, but verification fixture failed
+    case error        // download failed
 }
 
 // MARK: - ModelInfo
@@ -95,11 +98,28 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
     /// doesn't need to depend on MLX/Hub. Protected by `lock`.
     private var downloadHandler: ((String) async throws -> Void)?
 
+    /// Registered verification handler. When `nil`, `verify(modelId:)` falls
+    /// back to an integrity-only probe (config.json + weight file on disk,
+    /// config parses as JSON dict). MCP layer can override with a real
+    /// inference fixture (e.g. `engine.embed("ping")` for the embed model).
+    /// Protected by `lock`.
+    private var verificationHandler: ((String) async throws -> Void)?
+
     /// Register a download handler (called by MCP layer at startup).
     /// Thread-safe: acquires lock before writing.
     public func registerDownloadHandler(_ handler: @escaping (String) async throws -> Void) {
         lock.lock()
         downloadHandler = handler
+        lock.unlock()
+    }
+
+    /// Register a verification handler (called by MCP layer at startup). The
+    /// handler should run a tiny inference against the freshly-installed
+    /// model and throw if it fails. When no handler is registered the
+    /// integrity-only default is used.
+    public func registerVerificationHandler(_ handler: @escaping (String) async throws -> Void) {
+        lock.lock()
+        verificationHandler = handler
         lock.unlock()
     }
 
@@ -216,11 +236,14 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
 
     // MARK: - Public API
 
-    /// Check whether a model is downloaded and ready to use.
+    /// Check whether a model is downloaded and ready to use. `.downloaded`
+    /// (present on disk, verify not yet run) and `.verified` (verify passed)
+    /// both count as ready; `.broken` and `.error` do not.
     public func isReady(_ modelId: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return _models.first(where: { $0.id == modelId })?.status == .downloaded
+        let status = _models.first(where: { $0.id == modelId })?.status
+        return status == .downloaded || status == .verified
     }
 
     /// Verify that a model is downloaded AND its files pass integrity checks.
@@ -235,10 +258,10 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
         let status = info.status
         lock.unlock()
 
-        guard status == .downloaded else {
+        guard status == .downloaded || status == .verified else {
             return "\(info.name) is not downloaded (status: \(status.rawValue))"
         }
-        return nil  // Files exist and status is downloaded — ready
+        return nil  // Files exist and status is at-least downloaded — ready
     }
 
     /// Get info for a specific model.
@@ -292,6 +315,9 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
     }
 
     /// Mark a model as downloaded after MLX libraries finish their download.
+    /// Does NOT auto-run verification — callers that want the "install →
+    /// verify" fused flow should use `download(modelId:)` or call
+    /// `verify(modelId:)` explicitly.
     public func markDownloaded(_ modelId: String) {
         lock.lock()
         if let idx = _models.firstIndex(where: { $0.id == modelId }) {
@@ -299,6 +325,48 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
             _models[idx].downloadProgress = 1.0
             _models[idx].downloadedAt = Date()
             _models[idx].localPath = hfCachePath(for: _models[idx].repoId).path
+            _models[idx].lastError = nil
+        }
+        lock.unlock()
+        persistMetadata()
+        notifyChange()
+    }
+
+    /// Mark a model as `.verifying` before a verify fixture runs.
+    public func markVerifying(_ modelId: String) {
+        lock.lock()
+        if let idx = _models.firstIndex(where: { $0.id == modelId }) {
+            _models[idx].status = .verifying
+            _models[idx].lastError = nil
+        }
+        lock.unlock()
+        notifyChange()
+    }
+
+    /// Mark a model as `.verified` after a verify fixture succeeds.
+    public func markVerified(_ modelId: String) {
+        lock.lock()
+        if let idx = _models.firstIndex(where: { $0.id == modelId }) {
+            _models[idx].status = .verified
+            _models[idx].downloadProgress = 1.0
+            _models[idx].lastError = nil
+            if _models[idx].downloadedAt == nil {
+                _models[idx].downloadedAt = Date()
+            }
+            _models[idx].localPath = hfCachePath(for: _models[idx].repoId).path
+        }
+        lock.unlock()
+        persistMetadata()
+        notifyChange()
+    }
+
+    /// Mark a model as `.broken` when a verify fixture fails. The files are
+    /// still on disk; the user can retry via `verify(modelId:)` or delete.
+    public func markBroken(_ modelId: String, message: String) {
+        lock.lock()
+        if let idx = _models.firstIndex(where: { $0.id == modelId }) {
+            _models[idx].status = .broken
+            _models[idx].lastError = message
         }
         lock.unlock()
         persistMetadata()
@@ -317,20 +385,131 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
         notifyChange()
     }
 
-    /// Trigger a model download via the registered handler.
-    /// The MCP layer registers the actual download logic at startup.
+    /// Trigger a model download via the registered handler, and on success
+    /// automatically run verification. Callers (the UI "Install" button, the
+    /// MCP tool install path) get the full install → verify transition in
+    /// one call.
+    ///
+    /// Status progression on success:
+    ///   .available → .downloading (via handler's progress callbacks)
+    ///               → .downloaded → .verifying → .verified
+    ///
+    /// On download failure:
+    ///   .available → .downloading → .error (lastError = thrown message)
+    ///
+    /// On verification failure:
+    ///   .available → ... → .downloaded → .verifying → .broken
     public func download(modelId: String) async throws {
         let handler: ((String) async throws -> Void)? = lock.withLock {
             downloadHandler
         }
         guard let handler else {
+            markError(modelId, message: "No download handler registered. Start the MCP server first.")
             throw NSError(
                 domain: "dev.senkani.ModelManager",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "No download handler registered. Start the MCP server first."]
             )
         }
-        try await handler(modelId)
+
+        // Download phase — handler drives progress via updateProgress/markDownloaded.
+        do {
+            try await handler(modelId)
+        } catch {
+            markError(modelId, message: error.localizedDescription)
+            throw error
+        }
+
+        // If the handler didn't flip the status to .downloaded (e.g. because
+        // it relies on reconcileWithDisk), do it now so verify has the right
+        // precondition. Callers that already called markDownloaded get a no-op.
+        let needsMarkDownloaded: Bool = lock.withLock {
+            if let idx = _models.firstIndex(where: { $0.id == modelId }) {
+                let s = _models[idx].status
+                return s == .downloading || s == .available
+            }
+            return false
+        }
+        if needsMarkDownloaded {
+            markDownloaded(modelId)
+        }
+
+        // Verify phase — throws are swallowed and reflected as .broken so the
+        // caller's Install button doesn't surface a second error banner; the
+        // UI reads status directly.
+        try? await verify(modelId: modelId)
+    }
+
+    /// Run the verification fixture against a previously-downloaded model,
+    /// flipping status to `.verified` or `.broken`. Safe to call on
+    /// `.downloaded`, `.verified`, or `.broken` (retry). Throws if the model
+    /// is unknown or not present on disk.
+    public func verify(modelId: String) async throws {
+        let (known, preconditionOk, handler) = lock.withLock { () -> (Bool, Bool, ((String) async throws -> Void)?) in
+            guard let info = _models.first(where: { $0.id == modelId }) else {
+                return (false, false, nil)
+            }
+            let ok = info.status == .downloaded || info.status == .verified || info.status == .broken
+            return (true, ok, verificationHandler)
+        }
+        guard known else {
+            throw NSError(
+                domain: "dev.senkani.ModelManager",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Unknown model ID: \(modelId)"]
+            )
+        }
+        guard preconditionOk else {
+            throw NSError(
+                domain: "dev.senkani.ModelManager",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "Cannot verify \(modelId): model is not downloaded"]
+            )
+        }
+
+        markVerifying(modelId)
+
+        do {
+            if let handler {
+                try await handler(modelId)
+            } else {
+                try runDefaultVerification(modelId: modelId)
+            }
+            markVerified(modelId)
+        } catch {
+            markBroken(modelId, message: error.localizedDescription)
+            throw error
+        }
+    }
+
+    /// Default verification when no handler is registered: re-check that
+    /// config.json and a weight file are on disk, and that config.json
+    /// parses as a JSON dictionary. Cheap, deterministic, MLX-free.
+    private func runDefaultVerification(modelId: String) throws {
+        let repoId = lock.withLock { () -> String? in
+            _models.first(where: { $0.id == modelId })?.repoId
+        }
+        guard let repoId else {
+            throw NSError(
+                domain: "dev.senkani.ModelManager",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Unknown model ID: \(modelId)"]
+            )
+        }
+        guard modelExistsOnDisk(repoId: repoId) else {
+            throw NSError(
+                domain: "dev.senkani.ModelManager",
+                code: 5,
+                userInfo: [NSLocalizedDescriptionKey: "Model files missing on disk"]
+            )
+        }
+        guard verifyConfigIntegrity(repoId: repoId) else {
+            throw NSError(
+                domain: "dev.senkani.ModelManager",
+                code: 6,
+                userInfo: [NSLocalizedDescriptionKey: "config.json failed integrity check"]
+            )
+        }
     }
 
     /// Delete a model's cached files from the HuggingFace cache.
@@ -377,13 +556,19 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
         totalDiskUsage()
     }
 
-    /// Total disk usage of all downloaded models.
+    /// Total disk usage of all downloaded models. Counts anything whose
+    /// files are on disk: `.downloaded`, `.verifying`, `.verified`, `.broken`.
     public func totalDiskUsage() -> Int64 {
         lock.lock()
-        let downloaded = _models.filter { $0.status == .downloaded }
+        let present = _models.filter {
+            switch $0.status {
+            case .downloaded, .verifying, .verified, .broken: return true
+            case .available, .downloading, .error: return false
+            }
+        }
         lock.unlock()
 
-        return downloaded.reduce(Int64(0)) { total, info in
+        return present.reduce(Int64(0)) { total, info in
             total + Self.directorySize(hfCachePath(for: info.repoId))
         }
     }
@@ -476,7 +661,11 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
             guard i < _models.count else { continue }
             let repoId = _models[i].repoId
             if update.exists {
-                if _models[i].status != .downloading {
+                // Don't disturb in-flight or verified/broken — those states
+                // already know the files exist. Only lift .available/.error
+                // up to .downloaded so a pre-populated cache gets picked up.
+                let s = _models[i].status
+                if s == .available || s == .error {
                     _models[i].status = .downloaded
                     _models[i].downloadProgress = 1.0
                     _models[i].localPath = hfCachePath(for: repoId).path
@@ -485,7 +674,10 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
                     }
                 }
             } else {
-                if _models[i].status == .downloaded {
+                // Files vanished from disk — any post-download state drops
+                // back to .available so the UI re-offers install.
+                let s = _models[i].status
+                if s == .downloaded || s == .verified || s == .broken || s == .verifying {
                     _models[i].status = .available
                     _models[i].downloadProgress = 0
                     _models[i].localPath = nil

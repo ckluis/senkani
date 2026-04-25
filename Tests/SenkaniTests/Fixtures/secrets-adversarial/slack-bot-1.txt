@@ -1,0 +1,8 @@
+# id: slack-bot-1
+# family: slack
+# expected: SLACK_TOKEN
+# match_mode: any
+# description: Slack bot token in env file (synthetic FAKE body).
+# synthetic: true
+---
+SLACK_BOT_TOKEN=xoxb-FAKE-FAKE-fakefakefakefakefakefakefake

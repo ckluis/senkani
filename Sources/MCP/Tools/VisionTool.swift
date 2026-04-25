@@ -149,7 +149,15 @@ enum VisionTool {
             }
         }
 
-        let absPath = imagePath.hasPrefix("/") ? imagePath : session.projectRoot + "/" + imagePath
+        let absPath: String
+        do {
+            absPath = try ProjectSecurity.resolveProjectFile(imagePath, projectRoot: session.projectRoot)
+        } catch {
+            return .init(
+                content: [.text(text: "Error: \(error)", annotations: nil, _meta: nil)],
+                isError: true
+            )
+        }
         let prompt = arguments?["prompt"]?.stringValue ?? "Describe this image in detail. Note any text, UI elements, buttons, errors, or notable features."
 
         do {

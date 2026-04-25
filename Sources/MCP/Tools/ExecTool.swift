@@ -82,7 +82,11 @@ enum ExecTool {
         process.arguments = ["-c", command]
         process.standardOutput = outPipe
         process.standardError = errPipe
-        process.environment = ProcessInfo.processInfo.environment
+        // Sanitize inherited env: strip TOKEN/SECRET/API_KEY/cloud creds before
+        // handing them to an arbitrary shell command. A hostile postinstall
+        // script or prompt-injected command would otherwise read the parent
+        // shell's secrets verbatim. See Core.SensitiveEnvironmentPolicy.
+        process.environment = SensitiveEnvironmentPolicy.sanitize(ProcessInfo.processInfo.environment)
         process.currentDirectoryURL = URL(fileURLWithPath: session.projectRoot)
 
         do {
@@ -118,12 +122,18 @@ enum ExecTool {
         // Timeout: kill the process after 30 seconds to prevent MCP server stalls
         let timeoutWork = DispatchWorkItem {
             if process.isRunning {
-                print("[EXEC] Command timeout after 30s, sending SIGTERM: \(command)")
+                Logger.log("exec.timeout", fields: [
+                    "signal": .string("SIGTERM"),
+                    "outcome": .string("terminating"),
+                ])
                 process.terminate() // SIGTERM
                 // If still running after 5 more seconds, SIGKILL
                 DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
                     if process.isRunning {
-                        print("[EXEC] SIGKILL: \(command)")
+                        Logger.log("exec.timeout", fields: [
+                            "signal": .string("SIGKILL"),
+                            "outcome": .string("killed"),
+                        ])
                         kill(process.processIdentifier, SIGKILL)
                     }
                 }

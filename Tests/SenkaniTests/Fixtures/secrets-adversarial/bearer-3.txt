@@ -1,0 +1,11 @@
+# id: bearer-3
+# family: bearer
+# expected: BEARER_TOKEN
+# match_mode: any
+# description: Bearer token followed by additional headers; ensure span boundary correct.
+# synthetic: true
+---
+GET /v1/users HTTP/1.1
+Authorization: Bearer abc123FAKEdef456ghi789jklmnopqrstuvwxyz
+Accept: application/json
+Content-Type: application/json

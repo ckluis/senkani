@@ -203,8 +203,10 @@ struct GraphConstructionTests {
             graph = IndexEngine.buildDependencyGraph(projectRoot: projectRoot)
         }
 
-        // Must complete in under 2 seconds (parsing all project source files)
-        #expect(elapsed < .seconds(2))
+        // Machine-load-dependent timing guard. The regression this rules out
+        // (accidentally O(N²) re-parse) costs minutes, not seconds — widen
+        // to 5s for parallel-test-run headroom without losing signal.
+        #expect(elapsed < .seconds(5))
 
         // Sanity: Core should be imported by multiple files
         let coreDependents = graph!.dependents(of: "Core")

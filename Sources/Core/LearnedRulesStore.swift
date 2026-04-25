@@ -1,5 +1,28 @@
 import Foundation
-import Filter
+
+// MARK: - LearnedRulesStore — façade
+//
+// Thin façade over the shared `learned-rules.json` cache + four
+// per-artifact bounded contexts. The façade owns:
+//
+//   - `LearnedRuleStatus`     — the lifecycle enum every artifact uses
+//   - `LearnedArtifact`       — discriminated union over artifact kinds
+//   - `LearnedRulesFile`      — top-level JSON container + migrations
+//   - `LearnedRulesStore`     — static persistence (load/save/cache,
+//                               `withPath` test override, `reset`)
+//
+// Per-artifact lifecycle methods live in extensions under
+// `Sources/Core/LearnedRules/`:
+//
+//   - `FilterRuleStore.swift`        — Phase H/H+1/H+2a (filter rules)
+//   - `ContextDocStore.swift`        — Phase H+2b (context docs)
+//   - `InstructionPatchStore.swift`  — Phase H+2c (instruction patches)
+//   - `WorkflowPlaybookStore.swift`  — Phase H+2c (workflow playbooks)
+//
+// The split was shipped under
+// `luminary-2026-04-24-6-learnedrulesstore-split` (2026-04-25). See
+// `Sources/Core/Stores/INVARIANTS.md` "LearnedRulesStore invariants"
+// for the rules every per-artifact extension must follow.
 
 // MARK: - LearnedRuleStatus
 //
@@ -22,154 +45,6 @@ public enum LearnedRuleStatus: String, Codable, Sendable, CaseIterable {
     case applied
     /// Operator said no.
     case rejected
-}
-
-// MARK: - LearnedFilterRule
-//
-// H+1 schema additions (all default-constructible so v1 files migrate cleanly):
-//
-//   - `rationale`       — deterministic, human-readable "why" (<=140 chars)
-//   - `signalType`      — Garg taxonomy, defaults to `.failure` for filter rules
-//   - `recurrenceCount` — number of times this pattern has been proposed
-//   - `lastSeenAt`      — timestamp of most recent proposal observation
-//   - `sources`         — all session ids that contributed; `source` kept for back-compat
-//
-// The rule continues to deserialize as a `FilterRule` at apply time via
-// `asFilterRule`. `asFilterRule` only understands op strings the H-era
-// parser recognized plus `stripMatching(<literal>)` (H+1 addition).
-
-public struct LearnedFilterRule: Codable, Sendable {
-    /// Stable UUID — used for apply/reject by ID.
-    public let id: String
-    /// Base command name, e.g. "docker"
-    public let command: String
-    /// Optional subcommand, e.g. "compose". nil matches any subcommand.
-    public let subcommand: String?
-    /// Serialized FilterOp descriptions, e.g. `["head(50)", "stripMatching(INFO)"]`.
-    public let ops: [String]
-    /// session_id of the session that first proposed this rule.
-    public let source: String
-    /// 0.0–1.0 Laplace-smoothed (H+1). 1.0 = strongest evidence of unfiltered.
-    public let confidence: Double
-    /// Lifecycle state.
-    public var status: LearnedRuleStatus
-    /// Number of distinct sessions where the triggering pattern appeared.
-    public var sessionCount: Int
-    /// When this rule was first proposed.
-    public let createdAt: Date
-
-    // MARK: H+1 additions (all optional in JSON for v1→v2 migration)
-
-    /// Deterministic human-readable "why" line.
-    public var rationale: String
-    /// Garg-taxonomy signal category. Filter rules default to `.failure`.
-    public var signalType: SignalType
-    /// How many post-session runs have re-proposed this pattern.
-    public var recurrenceCount: Int
-    /// Most recent re-observation.
-    public var lastSeenAt: Date
-    /// All session ids that contributed to the observation aggregate.
-    public var sources: [String]
-
-    // MARK: H+2a additions
-
-    /// LLM-generated natural-language rewrite of `rationale`. Populated
-    /// asynchronously after a rule is promoted to `.staged` (see
-    /// `GemmaRationaleRewriter`). `nil` until enrichment completes — CLI
-    /// and callers MUST fall back to `rationale` when this is nil.
-    ///
-    /// Contained to this field: the LLM output never enters
-    /// `FilterPipeline.engine.rules`. Karpathy's Phase K red-flag
-    /// constraint holds through H+2a.
-    public var enrichedRationale: String?
-
-    public init(
-        id: String,
-        command: String,
-        subcommand: String?,
-        ops: [String],
-        source: String,
-        confidence: Double,
-        status: LearnedRuleStatus,
-        sessionCount: Int = 0,
-        createdAt: Date,
-        rationale: String = "",
-        signalType: SignalType = .failure,
-        recurrenceCount: Int = 1,
-        lastSeenAt: Date? = nil,
-        sources: [String]? = nil,
-        enrichedRationale: String? = nil
-    ) {
-        self.id = id
-        self.command = command
-        self.subcommand = subcommand
-        self.ops = ops
-        self.source = source
-        self.confidence = confidence
-        self.status = status
-        self.sessionCount = sessionCount
-        self.createdAt = createdAt
-        self.rationale = rationale
-        self.signalType = signalType
-        self.recurrenceCount = recurrenceCount
-        self.lastSeenAt = lastSeenAt ?? createdAt
-        self.sources = sources ?? [source]
-        self.enrichedRationale = enrichedRationale
-    }
-
-    // Decodable with defaults for every H+1 addition. Uses a custom init
-    // so v1 files decode without a separate migration pass — the fields
-    // simply fall back to the v1-equivalent values.
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.id = try c.decode(String.self, forKey: .id)
-        self.command = try c.decode(String.self, forKey: .command)
-        self.subcommand = try c.decodeIfPresent(String.self, forKey: .subcommand)
-        self.ops = try c.decode([String].self, forKey: .ops)
-        self.source = try c.decode(String.self, forKey: .source)
-        self.confidence = try c.decode(Double.self, forKey: .confidence)
-        self.status = try c.decode(LearnedRuleStatus.self, forKey: .status)
-        self.sessionCount = (try? c.decode(Int.self, forKey: .sessionCount)) ?? 0
-        self.createdAt = try c.decode(Date.self, forKey: .createdAt)
-        self.rationale = (try? c.decode(String.self, forKey: .rationale)) ?? ""
-        self.signalType = (try? c.decode(SignalType.self, forKey: .signalType)) ?? .failure
-        self.recurrenceCount = (try? c.decode(Int.self, forKey: .recurrenceCount)) ?? 1
-        self.lastSeenAt = (try? c.decode(Date.self, forKey: .lastSeenAt)) ?? self.createdAt
-        self.sources = (try? c.decode([String].self, forKey: .sources)) ?? [self.source]
-        // v3 addition — optional on disk, default nil.
-        self.enrichedRationale = try? c.decodeIfPresent(String.self, forKey: .enrichedRationale)
-    }
-
-    /// Convert serialized ops strings back into a `FilterRule`.
-    /// Supported ops: `head(N)`, `tail(N)`, `truncateBytes(N)`,
-    /// `dedupLines`, `stripANSI`, `stripMatching(<literal>)`.
-    /// `stripMatching` accepts a substring literal (matches `LineOperations.stripMatching`
-    /// which uses `String.contains`). No regex, so no ReDoS risk (Schneier).
-    public var asFilterRule: FilterRule {
-        let filterOps: [FilterOp] = ops.compactMap { op in
-            if op.hasPrefix("head("), let n = parseIntArg(op) { return .head(n) }
-            if op.hasPrefix("tail("), let n = parseIntArg(op) { return .tail(n) }
-            if op.hasPrefix("truncateBytes("), let n = parseIntArg(op) { return .truncateBytes(n) }
-            if op.hasPrefix("stripMatching("), let s = parseStringArg(op) { return .stripMatching(s) }
-            if op == "dedupLines" { return .dedupLines }
-            if op == "stripANSI" { return .stripANSI }
-            return nil
-        }
-        return FilterRule(command: command, subcommand: subcommand, ops: filterOps)
-    }
-
-    private func parseIntArg(_ s: String) -> Int? {
-        guard let open = s.firstIndex(of: "("),
-              let close = s.lastIndex(of: ")") else { return nil }
-        return Int(s[s.index(after: open)..<close])
-    }
-
-    private func parseStringArg(_ s: String) -> String? {
-        guard let open = s.firstIndex(of: "("),
-              let close = s.lastIndex(of: ")"),
-              close > open else { return nil }
-        return String(s[s.index(after: open)..<close])
-    }
 }
 
 // MARK: - LearnedArtifact
@@ -374,7 +249,11 @@ public struct LearnedRulesFile: Codable {
     }
 }
 
-// MARK: - LearnedRulesStore
+// MARK: - LearnedRulesStore — shared persistence
+//
+// Static enum holding the on-disk path + in-memory cache used by every
+// per-artifact extension. See `Sources/Core/Stores/INVARIANTS.md`
+// section "LearnedRulesStore invariants" for the rules.
 
 public enum LearnedRulesStore {
 
@@ -383,68 +262,65 @@ public enum LearnedRulesStore {
     /// the shared file under parallel execution.
     public static let defaultPath: String = NSHomeDirectory() + "/.senkani/learned-rules.json"
 
-    nonisolated(unsafe) private static var _path: String = defaultPath
+    nonisolated(unsafe) private static var _defaultPath: String = defaultPath
+    nonisolated(unsafe) private static var _defaultShared: LearnedRulesFile = {
+        let url = URL(fileURLWithPath: _defaultPath)
+        guard let data = try? Data(contentsOf: url) else { return .empty }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode(LearnedRulesFile.self, from: data)) ?? .empty
+    }()
 
-    /// Serializes all writes through the store. Tests call `withPath` which
-    /// redirects the global `_path` for the body's duration — without the
-    /// lock, concurrent suites would race on `_path` and one test's `save`
-    /// would land in another test's temp file.
-    nonisolated(unsafe) private static let writeLock = NSLock()
+    /// Task-local scoped override for tests. A reference-type box lets each
+    /// `withPath` body mutate its own (path, cache) pair without colliding
+    /// with parallel suites — no NSLock, no cooperative-pool blocking.
+    final class Scoped: @unchecked Sendable {
+        var path: String
+        var cache: LearnedRulesFile
+        init(path: String, cache: LearnedRulesFile) {
+            self.path = path
+            self.cache = cache
+        }
+    }
 
-    /// Current on-disk path. Test-only setters use `withPath(_:)`.
-    public static var path: String { _path }
+    @TaskLocal static var scoped: Scoped?
+
+    /// Current on-disk path. Inside a `withPath(_:)` scope this returns
+    /// the scoped temp path; otherwise the production default.
+    public static var path: String { Self.scoped?.path ?? _defaultPath }
 
     /// TEST ONLY: redirect persistence to `temp` for the duration of
-    /// `body`, then restore the prior path and singleton state. Holds
-    /// `writeLock` for the whole body so concurrent sync callers
-    /// serialize. Async callers MUST wrap through a sync body —
-    /// `withPath(temp) { Task { await yourAsync() }.value }` — since
-    /// Swift 6 blocks NSLock across suspension points.
+    /// `body`. Scoping is per-task (via `@TaskLocal`), so concurrent
+    /// parallel suites each get their own isolated (path, cache) box —
+    /// no shared lock. Child tasks spawned under structured concurrency
+    /// inherit the scope; `Task.detached` does not, by design.
     public static func withPath<T>(_ temp: String, _ body: () throws -> T) rethrows -> T {
-        writeLock.lock()
-        defer { writeLock.unlock() }
-        let prior = _path
-        let priorShared = shared
-        _path = temp
-        shared = load() ?? .empty
-        defer {
-            _path = prior
-            shared = priorShared
-        }
-        return try body()
+        let box = Scoped(path: temp, cache: loadFrom(temp) ?? .empty)
+        return try $scoped.withValue(box, operation: body)
     }
 
-    /// TEST ONLY (async variant): DEPRECATED — use `withPath(...) { Task { ... }.value }`
-    /// instead. Swift 6 blocks NSLock / DispatchSemaphore across async
-    /// suspension points, and async tests that need path isolation
-    /// should wrap a Task inside a sync `withPath` block rather than
-    /// try to hold a lock across `await`.
-    ///
-    /// Left as a nominal stub so existing callers don't break — it
-    /// runs the body WITHOUT cross-suite synchronization, so callers
-    /// should migrate.
-    @available(*, deprecated, message: "Swift 6: NSLock can't span await. Wrap your async body: LearnedRulesStore.withPath(temp) { Task { await yourAsync() }.value }")
-    public static func withPathAsync<T>(
-        _ temp: String,
-        _ body: () async throws -> T
-    ) async rethrows -> T {
-        let prior = _path
-        let priorShared = shared
-        _path = temp
-        shared = load() ?? .empty
-        defer {
-            _path = prior
-            shared = priorShared
-        }
-        return try await body()
+    private static func loadFrom(_ path: String) -> LearnedRulesFile? {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(LearnedRulesFile.self, from: data)
     }
 
-    // MARK: - Singleton
+    // MARK: - Singleton cache
 
-    /// In-process cache — loaded once. Tests should call `reload()` after writing to disk.
-    nonisolated(unsafe) public static var shared: LearnedRulesFile = {
-        load() ?? .empty
-    }()
+    /// In-process cache. Inside a `withPath(_:)` scope this reads/writes the
+    /// task-local box; otherwise the process-wide default. Tests should call
+    /// `reload()` after writing to disk.
+    public static var shared: LearnedRulesFile {
+        get { Self.scoped?.cache ?? _defaultShared }
+        set {
+            if let box = Self.scoped {
+                box.cache = newValue
+            } else {
+                _defaultShared = newValue
+            }
+        }
+    }
 
     // MARK: - Persistence
 
@@ -475,373 +351,10 @@ public enum LearnedRulesStore {
         shared = load() ?? .empty
     }
 
-    // MARK: - Mutations
-
-    /// H+1 contract: record a freshly-observed proposal. If an equivalent
-    /// rule (same command+subcommand+ops) already exists in a non-terminal
-    /// status (recurring/staged/applied), bump its `recurrenceCount`,
-    /// `lastSeenAt`, and `sources` list. Otherwise append a new rule in
-    /// `.recurring` status.
-    ///
-    /// This replaces Phase H's `stage` no-op-on-dup behavior with an
-    /// aggregate counter — enabling the daily-cadence sweep.
-    /// Terminal statuses (`.rejected`) are respected: a previously
-    /// rejected rule is NOT re-proposed (prevents nagging).
-    ///
-    /// H+2b note: operates on the polymorphic artifact set directly —
-    /// iterates `artifacts` in place so mutation stays O(N) instead of
-    /// rebuilding the array via the `rules` computed setter.
-    public static func observe(_ rule: LearnedFilterRule) throws {
-        var file = load() ?? .empty
-        var didMerge = false
-        for (idx, artifact) in file.artifacts.enumerated() {
-            guard case .filterRule(var existing) = artifact else { continue }
-            guard existing.command == rule.command,
-                  existing.subcommand == rule.subcommand,
-                  existing.ops == rule.ops
-            else { continue }
-            switch existing.status {
-            case .rejected:
-                return   // respect operator's decision
-            case .recurring, .staged, .applied:
-                existing.recurrenceCount += 1
-                existing.lastSeenAt = rule.lastSeenAt
-                if !existing.sources.contains(rule.source) {
-                    existing.sources.append(rule.source)
-                }
-                existing.sessionCount = max(existing.sessionCount, rule.sessionCount)
-                file.artifacts[idx] = .filterRule(existing)
-                didMerge = true
-            }
-            break
-        }
-        if !didMerge {
-            file.artifacts.append(.filterRule(rule))
-        }
-        try save(file)
-        shared = file
-    }
-
-    // MARK: - Context artifact mutations (H+2b)
-
-    /// Phase H+2b analogue of `observe(_:)` for context docs. Merges by
-    /// `title` (filesystem-safe slug), respects `.rejected` stickiness,
-    /// appends a fresh `.recurring` doc when absent.
-    public static func observeContextDoc(_ doc: LearnedContextDoc) throws {
-        var file = load() ?? .empty
-        var didMerge = false
-        for (idx, artifact) in file.artifacts.enumerated() {
-            guard case .contextDoc(var existing) = artifact else { continue }
-            guard existing.title == doc.title else { continue }
-            switch existing.status {
-            case .rejected:
-                return
-            case .recurring, .staged, .applied:
-                existing.recurrenceCount += 1
-                existing.lastSeenAt = doc.lastSeenAt
-                for s in doc.sources where !existing.sources.contains(s) {
-                    existing.sources.append(s)
-                }
-                existing.sessionCount = max(existing.sessionCount, doc.sessionCount)
-                // Body update on re-observation lets the generator
-                // accumulate more evidence over time. Re-sanitize.
-                if !doc.body.isEmpty {
-                    existing.body = LearnedContextDoc.sanitizeBody(doc.body)
-                }
-                file.artifacts[idx] = .contextDoc(existing)
-                didMerge = true
-            }
-            break
-        }
-        if !didMerge {
-            file.artifacts.append(.contextDoc(doc))
-        }
-        try save(file)
-        shared = file
-    }
-
-    /// Promote a context doc from `.recurring` → `.staged`. No-op for
-    /// other statuses / unknown ids.
-    public static func promoteContextDocToStaged(id: String) throws {
-        try mutateContextDoc(id: id) { doc in
-            guard doc.status == .recurring else { return }
-            doc.status = .staged
-        }
-    }
-
-    /// Move a staged context doc to applied status.
-    public static func applyContextDoc(id: String) throws {
-        try mutateContextDoc(id: id) { doc in
-            guard doc.status == .staged else { return }
-            doc.status = .applied
-        }
-    }
-
-    /// Move a context doc to rejected (from any non-terminal state).
-    public static func rejectContextDoc(id: String) throws {
-        try mutateContextDoc(id: id) { doc in
-            doc.status = .rejected
-        }
-    }
-
-    /// Read-only: context docs in a given status (sorted by lastSeenAt desc).
-    public static func contextDocs(inStatus status: LearnedRuleStatus) -> [LearnedContextDoc] {
-        (load() ?? .empty).contextDocs
-            .filter { $0.status == status }
-            .sorted { $0.lastSeenAt > $1.lastSeenAt }
-    }
-
-    /// Read-only: applied context docs (sorted by lastSeenAt desc, most
-    /// recent first). Used by the session-brief integration — the
-    /// agent's context is fed by what's currently applied.
-    public static func appliedContextDocs() -> [LearnedContextDoc] {
-        contextDocs(inStatus: .applied)
-    }
-
-    // MARK: - Instruction patch mutations (H+2c)
-
-    /// Merge-on-duplicate observation for instruction patches. Dedup
-    /// key is `(toolName, hint)` — same hint for the same tool is the
-    /// same observation. Respects `.rejected` stickiness.
-    public static func observeInstructionPatch(_ patch: LearnedInstructionPatch) throws {
-        var file = load() ?? .empty
-        var didMerge = false
-        for (idx, artifact) in file.artifacts.enumerated() {
-            guard case .instructionPatch(var existing) = artifact else { continue }
-            guard existing.toolName == patch.toolName,
-                  existing.hint == patch.hint else { continue }
-            switch existing.status {
-            case .rejected: return
-            case .recurring, .staged, .applied:
-                existing.recurrenceCount += 1
-                existing.lastSeenAt = patch.lastSeenAt
-                for s in patch.sources where !existing.sources.contains(s) {
-                    existing.sources.append(s)
-                }
-                existing.sessionCount = max(existing.sessionCount, patch.sessionCount)
-                file.artifacts[idx] = .instructionPatch(existing)
-                didMerge = true
-            }
-            break
-        }
-        if !didMerge { file.artifacts.append(.instructionPatch(patch)) }
-        try save(file)
-        shared = file
-    }
-
-    public static func promoteInstructionPatchToStaged(id: String) throws {
-        try mutateInstructionPatch(id: id) { p in
-            guard p.status == .recurring else { return }
-            p.status = .staged
-        }
-    }
-
-    /// Apply ONLY fires when operator confirms — no auto-apply path
-    /// anywhere. Schneier constraint enforced at the state machine.
-    public static func applyInstructionPatch(id: String) throws {
-        try mutateInstructionPatch(id: id) { p in
-            guard p.status == .staged else { return }
-            p.status = .applied
-        }
-    }
-
-    public static func rejectInstructionPatch(id: String) throws {
-        try mutateInstructionPatch(id: id) { p in p.status = .rejected }
-    }
-
-    public static func instructionPatches(inStatus status: LearnedRuleStatus) -> [LearnedInstructionPatch] {
-        (load() ?? .empty).instructionPatches
-            .filter { $0.status == status }
-            .sorted { $0.lastSeenAt > $1.lastSeenAt }
-    }
-
-    public static func appliedInstructionPatches() -> [LearnedInstructionPatch] {
-        instructionPatches(inStatus: .applied)
-    }
-
-    // MARK: - Workflow playbook mutations (H+2c)
-
-    /// Dedup by `title` (same recipe shape produces same slug). Respects
-    /// `.rejected` stickiness.
-    public static func observeWorkflowPlaybook(_ playbook: LearnedWorkflowPlaybook) throws {
-        var file = load() ?? .empty
-        var didMerge = false
-        for (idx, artifact) in file.artifacts.enumerated() {
-            guard case .workflowPlaybook(var existing) = artifact else { continue }
-            guard existing.title == playbook.title else { continue }
-            switch existing.status {
-            case .rejected: return
-            case .recurring, .staged, .applied:
-                existing.recurrenceCount += 1
-                existing.lastSeenAt = playbook.lastSeenAt
-                for s in playbook.sources where !existing.sources.contains(s) {
-                    existing.sources.append(s)
-                }
-                existing.sessionCount = max(existing.sessionCount, playbook.sessionCount)
-                // Refresh steps/description on re-observation so a
-                // refined generator pass can update them.
-                if !playbook.description.isEmpty {
-                    existing.description = LearnedWorkflowPlaybook.sanitizeDescription(playbook.description)
-                }
-                if !playbook.steps.isEmpty {
-                    existing.steps = Array(playbook.steps.prefix(LearnedWorkflowPlaybook.maxSteps))
-                }
-                file.artifacts[idx] = .workflowPlaybook(existing)
-                didMerge = true
-            }
-            break
-        }
-        if !didMerge { file.artifacts.append(.workflowPlaybook(playbook)) }
-        try save(file)
-        shared = file
-    }
-
-    public static func promoteWorkflowPlaybookToStaged(id: String) throws {
-        try mutateWorkflowPlaybook(id: id) { w in
-            guard w.status == .recurring else { return }
-            w.status = .staged
-        }
-    }
-
-    public static func applyWorkflowPlaybook(id: String) throws {
-        try mutateWorkflowPlaybook(id: id) { w in
-            guard w.status == .staged else { return }
-            w.status = .applied
-        }
-    }
-
-    public static func rejectWorkflowPlaybook(id: String) throws {
-        try mutateWorkflowPlaybook(id: id) { w in w.status = .rejected }
-    }
-
-    public static func workflowPlaybooks(inStatus status: LearnedRuleStatus) -> [LearnedWorkflowPlaybook] {
-        (load() ?? .empty).workflowPlaybooks
-            .filter { $0.status == status }
-            .sorted { $0.lastSeenAt > $1.lastSeenAt }
-    }
-
-    // MARK: - Private — shared mutation helpers
-
-    private static func mutateContextDoc(
-        id: String,
-        _ mutate: (inout LearnedContextDoc) -> Void
-    ) throws {
-        var file = load() ?? .empty
-        for (idx, artifact) in file.artifacts.enumerated() {
-            guard case .contextDoc(var doc) = artifact, doc.id == id else { continue }
-            mutate(&doc)
-            file.artifacts[idx] = .contextDoc(doc)
-            try save(file)
-            shared = file
-            return
-        }
-    }
-
-    private static func mutateInstructionPatch(
-        id: String,
-        _ mutate: (inout LearnedInstructionPatch) -> Void
-    ) throws {
-        var file = load() ?? .empty
-        for (idx, artifact) in file.artifacts.enumerated() {
-            guard case .instructionPatch(var p) = artifact, p.id == id else { continue }
-            mutate(&p)
-            file.artifacts[idx] = .instructionPatch(p)
-            try save(file)
-            shared = file
-            return
-        }
-    }
-
-    private static func mutateWorkflowPlaybook(
-        id: String,
-        _ mutate: (inout LearnedWorkflowPlaybook) -> Void
-    ) throws {
-        var file = load() ?? .empty
-        for (idx, artifact) in file.artifacts.enumerated() {
-            guard case .workflowPlaybook(var w) = artifact, w.id == id else { continue }
-            mutate(&w)
-            file.artifacts[idx] = .workflowPlaybook(w)
-            try save(file)
-            shared = file
-            return
-        }
-    }
-
-    /// Back-compat: Phase H callers that still use `stage(_:)` get the
-    /// new `observe` behavior — non-breaking from the caller's side.
-    @available(*, deprecated, renamed: "observe(_:)", message: "Use observe(_:) — it also handles deduplication + recurrence counting.")
-    public static func stage(_ rule: LearnedFilterRule) throws {
-        try observe(rule)
-    }
-
-    /// Promote a single rule from `.recurring` to `.staged`. Called by the
-    /// daily-cadence sweep once a rule has recurred ≥N times with sufficient
-    /// confidence. No-op for rules in terminal statuses or already staged.
-    public static func promoteToStaged(id: String) throws {
-        var file = load() ?? .empty
-        guard let idx = file.rules.firstIndex(where: { $0.id == id }) else { return }
-        guard file.rules[idx].status == .recurring else { return }
-        file.rules[idx].status = .staged
-        try save(file)
-        shared = file
-    }
-
-    /// Move a staged rule to applied status.
-    public static func apply(id: String) throws {
-        var file = load() ?? .empty
-        guard let idx = file.rules.firstIndex(where: { $0.id == id }) else { return }
-        file.rules[idx].status = .applied
-        try save(file)
-        shared = file
-    }
-
-    /// Apply all staged rules at once.
-    public static func applyAll() throws {
-        var file = load() ?? .empty
-        for idx in file.rules.indices where file.rules[idx].status == .staged {
-            file.rules[idx].status = .applied
-        }
-        try save(file)
-        shared = file
-    }
-
-    /// Move a staged rule to rejected status.
-    public static func reject(id: String) throws {
-        var file = load() ?? .empty
-        guard let idx = file.rules.firstIndex(where: { $0.id == id }) else { return }
-        file.rules[idx].status = .rejected
-        try save(file)
-        shared = file
-    }
-
     /// Delete all learned rules and reset the file.
     public static func reset() throws {
         let empty = LearnedRulesFile.empty
         try save(empty)
         shared = empty
-    }
-
-    /// Store an LLM-generated rewrite of the rule's rationale.
-    /// Caller has already run safety passes (SecretDetector + length
-    /// cap) on `enrichedRationale`; this method is persistence only.
-    /// No-op when the rule id is unknown.
-    public static func setEnrichedRationale(id: String, text: String?) throws {
-        var file = load() ?? .empty
-        guard let idx = file.rules.firstIndex(where: { $0.id == id }) else { return }
-        file.rules[idx].enrichedRationale = text
-        try save(file)
-        shared = file
-    }
-
-    // MARK: - Queries
-
-    /// Returns only rules currently in applied status as FilterRules.
-    public static func loadApplied() -> [LearnedFilterRule] {
-        (load() ?? .empty).rules.filter { $0.status == .applied }
-    }
-
-    /// Returns rules in `.recurring` status — candidates for the daily sweep.
-    public static func loadRecurring() -> [LearnedFilterRule] {
-        (load() ?? .empty).rules.filter { $0.status == .recurring }
     }
 }

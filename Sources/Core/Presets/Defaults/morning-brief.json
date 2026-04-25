@@ -1,0 +1,13 @@
+{
+  "name": "morning-brief",
+  "version": 1,
+  "cronPattern": "30 6 * * *",
+  "command": "senkani brief --for today --out ~/.senkani/briefs/$(date +%F).md && senkani notify --sink pushover --priority info --title \"Morning brief\" --body-file ~/.senkani/briefs/$(date +%F).md",
+  "budgetLimitCents": 25,
+  "worktree": false,
+  "notify": { "onSuccess": "info", "onFailure": "attention" },
+  "engine": "claude",
+  "description": "Daily 06:30 brief of yesterday's session + today's hot files, written to ~/.senkani/briefs and pushed via Pushover.",
+  "docUrl": "/docs/reference/cli/schedule/presets/morning-brief.html",
+  "prerequisites": ["senkani-brief-cli", "pushover-notification-sink"]
+}

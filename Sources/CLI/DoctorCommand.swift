@@ -1,4 +1,5 @@
 import ArgumentParser
+import Bench
 import Core
 import Foundation
 import Indexer
@@ -41,6 +42,9 @@ struct Doctor: ParsableCommand {
 
         // 5. Model cache
         checkModels(&results)
+
+        // 5b. Per-RAM-tier Gemma 4 output quality
+        checkMLTierQuality(&results)
 
         // 6. SQLite database
         checkDatabase(&results)
@@ -340,14 +344,88 @@ struct Doctor: ParsableCommand {
         let mgr = ModelManager.shared
 
         for model in mgr.models {
-            let ready = mgr.isReady(model.id)
-            if ready {
-                printStatus(.pass, "\(model.name): downloaded")
+            switch model.status {
+            case .verified:
+                printStatus(.pass, "\(model.name): verified")
                 results.passed += 1
-            } else {
-                printStatus(.skip, "\(model.name): not downloaded")
+            case .downloaded:
+                printStatus(.pass, "\(model.name): installed (not yet verified)")
+                results.passed += 1
+            case .verifying:
+                printStatus(.skip, "\(model.name): verifying…")
+                results.skipped += 1
+            case .downloading:
+                let pct = Int(model.downloadProgress * 100)
+                printStatus(.skip, "\(model.name): downloading (\(pct)%)")
+                results.skipped += 1
+            case .broken:
+                let why = model.lastError.map { " — \($0)" } ?? ""
+                printStatus(.fail, "\(model.name): verification failed\(why)")
+                results.failed += 1
+            case .error:
+                let why = model.lastError.map { " — \($0)" } ?? ""
+                printStatus(.fail, "\(model.name): install error\(why)")
+                results.failed += 1
+            case .available:
+                printStatus(.skip, "\(model.name): not installed")
                 results.skipped += 1
             }
+        }
+    }
+
+    // MARK: - Check 5b: ML Tier Quality
+
+    /// Read the cached `ml-tier-eval.json` report and surface a per-tier
+    /// quality rating. Degraded tiers emit a warning so 8 GB Mac users
+    /// know the lower tier is materially worse before they're routed to it.
+    private func checkMLTierQuality(_ results: inout Results) {
+        guard let report = MLTierEvalReportStore.load() else {
+            printStatus(.skip, "ML tier quality: no eval cached (run `senkani ml-eval` to populate)")
+            results.skipped += 1
+            return
+        }
+
+        let installedIds = Set(ModelManager.shared.models
+            .filter { $0.status == .verified || $0.status == .downloaded }
+            .map(\.id))
+
+        let installedTiers = report.tiers.filter { installedIds.contains($0.tierId) }
+
+        if installedTiers.isEmpty {
+            printStatus(.skip, "ML tier quality: no Gemma tiers installed yet")
+            results.skipped += 1
+            return
+        }
+
+        for tier in installedTiers {
+            let label = mlTierLine(tier)
+            switch tier.rating {
+            case .excellent, .acceptable:
+                printStatus(.pass, label)
+                results.passed += 1
+            case .degraded:
+                printStatus(.fail, label + " — consider upgrading to a larger tier if RAM allows")
+                results.failed += 1
+            case .notEvaluated:
+                printStatus(.skip, label)
+                results.skipped += 1
+            }
+        }
+    }
+
+    private func mlTierLine(_ r: MLTierEvalResult) -> String {
+        let head = "ml.tier.\(r.tierId): \(r.rating.rawValue)"
+        switch r.rating {
+        case .notEvaluated:
+            let why = r.skipReason.map { " — \($0)" } ?? ""
+            return "\(head)\(why)"
+        case .excellent, .acceptable, .degraded:
+            let pct = Int((r.passRate * 100).rounded())
+            return String(
+                format: "%@ (%d/%d, %d%% pass, median %dms, %d output tok)",
+                head, r.passed, r.total, pct,
+                Int(r.medianLatencyMs.rounded()), r.totalOutputTokens
+            )
         }
     }
 

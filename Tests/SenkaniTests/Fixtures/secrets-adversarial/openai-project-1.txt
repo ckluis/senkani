@@ -1,0 +1,8 @@
+# id: openai-project-1
+# family: openai_project
+# expected: OPENAI_PROJECT_KEY
+# match_mode: any
+# description: OpenAI project-scoped key (sk-proj-) in env file.
+# synthetic: true
+---
+OPENAI_PROJECT_KEY=sk-proj-FAKEabcdef1234567890ABCDEF1234567890

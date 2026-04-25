@@ -1,0 +1,13 @@
+{
+  "name": "competitive-scan",
+  "version": 1,
+  "cronPattern": "0 8 * * 1",
+  "command": "senkani exec --tool senkani_search_web --args '{\"query\":\"<competitor> pricing OR changelog OR release\",\"limit\":12}' | ollama run gemma3:9b \"Extract concrete changes: pricing, product, positioning.\" > ~/.senkani/research/competitive/$(date +%F).md",
+  "budgetLimitCents": null,
+  "worktree": false,
+  "notify": { "onSuccess": "info", "onFailure": "attention" },
+  "engine": "local-llm",
+  "description": "Monday 08:00 competitor scan: search the web for pricing/release changes, land a weekly markdown roll-up.",
+  "docUrl": "/docs/reference/cli/schedule/presets/competitive-scan.html",
+  "prerequisites": ["senkani_search_web", "guard-research", "ollama"]
+}

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Panes — reference</title>
-<meta name="description" content="All 17 senkani workspace pane types.">
+<meta name="description" content="All 18 senkani workspace pane types.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -38,7 +38,7 @@
       </ul>
     </div>
     <div class="wiki-nav-group">
-      <h4>Pane types (17)</h4>
+      <h4>Pane types (18)</h4>
       <ul>
         <li><a href="../../docs/reference/panes/terminal.html">Terminal</a></li>
         <li><a href="../../docs/reference/panes/dashboard.html">Dashboard</a></li>
@@ -57,6 +57,7 @@
         <li><a href="../../docs/reference/panes/skill-library.html">Skill Library</a></li>
         <li><a href="../../docs/reference/panes/sprint-review.html">Sprint Review</a></li>
         <li><a href="../../docs/reference/panes/settings.html">Settings</a></li>
+        <li><a href="../../docs/reference/panes/ollama-launcher.html">Ollama</a></li>
       </ul>
     </div>
   </aside>
@@ -88,6 +89,7 @@
       <a class="card" href="../../docs/reference/panes/skill-library.html"><h4>Skill Library</h4><p>Browse, install, and manage AI agent skills discovered in the project or shipped globally. Zero-install enable/disable.</p></a>
       <a class="card" href="../../docs/reference/panes/sprint-review.html"><h4>Sprint Review</h4><p>GUI counterpart to `senkani learn review`. Accept/reject staged compound-learning proposals (filter rules, context docs, instruction patches, workflow playbooks) plus a stale-applied section mirroring the quarterly audit.</p></a>
       <a class="card" href="../../docs/reference/panes/settings.html"><h4>Settings</h4><p>Global app preferences: theme, font size, default FCSIT, key bindings, telemetry (off by default).</p></a>
+      <a class="card" href="../../docs/reference/panes/ollama-launcher.html"><h4>Ollama</h4><p>Local LLM chat via Ollama with a tri-state availability gate (detecting → absent-CTA → connected-terminal). Header download button opens a curated-catalog drawer: pick from 5 LLMs (llama3.1:8b, qwen2.5-coder:7b, deepseek-r1:7b, mistral:7b, gemma2:2b), each row discloses size before the pull click and streams `ollama pull` progress into the UI. The same Senkani MCP env that terminal panes get flows through to the subprocess.</p></a>
     </div>
 
     <h2 style="margin-top:32px;">Keyboard</h2>

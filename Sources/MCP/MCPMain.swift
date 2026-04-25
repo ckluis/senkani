@@ -7,18 +7,20 @@ import Core
 
 public struct MCPServerRunner {
     public static func run() async throws {
-        FileHandle.standardError.write(Data("🔴 [MCP-SERVER] Senkani MCP server STARTED at \(Date())\n".utf8))
-        FileHandle.standardError.write(Data("🔴 [MCP-SERVER] PID=\(ProcessInfo.processInfo.processIdentifier) binary=\(ProcessInfo.processInfo.arguments.first ?? "?")\n".utf8))
-        FileHandle.standardError.write(Data("🔴 [MCP-SERVER] SENKANI_METRICS_FILE = \(ProcessInfo.processInfo.environment["SENKANI_METRICS_FILE"] ?? "NOT SET")\n".utf8))
-        FileHandle.standardError.write(Data("🔴 [MCP-SERVER] SENKANI_PROJECT_ROOT = \(ProcessInfo.processInfo.environment["SENKANI_PROJECT_ROOT"] ?? "NOT SET")\n".utf8))
-        FileHandle.standardError.write(Data("🔴 [MCP-SERVER] SENKANI_PANE_ID = \(ProcessInfo.processInfo.environment["SENKANI_PANE_ID"] ?? "NOT SET")\n".utf8))
+        let env = ProcessInfo.processInfo.environment
+        Logger.log("mcp.boot", fields: [
+            "pid": .int(Int(ProcessInfo.processInfo.processIdentifier)),
+            "has_metrics_file": .bool(env["SENKANI_METRICS_FILE"] != nil),
+            "has_project_root": .bool(env["SENKANI_PROJECT_ROOT"] != nil),
+            "has_pane_id": .bool(env["SENKANI_PANE_ID"] != nil),
+        ])
+
         // Access gate: only activate in Senkani-managed panes.
         // SENKANI_PANE_ID is injected by PaneContainerView into Senkani-spawned shells
         // via execve() and inherited by claude → MCP server. It is never present in
         // a shell opened outside the Senkani app.
-        guard ProcessInfo.processInfo.environment["SENKANI_PANE_ID"] != nil else {
-            FileHandle.standardError.write(
-                Data("[MCP] SENKANI_PANE_ID absent — not a Senkani pane, exiting\n".utf8))
+        guard env["SENKANI_PANE_ID"] != nil else {
+            Logger.log("mcp.gate.denied", fields: ["reason": .string("no_pane_id")])
             exit(0)
         }
 
@@ -41,6 +43,27 @@ public struct MCPServerRunner {
                     domain: "dev.senkani.MCPServer",
                     code: 2,
                     userInfo: [NSLocalizedDescriptionKey: "Unknown model ID: \(modelId). Known: \(ModelManager.shared.models.map(\.id))"]
+                )
+            }
+        }
+
+        // Register verification handler. Running `ensureModel()` loads the
+        // freshly-installed model into an MLX ModelContainer — if the weights
+        // are corrupt or the config is incompatible this will throw, which
+        // ModelManager converts to `.broken`. This IS the "tiny inference
+        // fixture" referenced in the install spec — the container load
+        // exercises the actual runtime path a tool would use.
+        ModelManager.shared.registerVerificationHandler { modelId in
+            switch modelId {
+            case EmbedEngine.modelId:
+                _ = try await EmbedTool.engine.ensureModel()
+            case let id where ModelManager.visionModelIds.contains(id):
+                _ = try await VisionTool.engine.ensureModel()
+            default:
+                throw NSError(
+                    domain: "dev.senkani.MCPServer",
+                    code: 7,
+                    userInfo: [NSLocalizedDescriptionKey: "Unknown model ID for verification: \(modelId)"]
                 )
             }
         }

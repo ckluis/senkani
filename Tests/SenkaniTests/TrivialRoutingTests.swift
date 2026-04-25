@@ -202,6 +202,48 @@ struct TrivialRoutingTests {
         #expect(result == nil, "ls with flags should pass through")
     }
 
+    @Test func lsAbsoluteOutOfRootPassesThrough() {
+        // Hostile agent: `ls /Users/otheruser` or `ls /etc`. Before the
+        // ProjectSecurity resolver check, this would have listed the
+        // directory locally and leaked entries back in the deny reason.
+        let dir = makeTempDir(files: ["marker.txt"])
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        let result = HookRouter.checkTrivialRouting(
+            command: "ls /etc",
+            projectRoot: dir,
+            sessionId: nil,
+            eventName: "PreToolUse"
+        )
+        #expect(result == nil, "ls targeting an out-of-root absolute path must not be answered locally")
+    }
+
+    @Test func lsDotDotEscapePassesThrough() {
+        let dir = makeTempDir(files: ["marker.txt"])
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        let result = HookRouter.checkTrivialRouting(
+            command: "ls ../../..",
+            projectRoot: dir,
+            sessionId: nil,
+            eventName: "PreToolUse"
+        )
+        #expect(result == nil, "ls with ../ escape must not be answered locally")
+    }
+
+    @Test func lsInRootStillRouted() {
+        let dir = makeTempDir(files: ["keep.swift"])
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        let result = HookRouter.checkTrivialRouting(
+            command: "ls",
+            projectRoot: dir,
+            sessionId: nil,
+            eventName: "PreToolUse"
+        )
+        #expect(result != nil, "bare ls in the project root still gets answered locally")
+    }
+
     @Test func pipePassesThrough() {
         let result = HookRouter.checkTrivialRouting(
             command: "pwd | cat",

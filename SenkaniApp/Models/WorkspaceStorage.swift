@@ -49,6 +49,9 @@ struct PersistedPane: Codable {
     // Terminal font (nil on pre-font-persistence JSON — restore defaults then)
     var fontSize: Double?
     var fontFamily: String?
+    /// Ollama-launcher panes: persisted default model tag. Nil for all
+    /// other pane types and for pre-ollama-pane persistence files.
+    var ollamaDefaultModel: String?
 }
 
 struct PersistedFeatures: Codable {
@@ -230,7 +233,8 @@ enum WorkspaceStorage {
             commandCount: pane.metrics.commandCount,
             secretsCaught: pane.metrics.secretsCaught,
             fontSize: Double(pane.fontSize),
-            fontFamily: pane.fontFamily
+            fontFamily: pane.fontFamily,
+            ollamaDefaultModel: pane.paneType == .ollamaLauncher ? pane.ollamaDefaultModel : nil
         )
     }
 
@@ -266,6 +270,12 @@ enum WorkspaceStorage {
         }
         if let family = ppane.fontFamily {
             pane.fontFamily = PaneFontSettings.resolveFamily(requested: family)
+        }
+        // Ollama default model: snap to the package default if missing
+        // or invalid, so a corrupted persistence file can't launch a
+        // bogus command.
+        if paneType == .ollamaLauncher {
+            pane.ollamaDefaultModel = OllamaLauncherSupport.resolveModelTag(ppane.ollamaDefaultModel)
         }
         return pane
     }

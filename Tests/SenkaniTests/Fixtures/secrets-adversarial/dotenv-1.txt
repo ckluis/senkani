@@ -1,0 +1,9 @@
+# id: dotenv-1
+# family: dotenv
+# expected: GENERIC_API_KEY,HIGH_ENTROPY
+# match_mode: any
+# description: Dotenv-style password line. The GENERIC_API_KEY regex lacks "password" as a keyword (gap), but EntropyScanner catches the high-entropy value — pipeline still redacts.
+# synthetic: true
+---
+DATABASE_PASSWORD=Sup3rSecretFAKE_db_password_1234567890
+DATABASE_USER=postgres

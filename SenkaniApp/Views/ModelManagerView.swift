@@ -1,4 +1,5 @@
 import SwiftUI
+import Bench
 import Core
 
 /// View for managing downloadable ML models used by senkani_embed and senkani_vision.
@@ -7,9 +8,10 @@ struct ModelManagerView: View {
     @State private var showDeleteConfirmation = false
     @State private var pendingDeleteId: String?
     @State private var errorMessage: String?
+    @State private var tierEvalReport: MLTierEvalReport?
 
     private var isAnyDownloading: Bool {
-        manager.models.contains { $0.status == .downloading }
+        manager.models.contains { $0.status == .downloading || $0.status == .verifying }
     }
 
     var body: some View {
@@ -71,6 +73,9 @@ struct ModelManagerView: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: errorMessage != nil)
+        .onAppear {
+            tierEvalReport = MLTierEvalReportStore.load()
+        }
     }
 
     // MARK: - Header
@@ -208,8 +213,10 @@ struct ModelManagerView: View {
                     model: model,
                     isRecommended: model.id == recommended,
                     comparisonNote: modelComparisonNote(model.id),
+                    tierQuality: tierEvalReport?.result(for: model.id),
                     onDownload: { downloadModel(model.id) },
-                    onDelete: { confirmDelete(model.id) }
+                    onDelete: { confirmDelete(model.id) },
+                    onVerify: { verifyModel(model.id) }
                 )
             }
         }
@@ -250,6 +257,16 @@ struct ModelManagerView: View {
         }
     }
 
+    private func verifyModel(_ id: String) {
+        Task {
+            do {
+                try await manager.verify(modelId: id)
+            } catch {
+                withAnimation { errorMessage = error.localizedDescription }
+            }
+        }
+    }
+
     private func downloadAll() {
         let available = manager.models.filter { $0.status == ModelStatus.available }
         for model in available {
@@ -279,8 +296,10 @@ struct ModelCardView: View {
     let model: ModelInfo
     var isRecommended: Bool = false
     var comparisonNote: String? = nil
+    var tierQuality: MLTierEvalResult? = nil
     let onDownload: () -> Void
     let onDelete: () -> Void
+    var onVerify: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 12) {
@@ -311,6 +330,10 @@ struct ModelCardView: View {
                             .padding(.vertical, 1)
                             .background(Color.purple.opacity(0.10))
                             .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+
+                    if let q = tierQuality, q.rating != .notEvaluated {
+                        tierQualityBadge(q)
                     }
                 }
 
@@ -345,6 +368,27 @@ struct ModelCardView: View {
     // MARK: - Card Components
 
     @ViewBuilder
+    private func tierQualityBadge(_ r: MLTierEvalResult) -> some View {
+        let pct = Int((r.passRate * 100).rounded())
+        let (color, label): (Color, String) = {
+            switch r.rating {
+            case .excellent: return (.green, "excellent \(pct)%")
+            case .acceptable: return (.blue, "acceptable \(pct)%")
+            case .degraded: return (.orange, "degraded \(pct)%")
+            case .notEvaluated: return (.secondary, "not evaluated")
+            }
+        }()
+        Text(label)
+            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .foregroundStyle(color)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(color.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+            .help("Output quality: \(r.passed)/\(r.total) tasks passed, median \(Int(r.medianLatencyMs.rounded()))ms")
+    }
+
+    @ViewBuilder
     private var statusIcon: some View {
         switch model.status {
         case .available:
@@ -357,9 +401,22 @@ struct ModelCardView: View {
                 .foregroundStyle(.orange)
                 .symbolEffect(.pulse)
         case .downloaded:
+            Image(systemName: "checkmark.circle")
+                .font(.system(size: 20))
+                .foregroundStyle(.blue)
+        case .verifying:
+            Image(systemName: "sparkles")
+                .font(.system(size: 20))
+                .foregroundStyle(.orange)
+                .symbolEffect(.pulse)
+        case .verified:
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 20))
                 .foregroundStyle(.green)
+        case .broken:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 20))
+                .foregroundStyle(.orange)
         case .error:
             Image(systemName: "exclamationmark.circle.fill")
                 .font(.system(size: 20))
@@ -371,38 +428,30 @@ struct ModelCardView: View {
     private var statusBadge: some View {
         switch model.status {
         case .available:
-            Text("Available")
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundStyle(.blue)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
-                .background(Color.blue.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 3))
+            badgePill("Available", color: .blue)
         case .downloading:
-            Text("\(Int(model.downloadProgress * 100))%")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(.orange)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
-                .background(Color.orange.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 3))
+            badgePill("\(Int(model.downloadProgress * 100))%", color: .orange, bold: true)
         case .downloaded:
-            Text("Ready")
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundStyle(.green)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
-                .background(Color.green.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 3))
+            badgePill("Installed", color: .blue)
+        case .verifying:
+            badgePill("Verifying…", color: .orange)
+        case .verified:
+            badgePill("Ready", color: .green)
+        case .broken:
+            badgePill("Verification failed", color: .orange)
         case .error:
-            Text("Error")
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundStyle(.red)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
-                .background(Color.red.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 3))
+            badgePill("Error", color: .red)
         }
+    }
+
+    private func badgePill(_ text: String, color: Color, bold: Bool = false) -> some View {
+        Text(text)
+            .font(.system(size: 9, weight: bold ? .bold : .medium, design: .monospaced))
+            .foregroundStyle(color)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(color.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 3))
     }
 
     @ViewBuilder
@@ -415,12 +464,12 @@ struct ModelCardView: View {
                     .foregroundStyle(.blue)
             }
             .buttonStyle(.plain)
-            .help("Download \(model.name)")
-        case .downloading:
+            .help("Install \(model.name)")
+        case .downloading, .verifying:
             ProgressView()
                 .scaleEffect(0.6)
                 .frame(width: 18, height: 18)
-        case .downloaded:
+        case .downloaded, .verified:
             Button(action: onDelete) {
                 Image(systemName: "trash")
                     .font(.system(size: 14))
@@ -428,6 +477,23 @@ struct ModelCardView: View {
             }
             .buttonStyle(.plain)
             .help("Delete \(model.name)")
+        case .broken:
+            HStack(spacing: 6) {
+                Button(action: onVerify) {
+                    Image(systemName: "arrow.clockwise.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(.orange)
+                }
+                .buttonStyle(.plain)
+                .help("Re-verify \(model.name)")
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.red.opacity(0.7))
+                }
+                .buttonStyle(.plain)
+                .help("Delete \(model.name)")
+            }
         }
     }
 

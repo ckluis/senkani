@@ -1,0 +1,8 @@
+# id: anthropic-3
+# family: anthropic
+# expected: ANTHROPIC_API_KEY
+# match_mode: any
+# description: Anthropic key inside ANSI-coloured shell prompt log line.
+# synthetic: true
+---
+[2026-04-24 12:01:33] \x1b[33mloaded sk-ant-api03-FAKEFAKEFAKEFAKEFAKEFAKEFAKE\x1b[0m from secrets file

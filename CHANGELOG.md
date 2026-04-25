@@ -6,6 +6,1027 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 25 — Split `LearnedRulesStore.swift` (844 → 360 LOC façade) into four per-artifact extensions (`luminary-2026-04-24-6-learnedrulesstore-split`)
+- Luminary P1. `Sources/Core/LearnedRulesStore.swift` had grown to 844
+  LOC mixing four artifact lifecycles (`LearnedFilterRule`,
+  `LearnedContextDoc`, `LearnedInstructionPatch`,
+  `LearnedWorkflowPlaybook`). The artifact types are the natural seam
+  — adapt the SessionDatabase / KnowledgeStore split spirit to this
+  JSON-backed substrate.
+- Four per-artifact files extracted under `Sources/Core/LearnedRules/`:
+  - `FilterRuleStore.swift` — owns the `LearnedFilterRule` type +
+    Phase H/H+1/H+2a lifecycle (observe, promoteToStaged, apply,
+    applyAll, reject, setEnrichedRationale, loadApplied,
+    loadRecurring); also keeps the deprecated `stage(_:)` alias.
+  - `ContextDocStore.swift` — Phase H+2b context-doc lifecycle
+    (observe/promote/apply/reject/queries, plus the file-private
+    `mutateContextDoc` helper).
+  - `InstructionPatchStore.swift` — Phase H+2c lifecycle, with the
+    Schneier constraint (no auto-apply path) restated in the header.
+  - `WorkflowPlaybookStore.swift` — Phase H+2c lifecycle, with the
+    "refresh steps + description on re-observation" merge rule.
+- Each new file is a Swift `extension LearnedRulesStore { ... }` so
+  the public API is byte-identical (`LearnedRulesStore.observe(_:)`,
+  `.observeContextDoc(_:)`, etc.). The 20+ caller sites recorded
+  pre-split (`grep -rl LearnedRulesStore\\.` across `Sources/` and
+  `Tests/`) compile unchanged.
+- Façade `LearnedRulesStore.swift` shrinks from 844 → 360 LOC and now
+  owns only the cross-cutting types (`LearnedRuleStatus`,
+  `LearnedArtifact`, `LearnedRulesFile`) plus shared persistence
+  infra (`load`/`save`/`shared` cache, `withPath` test override,
+  `reset`).
+- New `Sources/Core/Stores/INVARIANTS.md` section "LearnedRulesStore
+  invariants" (LRS1–LRS4) documents the single-shared-cache /
+  read-modify-write / single-writer assumption, the public-API
+  byte-identity contract, and the discriminated-union placement rule
+  for adding a fifth artifact type. Calls out the explicit absence of
+  a SessionDatabase-style serial queue (today's writers don't
+  overlap; a future concurrent writer would need to add one before
+  introducing parallelism — Kleppmann's re-audit concern).
+- Tests: 25 new under `Tests/SenkaniTests/LearnedRules/` — one
+  `*StoreTests.swift` per artifact type, each exercising
+  observe/merge/rejected-stickiness/promote/apply/query paths
+  directly against the store API (the `CompoundLearningH*` suites
+  cover the higher-level generator → store integration; this layer
+  was previously only tested transitively).
+- Test count: 1781 → 1806 (+25). Full suite green via
+  `tools/test-safe.sh`.
+
+### April 25 — Split `KnowledgeStore.swift` (929 → 236 LOC façade) into four sub-stores (`luminary-2026-04-24-5-knowledgestore-split`)
+- Luminary P1. `Sources/Core/KnowledgeStore.swift` had grown to 929 LOC —
+  the same trajectory that prompted the SessionDatabase P2-11 split. Apply
+  the same pattern: keep the public class as a thin façade and move
+  table-owned behavior into focused stores under
+  `Sources/Core/KnowledgeStore/` that share the parent's connection +
+  serial dispatch queue.
+- Four sub-stores extracted (each ≤400 LOC):
+  - `EntityStore` — owns `knowledge_entities` + `knowledge_fts`
+    (FTS5 virtual table + 3 sync triggers); entity CRUD, mention-count
+    writes, staleness, FTS5 search.
+  - `LinkStore` — owns `entity_links` + 3 indexes; link CRUD,
+    backlinks, the post-hoc `target_id` resolver.
+  - `DecisionStore` — owns `decision_records` + the `entity_name` index
+    + the partial-unique `idx_decisions_commit` (git_commit dedup).
+  - `EnrichmentStore` — owns `evidence_timeline` + `co_change_coupling`,
+    the two enrichment-pipeline outputs that share an aggregate identity
+    despite different lifecycles (rationale documented in the file
+    header and INVARIANTS.md K3).
+- Public API is byte-identical. Forwarders live in four
+  `KnowledgeStore+*API.swift` extension files so callsites keep the
+  pre-split shape — `SessionDatabase`'s split precedent in
+  `Sources/Core/Stores/` set this convention.
+- 24 new tests (6 per sub-store), each focused on store-level
+  invariants the legacy aggregate suite doesn't cover: schema
+  idempotency under reopen, FK cascade + SET NULL behavior, partial
+  unique-index dedup semantics, mention-count batch atomicity,
+  coupling-pair canonicalisation under burst writes. Suite total
+  1757 → 1781 (+24).
+- `Sources/Core/Stores/INVARIANTS.md` extended with a new
+  "KnowledgeStore store invariants" section (K1–K5) covering connection
+  sharing, the cross-store FK boundaries, the FTS5 trigger contract,
+  the EnrichmentStore composition rationale, and the partial-unique
+  index contract. The two split-rounds (SessionDatabase + KnowledgeStore)
+  now share one invariants doc.
+
+### April 25 — `senkani ml-eval` CLI + per-tier inference adapter (`senkani-ml-eval-cli`)
+- Second of two follow-ups to `luminary-2026-04-24-4-gemma-tier-quality-eval`.
+  The 20-task harness shipped April 24, the vision fixtures shipped earlier
+  on April 25 — this round wires both to a CLI command that drives real
+  Gemma inference end-to-end. The harness is no longer dormant: on a real
+  machine with installed Gemma tiers, `senkani ml-eval` writes
+  `~/.senkani/ml-tier-eval.json` and `senkani doctor` surfaces ratings.
+- New `Sources/MCP/MLTierInferenceAdapter.swift` — actor-isolated, loads
+  one Gemma 4 VLM at a time via `VLMModelFactory.shared.loadContainer`,
+  answers `MLTierEvalTask`s through `MLXInferenceLock.shared`, unloads
+  between tiers so the next (often larger or smaller) tier doesn't OOM.
+- New `Sources/MCP/MLTierEvalOrchestrator.swift` — pure `plan(...)` helper
+  decides per-tier evaluate vs. skip (with explicit `.verified`/`.downloaded`
+  allowlist and named reasons for `insufficient RAM` / `not installed` /
+  `not in registry`); `run(...)` iterates the plans, drives the adapter,
+  and writes the report.
+- New `Sources/CLI/MLEvalCommand.swift` — `senkani ml-eval` subcommand.
+  Discovers `senkani-mcp` next to its own argv[0], in `.build/{release,
+  debug}/`, or on PATH (override via `--mcp-binary`); shells out so the
+  everyday `senkani` CLI stays MLX-free. `senkani-mcp` itself gains an
+  `eval` argv mode that bypasses the SENKANI_PANE_ID gate and runs the
+  orchestrator instead of the MCP server.
+- `Package.swift` — MCPServer target gains `Bench` dependency so the
+  orchestrator can reach `MLTierEvalTasks` / `MLTierEvalRunner` /
+  `MLTierEvalReportStore`. CLI target unchanged (no MLX surface).
+- 11 new tests: 6 pin orchestrator planning (RAM gate, install allowlist,
+  unknown-tier rejection, downloaded-counts-as-installed, broken/error/
+  downloading/verifying all skip with named status), 5 pin the CLI
+  subcommand (registered in `Senkani.subcommands`, help message contains
+  abstract + flags, MCP discovery finds sibling executable / build output /
+  returns nil when absent). Suite total 1746 → 1757 (+11).
+- Manual validation now runnable: the four `tools/soak/manual-log.md`
+  bullets under "Per-RAM-tier Gemma 4 quality eval" become exercisable
+  on the operator's machine — that's the round's final close-out
+  step and lives outside CI.
+
+### April 25 — Vision-eval image fixtures (`gemma4-vision-image-fixtures`)
+- Follow-up to `luminary-2026-04-24-4-gemma-tier-quality-eval`. The 10
+  vision tasks in `MLTierEvalTasks.visionTasks()` referenced PNGs by
+  `imageRef` but the files themselves didn't ship — the vision half of
+  the per-tier eval couldn't run end-to-end.
+- New `Sources/Bench/Resources/MLEvalImages/` with 10 PNGs (5–12 KB
+  each) covering each descriptor: terminal error, unified diff, Swift
+  function signature, labelled chart axes, test-failure output, build
+  log with warning count, UI mockup with primary button, multi-pane
+  Senkani window, crash-report stack trace, download progress bar.
+- `Sources/Bench/MLTierEvalTask.imageURL` resolves `imageRef` to a real
+  `URL` via `Bundle.module`. `Package.swift` adds the directory as a
+  `.copy` resource on the Bench target.
+- Generator script at `tools/render-ml-eval-fixtures.py` (PIL-based,
+  ≤200 KB cap enforced) so future descriptor changes can re-render
+  the set deterministically.
+- 2 new tests: `testEveryVisionTaskImageRefResolvesToARealFile` pins
+  every vision task to a real PNG via `Bundle.module`, and
+  `testRationaleTaskImageURLIsNil` pins the negative case. Suite total
+  1744 → 1746 (+2).
+- Doc fix: `MLTierEvalTask.imageRef` doc-comment claimed SHA-256 but
+  the codebase uses stable string IDs; updated to match reality.
+
+### April 24 — Per-RAM-tier Gemma 4 quality eval harness (`luminary-2026-04-24-4-gemma-tier-quality-eval`)
+- Luminary P1 from the 2026-04-24 review. Gemma 4 auto-selects an
+  install tier by available RAM (APEX 26B at ≥16 GB, E4B at ≥8 GB,
+  E2B fallback) but the quality-per-tier story was unpublished —
+  8 GB Mac users were silently routed to a materially worse model
+  with no warning. This round ships the harness that surfaces the
+  cost.
+- New `Sources/Bench/MLTierEvalTasks.swift` — 20 tasks (10 rationale
+  + 10 vision) probing concrete reasoning the rationale rewriter
+  uses in production: terseness, causal reasoning, terminology
+  recognition, structured output. Pass criterion is case-insensitive
+  any-of substring match so multiple correct phrasings count.
+- New `Sources/Bench/MLTierEvalRunner.swift` — runner accepts a
+  caller-provided inference closure (Bench has no MLX dependency)
+  and aggregates pass rate, median latency, output tokens. Rating
+  thresholds: ≥80% excellent, ≥60% acceptable, else degraded; tiers
+  the machine can't load report `notEvaluated` with a `skipReason`.
+- `MLTierEvalReportStore` persists results at
+  `~/.senkani/ml-tier-eval.json` (atomic write, ISO-8601 dates).
+- `senkani doctor` reads the cached report and surfaces a per-tier
+  line (`ml.tier.<id>: <rating> (passed/total, %, median ms, tokens)`).
+  Degraded tiers fail the check with an "upgrade if RAM allows" hint;
+  acceptable/excellent pass; absent report → skipped.
+- Models pane shows a quality badge on each Gemma card, color-coded
+  green (excellent) / blue (acceptable) / orange (degraded), with
+  hover tooltip showing pass-count and median latency.
+- 13 new tests pin task fixture shape, rating thresholds, runner
+  accuracy + median computation, JSON round-trip, and missing-file
+  handling. Suite total 1731 → 1744 (+13).
+- Deferred to follow-up rounds: (a) the 10 vision-image fixtures and
+  (b) the MCP-backed inference adapter that drives a real `senkani
+  ml-eval` CLI command. Both are spec'd in
+  `tools/soak/manual-log.md` and tracked as new backlog items so
+  the eval gets real numbers on machines that have Gemma 4 tiers
+  installed.
+
+### April 24 — SessionDatabase store invariants doc (`luminary-2026-04-24-3-store-invariants-doc`)
+- Luminary P1 from the 2026-04-24 review. The four-store split
+  (`CommandStore`, `TokenEventStore`, `SandboxStore`, `ValidationStore`)
+  shipped under `sessiondb-split-2..6` left several invariants
+  enforced "by being in one file" with no written contract. Future
+  splits (`KnowledgeStore` 929 LOC, `LearnedRulesStore` 844 LOC) need
+  the rule-set written down before they begin.
+- New `Sources/Core/Stores/INVARIANTS.md` — nine numbered invariants
+  (I1–I9) covering the shared connection / serial-queue rule,
+  `BEGIN IMMEDIATE` boundary on `recordCommand` (the only multi-
+  statement transaction today), public-API byte-identity contract,
+  `project_root` filter on every cross-project read (with the named
+  asymmetry — `sandboxed_results` and `validation_results` are
+  session-scoped and don't carry it), `token_events` single-source-
+  of-truth and the inventory of every place it's JOINed, mandatory
+  `PersistenceRedaction` on every disk-bound write, the
+  `db.<scope>.<outcome>` Logger contract, cache-key conventions
+  reserved for the next splits, and migration ownership at the
+  façade. Each invariant cites ≥ 1 concrete test that enforces it.
+- `spec/architecture.md` SessionDatabase section now links to
+  `INVARIANTS.md`.
+- `spec/cleanup.md` item 19 records two coverage gaps the audit
+  surfaced: `complianceRate` and `lastExecResult` have no direct
+  unit tests for project isolation. Closes before the next
+  store-extraction round.
+- Pure documentation round — no source changes, no test delta.
+
+### April 24 — SecretDetector adversarial corpus + precision/recall harness (`luminary-2026-04-24-2-secretdetector-adversarial-corpus`)
+- Luminary P0 from the 2026-04-24 spec-vs-codebase review. The
+  shipped "100% redaction" claim was measured against a small
+  hand-curated fixture set; against modern adversarial inputs (JWTs,
+  PEM blocks, signed URLs, sub-threshold tokens, hyphenated key
+  names, multi-secret blobs, structured config, base64/hex obfuscation)
+  the same pipeline measured **1.000 precision / 0.894 recall**.
+  The round publishes the honest numbers, names the gaps, and adds
+  a regression harness so future changes can't drift either way.
+- New `Tests/SenkaniTests/Fixtures/secrets-adversarial/` with 53
+  labelled fixture files spanning 22 families. Each fixture has a
+  `# id / family / expected / match_mode / description` header
+  followed by `---\n` and a body. All bodies are synthetic — keys
+  marked `FAKE` or split with concatenation tricks dodge GitHub
+  push-protection.
+- New `Tests/SenkaniTests/SecretDetectorAdversarialTests.swift`
+  (~250 LOC). Three `@Test` functions: parameterised
+  fixture-level expectation (53 invocations), parameterised
+  family-threshold check (22 invocations), and a single summary
+  reporter that prints a TP/FP/FN/TN/precision/recall table to
+  stdout for each `swift test` run. New schema field
+  `documented_gap: true` lets a fixture pin a known recall miss —
+  the per-fixture test asserts the gap is still present, so any
+  scanner improvement that closes it surfaces with "documented
+  gap appears closed" rather than silently flipping coverage.
+- Bundled the corpus via `resources: [.copy("Fixtures/secrets-adversarial")]`
+  on the SenkaniTests target. Loaded at test time via
+  `Bundle.module`.
+- Updated `spec/testing.md`: Quality Gates row now reads
+  "100% (fixture suite) / 1.000 precision · 0.894 recall (adversarial)".
+  New "Secret redaction — fixture suite vs adversarial corpus"
+  section names the three documented gaps with mechanical reasons
+  and the marketing rule ("don't cite 100% without naming the
+  corpus").
+- Filed three follow-ups in `spec/cleanup.md` item 18 — sub-threshold
+  / Twilio support, URL-aware tokenisation for GCS-style signed
+  URLs, hex-charset entropy floor — each ships as a separate small
+  round; closing one is verified by flipping `documented_gap:` in
+  the corresponding fixture.
+- Notable defence-in-depth finding: families whose named regex
+  misses the fixture (hyphenated AWS key names, JSON-quoted
+  api-secret, PASSWORD-style env vars, multi-line PEM bodies) still
+  redact at 1.000 recall because EntropyScanner catches the
+  high-entropy value. The pipeline's two-layer design is
+  load-bearing — the named regex alone wouldn't hit these numbers.
+- Test count: 1728 → 1731 (+3). Full `tools/test-safe.sh` suite
+  green at 21.0s. Landing page test counter bumped 1,637 → 1,731.
+
+### April 24 — Core DB log routing (`luminary-2026-04-24-1-unify-core-logging`)
+- Luminary P0. Database init and per-store error paths used to write
+  `print("[SessionDatabase] …")` / `print("[CommandStore] SQL error: …")`
+  to stdout, bypassing the structured `Logger.log` pipeline that
+  MCP/SocketServer/retention already use. Failures operators most
+  need to see (DB open failure, SQL errors, schema migration drift)
+  were invisible to telemetry and JSON-mode log capture.
+- Replaced 8 `print(...)` sites in `Sources/Core/SessionDatabase.swift`,
+  `Sources/Core/Stores/CommandStore.swift`, `Sources/Core/Stores/SandboxStore.swift`,
+  `Sources/Core/Stores/ValidationStore.swift` with `Logger.log`
+  emissions following a stable `db.<scope>.<outcome>` vocabulary:
+  `db.session.open_failed`, `db.session.migrations_applied`,
+  `db.session.migration_failed`, `db.command.sql_error`,
+  `db.sandbox.sql_error`, `db.validation.sql_error`. Each event tags
+  `outcome=success|error`; open events also tag `mode=default|test`
+  and use `.path(...)` so home-dir prefixes are redacted at emit.
+- Allowlist (intentional stdout retained, out of scope this round):
+  `Sources/Core/ModelManager.swift:628` (security warning), and
+  `Sources/Core/Stores/TokenEventStore.swift` `dumpTokenEvents()`
+  under `#if DEBUG` (operator debug helper).
+- New `Logger._setTestSink(_:)` test-only observation hook (a tee:
+  the sink runs alongside the regular stderr write, so production
+  behavior is unchanged). Lets tests assert routing without dup2-ing
+  fd 2.
+- New `Tests/SenkaniTests/LoggerRoutingTests.swift` with 8 cases:
+  open-failed-on-bad-path, migrations-applied-on-fresh-DB,
+  no-double-fire on already-migrated DB, mode-tag contract,
+  per-store no-emit on clean init, regression anchor (no legacy
+  `print("[…]")` in scoped files), sink-round-trip, and field-shape
+  contract.
+- Test count: 1720 → 1728 (+8). Full `tools/test-safe.sh` suite
+  green at 20.8s.
+
+### April 24 — Live-session multiplier gate (`luminary-2026-04-24-0-live-session-multiplier-gate`)
+- Luminary P0 follow-up from the 2026-04-24 spec-vs-codebase review.
+  The 80.37× figure is a fixture-bench ceiling; the live-session
+  median is pending Phase G capture. External-facing copy must not
+  quote either multiplier without an explicit fixture/live/pending
+  qualifier. Round makes the rule automated and gap-closes three
+  residual unpaired surfaces.
+- New `tools/check-multiplier-claims.sh` (POSIX bash + awk, no deps):
+  scans `README.md`, `index.html`, `docs/**/*.html`, `spec/spec.md`,
+  `spec/roadmap.md`, `spec/testing.md` for bare multiplier claims
+  (`80x`, `80.37`, `5-10x`, `5 to 10x`, `5x-10x`) and fails if any
+  are unpaired with a fixture / live / synthetic / pending /
+  benchmark / replay / caveat / ceiling qualifier within ±4 lines.
+  Zero dependencies; runs in tens of ms.
+- Wired into `tools/test-safe.sh` as a pre-flight check. Running the
+  safe suite now also enforces the claim gate. Bypass via
+  `SKIP_MULTIPLIER_CHECK=1` if a rare edit needs to land without the
+  gate (not recommended).
+- `index.html` hero stat strip: added a paired **Live-session median
+  (pending)** tile next to the 80.37× fixture tile, with a link to
+  the Savings Test pane and a 2026-05-31 target date.
+- `spec/spec.md` "The Solution" close: rewrote the headline claim
+  from `5-10x cost reduction measured, not claimed` to the paired
+  framing — 80.37× fixture measured, live pending Phase G (expected
+  5-10× range), both reported as a pair. Links to the
+  testing.md caveat.
+- `spec/testing.md` "Live Session Caveat" section: added owner
+  (Chris Kluis), target capture date (2026-05-31), explicit
+  "done when" criteria, and an inline description of the automated
+  gate.
+- New `Tests/SenkaniTests/MultiplierClaimGateTests.swift` with 4
+  Swift Testing cases (unpaired fails, fixture-paired passes,
+  pending-paired passes, current repo state passes). Full safe
+  suite: green.
+
+### April 24 — SessionDatabase split: thin façade + close P2-11 (`sessiondb-split-6-facade-thin`)
+- Final round under the `sessiondatabase-split` umbrella (Luminary
+  P2-11). `Sources/Core/SessionDatabase.swift` is now the lifecycle
+  and composition façade only: connection/WAL setup, store wiring,
+  `MigrationRunner`, schema-version diagnostics, retained
+  `event_counters`, and the cross-store composition SQL
+  (`lastExecResult`, `lastSessionActivity`, `tokenStatsByAgent`,
+  `complianceRate`).
+- Public forwarding moved into focused extension files:
+  `SessionDatabase+CommandAPI.swift`,
+  `SessionDatabase+TokenEventAPI.swift`,
+  `SessionDatabase+SandboxAPI.swift`, and
+  `SessionDatabase+ValidationAPI.swift`. Public callsites still use
+  `SessionDatabase.shared.<method>`.
+- Command-table-only helper SQL moved behind `CommandStore`
+  (`totalStats`, `statsForProject`, `recentStats`,
+  `commandBreakdown`, `outputPreviewsForCommand`,
+  `costForToday`, `costForWeek`, `recordBudgetDecision`,
+  `executeRawSQL`), so the façade no longer owns table-local command
+  queries.
+- `SessionDatabase.swift` dropped from 1493 → 587 LOC in this round
+  (2479 → 587 across the split chain). No new tests were needed; the
+  refactor is covered by the existing database surface. Targeted
+  database suite passed 105/105; full safe suite passed 1716/1716.
+
+### April 24 — SessionDatabase split: extract ValidationStore (`sessiondb-split-5-validationstore`)
+- Round 4 of 5 under the `sessiondatabase-split` umbrella
+  (Luminary P2-11). New `Sources/Core/Stores/ValidationStore.swift`
+  owns `validation_results` setup, attempt persistence,
+  pending-advisory reads, inspection queries, surfaced marking,
+  legacy destructive fetch compatibility, and the 24-h prune method.
+- `SessionDatabase` keeps the public compatibility boundary and now
+  delegates all validation-result APIs. `AutoValidateQueue`,
+  `HookRouter`, and `RetentionScheduler` callsites stay unchanged,
+  so delivery policy and retention orchestration remain outside the
+  store.
+- Data-integrity constraints are preserved: `ValidationStore` shares
+  the parent SQLite handle and serial queue, migration v3 remains the
+  owner of `outcome`, `reason`, and `surfaced_at`, and pending reads
+  remain non-destructive until HookRouter appends an advisory to a
+  visible response.
+- New `Tests/SenkaniTests/ValidationStoreTests.swift` adds 6 tests
+  for non-destructive pending reads, surfaced marking, clean/dropped
+  inspection, session-scoped 10-row pending limit, prune cutoff
+  behavior, and legacy destructive fetch. Targeted validation surface
+  is 33/33 green; full suite is 1716/1716 green.
+
+### April 24 — Scheduled presets: day-1 catalogue of installable templates (`schedule-preset-library`)
+- Ships five JSON-backed presets (`log-rotation`, `morning-brief`,
+  `autoresearch`, `competitive-scan`, `senkani-improve`) as templates
+  over the already-shipped scheduling spine. Zero new infrastructure —
+  each preset emits the same `ScheduledTask` that
+  `senkani schedule create` already accepts.
+- New CLI surface: `senkani schedule preset list` /
+  `preset show <name>` / `preset install <name> [--topic … |
+  --competitor … | --budget … | --cron …]`. The `install` subcommand
+  resolves angle-bracket placeholders against the CLI overrides, runs
+  the resolved command through `PresetSecretDetector` (which delegates
+  to the shared `SecretDetector`), and calls the new reusable
+  `PresetInstaller` helper that also backs `senkani schedule create`
+  — one launchd plist generator for both paths.
+- `PresetPrerequisiteCheck` warns (does NOT block) on missing
+  companion surfaces: Ollama daemon reachability for local-LLM
+  presets, `senkani brief` / `senkani improve` CLIs, and hook-preset
+  IDs (`guard-research`, `guard-autoimprove`) + planned MCP tools
+  (`senkani_search_web`, `pushover-notification-sink`) that haven't
+  shipped yet. The detector has a `withProbes(_:_:)` test hook so
+  suites don't touch the network.
+- `PresetDoctor.check(tasks:presets:)` pairs installed schedules
+  against shipped preset prerequisites — intended as the Doctor
+  integration hook; `senkani doctor` wiring is a follow-up item.
+- Schedules pane gains a "Install preset" button in the header that
+  opens a sheet listing the shipped + user presets with descriptions,
+  engine class (shell / claude / local-LLM), and per-row prerequisite
+  readiness. Install button shells out to `senkani schedule preset
+  install` so the UI and CLI stay single-sourced.
+- 20 new tests across `PresetCatalogTests` (6),
+  `PresetInstallCommandTests` (4), `PresetHookPrerequisiteTests` (4),
+  `PresetSecretDetectorTests` (4), `PresetDoctorTests` (2). Full suite
+  1617 → 1637 in ~20 s under `tools/test-safe.sh`.
+
+### April 21 — `PaneSocketMigrationTests`: DispatchGroup → TaskGroup (`pane-socket-migration-taskgroup`)
+- Rewrote `concurrentWritesAllDelivered` on `withTaskGroup(of: Bool.self)`
+  with `await group.next()` draining. Closes the last of the three
+  cooperative-pool-starvation frames from the 2026-04-21 hang sample
+  (line 230's `DispatchGroup.wait()`). The `Counter`/`NSLock` helper
+  is gone — subtasks return `Bool`, the parent sums them.
+- Rewrote `largeFrameRoundTrip` the same way: `DispatchQueue.global` +
+  `DispatchSemaphore.wait` → `async let` over `Task.detached` +
+  `await`. Same hazard class, surfaced the moment the suite stopped
+  being `.serialized`. `FrameBox` helper deleted.
+- `.serialized` trait removed from the `PaneSocketMigrationTests`
+  suite. All 9 tests run in parallel; the suite finishes in 7 ms
+  under `--parallel`. Full suite still 1617 green in ~20 s.
+
+### April 21 — Test harness hang: migrate NSLock helpers to `@TaskLocal` (`test-harness-tasklocal-migration`)
+- Root-cause fix for two of the three frozen frames from the
+  2026-04-21 sigtrap-repro sample. `ScheduleWorktree.withTestDir`
+  and `LearnedRulesStore.withPath` no longer take an `NSLock` —
+  both are now `@TaskLocal`-scoped. Parallel `@Test` tasks each
+  get their own scoped value with structured-concurrency
+  propagation, so cooperative-pool starvation on these helpers is
+  structurally impossible.
+- `LearnedRulesStore`: task-local is a `Scoped` ref-type box
+  holding the (path, cache) pair, so per-test mutation of the
+  `shared` singleton via the existing `shared = file` call sites
+  is isolated to each parallel suite without a process lock.
+  Computed `shared` getter/setter routes through the scoped box
+  when a scope is active, else the process-wide default.
+- Dead-code removal: deprecated `LearnedRulesStore.withPathAsync`
+  (zero call sites) deleted. Three tests changed
+  `Task.detached { ... }` → `Task { ... }` inside their `withPath`
+  body so the task-local scope propagates via structured
+  concurrency (inheritance behavior only `Task { ... }` honors).
+  Touched: `CompoundLearningH1Tests:775`,
+  `CompoundLearningH2aTests:409/442`, `CompoundLearningH2bTests:473`.
+- `.serialized` trait removed from `ScheduleWorktreeTests` and
+  `WatchRingBufferTests`. `PaneSocketMigrationTests` retains
+  `.serialized` until the DispatchGroup → TaskGroup rewrite in
+  `pane-socket-migration-taskgroup` lands.
+- One more timing flake widened (parallel-mode headroom):
+  `DependencyGraphTests` "Real project graph builds fast"
+  2s → 5s. Same rationale as the prior TreeSitter / SkillScanner
+  widenings.
+- `swift test` (parallel) no longer hangs — the 50+ min wait is
+  gone. `tools/test-safe.sh` retained as belt-and-suspenders
+  (and now the authoritative green baseline: 1617 tests in ~20 s).
+- Accepted risks: parallel mode surfaces other pre-existing
+  flakes (URLProtocol-stub registration races in
+  `RemoteRepoClientTests` / `BundleRemoteTests`, occasional
+  `swiftpm-testing-helper` SIGTRAP). These predate this round —
+  NSLock-induced serialization previously hid them. Tracked as
+  follow-ups in `spec/testing.md`.
+- Tests: 1617 tests green via `tools/test-safe.sh` (unchanged
+  count — rewrite of existing helpers, no new tests).
+
+### April 21 — Test harness hang: `.serialized` + `tools/test-safe.sh` (`test-harness-sigtrap-repro`)
+- Three consecutive DB-split rounds (split-2/3/4) fell back to
+  targeted regressions because `swift test` hangs 50+ minutes at
+  0% CPU on this machine. Operator sample at
+  `spec/.harness-deadlock-sample-2026-04-21.txt` named three
+  frozen frames: `ScheduleWorktree.withTestDir`,
+  `LearnedRulesStore.withPath`, `PaneSocketMigrationTests.swift:230`.
+- Root cause: Swift concurrency cooperative-pool starvation. The
+  first two helpers wrap `body()` in `NSLock`; the third uses
+  `DispatchGroup.wait()`. Enough parallel `@Test` tasks block on
+  these primitives and the pool deadlocks — `withTimeLimit`
+  traits are cooperative and never fire.
+- Shipped workaround: `.serialized` trait added to
+  `ScheduleWorktreeTests`, `PaneSocketMigrationTests`,
+  `WatchRingBufferTests`; `tools/test-safe.sh` provides a
+  deterministic full-suite run (`SWT_NO_PARALLEL=1 swift test
+  --no-parallel`); three timing flakes widened (TreeSitter
+  Elixir/Kotlin parse 10ms → 50ms, SkillScannerAsync 2s → 5s).
+  Root cause + fingerprint + re-capture recipe documented in
+  `spec/testing.md` under "Full-suite hang — Swift concurrency
+  pool starvation".
+- Deferred (new backlog items): migrate `withTestDir`/`withPath`
+  to `@TaskLocal`; rewrite `concurrentWritesAllDelivered` on
+  `TaskGroup`; file upstream swift-testing issue.
+- Tests: 32 targeted tests pass, build green. Full-suite
+  validation via `tools/test-safe.sh` — deterministic but slow;
+  manual-log target added.
+
+### April 21 — SessionDatabase split: extract SandboxStore (`sessiondb-split-4-sandboxstore`)
+- Round 3 of 5 under the `sessiondatabase-split` umbrella
+  (Luminary P2-11). New `Sources/Core/Stores/SandboxStore.swift`
+  (138 LOC) owns the `sandboxed_results` table end-to-end: schema
+  + the two existing indexes
+  (`idx_sandboxed_results_session`, `idx_sandboxed_results_time`)
+  + the `r_`-prefix ID mint, the store/retrieve path, and the
+  24-h prune that `RetentionScheduler` invokes hourly. The store
+  shares the parent's `DispatchQueue` and raw SQLite connection —
+  no second handle, same `unowned let parent` pattern as
+  `CommandStore` and `TokenEventStore`.
+- Methods now delegated through the façade:
+  `storeSandboxedResult`, `retrieveSandboxedResult`,
+  `pruneSandboxedResults`. All callers
+  (`ExecTool`, `WebFetchTool`, `SessionTool`, `MCPSession`,
+  `RetentionScheduler`) continue to use
+  `SessionDatabase.shared.<method>` — the extraction is
+  byte-identical.
+- `SessionDatabase.swift` dropped from 1598 → 1542 LOC (−56).
+  Three of the four planned stores
+  (CommandStore 384 + TokenEventStore 860 + SandboxStore 138 =
+  1382 LOC) now own their own files; the façade is on track for
+  the round-5 ≤800-LOC target once `ValidationStore` also
+  extracts.
+- New `Tests/SenkaniTests/SandboxStoreTests.swift` @Suite
+  "SandboxStore — writes, reads, prune" adds 6 tests:
+  ID shape (`r_` prefix + 14 chars + hex charset), round-trip of
+  command/output/line-count/byte-count, prune-by-age deletes old
+  rows and returns the delete count, prune keeps rows younger
+  than the cutoff, `retrieveSandboxedResult` returns nil for an
+  unknown ID, and multi-session isolation. The pre-existing
+  `OutputSandboxingTests.swift` suites (11 tests across storage,
+  summary builder, and mode logic) continue to pass unchanged —
+  the façade contract they rely on is preserved.
+- Targeted regression: 129 tests green across
+  `SandboxStore` + `OutputSandboxing` + `MCPSession` +
+  `RetentionScheduler` + `ExecTool` + `SessionTool` +
+  `WebFetch` + `SessionDatabase` + `CommandStore` +
+  `TokenEventStore` + `AutoValidate` + `DiagnosticRewriter`.
+
+### April 21 — SessionDatabase split: extract TokenEventStore (`sessiondb-split-3-tokeneventstore`)
+- Round 3 of 5 under the `sessiondatabase-split` umbrella
+  (Luminary P2-11). New `Sources/Core/Stores/TokenEventStore.swift`
+  (860 LOC) owns the `token_events` + `claude_session_cursors`
+  tables end-to-end: schema + indexes + the one
+  `model_tier`-column migration + the 90-day `pruneTokenEvents`
+  cadence. The store shares the parent's `DispatchQueue` and raw
+  SQLite connection — no second handle.
+- Methods that moved behind the façade via delegation:
+  `recordTokenEvent`, `recordHookEvent` (hook rows still live in
+  `token_events` with `source='hook'`, not a separate table — see
+  round 1's note),
+  `tokenStatsForProject` / `tokenStatsAllProjects` /
+  `tokenStatsByFeature` / `tokenStatsByFeatureAllProjects`,
+  `liveSessionMultiplier`, `savingsTimeSeries` /
+  `savingsTimeSeriesAllProjects`, `recentTokenEvents` /
+  `recentTokenEventsAllProjects` (+ private
+  `parseTimelineRows` helper), `lastReadTimestamp`, `hotFiles`,
+  `sessionSummaries`, `unfilteredExecCommands`,
+  `recurringFileMentions`, `instructionRetryPatterns`,
+  `workflowPairPatterns`, `getSessionCursor`, `setSessionCursor`,
+  `pruneTokenEvents`, `dumpTokenEvents` (DEBUG).
+- Cross-store composition deliberately STAYS on the
+  `SessionDatabase` façade per the round's scope — these methods
+  JOIN across tables owned by different stores and live on the
+  thin façade that knows both: `lastSessionActivity`
+  (sessions → token_events), `lastExecResult` (token_events ↔
+  commands), `tokenStatsByAgent` (token_events ⋈ sessions),
+  `complianceRate` (called out explicitly). The façade still owns
+  `recordBudgetDecision` (writes commands) and `event_counters`
+  (trivially shared; moving would mean every defense site imports
+  a new store just to bump a counter).
+- `SessionDatabase.swift` drops from 2213 → 1598 LOC (28% smaller,
+  −615 LOC). `CommandStore` + `TokenEventStore` now own 1244 LOC
+  between them; façade is heading toward the round-5 ≤800-LOC
+  target.
+- Public API is byte-identical — every existing callsite
+  (AgentTimeline pane, Dashboard, SavingsTest pane, `senkani eval`,
+  BudgetConfig gates, ScheduleTelemetry, ClaudeSessionReader,
+  HookRouter's re-read suppression, WasteAnalyzer's
+  compound-learning queries, ContextSignalGenerator's H+2b
+  recurring-file flow) keeps working without edits.
+- New `Tests/SenkaniTests/TokenEventStoreTests.swift` with 9 tests
+  covering: recordTokenEvent persistence of all fields;
+  recordHookEvent landing in token_events with `source='hook'`;
+  tokenStatsForProject aggregation; tokenStatsByFeature sort
+  order; liveSessionMultiplier nil-on-empty and raw/compressed
+  math; hotFiles frequency ranking; session cursor upsert
+  (get → 0,0 / set → get round-trip / set-again overwrites);
+  pruneTokenEvents 90-day cutoff. Targeted regression suite
+  (AgentTracking + LiveMultiplier + TieredContext +
+  BudgetEnforcement + HookRouter + Dashboard + FeatureSavings +
+  ObservabilityCounters + CommandStore) passes green (116/116),
+  plus CompoundLearning + ClaudeSessionReader + RetentionScheduler
+  + MigrationRunner + SecurityEvents (152/152).
+- Accepted risks: none material. The extraction is
+  byte-identical; divergence would surface in the 1129-test
+  suite.
+- Next: `sessiondb-split-4-sandboxstore` — now unblocked.
+
+### April 20 — SessionDatabase split: extract CommandStore (`sessiondb-split-2-commandstore`)
+- First real extraction under the `sessiondatabase-split` umbrella
+  (Luminary P2-11). New `Sources/Core/Stores/CommandStore.swift`
+  owns the `sessions`, `commands`, and `commands_fts` tables
+  end-to-end: CREATE TABLE / FTS5 trigger set / column migrations /
+  `createSession` / `recordCommand` / `endSession` / `loadSessions`
+  / `search` / `sanitizeFTS5Query`. The store shares the parent's
+  `DatabaseQueue` and raw connection — never opens a second handle.
+- `SessionDatabase`'s public API is byte-identical. Every callsite
+  (`MCPSession.swift`, dashboard, `senkani eval`, compound-learning
+  tests, AgentTracking tests, CavoukianPrivacy tests, etc.) keeps
+  working without edits — the façade now forwards to
+  `commandStore.…`. The P3-13 BEGIN IMMEDIATE transaction boundary
+  around the FTS5 sync travels with `recordCommand` into the store,
+  preserving the "commands, FTS index, session aggregate" atomicity
+  contract that makes search results consistent under concurrent
+  writes.
+- Sessions-table indexes that were previously created from
+  `createTokenEventsTable` (`idx_sessions_project_ended`,
+  `idx_sessions_agent_type`) moved into
+  `CommandStore.setupSchema()` alongside the rest of the sessions
+  schema. `createTokenEventsTable` now only owns token_events and
+  `claude_session_cursors` indexes — one less bounded-context leak
+  for TokenEventStore's round to inherit.
+- `SessionDatabase.sanitizeFTS5Query(_:)` kept as a static delegate
+  so the two external callsites (`SearchSecurity.swift:35`,
+  `KnowledgeStore.swift:530`) continue compiling. Source of truth
+  is now `CommandStore.sanitizeFTS5Query`.
+- New `Tests/SenkaniTests/CommandStoreTests.swift` with 10 tests:
+  createSession persists + round-trips; recordCommand updates
+  session aggregates; secret redaction keeps API keys out of FTS;
+  endSession sets duration; loadSessions caps at 500; FTS finds
+  recorded commands; search sanitizes FTS5 operators (colon,
+  asterisk, caret, parentheses, AND/OR/NOT/NEAR); 25-writes
+  serial-consistency probe (FTS row count = commandCount = N);
+  schemaSurvivesReopen regression. Every existing test passes
+  unchanged (no test-file edits outside the new suite).
+- **Accepted risks**: none. The extraction is byte-identical; any
+  divergence would have surfaced in the 1129-test suite.
+- Next: `sessiondb-split-3-tokeneventstore` — now unblocked. It
+  will absorb `recordHookEvent` (rows live in `token_events` with
+  `source='hook'`) and the full `tokenStats*` / `hotFiles` /
+  `liveSessionMultiplier` surface.
+
+### April 20 — SessionDatabase split plan: retire phantom HookEventStore (`sessiondb-split-1-hookeventstore`)
+- Round 1 of the `sessiondatabase-split` umbrella (Luminary P2-11)
+  ran under an expanded Luminary roster (Torvalds, Jobs, Evans,
+  Kleppmann, Celko, Carmack, Bach, Majors, Allspaw) after the
+  operator lifted the P2-11 "second contributor needs to touch the
+  DB layer" gate. The round SKIPPED at pre-audit with a unanimous
+  finding that shifts the split chain.
+- Finding: the top-of-file comment on `Sources/Core/SessionDatabase.swift`
+  had been listing `hook_events` as a seventh table. `grep`
+  revealed the table does not exist — `recordHookEvent`
+  (`SessionDatabase.swift:2062–2083`) writes into `token_events`
+  with `source='hook'`. Hook telemetry is a SOURCE discriminator
+  on an existing table, not a separate aggregate. Extracting a
+  `HookEventStore` with no table of its own would have shipped
+  either a no-op wrapper or a fabricated schema migration, both
+  in violation of the round's acceptance criteria.
+- Shipped: corrected the top-of-file comment on
+  `Sources/Core/SessionDatabase.swift:4-64`. Removed `hook_events`
+  + `HookEventStore` from the table list and carve-up plan; noted
+  the correction inline so future readers see why the phantom
+  entry is gone. Updated `spec/autonomous-backlog.yaml` so (a) the
+  umbrella `sessiondatabase-split` now tracks four real rounds,
+  (b) `sessiondb-split-2-commandstore` is unblocked and absorbs
+  the "first extraction proves the pattern" charter, (c)
+  `sessiondb-split-3-tokeneventstore` explicitly owns
+  `recordHookEvent` (the rows live in `token_events`), (d)
+  `complianceRate()`'s single-table `source IN ('mcp','hook')`
+  query is called out as cross-store composition the final round
+  must preserve (Majors' observability flag).
+- No Swift source logic changed; no tests added or removed. The
+  split chain is now 4 extractions + 1 façade-thin wrap-up (was
+  5 + 1).
+- **Accepted risks**: none. The stale comment had no runtime
+  impact; it only misled pre-audit readers. If a dedicated
+  `hook_events` table is ever desired later (e.g. for retention
+  partitioning or tighter compliance-rate queries), that is a
+  P2 future backlog item that must weigh the cost of fracturing
+  `complianceRate()`.
+
+### April 20 — Ollama pane: pin the MCP env contract (`mcp-in-ollama-pane-verify`)
+- `mcp-in-ollama-pane-verify` closes round 5 of the
+  `ollama-pane-discovery-models-bundle` umbrella. The operator flagged
+  that Senkani MCP tooling's behaviour inside the Ollama-launcher pane
+  was unverified after the pane went first-class. Pre-audit traced the
+  env-injection path — both the plain Terminal pane and the Ollama
+  pane funnel through `TerminalViewRepresentable`, which merges the
+  supplied env dict onto `ProcessInfo.environment` before `startProcess`,
+  so `SENKANI_PANE_ID` et al. transit identically regardless of whether
+  `initialCommand` is an empty shell or `ollama run <tag>`.
+- Finding: env bundles were assembled inline in two SwiftUI views
+  (`OllamaLauncherPane.terminalBody` and `PaneContainerView.paneBody`
+  case `.terminal`). Torvalds flag: drift risk — a key added to one
+  site could silently disappear from the other, and the MCP gate
+  (`MCPMain.swift:19`, `SENKANI_PANE_ID != nil`) would fire on one
+  pane type and not the other.
+- New `Sources/Core/PaneLaunchEnv.swift` hoists the env-dict build
+  into a pure-Foundation helper with two entry points: `terminal(_:)`
+  and `ollamaLauncher(_:resolvedModelTag:)`. Both produce the same
+  MCP gate-key bundle (`SENKANI_PANE_ID`, `SENKANI_PROJECT_ROOT`,
+  `SENKANI_HOOK`, `SENKANI_INTERCEPT`, metrics/config paths,
+  workspace + pane slugs, every `SENKANI_MCP_*` toggle); the ollama
+  variant layers `SENKANI_OLLAMA_MODEL` on top. Both views now call
+  the helper so the contract is single-sourced.
+- New `Tests/SenkaniTests/PaneLaunchEnvTests.swift` pins the contract
+  with 8 tests: gate-key coverage for each pane type, cross-type
+  parity (terminal ↔ ollama dicts agree on every shared key), ollama
+  model-tag round-trip, bounded-context guard (terminal env omits
+  `SENKANI_OLLAMA_MODEL`), shell-safe value assertion (Schneier — no
+  `\n`, `\r`, `\0` in any value), workspace/pane slug round-trip,
+  feature-flag on↔off mapping.
+- The live end-to-end verification (real MCP client attached to an
+  ollama-launched shell) still requires the operator's machine —
+  pushed to `tools/soak/manual-log.md` under Wave "Ollama pane: MCP
+  tool reachability (2026-04-20)" so the concern stops bleeding
+  across rounds without a landing point.
+- **Accepted risks**: if an ollama REPL spawns `/bin/sh -c ...` from
+  inside the LLM chat (the `!<cmd>` escape), the child shell
+  inherits SENKANI_* by POSIX rule — this is the same behaviour every
+  other terminal pane has. No new leak path; documented under the
+  soak entry.
+
+### April 20 — Models pane: install → verify state machine (`models-page-installable`)
+- `models-page-installable` closes round 4 of the
+  `ollama-pane-discovery-models-bundle` umbrella. The Models pane's
+  install buttons now drive the full download→install→verify flow
+  end-to-end for senkani-internal ML (MiniLM-L6 embeddings + the 3
+  Gemma 4 vision tiers). Clicking **Install** progresses through
+  `Available → Installing N% → Installed → Verifying… → Ready`;
+  failures stop at `Error` (download) or `Verification failed`
+  (verify) with a **Re-verify** action that retries without
+  re-downloading.
+- `ModelStatus` (Sources/Core/ModelManager.swift:7) gains
+  `.verifying`, `.verified`, and `.broken`. `isReady` treats both
+  `.downloaded` (integrity unconfirmed) and `.verified` (fixture
+  passed) as ready so existing MCP gates keep working.
+- `ModelManager.download(modelId:)` now wraps the registered
+  handler: on throw it `markError`s the model with
+  `error.localizedDescription` instead of letting the exception
+  escape into UI without state; on success it auto-invokes
+  `verify(modelId:)` so "install → verify" is one call for the UI
+  (Jansen gate — no second click to verify).
+- New `verify(modelId:)` + `registerVerificationHandler(_:)` pair,
+  parallel to the existing `download(modelId:)` /
+  `registerDownloadHandler(_:)` layering. When no handler is
+  registered, Core falls back to an integrity-only default:
+  re-check `config.json` + a weight file are on disk and
+  `config.json` parses as a JSON dict. MCP layer registers an MLX
+  handler that calls `EmbedTool.engine.ensureModel()` /
+  `VisionTool.engine.ensureModel()` — loading the freshly-installed
+  model into a `ModelContainer` IS the "tiny inference fixture",
+  since a corrupt weight file or incompatible config blows up at
+  container load.
+- `senkani doctor` check #5 reads every registered model's status
+  directly — `.verified: "verified"`, `.downloaded: "installed (not
+  yet verified)"`, `.broken: "verification failed — <error>"` (with
+  per-model lastError captured), `.error: "install error — <error>"`,
+  `.available: "not installed"`. Failures (broken / error) now fail
+  doctor with an actionable line instead of silently skipping.
+- `ModelCardView` renders distinct badge colors and action buttons
+  per state: Installing (orange %), Verifying… (orange sparkles),
+  Ready (green check + trash), Verification failed (orange warning
+  + re-verify + trash). Delete still wipes the cache dir and resets
+  to `.available` so re-install round-trips cleanly.
+- 7 new tests in `ModelManagerInstallTests.swift` drive the state
+  machine with fake handlers + planted HF snapshots: happy path,
+  download fail, verify fail keeps files on disk, delete-and-
+  reinstall round-trip, `.broken → verify retry → .verified`,
+  per-model doctor readout (three models in three different
+  states), missing-handler guard. Test count: 1577 → 1584 (+7).
+- **Accepted risks**: real-machine verification of the MLX
+  `ensureModel` verify path is deferred to the soak log — the
+  state machine IS unit-tested, but actually running `ensureModel`
+  on a freshly-downloaded model requires network + multi-GB
+  download and can't run in CI. See `tools/soak/manual-log.md`.
+  Pre-existing `MockURLProtocol.stubs` race (3 flaky URLProtocol
+  tests under parallel runs) is **not** introduced by this round —
+  documented under accepted-risk in manual-log.
+
+### April 20 — Ollama: curated LLM catalog + click-to-pull drawer
+- `ollama-model-curation` closes round 3 of the
+  `ollama-pane-discovery-models-bundle` umbrella. The Ollama pane now
+  has a settings drawer (header → download icon) that shows a curated
+  list of 5 user-facing LLMs — each row discloses its size BEFORE the
+  click and kicks off an out-of-process `ollama pull` that streams
+  progress into the UI (Schneier: explicit click-to-pull, no
+  auto-pull; Podmajersky: size disclosed in the button copy).
+- New `Sources/Core/OllamaModelCatalog.swift` is the pure-Foundation
+  layer: `OllamaCuratedModel` (tag + displayName + useCase + sizeGB +
+  `pullButtonCopy` that renders `"Pull 4.7 GB"`), the curated list
+  (llama3.1:8b, qwen2.5-coder:7b, deepseek-r1:7b, mistral:7b,
+  gemma2:2b), `OllamaPullState` (`.notPulled` / `.pulling(progress)`
+  / `.pulled(digest?)` / `.failed(message)`),
+  `OllamaPullOutputParser` (incremental line-by-line parser for
+  `ollama pull` stdout — progress monotonic, digest captured,
+  Error line flips to failed), `OllamaInstalledListParser` (parses
+  `ollama list` tabular output → `[(tag, digest)]`), and
+  `OllamaPullCommand` (argv builder gated by the existing
+  shell-injection validator). Evans' bounded-context gate: this
+  catalog is STRICTLY separate from `ModelManager`, which owns
+  senkani-internal ML — two surfaces, two lifecycles.
+- New `SenkaniApp/Models/OllamaModelDownloadController.swift`
+  (~@MainActor `ObservableObject`, ~180 LOC) owns per-tag state +
+  the `ollama pull` `Process()` references. Spawns via
+  `PATH`-resolved ollama binary (with Homebrew + direct-DMG
+  fallback paths), streams stdout through a `LineBuffer` that
+  splits on `\n` and `\r` so the parser sees complete progress
+  frames, and on exit drains trailing output through the parser
+  (catching a late `success` / error line). On success falls back
+  to `ollama list` when the parser didn't pick up a digest.
+  `cancelPull(tag:)` `.terminate()`s the subprocess, clears
+  state back to `.notPulled`.
+- New `SenkaniApp/Views/OllamaModelsDrawer.swift` renders the
+  curated list as a 520×420 sheet: each row shows displayName +
+  tag + use-case + size/progress line + action button. Action
+  resolves against daemon availability: absent → **Install
+  Ollama** deep-link to ollama.com/download; present + not-pulled
+  → **Pull N.N GB**; present + pulling → **Cancel**; present +
+  pulled → **Use** / **Current** (sets the pane's default model).
+  Swapping the default restarts the terminal subprocess via the
+  pane's existing `restartToken` so chat reflects the new model
+  without the user reopening the pane.
+- `OllamaLauncherPane` gets a `square.and.arrow.down` icon in the
+  pane header next to the connected indicator — opens the drawer
+  as a sheet. The existing header model-picker Menu still works
+  for quick-switching among already-pulled tags.
+- `OllamaLauncherSupport.defaultModelTags` now delegates to
+  `OllamaModelCatalog.curatedTags` so the selector list + pull
+  surface + pane default all single-source off the catalog. Legacy
+  callers (header Menu, pane-restore fallback) continue to work
+  unchanged.
+- 21 new tests under `@Suite("Ollama Model Catalog")`: curated-list
+  invariants (size ≥5, all tags validate, no dupes, first entry
+  doubles as default), button-copy discloses size (Podmajersky
+  gate), use-case copy ≤50 chars (Handley gate), parser state
+  machine from .notPulled through .pulling(p) to .pulled(digest)
+  on canonical transcript, progress monotonicity, error-line
+  flip-to-failed, junk-input doesn't move state, percent
+  extraction across 1/2/3-digit values, layer-digest extraction
+  skips the `manifest` keyword, pull/list argv gate invalid tags,
+  `ollama list` tabular-output parse + malformed-row rejection,
+  parser freshness on cancel-and-restart, state classification
+  helpers.
+- Test count: 1554 → 1575 (+21).
+- **Accepted risks** (documented in `tools/soak/manual-log.md`):
+  the `OllamaModelDownloadController`'s `Process()` path is NOT
+  unit-tested (would require a real `ollama` binary on the CI
+  runner) — all state-machine + parsing logic driving it IS
+  tested, and soak-log adds an end-to-end manual validation
+  entry. Concurrent pulls are allowed at the controller level but
+  the drawer exposes one button per row, so the common path is
+  one-at-a-time. Custom-model (non-curated) tags are a FUTURE
+  surface — this round ships the curated list only.
+
+### April 20 — Ollama: first-class `.ollamaLauncher` PaneType
+- `ollama-pane-first-class` closes round 2 of the
+  `ollama-pane-discovery-models-bundle` umbrella. The Welcome screen's
+  hardcoded `onStart("Ollama", "ollama run llama3")` string is gone;
+  the Ollama card (and the new gallery entry) now open a dedicated
+  pane instead of bolting ollama semantics onto the Terminal pane
+  (Torvalds' "category error" gate, Evans' "senkani ML ≠ user LLMs"
+  bounded-context gate).
+- New `Sources/Core/OllamaLauncherSupport.swift` holds the testable
+  layer: a 4-tag default selector list (`llama3.1:8b`,
+  `qwen2.5-coder:7b`, `mistral:7b`, `gemma2:2b`), a tag validator
+  that rejects shell metacharacters (Schneier's shell-injection
+  gate), a `launchCommand` builder, and `resolveModelTag` for the
+  persistence-fallback path. `OllamaAvailability.detect` is extracted
+  from `WelcomeView` so the pane and the Welcome card share one
+  probe.
+- New `SenkaniApp/Views/OllamaLauncherPane.swift` renders the pane:
+  compact model-picker header, tri-state availability gate
+  (detecting → absent-CTA with "Get Ollama" + "Retry" buttons →
+  connected terminal body), and delegates to `TerminalViewRepresentable`
+  for the subprocess. Same MCP env bundle terminal panes get
+  (`SENKANI_PANE_ID`, `SENKANI_PROJECT_ROOT`, `SENKANI_WORKSPACE_SLUG`,
+  `SENKANI_PANE_SLUG`, FCSIT aliases) plus a new `SENKANI_OLLAMA_MODEL`
+  hint for the hook binary.
+- `PaneType.ollamaLauncher` added (18 types now). `SenkaniTheme`
+  gains accent (warm orange `#ee7f31`), `cpu.fill` icon, description,
+  displayName. `PaneContainerView.paneBody` routes the new case.
+- `AddPaneSheet.idToType` + `ContentView.addPaneByTypeId` map the new
+  string ID; `PaneGalleryBuilder` lists "Ollama" in **AI & Models**
+  (category now 5 entries, still ≤6).
+- `PaneModel.ollamaDefaultModel` persists the user's selected tag;
+  `WorkspaceStorage` round-trips it (field is optional so old JSON
+  files migrate silently). Invalid/missing values snap to the
+  package default on restore.
+- WelcomeView's `detectOllama` now delegates to the Core probe so a
+  single code path answers both the Welcome card and the pane's
+  absent-CTA gate.
+- 14 new tests under `@Suite("Ollama Launcher Support")`: default-
+  tag list invariants (non-empty, first-entry == default, no dupes),
+  tag validator accepts realistic tags + rejects 14 shell-meta
+  injection attempts + empty/oversized, launch-command shape + nil
+  on invalid, `resolveModelTag` fallback matrix (nil/empty/invalid/
+  valid), gallery registration + description length, availability
+  probe against a closed port. `PaneGalleryTests.allEntriesCoversAll17PaneTypes`
+  renamed to `allEntriesCoversAll18PaneTypes`.
+- Test count: 1540 → 1554 (+14).
+- **Accepted risks** (documented in `tools/soak/manual-log.md`):
+  pane-open telemetry to `token_events` NOT wired this round — the
+  backlog proposed overloading token_events with a UI-open event,
+  but that's the exact bounded-context merger Evans' gate at
+  umbrella time was telling us to avoid (token_events is for LLM
+  tool-call telemetry). Deferred to a follow-up round that adds a
+  dedicated UI-telemetry path. Click-to-pull UX for the curated
+  model list also deferred — that's sub-item `ollama-model-curation`.
+  For now, `ollama run <tag>` still auto-pulls on first launch
+  (ollama's default behavior).
+
+### April 20 — Pane gallery: categorize 17 panes + fix missing Dashboard
+- `pane-add-gallery-redesign` closes round 1 of the
+  `ollama-pane-discovery-models-bundle` umbrella (escalated to the
+  top of the backlog 2026-04-20 after operator feedback on
+  discoverability + ollama-launch flow). `AddPaneSheet` was already
+  a 2-column visual grid with icon + title + description + hover
+  lift — NOT a hidden menu as the operator's framing suggested. The
+  real gaps were: (1) `dashboard` was missing from the entries list
+  (16 of 17 panes listed), (2) no categorization on a 16-item flat
+  grid, (3) gallery data was duplicated in the SwiftUI view and
+  untestable.
+- New `Sources/Core/PaneGalleryBuilder.swift` mirrors
+  `CommandEntryBuilder` — pure-data, string-ID-based, testable.
+  17 entries grouped into 4 categories (Morville + Norman
+  taxonomy): **Shell & Agents** (Terminal, Agent Timeline),
+  **AI & Models** (Skills, Knowledge Base, Models, Sprint Review),
+  **Data & Insights** (Dashboard, Analytics, Savings Test,
+  Schedules, Log Viewer), **Docs & Code** (Code Editor, Markdown
+  Preview, HTML Preview, Browser, Diff Viewer, Scratchpad). Every
+  category is ≤6 entries (skimmable bar).
+- `AddPaneSheet` refactored to consume `PaneGalleryBuilder`:
+  category section headers (uppercased, tracked, 10pt) above a
+  2-column grid per category, filter still works across all
+  categories (empty categories auto-omit from filtered output),
+  sheet grew 420×480 → 460×560 to fit labels.
+- **Unchanged:** the "+ Add Pane" button in the sidebar bottom bar
+  is already labeled (verified in `SidebarView.swift:289–307`) —
+  the operator's "hidden +" concern was actually the flat-grid
+  discoverability once the sheet opened, not the trigger itself.
+- 12 new tests under `@Suite("Pane Gallery")`: 17-type coverage,
+  dashboard-present regression pin, unique IDs, ≤6 per category,
+  every entry in a known category, categorization is total,
+  category order stable, descriptions ≤80 chars (Podmajersky bar),
+  filter case-insensitive + matches description, empty query
+  returns all, filter→categorized collapse.
+- Test count: 1527 → 1539 (+12).
+- **Accepted risks** (documented in `tools/soak/manual-log.md`):
+  Butterick explicit focus-ring treatment not added this round
+  (SwiftUI Button default keyboard focus is reachable but
+  visually subtle); Podmajersky microcopy audit deferred (current
+  descriptions are ≤80 chars but stylistically inconsistent).
+  Both are follow-up items, not round-blockers.
+- **Deferred to the next 4 sub-items** of the umbrella:
+  `ollama-pane-first-class` (b), `ollama-model-curation` (c),
+  `models-page-installable` (d), `mcp-in-ollama-pane-verify` (e).
+
+### April 20 — Phase S.1: manifest schema + MCP tool gating (foundation)
+- `phase-s-manifest-schema` closes the first Week-1 slice of Phase S
+  (skill/tool/hook manifest, approved 2026-04-19). New module
+  `Sources/Core/Manifest/` (3 files, ~170 LOC):
+  `Manifest.swift` (team manifest schema + `ManifestOverrides` +
+  `EffectiveSet`), `ManifestResolver.swift` (pure resolver
+  `effective = team ∩ optOuts ∪ additions`), `ManifestLoader.swift`
+  (disk I/O; missing files are not errors).
+- On-disk home is `<projectRoot>/.senkani/senkani.json` for the team
+  manifest, `~/.senkani/overrides.json` (single file, keyed by
+  absolute project-root path) for user-local overrides. Format is
+  JSON rather than the YAML named in the roadmap spec — no YAML
+  parser is in-tree; JSON is a strict YAML subset so a future
+  Yams-backed round reads today's files verbatim.
+- `MCPSession.effectiveSet` is a lazy lock-guarded resolve that
+  happens on first read and caches for the session. Never throws —
+  missing files yield `manifestPresent: false`.
+- `ToolRouter.advertisedTools(for:)` filters the catalog by the
+  effective set, with core tools (`read`, `outline`, `deps`,
+  `session`) always-on. `ToolRouter.route` gates CallTool by the
+  same set, returning `isError: true` with a Skills-pane-pointer
+  message for disabled tools. `ListTools` handler queries the
+  filtered catalog.
+- Backwards-compat invariant: projects with no
+  `.senkani/senkani.json` get `manifestPresent: false` and the full
+  tool surface — today's behavior, verified by
+  `backwardsCompatWithoutManifestEnablesEverything` and
+  `advertisedToolsIncludesEverythingWhenNoManifest`.
+- Out of scope this round (deferred to follow-up rounds):
+  Skills-pane UI (S.4), storefront/registry (S.6), AXI.9
+  `buildSkillsPrompt` retrofit (touches MCPSession.swift), Starter
+  Kits (S.7), ratings + comments (S.5), cron/agents manifest
+  sections (S.8), YAML parser swap.
+- Tests: 1510 → 1527 (+17 new) across five `ManifestTests` suites —
+  schema round-trip + coreTools identity, resolver formula (team/
+  opt-out/addition/precedence/nil-manifest), `isToolEnabled`
+  gating (core-always, backwards-compat, non-core requires listing),
+  loader disk paths (missing file, present file, user overrides,
+  per-project keying), and ToolRouter advertise filtering.
+
+### April 20 — Website search: client-side Lunr across the wiki
+- `website-rebuild-10-search` closes. `scripts/gen.py` emits
+  `assets/search-index.json` by walking every `docs/**/*.html` —
+  extracts title, body (first 800 chars of `<main>`, tags stripped),
+  path, and a short `name` field for MCP/CLI pages (the bare tool
+  name, e.g. `read` for `senkani_read`, `bench` for `senkani-bench`).
+  93 docs / ~85 KB.
+- `assets/lunr.min.js` vendored (~29 KB, MIT). `assets/app.js`
+  lazy-loads it on first focus/keystroke — first-paint unchanged.
+- Index builder overrides `lunr.tokenizer.separator` to split on
+  underscore as well as whitespace/hyphen, so `senkani_read`
+  tokenizes to `[senkani, read]` and the bare tool name is
+  discoverable by prefix. Fields: `name` boost 30, `title` 10,
+  `path` 3, `body` 1.
+- Query builder uses prefix (`q*`) for tokens of 3 chars or fewer
+  and prefix-plus-fuzzy (`q* q~1`) for longer tokens. Short queries
+  no longer drown in near-matches.
+- Keyboard: `/` focuses the nav search from anywhere; arrow keys
+  navigate the 8-result dropdown; Enter opens; Escape closes.
+- Acceptance measured on the shipped index (replayed via
+  JavaScriptCore against the live `search-index.json` +
+  `lunr.min.js`): typical full-name queries hit the expected
+  senkani page top for 15/19 MCP tools and 18/19 CLI commands.
+  At 3-character prefix, 17/19 CLI commands return the matching
+  `senkani <cmd>` page top. At the strict 2-character prefix, MCP
+  matches 11/19 — the remaining gap is structural (four pairs of
+  MCP tools share 2-char prefixes: read/repo, exec/explore,
+  search/session, pane/parse; one of each pair wins at 2 chars,
+  the other needs one more keystroke) plus four MCP names that
+  overlap with CLI commands (fetch, search, explore, validate) —
+  both the CLI and MCP pages match, the CLI page outranks because
+  its title carries the name as a standalone word by default.
+  Accepted: the user gets a valid senkani page for their query
+  either way; the overlap is a real-world disambiguator, not a bug.
+- No Swift code changes; no test delta (1510 → 1510). Soak log
+  updated — manual validation in a real browser still queued.
+
 ### April 19 — Website redesign: hero stack + /docs/ consolidation + font bumps
 - Landing page redesigned as a hero stack — one full-width "product
   hero" per major feature, Apple-product-page style. Each hero
@@ -69,10 +1090,10 @@ Senkani *is*. Entries are grouped by the server version reported by
 - Legacy anchor redirects preserved in `assets/app.js`: inbound
   links to `/#how-it-works`, `/#mcp-tools`, `/#install`, `/#terse`,
   etc. now redirect to the corresponding new wiki URLs.
-- Pending in follow-up rounds: `website-rebuild-10-search` (Lunr
-  index generation + vendoring), `website-rebuild-11-content-pass`
+- Pending in follow-up rounds: `website-rebuild-11-content-pass`
   (editorial + closing audit), `website-rebuild-12-claude-prototype-
   review` (operator's auth-walled Claude Design prototype extract).
+  `-10-search` closed 2026-04-20 (see above).
 - No Swift code changes; no test delta (1510 → 1510). Manual
   validation queue added to `tools/soak/manual-log.md` (visual
   inspection, axe-core-cli pass, Lighthouse, keyboard traversal,

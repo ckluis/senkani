@@ -1,0 +1,11 @@
+# id: fp-clean-6
+# family: false_positive_guard
+# expected: NONE
+# match_mode: none
+# description: Build output: filenames, version numbers, port numbers, timestamps. None should match.
+# synthetic: true
+---
+Compiling Senkani 0.2.0
+[12/45] Building Sources/Core/SessionDatabase.swift
+Listening on port 8080
+Started 2026-04-24T12:01:33Z

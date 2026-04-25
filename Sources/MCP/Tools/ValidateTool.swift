@@ -9,7 +9,15 @@ enum ValidateTool {
             return .init(content: [.text(text: "Error: 'file' is required", annotations: nil, _meta: nil)], isError: true)
         }
 
-        let absPath = filePath.hasPrefix("/") ? filePath : session.projectRoot + "/" + filePath
+        let absPath: String
+        do {
+            absPath = try ProjectSecurity.resolveProjectFile(filePath, projectRoot: session.projectRoot)
+        } catch {
+            return .init(
+                content: [.text(text: "Error: \(error)", annotations: nil, _meta: nil)],
+                isError: true
+            )
+        }
         guard FileManager.default.fileExists(atPath: absPath) else {
             return .init(content: [.text(text: "Error: file not found: \(filePath)", annotations: nil, _meta: nil)], isError: true)
         }

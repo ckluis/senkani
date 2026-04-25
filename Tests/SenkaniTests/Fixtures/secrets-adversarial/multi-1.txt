@@ -1,0 +1,9 @@
+# id: multi-1
+# family: multi_secret
+# expected: ANTHROPIC_API_KEY,GITHUB_TOKEN
+# match_mode: all
+# description: Two distinct secrets in one blob — both must redact.
+# synthetic: true
+---
+export ANTHROPIC_API_KEY=sk-ant-api03-FAKEmultisecret_one_abcdefghijklmnop
+export GITHUB_TOKEN=ghp_FAKEmultisecret_two_ABCDEFGHIJKLMNOPQRSTUVWXYZ12

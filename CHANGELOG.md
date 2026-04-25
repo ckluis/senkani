@@ -6,6 +6,34 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 25 — Name Phase F's post-AAAK optimization target with explicit Lesson #17 rationale (`luminary-2026-04-24-8-phase-f-target-post-aaak`)
+- Luminary P2 (Evans-flagged). Phase F was reworked April 12 when AAAK
+  was dropped, but `spec/roadmap.md` never explicitly named the
+  replacement optimization target nor referenced Structural Lesson
+  No. 17 (the AAAK debunk). The section header read "(AAAK dropped —
+  see below)", leading with the failure rather than the new direction.
+- Phase F section in `spec/roadmap.md` re-framed: header now reads
+  "Phase F: Smart First-Read Selection + Knowledge Graph". A new
+  "Optimization target (post-Lesson #17)" paragraph names the
+  replacement target explicitly — *selection over compression* —
+  with three components (outline-first read, repo map, knowledge
+  graph) framed as the post-AAAK headline.
+- New "Why this target replaced AAAK (Lesson #17 rationale)"
+  paragraph cites the specific measurements: AAAK's `len(text) // 3`
+  token counter, 73 vs 66 tokens on the canonical example, 96.6% →
+  84.2% accuracy on LongMemEval (12.4 pp regression), and the BPE
+  reasoning for why source code can't be meaningfully abbreviated.
+  References Structural Lesson No. 17 by name.
+- Exit criteria rewritten to mark each as ✅ where infrastructure has
+  shipped (outline-first ✅, repo map ✅, scenario multipliers ≥2x ✅
+  via Phase E baseline 80.37x). The runtime "≥20 facts" criterion is
+  acknowledged as runtime-not-infrastructure and the live-multiplier
+  rollup is delegated to Phase G's tracking gate (no dual ownership).
+- Re-audit (Evans/Torvalds/Carmack/Jobs): PASS clean — the
+  replacement target is named, the rationale is sourced, and the
+  bounded-context split (selection vs compression) is explicit.
+- Spec-only edit: zero source files touched, zero tests added.
+
 ### April 25 — Rewrite Principle No. 6 to reconcile invisible optimization with the on-demand workspace (`luminary-2026-04-24-7-principle-6-rewrite`)
 - Luminary P1 (Jobs-flagged). Principle No. 6 in `spec/spec.md`
   ("The App Disappears") read as "Senkani has no UI" and put every

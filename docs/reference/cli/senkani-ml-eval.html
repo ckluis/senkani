@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>senkani doctor — CLI reference</title>
-<meta name="description" content="Diagnose and optionally repair hook registration, binary paths, grammar versions, config.">
+<title>senkani ml-eval — CLI reference</title>
+<meta name="description" content="Per-tier Gemma 4 output quality eval. Drives the 20-task harness against each installed Gemma tier and writes ~/.senkani/ml-tier-eval.json.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -51,14 +51,14 @@
         <li><a href="../../../docs/reference/cli/senkani-wipe.html"><code>senkani wipe</code></a></li>
         <li><a href="../../../docs/reference/cli/senkani-bench.html"><code>senkani bench</code></a></li>
         <li><a href="../../../docs/reference/cli/senkani-init.html"><code>senkani init</code></a></li>
-        <li><a href="../../../docs/reference/cli/senkani-doctor.html" class="active"><code>senkani doctor</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-doctor.html"><code>senkani doctor</code></a></li>
         <li><a href="../../../docs/reference/cli/senkani-compare.html"><code>senkani compare</code></a></li>
         <li><a href="../../../docs/reference/cli/senkani-grammars.html"><code>senkani grammars</code></a></li>
         <li><a href="../../../docs/reference/cli/senkani-schedule.html"><code>senkani schedule</code></a></li>
         <li><a href="../../../docs/reference/cli/senkani-uninstall.html"><code>senkani uninstall</code></a></li>
         <li><a href="../../../docs/reference/cli/senkani-kb.html"><code>senkani kb</code></a></li>
-        <li><a href="../../../docs/reference/cli/senkani-eval.html"><code>senkani eval</code></a></li>        <li><a href="../../../docs/reference/cli/senkani-ml-eval.html"><code>senkani ml-eval</code></a></li>
-
+        <li><a href="../../../docs/reference/cli/senkani-eval.html"><code>senkani eval</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-ml-eval.html" class="active"><code>senkani ml-eval</code></a></li>
         <li><a href="../../../docs/reference/cli/senkani-learn.html"><code>senkani learn</code></a></li>
       </ul>
     </div>
@@ -68,40 +68,56 @@
       <a href="../../../">Home</a> <span class="sep">›</span>
       <a href="../../../docs/reference.html">Reference</a> <span class="sep">›</span>
       <a href="../../../docs/reference/cli.html">CLI commands</a> <span class="sep">›</span>
-      <span class="here"><code>senkani doctor</code></span>
+      <span class="here"><code>senkani ml-eval</code></span>
     </nav>
     <span class="quadrant reference">Reference · Information</span>
-    <h1 class="page-title"><code style="background:none;padding:0;color:var(--accent-lo);font-size:0.82em;">senkani doctor</code></h1>
+    <h1 class="page-title"><code style="background:none;padding:0;color:var(--accent-lo);font-size:0.82em;">senkani ml-eval</code></h1>
     <div class="tag-row" style="margin-bottom:18px;"><span class="badge badge-live">Live</span></div>
 
-    <p class="lede">Diagnose and optionally repair hook registration, binary paths, grammar versions, config.</p>
+    <p class="lede">Measure per-tier Gemma 4 output quality. Drives the 20-task harness (10 rationale + 10 vision) against every installed Gemma tier this machine can host, writes <code>~/.senkani/ml-tier-eval.json</code>, and <code>senkani doctor</code> then surfaces per-tier ratings (excellent / acceptable / degraded) so 8 GB Mac users learn the smaller tier's quality cost up-front.</p>
 
     <h2>Syntax</h2>
-    <div class="ref-signature">senkani doctor [--fix]</div>
+    <div class="ref-signature">senkani ml-eval [--mcp-binary &lt;path&gt;]</div>
 
     <h2>Behavior</h2>
-    <p>Checks: MCP server entry, hook registration, binary path resolution, grammar staleness (non-blocking advisory — PASS for recent, SKIP for stale >30 d, never FAIL), and per-RAM-tier ML output quality.</p>
-    <p><strong>ML tier quality (5b):</strong> reads <code>~/.senkani/ml-tier-eval.json</code> and surfaces a per-tier rating for installed Gemma 4 tiers — <code>excellent</code> (≥80% pass), <code>acceptable</code> (≥60%), <code>degraded</code> (&lt;60%, fails check with an "upgrade if RAM allows" hint), or skipped if the report is missing or the tier isn't installed. The harness is <code>Sources/Bench/MLTierEvalTasks.swift</code> (10 rationale + 10 vision tasks).</p>
+    <p>Iterates each Gemma 4 tier in <code>ModelManager.visionModelIds</code> (<code>gemma4-26b-apex</code>, <code>gemma4-e4b</code>, <code>gemma4-e2b</code>). For each tier:</p>
+    <ul>
+      <li><strong>Insufficient RAM</strong> (tier requires more than this machine has) — recorded as <code>notEvaluated</code> with a named reason. Doctor surfaces the placeholder.</li>
+      <li><strong>Not installed</strong> (status not <code>verified</code> or <code>downloaded</code>) — recorded as <code>notEvaluated</code> with the actual <code>ModelStatus</code> in the reason; install via the Models pane and re-run.</li>
+      <li><strong>Eligible</strong> — loaded via <code>VLMModelFactory.shared.loadContainer</code>, the 20 tasks run through <code>MLXInferenceLock.shared</code>, and the tier is unloaded before the next one to avoid OOM.</li>
+    </ul>
+    <p>The CLI itself is a thin shim. Real inference lives in <code>MCPServer.MLTierEvalOrchestrator</code> (which pulls in MLX); the everyday <code>senkani</code> binary stays MLX-free by shelling out to <code>senkani-mcp eval</code>.</p>
 
     <h2>Example</h2>
-    <pre class="code">$ senkani doctor --fix</pre>
+    <pre class="code">$ senkani ml-eval
+[ml-eval] skip gemma4-26b-apex — insufficient RAM (8 GB; tier requires 16 GB)
+[ml-eval] load gemma4-e4b (unsloth/gemma-4-E4B-it-UD-MLX-4bit)
+[ml-eval]   gemma4-e4b: 16/20 (80% pass, excellent)
+[ml-eval] load gemma4-e2b (unsloth/gemma-4-E2B-it-GGUF)
+[ml-eval]   gemma4-e2b: 11/20 (55% pass, degraded)
+[ml-eval] wrote /Users/you/.senkani/ml-tier-eval.json
+
+$ senkani doctor | grep ml.tier
+✓ ml.tier.gemma4-e4b: excellent (16/20, 80% pass, median 612ms, 1840 output tok)
+✗ ml.tier.gemma4-e2b: degraded (11/20, 55% pass, median 388ms, 1100 output tok) — consider upgrading to a larger tier if RAM allows
+- ml.tier.gemma4-26b-apex: notEvaluated — insufficient RAM (8 GB; tier requires 16 GB)</pre>
 
     <h2>Flags</h2>
     <div class="ref-io-table">
       <div class="head">Flag</div><div class="head"></div><div class="head"></div><div class="head">Description</div>
-      <div class="k">--fix</div><div class="t"></div><div class="default"></div><div class="desc">Attempt repair for each failing check.</div>
+      <div class="k">--mcp-binary</div><div class="t">path</div><div class="default">auto-discover</div><div class="desc">Override the discovered <code>senkani-mcp</code>. Auto-discovery checks (1) the same directory as <code>argv[0]</code>, (2) <code>.build/release/senkani-mcp</code>, (3) <code>.build/debug/senkani-mcp</code>, (4) <code>which senkani-mcp</code>.</div>
     </div>
 
     <div class="seealso">
       <h3>See also</h3>
       <ul>
-        <li><a href="../../../docs/reference/cli/senkani-init.html"><code>senkani init</code></a></li>
-        <li><a href="../../../docs/guides/troubleshooting.html"><code>Troubleshooting guide</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-doctor.html"><code>senkani doctor</code></a> — surfaces the cached per-tier ratings</li>
+        <li><a href="../../../docs/reference/cli/senkani-eval.html"><code>senkani eval</code></a> — quality gates for compression (different scope)</li>
       </ul>
     </div>
 
     <div class="source-pointer">
-      <strong>Source:</strong> <code>Sources/CLI/DoctorCommand.swift</code>
+      <strong>Source:</strong> <code>Sources/CLI/MLEvalCommand.swift</code> · orchestrator <code>Sources/MCP/MLTierEvalOrchestrator.swift</code> · adapter <code>Sources/MCP/MLTierInferenceAdapter.swift</code>
     </div>
   </article>
 </main>

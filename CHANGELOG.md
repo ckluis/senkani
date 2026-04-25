@@ -6,6 +6,42 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 25 — `senkani ml-eval` CLI + per-tier inference adapter (`senkani-ml-eval-cli`)
+- Second of two follow-ups to `luminary-2026-04-24-4-gemma-tier-quality-eval`.
+  The 20-task harness shipped April 24, the vision fixtures shipped earlier
+  on April 25 — this round wires both to a CLI command that drives real
+  Gemma inference end-to-end. The harness is no longer dormant: on a real
+  machine with installed Gemma tiers, `senkani ml-eval` writes
+  `~/.senkani/ml-tier-eval.json` and `senkani doctor` surfaces ratings.
+- New `Sources/MCP/MLTierInferenceAdapter.swift` — actor-isolated, loads
+  one Gemma 4 VLM at a time via `VLMModelFactory.shared.loadContainer`,
+  answers `MLTierEvalTask`s through `MLXInferenceLock.shared`, unloads
+  between tiers so the next (often larger or smaller) tier doesn't OOM.
+- New `Sources/MCP/MLTierEvalOrchestrator.swift` — pure `plan(...)` helper
+  decides per-tier evaluate vs. skip (with explicit `.verified`/`.downloaded`
+  allowlist and named reasons for `insufficient RAM` / `not installed` /
+  `not in registry`); `run(...)` iterates the plans, drives the adapter,
+  and writes the report.
+- New `Sources/CLI/MLEvalCommand.swift` — `senkani ml-eval` subcommand.
+  Discovers `senkani-mcp` next to its own argv[0], in `.build/{release,
+  debug}/`, or on PATH (override via `--mcp-binary`); shells out so the
+  everyday `senkani` CLI stays MLX-free. `senkani-mcp` itself gains an
+  `eval` argv mode that bypasses the SENKANI_PANE_ID gate and runs the
+  orchestrator instead of the MCP server.
+- `Package.swift` — MCPServer target gains `Bench` dependency so the
+  orchestrator can reach `MLTierEvalTasks` / `MLTierEvalRunner` /
+  `MLTierEvalReportStore`. CLI target unchanged (no MLX surface).
+- 11 new tests: 6 pin orchestrator planning (RAM gate, install allowlist,
+  unknown-tier rejection, downloaded-counts-as-installed, broken/error/
+  downloading/verifying all skip with named status), 5 pin the CLI
+  subcommand (registered in `Senkani.subcommands`, help message contains
+  abstract + flags, MCP discovery finds sibling executable / build output /
+  returns nil when absent). Suite total 1746 → 1757 (+11).
+- Manual validation now runnable: the four `tools/soak/manual-log.md`
+  bullets under "Per-RAM-tier Gemma 4 quality eval" become exercisable
+  on the operator's machine — that's the round's final close-out
+  step and lives outside CI.
+
 ### April 25 — Vision-eval image fixtures (`gemma4-vision-image-fixtures`)
 - Follow-up to `luminary-2026-04-24-4-gemma-tier-quality-eval`. The 10
   vision tasks in `MLTierEvalTasks.visionTasks()` referenced PNGs by

@@ -12,29 +12,42 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
-### Per-RAM-tier Gemma 4 quality eval (harness shipped 2026-04-24)
+### Per-RAM-tier Gemma 4 quality eval — RUNNABLE 2026-04-25
 
-Round `luminary-2026-04-24-4-gemma-tier-quality-eval`. Shipped: 20-task
-harness in `Sources/Bench/MLTierEvalTasks.swift` (10 rationale + 10
-vision), `MLTierEvalRunner.evaluate` accepting a caller-provided
-inference closure, JSON persistence at `~/.senkani/ml-tier-eval.json`,
-`senkani doctor` cache-reader, and a Models pane quality badge. The
-harness is **dormant** — Bench has no MLX dependency, so the runner
-needs a caller (the deferred `senkani ml-eval` CLI command) to drive
-real inference. Two follow-up backlog items track the remaining work:
-`gemma4-vision-image-fixtures` for the 10 vision PNGs, and
-`senkani-ml-eval-cli` for the MCP-backed inference adapter. Once both
-land, this manual-log entry's checks become runnable.
+Round `luminary-2026-04-24-4-gemma-tier-quality-eval` (harness 04-24)
++ `gemma4-vision-image-fixtures` (vision PNGs 04-25)
++ `senkani-ml-eval-cli` (CLI + MCP-backed inference adapter 04-25).
+The full chain is now wired end-to-end: 20-task harness in
+`Sources/Bench/MLTierEvalTasks.swift` (10 rationale + 10 vision) with
+`MLTierEvalRunner.evaluate` accepting a caller-provided inference
+closure; `MCPServer.MLTierInferenceAdapter` loads each Gemma 4 tier in
+turn through `VLMModelFactory.shared.loadContainer` and answers tasks
+via `MLXInferenceLock.shared`; `MCPServer.MLTierEvalOrchestrator`
+plans evaluate-vs-skip per tier (allowlists `.verified`/`.downloaded`,
+records `notEvaluated` with named reason for `insufficient RAM` /
+`not installed` / `not in registry`); `senkani ml-eval` CLI shells
+out to `senkani-mcp eval` so the everyday `senkani` binary stays
+MLX-free; JSON written atomically to `~/.senkani/ml-tier-eval.json`;
+`senkani doctor` cache-reader + Models pane quality badge surface
+ratings to the user. The harness is **no longer dormant** — every
+bullet below is exercisable on a machine with at least one Gemma 4
+tier installed.
 
 - **Real measurements on a machine with ≥1 Gemma 4 tier installed.**
-  Prereq: `senkani-ml-eval-cli` follow-up shipped + at least one
-  Gemma 4 tier (`gemma4-26b-apex` / `gemma4-e4b` / `gemma4-e2b`)
-  downloaded + verified via the Models pane. Run `senkani ml-eval`
-  (TBD command). Expect: writes `~/.senkani/ml-tier-eval.json` with
+  Prereq: at least one Gemma 4 tier (`gemma4-26b-apex` / `gemma4-e4b`
+  / `gemma4-e2b`) downloaded + verified via the Models pane. Run
+  `senkani ml-eval`. Expect: writes `~/.senkani/ml-tier-eval.json` with
   per-tier `passed`, `total`, `medianLatencyMs`, `totalOutputTokens`,
   `rating`. Re-run `senkani doctor` — the `ml.tier.<id>` line should
   appear with the rating string. If the lowest tier the machine can
   load rates `degraded`, doctor exits non-zero with the upgrade hint.
+  Tiers above this machine's RAM should appear as `notEvaluated`
+  with reason `insufficient RAM (N GB; tier requires M GB)` rather
+  than be silently absent. Sanity check the `outputTokens` figures —
+  current implementation counts MLX `Generation.chunk`s as a token
+  proxy (doc-commented in `MLTierInferenceAdapter.run`); if MLX gains
+  a precise per-chunk token count, swap the source and refresh the
+  numbers.
 
 - **8 GB-machine validation: E2B rating is honest.** On a real 8 GB
   Mac, after running the eval, confirm `gemma4-e2b` is the

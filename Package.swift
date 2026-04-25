@@ -342,6 +342,7 @@ let package = Package(
                 "Filter",
                 "Indexer",
                 "Bundle",
+                "Bench",
                 .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "MLXEmbedders", package: "mlx-swift-lm"),
                 .product(name: "MLXVLM", package: "mlx-swift-lm"),

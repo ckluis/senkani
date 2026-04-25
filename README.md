@@ -71,7 +71,7 @@ A horizontal canvas of panes. Each pane is a primitive type; you arrange them ho
 - **Browser** — WKWebView embedded, localhost or any URL. Optional click-to-capture Design Mode (env-gate `SENKANI_BROWSER_DESIGN=on`, ⌥⇧D toggles) — click an element, get a fixed-schema Markdown block on the clipboard.
 - **Markdown Preview** — live render from file, updates on save
 - **Analytics** — token/cost savings with charts, persistent across restarts
-- **Model Manager** — install → verify → ready state machine for local ML (MiniLM-L6 embeddings + Gemma 4 vision tiers). One-click **Install** drives `Available → Installing N% → Installed → Verifying… → Ready`; verification loads the model into an MLX container (real fixture) and flips to `Ready` or `Verification failed` with a one-click **Re-verify**.
+- **Model Manager** — install → verify → ready state machine for local ML (MiniLM-L6 embeddings + Gemma 4 vision tiers). One-click **Install** drives `Available → Installing N% → Installed → Verifying… → Ready`; verification loads the model into an MLX container (real fixture) and flips to `Ready` or `Verification failed` with a one-click **Re-verify**. Per-tier output quality is measured by `senkani ml-eval` — runs the 20-task harness against each installed Gemma tier, writes `~/.senkani/ml-tier-eval.json`, and `senkani doctor` then surfaces the rating (excellent / acceptable / degraded) so 8 GB Mac users learn the smaller tier's quality cost up-front.
 - **Savings Test** — fixture bench + live session replay + scenario simulator
 - **Agent Timeline** — timeline of optimization events, interactive tool calls, and scheduled-task runs (start/end/blocked)
 - **Knowledge Base** — project knowledge entities, freshness indicators

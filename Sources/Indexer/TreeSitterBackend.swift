@@ -83,8 +83,21 @@ public enum TreeSitterBackend {
         let ns = source as NSString
         let lines = source.components(separatedBy: "\n")
         var entries: [IndexEntry] = []
-        walkNode(root, language: language, file: file, source: ns, lines: lines, container: nil, entries: &entries)
+        if let backend = backend(for: language) {
+            backend.extractSymbols(from: root, file: file, source: ns, lines: lines, container: nil, entries: &entries)
+        } else {
+            walkNode(root, language: language, file: file, source: ns, lines: lines, container: nil, entries: &entries)
+        }
         return entries
+    }
+
+    /// Pick the per-language backend for a given language id, if one exists.
+    /// Languages that have not yet been migrated out of the central `walkNode`
+    /// switch return `nil` here and fall through to the dispatcher.
+    internal static func backend(for language: String) -> TreeSitterLanguageBackend.Type? {
+        if TomlBackend.supports(language)    { return TomlBackend.self }
+        if GraphQLBackend.supports(language) { return GraphQLBackend.self }
+        return nil
     }
 
     /// Index files of a given language using tree-sitter AST parsing.
@@ -164,7 +177,11 @@ public enum TreeSitterBackend {
 
             let source = content as NSString
             let lines = content.components(separatedBy: "\n")
-            walkNode(root, language: language, file: relativePath, source: source, lines: lines, container: nil, entries: &entries)
+            if let backend = backend(for: language) {
+                backend.extractSymbols(from: root, file: relativePath, source: source, lines: lines, container: nil, entries: &entries)
+            } else {
+                walkNode(root, language: language, file: relativePath, source: source, lines: lines, container: nil, entries: &entries)
+            }
         }
 
         return entries
@@ -181,13 +198,11 @@ public enum TreeSitterBackend {
         container: String?,
         entries: inout [IndexEntry]
     ) {
-        // GraphQL uses its own walker — keeping it out of this switch keeps
-        // `walkNode`'s stack frame small enough for Swift 6 to compile without
-        // tripping a codegen SIGBUS on large unrelated ASTs (see walkGraphQL).
-        if language == "graphql" {
-            walkGraphQL(node, file: file, source: source, lines: lines, container: container, entries: &entries)
-            return
-        }
+        // GraphQL and TOML are handled by `GraphQLBackend` / `TomlBackend`;
+        // both entry points (`extractSymbols(from:source:language:file:)` and
+        // `index(files:language:projectRoot:treeCache:)`) route to those
+        // backends before calling `walkNode`, so `walkNode` never observes
+        // those languages. See `Sources/Indexer/Languages/`.
         for i in 0..<Int(node.childCount) {
             guard let child = node.child(at: i) else { continue }
             let type = child.nodeType ?? ""
@@ -988,39 +1003,11 @@ public enum TreeSitterBackend {
                     }
                 }
 
-            // TOML [table] + [[table_array_element]] headers (children include
-            // the key node + inner pairs; emit as `.extension` and recurse so
-            // nested pairs get the table as container).
-            // NOTE: Keep `table` and `table_array_element` folded into a single
-            // `case A, B:` — splitting them into two adjacent cases triggers a
-            // Swift 6 switch-codegen stack-overflow when the switch has many
-            // String cases (see: walkNode has ~70 cases). Measured: separate
-            // cases with identical `walkNode(child, …, container: name)` tails
-            // blow the stack on large Bash ASTs; folded case is fine.
-            case "table", "table_array_element":
-                if language == "toml" {
-                    if let name = extractTomlTableName(child, source: source) {
-                        entries.append(IndexEntry(
-                            name: name, kind: .extension, file: file,
-                            startLine: startLine(of: child), endLine: endLine(of: child),
-                            signature: signatureText(lines: lines, line: startLine(of: child)),
-                            container: container, engine: "tree-sitter"
-                        ))
-                        walkNode(child, language: language, file: file, source: source, lines: lines, container: name, entries: &entries)
-                    }
-                }
-
-            // TOML key = value
-            case "pair":
-                if language == "toml", let name = extractTomlPairKey(child, source: source) {
-                    let kind: SymbolKind = container != nil ? .property : .variable
-                    entries.append(IndexEntry(
-                        name: name, kind: kind, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
-                }
+            // (TOML's `table` / `table_array_element` / `pair` cases used to
+            // live here; they moved to `TomlBackend`. Other languages with
+            // these node types fall through to `default:` and are recursed
+            // — same behavior as before, since the TOML cases were
+            // language-gated no-ops for non-TOML.)
 
             default:
                 // Recurse into non-declaration nodes (decorated_definition, export_statement, block, etc.)
@@ -1031,353 +1018,14 @@ public enum TreeSitterBackend {
         }
     }
 
-    // MARK: - GraphQL Walker
-
-    /// GraphQL has its own dedicated walker so it doesn't share the large
-    /// `walkNode` switch. Matches top-level schema definitions (object,
-    /// interface, enum, scalar, union, input object, directive) by name,
-    /// recursing into wrapper nodes (`document`, `definition`,
-    /// `type_system_definition`, `type_definition`) via a simple loop.
-    private static func walkGraphQL(
-        _ node: Node,
-        file: String,
-        source: NSString,
-        lines: [String],
-        container: String?,
-        entries: inout [IndexEntry]
-    ) {
-        for i in 0..<Int(node.childCount) {
-            guard let child = node.child(at: i) else { continue }
-            let type = child.nodeType ?? ""
-            if let kind = graphqlDefinitionKind(type),
-               let name = graphqlName(child, source: source) {
-                entries.append(IndexEntry(
-                    name: name, kind: kind, file: file,
-                    startLine: startLine(of: child), endLine: endLine(of: child),
-                    signature: signatureText(lines: lines, line: startLine(of: child)),
-                    container: container, engine: "tree-sitter"
-                ))
-            } else if child.childCount > 0 {
-                walkGraphQL(child, file: file, source: source, lines: lines, container: container, entries: &entries)
-            }
-        }
-    }
-
-    // MARK: - Shared Extractors
-
-    private static func extractFunction(
-        _ node: Node, file: String, source: NSString, lines: [String], container: String?
-    ) -> IndexEntry? {
-        guard let name = nodeName(node, source: source) else { return nil }
-        let kind: SymbolKind = container != nil ? .method : .function
-        return IndexEntry(
-            name: name,
-            kind: kind,
-            file: file,
-            startLine: startLine(of: node),
-            endLine: endLine(of: node),
-            signature: signatureText(lines: lines, line: startLine(of: node)),
-            container: container,
-            engine: "tree-sitter"
-        )
-    }
-
-    // MARK: - Swift Extractors
-
-    /// Extracts Swift class/struct/enum/extension declarations.
-    private static func extractSwiftClassLike(
-        _ node: Node, file: String, source: NSString, lines: [String], container: String?
-    ) -> (IndexEntry, Node?)? {
-        let kind: SymbolKind
-        var declKindText = ""
-        for i in 0..<Int(node.childCount) {
-            guard let child = node.child(at: i) else { continue }
-            let t = child.nodeType ?? ""
-            if ["class", "struct", "enum", "actor", "extension"].contains(t) {
-                declKindText = t
-                break
-            }
-        }
-
-        switch declKindText {
-        case "class", "actor": kind = .class
-        case "struct": kind = .struct
-        case "enum": kind = .enum
-        case "extension": kind = .extension
-        default: return nil
-        }
-
-        let name: String
-        if let n = nodeName(node, source: source) {
-            name = n
-        } else if kind == .extension, let typeName = extensionTypeName(node, source: source) {
-            name = typeName
-        } else {
-            return nil
-        }
-
-        let body = findBody(node)
-        let entry = IndexEntry(
-            name: name,
-            kind: kind,
-            file: file,
-            startLine: startLine(of: node),
-            endLine: endLine(of: node),
-            signature: signatureText(lines: lines, line: startLine(of: node)),
-            container: container,
-            engine: "tree-sitter"
-        )
-
-        return (entry, body)
-    }
-
-    private static func extractProtocol(
-        _ node: Node, file: String, source: NSString, lines: [String], container: String?
-    ) -> (IndexEntry, Node?)? {
-        guard let name = nodeName(node, source: source) else { return nil }
-        let body = findBody(node)
-        let entry = IndexEntry(
-            name: name,
-            kind: .protocol,
-            file: file,
-            startLine: startLine(of: node),
-            endLine: endLine(of: node),
-            signature: signatureText(lines: lines, line: startLine(of: node)),
-            container: container,
-            engine: "tree-sitter"
-        )
-        return (entry, body)
-    }
-
-    private static func extractProperty(
-        _ node: Node, file: String, source: NSString, lines: [String], container: String?
-    ) -> IndexEntry? {
-        guard let name = findFirstIdentifier(in: node, source: source) else { return nil }
-        let kind: SymbolKind = container != nil ? .property : .variable
-        return IndexEntry(
-            name: name,
-            kind: kind,
-            file: file,
-            startLine: startLine(of: node),
-            endLine: endLine(of: node),
-            signature: signatureText(lines: lines, line: startLine(of: node)),
-            container: container,
-            engine: "tree-sitter"
-        )
-    }
-
-    // MARK: - Python Extractors
-
-    /// Extracts a Python class_definition.
-    private static func extractPythonClass(
-        _ node: Node, file: String, source: NSString, lines: [String], container: String?
-    ) -> (IndexEntry, Node?)? {
-        guard let name = nodeName(node, source: source) else { return nil }
-        let body = findBody(node)
-        let entry = IndexEntry(
-            name: name,
-            kind: .class,
-            file: file,
-            startLine: startLine(of: node),
-            endLine: endLine(of: node),
-            signature: signatureText(lines: lines, line: startLine(of: node)),
-            container: container,
-            engine: "tree-sitter"
-        )
-        return (entry, body)
-    }
-
-    // MARK: - TypeScript/TSX Extractors
-
-    /// Extracts a TypeScript/TSX declaration with a name field and optional body.
-    private static func extractTSDeclaration(
-        _ node: Node, kind: SymbolKind, file: String, source: NSString, lines: [String], container: String?
-    ) -> (IndexEntry, Node?)? {
-        guard let name = nodeName(node, source: source) else { return nil }
-        let body = findBody(node)
-        let entry = IndexEntry(
-            name: name,
-            kind: kind,
-            file: file,
-            startLine: startLine(of: node),
-            endLine: endLine(of: node),
-            signature: signatureText(lines: lines, line: startLine(of: node)),
-            container: container,
-            engine: "tree-sitter"
-        )
-        return (entry, body)
-    }
-
-    // MARK: - Go Extractors
-
-    /// Extracts a Go method_declaration with receiver-based container.
-    private static func extractGoMethod(
-        _ node: Node, file: String, source: NSString, lines: [String]
-    ) -> IndexEntry? {
-        guard let name = nodeName(node, source: source) else { return nil }
-        let container = extractGoReceiverType(node, source: source)
-        return IndexEntry(
-            name: name,
-            kind: .method,
-            file: file,
-            startLine: startLine(of: node),
-            endLine: endLine(of: node),
-            signature: signatureText(lines: lines, line: startLine(of: node)),
-            container: container,
-            engine: "tree-sitter"
-        )
-    }
-
-    /// Extract the receiver type from a Go method_declaration.
-    /// Handles both value receivers `(u User)` and pointer receivers `(u *User)`.
-    private static func extractGoReceiverType(_ node: Node, source: NSString) -> String? {
-        // receiver field is a parameter_list
-        guard let receiver = node.child(byFieldName: "receiver") else { return nil }
-        // Walk into first parameter_declaration
-        for i in 0..<Int(receiver.childCount) {
-            guard let param = receiver.child(at: i) else { continue }
-            let paramType = param.nodeType ?? ""
-            if paramType == "parameter_declaration" {
-                // Find the type field — either type_identifier or pointer_type
-                if let typeNode = param.child(byFieldName: "type") {
-                    let typeNodeType = typeNode.nodeType ?? ""
-                    if typeNodeType == "type_identifier" {
-                        return nodeText(typeNode, source: source)
-                    } else if typeNodeType == "pointer_type" {
-                        // pointer_type contains a type_identifier child
-                        for j in 0..<Int(typeNode.childCount) {
-                            guard let inner = typeNode.child(at: j) else { continue }
-                            if (inner.nodeType ?? "") == "type_identifier" {
-                                return nodeText(inner, source: source)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return nil
-    }
-
-    /// Extracts Go type declarations from a type_declaration node.
-    /// A type_declaration can contain multiple type_spec children.
-    private static func extractGoTypeDeclaration(
-        _ node: Node, file: String, source: NSString, lines: [String], entries: inout [IndexEntry]
-    ) {
-        for i in 0..<Int(node.childCount) {
-            guard let child = node.child(at: i) else { continue }
-            let childType = child.nodeType ?? ""
-            if childType == "type_spec" {
-                if let entry = extractGoTypeSpec(child, file: file, source: source, lines: lines) {
-                    entries.append(entry)
-                }
-            }
-        }
-    }
-
-    /// Extracts a single Go type_spec (name + type).
-    private static func extractGoTypeSpec(
-        _ node: Node, file: String, source: NSString, lines: [String]
-    ) -> IndexEntry? {
-        guard let name = nodeName(node, source: source) else { return nil }
-        // Determine kind from the type field
-        let kind: SymbolKind
-        if let typeNode = node.child(byFieldName: "type") {
-            let typeNodeType = typeNode.nodeType ?? ""
-            switch typeNodeType {
-            case "struct_type": kind = .struct
-            case "interface_type": kind = .interface
-            default: kind = .type
-            }
-        } else {
-            kind = .type
-        }
-        return IndexEntry(
-            name: name,
-            kind: kind,
-            file: file,
-            startLine: startLine(of: node),
-            endLine: endLine(of: node),
-            signature: signatureText(lines: lines, line: startLine(of: node)),
-            container: nil,
-            engine: "tree-sitter"
-        )
-    }
-
-    // MARK: - Rust Extractors
-
-    /// Extract the type name from a Rust impl_item.
-    /// Handles: `impl User`, `impl<T> Wrapper<T>`, `impl Display for User` (returns "User").
-    private static func extractRustImplType(_ node: Node, source: NSString) -> String? {
-        // The "type" field is the type being implemented (e.g., User in `impl Display for User`)
-        guard let typeNode = node.child(byFieldName: "type") else { return nil }
-        return extractRustTypeName(typeNode, source: source)
-    }
-
-    /// Extract the base type name from a Rust type node.
-    /// Handles type_identifier, generic_type (strips <T>), and scoped_type_identifier.
-    private static func extractRustTypeName(_ node: Node, source: NSString) -> String? {
-        let type = node.nodeType ?? ""
-        switch type {
-        case "type_identifier":
-            return nodeText(node, source: source)
-        case "generic_type":
-            // generic_type contains a type_identifier child for the base name
-            if let typeId = node.child(byFieldName: "type") {
-                return extractRustTypeName(typeId, source: source)
-            }
-            // Fallback: first type_identifier child
-            for i in 0..<Int(node.childCount) {
-                guard let child = node.child(at: i) else { continue }
-                if (child.nodeType ?? "") == "type_identifier" {
-                    return nodeText(child, source: source)
-                }
-            }
-            return nil
-        case "scoped_type_identifier":
-            // For module::Type, extract the last type_identifier
-            for i in stride(from: Int(node.childCount) - 1, through: 0, by: -1) {
-                guard let child = node.child(at: i) else { continue }
-                if (child.nodeType ?? "") == "type_identifier" {
-                    return nodeText(child, source: source)
-                }
-            }
-            return nil
-        default:
-            return nodeText(node, source: source)
-        }
-    }
-
-    // MARK: - Lua Extractors
-
-    /// Extract function name and optional container from a Lua function_declaration.
-    /// Handles three forms:
-    /// - `function foo()` → ("foo", nil)
-    /// - `function M.greet()` → ("greet", "M")
-    /// - `function M:say()` → ("say", "M")
-    private static func extractLuaFunctionName(_ node: Node, source: NSString) -> (name: String, container: String?)? {
-        guard let nameNode = node.child(byFieldName: "name") else { return nil }
-        let nameType = nameNode.nodeType ?? ""
-
-        switch nameType {
-        case "identifier":
-            guard let name = nodeText(nameNode, source: source) else { return nil }
-            return (name, nil)
-        case "dot_index_expression":
-            guard let fieldNode = nameNode.child(byFieldName: "field"),
-                  let tableNode = nameNode.child(byFieldName: "table"),
-                  let field = nodeText(fieldNode, source: source),
-                  let table = nodeText(tableNode, source: source) else { return nil }
-            return (field, table)
-        case "method_index_expression":
-            guard let methodNode = nameNode.child(byFieldName: "method"),
-                  let tableNode = nameNode.child(byFieldName: "table"),
-                  let method = nodeText(methodNode, source: source),
-                  let table = nodeText(tableNode, source: source) else { return nil }
-            return (method, table)
-        default:
-            return nil
-        }
-    }
+    // (Shared / Swift / Python / TypeScript / Go / Rust / Lua / C / C++
+    // extractors plus all generic node helpers (`nodeText`, `nodeName`,
+    // `findChildByType`, `findBody`, `startLine`, `endLine`,
+    // `signatureText`, `extensionTypeName`, `findFirstIdentifier`) live
+    // in `Sources/Indexer/Languages/Helpers.swift` as an `extension
+    // TreeSitterBackend`. They are `internal` there so per-language
+    // backends in `Sources/Indexer/Languages/` can call them; existing
+    // call sites here continue to use the bare names unchanged.)
 
     // MARK: - Elixir Extractors
 
@@ -1568,204 +1216,4 @@ public enum TreeSitterBackend {
         return nil
     }
 
-    // MARK: - C++ Extractors
-
-    /// Extract method name and container from a C++ out-of-class method definition.
-    /// Handles: `void Foo::bar() { }` and `int *Foo::baz() { }`.
-    private static func extractCppQualifiedMethod(_ node: Node, source: NSString) -> (name: String, container: String)? {
-        guard let qualId = findQualifiedIdentifier(node) else { return nil }
-        guard let nameNode = qualId.child(byFieldName: "name") else { return nil }
-        guard let name = nodeText(nameNode, source: source) else { return nil }
-        guard let scopeNode = qualId.child(byFieldName: "scope") else { return nil }
-        guard let scope = nodeText(scopeNode, source: source) else { return nil }
-        return (name, scope)
-    }
-
-    /// Find a qualified_identifier node in the declarator chain.
-    private static func findQualifiedIdentifier(_ node: Node) -> Node? {
-        guard let declarator = node.child(byFieldName: "declarator") else { return nil }
-        if (declarator.nodeType ?? "") == "qualified_identifier" { return declarator }
-        return findQualifiedIdentifier(declarator)
-    }
-
-    // MARK: - C Extractors
-
-    /// Extract the symbol name from a C declarator chain.
-    /// Traverses: function_declarator, pointer_declarator, parenthesized_declarator → identifier.
-    private static func extractCDeclaratorName(_ node: Node, source: NSString) -> String? {
-        let type = node.nodeType ?? ""
-        if type == "identifier" || type == "type_identifier" || type == "field_identifier" {
-            return nodeText(node, source: source)
-        }
-        if let declarator = node.child(byFieldName: "declarator") {
-            return extractCDeclaratorName(declarator, source: source)
-        }
-        for i in 0..<Int(node.childCount) {
-            guard let child = node.child(at: i) else { continue }
-            let childType = child.nodeType ?? ""
-            if childType == "identifier" || childType == "type_identifier" || childType == "field_identifier" {
-                return nodeText(child, source: source)
-            }
-        }
-        for i in 0..<Int(node.childCount) {
-            guard let child = node.child(at: i) else { continue }
-            let childType = child.nodeType ?? ""
-            if childType != "parameter_list" && childType != "argument_list" {
-                if let name = extractCDeclaratorName(child, source: source) {
-                    return name
-                }
-            }
-        }
-        return nil
-    }
-
-    /// Check if a C declaration contains a function_declarator in its declarator chain.
-    private static func cHasFunctionDeclarator(_ node: Node) -> Bool {
-        guard let declarator = node.child(byFieldName: "declarator") else { return false }
-        let type = declarator.nodeType ?? ""
-        if type == "function_declarator" { return true }
-        return cHasFunctionDeclarator(declarator)
-    }
-
-    // MARK: - TOML Extractors
-
-    /// Extract the header key from a TOML `table` or `table_array_element`.
-    /// Children order is [ `[` or `[[`, key_node, `]` or `]]`, ...pairs ]; the
-    /// key node is `bare_key`, `quoted_key`, or `dotted_key`.
-    private static func extractTomlTableName(_ node: Node, source: NSString) -> String? {
-        for i in 0..<Int(node.childCount) {
-            guard let child = node.child(at: i) else { continue }
-            switch child.nodeType ?? "" {
-            case "bare_key", "quoted_key", "dotted_key":
-                return nodeText(child, source: source)
-            default:
-                continue
-            }
-        }
-        return nil
-    }
-
-    /// Extract the LHS key from a TOML `pair` (`key = value`).
-    private static func extractTomlPairKey(_ node: Node, source: NSString) -> String? {
-        for i in 0..<Int(node.childCount) {
-            guard let child = node.child(at: i) else { continue }
-            switch child.nodeType ?? "" {
-            case "bare_key", "quoted_key", "dotted_key":
-                return nodeText(child, source: source)
-            default:
-                continue
-            }
-        }
-        return nil
-    }
-
-    // MARK: - GraphQL Extractors
-
-    /// Return the text of a GraphQL definition's `name` child node.
-    /// GraphQL grammar treats `name` as a node type (not a field), so we
-    /// look it up by type.
-    private static func graphqlName(_ node: Node, source: NSString) -> String? {
-        guard let nameNode = findChildByType(node, type: "name") else { return nil }
-        return nodeText(nameNode, source: source)
-    }
-
-    /// Map a GraphQL top-level definition node type to a `SymbolKind`.
-    /// object_type_definition → .class (struct-like aggregate of fields)
-    /// interface_type_definition → .interface
-    /// enum_type_definition → .enum
-    /// input_object_type_definition → .struct (input-only aggregate)
-    /// scalar_type_definition / union_type_definition → .type
-    /// directive_definition → .function (callable-ish thing at use sites)
-    private static func graphqlDefinitionKind(_ nodeType: String) -> SymbolKind? {
-        switch nodeType {
-        case "object_type_definition":       return .class
-        case "interface_type_definition":    return .interface
-        case "enum_type_definition":         return .enum
-        case "input_object_type_definition": return .struct
-        case "scalar_type_definition",
-             "union_type_definition":        return .type
-        case "directive_definition":         return .function
-        default:                             return nil
-        }
-    }
-
-
-    // MARK: - Node Helpers
-
-    /// Extract text from a node using its NSRange and the source NSString.
-    private static func nodeText(_ node: Node, source: NSString) -> String? {
-        let range = node.range
-        guard range.location != NSNotFound, NSMaxRange(range) <= source.length else { return nil }
-        return source.substring(with: range)
-    }
-
-    /// Get the name from a node's "name" field.
-    private static func nodeName(_ node: Node, source: NSString) -> String? {
-        guard let nameNode = node.child(byFieldName: "name") else { return nil }
-        return nodeText(nameNode, source: source)
-    }
-
-    /// For Swift extension declarations, extract the extended type name.
-    private static func extensionTypeName(_ node: Node, source: NSString) -> String? {
-        var pastKeyword = false
-        for i in 0..<Int(node.childCount) {
-            guard let child = node.child(at: i) else { continue }
-            let t = child.nodeType ?? ""
-            if t == "extension" { pastKeyword = true; continue }
-            if pastKeyword && (t == "type_identifier" || t == "user_type") {
-                return nodeText(child, source: source)
-            }
-        }
-        return nil
-    }
-
-    /// Find the first child node of a given type (for grammars without field names, e.g. Kotlin).
-    private static func findChildByType(_ node: Node, type: String) -> Node? {
-        for i in 0..<Int(node.childCount) {
-            guard let child = node.child(at: i) else { continue }
-            if child.nodeType == type { return child }
-        }
-        return nil
-    }
-
-    /// Find the body node inside a declaration.
-    private static func findBody(_ node: Node) -> Node? {
-        if let body = node.child(byFieldName: "body") { return body }
-        for i in 0..<Int(node.childCount) {
-            guard let child = node.child(at: i) else { continue }
-            let t = child.nodeType ?? ""
-            if t.hasSuffix("_body") { return child }
-        }
-        return nil
-    }
-
-    /// Find the first simple_identifier descendant (for Swift property patterns).
-    private static func findFirstIdentifier(in node: Node, source: NSString) -> String? {
-        let type = node.nodeType ?? ""
-        if type == "simple_identifier" { return nodeText(node, source: source) }
-        for i in 0..<Int(node.childCount) {
-            guard let child = node.child(at: i) else { continue }
-            let childType = child.nodeType ?? ""
-            if childType == "type_annotation" || childType == "call_expression"
-                || childType == "value_arguments" { continue }
-            if let found = findFirstIdentifier(in: child, source: source) { return found }
-        }
-        return nil
-    }
-
-    /// 1-based start line from a node's point range.
-    private static func startLine(of node: Node) -> Int {
-        Int(node.pointRange.lowerBound.row) + 1
-    }
-
-    /// 1-based end line from a node's point range.
-    private static func endLine(of node: Node) -> Int {
-        Int(node.pointRange.upperBound.row) + 1
-    }
-
-    /// Extract the signature text from the source lines.
-    private static func signatureText(lines: [String], line: Int) -> String {
-        guard line > 0, line <= lines.count else { return "" }
-        return lines[line - 1].trimmingCharacters(in: .whitespaces)
-    }
 }

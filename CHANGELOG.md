@@ -6,6 +6,48 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 25 — TreeSitterBackend decomposition pilot: protocol + Helpers + TOML/GraphQL backends (`luminary-2026-04-24-10a-treesitterbackend-protocol-and-pilot`)
+- Luminary P2 (Torvalds/Carmack/Bach-flagged). Pilot round of the
+  per-language backend decomposition — `Sources/Indexer/TreeSitterBackend.swift`
+  was 1,771 LOC with 80+ case branches and intricate per-language
+  sub-dispatch making language No. 26 materially harder than it
+  should be.
+- New `Sources/Indexer/Languages/TreeSitterLanguageBackend.swift`:
+  `internal protocol` with `supports(_:)` + `extractSymbols(...)`. Doc
+  comment explains the contract for adding a language and points at
+  `TomlBackend.swift` as the worked example.
+- New `Sources/Indexer/Languages/Helpers.swift`: 23 shared helpers
+  (`nodeText`, `nodeName`, `findChildByType`, `findBody`, `startLine`,
+  `endLine`, `signatureText`, `extractFunction`, `extractTSDeclaration`,
+  `extractProperty`, `extractProtocol`, `extractPythonClass`,
+  `extractSwiftClassLike`, `extractGoMethod`/`extractGoReceiverType`/
+  `extractGoTypeDeclaration`/`extractGoTypeSpec`, `extractRustImplType`/
+  `extractRustTypeName`, `extractCppQualifiedMethod`/`findQualifiedIdentifier`,
+  `extractCDeclaratorName`, `cHasFunctionDeclarator`, `extractLuaFunctionName`,
+  `extensionTypeName`, `findFirstIdentifier`) promoted from `private` to
+  `internal` via `extension TreeSitterBackend`. No call-site churn —
+  existing dispatcher code in `TreeSitterBackend.swift` continues to
+  use bare names.
+- New `Sources/Indexer/Languages/TomlBackend.swift`: 115 LOC, owns
+  `table` / `table_array_element` / `pair` walk + `extractTableName` /
+  `extractPairKey` (formerly `extractTomlTableName` / `extractTomlPairKey`).
+- New `Sources/Indexer/Languages/GraphQLBackend.swift`: 86 LOC, lifts
+  `walkGraphQL` intact + private `extractName` / `definitionKind`
+  (formerly `graphqlName` / `graphqlDefinitionKind`).
+- `TreeSitterBackend.extractSymbols(...)` and `TreeSitterBackend.index(...)`
+  both route to `backend(for: language)` BEFORE calling `walkNode`, so
+  TOML / GraphQL never enter the central switch. `walkNode`'s GraphQL
+  early-return + TOML cases removed.
+- Dispatcher dropped 1,771 → 1,219 LOC (-31%). Languages directory
+  now holds 753 LOC across 4 files. Five rounds (10b–10f) remain to
+  bring the dispatcher under 500 LOC by migrating the remaining 21
+  language branches.
+- Re-audit (Torvalds, Carmack, Bach): PASS clean. 1,806/1,806 tests
+  green (260 tree-sitter tests unchanged); zero behavior delta as
+  designed for a pure refactor (tests target = 0).
+- `spec/tree_sitter.md` got an "Adding a language" section pointing
+  at the new protocol with `TomlBackend` as the worked example.
+
 ### April 25 — Glossary + CLI conventions: pin the ubiquitous language (`luminary-2026-04-24-9-glossary-and-cli-conventions`)
 - Luminary P2 (Evans-flagged). Twelve terms drifted across the spec
   tree with three different meanings each in some cases ("hook" was

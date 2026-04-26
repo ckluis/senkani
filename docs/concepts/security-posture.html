@@ -89,6 +89,9 @@
     <h2>Observability</h2>
     <p>Every security-defense site increments an <code>event_counters</code> row: injection detections, SSRF blocks, socket handshake rejections, schema migrations, retention prunes, command redactions. Surfaced via <code>senkani stats --security</code> with Gelman-style <code>count/total (pct%)</code> rate annotation, or the <code>senkani_session action:"stats"</code> MCP action.</p>
 
+    <h2>Vendored grammar integrity</h2>
+    <p>25 tree-sitter grammars vendor as third-party C code that runs in-process during every <code>senkani index</code> and every MCP <code>outline</code>/<code>deps</code>/<code>repo</code> call. Each grammar entry in <code>Sources/Indexer/GrammarManifest.swift</code> declares a SHA-256 <code>contentHash</code> covering <code>parser.c</code> (concatenated with <code>scanner.c</code> when one is present). <code>tools/verify-grammar-hashes.sh</code> recomputes and diffs each hash; it runs as a pre-flight gate inside <code>tools/test-safe.sh</code>, so a swapped <code>parser.c</code> fails CI before any test can mask the change. <code>tools/generate-sbom.sh</code> emits a CycloneDX 1.5 JSON SBOM (25 grammars + 4 ML models + 22 Swift packages = 51 components, byte-deterministic, honors <code>SOURCE_DATE_EPOCH</code>) for downstream consumers auditing what shipped.</p>
+
     <h2>Data portability</h2>
     <p><a href="../../docs/reference/cli/senkani-export.html"><code>senkani export</code></a> streams sessions + commands + token_events as JSONL via a read-only SQLite connection — doesn't block the live MCP server. <code>--redact</code> collapses user paths. GDPR-adjacent by design, not by regulation.</p>
 

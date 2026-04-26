@@ -6,6 +6,57 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 26 — Tree-sitter grammars are SHA-256 pinned; release SBOM script lands (`luminary-2026-04-24-13-grammar-pinning-sbom`)
+- Luminary P2 (Schneier/Meeker/Grace). 25 vendored tree-sitter
+  grammars are third-party C code that runs in-process during every
+  `senkani index` and every MCP `outline`/`deps`/`repo` call.
+  `GrammarManifest.swift` already tracked upstream version + repo,
+  but it did not pin a content hash and the project did not emit an
+  SBOM — a swapped `parser.c` would have shipped silently.
+- `GrammarInfo` gains `contentHash: String` — SHA-256 of
+  `parser.c` (concatenated with `scanner.c` when one is present).
+  All 25 manifest entries declare a hash; six grammars have no
+  external scanner so their hash covers `parser.c` alone.
+- New `tools/verify-grammar-hashes.sh` recomputes each hash and
+  diffs it against the manifest. Mismatch = exit 1 with the declared
+  and computed hashes printed for forensics. `--print` mode emits
+  the current-on-disk hash table so a deliberate grammar bump can
+  re-pin in one paste. Wired into `tools/test-safe.sh` as a
+  pre-flight gate (after the multiplier-claims check) so a tampered
+  grammar fails CI before tests can mask the change with an
+  unrelated regression. Skip via `SKIP_GRAMMAR_HASH_CHECK=1` for
+  local iteration on a known-good tree.
+- New `tools/generate-sbom.sh` emits a CycloneDX 1.5 JSON SBOM:
+  25 tree-sitter grammars (with their pinned hashes + GitHub
+  vcs URL), 4 ML models from `ModelManager.swift` (HuggingFace
+  repo + expected size; runtime-downloaded so no content hash yet),
+  and 22 Swift packages from `Package.resolved` (with pinned commit
+  SHAs; branch-pinned packages get a `git-<short>` synthetic
+  version). Components are sorted by name and the serial number is
+  derived from the component fingerprint, so two identical builds
+  produce byte-identical SBOMs (verified across runs). Honors
+  `SOURCE_DATE_EPOCH` for reproducible-build pipelines. Standalone:
+  no SwiftPM dependency, runnable from any release workflow as
+  `./tools/generate-sbom.sh sbom.json`.
+- 5 new tests under `GrammarManifest — Content hashes`: every
+  entry declares a hash, format is lowercase hex-64, hashes are
+  unique across grammars, on-disk SHA-256 matches the manifest
+  for every grammar (catches forgot-to-rerun-verify after a
+  re-vendor), and target names follow the `TreeSitter…Parser`
+  contract that the verify + SBOM scripts assume.
+  `GrammarStalenessTests` updated to pass a placeholder hash —
+  staleness logic doesn't consult the field.
+- Suite: 1837 → 1842 (+5). `spec/cleanup.md` "Vendored grammars
+  not content-pinned + no SBOM" entry added as RESOLVED. Re-audit
+  (Schneier/Meeker/Grace): PASS clean.
+- Deferred: wiring `generate-sbom.sh` into an actual GitHub
+  Actions release job — no `.github/workflows/` exists yet. The
+  script header documents the intended integration; this gap is
+  owned by `luminary-2026-04-24-14-distribution-packaging`. ML
+  model download digests are not pinned (HuggingFace doesn't
+  expose them at lookup time without a fetch); the SBOM lists
+  repo + expected size as the authoritative-on-paper record.
+
 ### April 26 — Published SLOs surface in `senkani doctor` with a CI perf gate (`luminary-2026-04-24-12-slo-pack-with-burn-rate`)
 - Luminary P2 (Majors/Carmack/Allspaw). The spec named three p99
   contracts on the hot path (cache hit < 1 ms, pipeline cache-miss

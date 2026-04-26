@@ -1,5 +1,9 @@
 # Senkani (閃蟹)
 
+[![tests](https://github.com/ckluis/senkani/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/ckluis/senkani/actions/workflows/test.yml)
+[![license](https://img.shields.io/github/license/ckluis/senkani)](LICENSE)
+[![release](https://img.shields.io/github/v/release/ckluis/senkani)](https://github.com/ckluis/senkani/releases)
+
 One macOS binary, two jobs: a **native multi-pane workspace** (SwiftUI, sub-3ms renders, 18 pane types) and an **MCP intelligence layer** that cuts 50–90% of the tokens your AI spends on perception. Compression, symbol indexing, secret redaction, local validators, and Layer-3 hook interception run before the request ever leaves your machine. No workflow changes — point Claude Code at it and your session just costs less.
 
 ## Quick Start

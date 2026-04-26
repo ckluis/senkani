@@ -9,6 +9,24 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 26 — First GitHub Actions CI workflow lands (`ci-workflow-v1`)
+- Bach/Majors/Schneier round. Pre-`v0.2.0` the project had zero CI:
+  every PR relied on the operator running `./tools/test-safe.sh`
+  locally. This commit adds `.github/workflows/test.yml` — a single
+  macOS-pinned job that runs the same `tools/test-safe.sh`
+  entrypoint humans run, so CI and local don't diverge.
+- Roster P0s (all shipped): single command `./tools/test-safe.sh`,
+  `runs-on: macos-14` (pinned, not `latest` — the suite-hang
+  fingerprint in `spec/testing.md` is OS-version-sensitive),
+  `permissions: contents: read`, `concurrency: cancel-in-progress`.
+- P1 (shipped): SwiftPM `.build` + Xcode `DerivedData` cache keyed
+  on `hashFiles('Package.resolved')`.
+- Deferred to a future round: hard-gating on `tools/perf-gate.sh`
+  (need 2–3 weeks of shared-runner baseline data first per Bach),
+  multi-OS matrix (project is macOS-only by design), separate
+  jobs for build vs. test.
+- README adds three badges at the top: tests, license, release.
+
 ## v0.2.0 — 2026-04-26
 
 ### April 26 — Release checklist gives `senkani uninstall` real-install validation a durable home (`luminary-2026-04-24-15-uninstall-ci`)

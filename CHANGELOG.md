@@ -6,6 +6,55 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 26 — Typed `IndexError` replaces silent `[]` returns across the Indexer public API (`luminary-2026-04-24-11-indexer-result-errors`)
+- Luminary P2 (Schneier/Bach/Torvalds). Indexer leaf functions used
+  to return `[]` for every failure mode — binary missing, parse
+  failed, unsupported language, file unreadable — making "no
+  symbols here" indistinguishable from "the tool is broken." This
+  was the single biggest style-drift cost in the codebase per the
+  Codex-vs-Claude audit.
+- New `Sources/Indexer/IndexError.swift`: `Equatable`, `Sendable`
+  enum with four cases — `binaryMissing(String)`,
+  `parseFailed(file:reason:)`, `unsupportedLanguage(String)`,
+  `ioError(file:underlying:)`. `CustomStringConvertible` for
+  legible logs; never includes absolute paths (Schneier).
+- Seven public entry points now `throws` instead of silently
+  returning `[]`: `CTagsBackend.index`,
+  `TreeSitterBackend.index` and `TreeSitterBackend.extractSymbols`,
+  `RegexBackend.index`, `IndexEngine.indexFileIncremental`,
+  `DependencyExtractor.extractImports` and `extractAllImports`.
+  Setup-level failures (missing binary, unknown language, parser
+  setup) surface; per-file failures inside batch loops still
+  `continue` silently — one bad file shouldn't fail the batch.
+- Orchestrators (`IndexEngine.index`, `incrementalUpdate`,
+  `buildDependencyGraph`) keep their `SymbolIndex` /
+  `DependencyGraph` return types and now log the explicit swallow
+  point when a backend throws (e.g. tree-sitter fails for a
+  language → log + skip + continue with regex). Replaces five
+  invisible silent-fail sites in the orchestration path.
+- New `RegexBackend.supports(_:)` and `RegexBackend.supportedLanguages`
+  let the orchestrator pick the right backend without invoking and
+  catching `unsupportedLanguage`.
+- `DependencyExtractor.extractImports` now collapses its public
+  switch into the existing `extractForLanguage` private dispatch
+  — no behavioral change, just a single place to extend.
+- 12 new tests in `IndexErrorTests.swift` cover each `IndexError`
+  case at every entry point: `Equatable` and `description` shape,
+  `binaryMissing` (via a new `_binaryPathOverride` test hook on
+  `CTagsBackend` so we don't need to uninstall ctags),
+  `unsupportedLanguage` from each backend, `ioError` from
+  `indexFileIncremental` with a missing file, the
+  known-but-importless `bash`/`lua` success-with-`[]` contract,
+  and the unknown-extension throw on `indexFileIncremental`.
+- 1 new file (`IndexError.swift`) + 6 modified Indexer sources +
+  21 test files updated to wrap helpers in `(try? f()) ?? []`
+  + 1 production caller updated (`MCPSession.processFileEvents`).
+  No callers' empty-success behavior changes; the only new
+  observable is `try`-clauses can now match on which thing went
+  wrong.
+- Tests: 1806 → 1818 (+12). `spec/cleanup.md` "Silent error
+  swallowing in Indexer" → ✅ RESOLVED.
+
 ### April 26 — TreeSitterBackend decomposition complete: Rust / Go / Dart / HTML / CSS migrated, dispatcher trimmed to 178 LOC (`luminary-2026-04-24-10f-treesitterbackend-cleanup`)
 - Luminary P2 (Torvalds/Carmack/Bach via parent
   `luminary-2026-04-24-10`). Sixth and final round of the

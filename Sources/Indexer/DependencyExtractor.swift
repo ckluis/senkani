@@ -7,46 +7,54 @@ public enum DependencyExtractor {
 
     /// Extract imports from a single file. Returns the list of module identifiers
     /// imported by the file (raw, as written in source — no path resolution).
-    public static func extractImports(source: String, language: String) -> [String] {
-        guard let tsLanguage = TreeSitterBackend.language(for: language) else { return [] }
+    ///
+    /// Throws `IndexError.unsupportedLanguage(language)` if the language
+    /// has no tree-sitter grammar registered, or `IndexError.parseFailed(...)`
+    /// if parser setup or the parse itself fails. Languages that the
+    /// extractor knows about but does not extract imports from
+    /// (`bash`, `lua`, `html`, `css`, `dart`, `toml`, `graphql`) return
+    /// `.success([])` — the language *is* supported, there just are no
+    /// imports to find.
+    public static func extractImports(source: String, language: String) throws -> [String] {
+        guard let tsLanguage = TreeSitterBackend.language(for: language) else {
+            throw IndexError.unsupportedLanguage(language)
+        }
         let parser = Parser()
-        do { try parser.setLanguage(tsLanguage) } catch { return [] }
-        guard let tree = parser.parse(source) else { return [] }
-        guard let root = tree.rootNode else { return [] }
+        do {
+            try parser.setLanguage(tsLanguage)
+        } catch {
+            throw IndexError.parseFailed(file: "<inline source>", reason: "setLanguage(\(language)) failed: \(error)")
+        }
+        guard let tree = parser.parse(source) else {
+            throw IndexError.parseFailed(file: "<inline source>", reason: "parser.parse returned nil")
+        }
+        guard let root = tree.rootNode else {
+            throw IndexError.parseFailed(file: "<inline source>", reason: "tree.rootNode was nil")
+        }
 
         let ns = source as NSString
-
-        switch language {
-        case "swift":      return extractSwift(root: root, source: ns)
-        case "python":     return extractPython(root: root, source: ns)
-        case "typescript", "tsx", "javascript":
-                           return extractJSFamily(root: root, source: ns)
-        case "go":         return extractGo(root: root, source: ns)
-        case "rust":       return extractRust(root: root, source: ns)
-        case "java":       return extractJava(root: root, source: ns)
-        case "c", "cpp":   return extractCFamily(root: root, source: ns)
-        case "csharp":     return extractCSharp(root: root, source: ns)
-        case "ruby":       return extractRuby(root: root, source: ns)
-        case "php":        return extractPhp(root: root, source: ns)
-        case "kotlin":     return extractKotlin(root: root, source: ns)
-        case "scala":      return extractScala(root: root, source: ns)
-        case "elixir":     return extractElixir(root: root, source: ns)
-        case "haskell":    return extractHaskell(root: root, source: ns)
-        case "zig":        return extractZig(root: root, source: ns)
-        case "bash", "lua":
-                           return [] // sourcing/require patterns too varied
-        default:           return []
-        }
+        return extractForLanguage(root: root, source: ns, language: language)
     }
 
     /// Batch extract imports for all files of a given language.
     /// Uses a single parser instance for efficiency (avoids per-file parser creation).
+    ///
+    /// Throws `IndexError.unsupportedLanguage(language)` if the language
+    /// has no tree-sitter grammar, or `IndexError.parseFailed(...)` if
+    /// parser setup fails. Per-file unreadable / parse-nil failures are
+    /// silently skipped — one bad file shouldn't fail the batch.
     public static func extractAllImports(
         files: [String], language: String, projectRoot: String
-    ) -> [String: [String]] {
-        guard let tsLanguage = TreeSitterBackend.language(for: language) else { return [:] }
+    ) throws -> [String: [String]] {
+        guard let tsLanguage = TreeSitterBackend.language(for: language) else {
+            throw IndexError.unsupportedLanguage(language)
+        }
         let parser = Parser()
-        do { try parser.setLanguage(tsLanguage) } catch { return [:] }
+        do {
+            try parser.setLanguage(tsLanguage)
+        } catch {
+            throw IndexError.parseFailed(file: "<batch setup>", reason: "setLanguage(\(language)) failed: \(error)")
+        }
 
         var result: [String: [String]] = [:]
         for relativePath in files {

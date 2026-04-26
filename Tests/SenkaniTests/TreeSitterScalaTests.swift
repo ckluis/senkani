@@ -389,9 +389,9 @@ struct ScalaPerformanceTests {
         let kotlinSource = "class Greeter {\n    fun greet(): String = \"hi\"\n}\n"
         try! kotlinSource.write(toFile: tmpDir + "/Greeter.kt", atomically: true, encoding: .utf8)
 
-        let scalaEntries = TreeSitterBackend.index(files: ["greeter.scala"], language: "scala", projectRoot: tmpDir)
-        let javaEntries = TreeSitterBackend.index(files: ["Greeter.java"], language: "java", projectRoot: tmpDir)
-        let kotlinEntries = TreeSitterBackend.index(files: ["Greeter.kt"], language: "kotlin", projectRoot: tmpDir)
+        let scalaEntries = (try? TreeSitterBackend.index(files: ["greeter.scala"], language: "scala", projectRoot: tmpDir)) ?? []
+        let javaEntries = (try? TreeSitterBackend.index(files: ["Greeter.java"], language: "java", projectRoot: tmpDir)) ?? []
+        let kotlinEntries = (try? TreeSitterBackend.index(files: ["Greeter.kt"], language: "kotlin", projectRoot: tmpDir)) ?? []
 
         // Scala: class Greeter + method greet + object Greeter + method create = 4
         #expect(scalaEntries.count == 4)
@@ -417,5 +417,5 @@ private func indexScala(_ source: String) -> [IndexEntry] {
     defer { try? FileManager.default.removeItem(atPath: tmpDir) }
     let file = "test.scala"
     try! source.write(toFile: tmpDir + "/" + file, atomically: true, encoding: .utf8)
-    return TreeSitterBackend.index(files: [file], language: "scala", projectRoot: tmpDir)
+    return (try? TreeSitterBackend.index(files: [file], language: "scala", projectRoot: tmpDir)) ?? []
 }

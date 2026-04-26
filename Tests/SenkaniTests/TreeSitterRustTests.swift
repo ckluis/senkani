@@ -259,7 +259,7 @@ struct TreeSitterRustPerformanceTests {
         let clock = ContinuousClock()
         var entries: [IndexEntry] = []
         let elapsed = clock.measure {
-            entries = TreeSitterBackend.index(files: [filePath], language: "rust", projectRoot: tmpDir)
+            entries = (try? TreeSitterBackend.index(files: [filePath], language: "rust", projectRoot: tmpDir)) ?? []
         }
 
         let ms = Double(elapsed.components.attoseconds) / 1e15
@@ -298,13 +298,13 @@ struct TreeSitterRustPerformanceTests {
         defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
         // Parse Go
-        let goEntries = TreeSitterBackend.index(files: ["main.go"], language: "go", projectRoot: tmpDir)
+        let goEntries = (try? TreeSitterBackend.index(files: ["main.go"], language: "go", projectRoot: tmpDir)) ?? []
         // Then Rust
-        let rustEntries = TreeSitterBackend.index(files: ["lib.rs"], language: "rust", projectRoot: tmpDir)
+        let rustEntries = (try? TreeSitterBackend.index(files: ["lib.rs"], language: "rust", projectRoot: tmpDir)) ?? []
         // Then Swift
-        let swiftEntries = TreeSitterBackend.index(files: ["App.swift"], language: "swift", projectRoot: tmpDir)
+        let swiftEntries = (try? TreeSitterBackend.index(files: ["App.swift"], language: "swift", projectRoot: tmpDir)) ?? []
         // Then Rust again (proves no state leak)
-        let rustEntries2 = TreeSitterBackend.index(files: ["lib.rs"], language: "rust", projectRoot: tmpDir)
+        let rustEntries2 = (try? TreeSitterBackend.index(files: ["lib.rs"], language: "rust", projectRoot: tmpDir)) ?? []
 
         // Go: App (struct), Run (method on App), setup (function)
         #expect(goEntries.contains { $0.name == "App" && $0.kind == .struct })
@@ -337,5 +337,5 @@ private func indexRust(_ code: String) -> [IndexEntry] {
     try? code.write(toFile: fullPath, atomically: true, encoding: .utf8)
     defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
-    return TreeSitterBackend.index(files: [filePath], language: "rust", projectRoot: tmpDir)
+    return (try? TreeSitterBackend.index(files: [filePath], language: "rust", projectRoot: tmpDir)) ?? []
 }

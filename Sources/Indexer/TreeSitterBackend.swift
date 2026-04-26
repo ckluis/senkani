@@ -85,13 +85,18 @@ public enum TreeSitterBackend {
 
     /// Extract symbols from a pre-parsed tree's root node.
     /// Used by IncrementalParser to re-extract symbols without re-parsing the file.
+    ///
+    /// Throws `IndexError.unsupportedLanguage(language)` if no backend
+    /// is registered for the given language identifier.
     public static func extractSymbols(
         from root: Node,
         source: String,
         language: String,
         file: String
-    ) -> [IndexEntry] {
-        guard let backend = backend(for: language) else { return [] }
+    ) throws -> [IndexEntry] {
+        guard let backend = backend(for: language) else {
+            throw IndexError.unsupportedLanguage(language)
+        }
         let ns = source as NSString
         let lines = source.components(separatedBy: "\n")
         var entries: [IndexEntry] = []
@@ -131,12 +136,29 @@ public enum TreeSitterBackend {
 
     /// Index files of a given language using tree-sitter AST parsing.
     /// When a `treeCache` is provided, parsed trees are stored for later incremental re-parsing.
-    public static func index(files: [String], language: String, projectRoot: String, treeCache: TreeCache? = nil) -> [IndexEntry] {
-        guard let tsLanguage = self.language(for: language) else { return [] }
-        guard let backend = backend(for: language) else { return [] }
+    ///
+    /// Throws `IndexError.unsupportedLanguage(language)` if the language
+    /// has no tree-sitter grammar or no per-language backend registered,
+    /// or `IndexError.parseFailed(...)` if parser setup itself fails.
+    /// Per-file errors inside the batch (file unreadable, parse returned
+    /// nil) are silently skipped — one bad file shouldn't fail the
+    /// whole batch — but the setup-level failures above are surfaced
+    /// so callers can tell "language not supported" from "language
+    /// supported but no symbols found."
+    public static func index(files: [String], language: String, projectRoot: String, treeCache: TreeCache? = nil) throws -> [IndexEntry] {
+        guard let tsLanguage = self.language(for: language) else {
+            throw IndexError.unsupportedLanguage(language)
+        }
+        guard let backend = backend(for: language) else {
+            throw IndexError.unsupportedLanguage(language)
+        }
 
         let parser = Parser()
-        do { try parser.setLanguage(tsLanguage) } catch { return [] }
+        do {
+            try parser.setLanguage(tsLanguage)
+        } catch {
+            throw IndexError.parseFailed(file: "<tree-sitter setup>", reason: "setLanguage(\(language)) failed: \(error)")
+        }
 
         var entries: [IndexEntry] = []
 

@@ -285,7 +285,7 @@ struct TreeSitterGoPerformanceTests {
         let clock = ContinuousClock()
         var entries: [IndexEntry] = []
         let elapsed = clock.measure {
-            entries = TreeSitterBackend.index(files: [filePath], language: "go", projectRoot: tmpDir)
+            entries = (try? TreeSitterBackend.index(files: [filePath], language: "go", projectRoot: tmpDir)) ?? []
         }
 
         let ms = Double(elapsed.components.attoseconds) / 1e15
@@ -314,11 +314,11 @@ struct TreeSitterGoPerformanceTests {
         defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
         // Parse Go first
-        let goEntries = TreeSitterBackend.index(files: ["main.go"], language: "go", projectRoot: tmpDir)
+        let goEntries = (try? TreeSitterBackend.index(files: ["main.go"], language: "go", projectRoot: tmpDir)) ?? []
         // Then JS
-        let jsEntries = TreeSitterBackend.index(files: ["app.js"], language: "javascript", projectRoot: tmpDir)
+        let jsEntries = (try? TreeSitterBackend.index(files: ["app.js"], language: "javascript", projectRoot: tmpDir)) ?? []
         // Then Go again (proves no state leak)
-        let goEntries2 = TreeSitterBackend.index(files: ["main.go"], language: "go", projectRoot: tmpDir)
+        let goEntries2 = (try? TreeSitterBackend.index(files: ["main.go"], language: "go", projectRoot: tmpDir)) ?? []
 
         // Go should find: App (struct), Run (method on App), setup (function)
         #expect(goEntries.contains { $0.name == "App" && $0.kind == .struct })
@@ -346,5 +346,5 @@ private func indexGo(_ code: String) -> [IndexEntry] {
     try? code.write(toFile: fullPath, atomically: true, encoding: .utf8)
     defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
-    return TreeSitterBackend.index(files: [filePath], language: "go", projectRoot: tmpDir)
+    return (try? TreeSitterBackend.index(files: [filePath], language: "go", projectRoot: tmpDir)) ?? []
 }

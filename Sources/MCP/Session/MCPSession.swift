@@ -867,12 +867,16 @@ final class MCPSession: @unchecked Sendable {
                 continue
             }
 
-            let entries = IndexEngine.indexFileIncremental(
-                relativePath: relativePath,
-                projectRoot: projectRoot,
-                treeCache: treeCache
-            )
-            newEntries.append(contentsOf: entries)
+            do {
+                let entries = try IndexEngine.indexFileIncremental(
+                    relativePath: relativePath,
+                    projectRoot: projectRoot,
+                    treeCache: treeCache
+                )
+                newEntries.append(contentsOf: entries)
+            } catch {
+                fputs("[senkani] indexFileIncremental skipped for \(relativePath): \(error)\n", stderr)
+            }
         }
 
         lock.lock()

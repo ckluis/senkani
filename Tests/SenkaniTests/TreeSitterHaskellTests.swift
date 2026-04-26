@@ -341,9 +341,9 @@ struct HaskellPerformanceTests {
         let scalaSource = "class Greeter {\n  def greet(name: String): String = s\"hi, $name\"\n}\n"
         try! scalaSource.write(toFile: tmpDir + "/Greeter.scala", atomically: true, encoding: .utf8)
 
-        let haskellEntries = TreeSitterBackend.index(files: ["Main.hs"], language: "haskell", projectRoot: tmpDir)
-        let elixirEntries = TreeSitterBackend.index(files: ["greeter.ex"], language: "elixir", projectRoot: tmpDir)
-        let scalaEntries = TreeSitterBackend.index(files: ["Greeter.scala"], language: "scala", projectRoot: tmpDir)
+        let haskellEntries = (try? TreeSitterBackend.index(files: ["Main.hs"], language: "haskell", projectRoot: tmpDir)) ?? []
+        let elixirEntries = (try? TreeSitterBackend.index(files: ["greeter.ex"], language: "elixir", projectRoot: tmpDir)) ?? []
+        let scalaEntries = (try? TreeSitterBackend.index(files: ["Greeter.scala"], language: "scala", projectRoot: tmpDir)) ?? []
 
         // Haskell: function greet = 1
         #expect(haskellEntries.count == 1)
@@ -367,5 +367,5 @@ private func indexHaskell(_ source: String) -> [IndexEntry] {
     defer { try? FileManager.default.removeItem(atPath: tmpDir) }
     let file = "test.hs"
     try! source.write(toFile: tmpDir + "/" + file, atomically: true, encoding: .utf8)
-    return TreeSitterBackend.index(files: [file], language: "haskell", projectRoot: tmpDir)
+    return (try? TreeSitterBackend.index(files: [file], language: "haskell", projectRoot: tmpDir)) ?? []
 }

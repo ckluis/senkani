@@ -305,9 +305,9 @@ struct LuaPerformanceTests {
         let bashSource = "#!/bin/bash\nfunction greet() {\n    echo hi\n}\n"
         try! bashSource.write(toFile: tmpDir + "/greet.sh", atomically: true, encoding: .utf8)
 
-        let luaEntries = TreeSitterBackend.index(files: ["mod.lua"], language: "lua", projectRoot: tmpDir)
-        let pyEntries = TreeSitterBackend.index(files: ["greeter.py"], language: "python", projectRoot: tmpDir)
-        let bashEntries = TreeSitterBackend.index(files: ["greet.sh"], language: "bash", projectRoot: tmpDir)
+        let luaEntries = (try? TreeSitterBackend.index(files: ["mod.lua"], language: "lua", projectRoot: tmpDir)) ?? []
+        let pyEntries = (try? TreeSitterBackend.index(files: ["greeter.py"], language: "python", projectRoot: tmpDir)) ?? []
+        let bashEntries = (try? TreeSitterBackend.index(files: ["greet.sh"], language: "bash", projectRoot: tmpDir)) ?? []
 
         #expect(luaEntries.count == 2) // M.greet (method) + helper (function)
         #expect(luaEntries.contains { $0.name == "greet" && $0.kind == .method && $0.container == "M" })
@@ -329,5 +329,5 @@ private func indexLua(_ source: String) -> [IndexEntry] {
     defer { try? FileManager.default.removeItem(atPath: tmpDir) }
     let file = "test.lua"
     try! source.write(toFile: tmpDir + "/" + file, atomically: true, encoding: .utf8)
-    return TreeSitterBackend.index(files: [file], language: "lua", projectRoot: tmpDir)
+    return (try? TreeSitterBackend.index(files: [file], language: "lua", projectRoot: tmpDir)) ?? []
 }

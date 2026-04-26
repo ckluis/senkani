@@ -2,22 +2,22 @@ import Foundation
 
 /// Indexes symbols using Universal ctags (if installed).
 public enum CTagsBackend {
+    /// Test hook: when non-nil, `findBinary()` returns this value
+    /// instead of probing the filesystem. Set to `""` to simulate
+    /// "binary missing" without uninstalling ctags. Reset to `nil`
+    /// after the test. Tests that use this must run serially.
+    nonisolated(unsafe) internal static var _binaryPathOverride: String?? = nil
+
     /// Check if Universal ctags is available (not BSD ctags).
     public static func isAvailable() -> Bool {
-        let candidates = ["/opt/homebrew/bin/ctags", "/usr/local/bin/ctags"]
-        for path in candidates {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                // Verify it's Universal ctags
-                if let output = runProcess(path, args: ["--version"]) {
-                    if output.contains("Universal Ctags") { return true }
-                }
-            }
-        }
-        return false
+        return findBinary() != nil
     }
 
     /// Find the Universal ctags binary path.
     static func findBinary() -> String? {
+        if let override = _binaryPathOverride {
+            return override.flatMap { $0.isEmpty ? nil : $0 }
+        }
         let candidates = ["/opt/homebrew/bin/ctags", "/usr/local/bin/ctags"]
         for path in candidates {
             if FileManager.default.isExecutableFile(atPath: path),
@@ -30,8 +30,17 @@ public enum CTagsBackend {
     }
 
     /// Index a project using Universal ctags.
-    public static func index(projectRoot: String, languages: [String]? = nil) -> [IndexEntry] {
-        guard let binary = findBinary() else { return [] }
+    ///
+    /// Throws `IndexError.binaryMissing("ctags")` if Universal ctags
+    /// is not installed, or `IndexError.parseFailed(...)` if the ctags
+    /// process fails to produce output. A successful call returns the
+    /// (possibly empty) list of entries — empty here means "ctags ran
+    /// and found no symbols," which is meaningfully different from
+    /// "ctags failed."
+    public static func index(projectRoot: String, languages: [String]? = nil) throws -> [IndexEntry] {
+        guard let binary = findBinary() else {
+            throw IndexError.binaryMissing("ctags")
+        }
 
         var args = [
             "--output-format=json",
@@ -55,7 +64,9 @@ public enum CTagsBackend {
 
         args.append(projectRoot)
 
-        guard let output = runProcess(binary, args: args) else { return [] }
+        guard let output = runProcess(binary, args: args) else {
+            throw IndexError.parseFailed(file: "<ctags batch>", reason: "ctags process produced no output")
+        }
 
         var entries: [IndexEntry] = []
         for line in output.split(separator: "\n") {

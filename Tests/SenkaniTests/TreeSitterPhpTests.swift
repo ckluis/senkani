@@ -404,9 +404,9 @@ struct PhpPerformanceTests {
         let pySource = "class Greeter:\n    def greet(self):\n        pass\n"
         try! pySource.write(toFile: tmpDir + "/greeter.py", atomically: true, encoding: .utf8)
 
-        let phpEntries = TreeSitterBackend.index(files: ["greeter.php"], language: "php", projectRoot: tmpDir)
-        let rubyEntries = TreeSitterBackend.index(files: ["greeter.rb"], language: "ruby", projectRoot: tmpDir)
-        let pyEntries = TreeSitterBackend.index(files: ["greeter.py"], language: "python", projectRoot: tmpDir)
+        let phpEntries = (try? TreeSitterBackend.index(files: ["greeter.php"], language: "php", projectRoot: tmpDir)) ?? []
+        let rubyEntries = (try? TreeSitterBackend.index(files: ["greeter.rb"], language: "ruby", projectRoot: tmpDir)) ?? []
+        let pyEntries = (try? TreeSitterBackend.index(files: ["greeter.py"], language: "python", projectRoot: tmpDir)) ?? []
 
         #expect(phpEntries.count == 2) // class + method
         #expect(phpEntries.contains { $0.name == "Greeter" && $0.kind == .class })
@@ -428,5 +428,5 @@ private func indexPhp(_ source: String) -> [IndexEntry] {
     defer { try? FileManager.default.removeItem(atPath: tmpDir) }
     let file = "test.php"
     try! source.write(toFile: tmpDir + "/" + file, atomically: true, encoding: .utf8)
-    return TreeSitterBackend.index(files: [file], language: "php", projectRoot: tmpDir)
+    return (try? TreeSitterBackend.index(files: [file], language: "php", projectRoot: tmpDir)) ?? []
 }

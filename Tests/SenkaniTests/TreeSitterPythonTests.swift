@@ -199,7 +199,7 @@ struct TreeSitterPythonPerformanceTests {
         let clock = ContinuousClock()
         var entries: [IndexEntry] = []
         let elapsed = clock.measure {
-            entries = TreeSitterBackend.index(files: [filePath], language: "python", projectRoot: tmpDir)
+            entries = (try? TreeSitterBackend.index(files: [filePath], language: "python", projectRoot: tmpDir)) ?? []
         }
 
         let ms = Double(elapsed.components.attoseconds) / 1e15
@@ -229,11 +229,11 @@ struct TreeSitterPythonPerformanceTests {
         defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
         // Parse Swift first
-        let swiftEntries = TreeSitterBackend.index(files: ["test.swift"], language: "swift", projectRoot: tmpDir)
+        let swiftEntries = (try? TreeSitterBackend.index(files: ["test.swift"], language: "swift", projectRoot: tmpDir)) ?? []
         // Then Python
-        let pythonEntries = TreeSitterBackend.index(files: ["test.py"], language: "python", projectRoot: tmpDir)
+        let pythonEntries = (try? TreeSitterBackend.index(files: ["test.py"], language: "python", projectRoot: tmpDir)) ?? []
         // Then Swift again (proves no state leak)
-        let swiftEntries2 = TreeSitterBackend.index(files: ["test.swift"], language: "swift", projectRoot: tmpDir)
+        let swiftEntries2 = (try? TreeSitterBackend.index(files: ["test.swift"], language: "swift", projectRoot: tmpDir)) ?? []
 
         // Swift should find: Point (struct), x (property), distance (method)
         #expect(swiftEntries.contains { $0.name == "Point" && $0.kind == .struct })
@@ -261,5 +261,5 @@ private func indexPython(_ code: String) -> [IndexEntry] {
     try? code.write(toFile: fullPath, atomically: true, encoding: .utf8)
     defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
-    return TreeSitterBackend.index(files: [filePath], language: "python", projectRoot: tmpDir)
+    return (try? TreeSitterBackend.index(files: [filePath], language: "python", projectRoot: tmpDir)) ?? []
 }

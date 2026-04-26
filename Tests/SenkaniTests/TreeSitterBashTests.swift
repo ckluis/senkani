@@ -249,5 +249,5 @@ private func indexBash(_ source: String) -> [IndexEntry] {
     defer { try? FileManager.default.removeItem(atPath: tmpDir) }
     let file = "test.sh"
     try! source.write(toFile: tmpDir + "/" + file, atomically: true, encoding: .utf8)
-    return TreeSitterBackend.index(files: [file], language: "bash", projectRoot: tmpDir)
+    return (try? TreeSitterBackend.index(files: [file], language: "bash", projectRoot: tmpDir)) ?? []
 }

@@ -127,6 +127,6 @@ struct RegexBackendTests {
         try? code.write(toFile: fullPath, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
-        return RegexBackend.index(files: [filePath], language: language, projectRoot: tmpDir)
+        return (try? RegexBackend.index(files: [filePath], language: language, projectRoot: tmpDir)) ?? []
     }
 }

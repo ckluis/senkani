@@ -340,9 +340,9 @@ struct ElixirPerformanceTests {
         let scalaSource = "class Greeter {\n  def greet(name: String): String = s\"hi, $name\"\n}\n"
         try! scalaSource.write(toFile: tmpDir + "/Greeter.scala", atomically: true, encoding: .utf8)
 
-        let elixirEntries = TreeSitterBackend.index(files: ["greeter.ex"], language: "elixir", projectRoot: tmpDir)
-        let rubyEntries = TreeSitterBackend.index(files: ["greeter.rb"], language: "ruby", projectRoot: tmpDir)
-        let scalaEntries = TreeSitterBackend.index(files: ["Greeter.scala"], language: "scala", projectRoot: tmpDir)
+        let elixirEntries = (try? TreeSitterBackend.index(files: ["greeter.ex"], language: "elixir", projectRoot: tmpDir)) ?? []
+        let rubyEntries = (try? TreeSitterBackend.index(files: ["greeter.rb"], language: "ruby", projectRoot: tmpDir)) ?? []
+        let scalaEntries = (try? TreeSitterBackend.index(files: ["Greeter.scala"], language: "scala", projectRoot: tmpDir)) ?? []
 
         // Elixir: module Greeter + method greet = 2
         #expect(elixirEntries.count == 2)
@@ -367,5 +367,5 @@ private func indexElixir(_ source: String) -> [IndexEntry] {
     defer { try? FileManager.default.removeItem(atPath: tmpDir) }
     let file = "test.ex"
     try! source.write(toFile: tmpDir + "/" + file, atomically: true, encoding: .utf8)
-    return TreeSitterBackend.index(files: [file], language: "elixir", projectRoot: tmpDir)
+    return (try? TreeSitterBackend.index(files: [file], language: "elixir", projectRoot: tmpDir)) ?? []
 }

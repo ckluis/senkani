@@ -242,9 +242,15 @@ private final class NavigationHandler: NSObject, WKNavigationDelegate {
         self.allowPrivate = allowPrivate
         self.completion = completion
         super.init()
-        // Schedule timeout on the RunLoop (we're always on the main thread here)
+        // Schedule timeout on the RunLoop (we're always on the main thread here).
+        // Swift 6.1 rejects calling main-actor `resumeOnce` from the
+        // Timer closure's nonisolated `@Sendable` context; Swift 6.3
+        // infers the isolation correctly. The Task hop satisfies both
+        // and matches the bridging pattern used elsewhere in this file.
         timer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
-            self?.resumeOnce(.failure(WebFetchError.timeout))
+            Task { @MainActor in
+                self?.resumeOnce(.failure(WebFetchError.timeout))
+            }
         }
     }
 

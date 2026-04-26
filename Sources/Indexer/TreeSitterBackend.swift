@@ -106,6 +106,13 @@ public enum TreeSitterBackend {
         if CSharpBackend.supports(language)     { return CSharpBackend.self }
         if JavaBackend.supports(language)       { return JavaBackend.self }
         if ScalaBackend.supports(language)      { return ScalaBackend.self }
+        if RubyBackend.supports(language)       { return RubyBackend.self }
+        if PhpBackend.supports(language)        { return PhpBackend.self }
+        if BashBackend.supports(language)       { return BashBackend.self }
+        if LuaBackend.supports(language)        { return LuaBackend.self }
+        if ElixirBackend.supports(language)     { return ElixirBackend.self }
+        if HaskellBackend.supports(language)    { return HaskellBackend.self }
+        if ZigBackend.supports(language)        { return ZigBackend.self }
         return nil
     }
 
@@ -207,11 +214,14 @@ public enum TreeSitterBackend {
         container: String?,
         entries: inout [IndexEntry]
     ) {
-        // GraphQL, TOML, Swift, Python, TypeScript/TSX/JavaScript,
-        // Kotlin, C, C++, C#, Java, and Scala are handled by
-        // per-language backends in `Sources/Indexer/Languages/`. Both
-        // entry points (`extractSymbols(from:source:language:file:)`
-        // and `index(files:language:projectRoot:treeCache:)`) route to
+        // After 10e, the only languages that still flow through
+        // `walkNode` are Go, Rust, Dart, HTML, and CSS. GraphQL, TOML,
+        // Swift, Python, TypeScript/TSX/JavaScript, Kotlin, C, C++,
+        // C#, Java, Scala, Ruby, PHP, Bash, Lua, Elixir, Haskell, and
+        // Zig are handled by per-language backends in
+        // `Sources/Indexer/Languages/`. Both entry points
+        // (`extractSymbols(from:source:language:file:)` and
+        // `index(files:language:projectRoot:treeCache:)`) route to
         // those backends before calling `walkNode`, so `walkNode`
         // never observes those languages.
         for i in 0..<Int(node.childCount) {
@@ -219,52 +229,12 @@ public enum TreeSitterBackend {
             let type = child.nodeType ?? ""
 
             switch type {
-            // Lua + Zig need special name extraction; Go / PHP / Bash etc.
-            // fall through to extractFunction (name-field).
+            // function_declaration — Go top-level functions.
+            // (Zig and Lua moved to per-language backends in 10e;
+            //  PHP function_definition handling moved with PhpBackend.)
             case "function_declaration":
-                if language == "zig" {
-                    // Zig: function name is an identifier child, not a "name" field
-                    if let nameNode = findChildByType(child, type: "identifier"),
-                       let name = nodeText(nameNode, source: source) {
-                        let kind: SymbolKind = container != nil ? .method : .function
-                        entries.append(IndexEntry(
-                            name: name, kind: kind, file: file,
-                            startLine: startLine(of: child), endLine: endLine(of: child),
-                            signature: signatureText(lines: lines, line: startLine(of: child)),
-                            container: container, engine: "tree-sitter"
-                        ))
-                    }
-                } else if language == "lua" {
-                    // Lua: name can be identifier, dot_index_expression (M.foo), or method_index_expression (M:foo)
-                    if let (name, luaContainer) = extractLuaFunctionName(child, source: source) {
-                        let kind: SymbolKind = luaContainer != nil ? .method : .function
-                        entries.append(IndexEntry(
-                            name: name, kind: kind, file: file,
-                            startLine: startLine(of: child), endLine: endLine(of: child),
-                            signature: signatureText(lines: lines, line: startLine(of: child)),
-                            container: luaContainer, engine: "tree-sitter"
-                        ))
-                    }
-                } else if let entry = extractFunction(child, file: file, source: source, lines: lines, container: container) {
-                    entries.append(entry)
-                }
-
-            // function_definition — Bash and other "name-field" languages.
-            // (C/C++ moved to per-language backends in 10d; the cpp/c
-            //  declarator-chain arms went with them.)
-            case "function_definition":
                 if let entry = extractFunction(child, file: file, source: source, lines: lines, container: container) {
                     entries.append(entry)
-                }
-
-            // class_declaration — PHP routes through here. (Swift / TS / TSX /
-            //  JS / Kotlin / Java / C# all own backends.)
-            case "class_declaration":
-                if let (entry, body) = extractTSDeclaration(child, kind: .class, file: file, source: source, lines: lines, container: container) {
-                    entries.append(entry)
-                    if let body = body {
-                        walkNode(body, language: language, file: file, source: source, lines: lines, container: entry.name, entries: &entries)
-                    }
                 }
 
             // class_definition — Dart routes through here. (Python migrated
@@ -279,56 +249,23 @@ public enum TreeSitterBackend {
                     }
                 }
 
-            // PHP properties live inside property_element children with variable_name ($foo).
-            // (Swift / Kotlin / C# all moved to per-language backends.)
-            case "property_declaration":
-                if language == "php" {
-                    for pi in 0..<Int(child.childCount) {
-                        guard let propElem = child.child(at: pi),
-                              propElem.nodeType == "property_element",
-                              let name = nodeName(propElem, source: source) else { continue }
-                        entries.append(IndexEntry(
-                            name: name, kind: .property, file: file,
-                            startLine: startLine(of: child), endLine: endLine(of: child),
-                            signature: signatureText(lines: lines, line: startLine(of: child)),
-                            container: container, engine: "tree-sitter"
-                        ))
-                    }
-                }
-
-            // interface_declaration — PHP routes through here.
-            // (TypeScript / TSX moved to `TypeScriptBackend`; C# moved
-            //  to `CSharpBackend`.)
-            case "interface_declaration":
-                if let (entry, body) = extractTSDeclaration(child, kind: .interface, file: file, source: source, lines: lines, container: container) {
-                    entries.append(entry)
-                    if let body = body {
-                        walkNode(body, language: language, file: file, source: source, lines: lines, container: entry.name, entries: &entries)
-                    }
-                }
-
-            // enum_declaration — PHP routes through here.
-            // (TypeScript / TSX moved to `TypeScriptBackend`; C# moved
-            //  to `CSharpBackend`.)
-            case "enum_declaration":
-                if let (entry, body) = extractTSDeclaration(child, kind: .enum, file: file, source: source, lines: lines, container: container) {
-                    entries.append(entry)
-                    if let body = body {
-                        walkNode(body, language: language, file: file, source: source, lines: lines, container: entry.name, entries: &entries)
-                    }
-                }
-
-            // Go method declarations (receiver-based containers) / PHP method
-            // declarations (lexical containers via extractFunction).
-            // (Java + C# moved to per-language backends in 10d.)
+            // Go method declarations (receiver-based containers).
+            // (Java + C# + PHP all moved to per-language backends.)
             case "method_declaration":
                 if language == "go" {
                     if let entry = extractGoMethod(child, file: file, source: source, lines: lines) {
                         entries.append(entry)
                     }
-                } else {
-                    if let entry = extractFunction(child, file: file, source: source, lines: lines, container: container) {
-                        entries.append(entry)
+                }
+
+            // enum_declaration — Dart uses this node type for enums
+            // (`enum Color { Red, Green }`). PHP also used to route here
+            // but moved to `PhpBackend` in 10e.
+            case "enum_declaration":
+                if let (entry, body) = extractTSDeclaration(child, kind: .enum, file: file, source: source, lines: lines, container: container) {
+                    entries.append(entry)
+                    if let body = body {
+                        walkNode(body, language: language, file: file, source: source, lines: lines, container: entry.name, entries: &entries)
                     }
                 }
 
@@ -402,193 +339,25 @@ public enum TreeSitterBackend {
             //  `destructor_declaration`, `struct_declaration`,
             //  `delegate_declaration`, `namespace_declaration`,
             //  `file_scoped_namespace_declaration` — moved to
-            //  `JavaBackend` / `CSharpBackend` in 10d.)
+            //  `JavaBackend` / `CSharpBackend` in 10d. Ruby's `class`,
+            //  `module`, `method`, `singleton_method` moved to
+            //  `RubyBackend` in 10e; PHP's `class_declaration`,
+            //  `interface_declaration`, `enum_declaration`,
+            //  `trait_declaration`, `property_declaration`, and
+            //  `namespace_definition` moved to `PhpBackend`; Bash's
+            //  `function_definition` moved to `BashBackend`; Lua's
+            //  `function_declaration` to `LuaBackend`; Elixir's `call`
+            //  to `ElixirBackend`; Haskell's `declarations` /
+            //  `class_declarations` / `instance_declarations` to
+            //  `HaskellBackend`; Zig's `function_declaration`,
+            //  `variable_declaration`, `container_field`, and
+            //  `test_declaration` to `ZigBackend`.)
 
-            // Ruby class (bare 'class' node — distinct from class_declaration)
-            case "class":
-                if language == "ruby", let name = nodeName(child, source: source) {
-                    entries.append(IndexEntry(
-                        name: name, kind: .class, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
-                    if let body = findBody(child) {
-                        walkNode(body, language: language, file: file, source: source, lines: lines, container: name, entries: &entries)
-                    }
-                }
-
-            // Ruby module (namespacing/mixins — acts as container like class)
-            case "module":
-                if language == "ruby", let name = nodeName(child, source: source) {
-                    entries.append(IndexEntry(
-                        name: name, kind: .extension, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
-                    if let body = findBody(child) {
-                        walkNode(body, language: language, file: file, source: source, lines: lines, container: name, entries: &entries)
-                    }
-                }
-
-            // Ruby instance methods (def foo)
-            case "method":
-                if language == "ruby", let name = nodeName(child, source: source) {
-                    let kind: SymbolKind = container != nil ? .method : .function
-                    entries.append(IndexEntry(
-                        name: name, kind: kind, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
-                }
-
-            // Ruby singleton methods (def self.foo — class methods)
-            case "singleton_method":
-                if language == "ruby", let name = nodeName(child, source: source) {
-                    let kind: SymbolKind = container != nil ? .method : .function
-                    entries.append(IndexEntry(
-                        name: name, kind: kind, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
-                }
-
-            // PHP trait declarations (act like classes for container purposes)
-            case "trait_declaration":
-                if let (entry, body) = extractTSDeclaration(child, kind: .class, file: file, source: source, lines: lines, container: container) {
-                    entries.append(entry)
-                    if let body = body {
-                        walkNode(body, language: language, file: file, source: source, lines: lines, container: entry.name, entries: &entries)
-                    }
-                }
-
-            // (`object_declaration` was Kotlin-only and moved to
-            //  `KotlinBackend` in 10c. Scala's `object_definition`,
-            //  `trait_definition`, `val_definition`, `var_definition`
-            //  moved to `ScalaBackend` in 10d.)
-
-            // (`companion_object` and `type_alias` were Kotlin-only and
-            //  moved to `KotlinBackend` in 10c. C++'s `class_specifier`,
-            //  `struct_specifier`, `union_specifier`, `enum_specifier`,
-            //  `field_declaration`, `alias_declaration`, plus
-            //  `type_definition`, `declaration`, and `namespace_definition`
-            //  moved to `CBackend`/`CppBackend` in 10d.)
-
-            // type_definition — non-C/Scala wrapper node (e.g. GraphQL
-            //  uses `type_definition` as a wrapper; we recurse so inner
-            //  definitions are visited).
-            case "type_definition":
-                if child.childCount > 0 {
-                    walkNode(child, language: language, file: file, source: source, lines: lines, container: container, entries: &entries)
-                }
-
-            // declaration — recurse fallthrough only. (C/C++ function
-            //  prototypes moved to `CBackend`/`CppBackend`.)
-            case "declaration":
-                if child.childCount > 0 {
-                    walkNode(child, language: language, file: file, source: source, lines: lines, container: container, entries: &entries)
-                }
-
-            // PHP namespace definitions. (C++ moved to `CppBackend`.)
-            case "namespace_definition":
-                if language == "php" {
-                    if let name = nodeName(child, source: source) {
-                        entries.append(IndexEntry(
-                            name: name, kind: .extension, file: file,
-                            startLine: startLine(of: child), endLine: endLine(of: child),
-                            signature: signatureText(lines: lines, line: startLine(of: child)),
-                            container: container, engine: "tree-sitter"
-                        ))
-                    }
-                    // Recurse into body without setting container (namespaces don't set container)
-                    if let body = findBody(child) {
-                        walkNode(body, language: language, file: file, source: source, lines: lines, container: container, entries: &entries)
-                    }
-                } else if child.childCount > 0 {
-                    walkNode(child, language: language, file: file, source: source, lines: lines, container: container, entries: &entries)
-                }
-
-            // Haskell declarations scope (top-level, class body, instance body — handles deduplication)
-            case "declarations", "class_declarations", "instance_declarations":
-                if language == "haskell" {
-                    walkHaskellDeclarations(child, file: file, source: source, lines: lines, container: container, entries: &entries)
-                } else if child.childCount > 0 {
-                    walkNode(child, language: language, file: file, source: source, lines: lines, container: container, entries: &entries)
-                }
-
-            // Zig variable declarations (const Foo = struct { ... }; — type bindings)
-            case "variable_declaration":
-                if language == "zig" {
-                    walkZigVariableDeclaration(child, file: file, source: source, lines: lines, container: container, entries: &entries)
-                }
-
-            // Zig container fields (struct field declarations — only emit typed fields, skip enum variants)
-            case "container_field":
-                if language == "zig" {
-                    // Only emit fields that have a type annotation (name: type) — this filters out
-                    // enum variants which are just identifiers without types
-                    if findChildByType(child, type: ":") != nil,
-                       let nameNode = findChildByType(child, type: "identifier"),
-                       let name = nodeText(nameNode, source: source) {
-                        entries.append(IndexEntry(
-                            name: name, kind: .property, file: file,
-                            startLine: startLine(of: child), endLine: endLine(of: child),
-                            signature: signatureText(lines: lines, line: startLine(of: child)),
-                            container: container, engine: "tree-sitter"
-                        ))
-                    }
-                }
-
-            // Zig test declarations (test "name" { ... })
-            case "test_declaration":
-                if language == "zig" {
-                    let testName = extractZigTestName(child, source: source) ?? "test"
-                    entries.append(IndexEntry(
-                        name: testName, kind: .function, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: nil, engine: "tree-sitter"
-                    ))
-                }
-
-            // Elixir declarations (defmodule, def, defp, defmacro, defmacrop — all parse as call nodes)
-            case "call":
-                if language == "elixir" {
-                    // Get the call target identifier (defmodule, def, etc.)
-                    guard let targetNode = findChildByType(child, type: "identifier"),
-                          let target = nodeText(targetNode, source: source) else { break }
-                    switch target {
-                    case "defmodule":
-                        if let name = extractElixirModuleName(child, source: source) {
-                            entries.append(IndexEntry(
-                                name: name, kind: .class, file: file,
-                                startLine: startLine(of: child), endLine: endLine(of: child),
-                                signature: signatureText(lines: lines, line: startLine(of: child)),
-                                container: container, engine: "tree-sitter"
-                            ))
-                            if let doBlock = findChildByType(child, type: "do_block") {
-                                walkNode(doBlock, language: language, file: file, source: source, lines: lines, container: name, entries: &entries)
-                            }
-                        }
-                    case "def", "defp", "defmacro", "defmacrop":
-                        if let name = extractElixirFunctionName(child, source: source) {
-                            let kind: SymbolKind = container != nil ? .method : .function
-                            entries.append(IndexEntry(
-                                name: name, kind: kind, file: file,
-                                startLine: startLine(of: child), endLine: endLine(of: child),
-                                signature: signatureText(lines: lines, line: startLine(of: child)),
-                                container: container, engine: "tree-sitter"
-                            ))
-                        }
-                    default:
-                        break
-                    }
-                } else if child.childCount > 0 {
-                    walkNode(child, language: language, file: file, source: source, lines: lines, container: container, entries: &entries)
-                }
+            // (TOML's `table` / `table_array_element` / `pair` cases used
+            // to live here; they moved to `TomlBackend`. Other languages
+            // with these node types fall through to `default:` and are
+            // recursed — same behavior as before, since the TOML cases
+            // were language-gated no-ops for non-TOML.)
 
             // Dart function_signature (top-level functions + class methods; method_signature wraps this)
             case "function_signature":
@@ -668,195 +437,12 @@ public enum TreeSitterBackend {
     // in `Sources/Indexer/Languages/Helpers.swift` as an `extension
     // TreeSitterBackend`. They are `internal` there so per-language
     // backends in `Sources/Indexer/Languages/` can call them; existing
-    // call sites here continue to use the bare names unchanged.)
-
-    // MARK: - Elixir Extractors
-
-    /// Extract the module name from a defmodule call node.
-    /// `defmodule MyApp.Greeter do` → arguments contain an `alias` node with the full dotted name.
-    private static func extractElixirModuleName(_ callNode: Node, source: NSString) -> String? {
-        guard let args = findChildByType(callNode, type: "arguments") else { return nil }
-        // First child of arguments should be an alias (module name)
-        for i in 0..<Int(args.childCount) {
-            guard let arg = args.child(at: i) else { continue }
-            let t = arg.nodeType ?? ""
-            if t == "alias" { return nodeText(arg, source: source) }
-        }
-        return nil
-    }
-
-    /// Extract the function name from a def/defp/defmacro/defmacrop call node.
-    /// Two forms:
-    /// 1. `def hello do` → arguments contain an `identifier` "hello"
-    /// 2. `def greet(name) do` → arguments contain a `call` whose target is `identifier` "greet"
-    private static func extractElixirFunctionName(_ callNode: Node, source: NSString) -> String? {
-        guard let args = findChildByType(callNode, type: "arguments") else { return nil }
-        guard let firstArg = args.child(at: 0) else { return nil }
-        let argType = firstArg.nodeType ?? ""
-        switch argType {
-        case "identifier":
-            // No-arg function: def hello
-            return nodeText(firstArg, source: source)
-        case "call":
-            // Function with args: def greet(name) — target identifier is the function name
-            if let target = findChildByType(firstArg, type: "identifier") {
-                return nodeText(target, source: source)
-            }
-            return nil
-        default:
-            return nil
-        }
-    }
-
-    // MARK: - Haskell Declarations Walker
-
-    /// Walks a Haskell declarations scope (top-level, class body, instance body) with
-    /// deduplication for multi-equation functions and signature+definition pairs.
-    /// Signatures are only emitted if no corresponding function/bind definition exists.
-    private static func walkHaskellDeclarations(
-        _ node: Node, file: String, source: NSString, lines: [String],
-        container: String?, entries: inout [IndexEntry]
-    ) {
-        var emittedNames = Set<String>()
-        var pendingSignatures: [(name: String, node: Node)] = []
-
-        for i in 0..<Int(node.childCount) {
-            guard let child = node.child(at: i) else { continue }
-            let type = child.nodeType ?? ""
-
-            switch type {
-            case "signature":
-                if let name = nodeName(child, source: source), !emittedNames.contains(name) {
-                    pendingSignatures.append((name, child))
-                }
-
-            case "function", "bind":
-                if let name = nodeName(child, source: source), !emittedNames.contains(name) {
-                    emittedNames.insert(name)
-                    pendingSignatures.removeAll { $0.name == name }
-                    let kind: SymbolKind = container != nil ? .method : .function
-                    entries.append(IndexEntry(
-                        name: name, kind: kind, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
-                }
-
-            case "data_type", "newtype", "type_synomym":
-                if let name = nodeName(child, source: source) {
-                    entries.append(IndexEntry(
-                        name: name, kind: .type, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
-                }
-
-            case "class":
-                if let name = nodeName(child, source: source) {
-                    entries.append(IndexEntry(
-                        name: name, kind: .protocol, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
-                    if let body = findChildByType(child, type: "class_declarations") {
-                        walkHaskellDeclarations(body, file: file, source: source, lines: lines, container: name, entries: &entries)
-                    }
-                }
-
-            case "instance":
-                if let name = nodeName(child, source: source) {
-                    entries.append(IndexEntry(
-                        name: name, kind: .extension, file: file,
-                        startLine: startLine(of: child), endLine: endLine(of: child),
-                        signature: signatureText(lines: lines, line: startLine(of: child)),
-                        container: container, engine: "tree-sitter"
-                    ))
-                    if let body = findChildByType(child, type: "instance_declarations") {
-                        walkHaskellDeclarations(body, file: file, source: source, lines: lines, container: name, entries: &entries)
-                    }
-                }
-
-            default:
-                break
-            }
-        }
-
-        // Emit remaining signature-only entries (abstract methods in type classes)
-        for sig in pendingSignatures where !emittedNames.contains(sig.name) {
-            emittedNames.insert(sig.name)
-            let kind: SymbolKind = container != nil ? .method : .function
-            entries.append(IndexEntry(
-                name: sig.name, kind: kind, file: file,
-                startLine: startLine(of: sig.node), endLine: endLine(of: sig.node),
-                signature: signatureText(lines: lines, line: startLine(of: sig.node)),
-                container: container, engine: "tree-sitter"
-            ))
-        }
-    }
-
-    // MARK: - Zig Helpers
-
-    /// Walk a Zig variable_declaration: detect type bindings (const Foo = struct/enum/union { ... })
-    /// and emit type entries. Skip plain constants (imports, integers, etc.).
-    private static func walkZigVariableDeclaration(
-        _ node: Node, file: String, source: NSString, lines: [String],
-        container: String?, entries: inout [IndexEntry]
-    ) {
-        // Extract const name from identifier child
-        guard let nameNode = findChildByType(node, type: "identifier"),
-              let name = nodeText(nameNode, source: source) else { return }
-
-        // Check if RHS is a type declaration (struct/enum/union)
-        var typeKind: SymbolKind? = nil
-        var bodyNode: Node? = nil
-        for i in 0..<Int(node.childCount) {
-            guard let child = node.child(at: i) else { continue }
-            let t = child.nodeType ?? ""
-            switch t {
-            case "struct_declaration":
-                typeKind = .struct
-                bodyNode = child
-            case "enum_declaration":
-                typeKind = .enum
-                bodyNode = child
-            case "union_declaration":
-                typeKind = .struct  // unions mapped to .struct (same as C)
-                bodyNode = child
-            default:
-                break
-            }
-        }
-
-        guard let kind = typeKind else { return }  // Skip plain constants
-
-        entries.append(IndexEntry(
-            name: name, kind: kind, file: file,
-            startLine: startLine(of: node), endLine: endLine(of: node),
-            signature: signatureText(lines: lines, line: startLine(of: node)),
-            container: container, engine: "tree-sitter"
-        ))
-
-        // Only recurse into struct bodies (fields + methods + nested types).
-        // Enum and union bodies don't produce child entries in v1.
-        if let body = bodyNode, body.nodeType == "struct_declaration" {
-            walkNode(body, language: "zig", file: file, source: source, lines: lines, container: name, entries: &entries)
-        }
-    }
-
-    /// Extract the test name from a Zig test_declaration's string child.
-    private static func extractZigTestName(_ node: Node, source: NSString) -> String? {
-        guard let stringNode = findChildByType(node, type: "string") else { return nil }
-        // The string node contains: `"`, string_content, `"` — extract string_content
-        for i in 0..<Int(stringNode.childCount) {
-            guard let child = stringNode.child(at: i) else { continue }
-            if child.nodeType == "string_content" {
-                return nodeText(child, source: source)
-            }
-        }
-        return nil
-    }
+    // call sites here continue to use the bare names unchanged.
+    //
+    // Elixir / Haskell / Zig once kept their helper functions
+    // (`extractElixirModuleName`, `walkHaskellDeclarations`,
+    // `walkZigVariableDeclaration`, …) here. They moved into
+    // `ElixirBackend`, `HaskellBackend`, and `ZigBackend` as
+    // private statics in 10e.)
 
 }

@@ -6,6 +6,78 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 26 — TreeSitterBackend decomposition: Ruby / PHP / Bash / Lua / Elixir / Haskell / Zig migrated (`luminary-2026-04-24-10e-treesitterbackend-script-family`)
+- Luminary P2 (Torvalds/Carmack/Bach-flagged via parent
+  `luminary-2026-04-24-10`). Fifth round of the per-language backend
+  decomposition. Migrates the scripting / functional / systems mixed
+  bag — seven backends in one round.
+- New `Sources/Indexer/Languages/RubyBackend.swift` (91 LOC): owns
+  `class`, `module`, `method`, `singleton_method`. Class/module
+  bodies recurse with the declaration name as container; modules
+  emit as `.extension` for parity with Swift extensions and PHP
+  namespaces.
+- New `Sources/Indexer/Languages/PhpBackend.swift` (121 LOC): owns
+  `class_declaration`, `trait_declaration` (both `.class`),
+  `interface_declaration`, `enum_declaration`, `function_definition`,
+  `method_declaration`, `property_declaration` (one `.property` per
+  `property_element` child, sharing the parent's start/end lines),
+  and `namespace_definition` (`.extension` that recurses into its
+  body without setting container — `helpers_boot` inside
+  `namespace Acme\Services { … }` stays a top-level `.function`).
+- New `Sources/Indexer/Languages/BashBackend.swift` (51 LOC): owns
+  `function_definition` via `extractFunction`. No body recursion —
+  Bash has no nested function containers in well-formed scripts.
+- New `Sources/Indexer/Languages/LuaBackend.swift` (63 LOC): owns
+  `function_declaration` via the shared `extractLuaFunctionName`
+  helper, which unpacks all three name shapes (`function foo()`,
+  `function M.greet()`, `function M:say()`).
+- New `Sources/Indexer/Languages/ElixirBackend.swift` (125 LOC):
+  owns `call`. Elixir has no dedicated declaration nodes — `defmodule`,
+  `def`, `defp`, `defmacro`, and `defmacrop` all parse as `call`
+  nodes whose first identifier child is the macro name. Helpers
+  `extractModuleName` / `extractFunctionName` (formerly private
+  statics on `TreeSitterBackend`) moved into the backend file.
+- New `Sources/Indexer/Languages/HaskellBackend.swift` (151 LOC):
+  owns `declarations` / `class_declarations` / `instance_declarations`
+  with the per-scope dedup pass that handles multi-equation
+  functions, signature+definition pairs, and signature-only
+  abstract methods inside `class` bodies. The walker function
+  (formerly `walkHaskellDeclarations` on `TreeSitterBackend`) moved
+  into the backend file as a private static.
+- New `Sources/Indexer/Languages/ZigBackend.swift` (158 LOC): owns
+  `function_declaration` (identifier-child name extraction —
+  Zig's grammar doesn't expose a `name` field), `variable_declaration`
+  (type bindings only — `const Foo = struct/enum/union { … }`),
+  `container_field` (typed fields only, filtering enum variants),
+  and `test_declaration` (quoted-string name, container nil).
+  Helpers `walkVariableDeclaration` / `extractTestName` moved into
+  the backend file as private statics; struct-body recursion now
+  goes through the backend's own walk instead of bouncing back
+  through `walkNode`.
+- `backend(for:)` registers all seven: Ruby / PHP / Bash / Lua /
+  Elixir / Haskell / Zig now skip `walkNode` entirely. Dispatcher
+  arms removed: `function_definition`, `class_declaration`,
+  `interface_declaration`, `property_declaration`,
+  `trait_declaration`, `class`, `module`, `method`,
+  `singleton_method`, `declarations` / `class_declarations` /
+  `instance_declarations`, `variable_declaration`,
+  `container_field`, `test_declaration`, `call`,
+  `namespace_definition`. Shared cases (`function_declaration`,
+  `method_declaration`, `enum_declaration`) trimmed of their
+  ruby / php / bash / lua / elixir / haskell / zig arms.
+- Dart's `enum_declaration` was almost lost in the prune: a
+  full-suite run caught the regression (Dart's `enum Color { … }`
+  parses as `enum_declaration` exactly like PHP did). Restored to
+  the dispatcher; routing comment updated to "Dart uses this node
+  type for enums".
+- Dispatcher dropped 862 → 442 LOC (-420). Languages directory
+  now holds 2,488 LOC across 20 files. One round (10f) remains to
+  migrate Rust / Go / Dart / HTML / CSS and bring the dispatcher
+  under 500 LOC for good.
+- Re-audit (Torvalds, Carmack, Bach): PASS clean. 1,806/1,806
+  tests green; zero behavior delta as designed for a pure refactor
+  (tests target = 0). Full-suite runtime ~21s.
+
 ### April 25 — TreeSitterBackend decomposition: C / C++ / C# / Java / Scala migrated (`luminary-2026-04-24-10d-treesitterbackend-c-family`)
 - Luminary P2 (Torvalds/Carmack/Bach-flagged via parent
   `luminary-2026-04-24-10`). Fourth round of the per-language backend

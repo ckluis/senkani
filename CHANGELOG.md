@@ -6,6 +6,68 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 26 — TreeSitterBackend decomposition complete: Rust / Go / Dart / HTML / CSS migrated, dispatcher trimmed to 178 LOC (`luminary-2026-04-24-10f-treesitterbackend-cleanup`)
+- Luminary P2 (Torvalds/Carmack/Bach via parent
+  `luminary-2026-04-24-10`). Sixth and final round of the
+  per-language backend decomposition. Migrates the last five
+  languages and removes the central `walkNode` dispatcher entirely.
+- New `Sources/Indexer/Languages/RustBackend.swift` (113 LOC): owns
+  `function_item` / `function_signature_item` (via `extractFunction`),
+  `struct_item`, `enum_item`, `trait_item` (`.protocol`; body
+  recursed with the trait name as container so default fn
+  implementations land as methods), `type_item` (.type for
+  `type Alias = …`), and `impl_item` (no entry of its own; body
+  recursed with the impl'd type as container via the shared
+  `extractRustImplType` helper, which strips generics and resolves
+  `impl Display for User` to "User").
+- New `Sources/Indexer/Languages/GoBackend.swift` (61 LOC): owns
+  `function_declaration` (via `extractFunction`), `method_declaration`
+  (via `extractGoMethod`, which resolves the receiver type — value
+  `(u User)` or pointer `(u *User)` — as the container), and
+  `type_declaration` (via `extractGoTypeDeclaration` →
+  `extractGoTypeSpec`, which picks `.struct` / `.interface` / `.type`
+  from the spec's `type` field).
+- New `Sources/Indexer/Languages/DartBackend.swift` (121 LOC): owns
+  `class_definition` (via `extractPythonClass` — same node shape as
+  Python and Scala), `enum_declaration` (via `extractTSDeclaration`),
+  `function_signature` (.method when in a class container, else
+  .function), `getter_signature` / `setter_signature` (.property in
+  a container, else .variable), `extension_declaration` (.extension
+  with literal "extension" fallback for anonymous extensions; body
+  recursed with the extension name as container), and
+  `mixin_declaration` (.class with body recursion).
+- New `Sources/Indexer/Languages/HtmlBackend.swift` (32 LOC): no
+  symbol surface — HTML emits no entries today. The backend exists
+  to satisfy the dispatcher's "every supported language has a
+  backend" invariant. Tests in `TreeSitterHtmlCssTests.swift` only
+  verify grammar loading and `FileWalker` mapping.
+- New `Sources/Indexer/Languages/CssBackend.swift` (33 LOC): same
+  shape as `HtmlBackend` — no symbols, exists for invariant parity.
+- `Sources/Indexer/TreeSitterBackend.swift` trimmed from 442 → 178
+  LOC. The `walkNode` central switch is gone; the dispatcher is now
+  responsible only for (1) `language(for:)` — id → grammar, (2)
+  `backend(for:)` — id → `TreeSitterLanguageBackend.Type`, (3)
+  `index(...)` — parse files and hand the root node to the backend,
+  (4) `extractSymbols(...)` — same dispatch for an already-parsed
+  tree (used by `IncrementalParser`).
+- `extractSymbols(from:source:language:file:)` simplified: the
+  `else { walkNode(...) }` fallback is gone — every supported
+  language now has a backend, so an unsupported language returns
+  `[]` directly rather than entering a no-op walk.
+- 23 backend files now live under `Sources/Indexer/Languages/`
+  (one per grammar; `TypeScriptBackend` covers the ts/tsx/javascript
+  triple). The protocol is in `TreeSitterLanguageBackend.swift`;
+  shared extractors and node helpers in `Helpers.swift`.
+- `spec/cleanup.md` "TreeSitterBackend monolith" entry resolved
+  (closes the 1,771 → 178 LOC arc that started at
+  `luminary-2026-04-24-10`). `spec/tree_sitter.md` "Per-Language
+  Backend Protocol" → "Migration status" updated with the five
+  10f backends and the final dispatcher shape; "Adding more cases
+  to walkNode" trap section flagged as historical.
+- 1806/1806 tests green (no new tests — pure refactor, zero
+  behavior delta on a 270-test tree-sitter cohort that exercises
+  every migrated language end-to-end).
+
 ### April 26 — TreeSitterBackend decomposition: Ruby / PHP / Bash / Lua / Elixir / Haskell / Zig migrated (`luminary-2026-04-24-10e-treesitterbackend-script-family`)
 - Luminary P2 (Torvalds/Carmack/Bach-flagged via parent
   `luminary-2026-04-24-10`). Fifth round of the per-language backend

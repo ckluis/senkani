@@ -6,6 +6,39 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 26 — Release checklist gives `senkani uninstall` real-install validation a durable home (`luminary-2026-04-24-15-uninstall-ci`)
+- Luminary P3 (Bach/Majors/Grace). The 6 manual uninstall checks
+  (real install, `--keep-data`, full wipe + idempotency, no Senkani
+  tools in `claude`, app re-launch reversibility, post-wipe sweep
+  for missed artifacts) had been parked on `tools/soak/manual-log.md`
+  with no owner and no cadence. Synthetic regression coverage in
+  `UninstallSmokeTests` (6 tests, fixture HOME) was solid — but the
+  real-machine drift surface had no durable validation home.
+- Pre-audit: every one of the 6 soak checks **inherently** requires
+  state CI cannot reproduce (live MCP/hook registration, GUI
+  re-launch, real Claude Code, real `launchctl`, real Keychain).
+  Path A (lift to CI) rejected; Path B (formal release checklist)
+  shipped.
+- New `spec/release-checklist.md` §A — A1–A6 with the "uninstall
+  owner" role, per-release sign-off slots, an explicit "why these
+  stay manual" section, and a per-release log table appended at
+  the bottom (newest at top). Gated to every minor-version bump
+  (e.g. `v0.2.0 → v0.3.0`); patch bumps re-run only what changed.
+- `spec/cleanup.md` #15 RESOLVED — points at the new checklist as
+  the canonical home, retains the historical synthetic-smoke note
+  for context.
+- `tools/soak/manual-log.md` "uninstall" wave entry now opens with
+  a callout pointing at `release-checklist.md §A` as the canonical
+  home; the wave entry stays as the rolling diary for ad-hoc runs.
+- `spec/roadmap.md` — both the v0.2.0 row for `senkani uninstall`
+  and the "Manual test queue" entry updated to reference the new
+  checklist.
+- `spec/autonomous-manifest.yaml` — added `release:
+  spec/release-checklist.md` to `specs.subsystems` so future rounds
+  with `affects: [release]` route doc-sync to the right file.
+- Suite: 1842 → 1842 (doc-only round, no test delta — synthetic
+  surface was already covered).
+
 ### April 26 — Tree-sitter grammars are SHA-256 pinned; release SBOM script lands (`luminary-2026-04-24-13-grammar-pinning-sbom`)
 - Luminary P2 (Schneier/Meeker/Grace). 25 vendored tree-sitter
   grammars are third-party C code that runs in-process during every

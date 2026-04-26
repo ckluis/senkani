@@ -198,7 +198,7 @@ struct TreeSitterJavaScriptPerformanceTests {
         let clock = ContinuousClock()
         var entries: [IndexEntry] = []
         let elapsed = clock.measure {
-            entries = TreeSitterBackend.index(files: [filePath], language: "javascript", projectRoot: tmpDir)
+            entries = (try? TreeSitterBackend.index(files: [filePath], language: "javascript", projectRoot: tmpDir)) ?? []
         }
 
         let ms = Double(elapsed.components.attoseconds) / 1e15
@@ -224,11 +224,11 @@ struct TreeSitterJavaScriptPerformanceTests {
         defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
         // Parse JS first
-        let jsEntries = TreeSitterBackend.index(files: ["test.js"], language: "javascript", projectRoot: tmpDir)
+        let jsEntries = (try? TreeSitterBackend.index(files: ["test.js"], language: "javascript", projectRoot: tmpDir)) ?? []
         // Then TS
-        let tsEntries = TreeSitterBackend.index(files: ["test.ts"], language: "typescript", projectRoot: tmpDir)
+        let tsEntries = (try? TreeSitterBackend.index(files: ["test.ts"], language: "typescript", projectRoot: tmpDir)) ?? []
         // Then JS again (proves no state leak)
-        let jsEntries2 = TreeSitterBackend.index(files: ["test.js"], language: "javascript", projectRoot: tmpDir)
+        let jsEntries2 = (try? TreeSitterBackend.index(files: ["test.js"], language: "javascript", projectRoot: tmpDir)) ?? []
 
         // JS should find: setup (function), App (class)
         #expect(jsEntries.contains { $0.name == "setup" && $0.kind == .function })
@@ -255,5 +255,5 @@ private func indexJS(_ code: String) -> [IndexEntry] {
     try? code.write(toFile: fullPath, atomically: true, encoding: .utf8)
     defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
-    return TreeSitterBackend.index(files: [filePath], language: "javascript", projectRoot: tmpDir)
+    return (try? TreeSitterBackend.index(files: [filePath], language: "javascript", projectRoot: tmpDir)) ?? []
 }

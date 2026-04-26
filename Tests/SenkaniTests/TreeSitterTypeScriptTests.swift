@@ -290,11 +290,11 @@ struct TreeSitterTypeScriptPerformanceTests {
         defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
         // Parse TypeScript first
-        let tsEntries = TreeSitterBackend.index(files: ["test.ts"], language: "typescript", projectRoot: tmpDir)
+        let tsEntries = (try? TreeSitterBackend.index(files: ["test.ts"], language: "typescript", projectRoot: tmpDir)) ?? []
         // Then TSX
-        let tsxEntries = TreeSitterBackend.index(files: ["test.tsx"], language: "tsx", projectRoot: tmpDir)
+        let tsxEntries = (try? TreeSitterBackend.index(files: ["test.tsx"], language: "tsx", projectRoot: tmpDir)) ?? []
         // Then TypeScript again (proves no state leak)
-        let tsEntries2 = TreeSitterBackend.index(files: ["test.ts"], language: "typescript", projectRoot: tmpDir)
+        let tsEntries2 = (try? TreeSitterBackend.index(files: ["test.ts"], language: "typescript", projectRoot: tmpDir)) ?? []
 
         // TypeScript should find: Config (interface), setup (function)
         #expect(tsEntries.contains { $0.name == "Config" && $0.kind == .interface })
@@ -329,7 +329,7 @@ private func indexLanguage(_ code: String, language: String, ext: String) -> [In
     try? code.write(toFile: fullPath, atomically: true, encoding: .utf8)
     defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
-    return TreeSitterBackend.index(files: [filePath], language: language, projectRoot: tmpDir)
+    return (try? TreeSitterBackend.index(files: [filePath], language: language, projectRoot: tmpDir)) ?? []
 }
 
 private func measureIndex(_ code: String, language: String) -> ([IndexEntry], Double) {
@@ -345,7 +345,7 @@ private func measureIndex(_ code: String, language: String) -> ([IndexEntry], Do
     let clock = ContinuousClock()
     var entries: [IndexEntry] = []
     let elapsed = clock.measure {
-        entries = TreeSitterBackend.index(files: [filePath], language: language, projectRoot: tmpDir)
+        entries = (try? TreeSitterBackend.index(files: [filePath], language: language, projectRoot: tmpDir)) ?? []
     }
 
     let ms = Double(elapsed.components.attoseconds) / 1e15

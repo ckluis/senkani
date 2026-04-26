@@ -6,6 +6,627 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 26 — Release checklist gives `senkani uninstall` real-install validation a durable home (`luminary-2026-04-24-15-uninstall-ci`)
+- Luminary P3 (Bach/Majors/Grace). The 6 manual uninstall checks
+  (real install, `--keep-data`, full wipe + idempotency, no Senkani
+  tools in `claude`, app re-launch reversibility, post-wipe sweep
+  for missed artifacts) had been parked on `tools/soak/manual-log.md`
+  with no owner and no cadence. Synthetic regression coverage in
+  `UninstallSmokeTests` (6 tests, fixture HOME) was solid — but the
+  real-machine drift surface had no durable validation home.
+- Pre-audit: every one of the 6 soak checks **inherently** requires
+  state CI cannot reproduce (live MCP/hook registration, GUI
+  re-launch, real Claude Code, real `launchctl`, real Keychain).
+  Path A (lift to CI) rejected; Path B (formal release checklist)
+  shipped.
+- New `spec/release-checklist.md` §A — A1–A6 with the "uninstall
+  owner" role, per-release sign-off slots, an explicit "why these
+  stay manual" section, and a per-release log table appended at
+  the bottom (newest at top). Gated to every minor-version bump
+  (e.g. `v0.2.0 → v0.3.0`); patch bumps re-run only what changed.
+- `spec/cleanup.md` #15 RESOLVED — points at the new checklist as
+  the canonical home, retains the historical synthetic-smoke note
+  for context.
+- `tools/soak/manual-log.md` "uninstall" wave entry now opens with
+  a callout pointing at `release-checklist.md §A` as the canonical
+  home; the wave entry stays as the rolling diary for ad-hoc runs.
+- `spec/roadmap.md` — both the v0.2.0 row for `senkani uninstall`
+  and the "Manual test queue" entry updated to reference the new
+  checklist.
+- `spec/autonomous-manifest.yaml` — added `release:
+  spec/release-checklist.md` to `specs.subsystems` so future rounds
+  with `affects: [release]` route doc-sync to the right file.
+- Suite: 1842 → 1842 (doc-only round, no test delta — synthetic
+  surface was already covered).
+
+### April 26 — Tree-sitter grammars are SHA-256 pinned; release SBOM script lands (`luminary-2026-04-24-13-grammar-pinning-sbom`)
+- Luminary P2 (Schneier/Meeker/Grace). 25 vendored tree-sitter
+  grammars are third-party C code that runs in-process during every
+  `senkani index` and every MCP `outline`/`deps`/`repo` call.
+  `GrammarManifest.swift` already tracked upstream version + repo,
+  but it did not pin a content hash and the project did not emit an
+  SBOM — a swapped `parser.c` would have shipped silently.
+- `GrammarInfo` gains `contentHash: String` — SHA-256 of
+  `parser.c` (concatenated with `scanner.c` when one is present).
+  All 25 manifest entries declare a hash; six grammars have no
+  external scanner so their hash covers `parser.c` alone.
+- New `tools/verify-grammar-hashes.sh` recomputes each hash and
+  diffs it against the manifest. Mismatch = exit 1 with the declared
+  and computed hashes printed for forensics. `--print` mode emits
+  the current-on-disk hash table so a deliberate grammar bump can
+  re-pin in one paste. Wired into `tools/test-safe.sh` as a
+  pre-flight gate (after the multiplier-claims check) so a tampered
+  grammar fails CI before tests can mask the change with an
+  unrelated regression. Skip via `SKIP_GRAMMAR_HASH_CHECK=1` for
+  local iteration on a known-good tree.
+- New `tools/generate-sbom.sh` emits a CycloneDX 1.5 JSON SBOM:
+  25 tree-sitter grammars (with their pinned hashes + GitHub
+  vcs URL), 4 ML models from `ModelManager.swift` (HuggingFace
+  repo + expected size; runtime-downloaded so no content hash yet),
+  and 22 Swift packages from `Package.resolved` (with pinned commit
+  SHAs; branch-pinned packages get a `git-<short>` synthetic
+  version). Components are sorted by name and the serial number is
+  derived from the component fingerprint, so two identical builds
+  produce byte-identical SBOMs (verified across runs). Honors
+  `SOURCE_DATE_EPOCH` for reproducible-build pipelines. Standalone:
+  no SwiftPM dependency, runnable from any release workflow as
+  `./tools/generate-sbom.sh sbom.json`.
+- 5 new tests under `GrammarManifest — Content hashes`: every
+  entry declares a hash, format is lowercase hex-64, hashes are
+  unique across grammars, on-disk SHA-256 matches the manifest
+  for every grammar (catches forgot-to-rerun-verify after a
+  re-vendor), and target names follow the `TreeSitter…Parser`
+  contract that the verify + SBOM scripts assume.
+  `GrammarStalenessTests` updated to pass a placeholder hash —
+  staleness logic doesn't consult the field.
+- Suite: 1837 → 1842 (+5). `spec/cleanup.md` "Vendored grammars
+  not content-pinned + no SBOM" entry added as RESOLVED. Re-audit
+  (Schneier/Meeker/Grace): PASS clean.
+- Deferred: wiring `generate-sbom.sh` into an actual GitHub
+  Actions release job — no `.github/workflows/` exists yet. The
+  script header documents the intended integration; this gap is
+  owned by `luminary-2026-04-24-14-distribution-packaging`. ML
+  model download digests are not pinned (HuggingFace doesn't
+  expose them at lookup time without a fetch); the SBOM lists
+  repo + expected size as the authoritative-on-paper record.
+
+### April 26 — Published SLOs surface in `senkani doctor` with a CI perf gate (`luminary-2026-04-24-12-slo-pack-with-burn-rate`)
+- Luminary P2 (Majors/Carmack/Allspaw). The spec named three p99
+  contracts on the hot path (cache hit < 1 ms, pipeline cache-miss
+  < 20 ms, hook passthrough < 1 ms) but they were not published, not
+  measured, and not gated. This round ships all three (plus
+  `hook.active` < 3 ms as the operational ceiling for the same hook
+  binary when the relay is engaged) end-to-end.
+- New `spec/slos.md` declares the four SLOs, the 24-hour rolling
+  window, and the 1% error budget. Burn-rate is intentionally
+  simple for v0.2.0 — single window, single threshold,
+  green / warn / burn / unknown verdict. Multi-window /
+  multi-burn-rate alerting is parked until Senkani ships a daemon
+  mode users don't babysit.
+- New `Sources/Core/SLO.swift`: `SLOName` enum (with per-SLO
+  threshold + description), `SLOSample` (ms + ts), `SLOSampleStore`
+  (file-backed bounded ring buffer at `~/.senkani/slo-samples.json`,
+  1000-sample cap per SLO, atomic writes), `SLOEvaluation`
+  (state + p99 + sample count + over-budget pct), and the math
+  helper `SLO.percentile(...)` shared by store + perf gate so doctor
+  and CI compute p99 the same way.
+- `record(...)` is gated on `SENKANI_SLO_SAMPLES=1` — Carmack-flagged:
+  the SLOs measure operations on the order of 1–20 ms, and a
+  read-modify-write JSON flush on every hot-path call would dominate
+  what we're trying to measure. Recording is opt-in per process;
+  the perf gate (and operators who want live samples) flips the
+  env var. `recordForced(...)` bypasses the gate for tests + the
+  perf gate.
+- `FilterPipeline.process` now wraps its body in a timer and calls
+  `SLOSampleStore.shared.record(.pipelineMiss, ms:)` once per call
+  (no-op unless the env var is set). The same wiring slots in for
+  `cache.hit` once any KB / artifact lookup wraps its hit path —
+  the harness is generic so additional callsites are one line each.
+- `senkani doctor` gains check #14 (after WARP skills): one line per
+  SLO, surfacing rolling p99, threshold, sample count, and
+  over-budget percentage. Verdict semantics:
+  green = p99 ≤ threshold AND ≤ 1% over budget;
+  warn = p99 in [80%, 100%) of threshold (early signal — emitted
+  as a `✗` so it surfaces in the doctor's failed count and gets
+  the operator's attention before it burns);
+  burn = p99 > threshold OR > 1% of samples over threshold;
+  unknown = fewer than 30 samples in the rolling window
+  (Allspaw-flagged: prevents false-green on a fresh install and
+  false-burn from a single outlier).
+- New `Tests/SenkaniTests/SLOTests.swift` (19 tests) covers
+  `SLO.percentile` (5 tests: empty, single, linear interpolation,
+  p99 on 0..99 distribution, q-clamping), `SLOSampleStore` (10
+  tests: env-gate respect, recordForced bypass, window filter,
+  ring-buffer eviction, the four state transitions including
+  budget-exceeded → burn at 1.98%, evaluateAll, reset), and the
+  perf gate itself (3 tests: cache hit synthesised via Dictionary
+  lookup, pipeline miss via real `FilterPipeline.process` on a
+  small fixture, hook passthrough via the env-var read + bytes
+  encode the relay's cold path does — exec'ing the binary is
+  out of scope, the gate catches algorithmic regressions in the
+  cold path itself). All thresholds met locally with green
+  margins.
+- New `tools/perf-gate.sh` is a thin convenience wrapper that runs
+  the SLO gate suite alone (`swift test --filter SLOPerfGate`)
+  with `SWT_NO_PARALLEL=1` and the multiplier-claim pre-flight
+  skipped. The full suite via `tools/test-safe.sh` already
+  includes the gate; `perf-gate.sh` is for fast local iteration
+  when tuning a hot path.
+- 2 new files (`Sources/Core/SLO.swift`, `Tests/SenkaniTests/SLOTests.swift`,
+  `spec/slos.md`, `tools/perf-gate.sh`) + 2 modified
+  (`Sources/Core/FilterPipeline.swift`,
+  `Sources/CLI/DoctorCommand.swift`).
+- Tests: 1818 → 1837 (+19). Build clean at 9.98s; full suite green
+  at 22.4s. `spec/cleanup.md` "no published SLOs / no perf gate"
+  → ✅ RESOLVED.
+
+### April 26 — Typed `IndexError` replaces silent `[]` returns across the Indexer public API (`luminary-2026-04-24-11-indexer-result-errors`)
+- Luminary P2 (Schneier/Bach/Torvalds). Indexer leaf functions used
+  to return `[]` for every failure mode — binary missing, parse
+  failed, unsupported language, file unreadable — making "no
+  symbols here" indistinguishable from "the tool is broken." This
+  was the single biggest style-drift cost in the codebase per the
+  Codex-vs-Claude audit.
+- New `Sources/Indexer/IndexError.swift`: `Equatable`, `Sendable`
+  enum with four cases — `binaryMissing(String)`,
+  `parseFailed(file:reason:)`, `unsupportedLanguage(String)`,
+  `ioError(file:underlying:)`. `CustomStringConvertible` for
+  legible logs; never includes absolute paths (Schneier).
+- Seven public entry points now `throws` instead of silently
+  returning `[]`: `CTagsBackend.index`,
+  `TreeSitterBackend.index` and `TreeSitterBackend.extractSymbols`,
+  `RegexBackend.index`, `IndexEngine.indexFileIncremental`,
+  `DependencyExtractor.extractImports` and `extractAllImports`.
+  Setup-level failures (missing binary, unknown language, parser
+  setup) surface; per-file failures inside batch loops still
+  `continue` silently — one bad file shouldn't fail the batch.
+- Orchestrators (`IndexEngine.index`, `incrementalUpdate`,
+  `buildDependencyGraph`) keep their `SymbolIndex` /
+  `DependencyGraph` return types and now log the explicit swallow
+  point when a backend throws (e.g. tree-sitter fails for a
+  language → log + skip + continue with regex). Replaces five
+  invisible silent-fail sites in the orchestration path.
+- New `RegexBackend.supports(_:)` and `RegexBackend.supportedLanguages`
+  let the orchestrator pick the right backend without invoking and
+  catching `unsupportedLanguage`.
+- `DependencyExtractor.extractImports` now collapses its public
+  switch into the existing `extractForLanguage` private dispatch
+  — no behavioral change, just a single place to extend.
+- 12 new tests in `IndexErrorTests.swift` cover each `IndexError`
+  case at every entry point: `Equatable` and `description` shape,
+  `binaryMissing` (via a new `_binaryPathOverride` test hook on
+  `CTagsBackend` so we don't need to uninstall ctags),
+  `unsupportedLanguage` from each backend, `ioError` from
+  `indexFileIncremental` with a missing file, the
+  known-but-importless `bash`/`lua` success-with-`[]` contract,
+  and the unknown-extension throw on `indexFileIncremental`.
+- 1 new file (`IndexError.swift`) + 6 modified Indexer sources +
+  21 test files updated to wrap helpers in `(try? f()) ?? []`
+  + 1 production caller updated (`MCPSession.processFileEvents`).
+  No callers' empty-success behavior changes; the only new
+  observable is `try`-clauses can now match on which thing went
+  wrong.
+- Tests: 1806 → 1818 (+12). `spec/cleanup.md` "Silent error
+  swallowing in Indexer" → ✅ RESOLVED.
+
+### April 26 — TreeSitterBackend decomposition complete: Rust / Go / Dart / HTML / CSS migrated, dispatcher trimmed to 178 LOC (`luminary-2026-04-24-10f-treesitterbackend-cleanup`)
+- Luminary P2 (Torvalds/Carmack/Bach via parent
+  `luminary-2026-04-24-10`). Sixth and final round of the
+  per-language backend decomposition. Migrates the last five
+  languages and removes the central `walkNode` dispatcher entirely.
+- New `Sources/Indexer/Languages/RustBackend.swift` (113 LOC): owns
+  `function_item` / `function_signature_item` (via `extractFunction`),
+  `struct_item`, `enum_item`, `trait_item` (`.protocol`; body
+  recursed with the trait name as container so default fn
+  implementations land as methods), `type_item` (.type for
+  `type Alias = …`), and `impl_item` (no entry of its own; body
+  recursed with the impl'd type as container via the shared
+  `extractRustImplType` helper, which strips generics and resolves
+  `impl Display for User` to "User").
+- New `Sources/Indexer/Languages/GoBackend.swift` (61 LOC): owns
+  `function_declaration` (via `extractFunction`), `method_declaration`
+  (via `extractGoMethod`, which resolves the receiver type — value
+  `(u User)` or pointer `(u *User)` — as the container), and
+  `type_declaration` (via `extractGoTypeDeclaration` →
+  `extractGoTypeSpec`, which picks `.struct` / `.interface` / `.type`
+  from the spec's `type` field).
+- New `Sources/Indexer/Languages/DartBackend.swift` (121 LOC): owns
+  `class_definition` (via `extractPythonClass` — same node shape as
+  Python and Scala), `enum_declaration` (via `extractTSDeclaration`),
+  `function_signature` (.method when in a class container, else
+  .function), `getter_signature` / `setter_signature` (.property in
+  a container, else .variable), `extension_declaration` (.extension
+  with literal "extension" fallback for anonymous extensions; body
+  recursed with the extension name as container), and
+  `mixin_declaration` (.class with body recursion).
+- New `Sources/Indexer/Languages/HtmlBackend.swift` (32 LOC): no
+  symbol surface — HTML emits no entries today. The backend exists
+  to satisfy the dispatcher's "every supported language has a
+  backend" invariant. Tests in `TreeSitterHtmlCssTests.swift` only
+  verify grammar loading and `FileWalker` mapping.
+- New `Sources/Indexer/Languages/CssBackend.swift` (33 LOC): same
+  shape as `HtmlBackend` — no symbols, exists for invariant parity.
+- `Sources/Indexer/TreeSitterBackend.swift` trimmed from 442 → 178
+  LOC. The `walkNode` central switch is gone; the dispatcher is now
+  responsible only for (1) `language(for:)` — id → grammar, (2)
+  `backend(for:)` — id → `TreeSitterLanguageBackend.Type`, (3)
+  `index(...)` — parse files and hand the root node to the backend,
+  (4) `extractSymbols(...)` — same dispatch for an already-parsed
+  tree (used by `IncrementalParser`).
+- `extractSymbols(from:source:language:file:)` simplified: the
+  `else { walkNode(...) }` fallback is gone — every supported
+  language now has a backend, so an unsupported language returns
+  `[]` directly rather than entering a no-op walk.
+- 23 backend files now live under `Sources/Indexer/Languages/`
+  (one per grammar; `TypeScriptBackend` covers the ts/tsx/javascript
+  triple). The protocol is in `TreeSitterLanguageBackend.swift`;
+  shared extractors and node helpers in `Helpers.swift`.
+- `spec/cleanup.md` "TreeSitterBackend monolith" entry resolved
+  (closes the 1,771 → 178 LOC arc that started at
+  `luminary-2026-04-24-10`). `spec/tree_sitter.md` "Per-Language
+  Backend Protocol" → "Migration status" updated with the five
+  10f backends and the final dispatcher shape; "Adding more cases
+  to walkNode" trap section flagged as historical.
+- 1806/1806 tests green (no new tests — pure refactor, zero
+  behavior delta on a 270-test tree-sitter cohort that exercises
+  every migrated language end-to-end).
+
+### April 26 — TreeSitterBackend decomposition: Ruby / PHP / Bash / Lua / Elixir / Haskell / Zig migrated (`luminary-2026-04-24-10e-treesitterbackend-script-family`)
+- Luminary P2 (Torvalds/Carmack/Bach-flagged via parent
+  `luminary-2026-04-24-10`). Fifth round of the per-language backend
+  decomposition. Migrates the scripting / functional / systems mixed
+  bag — seven backends in one round.
+- New `Sources/Indexer/Languages/RubyBackend.swift` (91 LOC): owns
+  `class`, `module`, `method`, `singleton_method`. Class/module
+  bodies recurse with the declaration name as container; modules
+  emit as `.extension` for parity with Swift extensions and PHP
+  namespaces.
+- New `Sources/Indexer/Languages/PhpBackend.swift` (121 LOC): owns
+  `class_declaration`, `trait_declaration` (both `.class`),
+  `interface_declaration`, `enum_declaration`, `function_definition`,
+  `method_declaration`, `property_declaration` (one `.property` per
+  `property_element` child, sharing the parent's start/end lines),
+  and `namespace_definition` (`.extension` that recurses into its
+  body without setting container — `helpers_boot` inside
+  `namespace Acme\Services { … }` stays a top-level `.function`).
+- New `Sources/Indexer/Languages/BashBackend.swift` (51 LOC): owns
+  `function_definition` via `extractFunction`. No body recursion —
+  Bash has no nested function containers in well-formed scripts.
+- New `Sources/Indexer/Languages/LuaBackend.swift` (63 LOC): owns
+  `function_declaration` via the shared `extractLuaFunctionName`
+  helper, which unpacks all three name shapes (`function foo()`,
+  `function M.greet()`, `function M:say()`).
+- New `Sources/Indexer/Languages/ElixirBackend.swift` (125 LOC):
+  owns `call`. Elixir has no dedicated declaration nodes — `defmodule`,
+  `def`, `defp`, `defmacro`, and `defmacrop` all parse as `call`
+  nodes whose first identifier child is the macro name. Helpers
+  `extractModuleName` / `extractFunctionName` (formerly private
+  statics on `TreeSitterBackend`) moved into the backend file.
+- New `Sources/Indexer/Languages/HaskellBackend.swift` (151 LOC):
+  owns `declarations` / `class_declarations` / `instance_declarations`
+  with the per-scope dedup pass that handles multi-equation
+  functions, signature+definition pairs, and signature-only
+  abstract methods inside `class` bodies. The walker function
+  (formerly `walkHaskellDeclarations` on `TreeSitterBackend`) moved
+  into the backend file as a private static.
+- New `Sources/Indexer/Languages/ZigBackend.swift` (158 LOC): owns
+  `function_declaration` (identifier-child name extraction —
+  Zig's grammar doesn't expose a `name` field), `variable_declaration`
+  (type bindings only — `const Foo = struct/enum/union { … }`),
+  `container_field` (typed fields only, filtering enum variants),
+  and `test_declaration` (quoted-string name, container nil).
+  Helpers `walkVariableDeclaration` / `extractTestName` moved into
+  the backend file as private statics; struct-body recursion now
+  goes through the backend's own walk instead of bouncing back
+  through `walkNode`.
+- `backend(for:)` registers all seven: Ruby / PHP / Bash / Lua /
+  Elixir / Haskell / Zig now skip `walkNode` entirely. Dispatcher
+  arms removed: `function_definition`, `class_declaration`,
+  `interface_declaration`, `property_declaration`,
+  `trait_declaration`, `class`, `module`, `method`,
+  `singleton_method`, `declarations` / `class_declarations` /
+  `instance_declarations`, `variable_declaration`,
+  `container_field`, `test_declaration`, `call`,
+  `namespace_definition`. Shared cases (`function_declaration`,
+  `method_declaration`, `enum_declaration`) trimmed of their
+  ruby / php / bash / lua / elixir / haskell / zig arms.
+- Dart's `enum_declaration` was almost lost in the prune: a
+  full-suite run caught the regression (Dart's `enum Color { … }`
+  parses as `enum_declaration` exactly like PHP did). Restored to
+  the dispatcher; routing comment updated to "Dart uses this node
+  type for enums".
+- Dispatcher dropped 862 → 442 LOC (-420). Languages directory
+  now holds 2,488 LOC across 20 files. One round (10f) remains to
+  migrate Rust / Go / Dart / HTML / CSS and bring the dispatcher
+  under 500 LOC for good.
+- Re-audit (Torvalds, Carmack, Bach): PASS clean. 1,806/1,806
+  tests green; zero behavior delta as designed for a pure refactor
+  (tests target = 0). Full-suite runtime ~21s.
+
+### April 25 — TreeSitterBackend decomposition: C / C++ / C# / Java / Scala migrated (`luminary-2026-04-24-10d-treesitterbackend-c-family`)
+- Luminary P2 (Torvalds/Carmack/Bach-flagged via parent
+  `luminary-2026-04-24-10`). Fourth round of the per-language backend
+  decomposition. Migrates the C-family + Java + Scala — five backends
+  in one round.
+- New `Sources/Indexer/Languages/CBackend.swift` (111 LOC): owns
+  `function_definition` (declarator-chain name extraction),
+  `struct_specifier` / `union_specifier`, `enum_specifier`,
+  `type_definition`, and `declaration` (function prototypes).
+- New `Sources/Indexer/Languages/CppBackend.swift` (183 LOC):
+  preserves the three-tier `function_definition` extraction
+  (extractFunction → extractCppQualifiedMethod → extractCDeclaratorName),
+  plus `class_specifier`, `struct_specifier` / `union_specifier`
+  with body recursion, `enum_specifier`, `type_definition`,
+  `declaration`, `field_declaration` (in-class methods),
+  `namespace_definition` (recurses without setting container), and
+  `alias_declaration`.
+- New `Sources/Indexer/Languages/CSharpBackend.swift` (147 LOC):
+  owns `class_declaration`, `struct_declaration`,
+  `record_declaration` (C# 9+), `interface_declaration`,
+  `enum_declaration`, `delegate_declaration`, `namespace_declaration`,
+  `file_scoped_namespace_declaration`, `method_declaration`,
+  `constructor_declaration`, `destructor_declaration`,
+  `property_declaration`.
+- New `Sources/Indexer/Languages/JavaBackend.swift` (102 LOC):
+  uniform `name`-field extraction via `extractTSDeclaration` for
+  `class_declaration`, `interface_declaration`, `enum_declaration`,
+  `record_declaration` (mapped to .struct), `annotation_type_declaration`
+  (mapped to .protocol). Methods + constructors via `extractFunction`.
+- New `Sources/Indexer/Languages/ScalaBackend.swift` (121 LOC):
+  owns `class_definition` (via `extractPythonClass`),
+  `object_definition` (.class with body recursion),
+  `trait_definition` (.protocol with body recursion),
+  `val_definition` / `var_definition` (.property — name from
+  `pattern` field, not `name`), `type_definition`, and
+  `function_definition` (`def`).
+- `backend(for:)` registers all five: C / C++ / C# / Java / Scala
+  now skip `walkNode` entirely. Dispatcher's C-family-only arms
+  removed: `class_specifier`, `struct_specifier`/`union_specifier`,
+  `enum_specifier`, `field_declaration`, `alias_declaration`,
+  `record_declaration`, `annotation_type_declaration`,
+  `constructor_declaration`, `destructor_declaration`,
+  `struct_declaration`, `delegate_declaration`,
+  `namespace_declaration`, `file_scoped_namespace_declaration`,
+  `object_definition`, `trait_definition`, `val_definition` /
+  `var_definition`. Shared cases (`function_definition`,
+  `type_definition`, `declaration`, `namespace_definition`,
+  `method_declaration`) trimmed of their cpp / c / csharp / java /
+  scala arms.
+- **10c-deferred deletion deferred again to 10e.** The 10d
+  acceptance asked for `class_declaration` + `interface_declaration`
+  + `enum_declaration` case-branch deletions. Pre-audit caught that
+  PHP routes through all three (`class Foo`, `interface Greeter`,
+  `enum Color` in PHP all parse as those node types). The branches
+  stay alive — now serving PHP only — until 10e (when PHP migrates).
+  Same for `property_declaration` (PHP property arm) and
+  `namespace_definition` (PHP arm). The 10c lesson — enumerate every
+  owning language by grep before deleting a walkNode case — paid off
+  again here.
+- Dart's `class_definition` was almost lost in the prune: a
+  full-suite run caught the regression (Dart classes use
+  `class_definition` exactly like Python and Scala did). Restored
+  to the dispatcher; routing comment updated to "Dart routes through
+  here".
+- Two test discoveries during the round (both fixed before re-audit):
+  C# `record_declaration` was previously served by the dispatcher's
+  Java-shared `record_declaration` case — added to `CSharpBackend`
+  alongside `struct_declaration`. Scala's `def` parses as
+  `function_definition` and was getting recursed-but-not-extracted
+  inside `object_definition` bodies — added a `function_definition`
+  case to `ScalaBackend`.
+- Dispatcher dropped 1,114 → 862 LOC (-252). Languages directory now
+  holds 1,830 LOC across 13 files. Two rounds (10e–10f) remain to
+  bring the dispatcher under 500 LOC.
+- Re-audit (Torvalds, Carmack, Bach): PASS clean. 1,806/1,806 tests
+  green; zero behavior delta as designed for a pure refactor (tests
+  target = 0). Full-suite runtime ~20s.
+
+### April 25 — TreeSitterBackend decomposition: TypeScript / TSX / JavaScript + Kotlin migrated (`luminary-2026-04-24-10c-treesitterbackend-ts-family`)
+- Luminary P2 (Torvalds/Carmack/Bach-flagged via parent
+  `luminary-2026-04-24-10`). Third round of the per-language backend
+  decomposition. Migrates the TS-family + Kotlin to per-language files.
+- New `Sources/Indexer/Languages/TypeScriptBackend.swift` (111 LOC):
+  one backend covers `typescript`, `tsx`, and `javascript` because the
+  declaration node types and extraction logic are uniform across all
+  three grammars. Owns `function_declaration` / `generator_function_declaration`
+  / `class_declaration` / `interface_declaration` / `type_alias_declaration`
+  / `enum_declaration` / `method_definition`. JSX is handled by the
+  parser; the walk is identical.
+- New `Sources/Indexer/Languages/KotlinBackend.swift` (139 LOC):
+  Kotlin uses positional children rather than named fields, so name
+  lookups go via `findChildByType` (`simple_identifier` for functions
+  / properties, `type_identifier` for classes / objects / type
+  aliases). Owns `function_declaration` / `class_declaration`
+  (covers class, sealed, data, interface, inner) /
+  `property_declaration` / `object_declaration` / `companion_object`
+  (defaults to "Companion" when unnamed) / `type_alias`.
+- `backend(for:)` registers both: TypeScript / TSX / JavaScript /
+  Kotlin now skip `walkNode` entirely. Dispatcher's TS-only arms
+  (`type_alias_declaration`, `method_definition`) and Kotlin-only
+  arms (`object_declaration`, `companion_object`, `type_alias`,
+  Kotlin branches in `function_declaration` and `property_declaration`)
+  deleted.
+- **Acceptance #4 deferred:** the original spec said the
+  `class_declaration` case branch could be deleted entirely once
+  Swift / TS / TSX / Kotlin all migrated. Pre-existing behavior
+  proved Java + C# also route through `class_declaration` (and C#
+  also through `interface_declaration` + `enum_declaration`), so
+  those three branches stay alive — now serving Java + C# only —
+  until 10d (Java + C# migration round) when they can be deleted.
+  Recorded inline in the dispatcher comments.
+- Dispatcher dropped 1,206 → 1,114 LOC (-92). Languages directory
+  now holds 1,176 LOC across 8 files. Three rounds (10d–10f) remain
+  to bring the dispatcher under 500 LOC.
+- Re-audit (Torvalds, Carmack, Bach): PASS with one accepted scope
+  adjustment (acceptance #4 above). 1,806/1,806 tests green; zero
+  behavior delta as designed for a pure refactor (tests target = 0).
+  Full-suite runtime ~21s.
+
+### April 25 — TreeSitterBackend decomposition: Swift + Python migrated to per-language files (`luminary-2026-04-24-10b-treesitterbackend-swift-python`)
+- Luminary P2 (Torvalds/Carmack/Bach-flagged via parent
+  `luminary-2026-04-24-10`). Second round of the per-language backend
+  decomposition started in 10a. Migrates the two languages with the
+  most distinctive extraction logic — Swift (class/struct/enum/actor/
+  extension via `class_declaration` + `protocol_declaration` +
+  `init_declaration` + `property_declaration`/`protocol_property_declaration`)
+  and Python (`function_definition` + `class_definition` + decorated-
+  definition recursion).
+- New `Sources/Indexer/Languages/SwiftBackend.swift` (102 LOC), conforms
+  to the protocol; reuses `extractSwiftClassLike` / `extractProtocol` /
+  `extractFunction` / `extractProperty` shared helpers.
+- New `Sources/Indexer/Languages/PythonBackend.swift` (68 LOC), conforms
+  to the protocol; reuses `extractFunction` / `extractPythonClass` and
+  recurses via the `default:` arm so `decorated_definition` wrappers
+  flow through to inner `function_definition` / `class_definition` nodes.
+- `backend(for:)` registers both: Swift / Python now skip `walkNode`
+  entirely. Dispatcher's Swift-only arms (`protocol_declaration`,
+  `init_declaration`, `protocol_property_declaration`, the Swift arm
+  of `class_declaration`, the Swift fallthrough in `property_declaration`)
+  removed. `class_definition` kept in `walkNode` because Scala also
+  uses it (a one-test fix during the round — the migration spec
+  flagged it as Python-only, but pre-audit caught the cross-language
+  shape).
+- Dispatcher dropped 1,219 → 1,206 LOC (-13). Languages directory
+  now holds 923 LOC across 6 files. Four rounds (10c–10f) remain to
+  bring the dispatcher under 500 LOC.
+- Re-audit (Torvalds, Carmack, Bach): PASS clean. 1,806/1,806 tests
+  green; zero behavior delta as designed for a pure refactor (tests
+  target = 0). Full-suite runtime ~21s.
+
+### April 25 — TreeSitterBackend decomposition pilot: protocol + Helpers + TOML/GraphQL backends (`luminary-2026-04-24-10a-treesitterbackend-protocol-and-pilot`)
+- Luminary P2 (Torvalds/Carmack/Bach-flagged). Pilot round of the
+  per-language backend decomposition — `Sources/Indexer/TreeSitterBackend.swift`
+  was 1,771 LOC with 80+ case branches and intricate per-language
+  sub-dispatch making language No. 26 materially harder than it
+  should be.
+- New `Sources/Indexer/Languages/TreeSitterLanguageBackend.swift`:
+  `internal protocol` with `supports(_:)` + `extractSymbols(...)`. Doc
+  comment explains the contract for adding a language and points at
+  `TomlBackend.swift` as the worked example.
+- New `Sources/Indexer/Languages/Helpers.swift`: 23 shared helpers
+  (`nodeText`, `nodeName`, `findChildByType`, `findBody`, `startLine`,
+  `endLine`, `signatureText`, `extractFunction`, `extractTSDeclaration`,
+  `extractProperty`, `extractProtocol`, `extractPythonClass`,
+  `extractSwiftClassLike`, `extractGoMethod`/`extractGoReceiverType`/
+  `extractGoTypeDeclaration`/`extractGoTypeSpec`, `extractRustImplType`/
+  `extractRustTypeName`, `extractCppQualifiedMethod`/`findQualifiedIdentifier`,
+  `extractCDeclaratorName`, `cHasFunctionDeclarator`, `extractLuaFunctionName`,
+  `extensionTypeName`, `findFirstIdentifier`) promoted from `private` to
+  `internal` via `extension TreeSitterBackend`. No call-site churn —
+  existing dispatcher code in `TreeSitterBackend.swift` continues to
+  use bare names.
+- New `Sources/Indexer/Languages/TomlBackend.swift`: 115 LOC, owns
+  `table` / `table_array_element` / `pair` walk + `extractTableName` /
+  `extractPairKey` (formerly `extractTomlTableName` / `extractTomlPairKey`).
+- New `Sources/Indexer/Languages/GraphQLBackend.swift`: 86 LOC, lifts
+  `walkGraphQL` intact + private `extractName` / `definitionKind`
+  (formerly `graphqlName` / `graphqlDefinitionKind`).
+- `TreeSitterBackend.extractSymbols(...)` and `TreeSitterBackend.index(...)`
+  both route to `backend(for: language)` BEFORE calling `walkNode`, so
+  TOML / GraphQL never enter the central switch. `walkNode`'s GraphQL
+  early-return + TOML cases removed.
+- Dispatcher dropped 1,771 → 1,219 LOC (-31%). Languages directory
+  now holds 753 LOC across 4 files. Five rounds (10b–10f) remain to
+  bring the dispatcher under 500 LOC by migrating the remaining 21
+  language branches.
+- Re-audit (Torvalds, Carmack, Bach): PASS clean. 1,806/1,806 tests
+  green (260 tree-sitter tests unchanged); zero behavior delta as
+  designed for a pure refactor (tests target = 0).
+- `spec/tree_sitter.md` got an "Adding a language" section pointing
+  at the new protocol with `TomlBackend` as the worked example.
+
+### April 25 — Glossary + CLI conventions: pin the ubiquitous language (`luminary-2026-04-24-9-glossary-and-cli-conventions`)
+- Luminary P2 (Evans-flagged). Twelve terms drifted across the spec
+  tree with three different meanings each in some cases ("hook" was
+  Layer 2 enforcement, Layer 3 intercept, *or* a Claude Code shell
+  hook; "session" was pane-session, Claude-session, *or* provider-
+  session; "rule" was built-in filter rule *or* learned filter rule).
+  External contributors had no canonical reference.
+- New `spec/glossary.md`: one entry per term (artifact, hook,
+  intercept, multiplier, pane, project, rule, score, session,
+  sessionDB, tier, tool). Bounded contexts called out explicitly.
+- New `docs/cli-conventions.md`: argument naming (`--root`, `--yes`,
+  kebab-case, no implicit shorts), verb choice for top-level
+  commands, output formats (`--json` vs `--format`), exit codes
+  (`0`/`1`/`2` plus child-process passthrough), stdout vs stderr
+  policy, confirmation prompts, help text style, subcommand
+  grouping, plus an "adding a new subcommand" checklist.
+- Every spec file in `spec/` got a `> Glossary:` banner listing the
+  terms it actually uses, with each term linked to the matching
+  glossary entry. The banner is the file's first use of each term,
+  so the cross-link is structural, not per-paragraph.
+- `spec/spec.md` TOC gained a `glossary.md` row.
+- `Sources/CLI/Senkani.swift` got a top-of-file comment pointing
+  contributors at the conventions doc and listing three current
+  deviations (type-name suffix is missing on 20/22 commands;
+  `WipeCommand` and `UninstallCommand` worded the same `--yes` flag
+  differently; `--json` Bool vs `--format <markdown|json>` is not
+  a strict rule). Build passes.
+- Re-audit (Evans, Grace, Procida, Podmajersky): PASS clean.
+- Spec/docs edit + 1-file source comment; zero tests added.
+
+### April 25 — Name Phase F's post-AAAK optimization target with explicit Lesson #17 rationale (`luminary-2026-04-24-8-phase-f-target-post-aaak`)
+- Luminary P2 (Evans-flagged). Phase F was reworked April 12 when AAAK
+  was dropped, but `spec/roadmap.md` never explicitly named the
+  replacement optimization target nor referenced Structural Lesson
+  No. 17 (the AAAK debunk). The section header read "(AAAK dropped —
+  see below)", leading with the failure rather than the new direction.
+- Phase F section in `spec/roadmap.md` re-framed: header now reads
+  "Phase F: Smart First-Read Selection + Knowledge Graph". A new
+  "Optimization target (post-Lesson #17)" paragraph names the
+  replacement target explicitly — *selection over compression* —
+  with three components (outline-first read, repo map, knowledge
+  graph) framed as the post-AAAK headline.
+- New "Why this target replaced AAAK (Lesson #17 rationale)"
+  paragraph cites the specific measurements: AAAK's `len(text) // 3`
+  token counter, 73 vs 66 tokens on the canonical example, 96.6% →
+  84.2% accuracy on LongMemEval (12.4 pp regression), and the BPE
+  reasoning for why source code can't be meaningfully abbreviated.
+  References Structural Lesson No. 17 by name.
+- Exit criteria rewritten to mark each as ✅ where infrastructure has
+  shipped (outline-first ✅, repo map ✅, scenario multipliers ≥2x ✅
+  via Phase E baseline 80.37x). The runtime "≥20 facts" criterion is
+  acknowledged as runtime-not-infrastructure and the live-multiplier
+  rollup is delegated to Phase G's tracking gate (no dual ownership).
+- Re-audit (Evans/Torvalds/Carmack/Jobs): PASS clean — the
+  replacement target is named, the rationale is sourced, and the
+  bounded-context split (selection vs compression) is explicit.
+- Spec-only edit: zero source files touched, zero tests added.
+
+### April 25 — Rewrite Principle No. 6 to reconcile invisible optimization with the on-demand workspace (`luminary-2026-04-24-7-principle-6-rewrite`)
+- Luminary P1 (Jobs-flagged). Principle No. 6 in `spec/spec.md`
+  ("The App Disappears") read as "Senkani has no UI" and put every
+  observability feature on the back foot — the 18-pane workspace,
+  Dashboard, Agent Timeline, Sprint Review, Models pane, Ollama
+  launcher, Knowledge Base, Savings Test, and `senkani doctor` were
+  all in tension with the principle's "they may never know why" line.
+- Principle No. 6 retitled **Invisible Optimization, On-Demand
+  Inspection** and rewritten as a dual thesis: the *optimization
+  layer* (Layers 1/2/3 — MCP tools, smart hooks, intent interception)
+  is invisible and always-on; the *telemetry / inspection surface*
+  (the panes, status bar, `doctor`, sprint review, savings test) is
+  rich and on-demand. Names both users explicitly — the AI-session
+  user (sees optimization invisibly) and the operator (lifts the
+  hood deliberately) — and rejects the "Senkani has no UI"
+  misreading on the record.
+- New section "Invisible Optimization vs On-Demand Inspection" added
+  to the top of `spec/app.md`, ahead of the pane catalogue. Links
+  back to the principle so every pane below is justified by the
+  second half of the contract: optimization does not interrupt, and
+  inspection does not run unless asked.
+- README.md audited and untouched: line 3's hero already leads with
+  the dual thesis ("native multi-pane workspace … and an MCP
+  intelligence layer that cuts 50–90% of the tokens your AI spends
+  on perception") and never leaned on the old "may never know why"
+  phrasing, so the acceptance criterion's "if it currently leans"
+  clause was honored by skipping the edit.
+- Spec edit only: zero source files touched, zero tests added.
+  Re-audit (Jobs/Evans/Torres/Norman): PASS clean — the dual thesis
+  is named, the two domain concepts have crisp ubiquitous-language
+  labels, both user roles are surfaced, and the workspace's
+  complexity is now justified by the principle rather than at war
+  with it.
+
 ### April 25 — Split `LearnedRulesStore.swift` (844 → 360 LOC façade) into four per-artifact extensions (`luminary-2026-04-24-6-learnedrulesstore-split`)
 - Luminary P1. `Sources/Core/LearnedRulesStore.swift` had grown to 844
   LOC mixing four artifact lifecycles (`LearnedFilterRule`,

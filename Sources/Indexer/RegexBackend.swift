@@ -90,9 +90,26 @@ public enum RegexBackend {
         ],
     ]
 
+    /// Languages with declaration-pattern coverage in this backend.
+    public static var supportedLanguages: Set<String> { Set(allPatterns.keys) }
+
+    /// Whether the regex backend has declaration patterns for `language`.
+    public static func supports(_ language: String) -> Bool {
+        allPatterns[language] != nil
+    }
+
     /// Index files using regex patterns.
-    public static func index(files: [String], language: String, projectRoot: String) -> [IndexEntry] {
-        guard let langPatterns = allPatterns[language] else { return [] }
+    ///
+    /// Throws `IndexError.unsupportedLanguage(language)` if no patterns
+    /// are defined for the given language. Per-file unreadable failures
+    /// inside the batch are silently skipped — one bad file shouldn't
+    /// fail the whole batch — but the setup-level "language not
+    /// supported" case is surfaced so callers can distinguish it from
+    /// "language supported but no symbols found."
+    public static func index(files: [String], language: String, projectRoot: String) throws -> [IndexEntry] {
+        guard let langPatterns = allPatterns[language] else {
+            throw IndexError.unsupportedLanguage(language)
+        }
         var entries: [IndexEntry] = []
 
         for relativePath in files {

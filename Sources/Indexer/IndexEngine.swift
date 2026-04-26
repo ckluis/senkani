@@ -17,19 +17,33 @@ public enum IndexEngine {
         let usedEngine: String
 
         // Use tree-sitter for supported languages, regex for everything else.
+        // Per-language backend errors (unsupportedLanguage, parser setup
+        // failures) are logged + skipped here — this is the explicit
+        // "we know what we're swallowing" point. Per-file failures
+        // inside the batch are still skipped silently inside the
+        // backends, which is the right behavior for batch indexing.
         var allEntries: [IndexEntry] = []
         var treeSitterCount = 0
         var regexCount = 0
         for (language, files) in walk.byLanguage {
             if TreeSitterBackend.supports(language) {
-                let entries = TreeSitterBackend.index(files: files, language: language, projectRoot: projectRoot, treeCache: treeCache)
-                allEntries.append(contentsOf: entries)
-                treeSitterCount += entries.count
-            } else {
-                let entries = RegexBackend.index(files: files, language: language, projectRoot: projectRoot)
-                allEntries.append(contentsOf: entries)
-                regexCount += entries.count
+                do {
+                    let entries = try TreeSitterBackend.index(files: files, language: language, projectRoot: projectRoot, treeCache: treeCache)
+                    allEntries.append(contentsOf: entries)
+                    treeSitterCount += entries.count
+                } catch {
+                    fputs("senkani: tree-sitter index skipped for \(language): \(error)\n", stderr)
+                }
+            } else if RegexBackend.supports(language) {
+                do {
+                    let entries = try RegexBackend.index(files: files, language: language, projectRoot: projectRoot)
+                    allEntries.append(contentsOf: entries)
+                    regexCount += entries.count
+                } catch {
+                    fputs("senkani: regex index skipped for \(language): \(error)\n", stderr)
+                }
             }
+            // else: language has neither backend — legitimately nothing to do
         }
         idx.symbols = allEntries
         usedEngine = treeSitterCount > 0 ? "tree-sitter+regex" : "regex"
@@ -79,23 +93,36 @@ public enum IndexEngine {
 
         if hasCTags {
             // ctags on specific files
-            // For simplicity, re-run ctags on the whole project and filter to changed files
-            let allEntries = CTagsBackend.index(projectRoot: projectRoot)
-            let newEntries = allEntries.filter { changedFiles.contains($0.file) }
-            let newHashes = currentHashes.filter { changedFiles.contains($0.key) }
-            updated.addSymbols(newEntries, hashes: newHashes)
+            // For simplicity, re-run ctags on the whole project and filter to changed files.
+            // ctags failure here (binary disappeared between isAvailable() and index)
+            // is logged + treated as "no incremental update from ctags this round."
+            do {
+                let allEntries = try CTagsBackend.index(projectRoot: projectRoot)
+                let newEntries = allEntries.filter { changedFiles.contains($0.file) }
+                let newHashes = currentHashes.filter { changedFiles.contains($0.key) }
+                updated.addSymbols(newEntries, hashes: newHashes)
+            } catch {
+                fputs("senkani: ctags incremental skipped: \(error)\n", stderr)
+            }
         } else {
             // Tree-sitter for supported languages, regex for everything else
             var newEntries: [IndexEntry] = []
             for (language, files) in walk.byLanguage {
                 let changedInLang = files.filter { changedFiles.contains($0) }
-                if !changedInLang.isEmpty {
-                    if TreeSitterBackend.supports(language) {
-                        let entries = TreeSitterBackend.index(files: changedInLang, language: language, projectRoot: projectRoot, treeCache: treeCache)
+                guard !changedInLang.isEmpty else { continue }
+                if TreeSitterBackend.supports(language) {
+                    do {
+                        let entries = try TreeSitterBackend.index(files: changedInLang, language: language, projectRoot: projectRoot, treeCache: treeCache)
                         newEntries.append(contentsOf: entries)
-                    } else {
-                        let entries = RegexBackend.index(files: changedInLang, language: language, projectRoot: projectRoot)
+                    } catch {
+                        fputs("senkani: tree-sitter incremental skipped for \(language): \(error)\n", stderr)
+                    }
+                } else if RegexBackend.supports(language) {
+                    do {
+                        let entries = try RegexBackend.index(files: changedInLang, language: language, projectRoot: projectRoot)
                         newEntries.append(contentsOf: entries)
+                    } catch {
+                        fputs("senkani: regex incremental skipped for \(language): \(error)\n", stderr)
                     }
                 }
             }
@@ -111,26 +138,42 @@ public enum IndexEngine {
     /// If the file content hasn't changed (same hash), returns symbols from the cached tree.
     /// If changed, performs incremental re-parse via tree-sitter's Tree.edit() mechanism.
     /// Falls back to full parse when no cache entry exists or incremental parse fails.
+    ///
+    /// Throws `IndexError.ioError(...)` if the file cannot be read,
+    /// `IndexError.unsupportedLanguage(...)` if the extension does not
+    /// map to a tree-sitter-backed language, and `IndexError.parseFailed(...)`
+    /// if parser setup or parsing itself fails. Empty `[]` returns
+    /// only when extraction succeeded but the file genuinely has no
+    /// symbols (e.g., an empty `tree.rootNode`).
     public static func indexFileIncremental(
         relativePath: String,
         projectRoot: String,
         treeCache: TreeCache
-    ) -> [IndexEntry] {
+    ) throws -> [IndexEntry] {
         let fullPath = projectRoot + "/" + relativePath
-        guard let newContent = try? String(contentsOfFile: fullPath, encoding: .utf8) else { return [] }
+        let newContent: String
+        do {
+            newContent = try String(contentsOfFile: fullPath, encoding: .utf8)
+        } catch {
+            throw IndexError.ioError(file: relativePath, underlying: "\(error)")
+        }
         let newHash = TreeCache.hash(newContent)
 
         // Determine language from file extension
         let ext = (relativePath as NSString).pathExtension
-        guard let language = FileWalker.languageMap[ext],
-              TreeSitterBackend.supports(language) else { return [] }
+        guard let language = FileWalker.languageMap[ext] else {
+            throw IndexError.unsupportedLanguage("(extension: \(ext))")
+        }
+        guard TreeSitterBackend.supports(language) else {
+            throw IndexError.unsupportedLanguage(language)
+        }
 
         // Check cache
         if let cached = treeCache.lookup(file: relativePath) {
             if cached.contentHash == newHash {
                 // Unchanged — extract symbols from cached tree
                 guard let root = cached.tree.rootNode else { return [] }
-                return TreeSitterBackend.extractSymbols(from: root, source: newContent, language: language, file: relativePath)
+                return try TreeSitterBackend.extractSymbols(from: root, source: newContent, language: language, file: relativePath)
             }
 
             // Content changed — incremental re-parse
@@ -142,19 +185,27 @@ public enum IndexEngine {
             ) {
                 treeCache.store(file: relativePath, tree: newTree, content: newContent, contentHash: newHash, language: language)
                 guard let root = newTree.rootNode else { return [] }
-                return TreeSitterBackend.extractSymbols(from: root, source: newContent, language: language, file: relativePath)
+                return try TreeSitterBackend.extractSymbols(from: root, source: newContent, language: language, file: relativePath)
             }
         }
 
         // No cache or incremental parse failed — full parse
-        guard let tsLanguage = TreeSitterBackend.language(for: language) else { return [] }
+        guard let tsLanguage = TreeSitterBackend.language(for: language) else {
+            throw IndexError.unsupportedLanguage(language)
+        }
         let parser = Parser()
-        do { try parser.setLanguage(tsLanguage) } catch { return [] }
-        guard let tree = parser.parse(newContent) else { return [] }
+        do {
+            try parser.setLanguage(tsLanguage)
+        } catch {
+            throw IndexError.parseFailed(file: relativePath, reason: "setLanguage(\(language)) failed: \(error)")
+        }
+        guard let tree = parser.parse(newContent) else {
+            throw IndexError.parseFailed(file: relativePath, reason: "parser.parse returned nil")
+        }
 
         treeCache.store(file: relativePath, tree: tree, content: newContent, contentHash: newHash, language: language)
         guard let root = tree.rootNode else { return [] }
-        return TreeSitterBackend.extractSymbols(from: root, source: newContent, language: language, file: relativePath)
+        return try TreeSitterBackend.extractSymbols(from: root, source: newContent, language: language, file: relativePath)
     }
 
     /// Build the dependency graph by extracting imports from all source files.
@@ -167,10 +218,18 @@ public enum IndexEngine {
             // Skip vendored grammar parser files (generated code, not project source)
             let projectFiles = files.filter { !$0.contains("TreeSitter") }
             guard !projectFiles.isEmpty else { continue }
-            // Batch extraction — one parser per language for efficiency
-            let fileImports = DependencyExtractor.extractAllImports(
-                files: projectFiles, language: language, projectRoot: projectRoot
-            )
+            // Batch extraction — one parser per language for efficiency.
+            // Setup-level errors (unsupportedLanguage, parser setup failures)
+            // are logged + skipped here.
+            let fileImports: [String: [String]]
+            do {
+                fileImports = try DependencyExtractor.extractAllImports(
+                    files: projectFiles, language: language, projectRoot: projectRoot
+                )
+            } catch {
+                fputs("senkani: dependency extraction skipped for \(language): \(error)\n", stderr)
+                continue
+            }
             for (relativePath, modules) in fileImports {
                 imports[relativePath] = modules
                 for module in modules {

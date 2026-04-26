@@ -33,6 +33,14 @@ if [ -z "${SKIP_MULTIPLIER_CHECK:-}" ]; then
   ./tools/check-multiplier-claims.sh
 fi
 
+# Pre-flight: verify vendored tree-sitter grammar hashes match the
+# pinned values in GrammarManifest.swift (Luminary P2 round
+# 2026-04-24-13). Catches grammar tampering before tests can mask it.
+# Cheap; runs in tens of milliseconds.
+if [ -z "${SKIP_GRAMMAR_HASH_CHECK:-}" ]; then
+  ./tools/verify-grammar-hashes.sh
+fi
+
 export SWT_NO_PARALLEL=1
 
 exec swift test --no-parallel "$@"

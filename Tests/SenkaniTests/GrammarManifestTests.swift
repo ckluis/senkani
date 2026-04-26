@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import CryptoKit
 @testable import Indexer
 
 // MARK: - Suite 1: Manifest Correctness
@@ -70,6 +71,81 @@ struct GrammarManifestRegistryTests {
     }
 }
 
+// MARK: - Suite 1b: Content-Hash Pinning (supply-chain integrity)
+
+@Suite("GrammarManifest — Content hashes")
+struct GrammarManifestContentHashTests {
+
+    @Test func everyGrammarDeclaresAHash() {
+        for info in GrammarManifest.sorted {
+            #expect(!info.contentHash.isEmpty,
+                    "\(info.language) is missing contentHash")
+        }
+    }
+
+    @Test func everyHashIsLowercaseHex64() {
+        // SHA-256 hex digest is exactly 64 lowercase hex chars.
+        let hexCharset = CharacterSet(charactersIn: "0123456789abcdef")
+        for info in GrammarManifest.sorted {
+            #expect(info.contentHash.count == 64,
+                    "\(info.language) hash length is \(info.contentHash.count), want 64")
+            let chars = CharacterSet(charactersIn: info.contentHash)
+            #expect(chars.isSubset(of: hexCharset),
+                    "\(info.language) hash '\(info.contentHash)' has non-hex chars")
+        }
+    }
+
+    @Test func hashesAreUnique() {
+        // Two grammars sharing a hash would either be a copy-paste bug
+        // in the manifest or two grammars vendored from byte-identical
+        // source — both worth flagging.
+        var byHash: [String: [String]] = [:]
+        for info in GrammarManifest.sorted {
+            byHash[info.contentHash, default: []].append(info.language)
+        }
+        for (hash, langs) in byHash where langs.count > 1 {
+            Issue.record("hash \(hash) is shared by \(langs)")
+        }
+    }
+
+    @Test func hashMatchesVendoredCContent() throws {
+        // Spot-check the hash matches an on-disk recompute. Catches
+        // forgot-to-rerun-verify-grammar-hashes.sh after a re-vendor.
+        // Same algorithm as `tools/verify-grammar-hashes.sh`:
+        //   sha256(parser.c [+ scanner.c when present])
+        guard let root = findProjectRoot() else { return }
+
+        for info in GrammarManifest.sorted {
+            let parserPath = "\(root)/Sources/\(info.targetName)/parser.c"
+            let scannerPath = "\(root)/Sources/\(info.targetName)/scanner.c"
+
+            guard let parserData = FileManager.default.contents(atPath: parserPath) else {
+                Issue.record("parser.c missing for \(info.language) at \(parserPath)")
+                continue
+            }
+            var payload = parserData
+            if let scannerData = FileManager.default.contents(atPath: scannerPath) {
+                payload.append(scannerData)
+            }
+
+            let computed = sha256Hex(payload)
+            #expect(computed == info.contentHash,
+                    "\(info.language) hash mismatch — manifest=\(info.contentHash) computed=\(computed)")
+        }
+    }
+
+    @Test func everyTargetNameStartsWithTreeSitter() {
+        // The verify + SBOM scripts assume `Sources/<targetName>/` and
+        // a `TreeSitter…Parser` naming pattern. Catch drift early.
+        for info in GrammarManifest.sorted {
+            #expect(info.targetName.hasPrefix("TreeSitter"),
+                    "\(info.language) targetName '\(info.targetName)' must start with TreeSitter")
+            #expect(info.targetName.hasSuffix("Parser"),
+                    "\(info.language) targetName '\(info.targetName)' must end with Parser")
+        }
+    }
+}
+
 // MARK: - Suite 2: Semver Comparison
 
 @Suite("GrammarManifest — Semver")
@@ -127,6 +203,13 @@ struct GrammarVersionCheckerTests {
 }
 
 // MARK: - Helpers
+
+/// SHA-256 hex digest of `data` — must match the algorithm used by
+/// `tools/verify-grammar-hashes.sh` and the manifest's `contentHash`.
+private func sha256Hex(_ data: Data) -> String {
+    let digest = SHA256.hash(data: data)
+    return digest.map { String(format: "%02x", $0) }.joined()
+}
 
 /// Walk up from the test bundle's location to find the project root.
 private func findProjectRoot() -> String? {

@@ -12,7 +12,8 @@ struct GrammarStalenessAdvisoryTests {
         version: "0.7.1",
         repo: "alex-pinkus/tree-sitter-swift",
         vendoredDate: "2026-01-10",
-        targetName: "TreeSitterSwiftParser"
+        targetName: "TreeSitterSwiftParser",
+        contentHash: "0000000000000000000000000000000000000000000000000000000000000000"
     )
 
     private let pythonInfo = GrammarInfo(
@@ -20,7 +21,8 @@ struct GrammarStalenessAdvisoryTests {
         version: "0.23.6",
         repo: "tree-sitter/tree-sitter-python",
         vendoredDate: "2026-04-01",
-        targetName: "TreeSitterPythonParser"
+        targetName: "TreeSitterPythonParser",
+        contentHash: "0000000000000000000000000000000000000000000000000000000000000000"
     )
 
     private func date(_ y: Int, _ m: Int, _ d: Int) -> Date {
@@ -89,7 +91,8 @@ struct GrammarStalenessAdvisoryTests {
             version: "0.24.2",
             repo: "tree-sitter/tree-sitter-rust",
             vendoredDate: "2026-03-20",
-            targetName: "TreeSitterRustParser"
+            targetName: "TreeSitterRustParser",
+            contentHash: "0000000000000000000000000000000000000000000000000000000000000000"
         )
         let cached = [
             GrammarCheckResult(grammar: info, latestVersion: "0.25.0", isOutdated: true, error: nil),
@@ -105,7 +108,8 @@ struct GrammarStalenessAdvisoryTests {
             version: "0.24.2",
             repo: "tree-sitter/tree-sitter-rust",
             vendoredDate: "2026-03-19",
-            targetName: "TreeSitterRustParser"
+            targetName: "TreeSitterRustParser",
+            contentHash: "0000000000000000000000000000000000000000000000000000000000000000"
         )
         let cached = [
             GrammarCheckResult(grammar: info, latestVersion: "0.25.0", isOutdated: true, error: nil),
@@ -126,14 +130,16 @@ struct GrammarStalenessAdvisoryTests {
             version: "0.7.1",
             repo: "alex-pinkus/tree-sitter-swift",
             vendoredDate: "2026-02-01",
-            targetName: "TreeSitterSwiftParser"
+            targetName: "TreeSitterSwiftParser",
+            contentHash: "0000000000000000000000000000000000000000000000000000000000000000"
         )
         let rubyOld = GrammarInfo(
             language: "ruby",
             version: "0.23.0",
             repo: "tree-sitter/tree-sitter-ruby",
             vendoredDate: "2026-02-15",
-            targetName: "TreeSitterRubyParser"
+            targetName: "TreeSitterRubyParser",
+            contentHash: "0000000000000000000000000000000000000000000000000000000000000000"
         )
         let cached = [
             GrammarCheckResult(grammar: swiftOld, latestVersion: "0.8.0", isOutdated: true, error: nil),
@@ -169,7 +175,8 @@ struct GrammarStalenessAdvisoryTests {
             version: "0.25.0",
             repo: "tree-sitter/tree-sitter-go",
             vendoredDate: "2026-04-09",
-            targetName: "TreeSitterGoParser"
+            targetName: "TreeSitterGoParser",
+            contentHash: "0000000000000000000000000000000000000000000000000000000000000000"
         )
         let cached = [
             GrammarCheckResult(grammar: info, latestVersion: "0.26.0", isOutdated: true, error: nil),

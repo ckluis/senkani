@@ -173,5 +173,5 @@ private func indexLang(_ source: String, language: String, ext: String) -> [Inde
     defer { try? FileManager.default.removeItem(atPath: tmpDir) }
     let file = "test.\(ext)"
     try! source.write(toFile: tmpDir + "/" + file, atomically: true, encoding: .utf8)
-    return TreeSitterBackend.index(files: [file], language: language, projectRoot: tmpDir)
+    return (try? TreeSitterBackend.index(files: [file], language: language, projectRoot: tmpDir)) ?? []
 }

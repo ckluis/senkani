@@ -412,9 +412,9 @@ struct ZigPerformanceTests {
         let rustSource = "struct Greeter;\nimpl Greeter {\n    fn greet(&self) {}\n}\n"
         try! rustSource.write(toFile: tmpDir + "/greeter.rs", atomically: true, encoding: .utf8)
 
-        let zigEntries = TreeSitterBackend.index(files: ["greeter.zig"], language: "zig", projectRoot: tmpDir)
-        let haskellEntries = TreeSitterBackend.index(files: ["Main.hs"], language: "haskell", projectRoot: tmpDir)
-        let rustEntries = TreeSitterBackend.index(files: ["greeter.rs"], language: "rust", projectRoot: tmpDir)
+        let zigEntries = (try? TreeSitterBackend.index(files: ["greeter.zig"], language: "zig", projectRoot: tmpDir)) ?? []
+        let haskellEntries = (try? TreeSitterBackend.index(files: ["Main.hs"], language: "haskell", projectRoot: tmpDir)) ?? []
+        let rustEntries = (try? TreeSitterBackend.index(files: ["greeter.rs"], language: "rust", projectRoot: tmpDir)) ?? []
 
         // Zig: struct Greeter + method greet = 2
         #expect(zigEntries.count == 2)
@@ -439,5 +439,5 @@ private func indexZig(_ source: String) -> [IndexEntry] {
     defer { try? FileManager.default.removeItem(atPath: tmpDir) }
     let file = "test.zig"
     try! source.write(toFile: tmpDir + "/" + file, atomically: true, encoding: .utf8)
-    return TreeSitterBackend.index(files: [file], language: "zig", projectRoot: tmpDir)
+    return (try? TreeSitterBackend.index(files: [file], language: "zig", projectRoot: tmpDir)) ?? []
 }

@@ -559,9 +559,14 @@ round — needs a real machine with Node / axe-core-cli available.
   should stop; smooth-scroll should disable. Both are in
   `assets/theme.css`.
 
-### `senkani uninstall` — real-install validation (synthetic smoke shipped 2026-04-19)
+### `senkani uninstall` — real-install validation (synthetic smoke shipped 2026-04-19; release-checklist home shipped 2026-04-26)
 
-`Tests/SenkaniTests/UninstallSmokeTests.swift` now fences the
+> **Canonical home: `spec/release-checklist.md` §A.** That file lists
+> the six checks (A1–A6) with owner + per-release sign-off. Run them
+> there before every minor-version bump. The wave entry below stays
+> as the rolling diary for ad-hoc runs that aren't tied to a release.
+
+`Tests/SenkaniTests/UninstallSmokeTests.swift` fences the
 discovery + filter + removal logic against a fixture HOME (6 tests).
 That covers refactor-induced regressions. What synthetic tests
 *can't* catch: a newly-added runtime artifact path that the scanner

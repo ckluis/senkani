@@ -384,5 +384,5 @@ private func indexCSharp(_ source: String) -> [IndexEntry] {
     defer { try? FileManager.default.removeItem(atPath: tmpDir) }
     let file = "test.cs"
     try! source.write(toFile: tmpDir + "/" + file, atomically: true, encoding: .utf8)
-    return TreeSitterBackend.index(files: [file], language: "csharp", projectRoot: tmpDir)
+    return (try? TreeSitterBackend.index(files: [file], language: "csharp", projectRoot: tmpDir)) ?? []
 }

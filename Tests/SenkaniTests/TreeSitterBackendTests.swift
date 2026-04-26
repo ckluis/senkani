@@ -226,6 +226,6 @@ struct TreeSitterBackendTests {
         try? code.write(toFile: fullPath, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
-        return TreeSitterBackend.index(files: [filePath], language: "swift", projectRoot: tmpDir)
+        return (try? TreeSitterBackend.index(files: [filePath], language: "swift", projectRoot: tmpDir)) ?? []
     }
 }

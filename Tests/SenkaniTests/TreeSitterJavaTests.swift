@@ -269,7 +269,7 @@ struct TreeSitterJavaPerformanceTests {
         let clock = ContinuousClock()
         var entries: [IndexEntry] = []
         let elapsed = clock.measure {
-            entries = TreeSitterBackend.index(files: [filePath], language: "java", projectRoot: tmpDir)
+            entries = (try? TreeSitterBackend.index(files: [filePath], language: "java", projectRoot: tmpDir)) ?? []
         }
 
         let ms = Double(elapsed.components.attoseconds) / 1e15
@@ -308,13 +308,13 @@ struct TreeSitterJavaPerformanceTests {
         defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
         // Parse Rust
-        let rustEntries = TreeSitterBackend.index(files: ["lib.rs"], language: "rust", projectRoot: tmpDir)
+        let rustEntries = (try? TreeSitterBackend.index(files: ["lib.rs"], language: "rust", projectRoot: tmpDir)) ?? []
         // Then Java
-        let javaEntries = TreeSitterBackend.index(files: ["App.java"], language: "java", projectRoot: tmpDir)
+        let javaEntries = (try? TreeSitterBackend.index(files: ["App.java"], language: "java", projectRoot: tmpDir)) ?? []
         // Then TypeScript
-        let tsEntries = TreeSitterBackend.index(files: ["app.ts"], language: "typescript", projectRoot: tmpDir)
+        let tsEntries = (try? TreeSitterBackend.index(files: ["app.ts"], language: "typescript", projectRoot: tmpDir)) ?? []
         // Then Java again (proves no state leak)
-        let javaEntries2 = TreeSitterBackend.index(files: ["App.java"], language: "java", projectRoot: tmpDir)
+        let javaEntries2 = (try? TreeSitterBackend.index(files: ["App.java"], language: "java", projectRoot: tmpDir)) ?? []
 
         // Rust
         #expect(rustEntries.contains { $0.name == "App" && $0.kind == .struct })
@@ -348,5 +348,5 @@ private func indexJava(_ code: String) -> [IndexEntry] {
     try? code.write(toFile: fullPath, atomically: true, encoding: .utf8)
     defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
-    return TreeSitterBackend.index(files: [filePath], language: "java", projectRoot: tmpDir)
+    return (try? TreeSitterBackend.index(files: [filePath], language: "java", projectRoot: tmpDir)) ?? []
 }

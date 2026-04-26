@@ -366,9 +366,9 @@ struct CppPerformanceTests {
         let rsSource = "fn greet() {\n    println!(\"hello\");\n}\n"
         try! rsSource.write(toFile: tmpDir + "/lib.rs", atomically: true, encoding: .utf8)
 
-        let cEntries = TreeSitterBackend.index(files: ["math.c"], language: "c", projectRoot: tmpDir)
-        let cppEntries = TreeSitterBackend.index(files: ["foo.cpp"], language: "cpp", projectRoot: tmpDir)
-        let rsEntries = TreeSitterBackend.index(files: ["lib.rs"], language: "rust", projectRoot: tmpDir)
+        let cEntries = (try? TreeSitterBackend.index(files: ["math.c"], language: "c", projectRoot: tmpDir)) ?? []
+        let cppEntries = (try? TreeSitterBackend.index(files: ["foo.cpp"], language: "cpp", projectRoot: tmpDir)) ?? []
+        let rsEntries = (try? TreeSitterBackend.index(files: ["lib.rs"], language: "rust", projectRoot: tmpDir)) ?? []
 
         #expect(cEntries.count == 1)
         #expect(cEntries[0].name == "add")
@@ -390,5 +390,5 @@ private func indexCpp(_ source: String) -> [IndexEntry] {
     defer { try? FileManager.default.removeItem(atPath: tmpDir) }
     let file = "test.cpp"
     try! source.write(toFile: tmpDir + "/" + file, atomically: true, encoding: .utf8)
-    return TreeSitterBackend.index(files: [file], language: "cpp", projectRoot: tmpDir)
+    return (try? TreeSitterBackend.index(files: [file], language: "cpp", projectRoot: tmpDir)) ?? []
 }

@@ -8,44 +8,44 @@ import Testing
 struct ImportExtractionTests {
 
     @Test("Swift imports")
-    func extractsSwiftImports() {
+    func extractsSwiftImports() throws {
         let source = """
         import Foundation
         import Core
         @testable import Filter
         """
-        let imports = DependencyExtractor.extractImports(source: source, language: "swift")
+        let imports = try DependencyExtractor.extractImports(source: source, language: "swift")
         #expect(imports.contains("Foundation"))
         #expect(imports.contains("Core"))
         #expect(imports.contains("Filter"))
     }
 
     @Test("Python imports")
-    func extractsPythonImports() {
+    func extractsPythonImports() throws {
         let source = """
         import os
         from pathlib import Path
         import json
         """
-        let imports = DependencyExtractor.extractImports(source: source, language: "python")
+        let imports = try DependencyExtractor.extractImports(source: source, language: "python")
         #expect(imports.contains("os"))
         #expect(imports.contains("pathlib"))
         #expect(imports.contains("json"))
     }
 
     @Test("TypeScript imports")
-    func extractsTypeScriptImports() {
+    func extractsTypeScriptImports() throws {
         let source = """
         import { foo } from './bar'
         import baz from 'lodash'
         """
-        let imports = DependencyExtractor.extractImports(source: source, language: "typescript")
+        let imports = try DependencyExtractor.extractImports(source: source, language: "typescript")
         #expect(imports.contains("./bar"))
         #expect(imports.contains("lodash"))
     }
 
     @Test("Go imports")
-    func extractsGoImports() {
+    func extractsGoImports() throws {
         let source = """
         package main
 
@@ -55,62 +55,62 @@ struct ImportExtractionTests {
           "strings"
         )
         """
-        let imports = DependencyExtractor.extractImports(source: source, language: "go")
+        let imports = try DependencyExtractor.extractImports(source: source, language: "go")
         #expect(imports.contains("fmt"))
         #expect(imports.contains("os"))
         #expect(imports.contains("strings"))
     }
 
     @Test("Rust imports")
-    func extractsRustImports() {
+    func extractsRustImports() throws {
         let source = """
         use std::io::Read;
         use foo::bar;
         extern crate baz;
         """
-        let imports = DependencyExtractor.extractImports(source: source, language: "rust")
+        let imports = try DependencyExtractor.extractImports(source: source, language: "rust")
         #expect(imports.contains("std"))
         #expect(imports.contains("foo"))
         #expect(imports.contains("baz"))
     }
 
     @Test("Java imports")
-    func extractsJavaImports() {
+    func extractsJavaImports() throws {
         let source = """
         package com.example;
 
         import java.util.List;
         import java.util.Map;
         """
-        let imports = DependencyExtractor.extractImports(source: source, language: "java")
+        let imports = try DependencyExtractor.extractImports(source: source, language: "java")
         #expect(imports.contains("java.util.List"))
         #expect(imports.contains("java.util.Map"))
     }
 
     @Test("C includes")
-    func extractsCImports() {
+    func extractsCImports() throws {
         let source = """
         #include <stdio.h>
         #include "myheader.h"
         """
-        let imports = DependencyExtractor.extractImports(source: source, language: "c")
+        let imports = try DependencyExtractor.extractImports(source: source, language: "c")
         #expect(imports.contains("stdio.h"))
         #expect(imports.contains("myheader.h"))
     }
 
     @Test("Ruby requires")
-    func extractsRubyImports() {
+    func extractsRubyImports() throws {
         let source = """
         require 'json'
         require_relative '../helpers'
         """
-        let imports = DependencyExtractor.extractImports(source: source, language: "ruby")
+        let imports = try DependencyExtractor.extractImports(source: source, language: "ruby")
         #expect(imports.contains("json"))
         #expect(imports.contains("../helpers"))
     }
 
     @Test("Elixir aliases")
-    func extractsElixirAliases() {
+    func extractsElixirAliases() throws {
         let source = """
         defmodule MyMod do
           alias MyApp.Web.Helper
@@ -118,19 +118,19 @@ struct ImportExtractionTests {
           use GenServer
         end
         """
-        let imports = DependencyExtractor.extractImports(source: source, language: "elixir")
+        let imports = try DependencyExtractor.extractImports(source: source, language: "elixir")
         #expect(imports.contains("MyApp.Web.Helper"))
         #expect(imports.contains("Ecto.Query"))
         #expect(imports.contains("GenServer"))
     }
 
     @Test("Zig @import")
-    func extractsZigImports() {
+    func extractsZigImports() throws {
         let source = """
         const std = @import("std");
         const builtin = @import("builtin");
         """
-        let imports = DependencyExtractor.extractImports(source: source, language: "zig")
+        let imports = try DependencyExtractor.extractImports(source: source, language: "zig")
         #expect(imports.contains("std"))
         #expect(imports.contains("builtin"))
     }
@@ -142,14 +142,14 @@ struct ImportExtractionTests {
 struct GraphConstructionTests {
 
     @Test("Builds forward and reverse graph")
-    func buildsForwardAndReverseGraph() {
+    func buildsForwardAndReverseGraph() throws {
         // Build the graph from known import data — tests the DependencyGraph model
         // and DependencyExtractor without depending on FileWalker path resolution.
         let sourceA = "import Foundation\nimport Core\n"
         let sourceB = "import Foundation\n"
 
-        let importsA = DependencyExtractor.extractImports(source: sourceA, language: "swift")
-        let importsB = DependencyExtractor.extractImports(source: sourceB, language: "swift")
+        let importsA = try DependencyExtractor.extractImports(source: sourceA, language: "swift")
+        let importsB = try DependencyExtractor.extractImports(source: sourceB, language: "swift")
 
         var imports: [String: [String]] = [:]
         var importedBy: [String: [String]] = [:]

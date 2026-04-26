@@ -380,9 +380,9 @@ struct RubyPerformanceTests {
         let pySource = "class Greeter:\n    def greet(self):\n        pass\n"
         try! pySource.write(toFile: tmpDir + "/greeter.py", atomically: true, encoding: .utf8)
 
-        let javaEntries = TreeSitterBackend.index(files: ["Greeter.java"], language: "java", projectRoot: tmpDir)
-        let rubyEntries = TreeSitterBackend.index(files: ["greeter.rb"], language: "ruby", projectRoot: tmpDir)
-        let pyEntries = TreeSitterBackend.index(files: ["greeter.py"], language: "python", projectRoot: tmpDir)
+        let javaEntries = (try? TreeSitterBackend.index(files: ["Greeter.java"], language: "java", projectRoot: tmpDir)) ?? []
+        let rubyEntries = (try? TreeSitterBackend.index(files: ["greeter.rb"], language: "ruby", projectRoot: tmpDir)) ?? []
+        let pyEntries = (try? TreeSitterBackend.index(files: ["greeter.py"], language: "python", projectRoot: tmpDir)) ?? []
 
         #expect(javaEntries.count == 2) // class + method
         #expect(javaEntries.contains { $0.name == "Greeter" && $0.kind == .class })
@@ -404,5 +404,5 @@ private func indexRuby(_ source: String) -> [IndexEntry] {
     defer { try? FileManager.default.removeItem(atPath: tmpDir) }
     let file = "test.rb"
     try! source.write(toFile: tmpDir + "/" + file, atomically: true, encoding: .utf8)
-    return TreeSitterBackend.index(files: [file], language: "ruby", projectRoot: tmpDir)
+    return (try? TreeSitterBackend.index(files: [file], language: "ruby", projectRoot: tmpDir)) ?? []
 }

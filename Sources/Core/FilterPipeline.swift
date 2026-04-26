@@ -1,4 +1,5 @@
 import Filter
+import Foundation
 
 /// Orchestrates the filter engine, secret detection, and metrics collection.
 public struct FilterPipeline: Sendable {
@@ -15,6 +16,7 @@ public struct FilterPipeline: Sendable {
     /// Run the full pipeline: filter + secret detection.
     /// Returns filtered output and per-feature metrics.
     public func process(command: String, output: String) -> PipelineResult {
+        let sloStart = Date()
         let rawBytes = output.utf8.count
         var currentOutput = output
         var breakdown: [FeatureContribution] = []
@@ -91,6 +93,8 @@ public struct FilterPipeline: Sendable {
         }
 
         let filteredBytes = currentOutput.utf8.count
+        let elapsedMs = Date().timeIntervalSince(sloStart) * 1000
+        SLOSampleStore.shared.record(.pipelineMiss, ms: elapsedMs)
         return PipelineResult(
             output: currentOutput,
             wasFiltered: filteredBytes != rawBytes || !secretsFound.isEmpty || !injectionsFound.isEmpty,

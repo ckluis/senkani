@@ -80,8 +80,9 @@
     <div class="ref-signature">senkani doctor [--fix]</div>
 
     <h2>Behavior</h2>
-    <p>Checks: MCP server entry, hook registration, binary path resolution, grammar staleness (non-blocking advisory — PASS for recent, SKIP for stale >30 d, never FAIL), and per-RAM-tier ML output quality.</p>
+    <p>Checks: MCP server entry, hook registration, binary path resolution, grammar staleness (non-blocking advisory — PASS for recent, SKIP for stale >30 d, never FAIL), per-RAM-tier ML output quality, and the published SLO pack.</p>
     <p><strong>ML tier quality (5b):</strong> reads <code>~/.senkani/ml-tier-eval.json</code> and surfaces a per-tier rating for installed Gemma 4 tiers — <code>excellent</code> (≥80% pass), <code>acceptable</code> (≥60%), <code>degraded</code> (&lt;60%, fails check with an "upgrade if RAM allows" hint), or skipped if the report is missing or the tier isn't installed. The harness is <code>Sources/Bench/MLTierEvalTasks.swift</code> (10 rationale + 10 vision tasks).</p>
+    <p><strong>SLO pack (14):</strong> one line per published SLO — <code>cache.hit</code> (&lt;1 ms), <code>pipeline.miss</code> (&lt;20 ms), <code>hook.passthrough</code> (&lt;1 ms), <code>hook.active</code> (&lt;3 ms). Verdict is <code>green</code> (p99 within threshold and ≤ 1% over budget), <code>warn</code> (p99 between 80% and 100% of threshold), <code>burn</code> (p99 over threshold OR &gt; 1% of samples over), or <code>unknown</code> (fewer than 30 samples in the 24-hour rolling window). Samples persist to <code>~/.senkani/slo-samples.json</code>; recording is opt-in via <code>SENKANI_SLO_SAMPLES=1</code> so the measurement does not become the cost. The CI perf gate (<code>tools/perf-gate.sh</code> / <code>SLOPerfGateTests</code>) synthesises a representative workload for each SLO and fails the build if any p99 crosses its ceiling. See <a href="../../../spec/slos.md">spec/slos.md</a>.</p>
 
     <h2>Example</h2>
     <pre class="code">$ senkani doctor --fix</pre>

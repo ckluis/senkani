@@ -6,6 +6,76 @@ Senkani *is*. Entries are grouped by the server version reported by
 
 ## v0.2.0 — 2026-04 (current)
 
+### April 26 — Published SLOs surface in `senkani doctor` with a CI perf gate (`luminary-2026-04-24-12-slo-pack-with-burn-rate`)
+- Luminary P2 (Majors/Carmack/Allspaw). The spec named three p99
+  contracts on the hot path (cache hit < 1 ms, pipeline cache-miss
+  < 20 ms, hook passthrough < 1 ms) but they were not published, not
+  measured, and not gated. This round ships all three (plus
+  `hook.active` < 3 ms as the operational ceiling for the same hook
+  binary when the relay is engaged) end-to-end.
+- New `spec/slos.md` declares the four SLOs, the 24-hour rolling
+  window, and the 1% error budget. Burn-rate is intentionally
+  simple for v0.2.0 — single window, single threshold,
+  green / warn / burn / unknown verdict. Multi-window /
+  multi-burn-rate alerting is parked until Senkani ships a daemon
+  mode users don't babysit.
+- New `Sources/Core/SLO.swift`: `SLOName` enum (with per-SLO
+  threshold + description), `SLOSample` (ms + ts), `SLOSampleStore`
+  (file-backed bounded ring buffer at `~/.senkani/slo-samples.json`,
+  1000-sample cap per SLO, atomic writes), `SLOEvaluation`
+  (state + p99 + sample count + over-budget pct), and the math
+  helper `SLO.percentile(...)` shared by store + perf gate so doctor
+  and CI compute p99 the same way.
+- `record(...)` is gated on `SENKANI_SLO_SAMPLES=1` — Carmack-flagged:
+  the SLOs measure operations on the order of 1–20 ms, and a
+  read-modify-write JSON flush on every hot-path call would dominate
+  what we're trying to measure. Recording is opt-in per process;
+  the perf gate (and operators who want live samples) flips the
+  env var. `recordForced(...)` bypasses the gate for tests + the
+  perf gate.
+- `FilterPipeline.process` now wraps its body in a timer and calls
+  `SLOSampleStore.shared.record(.pipelineMiss, ms:)` once per call
+  (no-op unless the env var is set). The same wiring slots in for
+  `cache.hit` once any KB / artifact lookup wraps its hit path —
+  the harness is generic so additional callsites are one line each.
+- `senkani doctor` gains check #14 (after WARP skills): one line per
+  SLO, surfacing rolling p99, threshold, sample count, and
+  over-budget percentage. Verdict semantics:
+  green = p99 ≤ threshold AND ≤ 1% over budget;
+  warn = p99 in [80%, 100%) of threshold (early signal — emitted
+  as a `✗` so it surfaces in the doctor's failed count and gets
+  the operator's attention before it burns);
+  burn = p99 > threshold OR > 1% of samples over threshold;
+  unknown = fewer than 30 samples in the rolling window
+  (Allspaw-flagged: prevents false-green on a fresh install and
+  false-burn from a single outlier).
+- New `Tests/SenkaniTests/SLOTests.swift` (19 tests) covers
+  `SLO.percentile` (5 tests: empty, single, linear interpolation,
+  p99 on 0..99 distribution, q-clamping), `SLOSampleStore` (10
+  tests: env-gate respect, recordForced bypass, window filter,
+  ring-buffer eviction, the four state transitions including
+  budget-exceeded → burn at 1.98%, evaluateAll, reset), and the
+  perf gate itself (3 tests: cache hit synthesised via Dictionary
+  lookup, pipeline miss via real `FilterPipeline.process` on a
+  small fixture, hook passthrough via the env-var read + bytes
+  encode the relay's cold path does — exec'ing the binary is
+  out of scope, the gate catches algorithmic regressions in the
+  cold path itself). All thresholds met locally with green
+  margins.
+- New `tools/perf-gate.sh` is a thin convenience wrapper that runs
+  the SLO gate suite alone (`swift test --filter SLOPerfGate`)
+  with `SWT_NO_PARALLEL=1` and the multiplier-claim pre-flight
+  skipped. The full suite via `tools/test-safe.sh` already
+  includes the gate; `perf-gate.sh` is for fast local iteration
+  when tuning a hot path.
+- 2 new files (`Sources/Core/SLO.swift`, `Tests/SenkaniTests/SLOTests.swift`,
+  `spec/slos.md`, `tools/perf-gate.sh`) + 2 modified
+  (`Sources/Core/FilterPipeline.swift`,
+  `Sources/CLI/DoctorCommand.swift`).
+- Tests: 1818 → 1837 (+19). Build clean at 9.98s; full suite green
+  at 22.4s. `spec/cleanup.md` "no published SLOs / no perf gate"
+  → ✅ RESOLVED.
+
 ### April 26 — Typed `IndexError` replaces silent `[]` returns across the Indexer public API (`luminary-2026-04-24-11-indexer-result-errors`)
 - Luminary P2 (Schneier/Bach/Torvalds). Indexer leaf functions used
   to return `[]` for every failure mode — binary missing, parse

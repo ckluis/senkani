@@ -70,6 +70,9 @@ struct Doctor: ParsableCommand {
         // 13. WARP.md skills
         checkSkills(&results)
 
+        // 14. SLO pack — three published SLOs + hook-active ceiling
+        checkSLOs(&results)
+
         print("")
         var parts: [String] = []
         if results.passed > 0 { parts.append("\(results.passed) passed") }
@@ -627,6 +630,48 @@ struct Doctor: ParsableCommand {
         let kb = Double(totalBytes) / 1024
         printStatus(.pass, "WARP skills: \(files.count) skill\(files.count == 1 ? "" : "s") (\(String(format: "%.1f", kb)) KB) — injected at session start")
         results.passed += 1
+    }
+
+    // MARK: - Check 14: SLOs
+
+    /// Render one line per published SLO with the rolling 24-hour p99
+    /// and a green / warn / burn / unknown verdict. See `spec/slos.md`
+    /// for the contract; `Core/SLO.swift` for the math.
+    private func checkSLOs(_ results: inout Results) {
+        for evaluation in SLOSampleStore.shared.evaluateAll() {
+            let label = sloLine(evaluation)
+            switch evaluation.state {
+            case .green:
+                printStatus(.pass, label)
+                results.passed += 1
+            case .warn:
+                printStatus(.fail, label + " — within 80% of threshold; investigate before it burns")
+                results.failed += 1
+            case .burn:
+                printStatus(.fail, label + " — SLO BURNING; p99 over threshold or >1% over budget")
+                results.failed += 1
+            case .unknown:
+                printStatus(.skip, label + " — fewer than \(SLOSampleStore.minSamples) samples in window")
+                results.skipped += 1
+            }
+        }
+    }
+
+    private func sloLine(_ e: SLOEvaluation) -> String {
+        let head = "SLO \(e.slo.rawValue): \(e.state.rawValue)"
+        if e.state == .unknown {
+            return "\(head) (\(e.sampleCount) samples, threshold \(formatMs(e.slo.thresholdMs)))"
+        }
+        return String(
+            format: "%@ — p99 %@ (threshold %@, %d samples, %.2f%% over)",
+            head, formatMs(e.p99Ms), formatMs(e.slo.thresholdMs),
+            e.sampleCount, e.overBudgetPct
+        )
+    }
+
+    private func formatMs(_ ms: Double) -> String {
+        if ms < 10 { return String(format: "%.2fms", ms) }
+        return String(format: "%.0fms", ms)
     }
 
     // MARK: - Output Helpers

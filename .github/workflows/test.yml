@@ -51,5 +51,21 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-
 
-      - name: Build & test (deterministic harness)
-        run: ./tools/test-safe.sh
+      # Retries cover the known `swiftpm-testing-helper` SIGTRAP flake
+      # documented in spec/testing.md (line 458, deferred-issue list).
+      # Build is SwiftPM-cached after attempt 1, so retries cost only
+      # the test execution (~30s), not a fresh build.
+      - name: Build & test (deterministic harness, retry on flake)
+        run: |
+          for attempt in 1 2 3; do
+            echo "::group::Test attempt $attempt of 3"
+            if ./tools/test-safe.sh; then
+              echo "::endgroup::"
+              echo "Tests passed on attempt $attempt"
+              exit 0
+            fi
+            echo "::endgroup::"
+            echo "::warning::Test attempt $attempt failed — retrying (likely swiftpm-testing-helper SIGTRAP, see spec/testing.md)"
+          done
+          echo "::error::Tests failed on all 3 attempts — not a transient flake"
+          exit 1

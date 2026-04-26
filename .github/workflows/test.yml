@@ -16,15 +16,21 @@ concurrency:
 jobs:
   test:
     name: Build & test
-    # macos-15 ships Xcode 16 / Swift 6 by default; macos-14 defaults
-    # to Xcode 15.4 / Swift 5.10, which predates `swift test --no-parallel`
-    # (added in Swift 6) and does not match Package.swift's
-    # `swift-tools-version: 6.0`.
+    # macos-15 ships Xcode 16.4 / Swift 6.1.2 by default. The project
+    # is developed against Swift 6.3 — 6.1's stricter actor-isolation
+    # enforcement flagged dozens of legitimate-on-6.3 sites. Pinning
+    # the runner toolchain to 6.3 (Bach: "match the local environment")
+    # closes that gap without retrofitting hundreds of source sites.
     runs-on: macos-15
     timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install Swift 6.3
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.3"
 
       - name: Show toolchain
         run: |

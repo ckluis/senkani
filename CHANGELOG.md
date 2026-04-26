@@ -4,7 +4,12 @@ All shipped features live here so the README can stay focused on what
 Senkani *is*. Entries are grouped by the server version reported by
 `senkani_version` (see `VersionTool.serverVersion`).
 
-## v0.2.0 — 2026-04 (current)
+## v0.3.0 — unreleased
+
+_Add new entries here as work ships. Promote this section to a
+dated heading at release time._
+
+## v0.2.0 — 2026-04-26
 
 ### April 26 — Release checklist gives `senkani uninstall` real-install validation a durable home (`luminary-2026-04-24-15-uninstall-ci`)
 - Luminary P3 (Bach/Majors/Grace). The 6 manual uninstall checks

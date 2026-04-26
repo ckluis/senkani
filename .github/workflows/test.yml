@@ -16,7 +16,11 @@ concurrency:
 jobs:
   test:
     name: Build & test
-    runs-on: macos-14
+    # macos-15 ships Xcode 16 / Swift 6 by default; macos-14 defaults
+    # to Xcode 15.4 / Swift 5.10, which predates `swift test --no-parallel`
+    # (added in Swift 6) and does not match Package.swift's
+    # `swift-tools-version: 6.0`.
+    runs-on: macos-15
     timeout-minutes: 30
     steps:
       - name: Checkout

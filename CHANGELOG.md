@@ -9,6 +9,38 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 27 — Paired-numbers section + companion-stack section in README + spec/app.md (`phase-v16-paired-numbers-readme`)
+- `README.md` ships a top-level **Paired Performance Numbers**
+  section that supersedes the old "Performance" + "About the
+  numbers" block. The 80.37× fixture and the pending live-session
+  median are cited together as a 2-row table; a "Why a pair"
+  paragraph names the rule that 80× never appears unpaired
+  outside the testing.md gate's `±4 lines` qualifier window. The
+  full caveat link points at `spec/testing.md` Live Session
+  Caveat. Adjacent sub-table now also surfaces hot-path SLOs and
+  release commitments alongside the savings claim, per V.14
+  dependency.
+- `README.md` ships a new **Companion Stack (remote-operator
+  pattern)** section after Building from Source. Tutorial-shaped
+  per Procida: numbered steps for Tailscale (Personal $0) +
+  Screens 5 ($179.99 lifetime / $29.99 yr) + Pushover (~$4.99 /
+  platform, 10 k msgs/mo free), with the closed-loop narrative
+  (Senkani job ends → Pushover push → `screens://<tailnet-host>`
+  → Screens 5 opens that Mac's desktop). Disclaims explicitly
+  that none of the three is a Senkani feature; names the
+  durable contract as "any WireGuard mesh + any VNC client +
+  any HTTP-API push service." Links to
+  `spec/inspirations/native-app-ux/tailscale-plus-screens-5.md`.
+- `spec/app.md` ships a top-level **Paired Performance Numbers**
+  section after "Invisible Optimization vs On-Demand Inspection"
+  documenting the same pairing rule for the in-spec audience —
+  with a note that `tools/check-multiplier-claims.sh` is the
+  automated gate enforcing the contract.
+- `tools/check-multiplier-claims.sh` continues to pass — every
+  80.37× / 80× mention is paired with `fixture` / `live` /
+  `synthetic` / `pending` qualifiers within the gate's window.
+  Test count unchanged (V.16 is text-only): 1886 green.
+
 ### April 27 — Release-commitment SLOs + measure-slos.sh + doctor surface (`phase-v14-slo-commitments`)
 - `spec/slos.md` gains a "Release commitments (Phase V.14)" section
   publishing four numbers per release: cold-start (< 250 ms p95),

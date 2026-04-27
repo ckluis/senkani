@@ -142,23 +142,31 @@ Per-pane model presets control which Claude model handles tasks:
 
 ---
 
-## Performance
+## Paired Performance Numbers
 
-Numbers from the built-in benchmark suite (`senkani bench`):
+Senkani publishes its savings claim as a **pair of numbers**, never one alone. The fixture multiplier measures the optimization math under controlled conditions; the live-session multiplier measures the same stack on real Claude Code sessions. Both are legitimate, and the *pairing* is the differentiator — citing only the ceiling sets the product up for a credibility loss when real-world performance lands lower.
+
+| Number | Value | What it measures |
+|--------|-------|------------------|
+| **Fixture bench multiplier** | **80.37×** (synthetic, controlled) | 10-task × 7-config bench in `Sources/Bench/BenchmarkFixtures.swift`. Maximizes cache reuse, picks commands with aggressive filter rules. The optimization math's ceiling. |
+| **Live-session multiplier** | **pending** (target capture: 2026-05-31) | Median of 5–10 representative Claude Code sessions replayed through `SessionDatabase.liveSessionMultiplier(projectRoot:since:)`. Lower than the fixture by design — the floor. |
+
+**Why a pair, not a point estimate.** Real sessions read mostly-novel files (cache hit rate drops), pay symbol-index cold-start costs, vary in command output shape, and don't follow the bench's linear permutation. The fixture number is the honest *ceiling*; the live number is the honest *floor*. We report both so operators can pre-calibrate expectations before the first session, then reconcile against their own workflow once they've run it. Hard rule for the README and any marketing surface: **80×** never appears without its paired live-session number (or the explicit `pending` placeholder while Phase G capture is in flight).
+
+The full caveat — including the action item, owner, and the `tools/check-multiplier-claims.sh` automated gate that fails the build on bare claims — lives at [`spec/testing.md` → Live Session Caveat](https://github.com/ckluis/senkani/blob/main/spec/testing.md#live-session-caveat-important).
+
+**Other published numbers (see `senkani doctor` for current values):**
 
 | Metric | Value |
 |--------|-------|
-| Fixture bench multiplier | **80.37x** (synthetic, controlled conditions) |
-| Live session multiplier | **Varies by workflow** — see Savings Test pane |
-| Terminal render latency | p50 ~2ms, p99 ~3.4ms |
-| Filter throughput | >10k lines/sec |
-| Symbol search | <5ms cold, <1ms cached |
-| Secret scan | <2ms per KB |
-| Hook latency | <5ms active, <1ms passthrough |
-| Unit tests | **1433 passing** |
+| Hot-path SLOs | cache hit p99 < 1 ms · pipeline cache-miss p99 < 20 ms · hook passthrough p99 < 1 ms · hook active p99 < 3 ms |
+| Release commitments | cold-start < 250 ms p95 · idle memory < 75 MB · install size < 50 MB · classifier latency < 2 ms p95 (slot pending U.1) |
+| Terminal render | p50 ~2 ms, p99 ~3.4 ms |
+| Filter throughput | > 10 k lines/sec |
+| Symbol search | < 5 ms cold, < 1 ms cached |
+| Secret scan | < 2 ms / KB |
+| Unit tests | **1886 passing** |
 | Binary size | ~28 MB universal |
-
-**About the numbers:** The 80.37x figure is from the fixture benchmark — synthetic tasks designed to exercise each optimization layer. Real sessions produce a lower multiplier. The Savings Test pane shows both numbers side by side: fixture ceiling and live floor. The live number is the honest one.
 
 ---
 
@@ -199,6 +207,20 @@ senkani doctor       # verify grammar and database setup
 > migrated off cooperative-pool blocking primitives.
 
 The GUI target (`SenkaniApp`) includes SwiftUI, SwiftTerm, and MLX. The CLI (`senkani`) and hook (`senkani-hook`) targets are lean — no MLX, no SwiftUI.
+
+---
+
+## Companion Stack (remote-operator pattern)
+
+Senkani runs locally on a Mac. When the operator wants to drive a headless Mac mini from a phone or laptop on the road, the documented pattern is three off-the-shelf tools — **not Senkani features**, just the stack we recommend:
+
+1. **Tailscale (Personal tier, free).** WireGuard mesh that gives every device a stable hostname inside your tailnet without exposing any port to the public internet. The Personal tier covers up to 6 users and unlimited devices — comfortably above any solo operator's needs. Install Tailscale on the Senkani Mac and on the operator's phone/laptop; both sign into the same tailnet.
+2. **Screens 5 (one-time $179.99 lifetime, or $29.99/year subscription).** Native VNC client on iOS and macOS. Tap a saved Mac on the iPhone, get the actual Senkani desktop over the WireGuard tunnel. Use the `screens://<saved-name>` URL scheme — on macOS, `vnc://` and `ssh://` may be intercepted by Screen Sharing or Terminal. The lifetime tier is the right fit for the Senkani audience; if that flinches, take the annual subscription, not a fork-and-self-host alternative.
+3. **Pushover (one-time ~$4.99 per platform, 10 k messages/mo free tier).** Simple HTTPS push API — `POST https://api.pushover.net/1/messages.json` with `token` + `user` + `message`. Senkani's `NotificationSink` adapter populates the `url` field with `screens://<tailnet-host>` so the notification itself becomes the deep link.
+
+**The closed loop:** a Senkani job finishes → Pushover fires a push to the operator's phone → the notification's `url` field is `screens://<tailnet-host>` → tap → Screens 5 opens that exact Mac's desktop over the tunnel. No Senkani-side daemon ever listened on the public internet.
+
+Macs go to sleep — set **System Settings → Battery → Power Adapter → Wake for network access** so the headless Mac mini answers when Tailscale pokes it. Tailscale Personal-tier policy and Screens pricing have shifted before; treat the named products as the *current* recommendation and the *pattern* — any WireGuard mesh + any VNC client + any HTTP-API push service — as the durable contract. See [`spec/inspirations/native-app-ux/tailscale-plus-screens-5.md`](spec/inspirations/native-app-ux/tailscale-plus-screens-5.md) for the full design analysis.
 
 ---
 

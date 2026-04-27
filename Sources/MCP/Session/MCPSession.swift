@@ -574,6 +574,22 @@ final class MCPSession: @unchecked Sendable {
         return idx
     }
 
+    /// Test-only injection seam for the symbol index.
+    ///
+    /// Bypasses `IndexStore.save` + `ensureIndex` + `IndexEngine.incrementalUpdate`,
+    /// which all walk the project root via `FileWalker`. The walker's path
+    /// resolution differs across macOS versions for `/tmp` (which is a symlink
+    /// to `/private/tmp`), making tests that round-trip through disk
+    /// brittle on CI. `internal` so production code can't reach it; `@testable`
+    /// import in tests can.
+    internal func _setIndexForTesting(_ index: SymbolIndex) {
+        lock.lock()
+        _symbolIndex = index
+        _repoMap = nil
+        _indexBuilding = false
+        lock.unlock()
+    }
+
     /// Lazily build the dependency graph. Cached after first call.
     func ensureDependencyGraph() -> DependencyGraph {
         lock.lock()

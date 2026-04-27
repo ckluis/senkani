@@ -9,6 +9,49 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 27 — `PaneRefreshScheduler` Core protocol layer (`phase-v1-pane-refresh-scheduler`, V.1 round 1)
+- `Sources/Core/PaneRefreshScheduler.swift` ships the per-tile
+  refresh contract borrowed from Glance's `widgetBase`. The
+  `PaneRefreshScheduler` protocol declares `state`,
+  `requiresUpdate(now:)`, `update(ctx:)`, `scheduleNextUpdate(now:)`,
+  and `scheduleEarlyUpdate(now:)`. `PaneRefreshState` carries the
+  seven required fields — `cacheType`, `cacheDuration`,
+  `nextUpdate`, `retryCount`, `lastError`, `notice`,
+  `contentAvailable`. `PaneCacheType` covers `infinite` /
+  `duration` / `onTheHour`.
+- `PaneRefreshOutcome` is `success` | `partial(notice:)` |
+  `failure(error:)`. `success` clears retry count + error +
+  notice and flips `contentAvailable` true. `partial` preserves
+  prior `contentAvailable`, clears the error, and surfaces the
+  notice — the Glance pattern for keeping a stale-but-usable tile
+  on screen with an inline warning. `failure` bumps `retryCount`,
+  records the error, and uses `PaneRefreshBackoff` (squared
+  minutes, 1800 s default cap) for the early retry — capped by
+  the natural `nextUpdate` so a slow-moving tile doesn't retry
+  past its own freshness budget.
+- `StatefulPaneRefresher` is the reference implementation:
+  thread-safe via `NSLock`, takes a `@Sendable` fetch closure,
+  exposes `replaceState` for round-2 SessionDatabase rehydration.
+  `PaneRefreshWorkerPool` is a Swift actor with FIFO continuation
+  waiters, bounded by `maxConcurrent` — Dashboard / Analytics /
+  monitoring tiles dispatch through the pool so a wave of
+  on-the-hour boundary updates doesn't fan out into a thundering
+  herd.
+- 17 new tests in `Tests/SenkaniTests/PaneRefreshSchedulerTests.swift`
+  cover `requiresUpdate` for each `cacheType`,
+  `scheduleNextUpdate` alignment (duration / onTheHour /
+  infinite), squared backoff + cap-by-natural-nextUpdate,
+  outcome semantics (success / partial / failure), and worker
+  pool bounded concurrency + waiter queueing.
+- **Split note:** V.1's full exit criteria require schema
+  migration for scheduler-state persistence and three Dashboard
+  tile migrations (budget burn, validation queue, repository
+  dirty). Following the `phase-t5-audit-chain` precedent, those
+  are spinning out as `phase-v1b-pane-refresh-persistence`
+  (SessionDatabase + tile migrations) and
+  `phase-v1c-pane-refresh-notice-ui` (DashboardView notice
+  surface). Round 1 ships the protocol layer + worker pool only.
+
 ### April 27 — Paired-numbers section + companion-stack section in README + spec/app.md (`phase-v16-paired-numbers-readme`)
 - `README.md` ships a top-level **Paired Performance Numbers**
   section that supersedes the old "Performance" + "About the

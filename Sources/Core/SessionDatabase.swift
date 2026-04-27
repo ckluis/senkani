@@ -301,10 +301,18 @@ public final class SessionDatabase: @unchecked Sendable {
     // MARK: - Path Normalization
 
     /// Normalize a project root path for consistent DB storage and querying.
-    /// Resolves symlinks, removes trailing slashes, expands tildes.
+    /// Removes trailing slashes, resolves dot components, expands tildes.
+    ///
+    /// Tilde expansion is done explicitly via `NSString.expandingTildeInPath`
+    /// before URL standardization. Apple's docs warn against passing tilde
+    /// paths to `URL(fileURLWithPath:)` directly — historical Foundation
+    /// versions silently expanded `~`, but recent ones (Swift 6.3 on macOS 15
+    /// observed 2026-04-26 in CI) treat it as a literal directory name.
+    /// Explicit expansion keeps the result identical across OS / Swift versions.
     public static func normalizePath(_ raw: String?) -> String? {
         guard let raw, !raw.isEmpty else { return nil }
-        return URL(fileURLWithPath: raw).standardized.path
+        let expanded = (raw as NSString).expandingTildeInPath
+        return URL(fileURLWithPath: expanded).standardized.path
     }
 
     // MARK: - Cross-Store Composition

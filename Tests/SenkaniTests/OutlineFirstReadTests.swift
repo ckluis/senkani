@@ -16,17 +16,16 @@ private func makeSession(projectRoot: String, indexerEnabled: Bool = true) -> MC
     )
 }
 
-/// Inject a pre-built SymbolIndex into the session via its internal index path.
-/// We build the index from IndexEngine so it's populated before the test runs.
+/// Inject a pre-built SymbolIndex directly into the session.
+/// Uses `_setIndexForTesting` (an internal test seam on MCPSession) to
+/// bypass disk I/O and the file walker — both of which resolve `/tmp`
+/// to `/private/tmp` differently across macOS versions, leaving the
+/// injected symbols invisible to outline lookup on some CI runners.
 private func injectIndex(_ session: MCPSession, symbols: [IndexEntry]) {
     var idx = SymbolIndex()
     idx.projectRoot = session.projectRoot
     idx.symbols = symbols
-    // Access internal _symbolIndex via ensureIndex() side-effect isn't ideal,
-    // so we use the warmIndex path by pre-saving to disk
-    try? IndexStore.save(idx, projectRoot: session.projectRoot)
-    // Force load: call ensureIndex which will load from disk
-    _ = session.ensureIndex()
+    session._setIndexForTesting(idx)
 }
 
 private func makeTempDir() -> String {

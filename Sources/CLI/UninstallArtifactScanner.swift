@@ -67,33 +67,50 @@ struct UninstallArtifactScanner {
         }
 
         // 2. Project-level hook registrations — senkani-only entries.
+        // Two locations are checked:
+        //   (a) Modern (HookRegistration.registerForProject):
+        //       <projectPath>/.claude/settings.json — discovered via
+        //       workspace.json's project list.
+        //   (b) Legacy: ~/.claude/projects/<encoded>/settings.json — earlier
+        //       installer location, still scanned for back-compat with
+        //       installs that pre-date the per-project move.
+        // Both produce the same artifact category; the discovery is unified
+        // so a single approval prompt removes them all.
+        var hookSettingsFiles: [String] = []
+
+        // (a) Modern — walk workspace.json
+        if let data = fm.contents(atPath: workspacePath),
+           let workspace = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let projectList = workspace["projects"] as? [[String: Any]] {
+            for project in projectList {
+                guard let path = project["path"] as? String else { continue }
+                let settingsPath = path + "/.claude/settings.json"
+                if Self.fileHasSenkaniHooks(settingsPath, fm: fm) {
+                    hookSettingsFiles.append(settingsPath)
+                }
+            }
+        }
+
+        // (b) Legacy — walk ~/.claude/projects/*
         let projects = projectsDir
         if fm.fileExists(atPath: projects),
            let entries = try? fm.contentsOfDirectory(atPath: projects) {
-            let hookProjects = entries.filter { entry in
+            for entry in entries {
                 let path = projects + "/" + entry + "/settings.json"
-                guard let data = fm.contents(atPath: path),
-                      let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let hooks = config["hooks"] as? [String: Any] else { return false }
-                for (_, value) in hooks {
-                    guard let eventEntries = value as? [[String: Any]] else { continue }
-                    for entry in eventEntries {
-                        guard let hookList = entry["hooks"] as? [[String: Any]] else { continue }
-                        if hookList.contains(where: { ($0["command"] as? String)?.contains("senkani") ?? false }) {
-                            return true
-                        }
-                    }
+                if Self.fileHasSenkaniHooks(path, fm: fm) {
+                    hookSettingsFiles.append(path)
                 }
-                return false
             }
-            if !hookProjects.isEmpty {
-                items.append(Artifact(
-                    category: .projectHooks,
-                    icon: "\u{1FA9D}",
-                    description: "Hook registrations in \(hookProjects.count) project settings file(s)",
-                    remove: { Self.removeAllProjectHooks(projectsDir: projects, entries: hookProjects) }
-                ))
-            }
+        }
+
+        if !hookSettingsFiles.isEmpty {
+            let paths = hookSettingsFiles  // capture for the closure
+            items.append(Artifact(
+                category: .projectHooks,
+                icon: "\u{1FA9D}",
+                description: "Hook registrations in \(hookSettingsFiles.count) project settings file(s)",
+                remove: { Self.removeProjectHooksFromFiles(paths) }
+            ))
         }
 
         // 3. Hook binary at <home>/.senkani/bin/senkani-hook
@@ -202,9 +219,33 @@ struct UninstallArtifactScanner {
         try SettingsIO.writeJSONAtomically(config, to: settingsPath)
     }
 
-    static func removeAllProjectHooks(projectsDir: String, entries: [String]) {
-        for entry in entries {
-            let settingsPath = projectsDir + "/" + entry + "/settings.json"
+    /// True when `settingsPath` is a Claude Code config file containing at
+    /// least one hook entry whose `command` mentions "senkani". Returns
+    /// false for missing files, non-JSON files, files without a `hooks`
+    /// key, and files whose hooks are all from other tools.
+    static func fileHasSenkaniHooks(_ settingsPath: String, fm: FileManager) -> Bool {
+        guard let data = fm.contents(atPath: settingsPath),
+              let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let hooks = config["hooks"] as? [String: Any] else { return false }
+        for (_, value) in hooks {
+            guard let eventEntries = value as? [[String: Any]] else { continue }
+            for entry in eventEntries {
+                guard let hookList = entry["hooks"] as? [[String: Any]] else { continue }
+                if hookList.contains(where: { ($0["command"] as? String)?.contains("senkani") ?? false }) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /// Strip senkani hook entries from each `settings.json` path. Preserves
+    /// any non-senkani hooks in the same file. Drops the empty `hooks` key
+    /// when no entries remain. Per-file errors (unreadable JSON, write
+    /// failure) are suppressed — uninstall is best-effort and shouldn't
+    /// abort because one project's settings are malformed.
+    static func removeProjectHooksFromFiles(_ settingsPaths: [String]) {
+        for settingsPath in settingsPaths {
             guard var config = try? SettingsIO.readJSONOrEmpty(at: settingsPath) else { continue }
             guard var hooks = config["hooks"] as? [String: Any] else { continue }
 

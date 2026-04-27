@@ -9,6 +9,31 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 27 — Uninstall scanner finds project-level hooks at their actual install location (`fix-uninstall-project-hooks`)
+- Found during the v0.2.0 release-checklist §A1 walkthrough on a
+  real install. Operator's three Senkani-managed projects had hook
+  entries at `<projectPath>/.claude/settings.json` (where
+  `HookRegistration.registerForProject` writes them today), but
+  `senkani uninstall`'s artifact list never mentioned them — the
+  scanner was only checking the legacy
+  `~/.claude/projects/<encoded>/settings.json` path. Result:
+  `--yes` wipes left dead `senkani-hook` references in real
+  projects' Claude Code config.
+- Scanner now walks `~/.senkani/workspace.json`'s project list,
+  checks each project's own `.claude/settings.json` for senkani
+  hook entries, and unifies them with the legacy-location scan
+  under the same `.projectHooks` artifact category. One approval
+  prompt removes both.
+- `UninstallSmokeTests` gains explicit
+  `discoveryFindsModernHookLocationViaWorkspaceJson` test (the
+  fixture seeds the modern location, asserts discovery + removal).
+  Existing `seedProjectHooks` fixture extended to seed both
+  locations; `seedPerProjectSenkaniDirs` now additively merges
+  workspace.json entries instead of clobbering. Suite: 6 → 7 tests.
+- This is exactly the kind of finding the manual-validation pass
+  in `spec/release-checklist.md` §A is designed to catch — caught
+  before v0.3.0 ships.
+
 ### April 26 — First GitHub Actions CI workflow lands (`ci-workflow-v1`)
 - Bach/Majors/Schneier round. Pre-`v0.2.0` the project had zero CI:
   every PR relied on the operator running `./tools/test-safe.sh`

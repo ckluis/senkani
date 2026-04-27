@@ -62,16 +62,19 @@ struct UninstallSmokeTests {
             try data.write(to: URL(fileURLWithPath: claudeDir + "/settings.json"))
         }
 
-        /// Seed one senkani-hooked project + one unrelated-hooked project.
-        /// The scanner must pick up only the senkani one.
+        /// Seed senkani-hooked + unrelated-hooked projects in BOTH locations
+        /// the scanner checks:
+        ///   (a) Modern: <projectPath>/.claude/settings.json — registered
+        ///       in workspace.json's project list. This is where
+        ///       HookRegistration.registerForProject writes hooks today.
+        ///   (b) Legacy: ~/.claude/projects/<encoded>/settings.json — older
+        ///       installer location, still scanned for back-compat.
+        /// The scanner must pick up only the senkani-hooked entries from
+        /// each location and ignore the unrelated ones.
         func seedProjectHooks() throws {
             let fm = FileManager.default
-            let senkaniProj = home + "/.claude/projects/proj-senkani"
-            let unrelatedProj = home + "/.claude/projects/proj-other"
-            try fm.createDirectory(atPath: senkaniProj, withIntermediateDirectories: true)
-            try fm.createDirectory(atPath: unrelatedProj, withIntermediateDirectories: true)
 
-            let senkaniSettings: [String: Any] = [
+            let senkaniHookEntry: [String: Any] = [
                 "hooks": [
                     "PreToolUse": [[
                         "matcher": "*",
@@ -82,7 +85,7 @@ struct UninstallSmokeTests {
                     ]]
                 ]
             ]
-            let unrelatedSettings: [String: Any] = [
+            let unrelatedHookEntry: [String: Any] = [
                 "hooks": [
                     "PreToolUse": [[
                         "matcher": "*",
@@ -93,10 +96,54 @@ struct UninstallSmokeTests {
                     ]]
                 ]
             ]
-            try JSONSerialization.data(withJSONObject: senkaniSettings)
-                .write(to: URL(fileURLWithPath: senkaniProj + "/settings.json"))
-            try JSONSerialization.data(withJSONObject: unrelatedSettings)
-                .write(to: URL(fileURLWithPath: unrelatedProj + "/settings.json"))
+
+            // (a) Modern — workspace project dir with .claude/settings.json.
+            // Append to workspace.json so seedPerProjectSenkaniDirs can extend
+            // it later without clobbering our entries.
+            let modernSenkaniProj = root.appendingPathComponent("projModernSenkani").path
+            let modernUnrelatedProj = root.appendingPathComponent("projModernUnrelated").path
+            try fm.createDirectory(atPath: modernSenkaniProj + "/.claude",
+                                   withIntermediateDirectories: true)
+            try fm.createDirectory(atPath: modernUnrelatedProj + "/.claude",
+                                   withIntermediateDirectories: true)
+            try JSONSerialization.data(withJSONObject: senkaniHookEntry)
+                .write(to: URL(fileURLWithPath: modernSenkaniProj + "/.claude/settings.json"))
+            try JSONSerialization.data(withJSONObject: unrelatedHookEntry)
+                .write(to: URL(fileURLWithPath: modernUnrelatedProj + "/.claude/settings.json"))
+            try mergeWorkspaceProjects([modernSenkaniProj, modernUnrelatedProj])
+
+            // (b) Legacy — encoded-path dir in ~/.claude/projects/.
+            let legacySenkaniProj = home + "/.claude/projects/proj-senkani"
+            let legacyUnrelatedProj = home + "/.claude/projects/proj-other"
+            try fm.createDirectory(atPath: legacySenkaniProj, withIntermediateDirectories: true)
+            try fm.createDirectory(atPath: legacyUnrelatedProj, withIntermediateDirectories: true)
+            try JSONSerialization.data(withJSONObject: senkaniHookEntry)
+                .write(to: URL(fileURLWithPath: legacySenkaniProj + "/settings.json"))
+            try JSONSerialization.data(withJSONObject: unrelatedHookEntry)
+                .write(to: URL(fileURLWithPath: legacyUnrelatedProj + "/settings.json"))
+        }
+
+        /// Append project paths to workspace.json's `projects` list,
+        /// creating the file if it doesn't exist. Idempotent. Preserves
+        /// any other keys already in the workspace doc.
+        private func mergeWorkspaceProjects(_ paths: [String]) throws {
+            let fm = FileManager.default
+            let senkaniDir = home + "/.senkani"
+            try fm.createDirectory(atPath: senkaniDir, withIntermediateDirectories: true)
+            let workspacePath = senkaniDir + "/workspace.json"
+
+            var workspace: [String: Any] = [:]
+            if let data = fm.contents(atPath: workspacePath),
+               let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                workspace = existing
+            }
+            var projects = workspace["projects"] as? [[String: Any]] ?? []
+            for path in paths {
+                projects.append(["path": path])
+            }
+            workspace["projects"] = projects
+            try JSONSerialization.data(withJSONObject: workspace)
+                .write(to: URL(fileURLWithPath: workspacePath))
         }
 
         func seedHookBinary() throws {
@@ -134,22 +181,16 @@ struct UninstallSmokeTests {
         }
 
         /// Seed workspace.json listing two real project dirs (inside the
-        /// fixture root) each with a `.senkani/` indicator.
+        /// fixture root) each with a `.senkani/` indicator. Additively
+        /// extends the workspace.json's projects list — does not clobber
+        /// any entries seedProjectHooks may have added earlier.
         func seedPerProjectSenkaniDirs() throws {
             let fm = FileManager.default
             let projA = root.appendingPathComponent("projA").path
             let projB = root.appendingPathComponent("projB").path
             try fm.createDirectory(atPath: projA + "/.senkani", withIntermediateDirectories: true)
             try fm.createDirectory(atPath: projB + "/.senkani", withIntermediateDirectories: true)
-
-            let workspace: [String: Any] = [
-                "projects": [
-                    ["path": projA],
-                    ["path": projB]
-                ]
-            ]
-            try JSONSerialization.data(withJSONObject: workspace)
-                .write(to: URL(fileURLWithPath: home + "/.senkani/workspace.json"))
+            try mergeWorkspaceProjects([projA, projB])
         }
 
         func scanner(keepData: Bool = false) -> UninstallArtifactScanner {
@@ -218,6 +259,49 @@ struct UninstallSmokeTests {
         let second = f.scanner().scan()
         #expect(second.isEmpty,
                 "after remove() on every artifact, scanner must find nothing — got \(second.map(\.category.rawValue))")
+    }
+
+    @Test func discoveryFindsModernHookLocationViaWorkspaceJson() throws {
+        let f = try Fixture()
+        let fm = FileManager.default
+
+        // Modern install: hook lives at <projectPath>/.claude/settings.json,
+        // and the project is listed in workspace.json. No legacy hook in
+        // ~/.claude/projects/. Pre-fix the scanner missed this entirely.
+        let proj = f.root.appendingPathComponent("projModern").path
+        try fm.createDirectory(atPath: proj + "/.claude", withIntermediateDirectories: true)
+        let settings: [String: Any] = [
+            "hooks": [
+                "PreToolUse": [[
+                    "matcher": "*",
+                    "hooks": [[
+                        "type": "command",
+                        "command": f.home + "/.senkani/bin/senkani-hook"
+                    ]]
+                ]]
+            ]
+        ]
+        try JSONSerialization.data(withJSONObject: settings)
+            .write(to: URL(fileURLWithPath: proj + "/.claude/settings.json"))
+
+        try fm.createDirectory(atPath: f.home + "/.senkani", withIntermediateDirectories: true)
+        let workspace: [String: Any] = ["projects": [["path": proj]]]
+        try JSONSerialization.data(withJSONObject: workspace)
+            .write(to: URL(fileURLWithPath: f.home + "/.senkani/workspace.json"))
+
+        let categories = Set(f.scanner().scan().map(\.category))
+
+        #expect(categories.contains(.projectHooks),
+                "modern hook location (<projectPath>/.claude/settings.json) must be discovered via workspace.json")
+
+        // Removal must clear the hook from the modern location.
+        for item in f.scanner().scan() where item.category == .projectHooks {
+            try item.remove()
+        }
+        let stripped = try Data(contentsOf: URL(fileURLWithPath: proj + "/.claude/settings.json"))
+        let strippedConfig = try JSONSerialization.jsonObject(with: stripped) as? [String: Any]
+        #expect((strippedConfig?["hooks"] as? [String: Any]) == nil,
+                "after removal, the modern settings.json must have no hooks key (was the only senkani entry)")
     }
 
     @Test func scannerIgnoresNonSenkaniHooksAndPlists() throws {

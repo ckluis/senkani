@@ -12,6 +12,54 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### `senkani doctor --repair-chain` UX validation — RUNNABLE 2026-04-27 (Phase T.5 round 4)
+
+Round 4 of T.5 shipped the repair scaffolding green in CI (1879 tests pass, 9
+new round-4 tests including the load-bearing pre-segment-OK / post-segment-OK
+test). The scaffolding is correct mechanically; the **double-confirm prompt
+copy and the typed-string ergonomics** still need a real-tty walk-through
+before this round is considered fully shipped.
+
+What to verify on your machine:
+
+1. **Happy path — interactive.** Pick a workspace DB
+   (`~/Library/Application Support/Senkani/senkani.db`), pick a real rowid
+   in `token_events` (e.g. `sqlite3 ~/Library/Application\ Support/Senkani/senkani.db
+   'SELECT MAX(id) FROM token_events;'`), then run:
+   ```
+   senkani doctor --repair-chain --table token_events --from-rowid <N>
+   ```
+   Confirm the prompt explanation reads cleanly. Type `REPAIR` then the
+   table name. Verify the outcome message lists table / from-rowid / new
+   anchor id / prior tip / rows rebound, and the closing line points at
+   `senkani doctor --verify-chain`.
+
+2. **`--force` non-tty path.** `echo | senkani doctor --repair-chain
+   --table token_events --from-rowid <N> --force` — should run without
+   prompts and print the same outcome.
+
+3. **Refusal — non-tty without `--force`.** `echo | senkani doctor
+   --repair-chain --table token_events --from-rowid <N>` — should refuse
+   with the "refuses non-tty invocations without --force" message, exit
+   non-zero.
+
+4. **Wrong typed string aborts.** Run interactively, type anything other
+   than `REPAIR` at the first prompt — should print "Aborted (input was
+   not 'REPAIR')." and exit non-zero.
+
+5. **Idempotency guard.** Run the repair twice in a row (without
+   `--force` on the second). Second invocation should refuse with
+   "a repair anchor already exists for '<table>' (anchor id N).
+   Use --force to open a second repair anchor."
+
+6. **Verification after repair.** Run `senkani doctor --verify-chain`
+   after a repair. Should show `chain integrity: OK across … / 1 repairs`
+   (or however many repairs you ran).
+
+If any prompt copy reads ambiguous, file follow-up backlog items rather
+than re-opening this round — the scaffolding is fixed; the copy is text
+and ships independently.
+
 ### Per-RAM-tier Gemma 4 quality eval — RUNNABLE 2026-04-25
 
 Round `luminary-2026-04-24-4-gemma-tier-quality-eval` (harness 04-24)

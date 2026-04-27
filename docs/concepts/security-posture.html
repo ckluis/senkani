@@ -95,6 +95,9 @@
     <h2>Data portability</h2>
     <p><a href="../../docs/reference/cli/senkani-export.html"><code>senkani export</code></a> streams sessions + commands + token_events as JSONL via a read-only SQLite connection — doesn't block the live MCP server. <code>--redact</code> collapses user paths. GDPR-adjacent by design, not by regulation.</p>
 
+    <h2>Tamper-evident audit chain (Phase T.5)</h2>
+    <p>Every row in <code>token_events</code>, <code>validation_results</code>, <code>sandboxed_results</code>, and <code>commands</code> carries <code>prev_hash</code> + <code>entry_hash</code> + <code>chain_anchor_id</code>. <code>entry_hash = SHA-256(prev_hash || canonical_row_bytes)</code> — a single-byte tamper at row N invalidates row N's hash AND every subsequent row's hash, so the chain fails closed at the first mutation point. <code>senkani doctor --verify-chain</code> walks all four chains and reports OK or names the first broken <code>(table, rowid)</code>. The integrity line surfaces in <code>senkani doctor</code> as <code>chain integrity: OK since &lt;ISO-date&gt; / N repairs</code>. Recovery via <code>senkani doctor --repair-chain --table &lt;T&gt; --from-rowid &lt;N&gt;</code> opens a fresh chain segment with typed-string double-confirm, tty enforcement, and prior-tip linkage in the new anchor's <code>operator_note</code>. Existing rows at upgrade time are anchor-from-now — the chain is a forward integrity guarantee starting at migration time, not retroactive history.</p>
+
     <div class="seealso"><h3>See also</h3><ul>
         <li><a href="../../docs/reference/mcp/senkani_web.html">senkani_web (SSRF guard)</a></li>
         <li><a href="../../docs/reference/options/security.html">Security env vars</a></li>

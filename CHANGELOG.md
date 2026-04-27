@@ -9,6 +9,63 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 27 — Release-commitment SLOs + measure-slos.sh + doctor surface (`phase-v14-slo-commitments`)
+- `spec/slos.md` gains a "Release commitments (Phase V.14)" section
+  publishing four numbers per release: cold-start (< 250 ms p95),
+  idle memory (< 75 MB), install size (< 50 MB), classifier (< 2 ms
+  p95, slot pending U.1 TierScorer). p95 not p99 because these are
+  cold operations measured at low N.
+- `tools/measure-slos.sh` captures all four and appends a JSON row
+  to `~/.senkani/slo-history.jsonl` with `git_sha` + `version` for
+  trend correlation. Idle-memory and classifier slots emit `null`
+  when not measurable (daemon not running, or U.1 not yet shipped).
+- `Sources/Core/ReleaseSLO.swift` ships `ReleaseSLOHistory` —
+  median-of-5 baseline regression detector that flags any
+  measurement ≥10% over baseline as `.regression` and any
+  measurement over the published threshold as `.overBudget`.
+  Improvements never fail the gate; missing slots are skipped.
+- `senkani doctor` Check 15 ("Release commitments (Phase V.14)")
+  prints the latest row + per-SLO baseline + percentage delta. The
+  fresh-checkout case prints `n/a — run tools/measure-slos.sh to
+  populate <path>`.
+- 7 new tests in `Tests/SenkaniTests/ReleaseSLOTests.swift`: row
+  decode roundtrip, no-history verdict, single-row OK with
+  no-baseline, median-of-5 regression flag at ≥10%, improvement
+  doesn't regress, over-budget flagged without baseline, malformed
+  JSONL line tolerance.
+
+### April 27 — Tamper-evident audit chain on `SessionDatabase` rows (`phase-t5-audit-chain` rounds 1–4)
+- Round 1 — `Sources/Core/ChainHasher.swift` ships pure-function
+  canonical-bytes + SHA-256 chain primitives. Migration v4 adds
+  `prev_hash` / `entry_hash` / `chain_anchor_id` columns to
+  `token_events` and a `chain_anchors` table; existing rows are
+  anchor-from-now under a `migration-v4` anchor.
+- Round 2 — `TokenEventStore.recordTokenEvent` computes and binds
+  the chain columns; `Sources/Core/ChainVerifier.swift` walks the
+  chain and reports `.ok` / `.brokenAt(table, rowid, expected,
+  actual)` / `.noChain`. New `senkani doctor --verify-chain` flag
+  exits 0 OK / non-zero on tamper; `senkani doctor` (full mode)
+  emits `chain integrity: OK since <ISO-date> / N repairs`.
+- Round 3 — `Sources/Core/ChainState.swift` extracted as a shared
+  per-table primitive. Migration v5 extends the chain to
+  `validation_results`, `sandboxed_results`, `commands`. Verifier
+  gains `verifyAll(_:)` returning `[String: Result]` plus
+  per-table walkers; `senkani doctor` Check 15 reports per-table
+  integrity with one aggregated summary line.
+- Round 4 — `Sources/Core/ChainRepairer.swift` ships
+  `senkani doctor --repair-chain --table <T> --from-rowid <N>`
+  with typed-string double-confirm UX (`REPAIR` then `<table>`),
+  tty enforcement (refuses non-tty without `--force`), prior-tip
+  hash recorded in the new repair anchor's `operator_note`,
+  idempotency guard (refuses second repair against an existing
+  repair anchor without `--force`), and a single
+  `BEGIN IMMEDIATE` transaction for atomic repair. Verifier walk
+  SQL gains `entry_hash IS NOT NULL` filter so anchor-from-now
+  rebound rows are skipped during verification.
+- `spec/architecture.md` → "Tamper-Evident Audit Chain (Phase T.5)"
+  documents the full design + multi-round rollout. Test count
+  1843 → 1879 across the four rounds (+36 chain tests).
+
 ### April 27 — Uninstall scanner finds project-level hooks at their actual install location (`fix-uninstall-project-hooks`)
 - Found during the v0.2.0 release-checklist §A1 walkthrough on a
   real install. Operator's three Senkani-managed projects had hook

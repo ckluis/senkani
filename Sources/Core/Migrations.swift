@@ -97,5 +97,335 @@ public enum MigrationRegistry {
             try exec("ALTER TABLE validation_results ADD COLUMN surfaced_at REAL;", allowDuplicateColumn: true)
             try exec("CREATE INDEX IF NOT EXISTS idx_validation_session_outcome_surface ON validation_results(session_id, outcome, surfaced_at);")
         },
+        Migration(version: 4, description: "tamper-evident audit chain (Phase T.5 round 1, token_events)") { db in
+            // Round 1 of Phase T.5 — the tamper-evident audit chain. See
+            // `spec/architecture.md` → "Tamper-Evident Audit Chain (Phase T.5)"
+            // for the full design + multi-round rollout.
+            //
+            // Round 1 ships the additive schema + a fresh anchor for existing
+            // rows. The write path is NOT yet patched — the three new columns
+            // are nullable and default to NULL. Existing rows get a single
+            // anchor row in `chain_anchors` (reason='migration-v4') and a
+            // `chain_anchor_id` pointing at it; their `prev_hash` and
+            // `entry_hash` stay NULL because we deliberately do not fabricate
+            // hashes for history we cannot verify (anchor-from-now). Round 2
+            // (write-path integration) starts producing real hashes for new
+            // inserts; verification walks rows from the anchor's first
+            // hashed row forward, so the anchor itself doesn't have to verify.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v4", detail: msg)
+            }
+
+            // chain_anchors — one row per chain segment. Reason values:
+            //   'fresh-install'   — DB created on a v4+ codebase, no prior history
+            //   'migration-v4'    — pre-T.5 rows folded under a single anchor at upgrade time
+            //   'repair-<rowid>'  — `senkani doctor --repair-chain` opened a new segment (round 4)
+            try exec("""
+                CREATE TABLE IF NOT EXISTS chain_anchors (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    table_name TEXT NOT NULL,
+                    started_at REAL NOT NULL,
+                    started_at_rowid INTEGER NOT NULL,
+                    reason TEXT NOT NULL,
+                    operator_note TEXT
+                );
+                """)
+            try exec("""
+                CREATE INDEX IF NOT EXISTS idx_chain_anchors_table
+                    ON chain_anchors(table_name, id);
+                """)
+
+            // Migration tests exercise the runner directly against historical
+            // partial schemas, so this migration must be self-contained rather
+            // than assuming `TokenEventStore.setupSchema` ran. Same pattern as
+            // v3 for `validation_results`.
+            try exec("""
+                CREATE TABLE IF NOT EXISTS token_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp REAL NOT NULL,
+                    session_id TEXT NOT NULL,
+                    pane_id TEXT,
+                    project_root TEXT,
+                    source TEXT NOT NULL,
+                    tool_name TEXT,
+                    model TEXT,
+                    input_tokens INTEGER DEFAULT 0,
+                    output_tokens INTEGER DEFAULT 0,
+                    saved_tokens INTEGER DEFAULT 0,
+                    cost_cents INTEGER DEFAULT 0,
+                    feature TEXT,
+                    command TEXT
+                );
+                """)
+
+            // Schema additions on token_events. ALTERs are guarded so a
+            // partially-applied migration on a manually-recovered DB doesn't
+            // hard-fail — same convention as v3.
+            try exec("ALTER TABLE token_events ADD COLUMN prev_hash TEXT;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE token_events ADD COLUMN entry_hash TEXT;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE token_events ADD COLUMN chain_anchor_id INTEGER;", allowDuplicateColumn: true)
+            try exec("""
+                CREATE INDEX IF NOT EXISTS idx_token_events_anchor
+                    ON token_events(chain_anchor_id, id);
+                """)
+
+            // Open the migration anchor — only if `token_events` has any
+            // existing rows (a fresh DB will get its 'fresh-install' anchor
+            // lazily when the first row is written in round 2). The MAX(id)
+            // is used as `started_at_rowid` so verification round 2+ knows
+            // "rows up to here predate the chain; rows after this rowid must
+            // verify."
+            var stmt: OpaquePointer?
+            let countSQL = "SELECT COUNT(*), COALESCE(MAX(id), 0) FROM token_events;"
+            guard sqlite3_prepare_v2(db, countSQL, -1, &stmt, nil) == SQLITE_OK else {
+                throw MigrationError.sqlFailed(stage: "v4 count", detail: String(cString: sqlite3_errmsg(db)))
+            }
+            var rowCount: Int64 = 0
+            var maxRowid: Int64 = 0
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                rowCount = sqlite3_column_int64(stmt, 0)
+                maxRowid = sqlite3_column_int64(stmt, 1)
+            }
+            sqlite3_finalize(stmt)
+
+            if rowCount > 0 {
+                let now = Date().timeIntervalSince1970
+                let insertSQL = """
+                    INSERT INTO chain_anchors
+                        (table_name, started_at, started_at_rowid, reason, operator_note)
+                    VALUES ('token_events', ?, ?, 'migration-v4', NULL);
+                """
+                guard sqlite3_prepare_v2(db, insertSQL, -1, &stmt, nil) == SQLITE_OK else {
+                    throw MigrationError.sqlFailed(stage: "v4 anchor insert", detail: String(cString: sqlite3_errmsg(db)))
+                }
+                sqlite3_bind_double(stmt, 1, now)
+                sqlite3_bind_int64(stmt, 2, maxRowid)
+                guard sqlite3_step(stmt) == SQLITE_DONE else {
+                    sqlite3_finalize(stmt)
+                    throw MigrationError.sqlFailed(stage: "v4 anchor step", detail: String(cString: sqlite3_errmsg(db)))
+                }
+                sqlite3_finalize(stmt)
+
+                let anchorId = sqlite3_last_insert_rowid(db)
+                // Backfill: every existing token_events row gets `chain_anchor_id`
+                // pointing at the migration-v4 anchor; `prev_hash` and
+                // `entry_hash` stay NULL by design.
+                let backfillSQL = """
+                    UPDATE token_events
+                       SET chain_anchor_id = \(anchorId)
+                     WHERE chain_anchor_id IS NULL;
+                """
+                try exec(backfillSQL)
+            }
+        },
+        Migration(version: 5, description: "tamper-evident audit chain (Phase T.5 round 3, three remaining tables)") { db in
+            // Round 3 of Phase T.5 — extends the chain to validation_results,
+            // sandboxed_results, and commands. Same anchor-from-now strategy
+            // as v4 (per-table 'migration-v5' anchors for backfilled history;
+            // round 3+ writes get real hashes and verify against the same
+            // anchor with rowid > started_at_rowid).
+            //
+            // Identical idempotency guarantees as v4: ALTERs allow duplicate
+            // columns, table CREATEs are guarded, anchor inserts only fire
+            // when there's history to anchor.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v5", detail: msg)
+            }
+
+            // For each table: ensure schema exists (self-contained per the
+            // v3/v4 pattern), add three chain columns, add index, anchor
+            // existing rows under a per-table 'migration-v5' anchor.
+            //
+            // We also accept that the per-table primary-key column may not be
+            // 'id' — sandboxed_results uses a TEXT PRIMARY KEY. The chain
+            // mechanics don't need a numeric id; what matters is that
+            // started_at_rowid bounds verification, and for sandboxed_results
+            // we use the anchor row id itself as the boundary marker instead
+            // of the table's PK.
+
+            // ----- validation_results -----
+            try exec("""
+                CREATE TABLE IF NOT EXISTS validation_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    validator_name TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    exit_code INTEGER NOT NULL,
+                    raw_output TEXT,
+                    advisory TEXT NOT NULL,
+                    duration_ms INTEGER NOT NULL,
+                    created_at REAL NOT NULL,
+                    delivered INTEGER DEFAULT 0
+                );
+            """)
+            try exec("ALTER TABLE validation_results ADD COLUMN prev_hash TEXT;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE validation_results ADD COLUMN entry_hash TEXT;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE validation_results ADD COLUMN chain_anchor_id INTEGER;", allowDuplicateColumn: true)
+            try exec("CREATE INDEX IF NOT EXISTS idx_validation_results_anchor ON validation_results(chain_anchor_id, id);")
+
+            // ----- sandboxed_results -----
+            try exec("""
+                CREATE TABLE IF NOT EXISTS sandboxed_results (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    command TEXT NOT NULL,
+                    full_output TEXT NOT NULL,
+                    line_count INTEGER NOT NULL,
+                    byte_count INTEGER NOT NULL
+                );
+            """)
+            try exec("ALTER TABLE sandboxed_results ADD COLUMN prev_hash TEXT;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE sandboxed_results ADD COLUMN entry_hash TEXT;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE sandboxed_results ADD COLUMN chain_anchor_id INTEGER;", allowDuplicateColumn: true)
+            // sandboxed_results.id is TEXT — we index on (chain_anchor_id, created_at)
+            // which is monotonic-enough for verification ordering.
+            try exec("CREATE INDEX IF NOT EXISTS idx_sandboxed_results_anchor ON sandboxed_results(chain_anchor_id, created_at);")
+
+            // ----- commands -----
+            // The full commands table has more columns added by historical
+            // ALTERs (budget_decision); the CREATE TABLE here matches the
+            // baseline shape, then the chain ALTERs add three more.
+            try exec("""
+                CREATE TABLE IF NOT EXISTS commands (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL REFERENCES sessions(id),
+                    timestamp REAL NOT NULL,
+                    tool_name TEXT NOT NULL,
+                    command TEXT,
+                    raw_bytes INTEGER NOT NULL,
+                    compressed_bytes INTEGER NOT NULL,
+                    feature TEXT,
+                    output_preview TEXT
+                );
+            """)
+            try exec("ALTER TABLE commands ADD COLUMN prev_hash TEXT;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE commands ADD COLUMN entry_hash TEXT;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE commands ADD COLUMN chain_anchor_id INTEGER;", allowDuplicateColumn: true)
+            try exec("CREATE INDEX IF NOT EXISTS idx_commands_anchor ON commands(chain_anchor_id, id);")
+
+            // Backfill anchors for each table that has rows.
+            try anchorBackfill(db: db, table: "validation_results", rowidColumn: "id")
+            try anchorBackfillSandboxedResults(db: db)
+            try anchorBackfill(db: db, table: "commands", rowidColumn: "id")
+        },
     ]
+
+    // MARK: - v5 helpers
+
+    /// Open a 'migration-v5' anchor for a table that has existing rows and
+    /// backfill `chain_anchor_id` on every row. No-ops on empty tables.
+    private static func anchorBackfill(db: OpaquePointer, table: String, rowidColumn: String) throws {
+        var stmt: OpaquePointer?
+        let countSQL = "SELECT COUNT(*), COALESCE(MAX(\(rowidColumn)), 0) FROM \(table);"
+        guard sqlite3_prepare_v2(db, countSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(stage: "v5 count(\(table))", detail: String(cString: sqlite3_errmsg(db)))
+        }
+        var rowCount: Int64 = 0
+        var maxRowid: Int64 = 0
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            rowCount = sqlite3_column_int64(stmt, 0)
+            maxRowid = sqlite3_column_int64(stmt, 1)
+        }
+        sqlite3_finalize(stmt)
+        guard rowCount > 0 else { return }
+
+        let now = Date().timeIntervalSince1970
+        let insertSQL = """
+            INSERT INTO chain_anchors
+                (table_name, started_at, started_at_rowid, reason, operator_note)
+            VALUES (?, ?, ?, 'migration-v5', NULL);
+        """
+        guard sqlite3_prepare_v2(db, insertSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(stage: "v5 anchor insert(\(table))", detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_bind_text(stmt, 1, (table as NSString).utf8String, -1, nil)
+        sqlite3_bind_double(stmt, 2, now)
+        sqlite3_bind_int64(stmt, 3, maxRowid)
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            sqlite3_finalize(stmt)
+            throw MigrationError.sqlFailed(stage: "v5 anchor step(\(table))", detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_finalize(stmt)
+        let anchorId = sqlite3_last_insert_rowid(db)
+
+        var err: UnsafeMutablePointer<CChar>?
+        let backfillSQL = """
+            UPDATE \(table)
+               SET chain_anchor_id = \(anchorId)
+             WHERE chain_anchor_id IS NULL;
+        """
+        if sqlite3_exec(db, backfillSQL, nil, nil, &err) != SQLITE_OK {
+            let msg = err.map { String(cString: $0) } ?? "unknown"
+            if let err { sqlite3_free(err) }
+            throw MigrationError.sqlFailed(stage: "v5 backfill(\(table))", detail: msg)
+        }
+    }
+
+    /// `sandboxed_results.id` is TEXT, so we order by `created_at` (monotonic
+    /// at write time) instead of an integer rowid for the started_at_rowid
+    /// bound. The verifier walks rows with `created_at` greater than the
+    /// stored bound (we encode the timestamp as a Double round-tripped
+    /// through Int64-bit-pattern below — but in v5 we accept that the
+    /// 'migration-v5' segment of sandboxed_results has zero rows that can
+    /// chain-verify because there's no clean ordering on TEXT id; we record
+    /// `started_at_rowid = 0` and the verifier instead uses `id NOT IN
+    /// (existing TEXT ids)` for that segment. Round 4 cleans this up if the
+    /// tradeoff matters in practice.).
+    private static func anchorBackfillSandboxedResults(db: OpaquePointer) throws {
+        var stmt: OpaquePointer?
+        let countSQL = "SELECT COUNT(*) FROM sandboxed_results;"
+        guard sqlite3_prepare_v2(db, countSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(stage: "v5 count(sandboxed_results)", detail: String(cString: sqlite3_errmsg(db)))
+        }
+        var rowCount: Int64 = 0
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            rowCount = sqlite3_column_int64(stmt, 0)
+        }
+        sqlite3_finalize(stmt)
+        guard rowCount > 0 else { return }
+
+        let now = Date().timeIntervalSince1970
+        let insertSQL = """
+            INSERT INTO chain_anchors
+                (table_name, started_at, started_at_rowid, reason, operator_note)
+            VALUES ('sandboxed_results', ?, 0, 'migration-v5',
+                'TEXT-id table; verifier walks rows whose created_at > anchor.started_at');
+        """
+        guard sqlite3_prepare_v2(db, insertSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(stage: "v5 anchor insert(sandboxed_results)", detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_bind_double(stmt, 1, now)
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            sqlite3_finalize(stmt)
+            throw MigrationError.sqlFailed(stage: "v5 anchor step(sandboxed_results)", detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_finalize(stmt)
+        let anchorId = sqlite3_last_insert_rowid(db)
+
+        var err: UnsafeMutablePointer<CChar>?
+        let backfillSQL = """
+            UPDATE sandboxed_results
+               SET chain_anchor_id = \(anchorId)
+             WHERE chain_anchor_id IS NULL;
+        """
+        if sqlite3_exec(db, backfillSQL, nil, nil, &err) != SQLITE_OK {
+            let msg = err.map { String(cString: $0) } ?? "unknown"
+            if let err { sqlite3_free(err) }
+            throw MigrationError.sqlFailed(stage: "v5 backfill(sandboxed_results)", detail: msg)
+        }
+    }
 }

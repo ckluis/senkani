@@ -14,9 +14,16 @@ import SQLite3
 final class CommandStore: @unchecked Sendable {
     private unowned let parent: SessionDatabase
 
+    // T.5 round 3 — chain state for the `commands` table. Both
+    // `recordCommand` and `recordBudgetDecision` write through this state.
+    private let chain = ChainState(table: "commands")
+
     init(parent: SessionDatabase) {
         self.parent = parent
     }
+
+    /// Drop the chain cache after a `--repair-chain` motion.
+    func invalidateChainCache() { chain.invalidate() }
 
     // MARK: - Schema
 
@@ -155,8 +162,8 @@ final class CommandStore: @unchecked Sendable {
         // a single `Authorization: Bearer ey...` line fits inside that cap.
         let previewRedaction = PersistenceRedaction.redact(outputPreview.map { String($0.prefix(500)) })
         let preview = previewRedaction.redacted
-        parent.queue.async { [weak parent] in
-            guard let parent, let db = parent.db else { return }
+        parent.queue.async { [weak parent, weak self] in
+            guard let parent, let self, let db = parent.db else { return }
 
             guard sqlite3_exec(db, "BEGIN IMMEDIATE;", nil, nil, nil) == SQLITE_OK else { return }
             var committed = false
@@ -166,9 +173,30 @@ final class CommandStore: @unchecked Sendable {
                 }
             }
 
+            // T.5 round 3: chain-aware insert. Canonical bytes include every
+            // data column (NULL for unbound legacy ones) so the verifier can
+            // re-derive the hash from a SELECT *.
+            let anchorId = self.chain.resolveAnchorId(db: db)
+            let prevHash = self.chain.latestEntryHash(db: db, anchorId: anchorId)
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "session_id":       .text(sessionId),
+                "timestamp":        .real(now),
+                "tool_name":        .text(toolName),
+                "command":          redactedCommand.map { .text($0) } ?? .null,
+                "raw_bytes":        .integer(Int64(rawBytes)),
+                "compressed_bytes": .integer(Int64(compressedBytes)),
+                "feature":          feature.map { .text($0) } ?? .null,
+                "output_preview":   preview.map { .text($0) } ?? .null,
+                "budget_decision":  .null,
+            ]
+            let entryHash = ChainHasher.entryHash(
+                table: "commands", columns: columns, prev: prevHash
+            )
+
             let sql = """
-                INSERT INTO commands (session_id, timestamp, tool_name, command, raw_bytes, compressed_bytes, feature, output_preview)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                INSERT INTO commands (session_id, timestamp, tool_name, command, raw_bytes, compressed_bytes, feature, output_preview,
+                                     prev_hash, entry_hash, chain_anchor_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -192,9 +220,20 @@ final class CommandStore: @unchecked Sendable {
             } else {
                 sqlite3_bind_null(stmt, 8)
             }
+            if let prevH = prevHash {
+                sqlite3_bind_text(stmt, 9, (prevH as NSString).utf8String, -1, nil)
+            } else {
+                sqlite3_bind_null(stmt, 9)
+            }
+            sqlite3_bind_text(stmt, 10, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(stmt, 11, anchorId)
             let insertRC = sqlite3_step(stmt)
             sqlite3_finalize(stmt)
             guard insertRC == SQLITE_DONE else { return }
+            // Cache update fires only on commit (committed=true after the
+            // sessions UPDATE succeeds). Wire through the existing commit
+            // flow rather than this early return.
+            self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
 
             let updateSQL = """
                 UPDATE sessions SET
@@ -581,11 +620,33 @@ final class CommandStore: @unchecked Sendable {
         compressedBytes: Int = 0
     ) {
         let now = Date().timeIntervalSince1970
-        parent.queue.async { [weak parent] in
-            guard let parent, let db = parent.db else { return }
+        parent.queue.async { [weak parent, weak self] in
+            guard let parent, let self, let db = parent.db else { return }
+
+            // T.5 round 3: chain-aware budget-decision insert. Canonical
+            // bytes match the SELECT-* shape — all eight data columns plus
+            // budget_decision; unbound columns are NULL.
+            let anchorId = self.chain.resolveAnchorId(db: db)
+            let prevHash = self.chain.latestEntryHash(db: db, anchorId: anchorId)
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "session_id":       .text(sessionId),
+                "timestamp":        .real(now),
+                "tool_name":        .text(toolName),
+                "command":          .null,
+                "raw_bytes":        .integer(Int64(rawBytes)),
+                "compressed_bytes": .integer(Int64(compressedBytes)),
+                "feature":          .null,
+                "output_preview":   .null,
+                "budget_decision":  .text(decision),
+            ]
+            let entryHash = ChainHasher.entryHash(
+                table: "commands", columns: columns, prev: prevHash
+            )
+
             let sql = """
-                INSERT INTO commands (session_id, timestamp, tool_name, raw_bytes, compressed_bytes, budget_decision)
-                VALUES (?, ?, ?, ?, ?, ?);
+                INSERT INTO commands (session_id, timestamp, tool_name, raw_bytes, compressed_bytes, budget_decision,
+                                     prev_hash, entry_hash, chain_anchor_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -596,7 +657,16 @@ final class CommandStore: @unchecked Sendable {
             sqlite3_bind_int64(stmt, 4, Int64(rawBytes))
             sqlite3_bind_int64(stmt, 5, Int64(compressedBytes))
             sqlite3_bind_text(stmt, 6, (decision as NSString).utf8String, -1, nil)
-            sqlite3_step(stmt)
+            if let prevH = prevHash {
+                sqlite3_bind_text(stmt, 7, (prevH as NSString).utf8String, -1, nil)
+            } else {
+                sqlite3_bind_null(stmt, 7)
+            }
+            sqlite3_bind_text(stmt, 8, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(stmt, 9, anchorId)
+            if sqlite3_step(stmt) == SQLITE_DONE {
+                self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
+            }
         }
     }
 

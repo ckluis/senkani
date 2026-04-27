@@ -233,6 +233,7 @@ public final class SessionDatabase: @unchecked Sendable {
                     Logger.log("db.session.migrations_applied", fields: [
                         "versions": .string(applied.map(String.init).joined(separator: ",")),
                         "count": .int(applied.count),
+                        "path": .path(path),
                         "outcome": .string("success"),
                     ])
                 }

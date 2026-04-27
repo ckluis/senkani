@@ -9,7 +9,15 @@ import Darwin.POSIX
 /// Tests for the JSONL → Unix socket migration on the pane IPC path.
 /// Exercises `PaneIPC.sendFireAndForget` against a real bound UDS listener
 /// in a temp directory — no libc mocking, no SocketServerManager dependency.
-@Suite("PaneIPC — socket migration (fire-and-forget)")
+// `.serialized` is required: the largeFrameRoundTrip test launches an
+// `async let` over `Task.detached` to drain a multi-KB frame
+// concurrently with the send. Under cooperative-pool contention from
+// other parallel suites, the detached task may not start polling
+// before the sender's 200 ms `SO_SNDTIMEO` expires — the kernel send
+// buffer fills and the write fails. Serializing this suite removes
+// the contention without forcing a slower socket timeout in
+// production.
+@Suite("PaneIPC — socket migration (fire-and-forget)", .serialized)
 struct PaneSocketMigrationTests {
 
     // MARK: - Helpers

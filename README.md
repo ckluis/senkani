@@ -165,7 +165,7 @@ The full caveat — including the action item, owner, and the `tools/check-multi
 | Filter throughput | > 10 k lines/sec |
 | Symbol search | < 5 ms cold, < 1 ms cached |
 | Secret scan | < 2 ms / KB |
-| Unit tests | **1903 passing** |
+| Unit tests | **1912 passing** |
 | Binary size | ~28 MB universal |
 
 ---

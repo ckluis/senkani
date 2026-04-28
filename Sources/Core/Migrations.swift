@@ -322,6 +322,51 @@ public enum MigrationRegistry {
             try anchorBackfillSandboxedResults(db: db)
             try anchorBackfill(db: db, table: "commands", rowidColumn: "id")
         },
+        Migration(version: 6, description: "pane_refresh_state for V.1 round 2 (Dashboard tile persistence)") { db in
+            // V.1 round 2 — persist `PaneRefreshState` per (project_root, tile_id)
+            // so Dashboard tiles survive app restart. Append-only by design: each
+            // `applyOutcome` writes a new row; rehydration takes the row with
+            // MAX(id) per tile. Append-only is also what the chain primitives
+            // need — no UPDATEs that would invalidate `entry_hash`.
+            //
+            // Schema includes the three chain columns (`prev_hash`, `entry_hash`,
+            // `chain_anchor_id`) so writes go through the same `ChainHasher` /
+            // `ChainState` path as `token_events`. Idempotency: ALTERs allow
+            // duplicate columns; the CREATE TABLE is guarded.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v6", detail: msg)
+            }
+
+            try exec("""
+                CREATE TABLE IF NOT EXISTS pane_refresh_state (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_root TEXT NOT NULL,
+                    tile_id TEXT NOT NULL,
+                    cache_type TEXT NOT NULL,
+                    cache_duration REAL NOT NULL,
+                    next_update REAL NOT NULL,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    notice TEXT,
+                    content_available INTEGER NOT NULL DEFAULT 0,
+                    written_at REAL NOT NULL,
+                    prev_hash TEXT,
+                    entry_hash TEXT,
+                    chain_anchor_id INTEGER
+                );
+            """)
+            // Latest-per-tile lookup is the rehydration hot path; index covers it.
+            try exec("CREATE INDEX IF NOT EXISTS idx_pane_refresh_state_latest ON pane_refresh_state(project_root, tile_id, id DESC);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_pane_refresh_state_anchor ON pane_refresh_state(chain_anchor_id, id);")
+
+            // No backfill — table is brand new this migration.
+        },
     ]
 
     // MARK: - v5 helpers

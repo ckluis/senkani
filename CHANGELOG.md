@@ -9,6 +9,45 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 27 — `pane_refresh_state` persistence + Dashboard tile coordinator (`phase-v1b-pane-refresh-persistence`, V.1 round 2)
+- `Sources/Core/Stores/PaneRefreshStateStore.swift` and migration v6
+  add `pane_refresh_state` (project_root, tile_id, the seven Glance
+  state fields, plus `prev_hash` / `entry_hash` / `chain_anchor_id`
+  for tamper-evidence). Append-only by design — every
+  `applyOutcome` writes a fresh row; `paneRefreshStates` reads
+  latest-per-tile via `idx_pane_refresh_state_latest`. Writes go
+  through `ChainState`, so verification + repair work the same
+  way as the four T.5 chain participants.
+  `ChainVerifier.verifyAll` now returns five entries (token_events,
+  validation_results, sandboxed_results, commands,
+  pane_refresh_state).
+- `Sources/Core/PaneRefreshCoordinator.swift` owns the three round-2
+  Dashboard tiles — budget burn (30 s), validation queue (5 s),
+  repo dirty state (10 s) — under one `PaneRefreshWorkerPool`
+  (default cap 4). `tick(now:)` sweeps every refresher whose
+  `requiresUpdate` is true, persists the outcome, and bumps the
+  `pane_refresh.persisted` counter. `rehydrate()` restores tile
+  state on app start in one query and bumps the
+  `pane_refresh.rehydrated` counter.
+- `SenkaniApp/Views/DashboardView.swift` adds a "Live Tiles"
+  section rendering the three coordinator-backed states; the
+  existing 2 s timer drives both the legacy `refreshData` path
+  and the new `coordinator.tick()` sweep. Visual polish for the
+  notice strip ships in V.1 round 3 (`phase-v1c`).
+- 9 new tests across
+  `Tests/SenkaniTests/PaneRefreshStateStoreTests.swift` +
+  `Tests/SenkaniTests/PaneRefreshCoordinatorTests.swift`:
+  migration shape, append-only / latest-wins, bulk rehydrate,
+  chain OK after clean writes, tamper detection at the right
+  rowid, tick persists + surfaces outcomes, rehydrate round-trip,
+  failure outcome propagates to snapshot, bounded pool peak ≤ 4
+  across 12 simultaneous wakes.
+- _Deferred to a follow-up:_ FSEvents-driven invalidation for
+  `repo_dirty_state` (today's 10 s polling is the bridge), and
+  rewiring the existing summary cards on the scheduler (V.1
+  round 3 territory).
+- Test count: 1903 → 1912 (+9).
+
 ### April 27 — `PaneRefreshScheduler` Core protocol layer (`phase-v1-pane-refresh-scheduler`, V.1 round 1)
 - `Sources/Core/PaneRefreshScheduler.swift` ships the per-tile
   refresh contract borrowed from Glance's `widgetBase`. The

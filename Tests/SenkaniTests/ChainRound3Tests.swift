@@ -214,7 +214,10 @@ struct ChainRound3Tests {
         db.flushWrites()
 
         let perTable = ChainVerifier.verifyAll(db)
-        #expect(perTable.count == 4)
+        // Five chain participants: token_events + 3 from T.5 round 3 + the
+        // pane_refresh_state table added in V.1 round 2 (no rows yet, so its
+        // entry comes back as .noChain — still counted in the map shape).
+        #expect(perTable.count == 5)
         for table in ["token_events", "validation_results", "sandboxed_results", "commands"] {
             guard let r = perTable[table] else {
                 Issue.record("missing result for \(table)")

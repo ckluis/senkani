@@ -66,6 +66,7 @@ public enum ChainVerifier {
                 "validation_results": verifyTable(db: db, table: "validation_results", verify: verifyAnchorValidationResults),
                 "sandboxed_results":  verifyTable(db: db, table: "sandboxed_results",  verify: verifyAnchorSandboxedResults),
                 "commands":           verifyTable(db: db, table: "commands",           verify: verifyAnchorCommands),
+                "pane_refresh_state": verifyTable(db: db, table: "pane_refresh_state", verify: verifyAnchorPaneRefreshState),
             ]
         }
     }
@@ -88,6 +89,13 @@ public enum ChainVerifier {
         return database.queue.sync {
             guard let db = database.db else { return .noChain }
             return verifyTable(db: db, table: "commands", verify: verifyAnchorCommands)
+        }
+    }
+
+    public static func verifyPaneRefreshState(_ database: SessionDatabase) -> Result {
+        return database.queue.sync {
+            guard let db = database.db else { return .noChain }
+            return verifyTable(db: db, table: "pane_refresh_state", verify: verifyAnchorPaneRefreshState)
         }
     }
 
@@ -309,6 +317,37 @@ public enum ChainVerifier {
             ]
             let prev = optionalText(stmt, 10)
             let stored = sqlite3_column_text(stmt, 11).map { String(cString: $0) } ?? ""
+            return (rowid, columns, prev, stored)
+        }
+    }
+
+    /// Walk `pane_refresh_state` rows for one anchor.
+    /// `entry_hash IS NOT NULL` filter — see `verifyAnchorTokenEvents` notes.
+    private static func verifyAnchorPaneRefreshState(db: OpaquePointer, anchor: Anchor) -> Result? {
+        let sql = """
+            SELECT id, project_root, tile_id, cache_type, cache_duration,
+                   next_update, retry_count, last_error, notice, content_available,
+                   written_at, prev_hash, entry_hash
+              FROM pane_refresh_state
+             WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
+             ORDER BY id ASC;
+        """
+        return walkTable(db: db, table: "pane_refresh_state", anchor: anchor, sql: sql) { stmt in
+            let rowid = sqlite3_column_int64(stmt, 0)
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "project_root":      textValue(stmt, 1),
+                "tile_id":           textValue(stmt, 2),
+                "cache_type":        textValue(stmt, 3),
+                "cache_duration":    .real(sqlite3_column_double(stmt, 4)),
+                "next_update":       .real(sqlite3_column_double(stmt, 5)),
+                "retry_count":       .integer(sqlite3_column_int64(stmt, 6)),
+                "last_error":        textOrNull(stmt, 7),
+                "notice":            textOrNull(stmt, 8),
+                "content_available": .integer(sqlite3_column_int64(stmt, 9)),
+                "written_at":        .real(sqlite3_column_double(stmt, 10)),
+            ]
+            let prev = optionalText(stmt, 11)
+            let stored = sqlite3_column_text(stmt, 12).map { String(cString: $0) } ?? ""
             return (rowid, columns, prev, stored)
         }
     }

@@ -57,4 +57,18 @@ extension KnowledgeStore {
     public func search(query: String, limit: Int = 10) -> [KnowledgeSearchResult] {
         entityStore.search(query: query, limit: limit)
     }
+
+    /// Phase V.5c — count legacy NULL-authorship rows since a date. Used
+    /// by `senkani authorship backfill` as the dry-run preview surface.
+    public func countNullAuthorship(since: Date) -> Int {
+        entityStore.countNullAuthorship(since: since)
+    }
+
+    /// Phase V.5c — bulk-tag legacy NULL-authorship rows. Matches only
+    /// rows whose `authorship IS NULL`; the in-band `.unset` sentinel is
+    /// preserved as an explicit operator deferral. Idempotent.
+    @discardableResult
+    public func backfillNullAuthorship(since: Date, tag: AuthorshipTag) -> Int {
+        entityStore.backfillNullAuthorship(since: since, tag: tag)
+    }
 }

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>senkani authorship — CLI reference</title>
+<meta name="description" content="Bulk-tag legacy KB rows whose authorship column is NULL. Operator-triggered; never automatic.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../../assets/theme.css">
+</head>
+<body>
+<a href="#main" class="skip-nav">Skip to main content</a>
+<nav class="topnav" aria-label="Primary navigation">
+  <a class="wordmark" href="../../../">sen<span class="accent">kani</span><small>compression layer for AI coding agents</small></a>
+  <button class="topnav-hamburger" aria-label="Open navigation menu" aria-expanded="false" aria-controls="topnav-links"><span></span><span></span><span></span></button>
+  <div class="topnav-links" id="topnav-links">
+    <a href="../../../docs/what-is-senkani.html">What is it?</a>
+    <a href="../../../docs/concepts.html">Concepts</a>
+    <a href="../../../docs/reference.html">Reference</a>
+    <a href="../../../docs/guides.html">Guides</a>
+    <a href="../../../docs/status.html">Status</a>
+    <div class="topnav-search"><input type="search" id="site-search" placeholder="Search · /" aria-label="Search the site"></div>
+    <a href="https://github.com/ckluis/senkani" class="btn-nav">GitHub →</a>
+  </div>
+</nav>
+<main id="main" class="wiki-layout">
+  <aside class="wiki-nav" aria-label="CLI commands navigation">
+    <div class="wiki-nav-group">
+      <h4>Reference</h4>
+      <ul>
+        <li><a href="../../../docs/reference.html">All reference</a></li>
+        <li><a href="../../../docs/reference/mcp.html">MCP tools</a></li>
+        <li><a href="../../../docs/reference/cli.html">CLI commands index</a></li>
+        <li><a href="../../../docs/reference/options.html">Options &amp; env</a></li>
+        <li><a href="../../../docs/reference/panes.html">Panes</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>CLI commands (23)</h4>
+      <ul>
+        <li><a href="../../../docs/reference/cli/senkani-exec.html"><code>senkani exec</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-search.html"><code>senkani search</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-fetch.html"><code>senkani fetch</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-explore.html"><code>senkani explore</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-index.html"><code>senkani index</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-validate.html"><code>senkani validate</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-stats.html"><code>senkani stats</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-export.html"><code>senkani export</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-wipe.html"><code>senkani wipe</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-bench.html"><code>senkani bench</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-init.html"><code>senkani init</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-doctor.html"><code>senkani doctor</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-compare.html"><code>senkani compare</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-grammars.html"><code>senkani grammars</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-schedule.html"><code>senkani schedule</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-uninstall.html"><code>senkani uninstall</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-kb.html"><code>senkani kb</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-eval.html"><code>senkani eval</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-ml-eval.html"><code>senkani ml-eval</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-learn.html"><code>senkani learn</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-authorship.html" class="active"><code>senkani authorship</code></a></li>
+      </ul>
+    </div>
+  </aside>
+  <article class="wiki-main">
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../">Home</a> <span class="sep">›</span>
+      <a href="../../../docs/reference.html">Reference</a> <span class="sep">›</span>
+      <a href="../../../docs/reference/cli.html">CLI commands</a> <span class="sep">›</span>
+      <span class="here"><code>senkani authorship</code></span>
+    </nav>
+    <span class="quadrant reference">Reference · Information</span>
+    <h1 class="page-title"><code style="background:none;padding:0;color:var(--accent-lo);font-size:0.82em;">senkani authorship</code></h1>
+    <div class="tag-row" style="margin-bottom:18px;"><span class="badge badge-live">Live</span></div>
+
+    <p class="lede">Manage knowledge-base authorship tags. The <code>backfill</code> subcommand bulk-tags legacy rows whose <code>authorship</code> column is NULL — the operator-triggered path for healing pre-V.5 KB state.</p>
+
+    <h2>Syntax</h2>
+    <div class="ref-signature">senkani authorship backfill --since YYYY-MM-DD --tag &lt;aiAuthored|humanAuthored|mixed&gt; [--yes] [--root &lt;path&gt;]</div>
+
+    <h2>Behavior</h2>
+    <p>Walks <code>knowledge_entities</code> rows whose <code>authorship</code> column is literally NULL <em>and</em> whose <code>created_at &gt;= since</code>, then writes the chosen tag. The in-band <code>.unset</code> sentinel (an explicit operator deferral from the V.5b prompt path) and the three explicit tags are <strong>never</strong> overwritten.</p>
+    <p>Without <code>--yes</code>, the command prints a dry-run preview (project root, count, tag) and exits without writing. With <code>--yes</code>, it writes inside a single SQL transaction and is idempotent — a second pass with the same args matches zero rows because the predicate (<code>authorship IS NULL</code>) no longer holds.</p>
+    <p>Each non-empty batch records one row in the chain-participating <code>commands</code> table (Phase T.5 round 3) with <code>tool_name=&quot;authorship.backfill&quot;</code>. The row carries a 64-char SHA-256 <code>entry_hash</code> — that is the &quot;self-audited row in the chain&quot; required by V.5c.</p>
+    <p>Cavoukian invariant: bulk operations are operator-triggered, never automatic. The CLI rejects <code>--tag unset</code> because backfill exists to record an explicit decision.</p>
+
+    <h2>Example</h2>
+    <pre class="code">$ senkani authorship backfill --since 2026-01-01 --tag humanAuthored
+Project: /Users/op/code/myproj
+Found 14 legacy row(s) with NULL authorship created on/after 2026-01-01.
+Would tag as: Human (human-authored).
+
+DRY RUN — nothing written. Re-run with --yes to apply.
+
+$ senkani authorship backfill --since 2026-01-01 --tag humanAuthored --yes
+Tagged 14 row(s) as Human (human-authored).
+Audit-chain row recorded (commands table, session=8a3f0c9e…).</pre>
+
+    <h2>Flags</h2>
+    <div class="ref-io-table">
+      <div class="head">Flag</div><div class="head"></div><div class="head"></div><div class="head">Description</div>
+      <div class="k">--since</div><div class="t">YYYY-MM-DD</div><div class="default">required</div><div class="desc">Lower bound on <code>created_at</code> (UTC). Rows older than this are left alone.</div>
+      <div class="k">--tag</div><div class="t">enum</div><div class="default">required</div><div class="desc">One of <code>aiAuthored</code>, <code>humanAuthored</code>, <code>mixed</code>. The <code>unset</code> sentinel is rejected.</div>
+      <div class="k">--yes</div><div class="t"></div><div class="default">false</div><div class="desc">Confirm the write. Without this flag the command prints a dry-run preview and exits.</div>
+      <div class="k">--root</div><div class="t">path</div><div class="default">cwd</div><div class="desc">Project root (the KB lives at <code>&lt;root&gt;/.senkani/vault.db</code>).</div>
+    </div>
+
+    <div class="seealso">
+      <h3>See also</h3>
+      <ul>
+        <li><a href="../../../docs/reference/cli/senkani-kb.html"><code>senkani kb</code></a></li>
+        <li><a href="../../../docs/concepts/knowledge-base.html">Knowledge base</a></li>
+      </ul>
+    </div>
+
+    <div class="source-pointer">
+      <strong>Source:</strong> <code>Sources/CLI/AuthorshipCommand.swift</code>, <code>Sources/Core/AuthorshipBackfillRunner.swift</code>, <code>Sources/Core/KnowledgeStore/EntityStore.swift</code> (<code>backfillNullAuthorship</code>)
+    </div>
+  </article>
+</main>
+<footer class="site-foot">
+  <div class="foot-grid">
+    <div>
+      <div class="foot-wordmark">sen<span class="accent">kani</span></div>
+      <p class="foot-tagline"><span lang="zh">閃蟹</span> — "fast claw." A native macOS binary written in Swift.</p>
+    </div>
+    <div class="foot-col"><h4>Product</h4><ul><li><a href="../../../docs/what-is-senkani.html">What is it?</a></li><li><a href="../../../docs/concepts.html">Concepts</a></li><li><a href="../../../docs/reference.html">Reference</a></li><li><a href="../../../docs/guides.html">Guides</a></li><li><a href="../../../docs/status.html">Status</a></li></ul></div>
+    <div class="foot-col"><h4>Reference</h4><ul><li><a href="../../../docs/reference/mcp.html">MCP tools</a></li><li><a href="../../../docs/reference/cli.html">CLI commands</a></li><li><a href="../../../docs/reference/options.html">Options &amp; env</a></li><li><a href="../../../docs/reference/panes.html">Panes</a></li><li><a href="../../../docs/changelog.html">Changelog</a></li></ul></div>
+    <div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li><li><a href="../../../docs/guides/install.html">Install</a></li><li><a href="../../../docs/guides/troubleshooting.html">Troubleshooting</a></li><li><a href="../../../docs/about.html">About &amp; license</a></li></ul></div>
+  </div>
+  <div class="foot-meta">
+    <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
+    <span><a href="../../../docs/changelog.html">v0.2.0 changelog</a></span>
+  </div>
+</footer>
+<script src="../../../assets/app.js" defer></script>
+</body>
+</html>

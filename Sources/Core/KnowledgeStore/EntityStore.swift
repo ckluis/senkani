@@ -293,6 +293,69 @@ final class EntityStore: @unchecked Sendable {
         return min(1.0, delta / (7.0 * 86_400.0))
     }
 
+    // MARK: - Phase V.5c — bulk authorship backfill (legacy NULL only)
+
+    /// Count rows whose `authorship` column is **literally NULL** (not the
+    /// in-band `.unset` sentinel) and whose `created_at >= since`. This is
+    /// the dry-run preview surface for `senkani authorship backfill`.
+    /// Cavoukian: bulk operations are operator-triggered — the count comes
+    /// out, the operator decides, no implicit writes ever happen here.
+    func countNullAuthorship(since: Date) -> Int {
+        let cutoff = since.timeIntervalSince1970
+        return parent.queue.sync {
+            guard let db = parent.db else { return 0 }
+            var stmt: OpaquePointer?
+            let sql = """
+                SELECT COUNT(*) FROM knowledge_entities
+                 WHERE created_at >= ? AND authorship IS NULL;
+                """
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_double(stmt, 1, cutoff)
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+            return Int(sqlite3_column_int64(stmt, 0))
+        }
+    }
+
+    /// Bulk-tag legacy rows. Matches `created_at >= since AND authorship
+    /// IS NULL` only — never touches the in-band `.unset` sentinel (which
+    /// represents an explicit operator deferral) or any of the three
+    /// already-resolved tags. Idempotent: a second call with the same
+    /// args matches zero rows because the first pass flipped them off the
+    /// NULL predicate. Returns the number of rows written.
+    @discardableResult
+    func backfillNullAuthorship(since: Date, tag: AuthorshipTag) -> Int {
+        let cutoff = since.timeIntervalSince1970
+        let now = Date().timeIntervalSince1970
+        let raw = AuthorshipTracker.encode(tag)
+        return parent.queue.sync {
+            guard let db = parent.db else { return 0 }
+            guard sqlite3_exec(db, "BEGIN IMMEDIATE;", nil, nil, nil) == SQLITE_OK else { return 0 }
+            var committed = false
+            defer {
+                if !committed { sqlite3_exec(db, "ROLLBACK;", nil, nil, nil) }
+            }
+            var stmt: OpaquePointer?
+            let sql = """
+                UPDATE knowledge_entities
+                   SET authorship = ?, modified_at = ?
+                 WHERE created_at >= ? AND authorship IS NULL;
+                """
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (raw as NSString).utf8String, -1, nil)
+            sqlite3_bind_double(stmt, 2, now)
+            sqlite3_bind_double(stmt, 3, cutoff)
+            guard sqlite3_step(stmt) == SQLITE_DONE else { return 0 }
+            let changes = Int(sqlite3_changes(db))
+            if sqlite3_exec(db, "COMMIT;", nil, nil, nil) == SQLITE_OK {
+                committed = true
+                return changes
+            }
+            return 0
+        }
+    }
+
     // MARK: - FTS5 Search
 
     /// Full-text search across name and compiled understanding.

@@ -9,6 +9,37 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 28 — `senkani authorship backfill` CLI (`phase-v5c-authorship-cli-backfill`, V.5 round 3)
+- `Sources/CLI/AuthorshipCommand.swift` adds the operator-triggered
+  `senkani authorship backfill --since YYYY-MM-DD --tag <aiAuthored|humanAuthored|mixed>`
+  CLI for healing legacy NULL `authorship` rows on the KB
+  (`knowledge_entities`). The in-band `.unset` sentinel is **never**
+  overwritten — it represents an explicit operator deferral, distinct
+  from the pre-V.5 NULL state. Without `--yes` the command prints a
+  dry-run preview (count + project root + tag); `--yes` writes.
+- `Sources/Core/KnowledgeStore/EntityStore.swift` gains
+  `countNullAuthorship(since:)` and `backfillNullAuthorship(since:tag:)`.
+  The UPDATE matches `created_at >= since AND authorship IS NULL` only,
+  wrapped in `BEGIN IMMEDIATE`/`COMMIT`. Idempotent by construction —
+  a second pass with the same args writes 0 rows because the predicate
+  no longer matches.
+- `Sources/Core/AuthorshipBackfillRunner.swift` bridges the KB write
+  with the chain-participating audit log: each non-empty batch opens a
+  fresh session in `SessionDatabase.shared` and records one row in the
+  `commands` table with `tool_name="authorship.backfill"`. That row
+  carries `prev_hash` / `entry_hash` / `chain_anchor_id` (Phase T.5
+  round 3 chain) — the "self-audited row in the chain" required by
+  V.5c.
+- Cavoukian invariants: bulk operations are operator-triggered, never
+  automatic; the CLI rejects `--tag unset` because backfill exists to
+  record an explicit decision; `.unset` and the three explicit tags are
+  preserved on every backfill pass.
+- Tests: 7 new tests in `Tests/SenkaniTests/AuthorshipBackfillTests.swift`
+  cover the SQL contract (since-cutoff, idempotency, `.unset` and
+  explicit-tag preservation, all three explicit tags) plus the
+  audit-chain runner integration (one chain row per non-empty batch
+  with a 64-char SHA-256 entry_hash; no audit row on empty batches).
+
 ### April 28 — Save-path authorship prompt sheet (`phase-v5b-authorship-ui-prompts`, V.5 round 2)
 - `Sources/Core/AuthorshipPromptResolver.swift` is a pure-Core resolver
   that owns the V.5b decision: `needsPrompt(priorAuthorship:)` returns

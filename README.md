@@ -181,7 +181,7 @@ The full caveat — including the action item, owner, and the `tools/check-multi
 | **MCP** | Core, Filter, Indexer, Bundle, MLX | 18 MCP tools, socket server (mcp + hook + pane), vision + embedding inference, Gemma 4 rationale adapter |
 | **Bundle** | Core, Filter, Indexer | `BundleComposer` — budget-bounded repo-snapshot composition for `senkani_bundle` |
 | **HookRelay** | — | Zero-dep hook relay library shared by senkani-hook binary and app's --hook mode |
-| **CLI** | Core, Filter, Indexer, Bench | 18 commands: exec, search, bench, doctor, grammars, kb, eval, learn, init, … |
+| **CLI** | Core, Filter, Indexer, Bench | 23 commands: exec, search, bench, doctor, grammars, kb, eval, learn, init, authorship, … |
 | **SenkaniApp** | All + SwiftTerm | SwiftUI workspace: 18 pane types, multi-project, ⌘K palette, dashboard, menu bar |
 
 ---

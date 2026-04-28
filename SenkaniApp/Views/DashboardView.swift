@@ -115,24 +115,61 @@ struct DashboardView: View {
     }
 
     private func liveTileCard(title: String, state: PaneRefreshState, valueText: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let display = PaneRefreshTileDisplay(tileTitle: title, state: state, valueText: valueText)
+        return VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
             Text(valueText)
                 .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                .foregroundStyle(state.lastError != nil ? .red
-                                 : (state.notice != nil ? .yellow : .primary))
-            if let notice = state.notice {
-                Text(notice)
-                    .font(.system(size: 9))
-                    .foregroundStyle(.yellow)
+                .foregroundStyle(toneTextColor(display.tone))
+            if display.hasErrorStrip, let err = display.errorText {
+                tileNoticeStrip(
+                    iconSystemName: display.iconSystemName ?? "exclamationmark.octagon.fill",
+                    text: err,
+                    foreground: .red,
+                    background: Color.red.opacity(0.12)
+                )
+            } else if display.hasNoticeStrip, let notice = display.noticeText {
+                tileNoticeStrip(
+                    iconSystemName: display.iconSystemName ?? "exclamationmark.triangle.fill",
+                    text: notice,
+                    foreground: .yellow,
+                    background: Color.yellow.opacity(0.12)
+                )
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(Color(.controlBackgroundColor).opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 6))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(display.accessibilityLabel))
+    }
+
+    private func tileNoticeStrip(iconSystemName: String, text: String, foreground: Color, background: Color) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: iconSystemName)
+                .font(.system(size: 9))
+                .foregroundStyle(foreground)
+            Text(text)
+                .font(.system(size: 9))
+                .foregroundStyle(foreground)
+                .lineLimit(2)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(background)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+
+    private func toneTextColor(_ tone: PaneRefreshTileDisplay.Tone) -> Color {
+        switch tone {
+        case .normal: return .primary
+        case .warning: return .yellow
+        case .error: return .red
+        }
     }
 
     private func startLiveTiles() {

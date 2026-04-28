@@ -9,6 +9,33 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 27 — Partial-result notice strip + a11y on Dashboard tiles (`phase-v1c-pane-refresh-notice-ui`, V.1 round 3)
+- `Sources/Core/PaneRefreshTileDisplay.swift` extracts a pure,
+  unit-testable display projection of `PaneRefreshState`. Three
+  tones — `normal`, `warning`, `error` — drive distinct tile chrome
+  in `DashboardView.liveTileCard`: error renders a red strip with
+  an `exclamationmark.octagon.fill`, notice renders a yellow strip
+  with `exclamationmark.triangle.fill`, and the precedence rule
+  ensures the UI never shows both at once (error wins).
+- Each tile now sets `accessibilityLabel` so VoiceOver reads a
+  single coherent phrase (e.g. "Budget Burn, partial: no spend
+  yet") instead of an unlabeled stack of `Text` nodes.
+- `paneRefreshFixtureFetch(failuresBeforePartial:notice:)` ships
+  alongside the display helper as a test-mode fetch that injects
+  `.failure` for the first N calls then `.partial(notice:)`,
+  exercising the notice surface end-to-end through the worker pool.
+- 6 new tests in
+  `Tests/SenkaniTests/PaneRefreshTileDisplayTests.swift`: tone
+  routing for normal / notice / error, error-precedence-over-notice,
+  warming a11y label, and the 3-tick round-trip where the third
+  tick flips the fixture from `.failure` to `.partial(notice:)` and
+  the resulting display projects a warning strip with the expected
+  a11y label.
+- Test count: 1912 → 1918 (+6).
+- Closes V.1 by clearing the deferred row "Partial-result notice
+  rendered on a fixture-injected upstream failure" from the
+  original V.1 acceptance.
+
 ### April 27 — `pane_refresh_state` persistence + Dashboard tile coordinator (`phase-v1b-pane-refresh-persistence`, V.1 round 2)
 - `Sources/Core/Stores/PaneRefreshStateStore.swift` and migration v6
   add `pane_refresh_state` (project_root, tile_id, the seven Glance

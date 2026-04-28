@@ -22,6 +22,15 @@ struct KnowledgeBaseView: View {
         .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
             if !vm.isDirty { vm.loadEntities() }
         }
+        // V.5b — surfaces the AuthorshipTag prompt when a save is
+        // queued but the row's prior tag is `.unset` or `nil`. Sheet
+        // calls back into the VM to resolve or skip.
+        .sheet(isPresented: $vm.pendingAuthorshipPrompt) {
+            AuthorshipPromptSheet(
+                onChoice: { tag in vm.resolveAuthorship(tag) },
+                onSkip:   { vm.skipAuthorship() }
+            )
+        }
     }
 
     // MARK: - Entity List

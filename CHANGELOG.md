@@ -9,6 +9,41 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 28 — Save-path authorship prompt sheet (`phase-v5b-authorship-ui-prompts`, V.5 round 2)
+- `Sources/Core/AuthorshipPromptResolver.swift` is a pure-Core resolver
+  that owns the V.5b decision: `needsPrompt(priorAuthorship:)` returns
+  true exactly when the row's stored tag is `.unset` (V.5 round 1
+  sentinel) or `nil` (legacy NULL); the three explicit tags pass
+  through silently. `resolve(choice:)` is a documented pass-through to
+  `AuthorshipTracker.tag(forExplicitChoice:)` — no inference, no
+  defaulting, no timeout-based silent resolution. Cavoukian's red flag
+  holds: the operator is the sole authority on which tag a row carries.
+- `SenkaniApp/Views/AuthorshipPromptSheet.swift` is the SwiftUI host
+  for the resolver. Podmajersky-reviewed copy: 1-line verb-first
+  question ("Who wrote this?", 16 chars), three buttons matching
+  `AuthorshipTag.displayLabel` exactly (AI / Human / Mixed) with no
+  preselected default, plus a tertiary "Skip for now" that returns
+  control to the editor without saving (Skip preserves dirty state —
+  it never silently writes `.unset` through this path).
+- `KBPaneViewModel.saveUnderstanding()` now gates on
+  `AuthorshipPromptResolver.needsPrompt`; when true it sets
+  `pendingAuthorshipPrompt = true` and defers the write. The new
+  `resolveAuthorship(_:)` and `skipAuthorship()` callbacks complete or
+  abort the save; the existing fast path (prior tag explicit) preserves
+  the row's authorship value verbatim. `KnowledgeBaseView` binds the
+  flag to a `.sheet` modifier so the prompt surfaces inline in the KB
+  pane.
+- Bypass for headless callers is unchanged: `KnowledgeStore.upsertEntity(_,authorship:)`
+  takes an explicit tag and never touches the prompt path.
+  `KBCompoundBridge.seedKBEntity` (`.aiAuthored`) and tests that pass
+  `authorship:` continue to work as before.
+- Tests: 10 new tests in `Tests/SenkaniTests/AuthorshipPromptResolverTests.swift`
+  covering the predicate (5 cases — `nil`, `.unset`, three explicit
+  tags), the pass-through resolution invariant across all enum cases,
+  the Podmajersky copy contract (verb-first / one-line / button labels
+  match `displayLabel` / Skip distinct from primaries), and the
+  end-to-end bypass round-trip on `upsertEntity`.
+
 ### April 28 — `AuthorshipTag` + KB schema migration v7 + `AuthorshipTracker` facade (`phase-v5-authorship-tracker`, V.5 round 1)
 - `Sources/Core/AuthorshipTag.swift` adds the four-case provenance
   enum (`aiAuthored`, `humanAuthored`, `mixed`, **`unset`**) used by

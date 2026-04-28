@@ -63,14 +63,20 @@ public enum KBCompoundBridge {
         guard store.entity(named: entityName) == nil else { return false }
 
         let markdownPath = ".senkani/knowledge/\(entityName).md"
-        _ = store.upsertEntity(KnowledgeEntity(
-            name: entityName,
-            entityType: "concept",
-            sourcePath: nil,
-            markdownPath: markdownPath,
-            compiledUnderstanding: "Seeded from compound-learning context doc `\(doc.title)`. Edit this file to add project-specific context.",
-            mentionCount: max(1, doc.sessionCount)
-        ))
+        // Phase V.5 — seed rows produced by compound-learning are
+        // authored by the AI side. Operator can re-tag from the V.5b
+        // UI surface if they edit the seed.
+        _ = store.upsertEntity(
+            KnowledgeEntity(
+                name: entityName,
+                entityType: "concept",
+                sourcePath: nil,
+                markdownPath: markdownPath,
+                compiledUnderstanding: "Seeded from compound-learning context doc `\(doc.title)`. Edit this file to add project-specific context.",
+                mentionCount: max(1, doc.sessionCount)
+            ),
+            authorship: .aiAuthored
+        )
         return true
     }
 

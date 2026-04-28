@@ -367,6 +367,58 @@ public enum MigrationRegistry {
 
             // No backfill — table is brand new this migration.
         },
+        Migration(version: 7, description: "authorship column on knowledge_entities (Phase V.5 round 1)") { db in
+            // Phase V.5 round 1 — see `spec/roadmap.md` row "V.5 —
+            // `AuthorshipTracker`" and Gebru's red flag in the synthesis.
+            // Adds an explicit provenance column to KB entity rows. NULL
+            // is the legacy/never-written state; new inserts always
+            // carry one of the four `AuthorshipTag` rawValues
+            // (`ai-authored`, `human-authored`, `mixed`, `unset`).
+            //
+            // NULL is NOT silently equivalent to any tag value. The
+            // V.5b UI surface checks for `.unset` (explicit) and for
+            // NULL (legacy) and prompts the operator in both cases —
+            // the round 1 contract is purely additive schema + write-
+            // path plumbing.
+            //
+            // Idempotency: the ALTER guards on duplicate-column the
+            // same way as v3/v4/v5, so a partially-applied migration
+            // recovers cleanly. No backfill — existing rows stay
+            // NULL until V.5c lands the bulk-tag CLI.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v7", detail: msg)
+            }
+
+            // Self-contained CREATE matches the v3/v4/v5 convention:
+            // migration tests exercise the runner against historical
+            // partial schemas, so we cannot assume EntityStore.setupSchema
+            // ran first. Column shape mirrors EntityStore.swift.
+            try exec("""
+                CREATE TABLE IF NOT EXISTS knowledge_entities (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name             TEXT NOT NULL UNIQUE,
+                    entity_type      TEXT NOT NULL DEFAULT 'class',
+                    source_path      TEXT,
+                    markdown_path    TEXT NOT NULL,
+                    content_hash     TEXT NOT NULL DEFAULT '',
+                    content          TEXT NOT NULL DEFAULT '',
+                    last_enriched    REAL,
+                    mention_count    INTEGER NOT NULL DEFAULT 0,
+                    session_mentions INTEGER NOT NULL DEFAULT 0,
+                    staleness_score  REAL NOT NULL DEFAULT 0.0,
+                    created_at       REAL NOT NULL,
+                    modified_at      REAL NOT NULL
+                );
+            """)
+            try exec("ALTER TABLE knowledge_entities ADD COLUMN authorship TEXT;", allowDuplicateColumn: true)
+            try exec("CREATE INDEX IF NOT EXISTS idx_knowledge_entities_authorship ON knowledge_entities(authorship);")
+        },
     ]
 
     // MARK: - v5 helpers

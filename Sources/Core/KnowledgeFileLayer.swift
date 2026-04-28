@@ -415,7 +415,16 @@ public final class KnowledgeFileLayer: @unchecked Sendable {
         let entity = content.toKnowledgeEntity(
             name: name, markdownPath: relPath, contentHash: hash
         )
-        let entityId = store.upsertEntity(entity)
+        // Phase V.5 — markdown-vault sync writes have unknown
+        // provenance (the file on disk could have been edited by an
+        // agent or by the operator). Round 1 lands these rows as
+        // `.unset` so the V.5b prompt path can resolve them on next
+        // operator interaction. We do NOT silently call them human-
+        // or AI-authored — that's the Gebru red flag.
+        let entityId = store.upsertEntity(
+            entity,
+            authorship: AuthorshipTracker.tagForUnknownProvenance()
+        )
         guard entityId > 0 else { return }
 
         // Replace all links (re-parsed on every sync)

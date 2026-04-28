@@ -9,6 +9,44 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 28 — `AuthorshipTag` + KB schema migration v7 + `AuthorshipTracker` facade (`phase-v5-authorship-tracker`, V.5 round 1)
+- `Sources/Core/AuthorshipTag.swift` adds the four-case provenance
+  enum (`aiAuthored`, `humanAuthored`, `mixed`, **`unset`**) used by
+  every artifact row from V.5 forward. Round 1 honors Gebru's red
+  flag from the Phase 5 synthesis: `.unset` is the explicit "operator
+  has not yet chosen" sentinel — never silently equivalent to
+  `.humanAuthored`.
+- `Sources/Core/AuthorshipTracker.swift` is a pure facade for
+  resolving a tag from an explicit operator action. There is no
+  inference path — every code site that wants a tag routes through
+  one of three call surfaces (`tag(forExplicitChoice:)`,
+  `tagForUnknownProvenance()`, `decode(_:)`). `grep -n
+  "AuthorshipTracker"` finds every authorship resolution in the
+  codebase.
+- Migration v7 lands the `authorship` TEXT NULL column on
+  `knowledge_entities`, with a non-unique index for read-side
+  filtering. NULL is the legacy "pre-V.5 row" state and is distinct
+  from the in-band `.unset` rawValue. New inserts always carry an
+  explicit tag string.
+- `EntityStore.upsertEntity(_:authorship:)` requires an explicit
+  `AuthorshipTag` parameter (non-optional). The
+  `KnowledgeStore.upsertEntity(_:authorship:)` facade defaults the
+  parameter to `.unset`, which preserves source compatibility for
+  ~75 existing test call sites without softening the contract — the
+  default is the explicit unresolved sentinel, not silent inference.
+- The two production callers in `Sources/Core/KBCompoundBridge.swift`
+  (compound-learning seed → `.aiAuthored`) and
+  `Sources/Core/KnowledgeFileLayer.swift` (markdown-vault sync →
+  `.unset`, awaiting V.5b prompt) pass explicit tags.
+- Tests: 13 new tests in `Tests/SenkaniTests/AuthorshipTrackerTests.swift`
+  covering enum surface, facade pass-through invariants, decode
+  round-trip + corrupt-row signal, schema column existence, all-cases
+  upsert round-trip, conflict-overwrite, default-arg-lands-as-unset
+  contract, and FTS5 search column-shift regression.
+- Round 1 deliberately defers the V.5 UI prompts (`phase-v5b`),
+  CLI backfill (`phase-v5c`), and pane badges (`phase-v5d`) — those
+  ride on this round's enum + column foundation.
+
 ### April 27 — Partial-result notice strip + a11y on Dashboard tiles (`phase-v1c-pane-refresh-notice-ui`, V.1 round 3)
 - `Sources/Core/PaneRefreshTileDisplay.swift` extracts a pure,
   unit-testable display projection of `PaneRefreshState`. Three

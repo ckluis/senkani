@@ -4,9 +4,18 @@ import Foundation
 // Callers stay on `KnowledgeStore.upsertEntity(...)` etc.; the split is invisible.
 extension KnowledgeStore {
 
+    /// Upsert an entity with an explicit `AuthorshipTag` (Phase V.5).
+    /// The default of `.unset` is the explicit "operator has not yet
+    /// chosen" sentinel — never silently resolved to `.humanAuthored`.
+    /// Production callers should pass a real tag; the V.5b UI prompt
+    /// path turns `.unset` into one of the three concrete tags before
+    /// any policy decision keys off the value.
     @discardableResult
-    public func upsertEntity(_ entity: KnowledgeEntity) -> Int64 {
-        entityStore.upsertEntity(entity)
+    public func upsertEntity(
+        _ entity: KnowledgeEntity,
+        authorship: AuthorshipTag = .unset
+    ) -> Int64 {
+        entityStore.upsertEntity(entity, authorship: authorship)
     }
 
     public func entity(named name: String) -> KnowledgeEntity? {

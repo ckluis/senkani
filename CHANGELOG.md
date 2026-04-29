@@ -9,6 +9,44 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 29 — TaskTier + FallbackLadder + BudgetGate.clamp routing types (`phase-u1a-tier-types`, U.1a)
+- `Sources/Core/TaskTier.swift` introduces `TaskTier` (`simple` /
+  `standard` / `complex` / `reasoning`) — names *the work*, distinct
+  from the existing `ModelTier` which names *the engine* (local /
+  quick / balanced / frontier). The pair separates "what kind of
+  task is this" from "which model bin runs it" so routing can clamp
+  the former by budget without reshaping the latter.
+- `FallbackLadder` carries 1-3 ordered `ModelTier` entries with a
+  hard 3-rung cap. Construction `precondition`s on cap violation;
+  `init?(safe:)` returns nil for tests that pin rejection. Default
+  ladders: `simple → [.local, .quick]`, `standard → [.quick,
+  .balanced]`, `complex → [.balanced, .frontier]`, `reasoning →
+  [.frontier]` (opt-in; no auto-fallback). The 3-cap is Senkani's
+  discipline — Manifest's 5-rung default is the deliberately-
+  undercut anti-pattern that masks upstream failures.
+- `BudgetGate.clamp(taskTier:budget:)` is a pure function that
+  floors the desired tier to what the configured budget can afford
+  using a daily-equivalent ceiling (daily wins, weekly÷7 fallback,
+  session×5 fallback). It's a *plan* gate, not a *spend* gate — it
+  reads ceilings, not current spend, so reasoning-tier work cannot
+  schedule on a $5/day pane regardless of today's accumulated
+  charge. Spend gates remain at `HookRouter.checkHookBudgetGate` /
+  `BudgetConfig.check`.
+- `ModelRouter.resolve(taskTier:budget:availableRAMGB:gemma4Downloaded:ladder:)`
+  is a new overload that consults the ladder + clamp; it walks past
+  a `.local` rung when Gemma 4 isn't installed and synthesizes a
+  `.quick` fallback only if the ladder lacks a second rung. The
+  legacy `resolve(prompt:preset:...)` heuristic path is untouched —
+  no caller migration in this slice.
+- `Tests/SenkaniTests/ModelRouterTests.swift` gains the
+  "TaskTier Ladder" suite — 18 tests covering cap rejection (4
+  entries fails, empty fails, 1-3 succeed), default-ladder shapes,
+  clamp boundaries (unlimited, $0.50/day, $3/day, $15/day,
+  $50/day, weekly÷7, never-elevate), `resolve(taskTier:)` rung
+  walking, explicit-ladder bypass, and one-rung-local synthesis.
+- `spec/roadmap.md` U.1a row flips to ✅ SHIPPED with per-round
+  detail.
+
 ### April 29 — Diátaxis Documentation Standard + structural docs-shape lint (`phase-w6-diataxis-doc-split`, W.6)
 - `spec/spec.md` gains a **Documentation Standard** section
   codifying the four Diátaxis shapes — tutorial (learning-oriented

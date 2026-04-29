@@ -151,6 +151,8 @@ Per-pane model presets control which Claude model handles tasks:
 | **Quick** | Haiku 3.5 | ~$0.12/hr |
 | **Local** | Gemma 4 on-device | $0/hr |
 
+**TaskTier + FallbackLadder + BudgetGate (Phase U.1a, internal API).** A second routing surface alongside the prompt-scored heuristic: callers who already have a `TaskTier` (`simple` / `standard` / `complex` / `reasoning`) hand it to `ModelRouter.resolve(taskTier:budget:...)`, which clamps the desired tier against the configured budget (daily-equivalent ceiling) and walks a 3-rung-capped `FallbackLadder` to a concrete `ModelTier`. `TaskTier` names *the work*; `ModelTier` (`local` / `quick` / `balanced` / `frontier`) names *the engine* — the separation lets the budget gate floor what kind of task can run without reshaping the model bins. The 3-rung cap is a deliberate undercut against ladder-bloat anti-patterns. Labeled corpus, accuracy gate, and the Analytics chart land in U.1b + U.1c.
+
 ---
 
 ## Paired Performance Numbers
@@ -176,7 +178,7 @@ The full caveat — including the action item, owner, and the `tools/check-multi
 | Filter throughput | > 10 k lines/sec |
 | Symbol search | < 5 ms cold, < 1 ms cached |
 | Secret scan | < 2 ms / KB |
-| Unit tests | **2059 passing** |
+| Unit tests | **2311 passing** |
 | Binary size | ~28 MB universal |
 
 ---

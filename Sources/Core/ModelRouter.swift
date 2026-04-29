@@ -205,4 +205,54 @@ public struct ModelRouter: Sendable {
                 reason: "Auto scored \(score) → \(tier.displayName)")
         }
     }
+
+    // MARK: - TaskTier-aware Resolution (U.1a)
+
+    /// Resolve a TaskTier-driven routing decision through the
+    /// FallbackLadder + BudgetGate clamp. Distinct from the legacy
+    /// `resolve(prompt:preset:...)` path — callers that have a
+    /// TaskTier in hand (e.g. from a planner output) skip the
+    /// difficulty-scoring heuristic.
+    ///
+    /// Resolution order:
+    ///   1. Clamp the desired TaskTier against the budget ceiling.
+    ///   2. Pick the ladder (custom or default-for-clamped-tier).
+    ///   3. Try the primary rung. If it's `.local` and Gemma 4 is
+    ///      unavailable, walk to the next rung. Synthesize `.quick`
+    ///      as a final fallback only if the ladder lacks a second
+    ///      rung — keeps the "no silent surprises" contract.
+    public static func resolve(
+        taskTier desired: TaskTier,
+        budget: BudgetConfig = BudgetConfig.load(),
+        availableRAMGB: Int = Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024)),
+        gemma4Downloaded: Bool = false,
+        ladder: FallbackLadder? = nil
+    ) -> Decision {
+        let clamped = BudgetGate.clamp(taskTier: desired, budget: budget)
+        let chosenLadder = ladder ?? FallbackLadder.default(for: clamped)
+        let clampNote = (clamped == desired)
+            ? ""
+            : " (clamped from \(desired.rawValue) by budget)"
+
+        var tier = chosenLadder.primary
+        var rungUsed = 0
+
+        // RAM-gate the local rung — walk to the next rung if Gemma 4
+        // can't actually run.
+        let canRunLocal = gemma4Downloaded && availableRAMGB >= 4
+        if tier == .local && !canRunLocal {
+            if chosenLadder.entries.count > 1 {
+                tier = chosenLadder.entries[1]
+                rungUsed = 1
+            } else {
+                tier = .quick
+                let reason = "TaskTier \(desired.rawValue)\(clampNote) → \(tier.displayName) (synthesized fallback — local unavailable, ladder had no second rung)"
+                return Decision(tier: tier, score: 0, reason: reason)
+            }
+        }
+
+        let rungNote = rungUsed == 0 ? "primary rung" : "rung \(rungUsed + 1)"
+        let reason = "TaskTier \(desired.rawValue)\(clampNote) → \(tier.displayName) (\(rungNote))"
+        return Decision(tier: tier, score: 0, reason: reason)
+    }
 }

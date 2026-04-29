@@ -169,3 +169,172 @@ struct EnvVarTests {
                 "Build → balanced → claude-sonnet-4, got \(result.tier.claudeModelValue)")
     }
 }
+
+// MARK: - Suite 6: TaskTier Ladder + Clamp (U.1a)
+
+@Suite("ModelRouter — TaskTier Ladder")
+struct TaskTierLadderTests {
+
+    // FallbackLadder cap
+
+    @Test func fallbackLadderRejectsFourEntriesViaSafeInit() {
+        let four: [ModelTier] = [.local, .quick, .balanced, .frontier]
+        #expect(FallbackLadder(safe: four) == nil,
+                "Ladder with 4 entries must be rejected (cap is 3)")
+    }
+
+    @Test func fallbackLadderRejectsEmptyViaSafeInit() {
+        #expect(FallbackLadder(safe: []) == nil,
+                "Empty ladder must be rejected — at least one rung required")
+    }
+
+    @Test func fallbackLadderAcceptsOneTwoOrThreeEntries() {
+        #expect(FallbackLadder(safe: [.quick]) != nil)
+        #expect(FallbackLadder(safe: [.quick, .balanced]) != nil)
+        #expect(FallbackLadder(safe: [.local, .quick, .balanced]) != nil)
+    }
+
+    @Test func defaultLadderForReasoningHasOnlyOneRung() {
+        let ladder = FallbackLadder.default(for: .reasoning)
+        #expect(ladder.entries == [.frontier],
+                "Reasoning tier ladder must be Opus-only, no auto-fallback")
+    }
+
+    @Test func defaultLadderForSimpleStartsLocal() {
+        let ladder = FallbackLadder.default(for: .simple)
+        #expect(ladder.primary == .local,
+                "Simple tier primary should be local Gemma")
+        #expect(ladder.entries.count >= 2,
+                "Simple tier should have a fallback rung for no-Gemma machines")
+    }
+
+    // BudgetGate clamp
+
+    @Test func clampUnlimitedBudgetReturnsDesired() {
+        let unlimited = BudgetConfig()
+        #expect(BudgetGate.clamp(taskTier: .reasoning, budget: unlimited) == .reasoning)
+        #expect(BudgetGate.clamp(taskTier: .simple, budget: unlimited) == .simple)
+    }
+
+    @Test func clampTinyDailyBudgetForcesSimple() {
+        let tight = BudgetConfig(dailyLimitCents: 50)  // $0.50/day
+        #expect(BudgetGate.clamp(taskTier: .reasoning, budget: tight) == .simple,
+                "$0.50/day must clamp reasoning down to simple")
+    }
+
+    @Test func clampMidDailyBudgetForcesStandard() {
+        let mid = BudgetConfig(dailyLimitCents: 300)  // $3/day
+        #expect(BudgetGate.clamp(taskTier: .reasoning, budget: mid) == .standard,
+                "$3/day must clamp reasoning down to standard")
+    }
+
+    @Test func clampGenerousDailyBudgetAllowsComplex() {
+        let generous = BudgetConfig(dailyLimitCents: 1500)  // $15/day
+        #expect(BudgetGate.clamp(taskTier: .reasoning, budget: generous) == .complex,
+                "$15/day must clamp reasoning down to complex (just under the $20 reasoning floor)")
+    }
+
+    @Test func clampLargeDailyBudgetAllowsReasoning() {
+        let large = BudgetConfig(dailyLimitCents: 5000)  // $50/day
+        #expect(BudgetGate.clamp(taskTier: .reasoning, budget: large) == .reasoning,
+                "$50/day must permit reasoning")
+    }
+
+    @Test func clampWeeklyBudgetDividedBySeven() {
+        // $5/week → ~$0.71/day equivalent → strictly under the
+        // simple ceiling ($1/day). Confirms weekly→daily division.
+        let weekly = BudgetConfig(weeklyLimitCents: 500)
+        #expect(BudgetGate.clamp(taskTier: .complex, budget: weekly) == .simple,
+                "$5/week ≈ $0.71/day must clamp complex to simple")
+    }
+
+    @Test func clampDoesNotElevateBelowDesired() {
+        let huge = BudgetConfig(dailyLimitCents: 10_000)  // $100/day
+        #expect(BudgetGate.clamp(taskTier: .simple, budget: huge) == .simple,
+                "Clamp must never elevate desired tier — only floor it")
+    }
+
+    // ModelRouter.resolve(taskTier:)
+
+    @Test func resolveWithTaskTierUsesPrimaryRung() {
+        let unlimited = BudgetConfig()
+        let result = ModelRouter.resolve(
+            taskTier: .standard,
+            budget: unlimited,
+            availableRAMGB: 16,
+            gemma4Downloaded: true
+        )
+        // Standard ladder = [.quick, .balanced]; primary = .quick.
+        #expect(result.tier == .quick,
+                "Standard primary rung should be quick (Haiku)")
+        #expect(result.reason.contains("primary"),
+                "Reason should record which rung was used: \(result.reason)")
+    }
+
+    @Test func resolveWithTaskTierWalksLocalRungWhenNoGemma() {
+        let unlimited = BudgetConfig()
+        let result = ModelRouter.resolve(
+            taskTier: .simple,
+            budget: unlimited,
+            availableRAMGB: 16,
+            gemma4Downloaded: false
+        )
+        // Simple ladder = [.local, .quick]; local unavailable → walks to .quick.
+        #expect(result.tier == .quick,
+                "Simple primary should walk past .local when Gemma 4 unavailable, got \(result.tier)")
+    }
+
+    @Test func resolveWithTaskTierClampsByBudget() {
+        let tight = BudgetConfig(dailyLimitCents: 50)  // $0.50/day → simple ceiling
+        let result = ModelRouter.resolve(
+            taskTier: .reasoning,
+            budget: tight,
+            availableRAMGB: 16,
+            gemma4Downloaded: true
+        )
+        #expect(result.tier == .local,
+                "Reasoning under tight budget must clamp to simple → local primary, got \(result.tier)")
+        #expect(result.reason.contains("clamped"),
+                "Reason should record the clamp: \(result.reason)")
+    }
+
+    @Test func resolveWithExplicitLadderBypassesDefault() {
+        let unlimited = BudgetConfig()
+        let custom = FallbackLadder(entries: [.frontier])
+        let result = ModelRouter.resolve(
+            taskTier: .standard,
+            budget: unlimited,
+            availableRAMGB: 16,
+            gemma4Downloaded: true,
+            ladder: custom
+        )
+        #expect(result.tier == .frontier,
+                "Explicit ladder must be honored regardless of TaskTier default")
+    }
+
+    @Test func resolveSynthesizesFallbackForOneRungLocalLadder() {
+        // A pathological one-rung-of-local ladder + no Gemma → must
+        // synthesize .quick rather than crash or return .local.
+        let unlimited = BudgetConfig()
+        let oneRung = FallbackLadder(entries: [.local])
+        let result = ModelRouter.resolve(
+            taskTier: .simple,
+            budget: unlimited,
+            availableRAMGB: 16,
+            gemma4Downloaded: false,
+            ladder: oneRung
+        )
+        #expect(result.tier == .quick,
+                "One-rung local ladder must synthesize .quick when Gemma 4 unavailable, got \(result.tier)")
+        #expect(result.reason.lowercased().contains("synthesized"),
+                "Reason must flag the synthesis: \(result.reason)")
+    }
+
+    // TaskTier ordering
+
+    @Test func taskTierComparableOrdering() {
+        #expect(TaskTier.simple < TaskTier.standard)
+        #expect(TaskTier.standard < TaskTier.complex)
+        #expect(TaskTier.complex < TaskTier.reasoning)
+    }
+}

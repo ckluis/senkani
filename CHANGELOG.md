@@ -9,6 +9,54 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 29 — `NaturalLanguageSchedule` foundations (`phase-u8-natural-language-schedule`, U.8 round 1)
+- `ScheduledTask` (in `Sources/Core/ScheduleConfig.swift`) gains
+  optional `proseCadence`, `compiledCadence`, `eventCounterCadence`,
+  and `locale` JSON fields. Backward-compat decoding: pre-U.8
+  task JSON on disk decodes with these fields as `nil` and renders
+  in the Schedules pane exactly as before.
+- `Sources/Core/ProseCadenceCompiler.swift` defines the
+  prose-to-cron protocol with `NullProseCadenceCompiler` (default
+  when no LLM is installed; throws `.unavailable` so callers can
+  fall back to operator-entered cron) and `MockProseCadenceCompiler`
+  (test-time adapter that validates emitted cron via `CronToLaunchd`
+  before returning a `ProseCadence`). Mirrors the `RationaleLLM`
+  pattern — Core stays MLX-free; the production Gemma 4 adapter
+  lives in MCPServer / App and wires in via DI when the model
+  is downloaded.
+- `Sources/Core/CronPreview.swift` emits the next N fire times
+  for a 5-field cron string by walking minute-by-minute against
+  `CronToLaunchd`'s launchd-interval expansion. Powers a
+  Schedules-pane "show next 5 fires" tooltip + the
+  `AmplificationGuard` sub-minute check; horizon caps at 1 year
+  to terminate on degenerate crons.
+- `Sources/Core/CounterCadenceRateLimiter.swift` is the
+  in-process per-schedule rate limiter for counter-driven
+  cadences ("every 10 tool_calls"). Default ≤ 1 fire / 60 s,
+  per-schedule independent windows, NSLock-guarded. Defends
+  against the Hermes amplification scenario where a power user
+  fires 100 sessions in a day.
+- `Sources/Core/AmplificationGuard.swift` is the pre-save
+  validator: returns `.ok` or `.amplification(reason, floor)`
+  for prose that compiles to a sub-minute cron OR for counter
+  cadences with N ≤ 1. Includes `CounterCadence.parse` for
+  "every N events" / "every Nth event" expressions.
+- `SenkaniApp/Views/ScheduleView.swift` task row now surfaces
+  prose / counter cadences with a tooltip exposing the compiled
+  cron; cron-direct rows fall through to the existing
+  human-readable cron rendering.
+- 13 new tests in `Tests/SenkaniTests/NaturalLanguageScheduleTests.swift`
+  cover Codable backward-compat, prose round-trip,
+  Null/MockProseCadenceCompiler boundaries, CronPreview daily /
+  weekly / invalid, rate-limiter block + allow + per-schedule
+  isolation, AmplificationGuard amplification-detection +
+  daily-cron pass, CounterCadence parsing.
+- Deferred to follow-up u8b: Schedules pane "New Schedule" form
+  prose input + "Show next 5 fires" preview button; real
+  MLX-backed Gemma 4 adapter wiring; `HookRouter` post-tool
+  counter-cadence runner that queries `SessionDatabase` event
+  counts and fires the schedule subject to the rate limiter.
+
 ### April 29 — `PromptArtifactRegressionGate` + `ReflectiveLearningRun` (`phase-v4-regression-gate`, V.4 round 1)
 - `Sources/Core/PromptArtifactRegressionGate.swift` is the V.4
   pre-merge gate for prompt-side artifacts (skills, hook prompts,

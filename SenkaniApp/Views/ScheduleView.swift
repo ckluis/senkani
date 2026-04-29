@@ -156,13 +156,37 @@ struct ScheduleView: View {
                     Text(task.name)
                         .font(.system(size: 13, weight: .semibold))
 
-                    Text(CronToLaunchd.humanReadable(task.cronPattern))
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color(.controlBackgroundColor))
-                        .clipShape(Capsule())
-                        .foregroundStyle(.secondary)
+                    // U.8 — when a schedule was registered from prose,
+                    // surface the prose first and the compiled cron as
+                    // a tooltip; cron-direct schedules display the
+                    // human-readable cron as before.
+                    if let prose = task.proseCadence, !prose.isEmpty {
+                        Text(prose)
+                            .font(.system(size: 10, weight: .medium))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color(.controlBackgroundColor))
+                            .clipShape(Capsule())
+                            .foregroundStyle(.secondary)
+                            .help("Compiled cron: \(task.compiledCadence ?? task.cronPattern)")
+                    } else if let counter = task.eventCounterCadence, !counter.isEmpty {
+                        Text(counter)
+                            .font(.system(size: 10, weight: .medium))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.15))
+                            .clipShape(Capsule())
+                            .foregroundStyle(.secondary)
+                            .help("Counter cadence — fires from HookRouter, rate-limited to 1/min")
+                    } else {
+                        Text(CronToLaunchd.humanReadable(task.cronPattern))
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color(.controlBackgroundColor))
+                            .clipShape(Capsule())
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Text(task.command)

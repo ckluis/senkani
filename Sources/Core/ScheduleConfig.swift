@@ -13,6 +13,27 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
     public var lastRunResult: String?  // "success", "failed: ...", "budget_exceeded"
     public var worktree: Bool
 
+    // Phase U.8 — NaturalLanguageSchedule fields. All optional so existing
+    // task JSON on disk decodes unchanged (anchor-from-now: pre-U.8 rows
+    // simply have nil prose/counter cadence).
+    //
+    // Wiring:
+    //   - `proseCadence`         the original prose ("every weekday at 9am").
+    //   - `compiledCadence`      cron compiled from prose at registration.
+    //                            When non-nil, equals `cronPattern` — kept as
+    //                            a separate field so callers can tell prose-
+    //                            driven schedules apart from cron-direct
+    //                            without re-parsing.
+    //   - `eventCounterCadence`  counter expression ("every 10 tool_calls").
+    //                            Counter cadences fire from HookRouter post-
+    //                            tool reactions, NOT from launchd; cronPattern
+    //                            on those rows is a sentinel.
+    //   - `locale`               BCP-47 tag for prose parsing (default en-US).
+    public var proseCadence: String?
+    public var compiledCadence: String?
+    public var eventCounterCadence: String?
+    public var locale: String?
+
     public init(
         name: String,
         cronPattern: String,
@@ -22,7 +43,11 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
         createdAt: Date = Date(),
         lastRunAt: Date? = nil,
         lastRunResult: String? = nil,
-        worktree: Bool = false
+        worktree: Bool = false,
+        proseCadence: String? = nil,
+        compiledCadence: String? = nil,
+        eventCounterCadence: String? = nil,
+        locale: String? = nil
     ) {
         self.name = name
         self.cronPattern = cronPattern
@@ -33,13 +58,18 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
         self.lastRunAt = lastRunAt
         self.lastRunResult = lastRunResult
         self.worktree = worktree
+        self.proseCadence = proseCadence
+        self.compiledCadence = compiledCadence
+        self.eventCounterCadence = eventCounterCadence
+        self.locale = locale
     }
 
-    // Explicit Codable so a missing `worktree` key (pre-field JSON files
-    // already on disk) decodes as `false` instead of failing.
+    // Explicit Codable so a missing key (pre-field JSON files already on
+    // disk) decodes as default instead of failing.
     private enum CodingKeys: String, CodingKey {
         case name, cronPattern, command, budgetLimitCents, enabled
         case createdAt, lastRunAt, lastRunResult, worktree
+        case proseCadence, compiledCadence, eventCounterCadence, locale
     }
 
     public init(from decoder: Decoder) throws {
@@ -53,6 +83,10 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
         self.lastRunAt = try c.decodeIfPresent(Date.self, forKey: .lastRunAt)
         self.lastRunResult = try c.decodeIfPresent(String.self, forKey: .lastRunResult)
         self.worktree = try c.decodeIfPresent(Bool.self, forKey: .worktree) ?? false
+        self.proseCadence = try c.decodeIfPresent(String.self, forKey: .proseCadence)
+        self.compiledCadence = try c.decodeIfPresent(String.self, forKey: .compiledCadence)
+        self.eventCounterCadence = try c.decodeIfPresent(String.self, forKey: .eventCounterCadence)
+        self.locale = try c.decodeIfPresent(String.self, forKey: .locale)
     }
 }
 

@@ -12,6 +12,31 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Phase U.8 round 1 — NaturalLanguageSchedule foundations 2026-04-29
+
+Round 1 shipped the data-model + protocol + math + minimal pane
+affordance behind the autonomous loop. The pieces that need a real
+machine to validate land in u8b, but the round-1 surface needs at
+least one real-machine smoke-check before u8b builds on it:
+
+- [ ] Create a schedule via `senkani schedule create` with a cron,
+  then hand-edit `~/.senkani/schedules/<name>.json` to add a
+  `proseCadence` field and re-launch the Schedules pane. Confirm
+  the row renders the prose pill (not the cron pill) and the tooltip
+  shows the compiled cron from `compiledCadence`. (Validates the
+  round-1 round-trip path end to end without needing the New
+  Schedule form prose input.)
+- [ ] Hand-edit a schedule JSON to set `eventCounterCadence: "every
+  5 tool_calls"` (and an empty `cronPattern`). Confirm the row
+  renders the orange counter-cadence pill with the correct tooltip
+  text.
+- [ ] Verify pre-U.8 schedule JSON files on disk (the morning-brief
+  / autoresearch / log-rotation defaults) still load + render
+  exactly as before (cron-direct path).
+
+If any of these surface a regression, mark the round NEEDS-FIX and
+file under u8a-fix in the backlog before u8b queues.
+
 ### Full-suite test-bundle SIGTRAP — INVESTIGATE 2026-04-28 (pre-existing, found during V.7)
 
 `swift test` (no `--filter`) crashes the test bundle with `signal code 5`

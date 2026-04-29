@@ -77,6 +77,13 @@
 
     <p class="lede">Manage recurring tasks via launchd. View fire history, next-run times, worktree artifacts, budget ledger.</p>
 
+    <h2>Cadence sources</h2>
+    <p>The pane displays three kinds of cadence on each schedule row:</p>
+    <ul>
+      <li><strong>Cron-direct</strong> — a 5-field cron string entered in the New Schedule form. Example: <code>0 9 * * *</code> renders as <em>Daily at 9:00 AM</em>.</li>
+      <li><strong>Prose</strong> — a natural-language phrase compiled to cron at registration time (Phase U.8). The row shows the prose; hover for the compiled cron. Compilation runs locally via Gemma 4 — when the model is not installed the prose path is unavailable and the operator must enter cron directly.</li>
+      <li><strong>Counter cadence</strong> — fires every Nth event ("every 10 tool_calls") rather than on a wall-clock schedule. Counter rows fire from <code>HookRouter</code> post-tool reactions and are clamped by <code>CounterCadenceRateLimiter</code> to ≤ 1 fire / minute, defending against amplification when a power user produces many sessions in a day.</li>
+    </ul>
 
     <h2>Keyboard</h2>
     <p>Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas).</p>

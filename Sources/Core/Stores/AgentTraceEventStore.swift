@@ -205,6 +205,81 @@ final class AgentTraceEventStore: @unchecked Sendable {
         }
     }
 
+    /// W.4: token usage rollup for the ContextSaturationGate. Sums
+    /// `tokens_in + tokens_out` over an optional pane / project / time
+    /// window. The gate divides this by the configured budget to derive
+    /// a saturation percent.
+    func tokenUsage(pane: String? = nil, project: String? = nil, since: Date? = nil) -> AgentTraceTokenUsage {
+        return parent.queue.sync {
+            guard let db = parent.db else { return AgentTraceTokenUsage(eventCount: 0, totalTokensIn: 0, totalTokensOut: 0) }
+            var sql = """
+                SELECT COUNT(*),
+                       COALESCE(SUM(tokens_in), 0),
+                       COALESCE(SUM(tokens_out), 0)
+                FROM agent_trace_event
+                """
+            var clauses: [String] = []
+            if pane != nil { clauses.append("pane = ?") }
+            if project != nil { clauses.append("project = ?") }
+            if since != nil { clauses.append("started_at >= ?") }
+            if !clauses.isEmpty { sql += " WHERE " + clauses.joined(separator: " AND ") }
+            sql += ";"
+
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                return AgentTraceTokenUsage(eventCount: 0, totalTokensIn: 0, totalTokensOut: 0)
+            }
+            defer { sqlite3_finalize(stmt) }
+
+            var idx: Int32 = 1
+            if let pane { sqlite3_bind_text(stmt, idx, (pane as NSString).utf8String, -1, nil); idx += 1 }
+            if let project { sqlite3_bind_text(stmt, idx, (project as NSString).utf8String, -1, nil); idx += 1 }
+            if let since { sqlite3_bind_double(stmt, idx, since.timeIntervalSince1970); idx += 1 }
+
+            guard sqlite3_step(stmt) == SQLITE_ROW else {
+                return AgentTraceTokenUsage(eventCount: 0, totalTokensIn: 0, totalTokensOut: 0)
+            }
+            return AgentTraceTokenUsage(
+                eventCount: Int(sqlite3_column_int64(stmt, 0)),
+                totalTokensIn: Int(sqlite3_column_int64(stmt, 1)),
+                totalTokensOut: Int(sqlite3_column_int64(stmt, 2))
+            )
+        }
+    }
+
+    /// W.4: most-recent N idempotency keys for a pane / project window.
+    /// Used by `PreCompactHandoffWriter` to record the trace tail in the
+    /// handoff card so the next session can resume diagnostics.
+    func recentTraceKeys(pane: String? = nil, project: String? = nil, limit: Int = 10) -> [String] {
+        return parent.queue.sync {
+            guard let db = parent.db, limit > 0 else { return [] }
+            var sql = """
+                SELECT idempotency_key
+                FROM agent_trace_event
+                """
+            var clauses: [String] = []
+            if pane != nil { clauses.append("pane = ?") }
+            if project != nil { clauses.append("project = ?") }
+            if !clauses.isEmpty { sql += " WHERE " + clauses.joined(separator: " AND ") }
+            sql += " ORDER BY started_at DESC LIMIT ?;"
+
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+
+            var idx: Int32 = 1
+            if let pane { sqlite3_bind_text(stmt, idx, (pane as NSString).utf8String, -1, nil); idx += 1 }
+            if let project { sqlite3_bind_text(stmt, idx, (project as NSString).utf8String, -1, nil); idx += 1 }
+            sqlite3_bind_int64(stmt, idx, Int64(limit))
+
+            var out: [String] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                out.append(String(cString: sqlite3_column_text(stmt, 0)))
+            }
+            return out
+        }
+    }
+
     /// Pivot 3: per-result distribution (top-line "what's failing").
     func pivotByResult(since: Date? = nil) -> [AgentTraceResultRollup] {
         return parent.queue.sync {
@@ -327,6 +402,21 @@ public struct AgentTraceEvent: Sendable, Equatable {
         self.validationStatus = validationStatus
         self.confirmationRequired = confirmationRequired
         self.egressDecisions = egressDecisions
+    }
+}
+
+/// Token-usage rollup for the W.4 ContextSaturationGate. The sum is
+/// across `tokens_in + tokens_out` of the matching rows; callers divide
+/// by the configured context budget to get a saturation percent.
+public struct AgentTraceTokenUsage: Sendable, Equatable {
+    public let eventCount: Int
+    public let totalTokensIn: Int
+    public let totalTokensOut: Int
+    public var totalTokens: Int { totalTokensIn + totalTokensOut }
+    public init(eventCount: Int, totalTokensIn: Int, totalTokensOut: Int) {
+        self.eventCount = eventCount
+        self.totalTokensIn = totalTokensIn
+        self.totalTokensOut = totalTokensOut
     }
 }
 

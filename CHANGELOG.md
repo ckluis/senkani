@@ -9,6 +9,48 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 29 — `ContextSaturationGate` + `PreCompactHandoffWriter` ship (`phase-w4-context-saturation-gate`, W.4)
+- `Sources/Core/ContextSaturationGate.swift` ships the pure
+  decision function. `evaluate(currentTokens:threshold:)` returns
+  `.ok / .warn / .block` against a configurable
+  `Threshold(warnAt:blockAt:budgetTokens:)`. Defaults follow
+  Continuous Claude v4.7: warn 65 %, block 80 %, against a
+  200 000-token active window. The `block` reason names the percent
+  and tells the caller to write a handoff card before continuing.
+- A DB-backed convenience overload reads `tokens_in + tokens_out`
+  from `agent_trace_event` (V.2 canonical row) for a pane / project
+  / time window, so callers don't have to thread the running total
+  themselves. New `tokenUsage(...)` and `recentTraceKeys(...)`
+  queries on `AgentTraceEventStore` plus public forwarders on
+  `SessionDatabase`.
+- `Sources/Core/PreCompactHandoffWriter.swift` ships the
+  structured handoff card. `HandoffCard` is `Codable` with
+  `schemaVersion` (currently 1), `sessionId`, `savedAt`,
+  `contextPercent`, `openFiles`, `currentIntent`, `lastValidation`
+  (outcome / file / advisory pulled from `validation_results`),
+  `nextActionHint`, and `recentTraceKeys`. `write(_:rootDir:)`
+  serialises to JSON, lands in a temp file, fsyncs, then renames
+  into `<rootDir>/<sessionId>.json` (default `~/.senkani/handoffs/`)
+  so a crash mid-write never leaves a half-card readable.
+- `compose(...)` builds a card from `SessionDatabase` facts plus
+  caller-supplied intent / openFiles / nextAction. The W.4 round
+  ships the writer + composer; Hook-Router PreCompact wiring is
+  W.4-bis (operator decision pending — needs a review of which
+  hook payload fields the writer should auto-fill).
+- `PreCompactHandoffLoader.load(sessionId:rootDir:)` and
+  `loadLatest(rootDir:)` read a card on next-session start.
+  Returns nil for missing files, corrupt JSON, OR cards written
+  under a future schema version — Norman's "no fallback"
+  policy: a card the next session can't trust is worse than no
+  card.
+- 15 new tests in `ContextSaturationGateTests` (6) +
+  `PreCompactHandoffWriterTests` (9): every threshold band,
+  custom thresholds, malformed-budget fallback, DB-backed
+  derivation, Codable round-trip, atomic overwrite, real-clock
+  <1 s SLO assertion (the W.4 acceptance row), DB-driven compose,
+  missing-file / corrupt-JSON / future-schema → nil, and
+  `loadLatest` mtime ordering. Full safe suite 2094 → 2109 green.
+
 ### April 29 — Markdown-first content negotiation ships (`phase-w2-markdown-first-fetch`, W.2)
 - `Sources/Core/ContentNegotiator.swift` adds the three-tier
   fetch ladder used by `senkani_web` and `senkani_bundle`'s remote

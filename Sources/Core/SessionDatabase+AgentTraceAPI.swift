@@ -32,4 +32,19 @@ extension SessionDatabase {
     public func agentTracePivotByResult(since: Date? = nil) -> [AgentTraceResultRollup] {
         return agentTraceEventStore.pivotByResult(since: since)
     }
+
+    /// W.4 — token usage in a pane / project / time window. Sums
+    /// `tokens_in + tokens_out` across matching trace rows. The
+    /// `ContextSaturationGate` divides this by the configured budget to
+    /// derive a saturation percent.
+    public func agentTraceTokenUsage(pane: String? = nil, project: String? = nil, since: Date? = nil) -> AgentTraceTokenUsage {
+        return agentTraceEventStore.tokenUsage(pane: pane, project: project, since: since)
+    }
+
+    /// W.4 — most-recent N idempotency keys for a pane / project window.
+    /// Used by the PreCompactHandoffWriter to record the trace tail in
+    /// the handoff card so the next session can resume diagnostics.
+    public func agentTraceRecentKeys(pane: String? = nil, project: String? = nil, limit: Int = 10) -> [String] {
+        return agentTraceEventStore.recentTraceKeys(pane: pane, project: project, limit: limit)
+    }
 }

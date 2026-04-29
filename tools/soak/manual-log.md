@@ -12,6 +12,32 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Phase W.4 round 1 — `ContextSaturationGate` + `PreCompactHandoffWriter` 2026-04-29
+
+Round 1 ships the gate, the handoff card, and the loader as Core
+helpers. Unit tests pin every branch in-process. Three things only a
+real session can confirm:
+
+- [ ] **Live saturation read.** Run a long Claude Code session. Pull
+  `agentTraceTokenUsage(pane:)` from a senkani CLI shim or a custom
+  pane and confirm the running total tracks roughly with the agent's
+  reported context-window usage. If the two diverge sharply (>20 %),
+  the active-window slice may be wrong for this model and the
+  `Threshold.budgetTokens` default needs revisiting.
+- [ ] **End-to-end handoff round-trip.** Force a saturation block
+  (`evaluate(currentTokens: 180_000, threshold: .default)` →
+  `.block`), call `PreCompactHandoffWriter.compose(...) | write(...)`,
+  start a fresh session, and confirm `PreCompactHandoffLoader.load(...)`
+  returns the card with `currentIntent` and `lastValidation` intact.
+  Eyeball the JSON at `~/.senkani/handoffs/<sessionId>.json` for any
+  surprise field truncation.
+- [ ] **<1 s SLO under real load.** Tests assert <1 s on a quiet
+  machine with a small card. Soak: run `write` against a card that
+  embeds a 4 KB advisory string AND a full 10-key trace tail while
+  the disk is busy with concurrent test output. The SLO should still
+  hold; if it doesn't, file the regression because the gate is now
+  too expensive to drop into a hook path.
+
 ### Phase W.1 round 1 — `senkani_search_web` MCP tool 2026-04-29
 
 Round 1 ships a fully fixture-tested DuckDuckGo Lite backend (host pin,

@@ -178,7 +178,7 @@ The full caveat — including the action item, owner, and the `tools/check-multi
 
 | Module | Deps | Role |
 |--------|------|------|
-| **Core** | Filter | Session DB, feature config, metrics, budget, hook routing, model routing, auto-validate, adaptive truncation |
+| **Core** | Filter | Session DB (incl. canonical trace rows), feature config, metrics, budget, hook routing, model routing, auto-validate, adaptive truncation |
 | **Filter** | — | Token compression: 44 cmd rules, ANSI strip, dedup, secrets, terse |
 | **Indexer** | SwiftTreeSitter | 25 tree-sitter backends, FTS5 search, dependency graph, incremental parsing, FSEvents |
 | **Bench** | Core, Filter, Indexer | Token savings test suite: 10 tasks × 7 configs, quality gates, JSON export |

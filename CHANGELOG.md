@@ -9,6 +9,47 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 28 — `agent_trace_event` canonical row + idempotency keys (`phase-v2-canonical-trace-row`, V.2)
+- `Sources/Core/Migrations.swift` adds Migration v8 — a new
+  `agent_trace_event` table with one wide row per tool call.
+  Conformed dimensions: `pane`, `project`, `model`, `tier`,
+  `feature`, `result`. Measures: `started_at`, `completed_at`,
+  `latency_ms`, `tokens_in`, `tokens_out`, `cost_cents`,
+  `redaction_count`, `validation_status`,
+  `confirmation_required`, `egress_decisions`. The Stripe-style
+  accumulator pre-rolls everything an analytics query would
+  otherwise stitch from raw `token_events`. Three covering
+  indexes — `(project, started_at)`, `(pane, started_at)`,
+  `(feature, started_at)` — back the three pivot helpers.
+- `idempotency_key` is `UNIQUE`. Writes go through
+  `INSERT … ON CONFLICT(idempotency_key) DO NOTHING`, so a
+  retry from the call site lands one row, not two. The dedup
+  test fires 100 retries with the same key and asserts the
+  table holds exactly one row.
+- `Sources/Core/Stores/AgentTraceEventStore.swift` owns the
+  writes + reads. Three pivots ship: `pivotByProject`,
+  `pivotByFeature` (with success/failure split),
+  `pivotByResult`. All three respect an optional `since:` filter.
+- `Sources/Core/SessionDatabase+AgentTraceAPI.swift` exposes
+  the public façade — `recordAgentTraceEvent`,
+  `agentTracePivotByProject`, `agentTracePivotByFeature`,
+  `agentTracePivotByResult`.
+- `spec/architecture.md` documents the conformed-dimension
+  vocabulary in a new "Canonical Trace Rows (Phase V.2)"
+  section. Accepted risk: the canonical row is *derived*, so it
+  is not chain-anchored — the source `token_events` rows are.
+- 14 new tests in `Tests/SenkaniTests/AgentTraceEventStoreTests.swift`:
+  schema shape, UNIQUE-constraint enforcement, 100-retry dedup,
+  inserted-vs-deduped flag, distinct-keys split rows, full
+  dimension/measure roundtrip, NULL-tier default (filled by U.1
+  later), all three pivot rollups, NULL-project bucket, `since:`
+  filter, coexistence with existing `token_events` analytics, and
+  EXPLAIN-QUERY-PLAN proof the project index is used. The
+  existing 161-test DB / store / migration / chain regression
+  suite still passes.
+- Reference: `spec/inspirations/analytics-visibility/stripe-canonical-log-lines.md`,
+  `spec/inspirations/analytics-visibility/future-agi.md`.
+
 ### April 28 — MarkdownStreamingTranscoder Swift port (`phase-v8-markdown-streaming-transcoder`, V.8)
 - `Sources/Core/MarkdownStreamingTranscoder.swift` ports the
   `@wterm/markdown` per-line dispatcher pattern to Swift. `push(_:)`

@@ -47,6 +47,7 @@ public final class SessionDatabase: @unchecked Sendable {
     internal var sandboxStore: SandboxStore!
     internal var validationStore: ValidationStore!
     internal var paneRefreshStateStore: PaneRefreshStateStore!
+    internal var agentTraceEventStore: AgentTraceEventStore!
 
     // MARK: - Init
 
@@ -80,6 +81,8 @@ public final class SessionDatabase: @unchecked Sendable {
         validationStore.setupSchema()
         paneRefreshStateStore = PaneRefreshStateStore(parent: self)
         paneRefreshStateStore.setupSchema()
+        agentTraceEventStore = AgentTraceEventStore(parent: self)
+        agentTraceEventStore.setupSchema()
         runMigrations(path: dbPath)
     }
 
@@ -109,6 +112,8 @@ public final class SessionDatabase: @unchecked Sendable {
         validationStore.setupSchema()
         paneRefreshStateStore = PaneRefreshStateStore(parent: self)
         paneRefreshStateStore.setupSchema()
+        agentTraceEventStore = AgentTraceEventStore(parent: self)
+        agentTraceEventStore.setupSchema()
         runMigrations(path: path)
     }
 

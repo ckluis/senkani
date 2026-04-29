@@ -419,6 +419,66 @@ public enum MigrationRegistry {
             try exec("ALTER TABLE knowledge_entities ADD COLUMN authorship TEXT;", allowDuplicateColumn: true)
             try exec("CREATE INDEX IF NOT EXISTS idx_knowledge_entities_authorship ON knowledge_entities(authorship);")
         },
+        Migration(version: 8, description: "agent_trace_event canonical row + idempotency keys (Phase V.2)") { db in
+            // Phase V.2 — Stripe-style accumulator. Every tool call writes
+            // exactly one wide row at completion time, carrying every
+            // dimension a query would otherwise stitch from raw `token_events`.
+            //
+            // `idempotency_key` is UNIQUE; the write path uses
+            // `INSERT ... ON CONFLICT(idempotency_key) DO NOTHING`, so a
+            // safe retry from the call site lands one row, not two.
+            //
+            // The canonical row is *derived* from inputs that are themselves
+            // chain-anchored (token_events). It is not chain-anchored itself
+            // — accepted risk. Tampering the canonical row is detectable by
+            // re-deriving from the chain-anchored sources.
+            //
+            // Conformed dimensions (documented in `spec/architecture.md`
+            // → "Canonical Trace Rows"):
+            //   pane, project, model, tier, feature, result
+            // The `tier` column is populated by U.1 (TierScorer) once that
+            // round lands; until then it is NULL.
+            //
+            // Idempotency: ALTERs guard duplicate column the same way as
+            // v3/v4/v5/v7. The CREATE TABLE is guarded.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v8", detail: msg)
+            }
+
+            try exec("""
+                CREATE TABLE IF NOT EXISTS agent_trace_event (
+                    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                    idempotency_key       TEXT NOT NULL UNIQUE,
+                    pane                  TEXT,
+                    project               TEXT,
+                    model                 TEXT,
+                    tier                  TEXT,
+                    feature               TEXT,
+                    result                TEXT NOT NULL,
+                    started_at            REAL NOT NULL,
+                    completed_at          REAL NOT NULL,
+                    latency_ms            INTEGER NOT NULL DEFAULT 0,
+                    tokens_in             INTEGER NOT NULL DEFAULT 0,
+                    tokens_out            INTEGER NOT NULL DEFAULT 0,
+                    cost_cents            INTEGER NOT NULL DEFAULT 0,
+                    redaction_count       INTEGER NOT NULL DEFAULT 0,
+                    validation_status     TEXT,
+                    confirmation_required INTEGER NOT NULL DEFAULT 0,
+                    egress_decisions      INTEGER NOT NULL DEFAULT 0
+                );
+            """)
+            // Pivots run by (project, started_at), (pane, started_at),
+            // (feature, started_at). Indexes match the three pivot helpers.
+            try exec("CREATE INDEX IF NOT EXISTS idx_agent_trace_project_started ON agent_trace_event(project, started_at);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_agent_trace_pane_started ON agent_trace_event(pane, started_at);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_agent_trace_feature_started ON agent_trace_event(feature, started_at);")
+        },
     ]
 
     // MARK: - v5 helpers

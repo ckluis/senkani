@@ -9,6 +9,42 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 28 — `HandManifest` schema v1 + `senkani skill` CLI (`phase-u5-hand-manifest`, U.5 round 1)
+- New `Sources/Core/HandManifest.swift` is the canonical
+  capability-package shape: 13 fields covering identity
+  (`name`, `description`, `version`), capability surface
+  (`tools`, `settings`, `metrics`, `capabilities`), prompt
+  structure (`system_prompt.phases`, `skill_md`), and runtime
+  policy (`guardrails.requires_confirm/egress_allow/secret_scope`,
+  `cadence.triggers/schedule`, `sandbox`).
+- `Sources/Core/HandManifestLinter.swift` enforces 12 invariants
+  Codable can't catch — schema-version pin, identity-field
+  non-empty + kebab-case warning, phase non-empty,
+  `requires_confirm` ⊆ `tools[]`, known `cadence.triggers`,
+  non-empty `egress_allow` hosts. `lintJSON(_:)` surfaces decode
+  failures as one error-severity issue at path `(decode)`.
+- `Sources/Core/HandManifestExporter.swift` translates one
+  manifest to five harnesses. First-class: `claude-code` (SKILL.md
+  YAML frontmatter + sectioned phases) and `senkani` (WARP.md
+  with `tools:` + `sandbox:` frontmatter). Shape-only: `cursor`
+  (`.mdc` rule), `codex` and `opencode` (JSON envelope
+  `{harness, manifest}`). Per-harness installer hardening lands
+  in V.10 / V.11.
+- `Sources/CLI/SkillCommand.swift` wires `senkani skill lint
+  <path>` (with `--json`) and `senkani skill export --target
+  <harness> <path>`. Export refuses to emit when lint reports
+  errors. `Senkani.swift` registers `Skill.self` as a top-level
+  subcommand.
+- `spec/skills.md` is the frozen schema doc with field table,
+  lint matrix, exporter status table, CLI surface, and round
+  history. `spec/autonomous-manifest.yaml` adds the `skills`
+  subsystem mapping so future doc-sync routes here.
+- 20 new tests across three suites
+  (`HandManifestTests`, `HandManifestLinterTests`,
+  `HandManifestExporterTests`) covering happy-path decode,
+  decode rejects unknown sandbox, multi-phase round-trip, every
+  lint invariant, and one assertion per exporter target.
+
 ### April 28 — `agent_trace_event` canonical row + idempotency keys (`phase-v2-canonical-trace-row`, V.2)
 - `Sources/Core/Migrations.swift` adds Migration v8 — a new
   `agent_trace_event` table with one wide row per tool call.

@@ -65,6 +65,8 @@ Gemma 4 optionally enriches rationale strings (H+2a) — contained to a dedicate
 
 **Authorship tags** (Phase V.5) carry explicit provenance — `ai-authored` / `human-authored` / `mixed` / `unset` — on every KB entity. The save path prompts before persisting an ambiguous row (V.5b), `senkani authorship backfill` heals legacy NULL rows under a chain-participating audit row (V.5c), and the KB / Timeline / Skills panes render typographic badges that surface "Untagged" rather than silently inferring a tag (V.5d). Cavoukian's contract: provenance metadata, never policy.
 
+**`HandManifest` skills** (Phase U.5 round 1) are a portable canonical capability-package shape: one JSON manifest carries `tools`, `settings`, `metrics`, multi-phase `system_prompt`, `skill_md`, `guardrails` (`requires_confirm` / `egress_allow` / `secret_scope`), `cadence` (HookRouter triggers + cron), `sandbox`, and declared `capabilities`. `senkani skill lint <path>` enforces 12 schema invariants (kebab-case names, `requires_confirm` ⊆ `tools[]`, known cadence triggers); `senkani skill export --target claude-code|cursor|codex|opencode|senkani <path>` round-trips one source into per-harness output (claude-code SKILL.md and senkani WARP.md are first-class; cursor/codex/opencode emit canonical envelopes pending V.10/V.11 hardening). Schema v1 is frozen at `spec/skills.md`.
+
 ---
 
 ## The Workspace

@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>senkani authorship — CLI reference</title>
-<meta name="description" content="Bulk-tag legacy KB rows whose authorship column is NULL. Operator-triggered; never automatic.">
+<title>senkani skill — CLI reference</title>
+<meta name="description" content="Lint and export HandManifest skill packages. Round-trips one canonical manifest into Claude Code, Cursor, Codex, OpenCode, or Senkani output.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -60,8 +60,8 @@
         <li><a href="../../../docs/reference/cli/senkani-eval.html"><code>senkani eval</code></a></li>
         <li><a href="../../../docs/reference/cli/senkani-ml-eval.html"><code>senkani ml-eval</code></a></li>
         <li><a href="../../../docs/reference/cli/senkani-learn.html"><code>senkani learn</code></a></li>
-        <li><a href="../../../docs/reference/cli/senkani-authorship.html" class="active"><code>senkani authorship</code></a></li>
-        <li><a href="../../../docs/reference/cli/senkani-skill.html"><code>senkani skill</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-authorship.html"><code>senkani authorship</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-skill.html" class="active"><code>senkani skill</code></a></li>
       </ul>
     </div>
   </aside>
@@ -70,54 +70,65 @@
       <a href="../../../">Home</a> <span class="sep">›</span>
       <a href="../../../docs/reference.html">Reference</a> <span class="sep">›</span>
       <a href="../../../docs/reference/cli.html">CLI commands</a> <span class="sep">›</span>
-      <span class="here"><code>senkani authorship</code></span>
+      <span class="here"><code>senkani skill</code></span>
     </nav>
     <span class="quadrant reference">Reference · Information</span>
-    <h1 class="page-title"><code style="background:none;padding:0;color:var(--accent-lo);font-size:0.82em;">senkani authorship</code></h1>
+    <h1 class="page-title"><code style="background:none;padding:0;color:var(--accent-lo);font-size:0.82em;">senkani skill</code></h1>
     <div class="tag-row" style="margin-bottom:18px;"><span class="badge badge-live">Live</span></div>
 
-    <p class="lede">Manage knowledge-base authorship tags. The <code>backfill</code> subcommand bulk-tags legacy rows whose <code>authorship</code> column is NULL — the operator-triggered path for healing pre-V.5 KB state.</p>
+    <p class="lede">Manage <code>HandManifest</code> skill packages — Senkani's canonical capability-package shape. <code>lint</code> validates a manifest against schema v1; <code>export</code> round-trips one manifest into per-harness output (Claude Code, Cursor, Codex, OpenCode, Senkani).</p>
 
     <h2>Syntax</h2>
-    <div class="ref-signature">senkani authorship backfill --since YYYY-MM-DD --tag &lt;aiAuthored|humanAuthored|mixed&gt; [--yes] [--root &lt;path&gt;]</div>
+    <div class="ref-signature">senkani skill lint &lt;path&gt; [--json]</div>
+    <div class="ref-signature">senkani skill export --target &lt;harness&gt; &lt;path&gt;</div>
 
     <h2>Behavior</h2>
-    <p>Walks <code>knowledge_entities</code> rows whose <code>authorship</code> column is literally NULL <em>and</em> whose <code>created_at &gt;= since</code>, then writes the chosen tag. The in-band <code>.unset</code> sentinel (an explicit operator deferral from the V.5b prompt path) and the three explicit tags are <strong>never</strong> overwritten.</p>
-    <p>Without <code>--yes</code>, the command prints a dry-run preview (project root, count, tag) and exits without writing. With <code>--yes</code>, it writes inside a single SQL transaction and is idempotent — a second pass with the same args matches zero rows because the predicate (<code>authorship IS NULL</code>) no longer holds.</p>
-    <p>Each non-empty batch records one row in the chain-participating <code>commands</code> table (Phase T.5 round 3) with <code>tool_name=&quot;authorship.backfill&quot;</code>. The row carries a 64-char SHA-256 <code>entry_hash</code> — that is the &quot;self-audited row in the chain&quot; required by V.5c.</p>
-    <p>Cavoukian invariant: bulk operations are operator-triggered, never automatic. The CLI rejects <code>--tag unset</code> because backfill exists to record an explicit decision.</p>
+    <p><code>lint</code> reads a JSON file, decodes it as a <code>HandManifest</code>, and runs 12 invariants the Codable layer can't catch — schema-version pin, identity-field non-empty + kebab-case warning, <code>system_prompt.phases</code> non-empty, <code>guardrails.requires_confirm</code> ⊆ <code>tools[]</code>, known <code>cadence.triggers</code>, non-empty <code>egress_allow</code> hosts. Decode failures surface as a single error-severity issue at path <code>(decode)</code>. Exit code is <code>1</code> on any error-severity issue, <code>0</code> otherwise (warnings don't block).</p>
+    <p><code>export</code> picks a harness via <code>--target</code> and emits per-harness output to stdout. The exporter gates on the linter — it refuses to emit when lint reports errors. Two targets are first-class: <code>claude-code</code> emits a SKILL.md (YAML frontmatter + <code>## &lt;Phase&gt;</code> sectioned body); <code>senkani</code> emits a WARP.md with <code>tools:</code> + <code>sandbox:</code> frontmatter so <code>SkillScanner</code> can route the skill without parsing the body. The other three targets emit canonical envelopes pending V.10/V.11 hardening: <code>cursor</code> emits a <code>.mdc</code> rule (frontmatter + body); <code>codex</code> and <code>opencode</code> emit a JSON envelope <code>{harness, manifest}</code> for installer round-trip.</p>
 
     <h2>Example</h2>
-    <pre class="code">$ senkani authorship backfill --since 2026-01-01 --tag humanAuthored
-Project: /Users/op/code/myproj
-Found 14 legacy row(s) with NULL authorship created on/after 2026-01-01.
-Would tag as: Human (human-authored).
+    <pre class="code">$ senkani skill lint ./code-quality.json
+OK ./code-quality.json
 
-DRY RUN — nothing written. Re-run with --yes to apply.
+$ senkani skill lint ./broken.json
+error name: name must be non-empty
+error system_prompt.phases: system_prompt must have at least one phase
+error guardrails.requires_confirm[0]: requires_confirm references tool 'exec' that is not declared in tools[]
 
-$ senkani authorship backfill --since 2026-01-01 --tag humanAuthored --yes
-Tagged 14 row(s) as Human (human-authored).
-Audit-chain row recorded (commands table, session=8a3f0c9e…).</pre>
+$ senkani skill export --target claude-code ./code-quality.json
+---
+name: code-quality
+description: Run the project lint + format pipeline.
+---
+
+## Preamble
+
+You run lint + format and report failures.
+
+## Rules
+
+Never modify files without confirmation.</pre>
 
     <h2>Flags</h2>
     <div class="ref-io-table">
       <div class="head">Flag</div><div class="head"></div><div class="head"></div><div class="head">Description</div>
-      <div class="k">--since</div><div class="t">YYYY-MM-DD</div><div class="default">required</div><div class="desc">Lower bound on <code>created_at</code> (UTC). Rows older than this are left alone.</div>
-      <div class="k">--tag</div><div class="t">enum</div><div class="default">required</div><div class="desc">One of <code>aiAuthored</code>, <code>humanAuthored</code>, <code>mixed</code>. The <code>unset</code> sentinel is rejected.</div>
-      <div class="k">--yes</div><div class="t"></div><div class="default">false</div><div class="desc">Confirm the write. Without this flag the command prints a dry-run preview and exits.</div>
-      <div class="k">--root</div><div class="t">path</div><div class="default">cwd</div><div class="desc">Project root (the KB lives at <code>&lt;root&gt;/.senkani/vault.db</code>).</div>
+      <div class="k">--json</div><div class="t"></div><div class="default">false</div><div class="desc"><code>lint</code> only — emit issues as JSON (array of <code>{severity, path, message}</code>).</div>
+      <div class="k">--target</div><div class="t">enum</div><div class="default">required</div><div class="desc"><code>export</code> only — one of <code>claude-code</code>, <code>cursor</code>, <code>codex</code>, <code>opencode</code>, <code>senkani</code>.</div>
     </div>
+
+    <h2>Schema v1</h2>
+    <p>The full field list, lint matrix, and exporter status table live at <a href="../../../spec/skills.md"><code>spec/skills.md</code></a>. Schema v1 is frozen — schema bumps land as <code>HandManifestV2</code>, not in-place edits.</p>
 
     <div class="seealso">
       <h3>See also</h3>
       <ul>
-        <li><a href="../../../docs/reference/cli/senkani-kb.html"><code>senkani kb</code></a></li>
-        <li><a href="../../../docs/concepts/knowledge-base.html">Knowledge base</a></li>
+        <li><a href="../../../spec/skills.md"><code>spec/skills.md</code> — schema reference</a></li>
+        <li><a href="../../../docs/reference/mcp.html">MCP tools</a> (the <code>tools[]</code> field references these by name)</li>
       </ul>
     </div>
 
     <div class="source-pointer">
-      <strong>Source:</strong> <code>Sources/CLI/AuthorshipCommand.swift</code>, <code>Sources/Core/AuthorshipBackfillRunner.swift</code>, <code>Sources/Core/KnowledgeStore/EntityStore.swift</code> (<code>backfillNullAuthorship</code>)
+      <strong>Source:</strong> <code>Sources/Core/HandManifest.swift</code>, <code>Sources/Core/HandManifestLinter.swift</code>, <code>Sources/Core/HandManifestExporter.swift</code>, <code>Sources/CLI/SkillCommand.swift</code>
     </div>
   </article>
 </main>

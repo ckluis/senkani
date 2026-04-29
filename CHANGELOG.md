@@ -9,6 +9,70 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 29 — `PromptArtifactRegressionGate` + `ReflectiveLearningRun` (`phase-v4-regression-gate`, V.4 round 1)
+- `Sources/Core/PromptArtifactRegressionGate.swift` is the V.4
+  pre-merge gate for prompt-side artifacts (skills, hook prompts,
+  MCP tool descriptions, brief templates) — distinct namespace
+  from the Phase H+1 `RegressionGate`, which scores `FilterRule`
+  savings deltas against `FilterEngine`. Bach's audit: distinct
+  surfaces, distinct names, no payload-conflation. `EvalCorpus`
+  is `[EvalCase]`; each case carries a `Requirement`
+  (`.mustContain` / `.mustNotContain` / `.maxLength`) — round-1's
+  three constructors cover the lowest-friction skill/hook
+  invariants without committing to an LLM evaluator (V.4-bis
+  extension point). `ArtifactScore = (passing, total, cost)`
+  persists `total` for future uncertainty calibration (Gelman's
+  audit) and `cost` as utf8 byte count of the body (Karpathy's
+  audit: defensible token-cost proxy without a tokenizer in V.4).
+  Gate accepts when `candidate.passing ≥ baseline.passing` (cost-
+  only improvements are legal — the Pareto frontier filters
+  dominated entries downstream); empty corpus and nil baseline
+  accept unconditionally.
+- `Sources/Core/ReflectiveLearningRun.swift` ships the
+  `PromptMutator` protocol (Karpathy's "MutationStrategy" hook)
+  and a five-mutator deterministic suite (`concise_prefix` /
+  `trim_trailing_ws` / `drop_empty_lines` / `first_sentence_only`
+  / `append_safety_footer`) as the round-1 stand-in. Karpathy red
+  flag: this is **not** a GEPA implementation — round 1 is the
+  scaffold; V.4-bis swaps in an MLX-backed mutator behind the
+  same protocol. `ParetoFrontier.consider(_:)` enforces strict
+  dominance (≥ on one dimension, > on the other), evicts
+  dominated entries, and rejects exact-duplicate body+score
+  pairs. Persistence: `<projectRoot>/.senkani/learn/pareto/<kind>.json`
+  with `[.sortedKeys, .prettyPrinted]` + `.iso8601` JSON for
+  byte-stable round-trip; per-kind partition means the four
+  artifact kinds evolve independently.
+- `Sources/Core/CompoundLearning.swift` adds
+  `runReflectiveLearning(seed:corpus:projectRoot:mutators:db:)`
+  — the V.4 Propose-step hook. Loads the existing frontier,
+  runs the reflective loop, persists the merged frontier, and
+  bumps `compound_learning.prompt_artifact.run` once per call +
+  `compound_learning.prompt_artifact.proposed` by the
+  newly-added entry count. **Operator-triggered**, not
+  auto-fired in `runPostSession` (Schneier-style: silent prompt
+  mutation churn is opt-in; V.4-bis adds a `senkani gate run`
+  CLI + scheduled cadence).
+- `spec/compound_learning.md` adds a "Phase V.4 — Prompt-side
+  artifact gate" section documenting the corpus format, score
+  shape, gate semantics, Pareto dominance rule, persistence
+  layout, and the V.4-bis deferred work (LLM mutator, CLI
+  surface, auto-fire, frontier UI, V.6-round-3 fails-evidence →
+  EvalCase wiring).
+- 20 new tests across two suites (`PromptArtifactRegressionGateTests`,
+  `ReflectiveLearningRunTests`): score reports `passing`/`total`/
+  `cost` honestly; vacuous-truth pct on empty corpus;
+  equal-passing accepted (cost-only improvement legal);
+  strictly-better accepted; **fixture-injected regression
+  rejected (acceptance #1)**; nil baseline accepts; empty corpus
+  accepts; `maxLength` counts utf8 bytes; strict dominance on
+  lower-cost-same-passing; non-dominated coexist; ties
+  distinguished by body; **save/load round-trips byte-stably +
+  per-kind partition (acceptance #2)**; deterministic mutators
+  are pure; run includes the seed; run drops dominated
+  mutations; **`CompoundLearning.runReflectiveLearning` persists
+  + bumps event counter (acceptance #3)**; idempotent re-run;
+  stable `PromptArtifactKind.rawValue` contract.
+
 ### April 28 — `AnnotationStore` + signal generator backend (`phase-v6-annotation-system`, V.6 round 1)
 - `Sources/Core/Migrations.swift` adds Migration v9 — a new
   `annotations` table. One row per operator-tagged segment of a

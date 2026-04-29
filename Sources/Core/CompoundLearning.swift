@@ -711,6 +711,56 @@ public enum CompoundLearning {
             projectRoot: projectRoot)
     }
 
+    // MARK: - Prompt-artifact reflective learning (V.4)
+
+    /// V.4 Propose step. Mutates `seed` through the supplied
+    /// `PromptMutator` suite, scores each candidate against `corpus`
+    /// via `PromptArtifactRegressionGate`, and merges survivors into
+    /// the on-disk Pareto frontier at
+    /// `<projectRoot>/.senkani/learn/pareto/<kind>.json`.
+    ///
+    /// Called by the operator (CLI / pre-merge hook / future
+    /// CI integration) — NOT auto-fired from `runPostSession`. The
+    /// V.4 contract: the gate is a tool the operator runs, not a
+    /// background pass; auto-firing on every session would cost
+    /// inference time + commit churn the round explicitly avoids.
+    /// V.4-bis (LLM mutator + scheduled cadence) is a separate item.
+    ///
+    /// - Returns: the post-merge frontier so callers can inspect /
+    ///   render without re-loading from disk.
+    @discardableResult
+    public static func runReflectiveLearning(
+        seed: PromptArtifact,
+        corpus: EvalCorpus,
+        projectRoot: String,
+        mutators: [PromptMutator] = DeterministicMutators.suite(),
+        db: SessionDatabase = .shared
+    ) throws -> ParetoFrontier {
+        precondition(seed.kind == corpus.kind,
+            "ReflectiveLearningRun: seed.kind \(seed.kind) ≠ corpus.kind \(corpus.kind)")
+        db.recordEvent(
+            type: "compound_learning.prompt_artifact.run",
+            projectRoot: projectRoot)
+        let starting = ParetoFrontier.load(kind: seed.kind, projectRoot: projectRoot)
+        let merged = ReflectiveLearningRun.run(
+            seed: seed, corpus: corpus, mutators: mutators,
+            startingFrontier: starting
+        )
+        try merged.save(projectRoot: projectRoot)
+        // One "proposed" event per surviving entry that originated in
+        // this run. A non-mutating run (every candidate dominated)
+        // still bumps `.run` — callers can diff the counters to see
+        // whether the frontier actually grew.
+        let newCount = merged.entries.count - starting.entries.count
+        if newCount > 0 {
+            db.recordEvent(
+                type: "compound_learning.prompt_artifact.proposed",
+                projectRoot: projectRoot,
+                delta: newCount)
+        }
+        return merged
+    }
+
     // MARK: - Distribution logging (H+2a — Gelman infrastructure)
 
     /// Emit a compact line capturing session-count and savings-percentile

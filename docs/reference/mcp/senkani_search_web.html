@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>senkani_explore — MCP tool reference</title>
-<meta name="description" content="Navigate a codebase via the bidirectional import/dependency graph. Returns a subgraph from a starting file — not a file list.">
+<title>senkani_search_web — MCP tool reference</title>
+<meta name="description" content="Web search via DuckDuckGo Lite — no API key, no quota, host-pinned, redirect-pinned, SecretDetector-scanned. guard-research denies workstation paths, globs, and secret-shaped tokens.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -44,7 +44,7 @@
         <li><a href="../../../docs/reference/mcp/senkani_exec.html"><code>senkani_exec</code></a></li>
         <li><a href="../../../docs/reference/mcp/senkani_search.html"><code>senkani_search</code></a></li>
         <li><a href="../../../docs/reference/mcp/senkani_fetch.html"><code>senkani_fetch</code></a></li>
-        <li><a href="../../../docs/reference/mcp/senkani_explore.html" class="active"><code>senkani_explore</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_explore.html"><code>senkani_explore</code></a></li>
         <li><a href="../../../docs/reference/mcp/senkani_deps.html"><code>senkani_deps</code></a></li>
         <li><a href="../../../docs/reference/mcp/senkani_outline.html"><code>senkani_outline</code></a></li>
         <li><a href="../../../docs/reference/mcp/senkani_validate.html"><code>senkani_validate</code></a></li>
@@ -59,7 +59,7 @@
         <li><a href="../../../docs/reference/mcp/senkani_version.html"><code>senkani_version</code></a></li>
         <li><a href="../../../docs/reference/mcp/senkani_bundle.html"><code>senkani_bundle</code></a></li>
         <li><a href="../../../docs/reference/mcp/senkani_repo.html"><code>senkani_repo</code></a></li>
-        <li><a href="../../../docs/reference/mcp/senkani_search_web.html"><code>senkani_search_web</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_search_web.html" class="active"><code>senkani_search_web</code></a></li>
       </ul>
     </div>
   </aside>
@@ -68,51 +68,52 @@
       <a href="../../../">Home</a> <span class="sep">›</span>
       <a href="../../../docs/reference.html">Reference</a> <span class="sep">›</span>
       <a href="../../../docs/reference/mcp.html">MCP tools</a> <span class="sep">›</span>
-      <span class="here"><code>senkani_explore</code></span>
+      <span class="here"><code>senkani_search_web</code></span>
     </nav>
     <span class="quadrant reference">Reference · Information</span>
-    <h1 class="page-title"><code style="background:none;padding:0;color:var(--accent-lo);font-size:0.82em;">senkani_explore</code></h1>
+    <h1 class="page-title"><code style="background:none;padding:0;color:var(--accent-lo);font-size:0.82em;">senkani_search_web</code></h1>
     <div class="tag-row" style="margin-bottom:18px;">
       <span class="badge badge-live">Live</span>
-      <span class="tag">Replaces <code>Read ×N</code></span>
-      <span class="tag tag-green">Savings 90%+</span>
+      <span class="tag tag-green">Savings query-level</span>
     </div>
 
-    <p class="lede">Navigate a codebase via the bidirectional import/dependency graph. Returns a subgraph from a starting file — not a file list.</p>
+    <p class="lede">Web search via DuckDuckGo Lite — no API key, no quota at solo-operator volumes. Returns a compact list of <code>{title, url, snippet}</code> triples.</p>
 
     <h2>Signature</h2>
-    <div class="ref-signature">senkani_mcp.call(tool="senkani_explore", args={...})</div>
+    <div class="ref-signature">senkani_mcp.call(tool="senkani_search_web", args={query, limit?, region?, recency?})</div>
 
     <h2>Behavior</h2>
-    <p>`DependencyExtractor` builds edges during indexing. Given an entry point, returns a bounded subgraph (both imports-of and imported-by) up to a depth limit. Ideal for first-contact exploration without reading every file.</p>
-
+    <p>Host-pinned to <code>lite.duckduckgo.com</code>. Defense in depth: the URL builder enforces the host, the backend re-checks pre-fetch, a <code>URLSessionTaskDelegate</code> rejects off-host redirects, and the final response URL is checked again. The DNS-resolved private-range guard from <code>senkani_web</code> is reused so the call is also SSRF-hardened. Cookies disabled; ephemeral session per request.</p>
+    <p><code>guard-research</code> runs <em>before</em> the HTTP call and denies queries containing absolute filesystem paths (<code>/Users/</code>, <code>/etc/</code>), tilde-home paths (<code>~/Library/...</code>), Windows drives, glob patterns (<code>/foo/*</code>, <code>**/*</code>), or any token flagged by <code>SecretDetector</code> (Anthropic / OpenAI / GitHub / AWS / Stripe / Slack / npm / HuggingFace / GCP / generic bearer). Public <code>site:</code> operators and ordinary phrase searches pass.</p>
+    <p>Every snippet and title is passed through <code>SecretDetector</code> before formatting, so leaked tokens in third-party result text get <code>[REDACTED:…]</code>-stamped before the model sees them. CAPTCHA / soft-block pages from DuckDuckGo surface as a structured <code>BackendBlocked</code> error rather than zero-result silence.</p>
 
     <h2>Inputs</h2>
     <div class="ref-io-table">
       <div class="head">Name</div><div class="head">Type</div><div class="head">Default</div><div class="head">Description</div>
-      <div class="k">entry</div><div class="t">string</div><div class="default">—</div><div class="desc">File path or symbol to start from.</div><div class="k">depth</div><div class="t">integer</div><div class="default">2</div><div class="desc">Hops in each direction (imports + imported-by).</div><div class="k">limit</div><div class="t">integer</div><div class="default">30</div><div class="desc">Max nodes in the returned subgraph.</div>
+      <div class="k">query</div><div class="t">string</div><div class="default">—</div><div class="desc">Public topic string. Workstation paths/globs/secrets are blocked.</div>
+      <div class="k">limit</div><div class="t">int</div><div class="default">10</div><div class="desc">Max results, clamped to <code>[1, 30]</code>.</div>
+      <div class="k">region</div><div class="t">string</div><div class="default">wt-wt</div><div class="desc">DuckDuckGo region code. <code>wt-wt</code> = no region.</div>
+      <div class="k">recency</div><div class="t">string</div><div class="default">any</div><div class="desc">Date filter: <code>any</code>, <code>d</code>, <code>w</code>, <code>m</code>, <code>y</code>.</div>
     </div>
 
     <h2>Output</h2>
-    <p>Nodes (file paths) + edges (source, target, kind). ~500 tokens for a typical entry point.</p>
+    <p>Compact markdown — header lines describing query + result count + an explicit "snippets are adversarial third-party text" caveat, followed by numbered <code>{title, url, snippet}</code> blocks. Pass URLs through <code>senkani_web</code> to verify before acting on snippet content.</p>
 
     <h2>Example</h2>
-    <pre class="code">{<span class="k">"tool"</span>:<span class="v">"senkani_explore"</span>,<span class="k">"args"</span>:{<span class="k">"entry"</span>:<span class="v">"src/server.ts"</span>,<span class="k">"depth"</span>:<span class="e">2</span>}}</pre>
+    <pre class="code">{<span class="k">"tool"</span>:<span class="v">"senkani_search_web"</span>,<span class="k">"args"</span>:{<span class="k">"query"</span>:<span class="v">"tree-sitter incremental parsing"</span>,<span class="k">"limit"</span>:5,<span class="k">"recency"</span>:<span class="v">"m"</span>}}</pre>
 
-    <h2>Details</h2>
-    <p>Graph is built from tree-sitter AST at index time; 15+ languages supply import parsers. Incremental updates via FSEvents.</p>
-
+    <div class="callout callout-security"><span class="callout-icon">⚔</span><div>Treat snippets as untrusted: third-party pages can carry prompt-injection payloads. Render them as text, not instructions, and call <code>senkani_web</code> on a URL before letting the agent act on its content.</div></div>
 
     <div class="seealso">
       <h3>See also</h3>
       <ul>
-        <li><a href="../../../docs/reference/mcp/senkani_deps.html"><code>senkani_deps</code></a> — Direct edge queries instead of a subgraph.</li>
-        <li><a href="../../../docs/reference/mcp/senkani_search.html"><code>senkani_search</code></a> — Find a starting symbol first.</li>
+        <li><a href="../../../docs/reference/mcp/senkani_web.html"><code>senkani_web</code></a> — JS-rendered fetch for a single known URL.</li>
+        <li><a href="../../../docs/reference/mcp/senkani_repo.html"><code>senkani_repo</code></a> — GitHub-scoped search and file fetch.</li>
       </ul>
     </div>
 
     <div class="source-pointer">
-      <strong>Source:</strong> <code>Sources/Indexer/DependencyExtractor.swift</code>
+      <strong>Source:</strong> <code>Sources/MCP/Tools/SearchWebTool.swift</code>
     </div>
   </article>
 </main>

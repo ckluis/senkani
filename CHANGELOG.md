@@ -9,6 +9,42 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 29 — `senkani_search_web` MCP tool ships (`phase-w1-search-web-mcp`, W.1)
+- `Sources/MCP/Tools/SearchWebTool.swift` adds `senkani_search_web`
+  with DuckDuckGo Lite as the default backend. Schema:
+  `{ query, limit (1–30, default 10), region (default "wt-wt"),
+  recency ("any"|"d"|"w"|"m"|"y", default "any") }`. Returns
+  formatted `{title, url, snippet}` triples in compact markdown.
+- Defense in depth: URL builder pins the host to
+  `lite.duckduckgo.com`; the backend re-checks the host pre-fetch,
+  reuses `senkani_web`'s DNS-resolved private-range guard,
+  rejects off-host redirects via a `URLSessionTaskDelegate`, and
+  re-validates the final response host. Cookies disabled, ephemeral
+  session per request.
+- `guard-research` lands as a query-side filter at the tool
+  boundary (`SearchWebQueryGuard`): blocks workstation paths
+  (`/Users/`, `/etc/`, `~/...`, Windows drives), glob patterns
+  (`/foo/*`, `**/*`), and any token flagged by `SecretDetector`.
+  Public `site:` operators and ordinary phrase searches pass.
+- Snippet + title outputs are passed through `SecretDetector`
+  before formatting, so any third-party leak in DDG's organic
+  results gets `[REDACTED:...]`-stamped before reaching the
+  model. CAPTCHA / soft-block pages surface as a structured
+  `BackendBlocked` error rather than silently returning zero
+  results.
+- `Sources/Core/Presets/PresetPrerequisiteCheck.swift` flips
+  `senkani_search_web` and `guard-research` from "always warn"
+  to ready — `autoresearch` and `competitive-scan` presets now
+  satisfy those prerequisites against this binary.
+- `Tests/SenkaniTests/SearchWebToolTests.swift` covers the parser
+  (Lite-shaped HTML + CAPTCHA + entity decode + limit cap), the
+  URL builder (region/recency/host pin), the `guard-research`
+  filter (Unix paths + tilde-home + globs + ten secret families
+  + clean queries), the redirect-pin delegate, the foreign-host
+  rejection, end-to-end with an injected backend, and a
+  100-fixture corpus that confirms every embedded secret-shaped
+  token gets redacted in the formatted output. 23 new tests.
+
 ### April 29 — `NaturalLanguageSchedule` foundations (`phase-u8-natural-language-schedule`, U.8 round 1)
 - `ScheduledTask` (in `Sources/Core/ScheduleConfig.swift`) gains
   optional `proseCadence`, `compiledCadence`, `eventCounterCadence`,

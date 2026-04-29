@@ -9,8 +9,9 @@ import Foundation
 /// Each prerequisite identifier is matched to a specific probe. Known
 /// ids (day-1):
 ///   - `ollama`                      — TCP reachability on 127.0.0.1:11434
-///   - `senkani_search_web`          — MCP tool not yet shipped; always warn
-///   - `guard-research`              — hook preset not yet shipped; always warn
+///   - `senkani_search_web`          — ships with this binary (W.1); always ready
+///   - `guard-research`              — ships with this binary (W.1) at the
+///                                     senkani_search_web tool boundary; always ready
 ///   - `guard-autoimprove`           — hook preset not yet shipped; always warn
 ///   - `senkani-brief-cli`           — `senkani brief` CLI; shell-probe
 ///   - `senkani-improve-cli`         — `senkani improve` CLI; shell-probe
@@ -110,8 +111,13 @@ public enum PresetPrerequisiteCheck {
         case "senkani-improve-cli":
             return probeShellCommand("senkani improve --help", prereq: prereq)
         case "senkani_search_web",
-             "guard-research",
-             "guard-autoimprove",
+             "guard-research":
+            // Ship with this binary as of W.1: search_web MCP tool +
+            // guard-research query filter at the tool boundary. Probe is
+            // a no-op here because the binary that runs `senkani doctor`
+            // is the same one that registers the tool.
+            return nil
+        case "guard-autoimprove",
              "pushover-notification-sink":
             return CheckResult.Warning(
                 prerequisite: prereq,

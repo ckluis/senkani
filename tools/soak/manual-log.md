@@ -12,6 +12,28 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Phase W.1 round 1 — `senkani_search_web` MCP tool 2026-04-29
+
+Round 1 ships a fully fixture-tested DuckDuckGo Lite backend (host pin,
+SSRF guard, redirect pin, `guard-research` query filter, snippet
+redaction). Three things only a real run against `lite.duckduckgo.com`
+can validate:
+
+- [ ] **Live shape match.** From a real session: call
+  `senkani_search_web` with a public topic ("rust async runtime
+  comparison"). Confirm the parser pulls out at least 5 results with
+  non-empty title + url + snippet. If the regex misses a row, that's
+  a DDG markup drift — capture the served HTML for a fixture update.
+- [ ] **CAPTCHA backoff visible.** Hammer the tool ~50× in a minute to
+  trigger a soft block; confirm the response is `BackendBlocked`
+  (structured error, not silent zero results) and that the next call
+  after a few minutes recovers.
+- [ ] **`autoresearch` preset round-trip.** Install the `autoresearch`
+  scheduled preset (`senkani schedule preset install autoresearch`),
+  let one fire run, confirm `~/.senkani/research/<date>.md` lands and
+  contains LLM-summarised bullets — no `[REDACTED:…]` accidents in
+  the summary.
+
 ### Phase U.8 round 1 — NaturalLanguageSchedule foundations 2026-04-29
 
 Round 1 shipped the data-model + protocol + math + minimal pane

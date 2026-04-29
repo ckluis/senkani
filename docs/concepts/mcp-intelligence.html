@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MCP intelligence — concept</title>
-<meta name="description" content="MCP — Model Context Protocol — is the standard JSON-RPC interface an LLM agent uses to call tools. Senkani exposes 19 MCP tools specifically designed for the fr">
+<meta name="description" content="MCP — Model Context Protocol — is the standard JSON-RPC interface an LLM agent uses to call tools. Senkani exposes 20 MCP tools specifically designed for the fr">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -62,16 +62,16 @@
     </nav>
     <span class="quadrant concept">Concept · Explanation</span>
     <h1 class="page-title">MCP intelligence</h1>
-    <p class="lede">MCP — Model Context Protocol — is the standard JSON-RPC interface an LLM agent uses to call tools. Senkani exposes 19 MCP tools specifically designed for the friction points of agent-driven coding sessions.</p>
+    <p class="lede">MCP — Model Context Protocol — is the standard JSON-RPC interface an LLM agent uses to call tools. Senkani exposes 20 MCP tools specifically designed for the friction points of agent-driven coding sessions.</p>
 
     <h2>Why MCP</h2>
-    <p>An MCP-aware agent doesn't hard-code tool definitions; it asks the server what tools exist and what their schemas look like. Senkani's MCP server registers once via <code>senkani init</code>, and every MCP-compatible agent (Claude Code, Cursor if you wire it up, Copilot if you wire it up, any custom client) can call the same 19 tools.</p>
+    <p>An MCP-aware agent doesn't hard-code tool definitions; it asks the server what tools exist and what their schemas look like. Senkani's MCP server registers once via <code>senkani init</code>, and every MCP-compatible agent (Claude Code, Cursor if you wire it up, Copilot if you wire it up, any custom client) can call the same 20 tools.</p>
 
-    <h2>The 19 tools, classified</h2>
+    <h2>The 20 tools, classified</h2>
     <ul>
       <li><strong>Perception</strong> — <a href="../../docs/reference/mcp/senkani_read.html"><code>senkani_read</code></a>, <a href="../../docs/reference/mcp/senkani_fetch.html"><code>senkani_fetch</code></a>, <a href="../../docs/reference/mcp/senkani_outline.html"><code>senkani_outline</code></a>, <a href="../../docs/reference/mcp/senkani_search.html"><code>senkani_search</code></a>, <a href="../../docs/reference/mcp/senkani_deps.html"><code>senkani_deps</code></a>, <a href="../../docs/reference/mcp/senkani_explore.html"><code>senkani_explore</code></a>.</li>
       <li><strong>Action</strong> — <a href="../../docs/reference/mcp/senkani_exec.html"><code>senkani_exec</code></a>, <a href="../../docs/reference/mcp/senkani_validate.html"><code>senkani_validate</code></a>, <a href="../../docs/reference/mcp/senkani_parse.html"><code>senkani_parse</code></a>.</li>
-      <li><strong>External</strong> — <a href="../../docs/reference/mcp/senkani_web.html"><code>senkani_web</code></a>, <a href="../../docs/reference/mcp/senkani_repo.html"><code>senkani_repo</code></a>.</li>
+      <li><strong>External</strong> — <a href="../../docs/reference/mcp/senkani_web.html"><code>senkani_web</code></a>, <a href="../../docs/reference/mcp/senkani_search_web.html"><code>senkani_search_web</code></a>, <a href="../../docs/reference/mcp/senkani_repo.html"><code>senkani_repo</code></a>.</li>
       <li><strong>Local ML</strong> — <a href="../../docs/reference/mcp/senkani_embed.html"><code>senkani_embed</code></a>, <a href="../../docs/reference/mcp/senkani_vision.html"><code>senkani_vision</code></a>.</li>
       <li><strong>Session + state</strong> — <a href="../../docs/reference/mcp/senkani_session.html"><code>senkani_session</code></a>, <a href="../../docs/reference/mcp/senkani_watch.html"><code>senkani_watch</code></a>, <a href="../../docs/reference/mcp/senkani_pane.html"><code>senkani_pane</code></a>.</li>
       <li><strong>Knowledge</strong> — <a href="../../docs/reference/mcp/senkani_knowledge.html"><code>senkani_knowledge</code></a>, <a href="../../docs/reference/mcp/senkani_bundle.html"><code>senkani_bundle</code></a>.</li>

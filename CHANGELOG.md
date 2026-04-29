@@ -9,6 +9,50 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 28 — KB markdown vault is configurable + portable (`phase-v7-knowledgebase-plain-md`, V.7)
+- `Sources/Core/KBVaultConfig.swift` resolves the per-project
+  knowledge dir against three layers: `SENKANI_KB_VAULT_ROOT` env
+  override, `~/.senkani/config.json` `kb_vault_path`, then the
+  legacy `<projectRoot>/.senkani/knowledge` default. When a vault
+  root is configured, the resolved dir is `<vault_root>/<project-slug>`
+  so multiple projects don't collide on entity name. `getenv` is read
+  live so test setenv calls take effect without stale snapshots.
+- `Sources/Core/KBVaultMigrator.swift` copies the vault between two
+  directories, content-hash idempotent: `migrate` skips files already
+  present byte-for-byte, surfaces conflicts (different content) as a
+  separate list rather than silently overwriting, and never deletes
+  the source unless the operator passes `--prune`. `unmigrate` is the
+  same operation in reverse.
+- `Sources/Core/WikiLinkResolver.swift` is the click-through resolver
+  complementing `WikiLinkHelpers` completion. Stems resolve exact;
+  multi-hits without a folder hint return `.ambiguous([URL])` so the
+  caller can disambiguate; `folder/Name` and `nested/folder/Name`
+  hints anchor the suffix of the path components.
+- `Sources/CLI/KBCommand.swift` adds `senkani kb migrate --to <path>
+  [--prune]` (persists path to `~/.senkani/config.json` for the next
+  session) and `senkani kb unmigrate [--prune]` (clears the config
+  key when pruning). Conflicts cause non-zero exit so the operator
+  must reconcile manually — Cavoukian's "no silent data leak across
+  vaults" rule.
+- `Sources/Core/KnowledgeFileLayer.swift` gains
+  `init(vaultDir:store:)` for explicit paths; the existing
+  `init(projectRoot:store:)` is now a convenience that delegates
+  through `KBVaultConfig.resolvedVaultDir`. Same plumbing in
+  `KBLayer1Coordinator.decideRebuild` so staleness detection follows
+  the relocated vault. The Layer-2 SQLite DB still pins to
+  `<projectRoot>/.senkani/knowledge/knowledge.db` — derived state,
+  not user-edited markdown.
+- 12 new tests in `Tests/SenkaniTests/KBVaultV7Tests.swift` cover
+  config defaults / env override / slug sanitization, migrator
+  copy / idempotency / unmigrate / conflict-not-overwrite, resolver
+  exact / folder-hint / ambiguous / not-found, and the layer
+  end-to-end round-trip through `init(vaultDir:)`.
+- All KB-touching test suites green: 12 new V.7 + 12 KnowledgeFileLayer
+  + 5 KBLayer1Coordinator + 11 KBPaneViewModel + 14 WikiLinkCompletion
+  = 54 tests. The full `swift test` run hits a pre-existing test-bundle
+  SIGTRAP (verified to reproduce on `main` without these changes); see
+  manual-log entry for the soak follow-up.
+
 ### April 28 — Authorship badges in KB / Timeline / Skills panes (`phase-v5d-authorship-ui-badges`, V.5 round 4)
 - `Sources/Core/AuthorshipBadge.swift` is a pure-Core descriptor that
   is total over `AuthorshipTag?` × `BadgeContext`

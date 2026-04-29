@@ -39,12 +39,19 @@ public final class KnowledgeFileLayer: @unchecked Sendable {
 
     // MARK: Init
 
-    public init(projectRoot: String, store: KnowledgeStore) throws {
+    public convenience init(projectRoot: String, store: KnowledgeStore) throws {
+        try self.init(
+            vaultDir: KBVaultConfig.resolvedVaultDir(projectRoot: projectRoot),
+            store: store)
+    }
+
+    /// Construct against an explicit vault directory. Used by the V.7 vault
+    /// migrator and by callers that already resolved the path themselves.
+    public init(vaultDir: String, store: KnowledgeStore) throws {
         self.store = store
-        let base = projectRoot + "/.senkani/knowledge"
-        knowledgeDir = base
-        stagedDir    = base + "/.staged"
-        historyDir   = base + "/.history"
+        knowledgeDir = vaultDir
+        stagedDir    = vaultDir + "/.staged"
+        historyDir   = vaultDir + "/.history"
 
         for dir in [knowledgeDir, stagedDir, historyDir] {
             do {

@@ -12,6 +12,33 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Full-suite test-bundle SIGTRAP — INVESTIGATE 2026-04-28 (pre-existing, found during V.7)
+
+`swift test` (no `--filter`) crashes the test bundle with `signal code 5`
+(SIGTRAP) before reaching the summary line. Confirmed reproducible on
+`main` without any V.7 changes — this is **not** a V.7 regression. All
+focused suites still pass (V.7 added 12 tests; KnowledgeFileLayer × 12,
+KBLayer1Coordinator × 5, KBPaneViewModel × 11, WikiLinkCompletion × 14
+all green). The crash likely lives in cross-suite parallel test
+interaction, not in any single test (each suite passes independently).
+
+What to verify on your machine when you're back at it:
+
+1. Run `swift test --no-parallel` — does the SIGTRAP go away? If yes,
+   the failure is races between parallel test bundles (env mutation,
+   file system contention on `/tmp`, or shared mutable state).
+2. Run the suite in a worktree (`git worktree add ../senkani-soak main`)
+   under `swift test --num-workers 1` and capture which suite was last
+   running just before the crash. Add `--xunit-output` for a parsable
+   transcript.
+3. Bisect parallel-unsafe suites: env-mutating tests in
+   `KBVaultV7Tests`, `KBVaultConfigTests`, `WorkstreamTests`,
+   `FeatureConfigTests` are the usual suspects.
+
+Once isolated, file a follow-up backlog item to either serialize the
+offending suite (`.serialized` trait at `@Suite` level) or move the env
+read out of process-level state.
+
 ### `senkani doctor --repair-chain` UX validation — RUNNABLE 2026-04-27 (Phase T.5 round 4)
 
 Round 4 of T.5 shipped the repair scaffolding green in CI (1879 tests pass, 9

@@ -51,7 +51,7 @@
     <span>Universal binary · Swift 6.0+</span>
     <span>macOS 14+</span>
     <span>Fully offline after install</span>
-    <span>1,958 tests green</span>
+    <span>1,970 tests green</span>
   </div>
 </header>
 
@@ -217,6 +217,7 @@
         <li><strong>FTS5 search + BM25 ranking.</strong> <code>senkani_knowledge</code> or <code>senkani kb search</code>.</li>
         <li><strong>Enrichment validator</strong> flags information loss, contradiction, excessive rewrite before any Gemma enrichment commits.</li>
         <li><strong>Rollback + timeline.</strong> Every change is append-only history; <code>senkani kb rollback</code> reverts; <code>senkani kb timeline</code> shows the full chronology.</li>
+        <li><strong>Portable vault.</strong> <code>senkani kb migrate --to ~/My-Vault</code> relocates the markdown out of the project tree; per-project slug keeps multi-repo vaults isolated. Idempotent migrate / unmigrate, conflict detection, no silent overwrite.</li>
       </ul>
       <a class="product-hero-cta" href="docs/concepts/knowledge-base.html">How the KB stays coherent <span aria-hidden="true">→</span></a>
     </div>

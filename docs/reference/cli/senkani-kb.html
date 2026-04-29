@@ -77,18 +77,20 @@
     <p class="lede">Query and manage the project knowledge base.</p>
 
     <h2>Syntax</h2>
-    <div class="ref-signature">senkani kb [list|get|search|rollback|history|timeline]</div>
+    <div class="ref-signature">senkani kb [list|get|search|rollback|history|timeline|migrate|unmigrate]</div>
 
     <h2>Behavior</h2>
-    <p>Subcommands mirror `senkani_knowledge` + rollback/history/timeline from the enrichment layer. Flags: `--sort`, `--type`, `--limit`, `--root`.</p>
+    <p>Subcommands mirror <code>senkani_knowledge</code> + rollback/history/timeline from the enrichment layer + V.7 vault relocation (<code>migrate</code>, <code>unmigrate</code>). Flags: <code>--sort</code>, <code>--type</code>, <code>--limit</code>, <code>--root</code>, <code>--to</code>, <code>--prune</code>.</p>
 
     <h2>Example</h2>
-    <pre class="code">$ senkani kb search "auth middleware"</pre>
+    <pre class="code">$ senkani kb search "auth middleware"
+$ senkani kb migrate --to ~/Vaults/senkani --prune
+$ senkani kb unmigrate --prune</pre>
 
     <h2>Flags</h2>
     <div class="ref-io-table">
       <div class="head">Flag</div><div class="head"></div><div class="head"></div><div class="head">Description</div>
-      <div class="k">list</div><div class="t"></div><div class="default"></div><div class="desc">List entities.</div><div class="k">get &lt;id&gt;</div><div class="t"></div><div class="default"></div><div class="desc">Full entity detail.</div><div class="k">search &lt;q&gt;</div><div class="t"></div><div class="default"></div><div class="desc">FTS5 search.</div><div class="k">rollback &lt;id&gt;</div><div class="t"></div><div class="default"></div><div class="desc">Revert the last enrichment.</div><div class="k">history &lt;id&gt;</div><div class="t"></div><div class="default"></div><div class="desc">Show enrichment history.</div><div class="k">timeline</div><div class="t"></div><div class="default"></div><div class="desc">Chronological timeline of KB changes.</div>
+      <div class="k">list</div><div class="t"></div><div class="default"></div><div class="desc">List entities.</div><div class="k">get &lt;id&gt;</div><div class="t"></div><div class="default"></div><div class="desc">Full entity detail.</div><div class="k">search &lt;q&gt;</div><div class="t"></div><div class="default"></div><div class="desc">FTS5 search.</div><div class="k">rollback &lt;id&gt;</div><div class="t"></div><div class="default"></div><div class="desc">Revert the last enrichment.</div><div class="k">history &lt;id&gt;</div><div class="t"></div><div class="default"></div><div class="desc">Show enrichment history.</div><div class="k">timeline</div><div class="t"></div><div class="default"></div><div class="desc">Chronological timeline of KB changes.</div><div class="k">migrate --to &lt;path&gt;</div><div class="t"></div><div class="default"></div><div class="desc">Move the markdown vault to <code>&lt;path&gt;/&lt;project-slug&gt;</code> and persist <code>kb_vault_path</code> to <code>~/.senkani/config.json</code>. Idempotent; conflicts surface as a non-zero exit.</div><div class="k">unmigrate</div><div class="t"></div><div class="default"></div><div class="desc">Reverse the migration, restoring the project-local vault.</div><div class="k">--prune</div><div class="t">flag</div><div class="default">false</div><div class="desc">Remove source-side files after copy. On <code>unmigrate --prune</code>, also clears <code>kb_vault_path</code>.</div>
     </div>
 
     <div class="seealso">

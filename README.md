@@ -25,7 +25,7 @@ feature list and roadmap.
 
 ## The MCP Intelligence Layer
 
-19 tools that sit between Claude and your filesystem, compressing everything before it hits your token budget.
+20 tools that sit between Claude and your filesystem, compressing everything before it hits your token budget.
 
 | Tool | What it does | Savings |
 |------|-------------|---------|
@@ -41,7 +41,7 @@ feature list and roadmap.
 | `senkani_embed` | Text embeddings on Apple Silicon (no API cost) | $0/call |
 | `senkani_vision` | Vision model on Apple Silicon (no API cost) | $0/call |
 | `senkani_watch` | FSEvents ring buffer — query changed files by cursor + glob | near-zero |
-| `senkani_web` | Render `http://`/`https://` page with full JS, return AXTree markdown. DNS-resolved SSRF guard + redirect re-validation; `file://` not accepted (use `senkani_read`). | ~99% vs raw HTML |
+| `senkani_web` | Render `http://`/`https://` page with full JS, return AXTree markdown. DNS-resolved SSRF guard + redirect re-validation; `file://` not accepted (use `senkani_read`). The W.2 `MarkdownFirstFetcher` gives a three-tier ladder (`Accept: text/markdown` → HTML→markdown transform → headless render) with caller-forceable `method`; tier wired into the tool path is W.2-bis. | ~99% vs raw HTML |
 | `senkani_pane` | Control workspace panes — open, close, focus, resize (via Unix socket) | — |
 | `senkani_session` | View stats, toggle features, pin/unpin symbol context (`pin`/`unpin`/`pins`) | — |
 | `senkani_knowledge` | Query/update the project knowledge graph — entities, links, decisions, FTS5 search. `full: true` for complete entity detail (summary is default). | near-zero |

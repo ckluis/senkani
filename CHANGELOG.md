@@ -9,6 +9,38 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 29 — Markdown-first content negotiation ships (`phase-w2-markdown-first-fetch`, W.2)
+- `Sources/Core/ContentNegotiator.swift` adds the three-tier
+  fetch ladder used by `senkani_web` and `senkani_bundle`'s remote
+  mode: `Accept: text/markdown` first, deterministic HTML→markdown
+  transform on origin HTML, headless render only when both fail.
+  Cheapest-correct-first per the markdown.new pattern, with
+  caller-forceable tiers via `MarkdownFirstFetcher.fetch(url:method:)`
+  (`.auto` default, `.transform`, `.render`).
+- Every `ContentNegotiationResult` carries `tier`, `tokensEstimate`
+  (`bytes/4`, the local-first analogue of `x-markdown-tokens`),
+  `originBytes`, `needsRender`, and an optional `renderHint`. When
+  tier 2 can't extract usefully, the raw HTML is handed back so the
+  renderer doesn't pay a second fetch.
+- `HTMLToMarkdown` is a protocol; the round ships a deterministic
+  default transformer (strips `<script>` / `<style>` / `<head>` /
+  `<svg>`, preserves `<h1>`–`<h6>`, paragraphs, list items, link
+  syntax, and common HTML entities). The Gemma-4 adapter slot
+  mirrors U.8's `ProseCadenceCompiler` DI pattern so Core stays
+  MLX-free.
+- 12 new tests in `ContentNegotiatorTests`: tier-1 native return +
+  Accept header preference, tier-2 transform on HTML, tier-3
+  render fallback (transformer-nil + empty body), `method=.render`
+  short-circuits before any fetch, `method=.transform` forces tier 2
+  even when origin advertises markdown, origin failure →
+  `originUnreachable`, ≥40 % token reduction on a docs-page fixture,
+  transformer preserves headings + drops `<script>`, transformer
+  returns nil for empty input.
+- Deferred to W.2-bis: live wire-up to `WebFetchTool` /
+  `BundleTool` argument plumbing (`method` arg + `tokensEstimate`
+  in tool-result metadata) and a Gemma-4-backed `HTMLToMarkdown`
+  adapter (the deterministic transformer is the round-1 stand-in).
+
 ### April 29 — `senkani_search_web` MCP tool ships (`phase-w1-search-web-mcp`, W.1)
 - `Sources/MCP/Tools/SearchWebTool.swift` adds `senkani_search_web`
   with DuckDuckGo Lite as the default backend. Schema:

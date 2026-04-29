@@ -9,6 +9,34 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 29 — Quant-frontier review cadence + first 2026-Q2 report (`phase-w5-quant-frontier-cadence`, W.5)
+- `spec/ml_models.md` gains a "Quantization Frontiers" subsection
+  defining a quarterly review cadence (first business day of every
+  quarter), the per-candidate tracking schema (KL-max, imatrix
+  calibration mix, license, recipe class, footprint), and a binding
+  five-condition **promotion gate** — any candidate Gemma 4 quant
+  must beat the incumbent by ≥10 % on KL-max at equal-or-smaller
+  RAM, carry imatrix coverage of chat + code + tool-calling, post
+  `acceptable+` on `senkani ml-eval` real-machine, stay in-family
+  (no third on-device model family), and ship under a permissive
+  license. The section is explicitly walled off from the routing
+  surface so quant fashion never leaks into request-path code.
+- First quarterly report ships at
+  `~/.senkani/reports/quant-frontier-2026-Q2.md`. Reviews APEX
+  (Qwen3.6-35B-A3B + the `gemma-4-*-APEX-GGUF` family forward
+  signal), Ternary Bonsai (1.58-bit), and dots.ocr against the
+  promotion gate. Outcome: zero promotions — APEX recipe wins are
+  absorbed as policy (KL-max as headline metric, imatrix calibration
+  mix as the target, per-variant "best for" labels), Bonsai is
+  flagged as a forward signal for any future ≤2-bit Gemma 4 release,
+  dots.ocr is rejected as a third family but flagged as a candidate
+  for the OCR-specialist path *inside* `senkani_vision` (out of W.5
+  scope).
+- Cadence on the team calendar: recurring quarterly, first business
+  day of the quarter. Next review 2026-07-01.
+- Zero code, zero new tests; W.5 is a policy round. "Two Models, Not
+  Ten" remains the binding architectural constraint.
+
 ### April 29 — `ContextSaturationGate` + `PreCompactHandoffWriter` ship (`phase-w4-context-saturation-gate`, W.4)
 - `Sources/Core/ContextSaturationGate.swift` ships the pure
   decision function. `evaluate(currentTokens:threshold:)` returns

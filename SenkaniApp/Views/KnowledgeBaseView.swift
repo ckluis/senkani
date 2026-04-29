@@ -186,6 +186,8 @@ struct KnowledgeBaseView: View {
                     .padding(.vertical, 1)
                     .background(Capsule().fill(typeColor(entity.entityType).opacity(0.12)))
 
+                AuthorshipBadgeView(tag: entity.authorship, context: .knowledgeBase)
+
                 Text("\(entity.mentionCount)")
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundStyle(entity.mentionCount > 0
@@ -271,6 +273,8 @@ struct KnowledgeBaseView: View {
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
                         .background(Capsule().fill(typeColor(entity.entityType).opacity(0.15)))
+
+                    AuthorshipBadgeView(tag: entity.authorship, context: .knowledgeBase)
 
                     Button {
                         if vm.showingGraph {

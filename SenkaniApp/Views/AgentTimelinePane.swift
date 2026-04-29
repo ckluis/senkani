@@ -253,6 +253,11 @@ private struct TimelineRow: View {
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
+                // V.5d — token_events doesn't carry authorship; the
+                // badge surfaces the "Untagged" affordance with a
+                // tooltip explaining where the column lives today.
+                AuthorshipBadgeView(tag: nil, context: .timeline)
+
                 if event.savedTokens > 0 {
                     Text(formatCompact(event.savedTokens))
                         .font(.system(size: 9, design: .monospaced))

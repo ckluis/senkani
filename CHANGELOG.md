@@ -9,6 +9,35 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 28 — Authorship badges in KB / Timeline / Skills panes (`phase-v5d-authorship-ui-badges`, V.5 round 4)
+- `Sources/Core/AuthorshipBadge.swift` is a pure-Core descriptor that
+  is total over `AuthorshipTag?` × `BadgeContext`
+  (`.knowledgeBase` / `.timeline` / `.skills`). It returns a
+  `(label, weight, tooltip)` triple where `Weight` distinguishes the
+  three explicit tags (`.explicit`), an in-band `.unset` row owing a
+  decision (`.unset`), a legacy NULL on the KB (`.legacy`), and a
+  surface that doesn't yet carry the column at all (`.untracked`).
+  The three non-explicit weights all label as "Untagged" — the host
+  never silently relabels a missing tag as AI / Human / Mixed
+  (Cavoukian's V.5 contract).
+- `SenkaniApp/Views/AuthorshipBadgeView.swift` is the SwiftUI host —
+  monospaced 8-pt capsule with surface-aware tooltips. Visual weight
+  scales: `.explicit` rides the KB accent, `.unset` shows a small
+  orange nudge for the operator's decision, `.legacy` and `.untracked`
+  fade into the row chrome.
+- Wiring: `KnowledgeBaseView` renders the badge in the entity row and
+  the entity detail header (real authorship column);
+  `AgentTimelinePane` renders the `.untracked` badge on every timeline
+  row with a tooltip explaining that `token_events` doesn't carry the
+  column today; `SkillBrowserView` does the same for the skill list
+  row + skill detail header (filesystem-scanned, no DB column).
+- 10 new tests in `Tests/SenkaniTests/AuthorshipBadgeTests.swift` lock
+  the explicit-tag → label/weight/tooltip mapping, the no-silent-
+  inference contract across every untagged cell, the explicit-tag
+  context-invariance, and the Podmajersky single-sentence ≤150-char
+  tooltip rule.
+- 1948 → 1958 tests green; build green via `swift test --no-parallel`.
+
 ### April 28 — `senkani authorship backfill` CLI (`phase-v5c-authorship-cli-backfill`, V.5 round 3)
 - `Sources/CLI/AuthorshipCommand.swift` adds the operator-triggered
   `senkani authorship backfill --since YYYY-MM-DD --tag <aiAuthored|humanAuthored|mixed>`

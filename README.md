@@ -61,6 +61,8 @@ Gemma 4 optionally enriches rationale strings (H+2a) — contained to a dedicate
 
 **Knowledge base** (Phase F + F+1..F+5) integrates with compound learning: `.senkani/knowledge/*.md` is the source of truth, SQLite is a rebuilt index (`KBLayer1Coordinator` detects staleness + corrupt-DB recovery), entities mentioned ≥5× per session get queued for Gemma enrichment, `EnrichmentValidator` flags information loss / contradiction / excessive rewrite before commit, `senkani kb rollback / history / timeline` wrap the append-only evidence + history archive. `KBCompoundBridge` knits the two systems: high-mention entities boost compound-learning confidence; applied context docs seed KB entity stubs; rolling back a KB entity cascades to invalidate derived context docs.
 
+**Authorship tags** (Phase V.5) carry explicit provenance — `ai-authored` / `human-authored` / `mixed` / `unset` — on every KB entity. The save path prompts before persisting an ambiguous row (V.5b), `senkani authorship backfill` heals legacy NULL rows under a chain-participating audit row (V.5c), and the KB / Timeline / Skills panes render typographic badges that surface "Untagged" rather than silently inferring a tag (V.5d). Cavoukian's contract: provenance metadata, never policy.
+
 ---
 
 ## The Workspace
@@ -165,7 +167,7 @@ The full caveat — including the action item, owner, and the `tools/check-multi
 | Filter throughput | > 10 k lines/sec |
 | Symbol search | < 5 ms cold, < 1 ms cached |
 | Secret scan | < 2 ms / KB |
-| Unit tests | **1941 passing** |
+| Unit tests | **1958 passing** |
 | Binary size | ~28 MB universal |
 
 ---

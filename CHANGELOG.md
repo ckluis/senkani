@@ -9,6 +9,34 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 28 — MarkdownStreamingTranscoder Swift port (`phase-v8-markdown-streaming-transcoder`, V.8)
+- `Sources/Core/MarkdownStreamingTranscoder.swift` ports the
+  `@wterm/markdown` per-line dispatcher pattern to Swift. `push(_:)`
+  appends delta chunks, splits on `\n`, processes complete lines to
+  ANSI-styled output, and keeps the trailing partial line buffered
+  for the next call. `flush()` drains the orphan tail and closes any
+  open code fence. Inline scanner is a single forward pass: backtick
+  code spans win first (their content is pasted verbatim), then `**`
+  bold, `*` italic, and `[text](url)` links. Block dispatch covers
+  ATX headings (`# … ######`), bullet lists (`-`/`*`/`+`), ordered
+  lists (`N.`), and blockquotes (`> `). State is just `_buffer`,
+  `_inCodeBlock`, and the open fence's language hint.
+- `Tests/SenkaniTests/MarkdownStreamingTranscoderTests.swift` —
+  10 tests covering the load-bearing wterm streaming describe:
+  buffer-on-incomplete-line, multi-chunk pushes across line
+  boundaries, code-fence open/close (including the rule that
+  asterisks inside a fenced block survive verbatim), inline bold +
+  italic, inline-code protecting its body from re-scan, headings +
+  links, `flush()` draining an orphan code block, list items, the
+  `transcode(_:)` static convenience, and a streaming jitter
+  benchmark — 5 K-character corpus pushed one byte at a time
+  finishes in ~4 ms (budget is <50 ms / three frames at 60 Hz).
+- Reference: `spec/inspirations/native-app-ux/wterm.md` →
+  "What Senkani Should Borrow / Concrete Senkani Actions". Terminal
+  pane integration (route MCP-streaming text responses through the
+  transcoder) is the follow-up wedge — the algorithmic core landed
+  here so any caller can consume it.
+
 ### April 28 — KB markdown vault is configurable + portable (`phase-v7-knowledgebase-plain-md`, V.7)
 - `Sources/Core/KBVaultConfig.swift` resolves the per-project
   knowledge dir against three layers: `SENKANI_KB_VAULT_ROOT` env

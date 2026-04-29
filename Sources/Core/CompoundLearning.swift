@@ -118,6 +118,15 @@ public enum CompoundLearning {
             db: db
         )
 
+        // V.6 round 1 — annotation evidence flows into Analyze. Read-
+        // only: each evidence row bumps a counter so downstream
+        // Propose steps can consume the rollup without round 1
+        // mutating policy.
+        runAnnotationSignalDetection(
+            projectRoot: projectRoot,
+            db: db
+        )
+
         let report = WasteAnalyzer.analyze(
             projectRoot: projectRoot,
             sessionId: sessionId,
@@ -636,6 +645,33 @@ public enum CompoundLearning {
                 type: "compound_learning.workflow.proposed",
                 projectRoot: projectRoot)
         }
+    }
+
+    // MARK: - Annotation signal detection (V.6 round 1)
+
+    /// Read every annotation row, roll up by `(target_kind, target_id)`,
+    /// and bump `compound_learning.annotation.observed` once per
+    /// evidence row + a `.failing` / `.working` / `.mixed` counter for
+    /// the signal kind. Round 1 stops at evidence — no rule mutation,
+    /// no auto-staging. Downstream Propose steps (V.6 round 3+) read
+    /// the same rollup via `AnnotationSignalGenerator.analyze`.
+    @discardableResult
+    static func runAnnotationSignalDetection(
+        projectRoot: String,
+        db: SessionDatabase
+    ) -> [AnnotationEvidence] {
+        let evidence = AnnotationSignalGenerator.analyze(db: db)
+        for row in evidence {
+            db.recordEvent(
+                type: "compound_learning.annotation.observed",
+                projectRoot: projectRoot
+            )
+            db.recordEvent(
+                type: "compound_learning.annotation.\(row.signalKind.rawValue)",
+                projectRoot: projectRoot
+            )
+        }
+        return evidence
     }
 
     @discardableResult

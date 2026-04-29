@@ -79,6 +79,9 @@
     <h2>Workflow playbooks (H+2c)</h2>
     <p>Named multi-step recipes mined from ordered tool-call pairs within a 60-second window. Applied at <code>.senkani/playbooks/learned/&lt;title&gt;.md</code> — namespace-isolated from shipped skills so the two don't collide.</p>
 
+    <h2>Annotation evidence (V.6 round 1)</h2>
+    <p>Operator-tagged verdicts on a skill or KB entity feed Analyze as <em>read-only evidence</em>. Each annotation row carries a <code>target_kind</code> (skill / kb-entity), an inclusive byte range, a verdict (<code>works</code> / <code>fails</code> / <code>note</code>), free-text notes, an <code>authored_by</code> handle, and a V.5 <code>AuthorshipTag</code>. Annotations are append-only — a new verdict supersedes by recency, never by mutation — and they survive an artifact rename via <code>renameAnnotationTarget</code>. <code>AnnotationSignalGenerator.analyze</code> rolls evidence up per <code>(kind, target)</code>, classifies each as <code>failing</code> / <code>working</code> / <code>mixed</code>, and bumps <code>compound_learning.annotation.observed</code> + per-class counters during <code>runPostSession</code>. Round 1 stops at evidence — no rule mutation, no auto-staging. Operators' <code>fails</code> calls are ground truth, never silently inferred into a learned rule.</p>
+
     <h2>Enrichment via Gemma (H+2a)</h2>
     <p>Gemma 4 optionally enriches the rationale strings that accompany each proposal, via MLX. The enriched text lives in a dedicated <code>enrichedRationale</code> field — <strong>never enters FilterPipeline</strong>. This is deliberate: the enrichment improves the human review experience; it doesn't alter the runtime behavior.</p>
 

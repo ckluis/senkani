@@ -9,6 +9,67 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 28 — `AnnotationStore` + signal generator backend (`phase-v6-annotation-system`, V.6 round 1)
+- `Sources/Core/Migrations.swift` adds Migration v9 — a new
+  `annotations` table. One row per operator-tagged segment of a
+  skill or KB entity, append-only. Columns: `target_kind`,
+  `target_id`, `range_start`, `range_end`, `verdict`
+  (`works` / `fails` / `note`), `notes`, `authored_by`,
+  `authorship` (the V.5 `AuthorshipTag` rawValue, explicit by
+  construction), `created_at`, plus the three Phase T.5 chain
+  columns (`prev_hash` / `entry_hash` / `chain_anchor_id`)
+  nullable for forward compatibility. Three covering indexes —
+  `(target_kind, target_id, created_at DESC)`,
+  `(verdict, created_at DESC)`, and `(authorship)` — back the
+  byTarget / verdict-rollup / authorship-pivot read paths.
+- `Sources/Core/Stores/AnnotationStore.swift` owns the table:
+  `record(_:)` returns the new rowid, `byTarget(kind:id:)` and
+  `recent(limit:)` are newest-first reads, `verdictRollup(targetKind:)`
+  buckets works/fails/note per `(kind, target)`, and
+  `renameTarget(kind:fromId:toId:)` rewrites `target_id` so an
+  artifact rename / fork preserves annotation lineage (Torres
+  acceptance criterion).
+- `Sources/Core/SessionDatabase+AnnotationAPI.swift` exposes the
+  store on `SessionDatabase` matching the per-feature `+API.swift`
+  convention: `recordAnnotation(_:)`, `annotationCount()`,
+  `annotations(kind:id:)`, `recentAnnotations(limit:)`,
+  `renameAnnotationTarget(kind:from:to:)`,
+  `annotationVerdictRollup(targetKind:)`.
+- `Sources/Core/AnnotationSignalGenerator.swift` is the read-side
+  bridge to CompoundLearning Analyze. `analyze(db:targetKind:minTotal:limit:)`
+  rolls up annotation rows into deterministic
+  `AnnotationEvidence` rows tagged `failing` / `working` / `mixed`
+  per a coarse classifier. Round 1 stops at evidence — no rule
+  mutation, no auto-staging (Karpathy's red flag in the V.6
+  audit synthesis: annotations are operator attestation, not
+  agent inference).
+- `Sources/Core/CompoundLearning.swift` adds
+  `runAnnotationSignalDetection(projectRoot:db:)` and wires it
+  into `runPostSession`. Each evidence row bumps
+  `compound_learning.annotation.observed` plus a
+  `compound_learning.annotation.{failing,working,mixed}` counter
+  so operators can see the signal land via
+  `senkani stats --security` without a UI surface.
+- `Sources/Core/Stores/AnnotationStore.swift` ships three public
+  enums: `AnnotationTargetKind` (`skill`, `kb-entity`),
+  `AnnotationVerdict` (`works`, `fails`, `note`), and the
+  `AnnotationVerdictRollup` / `AnnotationEvidence` structs that
+  shape the analytics handoff.
+- 12 new tests in `Tests/SenkaniTests/AnnotationStoreTests.swift`:
+  schema shape; record + count; field round-trip; byTarget
+  filtering + unknown empties; recent ordering + limit; rename
+  preserves rows + does not cross kinds; verdictRollup buckets
+  by works/fails/note; verdictRollup filters by kind;
+  authorship `.unset` round-trip; the 100-fixture acceptance
+  test that proves every annotation flows into
+  `AnnotationSignalGenerator.analyze`; counters bump through
+  `runAnnotationSignalDetection`.
+- Accepted risks deferred to follow-up rounds: annotation rows
+  schema-include but do not yet write the audit-chain hashes
+  (V.6 round 2); SwiftUI annotation surface in SkillsLibrary /
+  KnowledgeBase panes (V.6b); `fails` evidence → learned-rule
+  Propose pathway (V.6 round 3).
+
 ### April 28 — `HandManifest` schema v1 + `senkani skill` CLI (`phase-u5-hand-manifest`, U.5 round 1)
 - New `Sources/Core/HandManifest.swift` is the canonical
   capability-package shape: 13 fields covering identity

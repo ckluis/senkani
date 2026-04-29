@@ -479,6 +479,55 @@ public enum MigrationRegistry {
             try exec("CREATE INDEX IF NOT EXISTS idx_agent_trace_pane_started ON agent_trace_event(pane, started_at);")
             try exec("CREATE INDEX IF NOT EXISTS idx_agent_trace_feature_started ON agent_trace_event(feature, started_at);")
         },
+        Migration(version: 9, description: "annotations table for V.6 round 1 (operator-tagged verdict rows)") { db in
+            // Phase V.6 round 1 — `AnnotationStore`. One row per
+            // operator-tagged segment of a skill or KB entity, with
+            // verdict (works/fails/note), range, optional notes, and
+            // V.5 authorship. See `spec/roadmap.md` row "V.6 —
+            // `AnnotationSystem`" and the round-1 audit synthesis.
+            //
+            // Schema includes the three chain columns nullable + the
+            // `_anchor` index so V.6 round 2 can integrate the audit
+            // chain without a second migration. Round 1 leaves them
+            // NULL — same accepted-risk pattern as V.2's
+            // `agent_trace_event` (operator-attestation rows are
+            // detectably tampered downstream by re-deriving from the
+            // operator's evidence).
+            //
+            // Idempotency: ALTERs guard duplicate-column the same way
+            // as v3/v4/v5/v7/v8; the CREATE TABLE is guarded.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v9", detail: msg)
+            }
+
+            try exec("""
+                CREATE TABLE IF NOT EXISTS annotations (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    target_kind     TEXT NOT NULL,
+                    target_id       TEXT NOT NULL,
+                    range_start     INTEGER NOT NULL,
+                    range_end       INTEGER NOT NULL,
+                    verdict         TEXT NOT NULL,
+                    notes           TEXT,
+                    authored_by     TEXT NOT NULL,
+                    authorship      TEXT NOT NULL,
+                    created_at      REAL NOT NULL,
+                    prev_hash       TEXT,
+                    entry_hash      TEXT,
+                    chain_anchor_id INTEGER
+                );
+            """)
+            try exec("CREATE INDEX IF NOT EXISTS idx_annotations_target ON annotations(target_kind, target_id, created_at DESC);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_annotations_verdict ON annotations(verdict, created_at DESC);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_annotations_authorship ON annotations(authorship);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_annotations_anchor ON annotations(chain_anchor_id, id);")
+        },
     ]
 
     // MARK: - v5 helpers

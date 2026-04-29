@@ -9,6 +9,32 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 29 — Diátaxis Documentation Standard + structural docs-shape lint (`phase-w6-diataxis-doc-split`, W.6)
+- `spec/spec.md` gains a **Documentation Standard** section
+  codifying the four Diátaxis shapes — tutorial (learning-oriented
+  set-up), how-to (task-oriented recipes), reference (schemas +
+  APIs), explanation (why it exists) — as the docs requirement for
+  every Phase T/U/V/W component before its Exit Criteria are
+  checked. The section includes the canonical tutorial-vs-how-to
+  distinction (different reader posture, different page) and a
+  "ship the explanation page first" heuristic so the other three
+  shapes don't drift on shared vocabulary.
+- `Sources/Core/DocsShapeLint.swift` ships the structural lint:
+  `DocsShape` enum, `ComponentDocs(id:paths:)` manifest, and
+  `DocsShapeLinter.lint(components:fileSystem:)` returning
+  `DocsShapeIssue` rows for missing declaration, missing-on-disk
+  file, or zero-byte stub. `FileSystemProbe.real` is the default;
+  tests inject `.inMemory(files:)`. Length / quality / freshness
+  checks are deliberately out of scope — the v1 gate is binary and
+  fast so authors can't argue about whether a paragraph "counts."
+- `Tests/SenkaniTests/DocsShapeLintTests.swift` (4 tests, target
+  was 4): all-shapes-present clean pass, missing-declaration flags
+  the right shape, declared-but-missing-file flags `fileNotFound`,
+  and a multi-component fixture with mixed missing + empty
+  conditions reports both issues in deterministic order.
+- `spec/roadmap.md` W.6 row flips to ✅ SHIPPED with per-round
+  detail.
+
 ### April 29 — Quant-frontier review cadence + first 2026-Q2 report (`phase-w5-quant-frontier-cadence`, W.5)
 - `spec/ml_models.md` gains a "Quantization Frontiers" subsection
   defining a quarterly review cadence (first business day of every

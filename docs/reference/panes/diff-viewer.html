@@ -77,6 +77,12 @@
 
     <p class="lede">Side-by-side LCS diff — correct insertions, deletions, replacements. Works with file pairs or git revisions.</p>
 
+    <h2>Hunks + severity-tagged annotations (V.12a)</h2>
+    <p>The diff renders as a sequence of LCS-derived hunk blocks (<code>@@ -orig, +mod</code>) — red removed rows on top, green added rows below — and a sidebar listing annotations grouped by hunk. Each annotation carries a frozen severity tag: <code>[must-fix]</code>, <code>[suggestion]</code>, <code>[question]</code>, <code>[nit]</code>. Sidebar order is hunk-top-to-bottom, then severity-weight DESC, then <code>createdAt</code> ASC. Click any sidebar row to scroll the matching hunk into view; the file bar shows a chip count for each severity (always all four chips, even when the count is zero).</p>
+
+    <h2>HookRouter denial pipe (V.12b)</h2>
+    <p>Denials that block real work — ConfirmationGate <code>.deny</code> on a write/exec tool, budget gate <code>.block</code> — feed <code>[must-fix]</code> annotations into this sidebar via <code>HookAnnotationFeed</code>. The pane subscribes once on appear and converts each admitted record to a <code>DiffAnnotation</code> pinned to the first hunk when the deny's <code>filePath</code> matches the active comparison's <code>leftPath</code> or <code>rightPath</code>. A per-minute rate cap (default 5 must-fix per 60 s) suppresses floods <em>without</em> changing the deny response — the agent still sees the deny; only the badge in this sidebar is dropped. Closed windows with at least one suppression write a row to <code>annotation_rate_cap_log</code> (Migration v13).</p>
+    <p>Read / Bash / Grep advisory denials (the routing nudges that send the agent toward <code>mcp__senkani__read</code> / <code>exec</code> / <code>search</code>) deliberately do <strong>not</strong> emit annotations — those aren't policy violations, and badging every redirect would defeat the rate cap.</p>
 
     <h2>Keyboard</h2>
     <p>Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas).</p>
@@ -86,6 +92,7 @@
       <li><a href="../../../docs/reference/panes.html">All pane types</a></li>
       <li><a href="../../../docs/reference/options/fcsit.html">FCSIT per-pane toggles</a></li>
       <li><a href="../../../docs/reference/mcp/senkani_pane.html"><code>senkani_pane</code> — programmatic control</a></li>
+      <li><a href="../../../docs/concepts/hook-relay.html">Hook relay (denial pipe)</a></li>
     </ul>
   </article>
 </main>

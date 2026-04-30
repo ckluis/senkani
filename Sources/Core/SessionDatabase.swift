@@ -51,6 +51,7 @@ public final class SessionDatabase: @unchecked Sendable {
     internal var annotationStore: AnnotationStore!
     internal var confirmationStore: ConfirmationStore!
     internal var trustAuditStore: TrustAuditStore!
+    internal var annotationRateCapStore: AnnotationRateCapStore!
 
     // MARK: - Init
 
@@ -92,7 +93,9 @@ public final class SessionDatabase: @unchecked Sendable {
         confirmationStore.setupSchema()
         trustAuditStore = TrustAuditStore(parent: self)
         trustAuditStore.setupSchema()
-        runMigrations(path: dbPath)
+        annotationRateCapStore = AnnotationRateCapStore(parent: self)
+        annotationRateCapStore.setupSchema()
+        runMigrations(path:dbPath)
     }
 
     /// Testable initializer — opens a DB at a custom path (use a temp file).
@@ -129,7 +132,9 @@ public final class SessionDatabase: @unchecked Sendable {
         confirmationStore.setupSchema()
         trustAuditStore = TrustAuditStore(parent: self)
         trustAuditStore.setupSchema()
-        runMigrations(path: path)
+        annotationRateCapStore = AnnotationRateCapStore(parent: self)
+        annotationRateCapStore.setupSchema()
+        runMigrations(path:path)
     }
 
     // MARK: - Observability counters (migration v2)

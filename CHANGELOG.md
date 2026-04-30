@@ -9,6 +9,38 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — HookRouter denials → `[must-fix]` annotations + per-minute rate cap (`phase-v12b-hookrouter-denials`, V.12b)
+- `Sources/Core/HookAnnotationFeed.swift` is the deny-side fan-out:
+  a process-singleton with a per-window must-fix rate cap (default
+  5 per 60 s). `HookAnnotation` carries severity, body, toolName,
+  filePath, sessionId; subscribers (DiffViewerPane) are notified
+  only on admitted records. Admitted/suppressed outcomes are
+  observable to callers but do NOT change the deny response —
+  suppression is non-blocking by design.
+- `HookRouter.handle(...)` emits `must-fix` annotations only at the
+  two real-blocker call sites: budget gate and ConfirmationGate
+  deny. Read/Bash/Grep advisory denials (token-saving redirects)
+  are excluded so the diff sidebar isn't flooded with badges that
+  aren't really blockers. `HookRouter.annotationFeed` is the test
+  seam.
+- New table `annotation_rate_cap_log` (Migration v13) records one
+  row per closed window in which at least one must-fix was
+  suppressed: `window_start`, `window_end`, `severity`,
+  `suppressed_count`, `threshold`. Not chain-hashed — derived flood
+  marker; source denials are already chained via T.5.
+  `Sources/Core/Stores/AnnotationRateCapStore.swift` owns the
+  table; public API at `SessionDatabase.recordAnnotationRateCap` /
+  `recentAnnotationRateCaps`.
+- `SenkaniApp/Views/DiffViewerPane.swift` subscribes to the feed
+  on appear and converts incoming `HookAnnotation` to
+  `DiffAnnotation` pinned to the first hunk when `filePath`
+  matches `leftPath` or `rightPath`. The `convertToDiffAnnotation`
+  static helper is exposed for unit-test reach.
+- 4 tests in `Tests/SenkaniTests/HookAnnotationFeedTests.swift`
+  cover deny → must-fix emit, threshold suppression, deny-response
+  invariance under suppression, and rate-cap log on window roll.
+  V.12b suite 4/4 green.
+
 ### April 30 — Hunk-based `DiffViewerPane` + frozen severity vocab (`phase-v12a-hunks-and-render`, V.12a)
 - `SenkaniApp/Views/DiffViewerPane.swift` switches from a paired-line
   stream to LCS-hunk blocks driven by the existing

@@ -638,6 +638,38 @@ public enum MigrationRegistry {
 
             // No backfill — table is brand new this migration.
         },
+        Migration(version: 13, description: "annotation_rate_cap_log for V.12b severity rate cap") { db in
+            // Phase V.12b — rate-cap log for must-fix annotation floods
+            // emitted by HookRouter. One row per closed window in which
+            // at least one annotation was suppressed. Not chain-hashed:
+            // the row is a derived flood marker, not load-bearing
+            // evidence — the source denials are already recorded in
+            // hook_events / token_events / commands.
+            //
+            // Idempotent: CREATE TABLE is guarded.
+            func exec(_ sql: String) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                throw MigrationError.sqlFailed(stage: "v13", detail: msg)
+            }
+
+            try exec("""
+                CREATE TABLE IF NOT EXISTS annotation_rate_cap_log (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    window_start     REAL NOT NULL,
+                    window_end       REAL NOT NULL,
+                    severity         TEXT NOT NULL,
+                    suppressed_count INTEGER NOT NULL,
+                    threshold        INTEGER NOT NULL,
+                    created_at       REAL NOT NULL
+                );
+            """)
+            try exec("CREATE INDEX IF NOT EXISTS idx_annotation_rate_cap_window ON annotation_rate_cap_log(window_start DESC);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_annotation_rate_cap_severity ON annotation_rate_cap_log(severity, created_at DESC);")
+        },
     ]
 
     // MARK: - v5 helpers

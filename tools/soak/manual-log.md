@@ -12,6 +12,42 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Phase V.12b round 1 — HookRouter denials → DiffViewerPane annotations 2026-04-30
+
+Round 2 of V.12 wires `HookRouter` denials into the V.12a sidebar
+via `HookAnnotationFeed.shared`. Unit tests cover the data flow
+(emit, rate cap, deny-response invariance, rate-cap log). UI
+behavior needs eyes-on:
+
+- [ ] **ConfirmationGate deny renders as a `[must-fix]` row.**
+  Open the Diff Viewer with two files (left = original, right =
+  modified). Inject a deny resolver into `ConfirmationGate` (e.g.
+  via a debug hook or by setting `ConfirmationGate.resolver` from
+  a scratch script) so an Edit on `<rightPath>` denies. Trigger
+  Edit on the right file from Claude Code; confirm a `[must-fix]`
+  badge appears in the sidebar with the deny reason as the body
+  and `hookrouter:Edit` as the author handle, pinned to the first
+  hunk. Click the badge — the diff scrolls to the first hunk.
+- [ ] **Read / Bash / Grep redirects do NOT badge.** Trigger a
+  vanilla Read on a file in the active diff; no annotation should
+  appear in the sidebar. The senkani_read advisory is a routing
+  nudge, not a policy violation.
+- [ ] **Rate cap suppresses past 5 must-fix in a minute.** Drive
+  six ConfirmationGate denies in under a minute via repeated Edits.
+  The first five render in the sidebar; the sixth does not. The
+  agent still sees the deny in its tool response on every call.
+- [ ] **Rate-cap log row appears after window roll.** After the
+  flood above, wait 60 s + trigger one more deny. Confirm a row
+  appears in `annotation_rate_cap_log` (`sqlite3` query against
+  `~/Library/Application\ Support/Senkani/senkani.db`):
+  `SELECT severity, suppressed_count, threshold FROM annotation_rate_cap_log ORDER BY id DESC LIMIT 1;`
+  should return `must-fix | 1 | 5` (one suppression carried into
+  the log).
+- [ ] **Multiple Diff Viewer panes don't double-badge.** Open two
+  Diff Viewer panes against the same file pair. A single deny
+  should badge in BOTH sidebars — both subscribe to the same
+  feed. Acceptable today; future cleanup will centralize.
+
 ### Phase V.12a round 1 — Hunk render + severity-tagged annotations sidebar 2026-04-30
 
 Round 1 refactors `SenkaniApp/Views/DiffViewerPane.swift` to show

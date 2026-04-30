@@ -40,6 +40,12 @@ public enum HookRouter {
     /// Test seam for validation advisory delivery. Production uses `.shared`.
     nonisolated(unsafe) static var validationDatabase: SessionDatabase = .shared
 
+    /// V.12b test seam — tests inject a feed with a short window or
+    /// a custom rate-cap sink to assert the suppression behavior
+    /// without polluting the shared feed's state. Production uses
+    /// `HookAnnotationFeed.shared`.
+    nonisolated(unsafe) public static var annotationFeed: HookAnnotationFeed = .shared
+
     /// Phase U.4a — process-wide detector instance. Soft-flag only:
     /// nothing in this file's denial paths reads its output. Tests
     /// reach into the detector via `fragmentationDetector.reset()`.
@@ -120,6 +126,14 @@ public enum HookRouter {
 
         // Budget enforcement on the hook path
         if case .block(let reason) = checkHookBudgetGate(projectRoot: projectRoot) {
+            // V.12b: budget gate is a real blocker — emit must-fix.
+            emitDenialAnnotation(
+                severity: .mustFix,
+                body: reason,
+                toolName: toolName,
+                toolInput: toolInput,
+                sessionId: sessionId
+            )
             return appendAndMarkValidationIfSurfaced(
                 blockResponse(reason, eventName: eventName),
                 advisory: validationAdvisory,
@@ -137,11 +151,20 @@ public enum HookRouter {
         // exercise the structured-error path.
         let confirmation = ConfirmationGate.evaluate(toolName: toolName)
         if confirmation.decision == .deny {
+            // V.12b: ConfirmationGate deny is a real blocker — emit
+            // must-fix. The deny response itself is unchanged so the
+            // agent still sees the deny (acceptance: non-blocking
+            // suppression).
+            let body = ConfirmationGate.denyReason(toolName: toolName, reason: confirmation.reason)
+            emitDenialAnnotation(
+                severity: .mustFix,
+                body: body,
+                toolName: toolName,
+                toolInput: toolInput,
+                sessionId: sessionId
+            )
             return appendAndMarkValidationIfSurfaced(
-                blockResponse(
-                    ConfirmationGate.denyReason(toolName: toolName, reason: confirmation.reason),
-                    eventName: eventName
-                ),
+                blockResponse(body, eventName: eventName),
                 advisory: validationAdvisory,
                 rows: validationRows,
                 projectRoot: projectRoot
@@ -170,6 +193,38 @@ public enum HookRouter {
             rows: validationRows,
             projectRoot: projectRoot
         )
+    }
+
+    // MARK: - V.12b denial-annotation emit
+
+    /// Emit a `HookAnnotation` for a denial that is *tied to a code
+    /// change* — the gate-level denials (budget + ConfirmationGate)
+    /// where the agent's tool call would have mutated the project.
+    /// Read/Bash/Grep advisory denials are excluded by design: those
+    /// are token-saving redirects, not policy violations, and would
+    /// flood the diff sidebar with "[must-fix]" badges.
+    ///
+    /// Goes through `HookAnnotationFeed.shared`; the feed enforces
+    /// the per-minute must-fix rate cap and writes the suppression
+    /// log row when a window rolls. Subscribers (DiffViewerPane in
+    /// SenkaniApp) are notified iff the annotation is admitted.
+    private static func emitDenialAnnotation(
+        severity: DiffAnnotationSeverity,
+        body: String,
+        toolName: String,
+        toolInput: [String: Any],
+        sessionId: String?
+    ) {
+        let filePath = (toolInput["file_path"] as? String)
+            ?? (toolInput["path"] as? String)
+        let annotation = HookAnnotation(
+            severity: severity,
+            body: body,
+            toolName: toolName,
+            filePath: filePath,
+            sessionId: sessionId
+        )
+        annotationFeed.record(annotation)
     }
 
     // MARK: - Search Upgrade (Phase I)

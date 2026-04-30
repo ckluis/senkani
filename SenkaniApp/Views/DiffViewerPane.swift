@@ -16,6 +16,13 @@ struct DiffViewerPane: View {
     @State private var annotations: [DiffAnnotation] = []
     @State private var hasCompared = false
     @State private var scrollTarget: UUID?
+    /// V.12b: subscribe to `HookAnnotationFeed.shared` once on appear.
+    /// SwiftUI's `@State` survives view re-creation, so a single
+    /// subscription persists across compare clicks. Multiple
+    /// DiffViewerPane instances each add a subscriber — acceptable
+    /// today (one diff pane is the common case); a future cleanup
+    /// would centralize via a shared `@MainActor` controller.
+    @State private var subscribedToHookFeed = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -34,6 +41,56 @@ struct DiffViewerPane: View {
                 }
             }
         }
+        .onAppear { subscribeIfNeeded() }
+    }
+
+    /// Subscribe to `HookAnnotationFeed.shared` exactly once. Each
+    /// admitted `HookAnnotation` whose `filePath` matches `leftPath`
+    /// or `rightPath` of an active comparison is converted into a
+    /// `DiffAnnotation` pinned to the first hunk and appended to the
+    /// sidebar. Conversions hop to the main actor before mutating
+    /// `@State`.
+    private func subscribeIfNeeded() {
+        guard !subscribedToHookFeed else { return }
+        subscribedToHookFeed = true
+        HookAnnotationFeed.shared.subscribe { incoming in
+            Task { @MainActor in
+                if let converted = Self.convertToDiffAnnotation(
+                    incoming,
+                    leftPath: leftPath,
+                    rightPath: rightPath,
+                    hunks: hunks
+                ) {
+                    annotations.append(converted)
+                }
+            }
+        }
+    }
+
+    /// Pure conversion helper — exposed `static` so unit tests can
+    /// drive the path-match + first-hunk-pin logic without a SwiftUI
+    /// view. Returns `nil` if no comparison is active, no hunks
+    /// exist, or the annotation's `filePath` does not match either
+    /// side of the active diff.
+    static func convertToDiffAnnotation(
+        _ hook: HookAnnotation,
+        leftPath: String,
+        rightPath: String,
+        hunks: [DiffHunk]
+    ) -> DiffAnnotation? {
+        guard !hunks.isEmpty,
+              let firstHunkId = hunks.first?.id,
+              let path = hook.filePath,
+              !path.isEmpty,
+              path == leftPath || path == rightPath
+        else { return nil }
+        return DiffAnnotation(
+            hunkId: firstHunkId,
+            severity: hook.severity,
+            body: hook.body,
+            authoredBy: "hookrouter:\(hook.toolName)",
+            createdAt: hook.createdAt
+        )
     }
 
     // MARK: - File bar

@@ -18,6 +18,12 @@ struct ContentView: View {
     @State private var broadcastEnabled = false
     @State private var broadcastText = ""
 
+    /// Single launch primitive — every user-visible pane creation
+    /// (Welcome, AddPaneSheet, Sidebar Claude, CommandPalette, IPC
+    /// `.add`) routes through this coordinator so hook registration
+    /// and session-watcher start are never skipped.
+    @State private var launcher: LaunchCoordinator?
+
     var body: some View {
         ZStack {
         VStack(spacing: 0) {
@@ -26,7 +32,12 @@ struct ContentView: View {
                 SidebarView(
                     workspace: workspace,
                     activeToolView: $activeToolView,
-                    onRequestAddPane: { showAddPaneSheet = true }
+                    onRequestAddPane: { showAddPaneSheet = true },
+                    onLaunchPane: { type, title, command in
+                        ensureLauncher().launchPane(
+                            type: type, title: title, command: command
+                        )
+                    }
                 )
 
                 // Thin divider between sidebar and canvas
@@ -201,7 +212,11 @@ struct ContentView: View {
     private func restoreWorkspace() {
         if let restored = WorkspaceStorage.load() {
             workspace = restored
-            // Start sessions (metrics watchers) for all restored panes
+            // Start sessions (metrics watchers) for all restored panes.
+            // Restore is not a launch — panes already exist, so we run
+            // the same per-pane side effects (hook reg + session start)
+            // inline rather than going through LaunchCoordinator (which
+            // would also call workspace.addPane and saveWorkspace).
             for pane in workspace.allPanes {
                 if pane.paneType == .terminal {
                     try? HookRegistration.registerForProject(
@@ -214,6 +229,22 @@ struct ContentView: View {
         // Always start metrics AFTER restore, so projects array is populated.
         // Safe even if restore fails — default project may still exist.
         MetricsStore.shared.start(projects: workspace.projects)
+    }
+
+    /// Lazy-initialize the LaunchCoordinator so `@State workspace` and
+    /// `@State sessions` are first observed by SwiftUI before we
+    /// capture references. The coordinator owns no state of its own —
+    /// it's a thin façade — so re-using the same instance for the
+    /// lifetime of the view is fine.
+    private func ensureLauncher() -> LaunchCoordinator {
+        if let existing = launcher { return existing }
+        let coord = LaunchCoordinator(
+            workspace: workspace,
+            sessions: sessions,
+            saveWorkspace: { WorkspaceStorage.save(workspace) }
+        )
+        launcher = coord
+        return coord
     }
 
     private func saveWorkspace() {
@@ -294,15 +325,20 @@ struct ContentView: View {
             let title = command.params["title"] ?? paneType.rawValue
             let cmd = command.params["command"] ?? ""
 
-            workspace.addPane(type: paneType, title: title, command: cmd,
-                              previewFilePath: command.params["url"] ?? "")
-            if let pane = workspace.panes.last {
-                if pane.paneType == .terminal {
-                    try? HookRegistration.registerForProject(
-                        at: pane.workingDirectory,
-                        hookBinaryPath: AutoRegistration.hookWrapperPath)
-                }
-                sessions.startSession(for: pane)
+            // Route IPC `.add` through the same primitive UI launch
+            // paths use, so programmatic creation matches user-driven
+            // creation (hooks registered, session started, workspace
+            // saved). The handler always runs on the main actor —
+            // see `registerPaneSocketHandler` above.
+            let coord = LaunchCoordinator(
+                workspace: workspace,
+                sessions: sessions,
+                saveWorkspace: { WorkspaceStorage.save(workspace) }
+            )
+            if let pane = coord.launchPane(
+                type: paneType, title: title, command: cmd,
+                previewFilePath: command.params["url"] ?? ""
+            ) {
                 return PaneIPCResponse(id: command.id, success: true,
                                        result: "Added pane: \(pane.id.uuidString)")
             }
@@ -345,17 +381,13 @@ struct ContentView: View {
         }
     }
 
+    /// Thin shim around `LaunchCoordinator.launchPane(...)` so call
+    /// sites that only know type/title/command (AddPaneSheet,
+    /// WelcomeView, CommandPalette) keep their compact API. All
+    /// SwiftUI launch paths funnel through here, which funnels into
+    /// the coordinator.
     private func addPane(type: PaneType = .terminal, title: String, command: String) {
-        workspace.addPane(type: type, title: title, command: command)
-        if let pane = workspace.panes.last {
-            if pane.paneType == .terminal {
-                try? HookRegistration.registerForProject(
-                    at: pane.workingDirectory,
-                    hookBinaryPath: AutoRegistration.hookWrapperPath)
-            }
-            sessions.startSession(for: pane)
-        }
-        saveWorkspace()
+        ensureLauncher().launchPane(type: type, title: title, command: command)
     }
 
     /// Add a pane by type ID string (from command palette).

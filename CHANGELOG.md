@@ -9,6 +9,44 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — LaunchCoordinator unifies every pane-launch path (`onboarding-p0-launch-coordinator`)
+- Round 1 of the Luminary onboarding chain queued earlier today.
+  Centralizes pane creation behind one app-layer primitive so every
+  user-visible launch path performs the same four side effects:
+  `WorkspaceModel.addPane`, `HookRegistration.registerForProject`
+  (terminal panes only), `SessionRegistry.startSession`, and
+  workspace persistence. Welcome cards, the AddPaneSheet, the
+  Sidebar "Add Pane → Claude Code…" sheet, the `⌘K` command
+  palette, and the pane IPC `.add` action all funnel through the
+  coordinator now.
+- Bug fixed: the Sidebar Claude launch was calling
+  `workspace.addPane(...)` directly, which skipped hook
+  registration and the session watcher start. Users could believe
+  Senkani was active in a Claude pane that had no MCP gate-key
+  bundle and no Claude session watcher. The coordinator route
+  closes the gap and matches the Welcome-card behavior.
+- New file: `SenkaniApp/Services/LaunchCoordinator.swift`. Plain
+  class (not `@MainActor`) so it slots into both the SwiftUI
+  view-update path and the static pane-IPC handler — callers must
+  already be on main when mutating `WorkspaceModel`. Hook-
+  registration failures are intentionally `try?`-swallowed to
+  match existing per-call-site behavior; surfacing them is a
+  separate future round.
+- `WorkspaceModel.addPane(...)` keeps its role as the pure model
+  mutation. Side effects live entirely in the coordinator now;
+  there is exactly one place to look when adding a new launch
+  path.
+- Source-level regression guard at
+  `Tests/SenkaniTests/LaunchCoordinatorRoutingTests.swift` —
+  six tests scan `SenkaniApp/` and assert no SwiftUI View calls
+  `workspace.addPane(...)` directly (only the model itself and
+  the coordinator are allowed). Comment-stripping pass keeps
+  doc-comments that mention the call shape from tripping the
+  guard. Future regressions in either Sidebar Claude, IPC `.add`,
+  Welcome, AddPaneSheet, or CommandPalette routing fail this
+  test instead of silently shipping a broken Senkani-active
+  state.
+
 ### April 30 — Plan-variance histogram + ≥ 90% pairing eval (`phase-u6c-variance-histogram`)
 - Third slice of the U.6 split. Lands the operator-visible surface
   (variance chart in `AnalyticsView`) plus the parent's headline

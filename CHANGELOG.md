@@ -9,6 +9,22 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — Sitewide sweep of stale MCP/CLI counts in nav sidebar (`phase-11f-sitewide-sidebar-stale-counts`)
+- Filed by the 11b narrative rubric pass: shared site-nav sidebar
+  carried stale tool counts baked into per-page HTML — 6 pages
+  read `MCP tools (19)` against the current truth of 20, and
+  25 pages read `CLI commands (20)` against the current 22.
+- Sweep: 26 files / 31 line edits (matching the spec's ~31
+  estimate exactly). MCP `(19)` → `(20)` across 5 sidebars +
+  the `mcp.html` heading; CLI `(20)` → `(22)` across 5 sidebars
+  + 20 CLI subpage headings. Pane count `(18)` already matched
+  reality and was left untouched.
+- Out-of-scope stragglers surfaced during verification —
+  `cli.html` heading at `(21)`, `senkani-authorship.html` /
+  `senkani-skill.html` headings at `(24)` — filed as
+  `11f-cli-page-heading-stale-counts` for a follow-up round
+  rather than scope-creep this one.
+
 ### April 30 — Voice rubric pass on 21 narrative pages (`website-rebuild-11b-rubric-narrative`)
 - `## Narrative pages` section appended to
   `spec/website_rebuild_audit_round11.md`. 21 / 21 narrative pages

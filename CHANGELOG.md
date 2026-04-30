@@ -9,6 +9,21 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — Literal markdown backticks → `<code>` spans on 7 CLI pages (`phase-11f-cli-literal-backticks-pass`)
+- Pure HTML hygiene fix routed out of `website-rebuild-11a-cli-rubric`.
+  Seven CLI reference pages — `senkani-init`, `senkani-grammars`,
+  `senkani-fetch`, `senkani-uninstall`, `senkani-search`,
+  `senkani-stats`, `senkani-wipe` — carried literal markdown-style
+  backticks in their `<h2>Behavior</h2>` paragraphs that browsers
+  rendered as plain characters rather than inline code. Each
+  backticked phrase is now a proper `<code>…</code>` span matching
+  the existing styling used elsewhere on the page (See-also entries,
+  flag rows). No prose changes.
+- The eighth page in the original filing (`senkani-index.html`) had
+  no literal backticks in Behavior — likely a stray entry from the
+  original audit. Verified clean and skipped.
+- Acceptance grep across the slice now returns zero matches.
+
 ### April 30 — Voice rubric pass on 22 CLI command reference pages (`website-rebuild-11a-cli-rubric`)
 - `## CLI commands` section appended to
   `spec/website_rebuild_audit_round11.md`. 22 / 22 CLI command pages

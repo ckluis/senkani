@@ -64,12 +64,12 @@
     <ol>
       <li>Writes <code>~/.senkani/bin/senkani-hook</code> (the compiled Mach-O hook binary, zero deps, &lt; 5 ms startup).</li>
       <li>Appends an entry to <code>~/.claude/settings.json</code> under <code>mcpServers</code>:
-        <pre class="code"><span class="k">"mcpServers"</span>: {{
-  <span class="k">"senkani"</span>: {{
+        <pre class="code"><span class="k">"mcpServers"</span>: {
+  <span class="k">"senkani"</span>: {
     <span class="k">"command"</span>: <span class="v">"/Users/you/.senkani/bin/senkani"</span>,
     <span class="k">"args"</span>: []
-  }}
-}}</pre>
+  }
+}</pre>
       </li>
       <li>Appends PreToolUse + PostToolUse hook entries with matcher <code>Read|Bash|Grep|Write|Edit</code>.</li>
       <li>Does not touch any other settings. Does not require sudo. Does not modify shell profiles.</li>

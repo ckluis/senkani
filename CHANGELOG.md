@@ -9,6 +9,61 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — Voice rubric pass on 21 narrative pages (`website-rebuild-11b-rubric-narrative`)
+- `## Narrative pages` section appended to
+  `spec/website_rebuild_audit_round11.md`. 21 / 21 narrative pages
+  (5 hubs + 7 concepts + 9 guides) PASS the 7-dimension rubric.
+  Closes the 11b rubric pass at 91 / 91 documented pages
+  (70 reference from 11a + 21 narrative from 11b). Voice anchors
+  identified per page-shape: `docs/concepts/security-posture.html`
+  for opinionated multi-defense concept pages,
+  `docs/concepts/compound-learning.html` for staged-lifecycle
+  concept pages, `docs/concepts/hook-relay.html` for
+  multi-round-extension concept pages, `docs/guides/install.html`
+  for step-numbered guides, `docs/guides/troubleshooting.html` for
+  symptom-based how-to pages, `index.html` for landing positioning,
+  `docs/what-is-senkani.html` for category-level positioning hubs.
+- 5 small-edit fixes shipped in-pass:
+  - `docs/about.html` — H1 jumped straight to H2 with no lede
+    paragraph, so the rubric's first question ("what does the
+    reader gain") had no answer on the page. Added a one-paragraph
+    lede stating what About delivers (license, credits, the name
+    `閃蟹` with inline translation, project links).
+  - `docs/status.html` — three numbers on one page disagreed about
+    reality (lede claimed 2,000 tests, stat-card said 1,837, MCP /
+    CLI counts lagged the current 11a coverage at 19 / 19 vs
+    20 / 22). Lede + stat-cards now cite 2,350 tests (matching
+    landing page meta strip) and 20 MCP / 22 CLI / 18 panes
+    (matching the 11a rubric coverage rows).
+  - `docs/changelog.html` — website-rebuild bullet contained a
+    literal Python f-string artifact (`{len(PANES)}`) that was
+    rendering as plain text in the browser, plus understated CLI
+    count ("19 CLI commands"). Fixed in one edit: artifact
+    replaced with the literal pane count (18), CLI count corrected
+    to 22.
+  - `docs/guides/claude-code.html` — `~/.claude/settings.json`
+    example carried double-brace `{{` / `}}` from a Python
+    f-string template rather than the literal single braces a JSON
+    config takes. Copying the example into a real settings file
+    would have produced invalid JSON. Replaced four `{{` / `}}`
+    pairs with single braces.
+  - `docs/guides/budget-setup.html` — same shape as
+    `claude-code.html`: `~/.senkani/config.json` example had four
+    `{{` / `}}` pairs from the same template generation pass.
+    Fixed in the same shape. Both guide pages now show valid JSON
+    that copy-pastes into a working config.
+- 1 below-threshold filing deferred to 11f:
+  - `11f-sitewide-sidebar-stale-counts` — the shared site-nav
+    sidebar reads `MCP tools (19)` on 6 pages and
+    `CLI commands (20)` on 25 pages, against the current 20 / 22
+    truth. Numbers are baked into per-page navigation HTML rather
+    than a single template, so the sweep is ~31 mechanical edits
+    across the site. Out of scope for the voice rubric (this round
+    only fixed the 5 narrative pages whose page body cited
+    counts). Same shape as the CLI slice's literal-backtick filing:
+    pure reference hygiene, no prose drift, mechanical edit per
+    match.
+
 ### April 30 — Voice rubric pass on 18 pane reference pages (`website-rebuild-11a-panes-rubric`)
 - `## Panes` section appended to
   `spec/website_rebuild_audit_round11.md`. 18 / 18 pane reference

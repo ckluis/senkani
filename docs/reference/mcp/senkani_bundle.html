@@ -99,7 +99,9 @@
     <h2>Example</h2>
     <pre class="code">{<span class="k">"tool"</span>:<span class="v">"senkani_bundle"</span>,<span class="k">"args"</span>:{<span class="k">"budget_tokens"</span>:<span class="e">6000</span>}}</pre>
 
-    
+    <h2>Details</h2>
+    <p>The composer fills sections in canonical order — <code>readme</code> → <code>outlines</code> → <code>deps</code> → <code>kb</code> — and stops once the budget is consumed, so a truncated bundle is still parseable from the top. Remote mode reuses <code>senkani_repo</code>'s TTL+LRU cache, so repeated bundles of the same <code>owner/name@ref</code> are warm. <code>format: "json"</code> emits a stable-schema <code>BundleDocument</code>; the schema version travels in <code>tool_schemas_version</code> from <code>senkani_version</code>, so callers can pin compatibility.</p>
+
     <div class="callout callout-security"><span class="callout-icon">⚔</span><div>Host allowlist (api.github.com, raw.githubusercontent.com) + SecretDetector on every scanned file.</div></div>
 
     <div class="seealso">

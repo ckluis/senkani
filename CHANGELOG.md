@@ -9,6 +9,28 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — Voice rubric pass on 20 MCP tool reference pages (`website-rebuild-11a-mcp-rubric`)
+- `spec/website_rebuild_audit_round11.md` is created as the canonical
+  audit doc for the round 11 voice + a11y + perf pass. Skeleton
+  carries section headers for every downstream slice — `## CLI
+  commands`, `## Options & env`, `## Panes`, `## Narrative pages`,
+  `## Appendix · accessibility`, `## Appendix · performance`,
+  `## Closing verdicts` — so 11a-cli, 11a-options, 11a-panes, 11b,
+  11c, 11d, and 11e append rather than restructure.
+- 20 / 20 MCP tool pages PASS the 7-dimension rubric
+  (lead-with-outcome, one-idea-per-paragraph, code-blocks-don't-
+  narrate, claims-cite, no-empty-calories, respects-skimmers,
+  fail-open-for-technical-reader). Page voice anchors:
+  `senkani_search_web.html` for prose density,
+  `senkani_read.html` for canonical structure.
+- 2 small-edit fixes shipped in-pass: `docs/reference/mcp/senkani_repo
+  .html` and `docs/reference/mcp/senkani_bundle.html` each gained a
+  `Details` section (rate-limit + cache key on repo; canonical-order
+  budget fill + `BundleDocument` schema-version pin on bundle) so
+  every MCP tool page now has the same 7-section shape.
+- 0 pages filed as `11f-page-rewrites` follow-ups; 0 deeper rewrites
+  needed for the MCP slice.
+
 ### April 30 — HookRouter denials → `[must-fix]` annotations + per-minute rate cap (`phase-v12b-hookrouter-denials`, V.12b)
 - `Sources/Core/HookAnnotationFeed.swift` is the deny-side fan-out:
   a process-singleton with a per-window must-fix rate cap (default

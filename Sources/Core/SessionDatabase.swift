@@ -50,6 +50,7 @@ public final class SessionDatabase: @unchecked Sendable {
     internal var agentTraceEventStore: AgentTraceEventStore!
     internal var annotationStore: AnnotationStore!
     internal var confirmationStore: ConfirmationStore!
+    internal var trustAuditStore: TrustAuditStore!
 
     // MARK: - Init
 
@@ -89,6 +90,8 @@ public final class SessionDatabase: @unchecked Sendable {
         annotationStore.setupSchema()
         confirmationStore = ConfirmationStore(parent: self)
         confirmationStore.setupSchema()
+        trustAuditStore = TrustAuditStore(parent: self)
+        trustAuditStore.setupSchema()
         runMigrations(path: dbPath)
     }
 
@@ -124,6 +127,8 @@ public final class SessionDatabase: @unchecked Sendable {
         annotationStore.setupSchema()
         confirmationStore = ConfirmationStore(parent: self)
         confirmationStore.setupSchema()
+        trustAuditStore = TrustAuditStore(parent: self)
+        trustAuditStore.setupSchema()
         runMigrations(path: path)
     }
 

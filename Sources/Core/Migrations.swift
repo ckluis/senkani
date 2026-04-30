@@ -591,6 +591,53 @@ public enum MigrationRegistry {
 
             // No backfill — table is brand new this migration.
         },
+        Migration(version: 12, description: "trust_audits table for U.4a soft-flag scaffolding") { db in
+            // Phase U.4a round 1 — append-only log of FragmentationDetector
+            // soft flags + operator FP/TP labels. Two row kinds:
+            //   - kind='flag' rows are emitted by the detector. flag_id NULL.
+            //   - kind='label' rows reference a flag's rowid via flag_id and
+            //     carry 'fp' or 'tp' in label.
+            // Chained via T.5 the same way confirmations is — tampering with
+            // a label row is detectable. Append-only: re-labelling writes a
+            // NEW row, never mutates an existing one.
+            //
+            // Idempotency: CREATE TABLE is guarded.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v12", detail: msg)
+            }
+
+            try exec("""
+                CREATE TABLE IF NOT EXISTS trust_audits (
+                    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind              TEXT NOT NULL,
+                    created_at        REAL NOT NULL,
+                    session_id        TEXT,
+                    pane_id           TEXT,
+                    tool_name         TEXT,
+                    reason            TEXT,
+                    score             INTEGER,
+                    correlation_count INTEGER,
+                    flag_id           INTEGER,
+                    label             TEXT,
+                    labeled_by        TEXT,
+                    prev_hash         TEXT,
+                    entry_hash        TEXT,
+                    chain_anchor_id   INTEGER
+                );
+            """)
+            try exec("CREATE INDEX IF NOT EXISTS idx_trust_audits_kind_time ON trust_audits(kind, created_at DESC);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_trust_audits_flag ON trust_audits(flag_id);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_trust_audits_session ON trust_audits(session_id, created_at DESC);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_trust_audits_anchor ON trust_audits(chain_anchor_id, id);")
+
+            // No backfill — table is brand new this migration.
+        },
     ]
 
     // MARK: - v5 helpers

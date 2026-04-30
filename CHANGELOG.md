@@ -9,6 +9,46 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — `FragmentationDetector` + `TrustScorer` + `trust_audits` (`phase-u4a-soft-flag-scaffolding`, U.4a)
+- `Sources/Core/FragmentationDetector.swift` is the soft-flag detector
+  — NSLock-guarded per-session sliding window with three observation
+  patterns: `toolBurst` (≥3 same-tool calls inside the burst window),
+  `fragmentStitch` (overlapping prompt fragments inside the stitch
+  window), `crossPane` (same tool firing in two panes inside one
+  session). Pure Core, no SwiftUI imports; deterministic and cheap on
+  the HookRouter hot path.
+- `Sources/Core/TrustScorer.swift` is the pure 0–100 aggregator —
+  defaults: ceiling 100, floor 0, −8 per burst, −12 per stitch, −6
+  per cross-pane.
+- Migration v12 adds the chained `trust_audits` table (two row kinds
+  — `flag` and `label` — with the T.5 chain columns). FP/TP labels
+  are NEW rows referencing the flag's rowid, so re-labelling is
+  detectable without breaking append-only.
+- `Sources/Core/Stores/TrustAuditStore.swift` +
+  `Sources/Core/SessionDatabase+TrustAuditAPI.swift` expose
+  `recordTrustFlag`, `recordTrustLabel`, `recentTrustFlags`,
+  `trustLabelsForFlag`, `trustFlagStats(since:)`,
+  `trustFlagStatsLast30Days(now:)`.
+- `HookRouter.handle(...)` records every event into the detector and
+  persists fired flags through an injectable `trustFlagSink`. The
+  denial path is unchanged — soft flags do NOT deny calls. U.4b
+  promotes the detector to blocking after 30 days of operator FP/TP
+  labelling.
+- `Sources/CLI/DoctorCommand.swift` adds the canonical line `trust
+  flags — soft flags last 30d: N | confirmed FP: M | confirmed TP: K`.
+- `SenkaniApp/Views/TrustFlagsView.swift` is the Trust Flags sidebar
+  tool — orange ⚠ inline badge per flagged row, plain-language
+  "False alarm" / "Real" labelling buttons (no FP/TP jargon on the
+  operator surface).
+- `Tests/SenkaniTests/FragmentationDetectorTests.swift` (14 new tests,
+  target was 12) — schema, three detector reasons + scoping +
+  windowing, session isolation, scorer weights + floor, chain
+  prev/entry hash linkage, FP/TP round-trip + flip on re-label,
+  doctor-line format, HookRouter detector wired non-blocking.
+- Deferred (operator-only): `phase-u4b-promotion-gate` waits on a
+  30-day labelled FP/TP sample + a documented promotion threshold
+  before flipping the detector into blocking mode.
+
 ### April 30 — `StdoutSink` + `MacOSLocalSink` + `NotificationRouter` (`phase-t6b-stdout-macos-sinks`, T.6b)
 - `Sources/Core/StdoutSink.swift` writes one canonical JSON line per
   `NotifyEvent` to an injectable `Writer` (defaults to

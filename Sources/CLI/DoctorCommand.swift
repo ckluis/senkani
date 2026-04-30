@@ -114,6 +114,9 @@ struct Doctor: ParsableCommand {
         // 16. Audit chain integrity (Phase T.5)
         checkAuditChain(&results)
 
+        // 17. Trust flags — soft-flag FP-rate counter (Phase U.4a)
+        checkTrustFlags(&results)
+
         print("")
         var parts: [String] = []
         if results.passed > 0 { parts.append("\(results.passed) passed") }
@@ -302,6 +305,18 @@ struct Doctor: ParsableCommand {
             )
             results.passed += 1
         }
+    }
+
+    // MARK: - Check 17: Trust flags (Phase U.4a)
+
+    /// Surface the rolling 30-day soft-flag count + confirmed FP/TP
+    /// totals. U.4a is non-blocking — the counter is informational
+    /// only. U.4b promotes the FP rate to a release gate once the
+    /// operator has labelled enough samples.
+    private func checkTrustFlags(_ results: inout Results) {
+        let stats = SessionDatabase.shared.trustFlagStatsLast30Days()
+        printStatus(.pass, "trust flags — \(stats.doctorLine)")
+        results.passed += 1
     }
 
     // MARK: - Check 1: Settings JSON

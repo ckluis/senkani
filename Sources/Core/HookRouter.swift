@@ -40,6 +40,19 @@ public enum HookRouter {
     /// Test seam for validation advisory delivery. Production uses `.shared`.
     nonisolated(unsafe) static var validationDatabase: SessionDatabase = .shared
 
+    /// Phase U.4a — process-wide detector instance. Soft-flag only:
+    /// nothing in this file's denial paths reads its output. Tests
+    /// reach into the detector via `fragmentationDetector.reset()`.
+    public static let fragmentationDetector = FragmentationDetector()
+
+    /// Persistence sink for soft flags. Tests inject a recorder closure
+    /// to assert flags surface; production wires it to
+    /// `SessionDatabase.shared.recordTrustFlag(...)`. Default sink is
+    /// the production path so HookRouter "just works" with no setup.
+    nonisolated(unsafe) public static var trustFlagSink: (FragmentationDetector.Flag, Int) -> Void = { flag, score in
+        _ = SessionDatabase.shared.recordTrustFlag(flag, score: score)
+    }
+
     /// Process a hook event JSON and return a response JSON.
     /// Returns `{}` (passthrough) for unrecognized or unroutable events.
     public static func handle(eventJSON: Data) -> Data {
@@ -61,6 +74,25 @@ public enum HookRouter {
                 eventType: eventName,
                 projectRoot: projectRoot
             )
+
+            // Phase U.4a — non-blocking soft-flag pass. Detector returns
+            // any FragmentationDetector.Flag observations triggered by
+            // this event; the sink persists them. NOTHING here can
+            // deny the call — promotion-to-blocking lives in U.4b.
+            let paneId = event["pane_id"] as? String
+            let fragment = (toolInput["prompt"] as? String)
+                ?? (toolInput["command"] as? String)
+                ?? (toolInput["file_path"] as? String)
+            let flags = fragmentationDetector.record(.init(
+                sessionId: sid,
+                paneId: paneId,
+                toolName: toolName,
+                fragment: fragment
+            ))
+            for flag in flags {
+                let score = TrustScorer.score(flags: [flag])
+                trustFlagSink(flag, score)
+            }
         }
 
         // PostToolUse: record + enqueue auto-validation if Edit/Write

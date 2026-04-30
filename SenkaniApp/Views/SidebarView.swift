@@ -46,6 +46,10 @@ struct SidebarView: View {
                                 .help("\(enrichmentBadge) enrichment candidate(s)")
                         }
                     }
+                    toolRow(icon: "exclamationmark.triangle", label: "Trust Flags",
+                            isActive: activeToolView == .trustFlags) {
+                        activateTool(.trustFlags)
+                    }
 
                     // Thin divider
                     Rectangle()

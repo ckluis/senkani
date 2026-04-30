@@ -96,6 +96,26 @@ public enum HookRouter {
             )
         }
 
+        // T.6a: ConfirmationGate on write/exec-tagged tools. Read-tagged
+        // tools and unknowns short-circuit at the gate with `.auto` and
+        // no row written. The default policy resolver also returns
+        // `.auto`, so production behavior on Edit/Write/Bash today is
+        // "approve, but log a chained row" — Schneier's auditability
+        // contract. A test-injected resolver can return `.deny` to
+        // exercise the structured-error path.
+        let confirmation = ConfirmationGate.evaluate(toolName: toolName)
+        if confirmation.decision == .deny {
+            return appendAndMarkValidationIfSurfaced(
+                blockResponse(
+                    ConfirmationGate.denyReason(toolName: toolName, reason: confirmation.reason),
+                    eventName: eventName
+                ),
+                advisory: validationAdvisory,
+                rows: validationRows,
+                projectRoot: projectRoot
+            )
+        }
+
         // Route the tool call
         var response: Data
         switch toolName {

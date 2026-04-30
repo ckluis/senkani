@@ -551,6 +551,46 @@ public enum MigrationRegistry {
             try exec("ALTER TABLE agent_trace_event ADD COLUMN ladder_position INTEGER;",
                      allowDuplicateColumn: true)
         },
+        Migration(version: 11, description: "confirmations table for T.6a ConfirmationGate") { db in
+            // Phase T.6a round 1 — append-only confirmations log. Every
+            // write/exec-tagged tool call walks ConfirmationGate, which
+            // writes one row here describing the decision (`approve` /
+            // `deny` / `auto`) and who decided it (`operator` /
+            // `policy` / `auto`). Chained via the T.5 audit chain so
+            // post-hoc tampering with the decision log is detectable.
+            //
+            // Idempotency: ALTER guards duplicate column the same way
+            // as v3/v4/v5/v7/v8/v9/v10. The CREATE TABLE is guarded.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v11", detail: msg)
+            }
+
+            try exec("""
+                CREATE TABLE IF NOT EXISTS confirmations (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tool_name       TEXT NOT NULL,
+                    requested_at    REAL NOT NULL,
+                    decided_at      REAL NOT NULL,
+                    decision        TEXT NOT NULL,
+                    decided_by      TEXT NOT NULL,
+                    reason          TEXT,
+                    prev_hash       TEXT,
+                    entry_hash      TEXT,
+                    chain_anchor_id INTEGER
+                );
+            """)
+            try exec("CREATE INDEX IF NOT EXISTS idx_confirmations_tool ON confirmations(tool_name, requested_at DESC);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_confirmations_decision ON confirmations(decision, requested_at DESC);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_confirmations_anchor ON confirmations(chain_anchor_id, id);")
+
+            // No backfill — table is brand new this migration.
+        },
     ]
 
     // MARK: - v5 helpers

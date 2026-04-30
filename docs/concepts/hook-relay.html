@@ -86,9 +86,13 @@
     <h2>Socket-auth handshake</h2>
     <p>With <code>SENKANI_SOCKET_AUTH=on</code>, every hook connection sends a length-prefixed handshake frame matching the token at <code>~/.senkani/.token</code> (mode 0600, rotated on every server start). Ambient same-UID attackers can no longer talk to the sockets; they'd need to read the token file too.</p>
 
+    <h2>Confirmation gate (T.6a)</h2>
+    <p>PreToolUse on a write/exec-tagged tool now consults <code>ConfirmationGate.evaluate(toolName:)</code> before dispatching. The gate looks the tool up in <code>MCPToolCatalog</code> (Edit/Write are <code>.write</code>; Bash and <code>senkani_exec</code> are <code>.exec</code>; everything read-only short-circuits with no row), runs an injectable <code>PolicyResolver</code>, and writes a chained row in the <code>confirmations</code> table. Round 1's default resolver returns <code>auto</code> — production Edit/Write/Bash flow stays unblocked, but every approval lands in the T.5 audit chain. A <code>deny</code> outcome short-circuits the call with a structured <code>permissionDecisionReason</code> ("Confirmation denied for '&lt;tool&gt;': &lt;reason&gt;") so the agent caller knows what was denied. Real notification adapters (<code>StdoutSink</code>, <code>MacOSLocalSink</code>, <code>PushoverSink</code>) plug into the <code>NotificationSink</code> protocol in T.6b/T.6c — round 1 ships the protocol scaffolding plus null/mock implementations and a fan-out helper that swallows throws so a bad adapter cannot block other sinks.</p>
+
     <div class="seealso"><h3>See also</h3><ul>
         <li><a href="../../docs/reference/cli/senkani-init.html">senkani init CLI</a></li>
         <li><a href="../../docs/concepts/three-layer-stack.html">Three-layer stack</a></li>
+        <li><a href="../../docs/concepts/security-posture.html">Security posture (T.5 audit chain, T.6a confirmation gate)</a></li>
         <li><a href="../../docs/reference/options/security.html">Socket auth (security env)</a></li>
     </ul></div>
   </article>

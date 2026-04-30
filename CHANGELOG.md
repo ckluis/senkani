@@ -9,6 +9,58 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — ConfirmationGate scaffolding + NotificationSink protocol (`phase-t6a-confirmation-gate`, T.6a)
+- Migration v11 adds `confirmations` table with `tool_name`,
+  `requested_at`, `decided_at`, `decision` (`approve`/`deny`/`auto`),
+  `decided_by` (`operator`/`policy`/`auto`), `reason`, plus the three
+  Phase T.5 chain columns. Tamper-evident via `ChainHasher`/
+  `ChainState`, same primitive `TokenEventStore` uses.
+- `Sources/Core/MCPToolConfig.swift` introduces `MCPToolTag`
+  (`read`/`write`/`exec`/`network`) and `MCPToolCatalog` keyed by
+  tool name. The default catalog tags Claude Code hook tools
+  (`Edit`/`Write`/`Bash`) and the senkani MCP surface; `senkani_exec`
+  is `.exec`, the rest of senkani's MCP tools are `.read`. An
+  operator override seam (`setOverride`) lets a future Settings UI
+  flip individual tools without touching the source.
+- `Sources/Core/ConfirmationGate.swift` ships the gate. Read-tagged
+  tools and unknowns short-circuit with `.auto` and no row; write/
+  exec-tagged tools walk an injectable `PolicyResolver` and persist
+  the outcome as a chained row. The default resolver returns `.auto`
+  so production Edit/Write/Bash today is "approve, but log a chained
+  row" — Schneier's auditability contract for the round-1 default.
+- `Sources/Core/NotificationSink.swift` defines the `NotificationSink`
+  protocol (`notify(_:NotifyEvent)`), three event variants
+  (`notifyDone`, `notifyFailure`, `scheduleEnd`),
+  `NullNotificationSink`, `MockNotificationSink` (test recorder with
+  optional throw), and `NotificationFanout.deliver(_:to:)` which
+  swallows throws so a bad adapter doesn't block other sinks.
+- `Sources/Core/Stores/ConfirmationStore.swift` owns the table —
+  schema, chained inserts via `ChainHasher`/`ChainState`, recent()
+  reads. `Sources/Core/SessionDatabase+ConfirmationAPI.swift`
+  exposes `recordConfirmation(_:)`, `confirmationCount()`,
+  `recentConfirmations(limit:)` on the façade.
+- `Sources/Core/HookRouter.swift` consults the gate on PreToolUse
+  before dispatching; `.deny` short-circuits with a structured
+  `permissionDecisionReason` carrying the tool name and resolver
+  reason. The existing budget gate runs first so a budget block
+  still wins over a confirmation question.
+- `Tests/SenkaniTests/ConfirmationGateTests.swift` (10 new tests,
+  target was 8): schema shape with chain columns, chain wiring
+  (prev_hash → entry_hash linkage + shared anchor id), default
+  catalog tags, operator override round-trip, every write/exec
+  call writes a row + reads/unknowns don't, deny path returns
+  structured error, default policy auto-approves with audit row,
+  HookRouter Edit→deny round-trips through hookSpecificOutput,
+  Null sink no-op, Mock sink + fan-out throw tolerance. Suite is
+  `.serialized` because `ConfirmationGate` carries process-global
+  resolver/database/catalog seams.
+- `spec/roadmap.md` T.6 row gains a "T.6a SHIPPED" call-out at the
+  top with the per-round detail; the original T.6 design text is
+  kept intact below for the t6b/t6c follow-ups.
+- Deferred (operator follow-ups): `phase-t6b-stdout-macos-sinks`
+  ships `StdoutSink` + `MacOSLocalSink` + Settings UI matrix;
+  `phase-t6c-pushover-sink` ships PushoverSink + Keychain seed.
+
 ### April 30 — Tier-distribution chart in AnalyticsView (`phase-u1c-analytics-chart`, U.1c)
 - `AgentTraceEventStore.tierDistribution(since:)` rolls up
   `agent_trace_event` rows per `(tier, ladder_position)` over a

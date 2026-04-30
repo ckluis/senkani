@@ -74,28 +74,28 @@
     <h1 class="page-title"><code style="background:none;padding:0;color:var(--accent-lo);font-size:0.82em;">senkani compare</code></h1>
     <div class="tag-row" style="margin-bottom:18px;"><span class="badge badge-live">Live</span></div>
 
-    <p class="lede">Diff two files or git revisions through the filter pipeline.</p>
+    <p class="lede">Run one command across four feature permutations and compare the token savings. The CLI counterpart to <code>senkani exec</code> when you want to know what each filter rule actually buys you.</p>
 
     <h2>Syntax</h2>
-    <div class="ref-signature">senkani compare <a> <b></div>
+    <div class="ref-signature">senkani compare -- &lt;cmd&gt;</div>
 
     <h2>Behavior</h2>
-    <p>Useful for comparing agent-produced diffs to raw diffs.</p>
+    <p>Runs <code>&lt;cmd&gt;</code> once, captures the raw output, then re-applies four <code>FilterPipeline</code> permutations — <code>passthrough</code>, <code>filter only</code>, <code>secrets only</code>, <code>all features</code> — and prints a per-permutation byte / saved-% / bar-graph table. Use it before adding a filter rule to confirm the rule actually moves the needle on the workloads you care about.</p>
 
     <h2>Example</h2>
-    <pre class="code">$ senkani compare HEAD~1 HEAD</pre>
+    <pre class="code">$ senkani compare -- git status</pre>
 
     <h2>Flags</h2>
     <div class="ref-io-table">
       <div class="head">Flag</div><div class="head"></div><div class="head"></div><div class="head">Description</div>
-      <div class="k">--no-filter</div><div class="t"></div><div class="default"></div><div class="desc">Disable filter for the comparison.</div>
+      <div class="k">-- &lt;cmd&gt;</div><div class="t"></div><div class="default">required</div><div class="desc">Everything after <code>--</code> is the command to compare across permutations.</div>
     </div>
 
     <div class="seealso">
       <h3>See also</h3>
       <ul>
-        <li><a href="../../../docs/reference/mcp/senkani_exec.html"><code>senkani_exec tool</code></a></li>
-        <li><a href="../../../docs/reference/panes/diff-viewer.html"><code>Diff Viewer pane</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-exec.html"><code>senkani exec</code></a></li>
+        <li><a href="../../../docs/reference/cli/senkani-bench.html"><code>senkani bench</code></a> — wider task suite for end-to-end savings</li>
       </ul>
     </div>
 

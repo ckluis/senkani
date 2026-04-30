@@ -9,6 +9,50 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — Voice rubric pass on 22 CLI command reference pages (`website-rebuild-11a-cli-rubric`)
+- `## CLI commands` section appended to
+  `spec/website_rebuild_audit_round11.md`. 22 / 22 CLI command pages
+  PASS the 7-dimension rubric (lead-with-outcome, one-idea-per-
+  paragraph, code-blocks-don't-narrate, claims-cite, no-empty-
+  calories, respects-skimmers, fail-open-for-technical-reader). CLI
+  pages don't carry a `Details` section the way MCP pages do — the
+  canonical CLI shape (lede → Syntax → Behavior → Example → Flags →
+  See also → Source) was sufficient to satisfy the technical-reader
+  dimension once the Source pointer named a specific file.
+- 3 small-edit fixes shipped in-pass:
+  - `docs/reference/cli/senkani-bench.html` — lede now leads with
+    the reproducible 80.37× compression figure rather than the
+    suite shape; Source pointer expanded from `Sources/Bench/`
+    (directory) to three specific files (`BenchmarkScenarios.swift`,
+    `BenchmarkTasks.swift`, `BenchBaseline.swift`).
+  - `docs/reference/cli/senkani-compare.html` — page documented
+    file-diff behavior the command does not have. Actual behavior:
+    runs one command across four `FilterPipeline` permutations
+    (passthrough / filter only / secrets only / all features) and
+    prints a per-permutation byte / saved-% / bar-graph table.
+    Lede, Syntax (also fixed two raw `<a> <b>` tags the browser
+    parsed as anchor / bold), Behavior, Example, Flags row, and
+    See-also list rewritten against `Sources/CLI/CompareCommand.swift`.
+  - `docs/reference/cli/senkani-eval.html` — Behavior section
+    rewritten to cite `BenchmarkTasks.all()`, `SavingsTestRunner`,
+    `KBGateComputer`, and the live-multiplier regression check
+    (default 7-day window, savings-regression-always-fails vs.
+    `--strict`-fails-everything contract). Source pointer expanded
+    from one file to three (`EvalCommand.swift`,
+    `SavingsTestRunner.swift`, `KBEvalRunner.swift`).
+- 1 batch-formatting filing deferred:
+  `11f-cli-literal-backticks-pass` — eight CLI pages
+  (`init`, `grammars`, `index`, `search`, `stats`, `fetch`,
+  `uninstall`, `wipe`) carry literal markdown-style backticks in
+  Behavior paragraphs that the browser renders as plain characters.
+  Not voice work; pure HTML hygiene. Routed to the page-rewrites
+  follow-up rather than rewriting eight pages in this voice round.
+- Page voice anchors recorded for the CLI group:
+  `senkani-authorship.html` for full-Behavior depth,
+  `senkani-doctor.html` for multi-subsystem aggregator pages,
+  `senkani-ml-eval.html` for feature pages that have to teach a
+  tier matrix.
+
 ### April 30 — Voice rubric pass on 20 MCP tool reference pages (`website-rebuild-11a-mcp-rubric`)
 - `spec/website_rebuild_audit_round11.md` is created as the canonical
   audit doc for the round 11 voice + a11y + perf pass. Skeleton

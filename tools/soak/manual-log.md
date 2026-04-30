@@ -12,6 +12,34 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Phase U.1c round 1 — Tier-distribution chart in AnalyticsView 2026-04-30
+
+Round 1 ships `AgentTraceEventStore.tierDistribution` + `tracesForTier`
+plus the new "Routing — TaskTier Distribution" card in
+`SenkaniApp/Views/AnalyticsView.swift`. Unit tests cover the store
+queries (counts, NULL-tier exclusion, `since` cutoff, drill-down DESC
++ limit) but Charts rendering and click-to-drill require eyes on the
+real machine.
+
+- [ ] **Stacked vs Grouped layout.** Open Analytics in a workspace
+  that has TaskTier-tagged traces. Switch between Stacked (default)
+  and Grouped — Grouped should split each tier into Primary /
+  Fallback 1 / Fallback 2 bars. Confirm legend colors match the
+  intended palette (Primary = green, Fallback 1 = yellow, Fallback 2
+  = orange) and that bars annotate with their counts in Grouped mode.
+- [ ] **24h vs 7d cutoff.** Change the window picker. Bars should
+  redraw within ~2 s; counts should be ≤ when narrowing from 7d → 24h
+  (never larger).
+- [ ] **Click-to-drill sheet.** Click any bar. The drill-down sheet
+  should render with the tier name + window in the title, list rows
+  newest-first, and close cleanly via Done / Esc. A control row from
+  a different tier must NOT appear.
+- [ ] **Empty-state copy.** On a fresh DB or in a 24h window with no
+  routing data, the empty-state should read exactly: "No routing
+  data yet — TaskTier was introduced in u1a; charts populate as new
+  traces land." If the wording drifts (e.g. truncation, missing
+  hyphen), file a regression — Podmajersky pinned this string.
+
 ### Phase W.4 round 1 — `ContextSaturationGate` + `PreCompactHandoffWriter` 2026-04-29
 
 Round 1 ships the gate, the handoff card, and the loader as Core

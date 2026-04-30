@@ -11,6 +11,12 @@ struct AnalyticsView: View {
     @State private var budgetConfig = BudgetConfig()
     @State private var todayCostCents: Int = 0
 
+    // U.1c — tier-distribution chart state.
+    @State private var tierWindow: TierChartWindow = .day
+    @State private var tierStyle: TierChartStyle = .stacked
+    @State private var tierBuckets: [AgentTraceTierBucket] = []
+    @State private var tierDrillTier: String? = nil
+
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -24,6 +30,7 @@ struct AnalyticsView: View {
                     budgetCard
                     savingsOverTimeChart
                     commandBreakdownChart
+                    tierDistributionChart
                     costProjectionChart
                     pastSessionsSection
                 }
@@ -335,6 +342,184 @@ struct AnalyticsView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
+    // MARK: - Tier Distribution (U.1c)
+
+    private var tierDistributionChart: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Text("Routing — TaskTier Distribution")
+                    .font(.system(size: 13, weight: .semibold))
+
+                Spacer()
+
+                Picker("", selection: $tierWindow) {
+                    ForEach(TierChartWindow.allCases) { w in
+                        Text(w.label).tag(w)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 130)
+                .onChange(of: tierWindow) { _, _ in refreshChartData() }
+
+                Picker("", selection: $tierStyle) {
+                    ForEach(TierChartStyle.allCases) { s in
+                        Text(s.label).tag(s)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 150)
+            }
+
+            if tierBuckets.isEmpty {
+                tierEmptyState
+            } else {
+                Chart(tierChartEntries) { entry in
+                    BarMark(
+                        x: .value("Tier", entry.tier.uppercased()),
+                        y: .value("Calls", entry.count)
+                    )
+                    .foregroundStyle(by: .value("Rung", entry.rungLabel))
+                    .position(by: .value("Rung", entry.rungLabel), axis: .horizontal)
+                    .annotation(position: .top, alignment: .center) {
+                        if tierStyle == .grouped {
+                            Text("\(entry.count)")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .chartForegroundStyleScale(tierColorScale)
+                .chartLegend(position: .top, alignment: .trailing)
+                .chartXAxis {
+                    AxisMarks { _ in
+                        AxisValueLabel()
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        AxisGridLine()
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks { value in
+                        AxisGridLine()
+                        AxisValueLabel {
+                            if let n = value.as(Int.self) {
+                                Text("\(n)")
+                                    .font(.system(size: 9, design: .monospaced))
+                            }
+                        }
+                    }
+                }
+                .frame(height: 200)
+                .chartOverlay { proxy in
+                    GeometryReader { geo in
+                        Rectangle()
+                            .fill(Color.clear)
+                            .contentShape(Rectangle())
+                            .onTapGesture { location in
+                                guard let plotFrame = proxy.plotFrame else { return }
+                                let frame = geo[plotFrame]
+                                let x = location.x - frame.origin.x
+                                if let tier: String = proxy.value(atX: x) {
+                                    tierDrillTier = tier.lowercased()
+                                }
+                            }
+                    }
+                }
+                .animation(.easeInOut(duration: 0.3), value: tierBuckets)
+
+                Text("Click a bar to inspect the underlying trace rows.")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(12)
+        .background(Color(.controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .sheet(item: tierDrillBinding) { drill in
+            TierDrillDownSheet(
+                tier: drill.tier,
+                window: tierWindow,
+                onClose: { tierDrillTier = nil }
+            )
+        }
+    }
+
+    private var tierEmptyState: some View {
+        HStack {
+            Spacer()
+            VStack(spacing: 6) {
+                Image(systemName: "chart.bar.xaxis")
+                    .font(.system(size: 24))
+                    .foregroundStyle(.tertiary)
+                Text("No routing data yet — TaskTier was introduced in u1a; charts populate as new traces land.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
+            }
+            .padding(.vertical, 40)
+            Spacer()
+        }
+    }
+
+    /// Chart entries — collapsed to one row per tier in stacked mode, one
+    /// row per (tier, rung) in grouped mode. Tier order is the canonical
+    /// TaskTier ordering: simple → standard → complex → reasoning.
+    private var tierChartEntries: [TierChartEntry] {
+        let order = ["simple", "standard", "complex", "reasoning"]
+        let sorted = tierBuckets.sorted { lhs, rhs in
+            let li = order.firstIndex(of: lhs.tier) ?? Int.max
+            let ri = order.firstIndex(of: rhs.tier) ?? Int.max
+            if li != ri { return li < ri }
+            return (lhs.ladderPosition ?? -1) < (rhs.ladderPosition ?? -1)
+        }
+        switch tierStyle {
+        case .stacked:
+            // Collapse to one row per tier, single rung label "All".
+            var totals: [String: Int] = [:]
+            for b in sorted { totals[b.tier, default: 0] += b.count }
+            return order.compactMap { tier in
+                guard let n = totals[tier], n > 0 else { return nil }
+                return TierChartEntry(tier: tier, ladderPosition: nil, count: n, rungLabel: "All")
+            }
+        case .grouped:
+            return sorted.map { b in
+                TierChartEntry(
+                    tier: b.tier,
+                    ladderPosition: b.ladderPosition,
+                    count: b.count,
+                    rungLabel: rungLabel(for: b.ladderPosition)
+                )
+            }
+        }
+    }
+
+    private func rungLabel(for position: Int?) -> String {
+        guard let p = position else { return "Unknown" }
+        switch p {
+        case 0: return "Primary"
+        case 1: return "Fallback 1"
+        case 2: return "Fallback 2"
+        default: return "Rung \(p)"
+        }
+    }
+
+    private var tierColorScale: KeyValuePairs<String, Color> {
+        [
+            "All":        Color.blue.opacity(0.7),
+            "Primary":    Color.green.opacity(0.7),
+            "Fallback 1": Color.yellow.opacity(0.8),
+            "Fallback 2": Color.orange.opacity(0.8),
+            "Unknown":    Color.gray.opacity(0.6),
+        ]
+    }
+
+    private var tierDrillBinding: Binding<TierDrillTarget?> {
+        Binding(
+            get: { tierDrillTier.map { TierDrillTarget(tier: $0) } },
+            set: { tierDrillTier = $0?.tier }
+        )
+    }
+
     // MARK: - Cost Projection (Area Chart)
 
     private var costProjectionChart: some View {
@@ -551,6 +736,9 @@ struct AnalyticsView: View {
                 filteredBytes: entry.compressedBytes
             )
         }
+
+        let since = Date().addingTimeInterval(-tierWindow.seconds)
+        tierBuckets = db.agentTraceTierDistribution(since: since)
     }
 
     /// Cost projection data points.
@@ -624,6 +812,129 @@ private struct CostDataPoint: Identifiable {
     let timestamp: Date
     let costWithout: Double
     let costWith: Double
+}
+
+// MARK: - Tier Distribution helpers (U.1c)
+
+enum TierChartWindow: String, CaseIterable, Identifiable {
+    case day, week
+    var id: String { rawValue }
+    var label: String { self == .day ? "24h" : "7d" }
+    var seconds: TimeInterval {
+        switch self {
+        case .day:  return 24 * 3600
+        case .week: return 7 * 24 * 3600
+        }
+    }
+}
+
+enum TierChartStyle: String, CaseIterable, Identifiable {
+    case stacked, grouped
+    var id: String { rawValue }
+    var label: String { self == .stacked ? "Stacked" : "Grouped" }
+}
+
+struct TierChartEntry: Identifiable, Equatable {
+    let tier: String
+    let ladderPosition: Int?
+    let count: Int
+    let rungLabel: String
+    var id: String { "\(tier)#\(ladderPosition.map(String.init) ?? "all")" }
+}
+
+struct TierDrillTarget: Identifiable, Equatable {
+    let tier: String
+    var id: String { tier }
+}
+
+/// Drill-down sheet — lists agent_trace_event rows for a clicked tier.
+private struct TierDrillDownSheet: View {
+    let tier: String
+    let window: TierChartWindow
+    let onClose: () -> Void
+
+    @State private var rows: [AgentTraceTierRow] = []
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(tier.uppercased()) — last \(window.label)")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("\(rows.count) trace row\(rows.count == 1 ? "" : "s")")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done", action: onClose)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(12)
+            .background(.ultraThinMaterial)
+
+            Divider()
+
+            if rows.isEmpty {
+                VStack(spacing: 8) {
+                    Spacer()
+                    Image(systemName: "tray")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.tertiary)
+                    Text("No traces in this tier+window.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(rows) { row in
+                            tierRowView(row)
+                            Divider()
+                        }
+                    }
+                }
+            }
+        }
+        .frame(width: 600, height: 480)
+        .onAppear {
+            let since = Date().addingTimeInterval(-window.seconds)
+            rows = SessionDatabase.shared.agentTraceRowsForTier(tier, since: since)
+        }
+    }
+
+    private func tierRowView(_ row: AgentTraceTierRow) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.feature ?? "—")
+                    .font(.system(size: 11, weight: .medium))
+                Text(row.startedAt.formatted(date: .abbreviated, time: .standard))
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 200, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.model ?? "—")
+                    .font(.system(size: 10, design: .monospaced))
+                Text("\(row.tokensIn)/\(row.tokensOut) tok • \(row.latencyMs) ms")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text(row.result)
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(row.result == "success" ? Color.green.opacity(0.15) : Color.red.opacity(0.15))
+                .foregroundStyle(row.result == "success" ? Color.green : Color.red)
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
 }
 
 // MARK: - Summary Card

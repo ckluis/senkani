@@ -77,6 +77,9 @@
 
     <p class="lede">Token + cost savings with charts, persistent across restarts. Compression breakdown by source (filter / indexer / intercept). Compliance rate meter.</p>
 
+    <h2>Routing — TaskTier distribution (U.1c)</h2>
+    <p>Above the cost-projection chart sits the Routing distribution card. A 24h/7d picker scopes the window; a Stacked/Grouped picker chooses between tier totals (default) and a per-rung split (Primary / Fallback 1 / Fallback 2) so operators can spot fallback churn at a glance. Tap on a bar to open a drill-down sheet listing the underlying <code>agent_trace_event</code> rows — feature, model, tokens in/out, latency, and result. The sheet is the inspection surface; the chart is the at-a-glance gauge.</p>
+    <p>If the chart is empty, the empty-state copy says so explicitly: <em>"No routing data yet — TaskTier was introduced in u1a; charts populate as new traces land."</em> A fresh database has no router output until a TaskTier-aware caller writes its first trace row.</p>
 
     <h2>Keyboard</h2>
     <p>Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas).</p>

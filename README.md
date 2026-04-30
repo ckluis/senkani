@@ -155,6 +155,8 @@ Per-pane model presets control which Claude model handles tasks:
 
 **Routing corpus + ≥0.85 accuracy gate (Phase U.1b).** `ModelRouter.classify(prompt:)` maps a prompt to its `TaskTier`; a 60-row hand-labeled corpus (≥10 per tier) at `Tests/SenkaniTests/Fixtures/routing-corpus.json` pins the classifier at ≥0.85 accuracy in CI. The gate is loose by design — flakiness is more expensive than a tight bar that catches nothing. `ModelRouter.Decision` now carries `taskTier` + `ladderPosition` and migration v10 adds `ladder_position` to `agent_trace_event` so the U.1c Analytics chart can split "primary rung used" from "fell back" without a second schema change.
 
+**Tier-distribution chart in AnalyticsView (Phase U.1c).** A new "Routing — TaskTier Distribution" card in Analytics renders router output across the past 24h or 7d, per `TaskTier`. Stacked view (default) shows totals per tier; Grouped view splits each tier into Primary / Fallback 1 / Fallback 2 bars so operators can spot fallback churn without a second query. Tapping a bar opens a drill-down sheet listing the underlying `agent_trace_event` rows (feature, model, tokens, latency, result). Empty-state copy explicitly links the blank chart back to U.1a so operators don't think the analytics broke.
+
 ---
 
 ## Paired Performance Numbers

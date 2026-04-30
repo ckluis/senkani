@@ -283,6 +283,90 @@ final class AgentTraceEventStore: @unchecked Sendable {
         }
     }
 
+    /// U.1c: tier-distribution rollup over a time window. Counts rows
+    /// per `tier` and per `(tier, ladderPosition)` so the AnalyticsView
+    /// can render either a stacked bar (tier-only) or a grouped bar
+    /// (tier × primary-vs-fallback) without re-querying.
+    ///
+    /// Rows whose `tier` is NULL (pre-U.1 traces and non-routed paths)
+    /// are excluded — the chart's empty-state copy explains why.
+    func tierDistribution(since: Date) -> [AgentTraceTierBucket] {
+        return parent.queue.sync {
+            guard let db = parent.db else { return [] }
+            let sql = """
+                SELECT tier,
+                       COALESCE(ladder_position, -1),
+                       COUNT(*)
+                FROM agent_trace_event
+                WHERE tier IS NOT NULL AND started_at >= ?
+                GROUP BY tier, COALESCE(ladder_position, -1)
+                ORDER BY tier;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_double(stmt, 1, since.timeIntervalSince1970)
+
+            var out: [AgentTraceTierBucket] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let tier = String(cString: sqlite3_column_text(stmt, 0))
+                let rawLadder = Int(sqlite3_column_int64(stmt, 1))
+                let ladder: Int? = rawLadder < 0 ? nil : rawLadder
+                let count = Int(sqlite3_column_int64(stmt, 2))
+                out.append(AgentTraceTierBucket(tier: tier, ladderPosition: ladder, count: count))
+            }
+            return out
+        }
+    }
+
+    /// U.1c: list trace rows matching `tier` within a time window. Powers
+    /// the drill-down sheet — operator clicks a bar, sees the underlying
+    /// rows. Capped at `limit` to keep the sheet responsive on busy days.
+    func tracesForTier(_ tier: String, since: Date, limit: Int = 200) -> [AgentTraceTierRow] {
+        return parent.queue.sync {
+            guard let db = parent.db, limit > 0 else { return [] }
+            let sql = """
+                SELECT idempotency_key, pane, project, model, tier, ladder_position,
+                       feature, result, started_at, latency_ms, tokens_in, tokens_out,
+                       cost_cents
+                FROM agent_trace_event
+                WHERE tier = ? AND started_at >= ?
+                ORDER BY started_at DESC
+                LIMIT ?;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (tier as NSString).utf8String, -1, nil)
+            sqlite3_bind_double(stmt, 2, since.timeIntervalSince1970)
+            sqlite3_bind_int64(stmt, 3, Int64(limit))
+
+            var out: [AgentTraceTierRow] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let key = String(cString: sqlite3_column_text(stmt, 0))
+                let pane = sqlite3_column_type(stmt, 1) == SQLITE_NULL ? nil : String(cString: sqlite3_column_text(stmt, 1))
+                let project = sqlite3_column_type(stmt, 2) == SQLITE_NULL ? nil : String(cString: sqlite3_column_text(stmt, 2))
+                let model = sqlite3_column_type(stmt, 3) == SQLITE_NULL ? nil : String(cString: sqlite3_column_text(stmt, 3))
+                let tierVal = String(cString: sqlite3_column_text(stmt, 4))
+                let ladder: Int? = sqlite3_column_type(stmt, 5) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 5))
+                let feature = sqlite3_column_type(stmt, 6) == SQLITE_NULL ? nil : String(cString: sqlite3_column_text(stmt, 6))
+                let result = String(cString: sqlite3_column_text(stmt, 7))
+                let startedAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 8))
+                out.append(AgentTraceTierRow(
+                    idempotencyKey: key,
+                    pane: pane, project: project, model: model,
+                    tier: tierVal, ladderPosition: ladder, feature: feature,
+                    result: result, startedAt: startedAt,
+                    latencyMs: Int(sqlite3_column_int64(stmt, 9)),
+                    tokensIn: Int(sqlite3_column_int64(stmt, 10)),
+                    tokensOut: Int(sqlite3_column_int64(stmt, 11)),
+                    costCents: Int(sqlite3_column_int64(stmt, 12))
+                ))
+            }
+            return out
+        }
+    }
+
     /// Pivot 3: per-result distribution (top-line "what's failing").
     func pivotByResult(since: Date? = nil) -> [AgentTraceResultRollup] {
         return parent.queue.sync {
@@ -463,4 +547,55 @@ public struct AgentTraceResultRollup: Sendable, Equatable {
     public let eventCount: Int
     public let meanLatencyMs: Double
     public let totalCostCents: Int
+}
+
+/// U.1c: one bucket of the tier-distribution rollup. `ladderPosition` is
+/// nil for rows that pre-date the ladder column (kept for chart symmetry).
+public struct AgentTraceTierBucket: Sendable, Equatable, Identifiable {
+    public let tier: String
+    public let ladderPosition: Int?
+    public let count: Int
+    public var id: String { "\(tier)#\(ladderPosition.map(String.init) ?? "nil")" }
+    public init(tier: String, ladderPosition: Int?, count: Int) {
+        self.tier = tier
+        self.ladderPosition = ladderPosition
+        self.count = count
+    }
+}
+
+/// U.1c: a single trace row surfaced by the drill-down sheet.
+public struct AgentTraceTierRow: Sendable, Equatable, Identifiable {
+    public let idempotencyKey: String
+    public let pane: String?
+    public let project: String?
+    public let model: String?
+    public let tier: String
+    public let ladderPosition: Int?
+    public let feature: String?
+    public let result: String
+    public let startedAt: Date
+    public let latencyMs: Int
+    public let tokensIn: Int
+    public let tokensOut: Int
+    public let costCents: Int
+    public var id: String { idempotencyKey }
+    public init(
+        idempotencyKey: String, pane: String?, project: String?, model: String?,
+        tier: String, ladderPosition: Int?, feature: String?, result: String,
+        startedAt: Date, latencyMs: Int, tokensIn: Int, tokensOut: Int, costCents: Int
+    ) {
+        self.idempotencyKey = idempotencyKey
+        self.pane = pane
+        self.project = project
+        self.model = model
+        self.tier = tier
+        self.ladderPosition = ladderPosition
+        self.feature = feature
+        self.result = result
+        self.startedAt = startedAt
+        self.latencyMs = latencyMs
+        self.tokensIn = tokensIn
+        self.tokensOut = tokensOut
+        self.costCents = costCents
+    }
 }

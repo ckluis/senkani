@@ -9,6 +9,42 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — Tier-distribution chart in AnalyticsView (`phase-u1c-analytics-chart`, U.1c)
+- `AgentTraceEventStore.tierDistribution(since:)` rolls up
+  `agent_trace_event` rows per `(tier, ladder_position)` over a
+  caller-supplied window. Rows whose `tier` is NULL (pre-U.1
+  traces, non-routed paths) are excluded — the chart's empty state
+  explains why.
+- `AgentTraceEventStore.tracesForTier(_:since:limit:)` returns the
+  matching rows for the drill-down sheet, capped at 200 by default
+  to keep the sheet responsive on busy days.
+- Both functions are exposed via `SessionDatabase` —
+  `agentTraceTierDistribution(since:)` and
+  `agentTraceRowsForTier(_:since:limit:)`.
+- `SenkaniApp/Views/AnalyticsView.swift` adds a new
+  "Routing — TaskTier Distribution" card. A 24h/7d segmented
+  picker scopes the window; a Stacked/Grouped picker switches
+  between tier totals (default) and a per-rung split that
+  surfaces fallback churn at a glance. Tap on a bar opens an
+  inline drill-down sheet listing the underlying trace rows
+  (feature, model, tokens, latency, result).
+- The drill-down lands as a sheet, not the DiffViewerPane that
+  the U.1c scope originally named — DiffViewerPane is a
+  file-diff tool and the wrong target for trace-row inspection.
+- Empty-state copy ships verbatim from the U.1c scope: "No
+  routing data yet — TaskTier was introduced in u1a; charts
+  populate as new traces land." This keeps the operator from
+  thinking the analytics broke when a fresh DB has no router
+  output yet.
+- `Tests/SenkaniTests/TierDistributionTests.swift` (6 new tests,
+  target was 6) covers per-tier counts, per-ladder-position
+  splits, NULL-tier exclusion, empty windows, the `since` cutoff
+  honoring 24h vs 7d vs all-time, and the drill-down DESC + limit
+  contract.
+- Visual verification (chart layout, drill-down click, animation)
+  cannot be automated in CI; pushed to
+  `tools/soak/manual-log.md` for real-machine confirmation.
+
 ### April 29 — Routing corpus + ≥0.85 accuracy gate + ladder_position migration (`phase-u1b-routing-corpus`, U.1b)
 - `Tests/SenkaniTests/Fixtures/routing-corpus.json` ships 60 hand-
   labeled prompts (≥10 per `TaskTier`) drawn from realistic senkani

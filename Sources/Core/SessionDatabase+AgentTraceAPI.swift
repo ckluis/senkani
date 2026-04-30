@@ -47,4 +47,18 @@ extension SessionDatabase {
     public func agentTraceRecentKeys(pane: String? = nil, project: String? = nil, limit: Int = 10) -> [String] {
         return agentTraceEventStore.recentTraceKeys(pane: pane, project: project, limit: limit)
     }
+
+    /// U.1c — per-tier (and per-ladder-position) row counts since `since`.
+    /// Powers the AnalyticsView tier-distribution chart. Rows with NULL
+    /// `tier` are excluded; the chart renders an empty state when nothing
+    /// returns.
+    public func agentTraceTierDistribution(since: Date) -> [AgentTraceTierBucket] {
+        return agentTraceEventStore.tierDistribution(since: since)
+    }
+
+    /// U.1c — drill-down rows for one tier within a window, capped at
+    /// `limit`. Used by the chart's click-to-inspect sheet.
+    public func agentTraceRowsForTier(_ tier: String, since: Date, limit: Int = 200) -> [AgentTraceTierRow] {
+        return agentTraceEventStore.tracesForTier(tier, since: since, limit: limit)
+    }
 }

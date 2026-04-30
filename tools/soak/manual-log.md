@@ -12,6 +12,48 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Phase U.6c round 1 — Plan-variance histogram in AnalyticsView 2026-04-30
+
+Round 3 of U.6 lands the operator-visible chart + the ≥ 90 % pairing
+eval. Unit + corpus tests cover the data flow (paired / unpaired /
+rejected / throws, histogram bin classification, median residual).
+The chart's visual rendering on a real machine needs eyes-on:
+
+- [ ] **Empty-state copy reads correctly with no combinator data.**
+  Open Analytics on a fresh-ish session that has zero combinator
+  calls. The "Plan Variance — Actual vs. Planned Cost" card should
+  render the empty-state copy (chart icon, "No combinator plans in
+  this window — variance appears once split / filter / reduce calls
+  land traces."). The header stat row should NOT render when no
+  bars are drawn.
+- [ ] **Under-N threshold copy reads correctly with 1–2 paired
+  plans.** Drive a single `split` call through a debug hook (or via
+  a future test seam in `OptimizationPipeline`); confirm the chart
+  still shows the empty state with the under-threshold message
+  ("Need ≥ 3 paired plans for a stable histogram…"). No bars.
+- [ ] **Bars render with three or more paired plans.** Drive ≥ 3
+  combinator calls (mix of `split` / `filter` / `reduce`); confirm
+  the histogram now draws bars colour-coded under (green) / exact
+  (gray) / over (red), with the bin labels visible on the X axis
+  and a count annotation on top of each non-empty bar. The Y axis
+  ticks should be integer.
+- [ ] **Header stats reflect ground truth.** With a known mix of
+  paired (some over-budget, some under, some exact) + at least one
+  rejected plan, confirm the four header cells show the expected
+  N paired, unpaired, signed median Δ (with leading `+` when
+  positive), and % paired. The percent should round to a whole
+  number and never exceed 100.
+- [ ] **24h / 7d picker scopes the window without flicker.** Toggle
+  the picker between 24h and 7d; the chart should re-render with
+  the wider/narrower window's data without showing the empty state
+  in between (data is fetched on the same timer tick as tier
+  distribution).
+- [ ] **Rejected plans appear in unpaired count, never in bars.**
+  Drive one combinator call whose `estimatedCost` exceeds the
+  active `BudgetConfig` daily-equivalent ceiling. Confirm the
+  unpaired count increments by 1 and the histogram bar counts do
+  not — rejection and execution must be pivot-distinct.
+
 ### Phase V.12b round 1 — HookRouter denials → DiffViewerPane annotations 2026-04-30
 
 Round 2 of V.12 wires `HookRouter` denials into the V.12a sidebar

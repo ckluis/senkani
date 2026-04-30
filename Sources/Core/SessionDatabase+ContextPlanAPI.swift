@@ -27,4 +27,13 @@ extension SessionDatabase {
     public func contextPlanCount() -> Int {
         return contextPlanStore.countAll()
     }
+
+    /// U.6c — plan/actual pairs since `since`. Drives the AnalyticsView
+    /// variance histogram (residual = actual − planned) and the
+    /// pairing-percentage eval. One row per plan; `actualCostCents` is
+    /// nil for rejected / closure-thrown plans so analytics can pivot
+    /// on rejection separately from execution.
+    public func contextPlanPairs(since: Date) -> [PlanActualPair] {
+        return contextPlanStore.planActualPairs(since: since)
+    }
 }

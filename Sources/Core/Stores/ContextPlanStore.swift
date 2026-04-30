@@ -131,6 +131,65 @@ final class ContextPlanStore: @unchecked Sendable {
         }
     }
 
+    /// U.6c — plan / actual pairs since `since`. One row per plan;
+    /// `actualCostCents` is nil for plans with no matching
+    /// `agent_trace_event` (rejected by BudgetGate or the closure threw
+    /// before persistence). Drives the AnalyticsView variance histogram
+    /// + the ≥ 90 % corpus pairing eval.
+    ///
+    /// Order: newest plans first, matching `fetchBySession`'s ordering.
+    /// Bound by `created_at >= since` on the plan side so rejected plans
+    /// (which have no trace) still surface in the window.
+    func planActualPairs(since: Date) -> [PlanActualPair] {
+        return parent.queue.sync {
+            guard let db = parent.db else { return [] }
+            let sql = """
+                SELECT p.id,
+                       p.session_id,
+                       p.planned_fanout,
+                       p.leaf_size,
+                       p.reducer_choice,
+                       p.estimated_cost,
+                       p.created_at,
+                       t.cost_cents
+                FROM context_plans p
+                LEFT JOIN agent_trace_event t ON t.plan_id = p.id
+                WHERE p.created_at >= ?
+                ORDER BY p.created_at DESC, p.id;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_double(stmt, 1, since.timeIntervalSince1970)
+
+            var out: [PlanActualPair] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let id = String(cString: sqlite3_column_text(stmt, 0))
+                let sessionId = String(cString: sqlite3_column_text(stmt, 1))
+                let plannedFanout = Int(sqlite3_column_int64(stmt, 2))
+                let leafSize = Int(sqlite3_column_int64(stmt, 3))
+                let reducerRaw = String(cString: sqlite3_column_text(stmt, 4))
+                let reducer = ReducerChoice(rawValue: reducerRaw) ?? .merge
+                let estimated = Int(sqlite3_column_int64(stmt, 5))
+                let createdAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 6))
+                let actual: Int? = sqlite3_column_type(stmt, 7) == SQLITE_NULL
+                    ? nil
+                    : Int(sqlite3_column_int64(stmt, 7))
+                out.append(PlanActualPair(
+                    planId: id,
+                    sessionId: sessionId,
+                    plannedFanout: plannedFanout,
+                    leafSize: leafSize,
+                    reducerChoice: reducer,
+                    plannedCost: estimated,
+                    actualCostCents: actual,
+                    createdAt: createdAt
+                ))
+            }
+            return out
+        }
+    }
+
     // MARK: - Helpers
 
     /// Step `stmt` once and decode the current row into a `ContextPlan`,

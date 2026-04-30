@@ -9,6 +9,48 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — Plan-variance histogram + ≥ 90% pairing eval (`phase-u6c-variance-histogram`)
+- Third slice of the U.6 split. Lands the operator-visible surface
+  (variance chart in `AnalyticsView`) plus the parent's headline
+  acceptance metric (≥ 90% of corpus operations land paired plan +
+  trace rows after a synthetic combinator run).
+- New `db.contextPlanPairs(since:)` API forwards to
+  `ContextPlanStore.planActualPairs(since:)`, a `LEFT JOIN` of
+  `context_plans` against `agent_trace_event` on `plan_id` — one row
+  per plan; `actualCostCents` is `nil` for rejected plans and
+  closure-thrown plans (the on-disk signal U.6b ships).
+- New `PlanActualPair` Sendable model in `Sources/Core/ContextPlan.swift`
+  carries plan + actual + computed `residualCents` (Karpathy:
+  `actual − planned`). Pure helpers in the new `VarianceHistogram`
+  enum bin residuals into fixed signed ranges (`[-100, -50, -10, 0,
+  10, 50, 100]`-edged `[…)` half-open bins, plus open-ended `<` / `≥`
+  end bins so the histogram never silently drops a row), tag each
+  bin as under / exact / over so the chart can colour-code, and
+  expose a signed median for the header.
+- `AnalyticsView` gains a "Plan Variance — Actual vs. Planned Cost"
+  card between the tier-distribution and cost-projection cards. 24h
+  / 7d window picker mirrors the tier card. Header surfaces four
+  stat cells (N paired, unpaired, median Δ¢, % paired); chart waits
+  for ≥ 3 paired plans before drawing bars (Gelman gate against
+  thin-data misreads); empty-state copy explains both the no-plans
+  case and the under-N-threshold case so the operator never thinks
+  the analytics broke.
+- New `Tests/SenkaniTests/Fixtures/context-plan-corpus.json` —
+  20-item synthetic corpus (6 split / 6 filter / 6 reduce + 1
+  rejected + 1 throws) exercising both happy and edge paths.
+- New `Tests/SenkaniTests/ContextPlanCorpusTests.swift` —
+  7 tests: corpus integrity (≥ 15 items, every `ReducerChoice`
+  exercised), the parent acceptance #1 metric (≥ 90 % of executable
+  items land paired rows), rejected-items-no-trace pin, throw-leaves-
+  plan-only pin, histogram bin classification (under/exact/over with
+  unpaired excluded), and signed-median definition pin.
+- Manual-log entry filed under `tools/soak/manual-log.md` for the
+  histogram visual check on a real machine.
+- Tests: +7 in new `ContextPlanCorpusTests` suite. Full safe suite
+  passes (2215 reported with the documented pre-existing
+  `LoggerRouting/migrationsAppliedFiresOnFreshDB` SIGTRAP suite
+  skipped per project convention).
+
 ### April 30 — `split` / `filter` / `reduce` combinators + BudgetGate plan rejection (`phase-u6b-combinator-budget-rejection`)
 - Second slice of the U.6 split. Builds on u6a's `ContextPlan`
   persistence to add the actual write path + the rejection path.

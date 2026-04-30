@@ -17,6 +17,10 @@ struct AnalyticsView: View {
     @State private var tierBuckets: [AgentTraceTierBucket] = []
     @State private var tierDrillTier: String? = nil
 
+    // U.6c — variance histogram state (planned-vs-actual cost residual).
+    @State private var varianceWindow: TierChartWindow = .day
+    @State private var variancePairs: [PlanActualPair] = []
+
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -31,6 +35,7 @@ struct AnalyticsView: View {
                     savingsOverTimeChart
                     commandBreakdownChart
                     tierDistributionChart
+                    varianceHistogramChart
                     costProjectionChart
                     pastSessionsSection
                 }
@@ -520,6 +525,147 @@ struct AnalyticsView: View {
         )
     }
 
+    // MARK: - Plan Variance Histogram (U.6c)
+
+    private var varianceHistogramChart: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Text("Plan Variance — Actual vs. Planned Cost")
+                    .font(.system(size: 13, weight: .semibold))
+
+                Spacer()
+
+                Picker("", selection: $varianceWindow) {
+                    ForEach(TierChartWindow.allCases) { w in
+                        Text(w.label).tag(w)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 130)
+                .onChange(of: varianceWindow) { _, _ in refreshChartData() }
+            }
+
+            // Gelman gate — don't draw the histogram below N=3 paired plans.
+            // Karpathy: residual = actual − planned. Negative = under, positive = over.
+            let pairedExecuted = variancePairs.filter { $0.isPaired }
+            let unpaired = variancePairs.count - pairedExecuted.count
+
+            if pairedExecuted.count < 3 {
+                varianceEmptyState(totalPlans: variancePairs.count)
+            } else {
+                let bins = VarianceHistogram.bins(pairs: pairedExecuted)
+                let median = VarianceHistogram.median(
+                    of: pairedExecuted.compactMap { $0.residualCents }
+                )
+                let pctPaired = variancePairs.isEmpty
+                    ? 0.0
+                    : Double(pairedExecuted.count) / Double(variancePairs.count)
+
+                varianceHeaderStats(
+                    paired: pairedExecuted.count,
+                    unpaired: unpaired,
+                    median: median,
+                    pctPaired: pctPaired
+                )
+
+                Chart(bins) { bin in
+                    BarMark(
+                        x: .value("Residual (¢)", bin.label),
+                        y: .value("Plans", bin.count)
+                    )
+                    .foregroundStyle(bin.kind == .under ? Color.green.opacity(0.7)
+                                     : bin.kind == .exact ? Color.gray.opacity(0.6)
+                                     : Color.red.opacity(0.7))
+                    .annotation(position: .top, alignment: .center) {
+                        if bin.count > 0 {
+                            Text("\(bin.count)")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .chartXAxis {
+                    AxisMarks { _ in
+                        AxisValueLabel()
+                            .font(.system(size: 9, design: .monospaced))
+                        AxisGridLine()
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks { value in
+                        AxisGridLine()
+                        AxisValueLabel {
+                            if let n = value.as(Int.self) {
+                                Text("\(n)")
+                                    .font(.system(size: 9, design: .monospaced))
+                            }
+                        }
+                    }
+                }
+                .frame(height: 200)
+                .animation(.easeInOut(duration: 0.3), value: bins)
+
+                Text("Residual = actual − planned cost. Under-budget left of 0¢, over-budget right.")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(12)
+        .background(Color(.controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func varianceEmptyState(totalPlans: Int) -> some View {
+        HStack {
+            Spacer()
+            VStack(spacing: 6) {
+                Image(systemName: "chart.bar")
+                    .font(.system(size: 24))
+                    .foregroundStyle(.tertiary)
+                Text(totalPlans == 0
+                     ? "No combinator plans in this window — variance appears once split / filter / reduce calls land traces."
+                     : "Need ≥ 3 paired plans for a stable histogram (have \(totalPlans), of which \(totalPlans) executed pending).")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
+            }
+            .padding(.vertical, 40)
+            Spacer()
+        }
+    }
+
+    private func varianceHeaderStats(
+        paired: Int,
+        unpaired: Int,
+        median: Int,
+        pctPaired: Double
+    ) -> some View {
+        HStack(spacing: 16) {
+            varianceStatCell(label: "N paired", value: "\(paired)")
+            varianceStatCell(label: "Unpaired", value: "\(unpaired)")
+            varianceStatCell(
+                label: "Median Δ",
+                value: "\(median > 0 ? "+" : "")\(median)¢"
+            )
+            varianceStatCell(
+                label: "% paired",
+                value: String(format: "%.0f%%", pctPaired * 100)
+            )
+            Spacer()
+        }
+    }
+
+    private func varianceStatCell(label: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+        }
+    }
+
     // MARK: - Cost Projection (Area Chart)
 
     private var costProjectionChart: some View {
@@ -739,6 +885,9 @@ struct AnalyticsView: View {
 
         let since = Date().addingTimeInterval(-tierWindow.seconds)
         tierBuckets = db.agentTraceTierDistribution(since: since)
+
+        let varianceSince = Date().addingTimeInterval(-varianceWindow.seconds)
+        variancePairs = db.contextPlanPairs(since: varianceSince)
     }
 
     /// Cost projection data points.

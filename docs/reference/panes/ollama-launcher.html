@@ -75,8 +75,10 @@
       <span class="tag tag-orange">Pane type</span>
     </div>
 
-    <p class="lede">Local LLM chat via Ollama with a tri-state availability gate (detecting → absent-CTA → connected-terminal). Header download button opens a curated-catalog drawer: pick from 5 LLMs (llama3.1:8b, qwen2.5-coder:7b, deepseek-r1:7b, mistral:7b, gemma2:2b), each row discloses size before the pull click and streams `ollama pull` progress into the UI. The same Senkani MCP env that terminal panes get flows through to the subprocess.</p>
+    <p class="lede">Local LLM chat via Ollama. The pane carries a tri-state availability gate (detecting → absent-CTA → connected-terminal); once Ollama is reachable the same Senkani MCP env that terminal panes get flows through to the subprocess.</p>
 
+    <h2>Curated catalog drawer</h2>
+    <p>The header download button opens a five-model catalog drawer: <code>llama3.1:8b</code>, <code>qwen2.5-coder:7b</code>, <code>deepseek-r1:7b</code>, <code>mistral:7b</code>, <code>gemma2:2b</code>. Each row discloses on-disk size before the pull click and streams <code>ollama pull</code> progress into the UI so the operator sees download state without leaving the pane.</p>
 
     <h2>Keyboard</h2>
     <p>Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas).</p>

@@ -9,6 +9,76 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — Voice rubric pass on 18 pane reference pages (`website-rebuild-11a-panes-rubric`)
+- `## Panes` section appended to
+  `spec/website_rebuild_audit_round11.md`. 18 / 18 pane reference
+  pages PASS the 7-dimension rubric (lead-with-outcome,
+  one-idea-per-paragraph, code-blocks-don't-narrate, claims-cite,
+  no-empty-calories, respects-skimmers,
+  fail-open-for-technical-reader). Pane pages have their own
+  page-shape contract — lede + 0–3 feature-specific H2s + Keyboard
+  + Related — distinct from MCP / CLI / options. The `Related`
+  links (`senkani_pane` MCP tool + FCSIT options) are the
+  technical-reader exit ramp for thin UI panes; rich panes
+  (`dashboard`, `diff-viewer`, `model-manager`) carry inline
+  citations to specific Swift classes, tables, and migration
+  numbers as the next layer down.
+- 8 small-edit fixes shipped in-pass:
+  - `docs/reference/panes/terminal.html`,
+    `docs/reference/panes/code-editor.html`,
+    `docs/reference/panes/browser.html` — ledes led with the
+    framework (SwiftTerm / NSTextView / WKWebView) rather than the
+    operator outcome. Each lede now leads with what the operator
+    gets, with the framework name closing as a one-line
+    implementation cite. Meta descriptions matched.
+  - `docs/reference/panes/browser.html`,
+    `docs/reference/panes/knowledge-base.html`,
+    `docs/reference/panes/markdown-preview.html`,
+    `docs/reference/panes/ollama-launcher.html`,
+    `docs/reference/panes/sprint-review.html` — literal
+    markdown-style backticks in ledes (e.g.
+    `` `senkani learn review` ``) replaced with proper
+    `<code>…</code>` spans. `markdown-preview.html` additionally
+    had an unescaped `<img>` tag inside its lede that the browser
+    was interpreting as a real (broken) image element; that token
+    is now properly HTML-escaped (`&lt;img&gt;`) inside the
+    `<code>` span. Same pattern as the CLI slice's
+    `phase-11f-cli-literal-backticks-pass`, but at five-page
+    scale fix-in-pass was the right move rather than filing a
+    follow-up.
+  - `docs/reference/panes/ollama-launcher.html` — original lede
+    stacked three distinct mechanisms (tri-state availability
+    gate, five-model catalog drawer, MCP env passthrough) into one
+    paragraph. Lede now keeps the gate + env passthrough; the
+    five-model catalog drawer was lifted into its own
+    `## Curated catalog drawer` H2 with each model name wrapped
+    in a `<code>` span.
+  - `docs/reference/panes/savings-test.html` — opinionated lede
+    claim ("the live number is the honest one") had no cite, and
+    the page was so thin (lede + Keyboard + Related only) that the
+    technical reader had no body H2 to verify the claim against.
+    Added a `## Live multiplier` H2 citing `SavingsTestRunner`,
+    the 7-day default window, the cross-link to `senkani eval`'s
+    live-multiplier regression check, and the 80.37× fixture
+    ceiling from `senkani bench`. Lede unchanged.
+- 0 pages filed as `11f-page-rewrites` follow-ups; 0 deeper
+  rewrites needed for the panes slice.
+- Page voice anchors recorded for the panes group:
+  `dashboard.html` for multi-tile dashboards (cites
+  `PaneRefreshScheduler`, `pane_refresh_state`, the per-tile cache
+  values, and the bounded-worker-pool cap),
+  `diff-viewer.html` for layered backing systems (V.12a hunks +
+  V.12b denial pipe each its own H2; cites `HookAnnotationFeed`,
+  `annotation_rate_cap_log`, Migration v13, severity literals;
+  documents what the system explicitly does *not* do — advisory
+  denials don't emit annotations), and `model-manager.html` for
+  state-machine panes (seven-state bullet list with one
+  state-name + role per row, closing with the `senkani doctor`
+  check #5 cross-link).
+- Slice cumulative: 70 of 70 reference pages rubric-passed
+  (20 MCP + 22 CLI + 10 options + 18 panes). 11a rubric pass
+  closes; `website-rebuild-11b-rubric-narrative` becomes pickable.
+
 ### April 30 — Voice rubric pass on 10 options/env reference pages (`website-rebuild-11a-options-rubric`)
 - `## Options & env` section appended to
   `spec/website_rebuild_audit_round11.md`. 10 / 10 options/env pages

@@ -9,6 +9,20 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — Sweep stale CLI count headings on three reference pages (`phase-11f-cli-page-heading-stale-counts`)
+- Follow-up to the parent sidebar sweep
+  (`phase-11f-sitewide-sidebar-stale-counts`). Three page `<h4>`
+  headings carried stale CLI counts that didn't fit the parent's
+  `(20)→(22)` literal-pattern acceptance and were filed for a
+  cleanup round rather than scope-creeping that one.
+- Edits (3 files / 3 lines): `docs/reference/cli.html` `(21)` →
+  `(22)`; `docs/reference/cli/senkani-authorship.html` `(24)` →
+  `(22)`; `docs/reference/cli/senkani-skill.html` `(24)` → `(22)`.
+- Verification: re-running
+  `grep -rEn "MCP tools \([0-9]+\)|CLI commands \([0-9]+\)" docs/`
+  now returns 54 matches, all `MCP tools (20)` or `CLI commands
+  (22)`. No strays remain.
+
 ### April 30 — Sitewide sweep of stale MCP/CLI counts in nav sidebar (`phase-11f-sitewide-sidebar-stale-counts`)
 - Filed by the 11b narrative rubric pass: shared site-nav sidebar
   carried stale tool counts baked into per-page HTML — 6 pages

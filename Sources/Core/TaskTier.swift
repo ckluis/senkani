@@ -137,4 +137,26 @@ public struct BudgetGate: Sendable {
         if let s = budget.perSessionLimitCents { return s * 5 }
         return nil
     }
+
+    /// Phase U.6b — plan-rejection check used by `CombinatorPipeline`.
+    /// Returns a structured `PlanRejection` when a single plan's
+    /// `estimatedCost` exceeds the configured daily-equivalent ceiling,
+    /// otherwise nil. Unlimited budgets (no limits configured) never
+    /// reject. The semantic is "scope-based" matching `clamp(taskTier:)`
+    /// — if one plan would burn the entire daily budget on its own, the
+    /// combinator declines to execute and surfaces the reason to callers.
+    public static func rejectPlan(
+        estimatedCost: Int,
+        budget: BudgetConfig,
+        planId: String
+    ) -> PlanRejection? {
+        guard let ceiling = dailyEquivalentCents(of: budget) else { return nil }
+        guard estimatedCost > ceiling else { return nil }
+        return PlanRejection(
+            reason: "Plan estimatedCost \(estimatedCost)¢ exceeds daily-equivalent ceiling \(ceiling)¢",
+            ceilingCents: ceiling,
+            estimatedCost: estimatedCost,
+            planId: planId
+        )
+    }
 }

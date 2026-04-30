@@ -162,6 +162,8 @@ Per-pane model presets control which Claude model handles tasks:
 
 **`ContextPlan` schema + plan/actual pairing (Phase U.6a, internal API).** First slice of the context-orchestration split. New `ContextPlan` Swift struct in `Sources/Core/` (id / sessionId / plannedFanout / leafSize / reducerChoice / estimatedCost / createdAt) backed by a `context_plans` table (Migration v14) with `insert` / `fetchById` / `fetchBySession`. `agent_trace_event` gains a nullable `plan_id` foreign-key column so combinator-emitted plans can be paired with their realized actuals. The combinator API + BudgetGate rejection path (U.6b) and the variance histogram + 90% pairing eval (U.6c) ride on top of this schema. Pure-Swift plumbing — no UI or operator-visible surface yet.
 
+**`split` / `filter` / `reduce` combinators + BudgetGate plan rejection (Phase U.6b, internal API).** New `Sources/Core/CombinatorPipeline.swift` adds three named operators that map to the closed `ReducerChoice` vocabulary (`split` → `merge`, `filter` → `select`, `reduce` → `summarize`). Each call writes a `ContextPlan` row up-front, asks `BudgetGate.rejectPlan(estimatedCost:budget:planId:)` whether the plan fits the active budget's daily-equivalent ceiling, and either runs the caller's closure (stamping `plan_id` onto the returned `AgentTraceEvent` with `withPlanId(_:)` so callers can't accidentally drop the pairing) or returns a structured `PlanRejection(reason:, ceilingCents:, estimatedCost:, planId:)`. Rejected plans persist the plan row but skip the trace; closure throws propagate with the plan still persisted (matches the reality of mid-execution crashes). The variance histogram + 90% pairing eval ride on this in U.6c.
+
 ---
 
 ## Paired Performance Numbers

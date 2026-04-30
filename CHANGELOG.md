@@ -9,6 +9,44 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — `split` / `filter` / `reduce` combinators + BudgetGate plan rejection (`phase-u6b-combinator-budget-rejection`)
+- Second slice of the U.6 split. Builds on u6a's `ContextPlan`
+  persistence to add the actual write path + the rejection path.
+  Internal API only — no UI yet (the variance histogram + corpus eval
+  ride in u6c).
+- New `Sources/Core/CombinatorPipeline.swift` adds three named
+  operators (`split` / `filter` / `reduce`) that map to the closed
+  `ReducerChoice` vocabulary (`merge` / `select` / `summarize`). Each
+  call writes a `ContextPlan` row up-front, asks `BudgetGate` whether
+  the plan fits the active `BudgetConfig`'s daily-equivalent ceiling,
+  and either runs the caller's closure (stamping `plan_id` onto the
+  returned `AgentTraceEvent` so the trace pairs with the plan) or
+  returns a structured `PlanRejection(reason:, ceilingCents:,
+  estimatedCost:, planId:)` and skips the closure. Rejected plans
+  still land in `context_plans` for analytics; their absence from
+  `agent_trace_event` is the on-disk pairing signal.
+- `BudgetGate.rejectPlan(estimatedCost:budget:planId:)` extends the
+  existing `clamp(taskTier:budget:)` shape — same `dailyEquivalentCents`
+  ceiling, scope-based ("would this single plan burn the entire daily
+  budget on its own?"). Unlimited budgets (no limits configured) never
+  reject. Strict `>` so an exact-ceiling cost still allows.
+- `AgentTraceEvent.withPlanId(_:)` returns a copy with `planId`
+  stamped — used internally by `CombinatorPipeline.run` so callers
+  don't have to thread the id through their closure.
+- The closure-throw third state (plan persisted, trace not, throw
+  propagates) is pinned by a test rather than papered over: it
+  matches the reality of mid-execution crashes, and u6c's residual
+  chart filters `plan_id IS NOT NULL` for the pairing percentage.
+- Tests: +11 in new `CombinatorPipelineTests` suite covering happy
+  paths for all three combinators + reducer-choice persistence,
+  pairing observable from both `+ContextPlanAPI` and `+AgentTraceAPI`,
+  BudgetGate rejection with closure-not-called proof + plan-row
+  still-persisted, unlimited-budget never-rejects, allowed-under-
+  ceiling executes, `BudgetGate.rejectPlan` direct-call field shape,
+  exact-ceiling-allows boundary, closure-throw third state, and
+  `withPlanId` field-by-field stamping. Full safe suite 2205 → 2216
+  green.
+
 ### April 30 — `ContextPlan` schema + `agent_trace_event.plan_id` (`phase-u6a-context-plan-schema`)
 - First slice of the U.6 split (parent had been carved into u6a / u6b /
   u6c on 2026-04-30 to keep each round autonomous-tractable). U.6a is

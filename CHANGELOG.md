@@ -9,6 +9,27 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — Hunk-based `DiffViewerPane` + frozen severity vocab (`phase-v12a-hunks-and-render`, V.12a)
+- `SenkaniApp/Views/DiffViewerPane.swift` switches from a paired-line
+  stream to LCS-hunk blocks driven by the existing
+  `DiffEngine.computeHunks`. Each hunk shows `@@ -orig, +mod` plus
+  red removed / green added rows. The pane gains an annotations
+  sidebar with click-to-jump (`ScrollViewReader.scrollTo(hunk.id)`).
+- `Sources/Core/DiffAnnotation.swift` introduces the value-type
+  `DiffAnnotation` (Identifiable; Codable severity) and
+  `DiffAnnotationLayout` (pure `groupByHunk` / `sidebarOrder` /
+  `severityCounts` helpers — testable without SwiftUI).
+- The four-tag severity vocabulary `[must-fix]` / `[suggestion]` /
+  `[question]` / `[nit]` is **frozen** as part of V.12a. Each case
+  carries a one-sentence purpose docstring, a distinct `visualWeight`
+  for sort, an SF Symbol glyph, and a theme-routed color (`ansiRed`
+  / `ansiBlue` / `ansiYellow` / `ansiCyan`). rawValue is what
+  V.12b+ persistence encodes — renaming a case is a schema break.
+- V.12a ships rendering surface only; `runDiff()` initializes
+  `annotations = []`. V.12b wires `HookRouter` denials in.
+- 12 tests in `Tests/SenkaniTests/DiffAnnotationTests.swift`. Full
+  safe suite 2180 → 2192 (+12) green.
+
 ### April 30 — `FragmentationDetector` + `TrustScorer` + `trust_audits` (`phase-u4a-soft-flag-scaffolding`, U.4a)
 - `Sources/Core/FragmentationDetector.swift` is the soft-flag detector
   — NSLock-guarded per-session sliding window with three observation

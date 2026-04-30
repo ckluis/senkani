@@ -12,6 +12,39 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### Phase V.12a round 1 — Hunk render + severity-tagged annotations sidebar 2026-04-30
+
+Round 1 refactors `SenkaniApp/Views/DiffViewerPane.swift` to show
+LCS hunk blocks with an annotations sidebar; the four-tag severity
+vocabulary `[must-fix]` / `[suggestion]` / `[question]` / `[nit]`
+ships frozen with distinct colors + glyphs + labels. Unit tests
+cover the layout helpers; UI behavior needs eyes-on:
+
+- [ ] **Hunk blocks render with stable headers.** Open the Diff
+  Viewer pane against two files with three or more separated
+  changes. Each hunk should render as a labeled `@@ -orig, +mod`
+  block with red removed / green added rows. Confirm hunk count
+  matches what `git diff` would show.
+- [ ] **Severity chip row in the file bar.** All four severity
+  chips render even when there are no annotations (counts show 0).
+  Order: must-fix / suggestion / question / nit. Hover tooltip
+  shows the severity label.
+- [ ] **Annotation sidebar.** With no annotations the sidebar
+  shows "No annotations on these hunks." (V.12a ships the surface;
+  V.12b wires HookRouter denials in — until then the annotations
+  list is intentionally empty.) The sidebar header shows
+  `Annotations` + count.
+- [ ] **Click-to-jump.** Once V.12b lands or while injecting
+  fixture annotations via debugger, click any annotation row in the
+  sidebar. The matching hunk should scroll into view at the top
+  edge with a brief animation. Clicking the same row twice in a
+  row must still re-trigger the scroll (state resets between
+  clicks).
+- [ ] **Colorblind readability.** Squint or run macOS Color Filters
+  → Greyscale. Each severity must remain distinguishable by glyph
+  + label even with color removed (must-fix octagon, suggestion
+  lightbulb, question questionmark.circle, nit scribble).
+
 ### Phase U.1c round 1 — Tier-distribution chart in AnalyticsView 2026-04-30
 
 Round 1 ships `AgentTraceEventStore.tierDistribution` + `tracesForTier`

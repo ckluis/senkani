@@ -90,7 +90,7 @@ A horizontal canvas of panes. Each pane is a primitive type; you arrange them ho
 - **Savings Test** — fixture bench + live session replay + scenario simulator
 - **Agent Timeline** — timeline of optimization events, interactive tool calls, and scheduled-task runs (start/end/blocked)
 - **Knowledge Base** — project knowledge entities, freshness indicators
-- **Diff Viewer** — side-by-side LCS diff (correct insertions, deletions, replacements)
+- **Diff Viewer** — LCS-hunk blocks with a severity-tagged annotations sidebar (`[must-fix]` / `[suggestion]` / `[question]` / `[nit]`); click any annotation to jump to its hunk
 - **Log Viewer** — searchable log output
 - **Scratchpad** — auto-saving markdown notepad
 - **Schedules** — manage recurring tasks via launchd. Ships with five day-1 presets (`log-rotation`, `morning-brief`, `autoresearch`, `competitive-scan`, `senkani-improve`) installable from the pane or via `senkani schedule preset install <name>`; each preset's resolved command is secret-scanned before install, and missing companion prerequisites (Ollama daemon, `guard-research` hook preset, `senkani brief` CLI, …) surface as warnings, not blockers.

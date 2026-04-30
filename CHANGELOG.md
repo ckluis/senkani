@@ -9,6 +9,42 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — `StdoutSink` + `MacOSLocalSink` + `NotificationRouter` (`phase-t6b-stdout-macos-sinks`, T.6b)
+- `Sources/Core/StdoutSink.swift` writes one canonical JSON line per
+  `NotifyEvent` to an injectable `Writer` (defaults to
+  `FileHandle.standardOutput`). Wire shape is sorted-key,
+  scalar-only, plus an ISO-8601 `ts` —
+  `{"kind":"notify_done","tool":"Edit","summary":"...","ts":"..."}`.
+  `NSLock`-guarded so concurrent fan-outs never interleave partial
+  lines on the same FileHandle.
+- `Sources/Core/MacOSLocalSink.swift` introduces `LocalNotifierBridge`
+  (the App's seam to wire `UNUserNotificationCenter`),
+  `NullLocalNotifierBridge` (default in headless CLI / MCP / CI),
+  `SpyLocalNotifierBridge` (records `(title, subtitle, body)` for
+  tests + can throw on demand), and the `MacOSLocalSink` itself
+  which deterministically maps `NotifyEvent` → banner copy ("Senkani
+  — done / failed / schedule" with the tool or schedule id as
+  subtitle and the human summary/reason as body).
+- `Sources/Core/NotificationRouter.swift` owns the JSON-only matrix
+  describing which named sink fires for which event variant.
+  `~/.senkani/notifications.json` decodes into `Config.sinks[name].events`;
+  sinks listed in `make(sinks:config:)` but absent from the file
+  default to subscribe-all (under-notification hides failures, so
+  the safe default is on). Missing/malformed file → `loadConfig` ⇒
+  `nil`, which the router treats as "every sink subscribes to
+  every variant".
+- `Tests/SenkaniTests/StdoutMacOSSinkTests.swift` (8 new tests,
+  target was 6): wire shape per variant, writer round-trip with
+  serialised access, MacOS sink → spy bridge banner mapping, default
+  Null bridge stays silent, throwing real sink does NOT block other
+  real sinks (closes the round-1 gap that the T.6a tolerance test
+  only proved with `MockNotificationSink`), router event filter,
+  `make` defaults missing sinks to all events, `loadConfig` returns
+  nil on missing file.
+- Deferred (operator follow-ups): `phase-t6b'` for the Settings →
+  Notifications matrix UI; `phase-t6c-pushover-sink` for the
+  Pushover adapter + `senkani doctor --seed-pushover-key`.
+
 ### April 30 — ConfirmationGate scaffolding + NotificationSink protocol (`phase-t6a-confirmation-gate`, T.6a)
 - Migration v11 adds `confirmations` table with `tool_name`,
   `requested_at`, `decided_at`, `decision` (`approve`/`deny`/`auto`),

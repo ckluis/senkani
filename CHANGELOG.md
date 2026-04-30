@@ -9,6 +9,41 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — Voice rubric pass on 10 options/env reference pages (`website-rebuild-11a-options-rubric`)
+- `## Options & env` section appended to
+  `spec/website_rebuild_audit_round11.md`. 10 / 10 options/env pages
+  PASS the 7-dimension rubric (lead-with-outcome, one-idea-per-
+  paragraph, code-blocks-don't-narrate, claims-cite, no-empty-
+  calories, respects-skimmers, fail-open-for-technical-reader).
+  Options pages do not carry the MCP-style `Details` section — the
+  reference lookup contract (env-var name + default + opinionated
+  override consequence) gives the careful reader the next layer
+  down without a separate H2.
+- 1 small-edit fix shipped in-pass:
+  - `docs/reference/options/compound-learning.html` — original lede
+    led with the *labels* of the knobs ("Confidence thresholds,
+    recurrence gates, Gemma enrichment rate limits.") rather than
+    the *outcome* of turning them. Lede now states the outcome
+    ("Tune how aggressively senkani promotes mined patterns from
+    `.recurring` to `.staged` — recurrence floor, confidence
+    floor, sweep cadence.") and surfaces the
+    instruction-patch-never-auto-applies invariant (Schneier gate)
+    in the lede so the security contract isn't buried in an H2.
+    Meta description updated to match. No body changes.
+- 0 pages filed as `11f-page-rewrites` follow-ups; 0 deeper
+  rewrites needed for the options slice.
+- Page voice anchors recorded for the options group: `security.html`
+  for opinionated env-var-as-H2 lookup pages (every section names a
+  specific defense site, file mode, token format, or migration
+  number), and `terse.html` for layered-mechanism options pages
+  (system-prompt injection layer + algorithmic strip layer, each
+  its own H2, with a Synergy section that ties terse back to F/C/S/I
+  via the input-vs-output token framing).
+- Slice cumulative across 11a so far: 52 of 70 reference pages
+  rubric-passed (20 MCP + 22 CLI + 10 options); 18 pane pages
+  remain for `website-rebuild-11a-panes-rubric` to close the rubric
+  pass on the reference quadrant.
+
 ### April 30 — Literal markdown backticks → `<code>` spans on 7 CLI pages (`phase-11f-cli-literal-backticks-pass`)
 - Pure HTML hygiene fix routed out of `website-rebuild-11a-cli-rubric`.
   Seven CLI reference pages — `senkani-init`, `senkani-grammars`,

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Compound-learning env — options reference</title>
-<meta name="description" content="Confidence thresholds, recurrence gates, Gemma enrichment rate limits. Tune via &lt;code&gt;~/.senkani/compound-learning.json&lt;/code&gt; or &lt;code&gt;SENKAN">
+<meta name="description" content="Tune how aggressively senkani promotes mined patterns from .recurring to .staged — recurrence floor, confidence floor, sweep cadence.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -59,7 +59,7 @@
     </nav>
     <span class="quadrant reference">Reference · Information</span>
     <h1 class="page-title">Compound-learning env</h1>
-    <p class="lede">Confidence thresholds, recurrence gates, Gemma enrichment rate limits. Tune via <code>~/.senkani/compound-learning.json</code> or <code>SENKANI_COMPOUND_*</code> env vars.</p>
+    <p class="lede">Tune how aggressively senkani promotes mined patterns from <code>.recurring</code> to <code>.staged</code> — recurrence floor, confidence floor, sweep cadence. Set in <code>~/.senkani/compound-learning.json</code> or via <code>SENKANI_COMPOUND_*</code> env vars; instruction-patch auto-apply is never tunable.</p>
 
     <h2>Thresholds</h2>
     <ul>

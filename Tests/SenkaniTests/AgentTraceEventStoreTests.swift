@@ -76,8 +76,8 @@ struct AgentTraceEventStoreTests {
         }
         let expected: Set<String> = [
             "id", "idempotency_key", "pane", "project", "model", "tier",
-            "feature", "result", "started_at", "completed_at", "latency_ms",
-            "tokens_in", "tokens_out", "cost_cents", "redaction_count",
+            "ladder_position", "feature", "result", "started_at", "completed_at",
+            "latency_ms", "tokens_in", "tokens_out", "cost_cents", "redaction_count",
             "validation_status", "confirmation_required", "egress_decisions",
         ]
         #expect(cols == expected, "table_info columns: \(cols.sorted())")

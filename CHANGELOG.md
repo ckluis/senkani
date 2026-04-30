@@ -9,6 +9,46 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 29 — Routing corpus + ≥0.85 accuracy gate + ladder_position migration (`phase-u1b-routing-corpus`, U.1b)
+- `Tests/SenkaniTests/Fixtures/routing-corpus.json` ships 60 hand-
+  labeled prompts (≥10 per `TaskTier`) drawn from realistic senkani
+  usage — trivial shell verbs, routine build/test/install/lint/format
+  flows, refactor/debug/audit/optimize work, and frontier
+  multi-system / from-scratch / across-multiple work. The corpus is
+  the eval substrate for the U.1c chart: any future tweak to the
+  classifier has to keep accuracy on this substrate above the gate.
+- `ModelRouter.classify(prompt:)` is the new pure-function classifier
+  on the prompt → `TaskTier` axis. It composes existing
+  `scoreDifficulty` with the new `taskTierForScore` boundary mapping
+  (1-2 simple, 3-4 standard, 5-7 complex, 8-10 reasoning), parallel
+  to `tierForScore` on the `ModelTier` axis. No new heuristic — same
+  string-scan signals U.1a already pinned.
+- `ModelRouter.Decision` now carries `taskTier: TaskTier?` (the
+  intent the router chose, after budget-clamp) and
+  `ladderPosition: Int` (which rung produced the resolved
+  `ModelTier` — 0 primary, 1 first fallback, 1 for synthesized
+  fallbacks too). `resolve(taskTier:)` populates both; the legacy
+  preset path leaves `taskTier` nil.
+- Migration v10 appends `ladder_position INTEGER` to
+  `agent_trace_event`. Forward-only — pre-migration rows stay NULL
+  (historical traces predate the FallbackLadder concept; no
+  defensible value to backfill). The existing `tier` column,
+  reserved by V.2 for U.1's eventual writes, is untouched.
+- `AgentTraceEvent` gains `ladderPosition: Int?`; the store insert
+  binds the new column with a nil-aware helper. Existing call sites
+  that omit `ladderPosition` continue to write NULL.
+- `Tests/SenkaniTests/RoutingCorpusTests.swift` (11 new tests, target
+  was 6): corpus-loads, ≥10-per-tier, all-labels-parse,
+  ≥0.85-accuracy gate, four `Decision.taskTier`/`ladderPosition`
+  propagation cases (primary rung, walk-past-local, budget-clamp
+  records the clamped tier, synthesized fallback at position 1),
+  three migration-and-store round-trip cases (schema has the column,
+  round-trips a value, omitted writes NULL).
+- `Tests/SenkaniTests/AgentTraceEventStoreTests.swift` schemaShape
+  expectation extended to include `ladder_position`.
+- `spec/roadmap.md` U.1b row flips to ✅ SHIPPED with per-round
+  detail.
+
 ### April 29 — TaskTier + FallbackLadder + BudgetGate.clamp routing types (`phase-u1a-tier-types`, U.1a)
 - `Sources/Core/TaskTier.swift` introduces `TaskTier` (`simple` /
   `standard` / `complex` / `reasoning`) — names *the work*, distinct

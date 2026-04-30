@@ -528,6 +528,29 @@ public enum MigrationRegistry {
             try exec("CREATE INDEX IF NOT EXISTS idx_annotations_authorship ON annotations(authorship);")
             try exec("CREATE INDEX IF NOT EXISTS idx_annotations_anchor ON annotations(chain_anchor_id, id);")
         },
+        Migration(version: 10, description: "ladder_position on agent_trace_event (Phase U.1b)") { db in
+            // Phase U.1b — pair the existing `tier` column with
+            // `ladder_position` so the U.1c analytics chart can split
+            // "primary rung used" from "first fallback used" from
+            // "synthesized fallback". Forward-only: pre-migration rows
+            // get NULL and stay NULL — historical traces predate the
+            // FallbackLadder concept and have no defensible value to
+            // backfill.
+            //
+            // Idempotency: ALTER guards duplicate column the same way
+            // as v3/v4/v5/v7/v8/v9.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v10", detail: msg)
+            }
+            try exec("ALTER TABLE agent_trace_event ADD COLUMN ladder_position INTEGER;",
+                     allowDuplicateColumn: true)
+        },
     ]
 
     // MARK: - v5 helpers

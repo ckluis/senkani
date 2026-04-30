@@ -27,7 +27,8 @@ final class AgentTraceEventStore: @unchecked Sendable {
 
     // MARK: - Schema
 
-    /// Idempotent — Migration v8 owns the canonical schema. This method
+    /// Idempotent — Migration v8 owns the original canonical schema;
+    /// migration v10 (Phase U.1b) appends `ladder_position`. This method
     /// stays so the store init pattern matches the other stores (every
     /// store calls `setupSchema()` after construction).
     func setupSchema() {
@@ -40,6 +41,7 @@ final class AgentTraceEventStore: @unchecked Sendable {
                     project               TEXT,
                     model                 TEXT,
                     tier                  TEXT,
+                    ladder_position       INTEGER,
                     feature               TEXT,
                     result                TEXT NOT NULL,
                     started_at            REAL NOT NULL,
@@ -72,11 +74,11 @@ final class AgentTraceEventStore: @unchecked Sendable {
             guard let db = parent.db else { return false }
             let sql = """
                 INSERT INTO agent_trace_event
-                    (idempotency_key, pane, project, model, tier, feature, result,
-                     started_at, completed_at, latency_ms, tokens_in, tokens_out,
-                     cost_cents, redaction_count, validation_status,
-                     confirmation_required, egress_decisions)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (idempotency_key, pane, project, model, tier, ladder_position,
+                     feature, result, started_at, completed_at, latency_ms,
+                     tokens_in, tokens_out, cost_cents, redaction_count,
+                     validation_status, confirmation_required, egress_decisions)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(idempotency_key) DO NOTHING;
             """
             var stmt: OpaquePointer?
@@ -88,18 +90,19 @@ final class AgentTraceEventStore: @unchecked Sendable {
             Self.bindOptionalText(stmt, 3, row.project)
             Self.bindOptionalText(stmt, 4, row.model)
             Self.bindOptionalText(stmt, 5, row.tier)
-            Self.bindOptionalText(stmt, 6, row.feature)
-            sqlite3_bind_text(stmt, 7, (row.result as NSString).utf8String, -1, nil)
-            sqlite3_bind_double(stmt, 8, row.startedAt.timeIntervalSince1970)
-            sqlite3_bind_double(stmt, 9, row.completedAt.timeIntervalSince1970)
-            sqlite3_bind_int64(stmt, 10, Int64(row.latencyMs))
-            sqlite3_bind_int64(stmt, 11, Int64(row.tokensIn))
-            sqlite3_bind_int64(stmt, 12, Int64(row.tokensOut))
-            sqlite3_bind_int64(stmt, 13, Int64(row.costCents))
-            sqlite3_bind_int64(stmt, 14, Int64(row.redactionCount))
-            Self.bindOptionalText(stmt, 15, row.validationStatus)
-            sqlite3_bind_int64(stmt, 16, row.confirmationRequired ? 1 : 0)
-            sqlite3_bind_int64(stmt, 17, Int64(row.egressDecisions))
+            Self.bindOptionalInt(stmt, 6, row.ladderPosition)
+            Self.bindOptionalText(stmt, 7, row.feature)
+            sqlite3_bind_text(stmt, 8, (row.result as NSString).utf8String, -1, nil)
+            sqlite3_bind_double(stmt, 9, row.startedAt.timeIntervalSince1970)
+            sqlite3_bind_double(stmt, 10, row.completedAt.timeIntervalSince1970)
+            sqlite3_bind_int64(stmt, 11, Int64(row.latencyMs))
+            sqlite3_bind_int64(stmt, 12, Int64(row.tokensIn))
+            sqlite3_bind_int64(stmt, 13, Int64(row.tokensOut))
+            sqlite3_bind_int64(stmt, 14, Int64(row.costCents))
+            sqlite3_bind_int64(stmt, 15, Int64(row.redactionCount))
+            Self.bindOptionalText(stmt, 16, row.validationStatus)
+            sqlite3_bind_int64(stmt, 17, row.confirmationRequired ? 1 : 0)
+            sqlite3_bind_int64(stmt, 18, Int64(row.egressDecisions))
 
             guard sqlite3_step(stmt) == SQLITE_DONE else { return false }
             return sqlite3_changes(db) > 0
@@ -322,6 +325,14 @@ final class AgentTraceEventStore: @unchecked Sendable {
         }
     }
 
+    private static func bindOptionalInt(_ stmt: OpaquePointer?, _ index: Int32, _ value: Int?) {
+        if let val = value {
+            sqlite3_bind_int64(stmt, index, Int64(val))
+        } else {
+            sqlite3_bind_null(stmt, index)
+        }
+    }
+
     private func execSilent(_ sql: String) {
         guard let db = parent.db else { return }
         var err: UnsafeMutablePointer<CChar>?
@@ -346,8 +357,15 @@ public struct AgentTraceEvent: Sendable, Equatable {
     public let pane: String?
     public let project: String?
     public let model: String?
-    /// Populated by U.1 (TierScorer) once that round lands; nil until then.
+    /// TaskTier (intent) the router chose for this call, e.g. "simple",
+    /// "standard", "complex", "reasoning". Populated by U.1; nil for
+    /// non-routed paths.
     public let tier: String?
+    /// Which rung of the FallbackLadder produced the resolved
+    /// ModelTier. 0 = primary, 1 = first fallback, etc. nil for
+    /// non-routed paths. Phase U.1b — paired with `tier` so the
+    /// analytics chart can split "primary used" from "fell back".
+    public let ladderPosition: Int?
     public let feature: String?
     /// One of: `success`, `error`, `timeout`, `denied`, `cached`. The store
     /// does not validate the vocabulary — pivots count distinct values.
@@ -372,6 +390,7 @@ public struct AgentTraceEvent: Sendable, Equatable {
         project: String? = nil,
         model: String? = nil,
         tier: String? = nil,
+        ladderPosition: Int? = nil,
         feature: String? = nil,
         result: String,
         startedAt: Date,
@@ -390,6 +409,7 @@ public struct AgentTraceEvent: Sendable, Equatable {
         self.project = project
         self.model = model
         self.tier = tier
+        self.ladderPosition = ladderPosition
         self.feature = feature
         self.result = result
         self.startedAt = startedAt

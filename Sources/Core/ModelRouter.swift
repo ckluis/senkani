@@ -94,6 +94,29 @@ public struct ModelRouter: Sendable {
         public let tier: ModelTier
         public let score: Int
         public let reason: String
+        /// TaskTier the router chose (intent), independent of the
+        /// concrete `tier` (engine). nil for the legacy preset path
+        /// where TaskTier wasn't computed.
+        public let taskTier: TaskTier?
+        /// Which rung of the FallbackLadder produced `tier`.
+        /// 0 = primary, 1 = first fallback, 2 = second fallback.
+        /// Synthesized fallbacks (e.g. one-rung-local + no Gemma) report
+        /// the synthetic position as 1.
+        public let ladderPosition: Int
+
+        public init(
+            tier: ModelTier,
+            score: Int,
+            reason: String,
+            taskTier: TaskTier? = nil,
+            ladderPosition: Int = 0
+        ) {
+            self.tier = tier
+            self.score = score
+            self.reason = reason
+            self.taskTier = taskTier
+            self.ladderPosition = ladderPosition
+        }
     }
 
     // MARK: - Difficulty Scoring
@@ -161,6 +184,28 @@ public struct ModelRouter: Sendable {
         case 5...7: return .balanced
         default:    return .frontier  // 8-10
         }
+    }
+
+    /// Map a difficulty score (1-10) to a TaskTier (the *work*).
+    /// Boundaries align with `tierForScore`:
+    ///   1-2 → simple    (local-class — small / trivial)
+    ///   3-4 → standard  (quick-class — routine engineering)
+    ///   5-7 → complex   (balanced-class — non-trivial reasoning)
+    ///   8-10 → reasoning (frontier-class — opt-in deep work)
+    public static func taskTierForScore(_ score: Int) -> TaskTier {
+        switch score {
+        case 1...2: return .simple
+        case 3...4: return .standard
+        case 5...7: return .complex
+        default:    return .reasoning  // 8-10
+        }
+    }
+
+    /// Classify a prompt to its TaskTier — the U.1b corpus gate calls
+    /// this. Pure function over `scoreDifficulty`; no I/O, no allocs
+    /// beyond the input scan.
+    public static func classify(prompt: String) -> TaskTier {
+        taskTierForScore(scoreDifficulty(prompt))
     }
 
     // MARK: - Resolution
@@ -247,12 +292,18 @@ public struct ModelRouter: Sendable {
             } else {
                 tier = .quick
                 let reason = "TaskTier \(desired.rawValue)\(clampNote) → \(tier.displayName) (synthesized fallback — local unavailable, ladder had no second rung)"
-                return Decision(tier: tier, score: 0, reason: reason)
+                return Decision(
+                    tier: tier, score: 0, reason: reason,
+                    taskTier: clamped, ladderPosition: 1
+                )
             }
         }
 
         let rungNote = rungUsed == 0 ? "primary rung" : "rung \(rungUsed + 1)"
         let reason = "TaskTier \(desired.rawValue)\(clampNote) → \(tier.displayName) (\(rungNote))"
-        return Decision(tier: tier, score: 0, reason: reason)
+        return Decision(
+            tier: tier, score: 0, reason: reason,
+            taskTier: clamped, ladderPosition: rungUsed
+        )
     }
 }

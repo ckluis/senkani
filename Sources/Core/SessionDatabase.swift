@@ -52,6 +52,7 @@ public final class SessionDatabase: @unchecked Sendable {
     internal var confirmationStore: ConfirmationStore!
     internal var trustAuditStore: TrustAuditStore!
     internal var annotationRateCapStore: AnnotationRateCapStore!
+    internal var contextPlanStore: ContextPlanStore!
 
     // MARK: - Init
 
@@ -95,6 +96,8 @@ public final class SessionDatabase: @unchecked Sendable {
         trustAuditStore.setupSchema()
         annotationRateCapStore = AnnotationRateCapStore(parent: self)
         annotationRateCapStore.setupSchema()
+        contextPlanStore = ContextPlanStore(parent: self)
+        contextPlanStore.setupSchema()
         runMigrations(path:dbPath)
     }
 
@@ -134,6 +137,8 @@ public final class SessionDatabase: @unchecked Sendable {
         trustAuditStore.setupSchema()
         annotationRateCapStore = AnnotationRateCapStore(parent: self)
         annotationRateCapStore.setupSchema()
+        contextPlanStore = ContextPlanStore(parent: self)
+        contextPlanStore.setupSchema()
         runMigrations(path:path)
     }
 

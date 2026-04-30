@@ -9,6 +9,37 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — `ContextPlan` schema + `agent_trace_event.plan_id` (`phase-u6a-context-plan-schema`)
+- First slice of the U.6 split (parent had been carved into u6a / u6b /
+  u6c on 2026-04-30 to keep each round autonomous-tractable). U.6a is
+  pure-Swift schema plumbing — no combinator API yet, no BudgetGate
+  rejection path, no UI.
+- New `Sources/Core/ContextPlan.swift` exposes the `ContextPlan` struct
+  (id / sessionId / plannedFanout / leafSize / reducerChoice /
+  estimatedCost / createdAt) plus the closed `ReducerChoice` enum
+  (`merge` / `summarize` / `select`).
+- New `Sources/Core/Stores/ContextPlanStore.swift` owns the
+  `context_plans` table; `Sources/Core/SessionDatabase+ContextPlanAPI.swift`
+  exposes `recordContextPlan` / `contextPlan(id:)` /
+  `contextPlans(forSession:)` / `contextPlanCount()` on the
+  SessionDatabase façade.
+- Migration v14 lands `context_plans` (TEXT primary key, session-scoped
+  newest-first index) and ALTERs `agent_trace_event` to add a nullable
+  `plan_id` FK column. `REFERENCES context_plans(id)` is declarative —
+  `PRAGMA foreign_keys` stays at its default (off) per the existing
+  convention (matches `commands.session_id REFERENCES sessions(id)`).
+  Purely additive: a v13 DB upgrades cleanly with no data loss; pre-
+  v14 trace rows read `plan_id` as NULL.
+- `AgentTraceEvent` gains a `planId: String?` field that round-trips
+  through the V.2 canonical-row write path.
+  `SessionDatabase.agentTraceEvent(idempotencyKey:)` reads back the
+  full row (including planId) for tests + diagnostics.
+- Tests: +9 in new `ContextPlanStoreTests` suite covering schema shape
+  on both tables, ContextPlan round-trip, all `ReducerChoice` cases,
+  per-session ordering, duplicate-id dedup, plan_id round-trip on
+  AgentTraceEvent, plan_id-nil staying NULL, and a v13→v14 upgrade
+  fixture asserting no data loss. Full safe suite 2196 → 2205 green.
+
 ### April 30 — Sweep stale CLI count headings on three reference pages (`phase-11f-cli-page-heading-stale-counts`)
 - Follow-up to the parent sidebar sweep
   (`phase-11f-sitewide-sidebar-stale-counts`). Three page `<h4>`

@@ -160,6 +160,8 @@ Per-pane model presets control which Claude model handles tasks:
 
 **Tier-distribution chart in AnalyticsView (Phase U.1c).** A new "Routing — TaskTier Distribution" card in Analytics renders router output across the past 24h or 7d, per `TaskTier`. Stacked view (default) shows totals per tier; Grouped view splits each tier into Primary / Fallback 1 / Fallback 2 bars so operators can spot fallback churn without a second query. Tapping a bar opens a drill-down sheet listing the underlying `agent_trace_event` rows (feature, model, tokens, latency, result). Empty-state copy explicitly links the blank chart back to U.1a so operators don't think the analytics broke.
 
+**`ContextPlan` schema + plan/actual pairing (Phase U.6a, internal API).** First slice of the context-orchestration split. New `ContextPlan` Swift struct in `Sources/Core/` (id / sessionId / plannedFanout / leafSize / reducerChoice / estimatedCost / createdAt) backed by a `context_plans` table (Migration v14) with `insert` / `fetchById` / `fetchBySession`. `agent_trace_event` gains a nullable `plan_id` foreign-key column so combinator-emitted plans can be paired with their realized actuals. The combinator API + BudgetGate rejection path (U.6b) and the variance histogram + 90% pairing eval (U.6c) ride on top of this schema. Pure-Swift plumbing — no UI or operator-visible surface yet.
+
 ---
 
 ## Paired Performance Numbers

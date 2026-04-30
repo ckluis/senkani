@@ -18,6 +18,13 @@ extension SessionDatabase {
         return agentTraceEventStore.countAll()
     }
 
+    /// Read back the full canonical trace row for an idempotency key.
+    /// Round-trips every field including U.6a's `planId`. Returns nil
+    /// if no row matches.
+    public func agentTraceEvent(idempotencyKey: String) -> AgentTraceEvent? {
+        return agentTraceEventStore.fetchByIdempotencyKey(idempotencyKey)
+    }
+
     /// Pivot 1 — per-project rollup (count, total cost, total tokens, mean latency).
     public func agentTracePivotByProject(since: Date? = nil) -> [AgentTraceProjectRollup] {
         return agentTraceEventStore.pivotByProject(since: since)

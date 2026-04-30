@@ -53,7 +53,8 @@ final class AgentTraceEventStore: @unchecked Sendable {
                     redaction_count       INTEGER NOT NULL DEFAULT 0,
                     validation_status     TEXT,
                     confirmation_required INTEGER NOT NULL DEFAULT 0,
-                    egress_decisions      INTEGER NOT NULL DEFAULT 0
+                    egress_decisions      INTEGER NOT NULL DEFAULT 0,
+                    plan_id               TEXT REFERENCES context_plans(id)
                 );
             """)
             execSilent("CREATE INDEX IF NOT EXISTS idx_agent_trace_project_started ON agent_trace_event(project, started_at);")
@@ -77,8 +78,9 @@ final class AgentTraceEventStore: @unchecked Sendable {
                     (idempotency_key, pane, project, model, tier, ladder_position,
                      feature, result, started_at, completed_at, latency_ms,
                      tokens_in, tokens_out, cost_cents, redaction_count,
-                     validation_status, confirmation_required, egress_decisions)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     validation_status, confirmation_required, egress_decisions,
+                     plan_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(idempotency_key) DO NOTHING;
             """
             var stmt: OpaquePointer?
@@ -103,6 +105,7 @@ final class AgentTraceEventStore: @unchecked Sendable {
             Self.bindOptionalText(stmt, 16, row.validationStatus)
             sqlite3_bind_int64(stmt, 17, row.confirmationRequired ? 1 : 0)
             sqlite3_bind_int64(stmt, 18, Int64(row.egressDecisions))
+            Self.bindOptionalText(stmt, 19, row.planId)
 
             guard sqlite3_step(stmt) == SQLITE_DONE else { return false }
             return sqlite3_changes(db) > 0
@@ -118,6 +121,62 @@ final class AgentTraceEventStore: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM agent_trace_event;", -1, &stmt, nil) == SQLITE_OK else { return 0 }
             defer { sqlite3_finalize(stmt) }
             return sqlite3_step(stmt) == SQLITE_ROW ? Int(sqlite3_column_int64(stmt, 0)) : 0
+        }
+    }
+
+    /// Read back the full row for an idempotency key. Returns `nil` if
+    /// no row matches. U.6a uses this to verify `plan_id` round-trips
+    /// through the write path; later phases may grow first-class
+    /// pivots that include `plan_id` directly.
+    func fetchByIdempotencyKey(_ key: String) -> AgentTraceEvent? {
+        return parent.queue.sync {
+            guard let db = parent.db else { return nil }
+            let sql = """
+                SELECT idempotency_key, pane, project, model, tier, ladder_position,
+                       feature, result, started_at, completed_at, latency_ms,
+                       tokens_in, tokens_out, cost_cents, redaction_count,
+                       validation_status, confirmation_required, egress_decisions,
+                       plan_id
+                FROM agent_trace_event
+                WHERE idempotency_key = ?;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (key as NSString).utf8String, -1, nil)
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+
+            func text(_ i: Int32) -> String? {
+                sqlite3_column_type(stmt, i) == SQLITE_NULL
+                    ? nil
+                    : String(cString: sqlite3_column_text(stmt, i))
+            }
+            func int(_ i: Int32) -> Int? {
+                sqlite3_column_type(stmt, i) == SQLITE_NULL
+                    ? nil
+                    : Int(sqlite3_column_int64(stmt, i))
+            }
+            return AgentTraceEvent(
+                idempotencyKey: String(cString: sqlite3_column_text(stmt, 0)),
+                pane: text(1),
+                project: text(2),
+                model: text(3),
+                tier: text(4),
+                ladderPosition: int(5),
+                feature: text(6),
+                result: String(cString: sqlite3_column_text(stmt, 7)),
+                startedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 8)),
+                completedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 9)),
+                latencyMs: Int(sqlite3_column_int64(stmt, 10)),
+                tokensIn: Int(sqlite3_column_int64(stmt, 11)),
+                tokensOut: Int(sqlite3_column_int64(stmt, 12)),
+                costCents: Int(sqlite3_column_int64(stmt, 13)),
+                redactionCount: Int(sqlite3_column_int64(stmt, 14)),
+                validationStatus: text(15),
+                confirmationRequired: sqlite3_column_int64(stmt, 16) != 0,
+                egressDecisions: Int(sqlite3_column_int64(stmt, 17)),
+                planId: text(18)
+            )
         }
     }
 
@@ -467,6 +526,11 @@ public struct AgentTraceEvent: Sendable, Equatable {
     public let validationStatus: String?
     public let confirmationRequired: Bool
     public let egressDecisions: Int
+    /// U.6a — UUID of the `ContextPlan` row this trace was paired with.
+    /// nil for trace rows produced outside the combinator path; the
+    /// FK is declared via `REFERENCES context_plans(id)` for documented
+    /// intent.
+    public let planId: String?
 
     public init(
         idempotencyKey: String,
@@ -486,7 +550,8 @@ public struct AgentTraceEvent: Sendable, Equatable {
         redactionCount: Int = 0,
         validationStatus: String? = nil,
         confirmationRequired: Bool = false,
-        egressDecisions: Int = 0
+        egressDecisions: Int = 0,
+        planId: String? = nil
     ) {
         self.idempotencyKey = idempotencyKey
         self.pane = pane
@@ -506,6 +571,7 @@ public struct AgentTraceEvent: Sendable, Equatable {
         self.validationStatus = validationStatus
         self.confirmationRequired = confirmationRequired
         self.egressDecisions = egressDecisions
+        self.planId = planId
     }
 }
 

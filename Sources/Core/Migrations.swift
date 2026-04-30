@@ -670,6 +670,84 @@ public enum MigrationRegistry {
             try exec("CREATE INDEX IF NOT EXISTS idx_annotation_rate_cap_window ON annotation_rate_cap_log(window_start DESC);")
             try exec("CREATE INDEX IF NOT EXISTS idx_annotation_rate_cap_severity ON annotation_rate_cap_log(severity, created_at DESC);")
         },
+        Migration(version: 14, description: "context_plans table + agent_trace_event.plan_id (Phase U.6a)") { db in
+            // Phase U.6a — first slice of the context-orchestration split.
+            // Introduces `context_plans` (one row per combinator-emitted
+            // plan) and a nullable `plan_id` foreign-key column on
+            // `agent_trace_event` so plan and actual are paired.
+            //
+            // Forward-only and purely additive: pre-migration trace rows
+            // get NULL `plan_id` and stay NULL — non-combinator paths in
+            // U.6b will also write NULL. The FK is declared via
+            // `REFERENCES context_plans(id)` for documented intent
+            // (matches the `commands.session_id REFERENCES sessions(id)`
+            // convention); SQLite `PRAGMA foreign_keys` stays at its
+            // default (off) so this migration cannot regress unrelated
+            // tables. Tampering is detectable downstream by re-deriving
+            // from the chain-anchored sources.
+            //
+            // Idempotency: ALTERs guard duplicate column the same way as
+            // v3/v4/v5/v7/v8/v9/v10. The CREATE TABLE is guarded.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v14", detail: msg)
+            }
+
+            // Migration tests exercise the runner directly against historical
+            // partial schemas, so this migration must be self-contained
+            // rather than assuming `ContextPlanStore.setupSchema` ran. Same
+            // pattern as v3 for `validation_results` and v8 for
+            // `agent_trace_event`.
+            try exec("""
+                CREATE TABLE IF NOT EXISTS context_plans (
+                    id              TEXT PRIMARY KEY,
+                    session_id      TEXT NOT NULL,
+                    planned_fanout  INTEGER NOT NULL,
+                    leaf_size       INTEGER NOT NULL,
+                    reducer_choice  TEXT NOT NULL,
+                    estimated_cost  INTEGER NOT NULL,
+                    created_at      REAL NOT NULL
+                );
+            """)
+            try exec("""
+                CREATE INDEX IF NOT EXISTS idx_context_plans_session
+                    ON context_plans(session_id, created_at DESC);
+            """)
+
+            // Self-contained CREATE for `agent_trace_event` matches the
+            // v8 baseline shape so v14 can run against a DB that was
+            // dropped in at any post-v8 state. The plan_id ALTER below
+            // adds the column on the existing or freshly-created table.
+            try exec("""
+                CREATE TABLE IF NOT EXISTS agent_trace_event (
+                    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                    idempotency_key       TEXT NOT NULL UNIQUE,
+                    pane                  TEXT,
+                    project               TEXT,
+                    model                 TEXT,
+                    tier                  TEXT,
+                    feature               TEXT,
+                    result                TEXT NOT NULL,
+                    started_at            REAL NOT NULL,
+                    completed_at          REAL NOT NULL,
+                    latency_ms            INTEGER NOT NULL DEFAULT 0,
+                    tokens_in             INTEGER NOT NULL DEFAULT 0,
+                    tokens_out            INTEGER NOT NULL DEFAULT 0,
+                    cost_cents            INTEGER NOT NULL DEFAULT 0,
+                    redaction_count       INTEGER NOT NULL DEFAULT 0,
+                    validation_status     TEXT,
+                    confirmation_required INTEGER NOT NULL DEFAULT 0,
+                    egress_decisions      INTEGER NOT NULL DEFAULT 0
+                );
+            """)
+            try exec("ALTER TABLE agent_trace_event ADD COLUMN plan_id TEXT REFERENCES context_plans(id);",
+                     allowDuplicateColumn: true)
+        },
     ]
 
     // MARK: - v5 helpers

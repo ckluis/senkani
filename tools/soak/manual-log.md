@@ -12,6 +12,70 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### onboarding-p2-early-use-milestones — Local-only early-use milestones 2026-05-01
+
+Round 9 of the Luminary onboarding chain. Pure-Foundation model + store +
+progression ship in `Sources/Core/OnboardingMilestone.swift`,
+`Sources/Core/OnboardingMilestoneStore.swift`, and
+`Sources/Core/OnboardingMilestoneProgression.swift`; the SwiftUI surface is
+the new `OnboardingNextStepBanner` rendered inside `WelcomeView`. 15 new
+tests pin every leg (enum order, copy completeness, store round-trip +
+idempotency + reset + 0600 file mode + env gate + path layout, progression
+`next` / `summary` / `elapsed`, source-level Welcome wiring). The pieces
+that need a real-machine pass:
+
+- [ ] **Banner appears empty-state on first launch.** With
+  `~/.senkani/onboarding/milestones.json` deleted (`rm -f ~/.senkani/onboarding/milestones.json`),
+  launch SenkaniApp on an empty workspace. The banner below the task
+  starters should read "Next: Pick a project" with a "0 of 7" progress
+  label. The banner must not block the project chooser or any task
+  starter — they must remain clickable.
+- [ ] **Banner refreshes when a milestone is recorded.** Run a quick
+  manual record from a debug REPL or a tracked-shell pane:
+
+      swift -e 'import Core; OnboardingMilestoneStore.record(.projectSelected)'
+
+  (or use the operator's preferred manual-record path once the
+  `onboarding-p2-milestone-callsites` round lands the real triggers.)
+  Re-render the Welcome screen by closing and reopening any pane that
+  triggers a workspace update. The banner should flip to "Next: Launch
+  your first agent — 1 of 7".
+- [ ] **Banner hides when all seven milestones fire.** Manually
+  populate every milestone (each `record(.X)` call) and confirm the
+  banner disappears entirely from the Welcome surface. The banner
+  must not collapse to "7 of 7 done" or any congratulatory state —
+  it should be gone.
+- [ ] **Privacy gate disables every read and write.** Set
+  `SENKANI_ONBOARDING_MILESTONES=off` in the launch environment
+  (e.g., `launchctl setenv SENKANI_ONBOARDING_MILESTONES off` then
+  re-launch SenkaniApp). The Welcome banner must read the empty-set
+  state regardless of what's on disk. Records made while the gate is
+  off must not create the file at all (`ls
+  ~/.senkani/onboarding/` should not show a `milestones.json` if
+  there wasn't one already).
+- [ ] **File mode is 0600 on real disk.** After a real-machine
+  launch where at least one milestone has been recorded, run
+  `ls -l ~/.senkani/onboarding/milestones.json`. Permissions must
+  read `-rw-------`.
+- [ ] **5-user first-10-minutes research script** (Torres synthesis):
+  recruit five new users (no prior Senkani exposure) and observe each
+  for the first 10 minutes after `SenkaniApp` launch. Don't intervene;
+  let them self-direct. After each session, capture the contents of
+  `~/.senkani/onboarding/milestones.json` plus the user's verbal
+  notes. The dataset to extract:
+    1. Which milestones fired in the 10-minute window?
+    2. Time from launch (file mtime of the first recorded milestone)
+       to each subsequent milestone — this is the time-to-first-win
+       data the `OnboardingMilestoneProgression.elapsed(...)` helper
+       reads.
+    3. Where did each user stall? Note in their words.
+    4. Did the Welcome banner's "Next:" copy match the user's
+       perceived next step? Where did it diverge?
+  The dataset stays local — these milestone logs do not leave the
+  user's machine. Aggregate findings live in
+  `spec/inspirations/early-use-research-2026-05-XX.md` (created by
+  the operator after the sessions); the per-user JSON files do not.
+
 ### onboarding-p2-copy-fcsit-empty-states — FCSIT first-use disclosure + actionable empty states 2026-05-01
 
 Round 8 of the Luminary onboarding chain. Pure-Foundation deciders

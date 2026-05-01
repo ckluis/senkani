@@ -9,6 +9,58 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 1 — Local-only early-use milestones (`onboarding-p2-early-use-milestones`)
+- Round 9 of the Luminary onboarding chain. After the first-value
+  layout shipped (round 8) the open question was whether returning
+  users actually reach value or stall — Torres / Swyx wanted a local
+  signal without sending telemetry off-machine.
+- New `Sources/Core/OnboardingMilestone.swift` — pure enum +
+  copy table for the seven early-use milestones (project selected,
+  agent launched, first tracked event, first non-zero savings,
+  first budget set, first workstream created, first staged
+  proposal reviewed). Each milestone carries a literal title,
+  populating-event description, and imperative next-action so the
+  Welcome banner can render them without duplicating copy.
+- New `Sources/Core/OnboardingMilestoneStore.swift` — file-backed
+  log at `~/.senkani/onboarding/milestones.json`, mode 0600,
+  atomic temp-file→rename writes. Idempotent record (the first
+  observation wins), `reset()` for tests + the rare debug
+  affordance, and an `SENKANI_ONBOARDING_MILESTONES=off` env gate
+  that turns every read and write into a no-op for privacy-strict
+  users.
+- New `Sources/Core/OnboardingMilestoneProgression.swift` — pure
+  derivation: `next(after:)` walks the canonical surfacing order
+  and returns the first milestone the user hasn't hit; `summary`
+  carries the count + next-entry + a stable `"N of 7"` progress
+  label; `elapsed(from:to:in:)` powers the manual-log time-to-
+  first-win research script without an automated telemetry path.
+- `WelcomeView` renders an `OnboardingNextStepBanner` below the
+  task starters. Banner is hidden when `summary.allComplete` so a
+  returning user isn't nagged after onboarding ends; never gates
+  the existing primary flow. Source-level guard pins the wiring.
+- Privacy posture (Cavoukian audit, 2026-05-01): the file holds
+  only `{milestone-key: ISO8601-timestamp}` — no project paths, no
+  session IDs, no agent text. Senkani never reads it off the local
+  machine; manual research uses it in place as observation
+  markers, not as an analytics feed. Module header declares the
+  stance explicitly.
+- Tests: 15 new in `OnboardingMilestoneTests` — enum order, copy
+  completeness, store round-trip + idempotency + reset + env gate
+  + 0600 file mode + path layout, progression `next` /
+  `summary` / `elapsed`, and the source-level WelcomeView wiring
+  guard. `tools/test-safe.sh` covers the same SIGTRAP envelope it
+  did before this round (signal-5 cutoff at the
+  `MigrationTests.migrationsAppliedDoesNotFireOnAlreadyMigratedDB`
+  test was reproduced at the pre-round HEAD; treated as accepted
+  pre-existing risk per `spec/testing.md` "Full-suite hang" notes).
+- Followup-on-deck: a separate round wires
+  `OnboardingMilestoneStore.record(.X)` into the seven actual
+  callsites (TaskStarter launch, BudgetConfig saves,
+  WorkstreamModel additions, sprint-review approve/reject, etc.).
+  Acceptance was scoped to land the model + store + UI surface
+  this round, with the wiring round on the backlog as
+  `onboarding-p2-milestone-callsites`.
+
 ### May 1 — FCSIT first-use disclosure + actionable empty states (`onboarding-p2-copy-fcsit-empty-states`)
 - Round 8 of the Luminary onboarding chain. The first-run user no
   longer faces five unexplained letters ("F C S I T") in the pane

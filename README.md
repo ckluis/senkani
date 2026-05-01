@@ -39,6 +39,13 @@ the pane header trigger a one-shot disclosure popover that names each
 optimizer (Filter, Cache, Secrets, Indexer, Terse) and what it does, and
 every early-use empty state — Analytics, Knowledge, Models, Sprint Review —
 ends in a concrete next action instead of a passive "data will appear" wall.
+A modest **Next: &lt;step&gt;** banner on the Welcome screen surfaces the next
+early-use milestone the user hasn't reached yet (project picked → agent
+launched → first tracked event → first non-zero savings → first budget
+set → first workstream created → first staged proposal reviewed); the
+banner disappears once all seven fire. The milestone log is local-only at
+`~/.senkani/onboarding/milestones.json` (mode 0600, no upload path) — opt
+out with `SENKANI_ONBOARDING_MILESTONES=off`.
 See [docs/guides/first-session.html](docs/guides/first-session.html)
 for the walkthrough.
 

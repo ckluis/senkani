@@ -26,6 +26,8 @@ struct WelcomeView: View {
 
     @State private var claudeAvailable: Bool?
     @State private var ollamaAvailable: Bool?
+    @State private var milestoneSummary: OnboardingMilestoneProgression.Summary =
+        OnboardingMilestoneProgression.summary(completed: [])
 
     /// True when the user has picked at least one project. The
     /// implicit "Default" project (auto-created by `addPane(...)` for
@@ -120,6 +122,13 @@ struct WelcomeView: View {
             }
             .frame(maxWidth: 320)
 
+            // Onboarding next-step banner — surfaces the next early-
+            // use milestone the user hasn't hit yet. Hidden once the
+            // user completes the seven-milestone arc; never blocks
+            // the primary task-starter flow above.
+            OnboardingNextStepBanner(summary: milestoneSummary)
+                .frame(maxWidth: 320)
+
             // Advanced path — the 18-pane gallery. Demoted to a
             // single secondary affordance so first-run users see the
             // task starters first.
@@ -142,7 +151,24 @@ struct WelcomeView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.windowBackgroundColor))
-        .task { await detectTools() }
+        .task {
+            refreshMilestoneSummary()
+            await detectTools()
+        }
+        .onChange(of: workspace.projects.count) { _, _ in
+            refreshMilestoneSummary()
+        }
+    }
+
+    /// Pull the latest set of completed milestones off disk and
+    /// refresh the summary the banner reads. Called on `.task` and
+    /// when the workspace's project count changes (since that is the
+    /// most likely trigger for the first milestone to fire).
+    private func refreshMilestoneSummary() {
+        let completed = Set(OnboardingMilestoneStore.completed().keys)
+        milestoneSummary = OnboardingMilestoneProgression.summary(
+            completed: completed
+        )
     }
 
     /// Tool-availability state for a starter — Claude card needs the
@@ -314,5 +340,54 @@ struct TaskStarterCard: View {
             .opacity(available || detecting ? 1.0 : 0.6)
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Compact "Next: <action>" banner that surfaces the first early-use
+/// milestone the user hasn't reached yet. Hidden when every milestone
+/// has fired so a returning user isn't nagged after onboarding ends.
+///
+/// Reads ``OnboardingMilestoneProgression.summary`` which the parent
+/// view refreshes on `.task` and on workspace changes — the banner
+/// itself stays a pure value-driven view so source-level tests can
+/// pin its contract without a SwiftUI test harness.
+struct OnboardingNextStepBanner: View {
+    let summary: OnboardingMilestoneProgression.Summary
+
+    var body: some View {
+        if let entry = summary.nextEntry, !summary.allComplete {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text("Next:")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        Text(entry.title)
+                            .font(.system(size: 11, weight: .medium))
+                        Spacer(minLength: 0)
+                        Text(summary.progressLabel)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    }
+                    Text(entry.nextAction)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color(.controlBackgroundColor).opacity(0.6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.secondary.opacity(0.18), lineWidth: 0.5)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                "Next early-use milestone: \(entry.title). \(entry.nextAction). \(summary.progressLabel) complete."
+            )
+        }
     }
 }

@@ -9,6 +9,38 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 1 — Chunked test harness (`harness-chunk-test-safe`)
+- `tools/test-safe.sh` rewritten to run the suite in named chunks
+  (parsers / learning / kb / pane / hook / session / onboarding /
+  other), each a separate `swift test --no-parallel --filter <regex>`
+  invocation. A SIGTRAP in one chunk fails only that chunk; the
+  rest run to completion and contribute their pass/fail signal.
+  Per-chunk retry-on-flake (3×, configurable via `TEST_SAFE_RETRIES`)
+  preserved.
+- New modes: `--chunk NAME` (single named chunk; useful for bisect
+  and CI matrix), `--list-chunks` (prints the regex table),
+  `--filter Foo` passthrough preserved for the legacy ad-hoc
+  single-process workflow.
+- Failed chunks emit a `::error title=chunk[NAME] failed::…` GitHub
+  annotation so the PR UI links straight to the offending chunk
+  instead of forcing log archaeology.
+- `.github/workflows/test.yml` simplified: the outer 3-retry loop
+  around the whole suite is gone (chunks retry internally), and a
+  diagnostic step prints the chunk inventory on every run so
+  reviewers see what's in each chunk without reading the script.
+- Motivation: the v0.3.0 batch turned the previously-occasional
+  `swiftpm-testing-helper` SIGTRAP deterministic in the
+  `session` chunk (Migration / SessionDatabase / Chain / Agent /
+  ClaudeSession / ValidationStore area). Single-process harness
+  meant we lost signal for the ~600 tests that would have run
+  after the crash. Chunking restores deterministic per-area
+  signal and gives `bisect-sigtrap-source` (next round) a
+  targeted reproducer.
+- `spec/testing.md` "Full-suite hang" section updated with the
+  chunk table, the new modes, and the current state (7 of 8
+  chunks green in ~35 s wall time; `session` chunk
+  deterministically SIGTRAPs pending the bisect round).
+
 ### May 1 — Local-only early-use milestones (`onboarding-p2-early-use-milestones`)
 - Round 9 of the Luminary onboarding chain. After the first-value
   layout shipped (round 8) the open question was whether returning

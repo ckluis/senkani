@@ -51,21 +51,19 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-
 
-      # Retries cover the known `swiftpm-testing-helper` SIGTRAP flake
-      # documented in spec/testing.md (line 458, deferred-issue list).
-      # Build is SwiftPM-cached after attempt 1, so retries cost only
-      # the test execution (~30s), not a fresh build.
-      - name: Build & test (deterministic harness, retry on flake)
-        run: |
-          for attempt in 1 2 3; do
-            echo "::group::Test attempt $attempt of 3"
-            if ./tools/test-safe.sh; then
-              echo "::endgroup::"
-              echo "Tests passed on attempt $attempt"
-              exit 0
-            fi
-            echo "::endgroup::"
-            echo "::warning::Test attempt $attempt failed — retrying (likely swiftpm-testing-helper SIGTRAP, see spec/testing.md)"
-          done
-          echo "::error::Tests failed on all 3 attempts — not a transient flake"
-          exit 1
+      # tools/test-safe.sh now runs the suite in named chunks, each a
+      # separate `swiftpm-testing-helper` invocation. A SIGTRAP in one
+      # chunk fails only that chunk; the rest still produce signal.
+      # Per-chunk retry-on-flake (3×) lives inside the script — the
+      # outer retry loop the prior workflow used is gone, since the
+      # chunked harness already covers the same flake envelope without
+      # paying for a full re-run on every retry.
+      - name: Build & test (chunked harness)
+        run: ./tools/test-safe.sh
+
+      # Diagnostic surface: print the chunk regex table in the run log
+      # so reviewers reading a failed run can see what's in each chunk
+      # without reading the script source.
+      - name: Chunk inventory (for log archaeology)
+        if: always()
+        run: ./tools/test-safe.sh --list-chunks

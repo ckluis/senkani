@@ -332,6 +332,8 @@ def heading_coverage(spec_dir: Path) -> list[str]:
     for source in ["roadmap.md", "cleanup.md"]:
         legacy = spec_dir / source
         if not legacy.exists():
+            legacy = spec_dir / f"{source}.legacy"
+        if not legacy.exists():
             continue
         for line in legacy.read_text().split("\n"):
             m = re.match(r"^###\s+(.+?)\s*$", line)

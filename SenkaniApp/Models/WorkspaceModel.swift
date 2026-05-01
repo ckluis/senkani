@@ -49,6 +49,7 @@ final class WorkspaceModel {
         guard let project = try? ProjectModel.create(path: path) else { return nil }
         projects.append(project)
         switchToProject(id: project.id)
+        OnboardingMilestoneStore.record(.projectSelected)
         return project
     }
 
@@ -142,6 +143,7 @@ final class WorkspaceModel {
             ws.panes.append(pane)
             project.addWorkstream(ws)
             activePaneID = pane.id
+            OnboardingMilestoneStore.record(.firstWorkstreamCreated)
             return .success(ws)
 
         case .failure(let error):

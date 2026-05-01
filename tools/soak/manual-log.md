@@ -12,6 +12,69 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### onboarding-p2-milestone-callsites — Welcome banner advances on real-machine first run 2026-05-01
+
+Round wired `OnboardingMilestoneStore.record(.X)` into the seven
+production callsites so the Welcome banner advances as users use
+Senkani. Behavioural tests cover the four Core-side callsites
+(`SessionDatabase.recordTokenEvent`, `BudgetConfig.loadFromDisk`,
+`SprintReviewViewModel.accept`/`.reject`); the three SwiftUI-side
+callsites (`WorkspaceModel.addProject`, `LaunchCoordinator.launchPane`,
+`WorkspaceModel.addWorkstream`) are guarded source-level only, since
+`SenkaniTests` cannot link `SenkaniApp`. Acceptance criterion was an
+explicit real-machine check that the banner advances on at least
+three of the seven milestones — that check belongs here.
+
+Walk-through (one user, one fresh launch, ~10 minutes):
+
+- [ ] **Reset state.** `rm -f ~/.senkani/onboarding/milestones.json`
+  then launch SenkaniApp. The Welcome banner should read **Next: Pick
+  a project** with progress label `0 of 7`.
+- [ ] **Pick a project** via the project chooser. The banner should
+  flip to **Next: Launch your first agent** (`1 of 7`). Verifies
+  `WorkspaceModel.addProject` records `.projectSelected`.
+- [ ] **Start Claude in `<project>`** (or any task starter). After the
+  pane opens, the banner should advance to **Next: Watch a tool call
+  get tracked** (`2 of 7`). Verifies `LaunchCoordinator.launchPane`
+  records `.agentLaunched`.
+- [ ] **Run any Claude command** (e.g. ask Claude to read a file). The
+  Agent Timeline pane should show the event within ~1 s, and the
+  banner should advance to **Next: Save your first tokens** (`3 of 7`).
+  Verifies `SessionDatabase.recordTokenEvent` records
+  `.firstTrackedEvent`. The fourth milestone (`.firstNonzeroSavings`)
+  fires the moment the Filter / Cache layer reports a non-zero saving;
+  on Claude Code via senkani_read this typically lands inside the
+  same first session.
+- [ ] **Set a daily budget.** Edit `~/.senkani/budget.json` to add a
+  non-default limit, e.g. `{"dailyLimitCents":1000,"softLimitPercent":0.8}`.
+  Trigger a tool call so `BudgetConfig.load()` re-reads from disk
+  (the cache TTL is 30s; a fresh launch also works). The banner
+  should advance to **Next: Create a workstream** (`5 of 7`).
+  Verifies `BudgetConfig.loadFromDisk` records `.firstBudgetSet`.
+- [ ] **Create a non-default workstream** in the project sidebar.
+  After the worktree creation succeeds the banner should advance to
+  **Next: Review a staged proposal** (`6 of 7`). Verifies
+  `WorkspaceModel.addWorkstream` records `.firstWorkstreamCreated`.
+- [ ] **Open Sprint Review** and approve or reject a staged
+  proposal (any kind). The banner should disappear (`7 of 7`,
+  `summary.allComplete == true`). Verifies
+  `SprintReviewViewModel.accept`/`.reject` record
+  `.firstStagedProposalReviewed`.
+- [ ] **Verify the privacy posture.** `cat ~/.senkani/onboarding/milestones.json`
+  — every entry should be `{milestone-key: ISO8601-timestamp}` only,
+  no project paths, no session IDs. Then re-run with
+  `SENKANI_ONBOARDING_MILESTONES=off senkani` (or the same env on
+  the SenkaniApp launch) and confirm the file is not re-written.
+- [ ] **Optional regression check.** Re-trigger any milestone (e.g.
+  add a second project). The on-disk timestamp for `.projectSelected`
+  must remain unchanged — the store guarantees first-observation wins
+  and callsites must not double-write.
+
+Tick the date line below when this walkthrough has been done on a
+real machine.
+
+- [ ] Walkthrough completed: `_____` (date / initials)
+
 ### sessiondb-deinit-regression-guard — Periodic revert-and-verify the guard 2026-05-01
 
 Round shipped `Tests/SenkaniTests/SessionDatabaseDeinitTests.swift`, a

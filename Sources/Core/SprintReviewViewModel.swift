@@ -239,6 +239,7 @@ public enum SprintReviewViewModel {
             try CompoundLearning.applyWorkflowPlaybook(
                 id: rowId, projectRoot: projectRoot, db: db)
         }
+        OnboardingMilestoneStore.record(.firstStagedProposalReviewed)
     }
 
     /// Reject a staged row — state-only transition. No filesystem side
@@ -257,6 +258,7 @@ public enum SprintReviewViewModel {
         case .workflowPlaybook:
             try LearnedRulesStore.rejectWorkflowPlaybook(id: rowId)
         }
+        OnboardingMilestoneStore.record(.firstStagedProposalReviewed)
     }
 
     // MARK: - Helpers

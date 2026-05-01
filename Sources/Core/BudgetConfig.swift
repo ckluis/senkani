@@ -194,9 +194,12 @@ extension BudgetConfig {
     }
 
     /// Load config from disk. JSON file takes priority, then env vars, then defaults.
-    fileprivate static func loadFromDisk() -> BudgetConfig {
+    ///
+    /// `path` defaults to ``budgetFilePath`` — tests pass an injected
+    /// path so they can verify the on-disk decode path without
+    /// touching the developer's real `~/.senkani/budget.json`.
+    static func loadFromDisk(path: String = budgetFilePath) -> BudgetConfig {
         let fm = FileManager.default
-        let path = budgetFilePath
 
         // Try JSON file first
         if fm.fileExists(atPath: path) {
@@ -242,6 +245,9 @@ extension BudgetConfig {
                     config.softLimitPercent = 0.8
                 }
 
+                if config.isNonDefault {
+                    OnboardingMilestoneStore.record(.firstBudgetSet)
+                }
                 return config
             } catch {
                 logWarning("Failed to decode budget.json: \(error.localizedDescription)")
@@ -250,6 +256,16 @@ extension BudgetConfig {
         }
 
         return loadFromEnv()
+    }
+
+    /// True when at least one explicit limit is set. Used to decide
+    /// whether the onboarding "first budget set" milestone should fire
+    /// — softLimitPercent is excluded because it has a non-nil default
+    /// and would otherwise always count as "non-default".
+    var isNonDefault: Bool {
+        perSessionLimitCents != nil
+            || dailyLimitCents != nil
+            || weeklyLimitCents != nil
     }
 
     /// Fallback: load from environment variables.

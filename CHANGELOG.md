@@ -9,6 +9,43 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 1 — Early-use milestones wired into the seven real triggers (`onboarding-p2-milestone-callsites`)
+- Follow-up to `onboarding-p2-early-use-milestones`. That round
+  shipped the milestone model, store, and Welcome banner; this
+  round wires `OnboardingMilestoneStore.record(.X)` into the seven
+  production callsites so the banner advances as users use Senkani.
+- Records: `WorkspaceModel.addProject` →
+  `.projectSelected`; `LaunchCoordinator.launchPane` →
+  `.agentLaunched`; `SessionDatabase.recordTokenEvent` →
+  `.firstTrackedEvent` (and `.firstNonzeroSavings` when
+  `savedTokens > 0`); `BudgetConfig.loadFromDisk` →
+  `.firstBudgetSet` when the decoded config is non-default;
+  `WorkspaceModel.addWorkstream` → `.firstWorkstreamCreated`;
+  `SprintReviewViewModel.accept`/`.reject` →
+  `.firstStagedProposalReviewed`.
+- Idempotent at every callsite: no caller pre-checks
+  `isCompleted` — the store guarantees first-observation wins.
+- Privacy posture unchanged: every callsite goes through the
+  gated `record()` path which respects
+  `SENKANI_ONBOARDING_MILESTONES=off` and writes only
+  `{milestone-key: ISO8601-timestamp}` to
+  `~/.senkani/onboarding/milestones.json`.
+- Adds `OnboardingMilestoneStore.withTestHome(_:_:)` (sync,
+  `NSRecursiveLock`-guarded — same shape as
+  `BudgetConfig.withTestOverride`) so behavioural tests can
+  redirect every default-home call inside the body to a temp
+  path, never touching the developer's real
+  `~/.senkani/onboarding/milestones.json`.
+- New `Tests/SenkaniTests/OnboardingMilestoneCallsiteTests.swift`
+  covers all seven callsites — Core-side callsites get
+  behavioural assertions under `withTestHome`; SwiftUI-side
+  callsites get source-level guards in the same shape as
+  `LaunchCoordinatorRoutingTests`.
+- Side update: `BudgetConfig.loadFromDisk` now exposes a
+  `path:` parameter (default `budgetFilePath`) and adds
+  `BudgetConfig.isNonDefault` so the decode path can be
+  exercised in tests without touching `~/.senkani/budget.json`.
+
 ### May 1 — Deinit-on-queue regression guard (`sessiondb-deinit-regression-guard`)
 - New `Tests/SenkaniTests/SessionDatabaseDeinitTests.swift` exercises
   the exact race that produced the `swiftpm-testing-helper` SIGTRAP

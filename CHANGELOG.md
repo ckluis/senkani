@@ -9,6 +9,50 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 1 — First-value layout assembled on first agent launch (`onboarding-p1-first-value-layout`)
+- Round 7 of the Luminary onboarding chain. After a project is
+  chosen, picking **Ask Claude** or **Open a tracked shell** from
+  the Welcome surface no longer drops the user into a single
+  terminal pane and waits for them to discover the Agent Timeline
+  manually. The first agent launch now assembles a witnessed
+  layout: terminal pane plus a live **Agent Timeline** pane next
+  to it so optimization events surface as the user works.
+- New `Sources/Core/FirstValueLayout.swift` — pure decider that
+  resolves a `TaskStarter.Kind` plus the workspace's existing pane
+  type IDs into the spec list the launcher should add. Claude and
+  tracked-shell starters get the primary pane plus an `agentTimeline`
+  insight pane on a true first-run; Ollama and Inspect skip the
+  insight pane because their primary pane already carries its own
+  proof/status surface (the OllamaLauncher header / the code
+  editor). Subsequent same-starter clicks in a non-empty workspace
+  add ONLY the primary pane — re-clicking "Ask Claude" never stacks
+  duplicate timelines next to duplicate terminals.
+- `ContentView.assembleFirstValueLayout(for:command:)` is the new
+  starter→pane funnel. The Claude launch sheet's `onLaunch` and the
+  Welcome non-Claude branches both flow through it, so every spec
+  the decider returns lands through `LaunchCoordinator.launchPane`
+  — hook registration, session-watcher start, and workspace persist
+  fire for the insight pane the same way they fire for the primary.
+- `AgentTimelinePane` empty-state copy retargeted at the first-run
+  user: instead of the abstract "Run an MCP tool to see it here"
+  the pane now reads "Use the terminal next to this pane — every
+  Senkani-aware tool call appears here with bytes saved", which
+  names the concrete next action (the terminal it's docked beside)
+  and what the user will see when it works.
+- Tests: 8 new in `FirstValueLayoutTests` covering primary+insight
+  on first run, primary-only on subsequent runs, the Ollama/Inspect
+  no-insight rule, and a source-level guard that ContentView
+  actually wires through the decider. Existing
+  `TaskStarterCatalogTests` regression check rewritten to assert
+  the consolidated `case .ollama, .trackedShell, .inspectProject:`
+  branch and the `assembleFirstValueLayout(for: starter.kind, …)`
+  call site rather than the old per-kind hardcoded `addPane`
+  switch.
+- Manual-log entry queues a real-machine first-launch visual
+  check at laptop and external-display widths so the multi-pane
+  starter layout's responsive behaviour gets eyes on it before
+  ship.
+
 ### April 30 — Task-starter Welcome replaces feature inventory (`onboarding-p1-task-presets`)
 - Round 5 of the Luminary onboarding chain. The first-run Welcome
   surface now reads as a list of jobs the user might want to do,

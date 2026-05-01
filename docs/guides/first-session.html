@@ -76,7 +76,7 @@
     <div class="step">
       <div class="step-num">Step 3</div>
       <h3>Start the agent</h3>
-      <p>Click <strong>Ask Claude in &lt;project&gt;</strong>. Senkani opens a launcher sheet for picking the Claude command, then opens a Terminal pane in the project root and runs the chosen launcher; the MCP handshake happens automatically. The pane header reads the actual working directory — <code>~/Desktop/projects/&lt;project&gt;</code> — not a bare <code>~</code>.</p>
+      <p>Click <strong>Ask Claude in &lt;project&gt;</strong>. Senkani opens a launcher sheet for picking the Claude command, then assembles the first-value layout: a Terminal pane in the project root running the chosen launcher (the MCP handshake happens automatically) and an <strong>Agent Timeline</strong> pane next to it so optimization events appear as the agent works — no need to open it manually. The Terminal pane header reads the actual working directory — <code>~/Desktop/projects/&lt;project&gt;</code> — not a bare <code>~</code>. Re-clicking <strong>Ask Claude</strong> later only adds another Terminal pane; the timeline isn't duplicated.</p>
       <p>Above the terminal output, the active terminal pane shows a <strong>Senkani Active</strong> proof strip with five labelled chips. Each chip flips to <code>OK</code> when its component is wired up; if any are missing, a banner row beneath the chips surfaces the next runnable action — no waiting for the first intercepted command to learn whether Senkani is in the loop.</p>
       <ul>
         <li><strong>PROJECT</strong> — a project root is selected for the pane.</li>
@@ -89,8 +89,8 @@
 
     <div class="step">
       <div class="step-num">Step 3b (optional)</div>
-      <h3>Open inspection panes</h3>
-      <p>⌘K → "Analytics". ⌘K → "Agent Timeline". Two extra panes side by side with the Terminal pane — the optimization layer is already running; these surfaces let you watch it.</p>
+      <h3>Open extra inspection panes</h3>
+      <p>The Agent Timeline already opened next to the Terminal as part of the first-value layout. To see compression numbers across every pane, ⌘K → "Analytics". To watch a specific pane's filter pipeline, ⌘K → "Savings Test". The optimization layer is already running; these surfaces let you watch it from a different angle.</p>
     </div>
 
     <div class="step">

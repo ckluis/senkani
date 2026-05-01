@@ -175,19 +175,23 @@ struct TaskStarterCatalogTests {
                 "WelcomeView must surface a 'Show all panes' affordance — the full gallery is one level deeper now.")
     }
 
-    @Test("ContentView wires Welcome onStartTask through LaunchCoordinator and the Claude sheet")
+    @Test("ContentView wires Welcome onStartTask through the first-value assembler and the Claude sheet")
     func contentViewWiresStartTask() {
         let src = stripLineComments(read("SenkaniApp/Views/ContentView.swift"))
         #expect(src.contains("private func startTask("),
                 "ContentView must expose a startTask(_:) resolver.")
         #expect(src.contains("case .claude:") && src.contains("showClaudeLaunch = true"),
                 "Claude starter must open the ClaudeLaunchSheet (deterministic mapping).")
-        #expect(src.contains("case .ollama:") && src.contains("type: .ollamaLauncher"),
-                "Ollama starter must launch an ollamaLauncher pane.")
-        #expect(src.contains("case .trackedShell:") && src.contains("type: .terminal"),
-                "Tracked-shell starter must launch a terminal pane.")
-        #expect(src.contains("case .inspectProject:") && src.contains("type: .codeEditor"),
-                "Inspect-project starter must launch the code editor pane.")
+        // After `onboarding-p1-first-value-layout` the Ollama / Shell /
+        // Inspect kinds delegate the kind→PaneType mapping to
+        // `FirstValueLayout`. The startTask resolver no longer
+        // hardcodes those mappings — the SwiftUI layer just passes
+        // `starter.kind` to the assembler. The actual primary-pane
+        // type per kind is covered by FirstValueLayoutTests.
+        #expect(src.contains("case .ollama, .trackedShell, .inspectProject:"),
+                "Non-Claude starters must route through a single assembler branch.")
+        #expect(src.contains("assembleFirstValueLayout(for: starter.kind"),
+                "startTask must hand the kind to assembleFirstValueLayout.")
         #expect(src.contains("onShowAllPanes: { showAddPaneSheet = true }"),
                 "ContentView must wire onShowAllPanes to the existing AddPaneSheet (the advanced path).")
     }

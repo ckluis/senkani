@@ -105,7 +105,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showClaudeLaunch) {
             ClaudeLaunchSheet { command in
-                addPane(type: .terminal, title: "Claude Code", command: command)
+                assembleFirstValueLayout(for: TaskStarter.Kind.claude, command: command)
             }
         }
         .onAppear {
@@ -413,20 +413,42 @@ struct ContentView: View {
 
     /// Resolve a `TaskStarter` from the Welcome screen into a concrete
     /// launch. Each `kind` maps to exactly one outcome — Claude opens
-    /// the launch sheet (which then routes through `addPane`),
-    /// everything else lands directly through `LaunchCoordinator`.
+    /// the launch sheet first (the sheet's onLaunch routes through
+    /// `assembleFirstValueLayout`), everything else flows straight into
+    /// the assembler so the first-run user gets the multi-pane
+    /// witnessed layout without manually opening Agent Timeline.
     /// Keep this switch exhaustive so `TaskStarterCatalog` additions
     /// fail to compile until they have a launch path.
     private func startTask(_ starter: TaskStarter) {
         switch starter.kind {
         case .claude:
             showClaudeLaunch = true
-        case .ollama:
-            addPane(type: .ollamaLauncher, title: "Ollama", command: "")
-        case .trackedShell:
-            addPane(type: .terminal, title: "Terminal", command: "")
-        case .inspectProject:
-            addPane(type: .codeEditor, title: "Code", command: "")
+        case .ollama, .trackedShell, .inspectProject:
+            assembleFirstValueLayout(for: starter.kind, command: "")
+        }
+    }
+
+    /// First-value layout assembler. Resolves the starter kind through
+    /// `FirstValueLayout`, then drives `LaunchCoordinator` once per
+    /// returned pane spec so the side effects (hook reg, session
+    /// watcher, workspace save) fire for every pane added — not just
+    /// the primary one. Idempotent by construction: the layout decider
+    /// reads `workspace` and only emits an insight pane when the
+    /// workspace was empty.
+    private func assembleFirstValueLayout(
+        for kind: TaskStarter.Kind,
+        command: String
+    ) {
+        let existingTypeIDs = workspace.allPanes.map { $0.paneType.rawValue }
+        let specs = FirstValueLayout.assemble(
+            for: kind, existingPaneTypeIDs: existingTypeIDs
+        )
+        for spec in specs {
+            let paneType = PaneType(rawValue: spec.typeID) ?? .terminal
+            let cmd = (spec.role == .primary) ? command : ""
+            ensureLauncher().launchPane(
+                type: paneType, title: spec.title, command: cmd
+            )
         }
     }
 

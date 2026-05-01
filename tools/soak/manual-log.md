@@ -12,6 +12,66 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### onboarding-p1-first-value-layout — first-value layout 2026-05-01
+
+The first agent launch now assembles a witnessed layout instead of
+dropping the user into a single Terminal pane. Picking
+**Ask Claude in <project>** or **Open a tracked shell** opens a
+Terminal pane plus an Agent Timeline insight pane next to it, so
+optimization events appear as the user works without anyone opening
+⌘K. Picking Ollama or Inspect skips the insight pane (their primary
+panes already carry their own proof/status surface). Subsequent
+clicks of the same starter add only the primary pane — no duplicate
+timelines. Decider lives in `Sources/Core/FirstValueLayout.swift`
+(unit-tested across all four kinds and idempotency); SwiftUI funnel
+is `ContentView.assembleFirstValueLayout(for:command:)`. The
+behavioral pieces — actual layout / responsive widths / repeated
+clicks — need a real-machine pass:
+
+- [ ] **First-run Ask Claude opens Terminal + Agent Timeline.**
+  Empty workspace. Pick a project, click Ask Claude, complete the
+  launch sheet. Both panes should appear side by side. The Agent
+  Timeline empty state should read "No optimization events yet
+  / Use the terminal next to this pane — every Senkani-aware tool
+  call appears here with bytes saved."
+- [ ] **First-run Open a tracked shell opens Terminal + Agent
+  Timeline.** From a fresh empty workspace, click the tracked-shell
+  starter. Same layout: Terminal + Agent Timeline. The Terminal
+  header should read the project root (or `home folder` if no
+  project chosen).
+- [ ] **First-run Use Ollama opens ONLY the launcher.** Empty
+  workspace, pick a project, click Use Ollama. Only the
+  OllamaLauncher pane should appear — no Agent Timeline next to
+  it. The OllamaLauncher's own header is the proof/status surface.
+- [ ] **First-run Inspect opens ONLY the code editor.** Empty
+  workspace, pick a project, click Inspect this project. Only the
+  codeEditor pane should appear.
+- [ ] **Re-clicking Ask Claude does not stack a second Agent
+  Timeline.** From the post-first-run state (Terminal + Agent
+  Timeline), open the Welcome again (close all panes or use the
+  ⌘K palette to reopen Welcome) and click Ask Claude a second
+  time. Only one new Terminal should appear; the Agent Timeline
+  count must not increase.
+- [ ] **Layout fits a 13" laptop display.** With Terminal + Agent
+  Timeline visible, the canvas should scroll horizontally if the
+  combined column widths exceed the viewport (existing behaviour).
+  Both panes should be readable without manual resize. No truncated
+  pane titles, no clipped chips on the proof strip.
+- [ ] **Layout uses an external display sensibly.** On a 27"+ external
+  monitor, the same Terminal + Agent Timeline layout should still
+  show both panes side-by-side without leaving most of the canvas
+  empty (the existing per-type `columnWidth` defaults are
+  responsible — confirm they don't look stranded).
+- [ ] **Layout persists through close/reopen.** With the first-value
+  layout open, quit the app and relaunch. The Terminal + Agent
+  Timeline pair should restore in their original positions
+  (workspace persistence runs via `LaunchCoordinator`'s save call).
+- [ ] **Agent Timeline empty-state copy is legible at the smallest
+  default width.** The new copy is multi-line and centered with
+  `padding(.horizontal, 16)`. On a default-width Agent Timeline
+  pane the body text should wrap cleanly — no awkward single-word
+  lines, no clipping.
+
 ### onboarding-p1-task-presets — task-starter Welcome 2026-04-30
 
 The first-run Welcome screen now renders four outcome-first task

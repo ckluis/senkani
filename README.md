@@ -29,7 +29,12 @@ The empty-workspace surface is project-first and task-first: pick a project
 folder, then choose one of four verb-led starters — **Ask Claude in &lt;project&gt;**,
 **Use Ollama in &lt;project&gt;**, **Open a tracked shell**, or **Inspect this project**.
 The full 18-pane gallery is one level deeper behind a **Show all panes** link
-for advanced users. See [docs/guides/first-session.html](docs/guides/first-session.html)
+for advanced users. The first agent launch auto-assembles a witnessed layout —
+**Ask Claude** and **Open a tracked shell** open the terminal next to a live
+**Agent Timeline** pane so optimization events appear as the user works, with
+no manual "open Agent Timeline" step. Subsequent launches add only the primary
+pane so re-clicking a starter never stacks duplicate timelines.
+See [docs/guides/first-session.html](docs/guides/first-session.html)
 for the walkthrough.
 
 ---

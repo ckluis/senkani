@@ -380,7 +380,16 @@ def main() -> int:
         # Try the renamed legacy path
         legacy_backlog = spec_dir / "autonomous-backlog.yaml.legacy"
     if not legacy_backlog.exists():
-        print(f"FATAL: no legacy backlog found at {legacy_backlog}", file=sys.stderr)
+        # Post-migration state: legacy files have been deleted after the
+        # soak period. Nothing to verify against — the new tree is the
+        # only source of truth now.
+        new_tree = spec_dir / "autonomous"
+        if new_tree.exists():
+            print(f"[roundtrip] no legacy backlog found at {spec_dir}/autonomous-backlog.yaml{{,.legacy}}.")
+            print(f"[roundtrip] {new_tree} exists — migration is complete and the legacy soak has ended.")
+            print(f"[roundtrip] nothing to verify; the new tree is the canonical source of truth.")
+            return 0
+        print(f"FATAL: no legacy backlog and no new tree at {spec_dir}", file=sys.stderr)
         return 2
 
     print(f"[roundtrip] Pass 1: reconstruct + diff vs {legacy_backlog.name}")

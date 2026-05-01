@@ -9,6 +9,32 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — First-run docs realigned with shipped behavior (`onboarding-p0-docs-truth-pass`)
+- Round 4 of the Luminary onboarding chain. After P0 rounds 1–3
+  changed the launch path (single `LaunchCoordinator`, project-first
+  Welcome flow, Senkani Active proof strip), the public install /
+  Claude Code / Cursor-Copilot / first-session guides and the
+  `senkani-init` reference still advertised flags the binary has
+  never accepted (`senkani init --hooks-only`, `senkani init
+  --dry-run`) and an MCP-registration step that lives in SenkaniApp's
+  launch path, not in `senkani init`. Procida's red flag: docs
+  currently break trust before the app gets a chance.
+- Updated `docs/guides/install.html`, `docs/guides/claude-code.html`,
+  `docs/guides/cursor-copilot.html`, `docs/guides/first-session.html`,
+  `docs/guides.html` (cards), `docs/reference/cli.html` (listing),
+  `docs/reference/cli/senkani-init.html`, and the README quick-start.
+  `senkani init` is now described accurately as project-only hook
+  registration; SenkaniApp's launch-time auto-registration is named
+  separately. The first-session guide names the proof strip's five
+  chips (PROJECT / MCP / HOOKS / TRACK / EVENTS) so users can read
+  the strip before the first command runs.
+- Tests: 2 new tests in
+  `Tests/SenkaniTests/DocsTruthGuardTests.swift`. A negative-list
+  guard fails if any of the eight first-run surfaces re-introduces
+  a banned phrase (`init --hooks-only`, `init --dry-run`, …); a
+  positive-list test asserts the senkani-init reference page
+  continues to name the real flags (`--uninstall`, `--hook-path`).
+
 ### April 30 — Senkani Active proof strip on the active terminal pane (`onboarding-p0-active-proof-strip`)
 - Round 3 of the Luminary onboarding chain. The active terminal
   pane now renders a five-chip proof strip at the top of its body —

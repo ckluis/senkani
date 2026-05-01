@@ -11,15 +11,19 @@ One macOS binary, two jobs: a **native multi-pane workspace** (SwiftUI, sub-3ms 
 ```bash
 git clone https://github.com/ckluis/senkani.git && cd senkani
 swift build -c release
-.build/release/SenkaniApp           # launch the workspace
+.build/release/SenkaniApp           # launch the workspace (auto-registers global MCP + hook wrapper)
+cd /path/to/your/project
+.build/release/senkani init         # register PreToolUse + PostToolUse hooks for THIS project
 .build/release/senkani doctor       # verify setup + MCP registration
 ```
 
-The MCP server auto-registers globally in `~/.claude/settings.json` on first
-launch and only activates inside Senkani-managed terminal panes (gated by the
-`SENKANI_PANE_ID` env var). Non-Senkani terminals never see the tools even if
-the app is running. See [CHANGELOG.md](CHANGELOG.md) for the full shipped
-feature list and roadmap.
+SenkaniApp's first launch installs the hook wrapper at `~/.senkani/bin/senkani-hook`
+and writes the global MCP entry to `~/.claude/settings.json`. The MCP server only
+activates inside Senkani-managed terminal panes (gated by `SENKANI_PANE_ID`) — non-
+Senkani terminals never see the tools even if the app is running. `senkani init`
+is per-project: it only writes hook entries to `<project>/.claude/settings.json`,
+never global. See [CHANGELOG.md](CHANGELOG.md) for the full shipped feature list
+and roadmap.
 
 ---
 

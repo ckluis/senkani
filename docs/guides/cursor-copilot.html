@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Wire up Cursor / Copilot — guide</title>
-<meta name="description" content="Cursor and Copilot don&#x27;t speak MCP. Install the hooks-only variant so you still get the filter pipeline + smart denials on their built-in Read/Bash.">
+<meta name="description" content="Cursor and Copilot don&#x27;t speak MCP. senkani init is already hooks-only by design — run it per project and you get the filter pipeline + smart denials on their built-in Read/Bash.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -58,15 +58,16 @@
     </nav>
     <span class="quadrant guide">Guide · How-to</span>
     <h1 class="page-title">Wire up Cursor / Copilot</h1>
-    <p class="lede">Cursor and Copilot don't speak MCP. Install the hooks-only variant so you still get the filter pipeline + smart denials on their built-in Read/Bash.</p>
+    <p class="lede">Cursor and Copilot don't speak MCP. <code>senkani init</code> is already hooks-only by design — run it per project and you get the filter pipeline + smart denials on their built-in Read/Bash.</p>
 
-    <h2>Install hooks only</h2>
-    <pre class="code">senkani init --hooks-only</pre>
-    <p>This skips the MCP server registration in <code>~/.claude/settings.json</code> but still:</p>
+    <h2>Install hooks per project</h2>
+    <pre class="code">cd /path/to/your/project
+senkani init</pre>
+    <p>The CLI's <code>init</code> command never touches MCP — it only registers PreToolUse + PostToolUse hook entries at <code>&lt;project&gt;/.claude/settings.json</code>. (SenkaniApp itself writes the hook wrapper at <code>~/.senkani/bin/senkani-hook</code> the first time you launch it; if you've never opened the app, build the hook target with <code>swift build -c release --product senkani-hook</code> and pass <code>--hook-path</code>.) The result:</p>
     <ul>
-      <li>Writes <code>~/.senkani/bin/senkani-hook</code>.</li>
       <li>Registers Senkani's PreToolUse + PostToolUse hooks for Cursor/Copilot's Read/Bash/Grep equivalents where supported.</li>
       <li>Runs the filter pipeline + secret redaction on intercepted tool output.</li>
+      <li>Leaves <code>~/.claude/settings.json</code> alone — no global MCP entry written by the CLI.</li>
     </ul>
 
     <h2>What you get</h2>
@@ -84,7 +85,7 @@
 
     <div class="callout callout-info">
       <span class="callout-icon">⚐</span>
-      <div>If your agent later adds MCP support, re-run <code>senkani init</code> (without <code>--hooks-only</code>) to add the server entry. Idempotent; no harm done.</div>
+      <div>If your agent later adds Claude Code-compatible MCP support, launch SenkaniApp once — its first-launch flow ensures the global MCP entry is in place. <code>senkani init</code> never registers the server itself.</div>
     </div>
 
     <h2>Next</h2><p><a href="../../docs/guides/first-session.html">Your first session →</a></p>

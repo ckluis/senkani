@@ -76,7 +76,15 @@
     <div class="step">
       <div class="step-num">Step 3</div>
       <h3>Start the agent</h3>
-      <p>Click <strong>Start Claude in &lt;project&gt;</strong>. Senkani opens a Terminal pane in the project root and launches <code>claude</code>; the MCP handshake happens automatically (you can confirm via the "MCP connected" indicator in the status bar). The pane header reads the actual working directory — <code>~/Desktop/projects/&lt;project&gt;</code> — not a bare <code>~</code>.</p>
+      <p>Click <strong>Start Claude in &lt;project&gt;</strong>. Senkani opens a Terminal pane in the project root and launches <code>claude</code>; the MCP handshake happens automatically. The pane header reads the actual working directory — <code>~/Desktop/projects/&lt;project&gt;</code> — not a bare <code>~</code>.</p>
+      <p>Above the terminal output, the active terminal pane shows a <strong>Senkani Active</strong> proof strip with five labelled chips. Each chip flips to <code>OK</code> when its component is wired up; if any are missing, a banner row beneath the chips surfaces the next runnable action — no waiting for the first intercepted command to learn whether Senkani is in the loop.</p>
+      <ul>
+        <li><strong>PROJECT</strong> — a project root is selected for the pane.</li>
+        <li><strong>MCP</strong> — Senkani's MCP server entry exists in <code>~/.claude/settings.json</code>.</li>
+        <li><strong>HOOKS</strong> — PreToolUse + PostToolUse hooks are registered in <code>&lt;project&gt;/.claude/settings.json</code> (run <code>senkani init</code> if missing).</li>
+        <li><strong>TRACK</strong> — the in-process session watcher is running.</li>
+        <li><strong>EVENTS</strong> — at least one tool-call event has been recorded for this project (relative-age detail keeps updating).</li>
+      </ul>
     </div>
 
     <div class="step">

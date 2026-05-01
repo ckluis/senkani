@@ -51,7 +51,7 @@
     <span>Universal binary · Swift 6.0+</span>
     <span>macOS 14+</span>
     <span>Fully offline after install</span>
-    <span>2,358 tests green</span>
+    <span>2,360 tests green</span>
   </div>
 </header>
 
@@ -314,18 +314,21 @@
 <section class="gallery" aria-label="Install">
   <span class="overline">Get started</span>
   <h2>Install in three minutes.</h2>
-  <p class="lede">Clone, build with Swift Package Manager, register hooks, launch the workspace. Idempotent — safe to re-run.</p>
+  <p class="lede">Clone, build with Swift Package Manager, launch SenkaniApp, then register hooks per project. Idempotent — safe to re-run.</p>
   <pre class="code" style="max-width:680px;"><span class="c"># clone + build</span>
 git clone https://github.com/ckluis/senkani
 cd senkani
 swift build -c release
 
-<span class="c"># register globally (idempotent)</span>
-.build/release/senkani init
+<span class="c"># launch the workspace (auto-registers global MCP + hook wrapper)</span>
+.build/release/SenkaniApp
 
-<span class="c"># verify + launch</span>
-.build/release/senkani doctor
-.build/release/senkani</pre>
+<span class="c"># register PreToolUse + PostToolUse hooks for THIS project</span>
+cd /path/to/your/project
+/path/to/senkani/.build/release/senkani init
+
+<span class="c"># verify</span>
+/path/to/senkani/.build/release/senkani doctor</pre>
   <div class="cta-row" style="margin-top:32px;">
     <a class="btn btn-primary" href="docs/guides/install.html">Full install guide</a>
     <a class="btn btn-secondary" href="docs/guides/claude-code.html">Wire up Claude Code</a>

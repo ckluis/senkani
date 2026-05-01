@@ -15,6 +15,7 @@ struct ContentView: View {
     @State var activeToolView: ToolView?
     @State var showAddPaneSheet = false
     @State var showCommandPalette = false
+    @State private var showClaudeLaunch = false
     @State private var broadcastEnabled = false
     @State private var broadcastText = ""
 
@@ -102,6 +103,11 @@ struct ContentView: View {
                 addPane(type: type, title: title, command: command)
             }
         }
+        .sheet(isPresented: $showClaudeLaunch) {
+            ClaudeLaunchSheet { command in
+                addPane(type: .terminal, title: "Claude Code", command: command)
+            }
+        }
         .onAppear {
             ThemeEngine.shared.restoreLastTheme()
             restoreWorkspace()  // Also starts MetricsStore after workspace is populated
@@ -182,13 +188,11 @@ struct ContentView: View {
             } else if workspace.panes.isEmpty {
                 WelcomeView(
                     workspace: workspace,
-                    onStart: { title, command in
-                        addPane(type: .terminal, title: title, command: command)
+                    onStartTask: { starter in
+                        startTask(starter)
                     },
-                    onStartOllama: {
-                        addPane(type: .ollamaLauncher, title: "Ollama", command: "")
-                    },
-                    onChooseProject: openProjectFolderPicker
+                    onChooseProject: openProjectFolderPicker,
+                    onShowAllPanes: { showAddPaneSheet = true }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .transition(.opacity.combined(with: .scale(scale: 0.95)))
@@ -404,6 +408,25 @@ struct ContentView: View {
         panel.prompt = "Add Project"
         if panel.runModal() == .OK, let url = panel.url {
             workspace.addProject(path: url.path)
+        }
+    }
+
+    /// Resolve a `TaskStarter` from the Welcome screen into a concrete
+    /// launch. Each `kind` maps to exactly one outcome — Claude opens
+    /// the launch sheet (which then routes through `addPane`),
+    /// everything else lands directly through `LaunchCoordinator`.
+    /// Keep this switch exhaustive so `TaskStarterCatalog` additions
+    /// fail to compile until they have a launch path.
+    private func startTask(_ starter: TaskStarter) {
+        switch starter.kind {
+        case .claude:
+            showClaudeLaunch = true
+        case .ollama:
+            addPane(type: .ollamaLauncher, title: "Ollama", command: "")
+        case .trackedShell:
+            addPane(type: .terminal, title: "Terminal", command: "")
+        case .inspectProject:
+            addPane(type: .codeEditor, title: "Code", command: "")
         }
     }
 

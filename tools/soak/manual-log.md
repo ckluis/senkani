@@ -12,6 +12,54 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### onboarding-p1-task-presets — task-starter Welcome 2026-04-30
+
+The first-run Welcome screen now renders four outcome-first task
+starters (Ask Claude, Use Ollama, Open a tracked shell, Inspect
+this project) sourced from `Sources/Core/TaskStarterCatalog.swift`
+instead of the old per-agent feature inventory. The 18-pane
+gallery is one level deeper behind a "Show all panes" link that
+opens the existing AddPaneSheet. Each starter resolves to a
+deterministic LaunchCoordinator outcome: Claude opens the launch
+sheet, Ollama opens the ollamaLauncher pane, tracked shell opens
+a terminal, Inspect this project opens the code editor. The
+catalog and project-aware rendering are unit-tested but the
+end-to-end Welcome flow needs a 10-minute walkthrough on a real
+machine. Tick each step as it's verified:
+
+- [ ] **First-run Welcome shows the project chooser before the
+  starters.** Launch Senkani in a fresh workspace (no projects
+  selected). The window should show the "Choose project folder"
+  affordance above any starter cards, and every starter except
+  "Open a tracked shell" should be visibly disabled with a
+  "Choose a project folder first" subtitle.
+- [ ] **Picking a project enables the project-required starters
+  and updates labels.** Click "Choose project folder" and pick a
+  repo. The four starter cards should rerender — Ask Claude,
+  Use Ollama, and Inspect this project become enabled, and each
+  label gains the "in <projectName>" suffix. The tracked-shell
+  card swaps "in home folder" for "in <projectName>".
+- [ ] **Each starter opens the right pane on the first click.**
+  Ask Claude → ClaudeLaunchSheet appears, picking a launcher
+  opens a Terminal pane in the project. Use Ollama → an
+  ollamaLauncher pane opens. Open a tracked shell → a Terminal
+  pane opens. Inspect this project → the codeEditor pane opens
+  with the project root showing.
+- [ ] **"Show all panes" demotes the gallery to one level
+  deeper.** From a fresh Welcome, click the "Show all panes"
+  link below the four starters. AddPaneSheet should open with
+  all 18 pane types. Closing it returns to the four-starter
+  Welcome with no extra panes created.
+- [ ] **Claude / Ollama install affordances still work when the
+  tool is missing.** On a machine without Claude Code installed,
+  the Ask Claude card should show "Install" and link to
+  claude.ai/download. Same for Ollama.
+- [ ] **Time the full first-run walkthrough end-to-end.** Reset
+  workspace state, then time how long it takes a fresh user to
+  go from app launch → project selected → Claude session live in
+  the project. Target ≤ 10 minutes including any tool installs.
+  Record the time so the P2 milestone work has a baseline.
+
 ### onboarding-p0-active-proof-strip — Senkani Active proof strip 2026-04-30
 
 The active terminal pane now renders a five-chip "Senkani Active"

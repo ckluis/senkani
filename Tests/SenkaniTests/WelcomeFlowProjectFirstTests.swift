@@ -62,39 +62,83 @@ struct WelcomeFlowProjectFirstTests {
 
     @Test("WelcomeView gates Claude + Ollama on a chosen project")
     func welcomeViewGatesAgentLaunches() {
-        let src = stripLineComments(read("SenkaniApp/Views/WelcomeView.swift"))
-        // hasProject derives from workspace.projects.isEmpty, and is
-        // ANDed into the Claude + Ollama AgentCard `available:` flag.
-        #expect(src.contains("workspace.projects.isEmpty"),
+        // Project-gate shape after the P1 task-starter round:
+        // `TaskStarter.requiresProject` is the catalog-level gate;
+        // `TaskStarterCard.available` enforces it via
+        // `requiresProject && !hasProject`. WelcomeView still derives
+        // hasProject from `workspace.projects.isEmpty` so the source-
+        // level marker is unchanged.
+        let welcome = stripLineComments(read("SenkaniApp/Views/WelcomeView.swift"))
+        let catalog = stripLineComments(read("Sources/Core/TaskStarterCatalog.swift"))
+        #expect(welcome.contains("workspace.projects.isEmpty"),
                 "WelcomeView must derive its project gate from workspace.projects.isEmpty.")
-        // Both Claude and Ollama gate on hasProject (`&& hasProject`).
-        let hasProjectGate = src.components(separatedBy: "&& hasProject").count - 1
-        #expect(hasProjectGate >= 2,
-                "Both the Claude and Ollama agent cards must gate `available:` on hasProject (saw \(hasProjectGate) gate sites).")
+        #expect(welcome.contains("starter.requiresProject && !hasProject"),
+                "TaskStarterCard.available must gate project-required starters on hasProject.")
+        // Catalog-level: Claude + Ollama both demand a project.
+        let claudeBlock = catalog.components(separatedBy: #"id: "ask-claude""#)
+        let ollamaBlock = catalog.components(separatedBy: #"id: "use-ollama""#)
+        #expect(claudeBlock.count >= 2,
+                "Catalog must define an `ask-claude` starter.")
+        #expect(ollamaBlock.count >= 2,
+                "Catalog must define a `use-ollama` starter.")
+        if claudeBlock.count >= 2 {
+            let body = claudeBlock[1].prefix(400)
+            #expect(body.contains("requiresProject: true"),
+                    "ask-claude starter must set requiresProject: true.")
+        }
+        if ollamaBlock.count >= 2 {
+            let body = ollamaBlock[1].prefix(400)
+            #expect(body.contains("requiresProject: true"),
+                    "use-ollama starter must set requiresProject: true.")
+        }
     }
 
     @Test("Welcome agent cards use verb-first project-aware titles")
     func welcomeCopyIsVerbFirstAndProjectAware() {
+        // The P0 round shipped "Start Claude in" / "Start Ollama in"
+        // labels. The P1 task-starter round (`onboarding-p1-task-presets`)
+        // moved that copy into `Sources/Core/TaskStarterCatalog.swift`
+        // with outcome-first verbs ("Ask Claude", "Use Ollama") and a
+        // project-aware suffix added at render time. Assert against the
+        // catalog (the new source of truth) rather than the SwiftUI body.
+        let catalog = read("Sources/Core/TaskStarterCatalog.swift")
+        #expect(!catalog.isEmpty,
+                "TaskStarterCatalog source must exist (P1 task-starter round).")
+        #expect(catalog.contains(#"label: "Ask Claude""#),
+                "Catalog must contain the verb-first 'Ask Claude' starter label.")
+        #expect(catalog.contains(#"label: "Use Ollama""#),
+                "Catalog must contain the verb-first 'Use Ollama' starter label.")
+        // Project-aware suffix is appended at render time.
+        #expect(catalog.contains(#""\(label) in \(name)""#),
+                "TaskStarter.displayLabel must render the '<verb> ... in <projectName>' shape.")
+        // The old marketing-copy subtitle is still gone.
         let raw = read("SenkaniApp/Views/WelcomeView.swift")
-        #expect(raw.contains("Start Claude in"),
-                "Claude agent card title must take the verb-first 'Start Claude in <project>' shape.")
-        #expect(raw.contains("Start Ollama in"),
-                "Ollama agent card title must take the verb-first 'Start Ollama in <project>' shape.")
-        // The old marketing-copy subtitle is gone.
         #expect(!raw.contains("Full compression pipeline + MCP integration"),
-                "The old 'Full compression pipeline + MCP integration' subtitle must be replaced with project-aware copy.")
+                "The old 'Full compression pipeline + MCP integration' subtitle must remain absent.")
     }
 
     @Test("Plain Shell remains an explicit escape hatch and names its directory")
     func plainShellEscapeHatchIsExplicit() {
-        let raw = read("SenkaniApp/Views/WelcomeView.swift")
-        // Plain Shell stays available even without a project — but it
-        // must name the directory so a user clicking it has chosen
-        // the home-folder destination explicitly.
-        #expect(raw.contains("home folder"),
-                "Plain Shell card must explicitly name 'home folder' so a no-project launch isn't silent.")
-        #expect(raw.contains("Tracked terminal"),
-                "Plain Shell card must describe itself as a tracked terminal — its purpose, not marketing copy.")
+        // After the P1 task-starter round the shell card is rendered
+        // from `TaskStarterCatalog`'s `open-tracked-shell` entry. Its
+        // copy is the source of truth; the "in home folder" suffix is
+        // appended at render time by `TaskStarter.displayLabel`.
+        let catalog = read("Sources/Core/TaskStarterCatalog.swift")
+        #expect(catalog.contains("home folder"),
+                "TaskStarter.displayLabel must explicitly name 'home folder' so a no-project shell launch isn't silent.")
+        #expect(catalog.contains(#"id: "open-tracked-shell""#),
+                "Catalog must define an `open-tracked-shell` starter (the escape hatch).")
+        #expect(catalog.contains(#"label: "Open a tracked shell""#),
+                "Tracked-shell starter must use the verb-first 'Open a tracked shell' label.")
+        #expect(catalog.contains("regular terminal Senkani is watching"),
+                "Tracked-shell subtitle must describe its purpose, not marketing copy.")
+        // And the starter must remain usable without a project.
+        let block = catalog.components(separatedBy: #"id: "open-tracked-shell""#)
+        if block.count >= 2 {
+            let body = block[1].prefix(400)
+            #expect(body.contains("requiresProject: false"),
+                    "Tracked-shell starter must have requiresProject: false (the escape hatch).")
+        }
     }
 
     @Test("WelcomeView surfaces a 'Choose project folder' affordance when no project")

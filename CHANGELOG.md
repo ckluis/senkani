@@ -9,6 +9,47 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — Task-starter Welcome replaces feature inventory (`onboarding-p1-task-presets`)
+- Round 5 of the Luminary onboarding chain. The first-run Welcome
+  surface now reads as a list of jobs the user might want to do,
+  not a list of features Senkani ships. Four outcome-first verb-
+  led starters render in canonical order: **Ask Claude in
+  &lt;project&gt;**, **Use Ollama in &lt;project&gt;**, **Open a tracked
+  shell** (the no-project escape hatch — keeps "in home folder" /
+  "in &lt;project&gt;" suffix), and **Inspect this project** (opens the
+  read-only code-editor pane).
+- New `Sources/Core/TaskStarterCatalog.swift` is the source of
+  truth: a `TaskStarter` value type (`id`, `label`, `subtitle`,
+  `icon`, `kind`, `paneTypeID`, `requiresProject`) plus a four-
+  entry catalog. Each starter resolves to exactly one
+  `LaunchCoordinator` outcome through a `TaskStarter.Kind` switch
+  in `ContentView.startTask(_:)`. `displayLabel(for:)` /
+  `displaySubtitle(for:)` render the project-aware "<verb> ... in
+  &lt;projectName&gt;" suffix and surface the missing-precondition gate
+  before the outcome description. Naming note: deliberately *not*
+  `Preset` — that noun is taken by `Sources/Core/Presets/` (cron-
+  style scheduled-automation jobs).
+- 18-pane gallery is one level deeper now. A single demoted
+  **Show all panes** link below the four starter cards opens the
+  existing `AddPaneSheet`, so the advanced path is preserved
+  without dominating first-run.
+- Tests: 11 new tests in
+  `Tests/SenkaniTests/TaskStarterCatalogTests.swift` covering
+  catalog shape (canonical order, renderable surfaces, unique
+  kinds, project-gate exclusivity), copy clarity (verb-first
+  labels, no FCSIT/MCP shorthand), project-aware rendering,
+  Welcome + ContentView wiring, and the manual-log entry. The
+  prior P0 `WelcomeFlowProjectFirstTests` was relaxed in two
+  places to assert against the new catalog source of truth
+  instead of the prior literal `Start Claude in` /
+  `&& hasProject` substrings.
+- **Accepted risks:** the catalog is hard-coded today — adding a
+  fifth starter is a Luminary-grade decision because the four-
+  card surface is the first-run IA. The Ask Claude starter still
+  routes through the existing launch sheet for command picking;
+  bypassing it for a smart-default Claude command is a separate
+  UX decision deferred to the P2 milestone work.
+
 ### April 30 — Command palette honesty contract (`onboarding-p1-command-palette-contract`)
 - ⌘K now advertises every pane the gallery ships and nothing it
   doesn't. `CommandEntryBuilder.paneEntries()` derives directly from

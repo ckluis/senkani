@@ -3,29 +3,29 @@ import Core
 
 /// First-run experience when no panes are open.
 ///
-/// Project-first flow: the user picks a project folder before Claude/
-/// Ollama launches become available. This forces the launch site to
-/// match the user's mental model ("run this agent in this repo")
-/// instead of silently dropping a session into `~`.
+/// Project-first, task-first flow. The user picks a project folder,
+/// then chooses a verb-first task starter ("Ask Claude in <project>",
+/// "Use Ollama", "Open a tracked shell", "Inspect this project").
+/// The full pane gallery lives one level deeper behind a "Show all
+/// panes" link so first-run isn't a feature inventory.
 ///
 /// Plain Shell remains usable without a project as the deliberate
 /// escape hatch for a tracked shell in `$HOME`.
 struct WelcomeView: View {
     /// Workspace state — drives the "is a project chosen?" gate.
     let workspace: WorkspaceModel
-    /// Terminal launch (Claude Code shell, Plain Shell).
-    let onStart: (String, String) -> Void  // (title, command)
-    /// Ollama launch: opens a first-class `ollamaLauncher` pane rather
-    /// than shelling out `ollama run <hardcoded>` via a terminal pane.
-    /// The pane owns its default-model selector + availability gate.
-    let onStartOllama: () -> Void
+    /// Resolve a task starter into a concrete launch. ContentView
+    /// switches on `starter.kind` and routes through LaunchCoordinator.
+    let onStartTask: (TaskStarter) -> Void
     /// Open the project-folder picker. ContentView wires this to
     /// `NSOpenPanel` + `workspace.addProject(...)`.
     let onChooseProject: () -> Void
+    /// Show the full pane gallery (advanced path). ContentView wires
+    /// this to `showAddPaneSheet = true`.
+    let onShowAllPanes: () -> Void
 
     @State private var claudeAvailable: Bool?
     @State private var ollamaAvailable: Bool?
-    @State private var showClaudeLaunch = false
 
     /// True when the user has picked at least one project. The
     /// implicit "Default" project (auto-created by `addPane(...)` for
@@ -36,8 +36,8 @@ struct WelcomeView: View {
         !workspace.projects.isEmpty
     }
 
-    private var activeProjectName: String {
-        workspace.activeProject?.name ?? ""
+    private var activeProjectName: String? {
+        workspace.activeProject?.name
     }
 
     var body: some View {
@@ -58,12 +58,12 @@ struct WelcomeView: View {
             // sees the precondition; the chosen project is shown
             // inline once selected, with a "Change" affordance.
             VStack(spacing: 8) {
-                if hasProject {
+                if hasProject, let name = activeProjectName {
                     HStack(spacing: 8) {
                         Image(systemName: "folder.fill")
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
-                        Text("Project: \(activeProjectName)")
+                        Text("Project: \(name)")
                             .font(.system(size: 12, weight: .medium))
                         Spacer()
                         Button("Change") { onChooseProject() }
@@ -102,96 +102,71 @@ struct WelcomeView: View {
             }
             .frame(maxWidth: 320)
 
+            // Step 2 — task starters. Outcome-first, verb-first labels.
+            // The full pane gallery is one level deeper behind the
+            // "Show all panes" link below so first-run isn't a feature
+            // inventory.
             VStack(spacing: 12) {
-                AgentCard(
-                    title: hasProject
-                        ? "Start Claude in \(activeProjectName)"
-                        : "Start Claude Code",
-                    subtitle: agentCardSubtitle(
-                        toolAvailable: claudeAvailable,
-                        notFoundMessage: "Not found — install from claude.ai/download",
-                        readyMessage: hasProject
-                            ? "Run Claude Code in \(activeProjectName)"
-                            : "Choose a project folder first"
-                    ),
-                    icon: "brain",
-                    color: .blue,
-                    available: (claudeAvailable ?? false) && hasProject,
-                    detecting: claudeAvailable == nil,
-                    installURL: claudeAvailable == false
-                        ? URL(string: "https://claude.ai/download")
-                        : nil
-                ) {
-                    showClaudeLaunch = true
-                }
-
-                AgentCard(
-                    title: hasProject
-                        ? "Start Ollama in \(activeProjectName)"
-                        : "Start Ollama",
-                    subtitle: agentCardSubtitle(
-                        toolAvailable: ollamaAvailable,
-                        notFoundMessage: "Not found — install from ollama.com",
-                        readyMessage: hasProject
-                            ? "Run Ollama in \(activeProjectName)"
-                            : "Choose a project folder first"
-                    ),
-                    icon: "cpu",
-                    color: .green,
-                    available: (ollamaAvailable ?? false) && hasProject,
-                    detecting: ollamaAvailable == nil,
-                    installURL: ollamaAvailable == false
-                        ? URL(string: "https://ollama.com")
-                        : nil
-                ) {
-                    onStartOllama()
-                }
-
-                // Plain Shell is the deliberate escape hatch — it
-                // works without a project so a user who really wants
-                // a tracked shell in $HOME can get one. The subtitle
-                // names the directory so this isn't a silent default.
-                AgentCard(
-                    title: hasProject
-                        ? "Open Plain Shell in \(activeProjectName)"
-                        : "Open Plain Shell in home folder",
-                    subtitle: hasProject
-                        ? "Tracked terminal in \(activeProjectName)"
-                        : "Tracked terminal in your home folder (no project)",
-                    icon: "terminal",
-                    color: .gray,
-                    available: true,
-                    detecting: false
-                ) {
-                    onStart("Terminal", "")
+                ForEach(TaskStarterCatalog.all()) { starter in
+                    TaskStarterCard(
+                        starter: starter,
+                        projectName: activeProjectName,
+                        toolAvailable: toolAvailability(for: starter),
+                        installURL: installURL(for: starter)
+                    ) {
+                        onStartTask(starter)
+                    }
                 }
             }
             .frame(maxWidth: 320)
+
+            // Advanced path — the 18-pane gallery. Demoted to a
+            // single secondary affordance so first-run users see the
+            // task starters first.
+            Button(action: onShowAllPanes) {
+                HStack(spacing: 6) {
+                    Image(systemName: "square.grid.2x2")
+                        .font(.system(size: 10))
+                    Text("Show all panes")
+                        .font(.system(size: 11))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                }
+                .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 4)
 
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.windowBackgroundColor))
         .task { await detectTools() }
-        .sheet(isPresented: $showClaudeLaunch) {
-            ClaudeLaunchSheet { command in
-                onStart("Claude Code", command)
-            }
+    }
+
+    /// Tool-availability state for a starter — Claude card needs the
+    /// `claude` CLI, Ollama card needs Ollama running, the rest are
+    /// always available.
+    private func toolAvailability(for starter: TaskStarter) -> Bool? {
+        switch starter.kind {
+        case .claude:         return claudeAvailable
+        case .ollama:         return ollamaAvailable
+        case .trackedShell,
+             .inspectProject: return true
         }
     }
 
-    /// Compose an agent card subtitle that tells the user why the
-    /// card is or isn't actionable. Project-gate state takes priority
-    /// over availability so the user sees the missing precondition,
-    /// not a stale "ready" message.
-    private func agentCardSubtitle(
-        toolAvailable: Bool?,
-        notFoundMessage: String,
-        readyMessage: String
-    ) -> String {
-        if toolAvailable == false { return notFoundMessage }
-        if !hasProject { return "Choose a project folder first" }
-        return readyMessage
+    /// Install URL when the underlying tool is missing.
+    private func installURL(for starter: TaskStarter) -> URL? {
+        switch starter.kind {
+        case .claude where claudeAvailable == false:
+            return URL(string: "https://claude.ai/download")
+        case .ollama where ollamaAvailable == false:
+            return URL(string: "https://ollama.com")
+        default:
+            return nil
+        }
     }
 
     private func detectTools() async {
@@ -241,15 +216,59 @@ struct WelcomeView: View {
     }
 }
 
-struct AgentCard: View {
-    let title: String
-    let subtitle: String
-    let icon: String
-    let color: Color
-    var available: Bool = true
-    var detecting: Bool = false
-    var installURL: URL? = nil
+/// Card representation of a `TaskStarter`. Composes the verb-first
+/// label, outcome subtitle, project gate, and tool-availability state
+/// into one tappable affordance. Replaces the per-agent `AgentCard`
+/// shape used before the task-starter round.
+struct TaskStarterCard: View {
+    let starter: TaskStarter
+    let projectName: String?
+    /// nil = still detecting; true = ready; false = tool not found.
+    let toolAvailable: Bool?
+    let installURL: URL?
     let action: () -> Void
+
+    private var hasProject: Bool { projectName != nil }
+
+    /// True when the user can act on the card right now. Project-
+    /// gated starters need a project chosen AND (when applicable) the
+    /// underlying tool installed/running.
+    private var available: Bool {
+        if starter.requiresProject && !hasProject { return false }
+        if toolAvailable == false { return false }
+        return true
+    }
+
+    private var detecting: Bool {
+        toolAvailable == nil && (starter.kind == .claude || starter.kind == .ollama)
+    }
+
+    private var title: String {
+        starter.displayLabel(for: projectName)
+    }
+
+    /// Subtitle composes the missing-precondition message ahead of
+    /// the outcome description. Tool-not-found takes precedence over
+    /// project-not-chosen so the user sees the actionable next step.
+    private var subtitle: String {
+        if toolAvailable == false {
+            switch starter.kind {
+            case .claude: return "Not found — install from claude.ai/download"
+            case .ollama: return "Not found — install from ollama.com"
+            default:      break
+            }
+        }
+        return starter.displaySubtitle(for: projectName)
+    }
+
+    private var iconColor: Color {
+        switch starter.kind {
+        case .claude:         return .blue
+        case .ollama:         return .green
+        case .trackedShell:   return .gray
+        case .inspectProject: return .purple
+        }
+    }
 
     var body: some View {
         Button(action: {
@@ -260,9 +279,9 @@ struct AgentCard: View {
             }
         }) {
             HStack(spacing: 12) {
-                Image(systemName: icon)
+                Image(systemName: starter.icon)
                     .font(.system(size: 20))
-                    .foregroundStyle(available ? color : .gray)
+                    .foregroundStyle(available ? iconColor : .gray)
                     .frame(width: 32)
 
                 VStack(alignment: .leading, spacing: 2) {

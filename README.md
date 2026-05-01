@@ -25,6 +25,13 @@ is per-project: it only writes hook entries to `<project>/.claude/settings.json`
 never global. See [CHANGELOG.md](CHANGELOG.md) for the full shipped feature list
 and roadmap.
 
+The empty-workspace surface is project-first and task-first: pick a project
+folder, then choose one of four verb-led starters — **Ask Claude in &lt;project&gt;**,
+**Use Ollama in &lt;project&gt;**, **Open a tracked shell**, or **Inspect this project**.
+The full 18-pane gallery is one level deeper behind a **Show all panes** link
+for advanced users. See [docs/guides/first-session.html](docs/guides/first-session.html)
+for the walkthrough.
+
 ---
 
 ## The MCP Intelligence Layer

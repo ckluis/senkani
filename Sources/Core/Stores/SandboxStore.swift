@@ -161,16 +161,7 @@ final class SandboxStore: @unchecked Sendable {
     // MARK: - Helpers
 
     private func exec(_ sql: String) {
-        guard let db = parent.db else { return }
-        var err: UnsafeMutablePointer<CChar>?
-        if sqlite3_exec(db, sql, nil, nil, &err) != SQLITE_OK {
-            let msg = err.map { String(cString: $0) } ?? "unknown"
-            Logger.log("db.sandbox.sql_error", fields: [
-                "error": .string(msg),
-                "outcome": .string("error"),
-            ])
-            sqlite3_free(err)
-        }
+        StoreExec.run(db: parent.db, sql: sql, scope: "sandbox")
     }
 
     private func execSilent(_ sql: String) {

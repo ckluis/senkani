@@ -9,6 +9,27 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 1 — Shared `StoreExec` helper folds three near-identical store `exec(_:)` copies into one (`cleanup-17-three-near-identical-exec-helpers-in-sto`)
+- New `Sources/Core/Stores/StoreExec.swift` exposes a single
+  `StoreExec.run(db:sql:scope:)` that wraps `sqlite3_exec` and emits
+  `db.<scope>.sql_error` on failure. CommandStore, SandboxStore, and
+  ValidationStore each previously inlined an 11-line copy that differed
+  only in the event-name token (`command` / `sandbox` / `validation`);
+  the three private `exec(_:)` helpers are now one-liners that delegate
+  to the shared call.
+- 4 new tests in `StoreExecTests` pin the contract directly: nil-DB is
+  a no-op, success emits nothing, a malformed statement emits exactly
+  one `db.<scope>.sql_error` with `outcome=error` + non-empty `error`
+  field, and the scope token is faithfully threaded through the event
+  name.
+- Why this matters: a future structured-field addition (e.g. a `sql:`
+  field naming the failed statement) is now a one-place change. Three
+  copies invited drift — one would have been forgotten.
+- Existing `LoggerRoutingTests` event-vocabulary contract
+  (`db.command.sql_error`, `db.sandbox.sql_error`,
+  `db.validation.sql_error` are the only emitters) is unchanged and
+  still green.
+
 ### May 1 — Website AA harness + sitewide brand-color rebind (`website-rebuild-11c-a11y-tooling` + `website-rebuild-11d-perf-tooling` + `website-rebuild-11e-closing-audit`)
 - New on-demand harness at `tools/website-checks/` driven by three
   Bash entry points under `scripts/`:

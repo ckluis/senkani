@@ -181,12 +181,14 @@ struct ContentView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             } else if workspace.panes.isEmpty {
                 WelcomeView(
+                    workspace: workspace,
                     onStart: { title, command in
                         addPane(type: .terminal, title: title, command: command)
                     },
                     onStartOllama: {
                         addPane(type: .ollamaLauncher, title: "Ollama", command: "")
-                    }
+                    },
+                    onChooseProject: openProjectFolderPicker
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .transition(.opacity.combined(with: .scale(scale: 0.95)))
@@ -388,6 +390,21 @@ struct ContentView: View {
     /// the coordinator.
     private func addPane(type: PaneType = .terminal, title: String, command: String) {
         ensureLauncher().launchPane(type: type, title: title, command: command)
+    }
+
+    /// Open the macOS folder picker and add the chosen directory as
+    /// a project. WelcomeView calls this for its project-first gate;
+    /// the same NSOpenPanel shape is used by `SidebarView.openFolderPicker`.
+    private func openProjectFolderPicker() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Select a project directory"
+        panel.prompt = "Add Project"
+        if panel.runModal() == .OK, let url = panel.url {
+            workspace.addProject(path: url.path)
+        }
     }
 
     /// Add a pane by type ID string (from command palette).

@@ -476,9 +476,13 @@ struct PaneContainerView: View {
     private var contextLabel: String {
         switch pane.paneType {
         case .terminal:
-            // Show abbreviated working directory
+            // Show abbreviated working directory. Use the pane's
+            // own `workingDirectory` (the path the shell actually
+            // opens in), not `previewFilePath` — the latter is
+            // empty for terminals and would show a bogus "~" even
+            // when the shell is running in `/Users/me/repo`.
             let home = NSHomeDirectory()
-            let path = pane.previewFilePath.isEmpty ? "~" : pane.previewFilePath
+            let path = pane.workingDirectory.isEmpty ? "~" : pane.workingDirectory
             return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
         case .analytics:
             return "\(pane.metrics.commandCount) cmds"

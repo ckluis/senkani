@@ -9,6 +9,30 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — Project-first Welcome flow + truthful terminal header (`onboarding-p0-project-first-welcome`)
+- Round 2 of the Luminary onboarding chain. The empty-workspace
+  Welcome surface now opens with an explicit "Choose project folder"
+  step. Claude / Ollama agent cards stay disabled until a project
+  is selected, then read `Start Claude in <project>` and
+  `Start Ollama in <project>` — verb-first, project-aware, no more
+  generic "Full compression pipeline + MCP integration" subtitle.
+- Plain Shell remains the deliberate escape hatch and now names its
+  destination ("Open Plain Shell in home folder" / "in <project>")
+  so a no-project launch is an explicit choice, not a silent default.
+- Bug fixed: terminal pane headers were reading `pane.previewFilePath`
+  for the context label, which is empty for terminals — every
+  terminal showed `~` regardless of where the shell actually opened.
+  The header now reads `pane.workingDirectory`, so a Claude session
+  in `~/Desktop/projects/senkani` finally reports that path instead
+  of pretending it lives in the home directory.
+- Tests: 8 new source-level guards in
+  `Tests/SenkaniTests/WelcomeFlowProjectFirstTests.swift` lock down
+  the Welcome contract (workspace + onChooseProject parameters, the
+  project gate on Claude / Ollama, verb-first copy, the Plain Shell
+  escape-hatch wording, the ContentView NSOpenPanel wiring, and the
+  PaneContainerView terminal header fix). Manual-log entry queues a
+  real-machine first-run check.
+
 ### April 30 — LaunchCoordinator unifies every pane-launch path (`onboarding-p0-launch-coordinator`)
 - Round 1 of the Luminary onboarding chain queued earlier today.
   Centralizes pane creation behind one app-layer primitive so every

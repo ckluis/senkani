@@ -12,6 +12,46 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### onboarding-p0-project-first-welcome — Project-first Welcome flow 2026-04-30
+
+The empty-workspace Welcome surface now gates Claude / Ollama launches
+behind a chosen project, replaces the marketing-copy subtitles with
+verb-first project-aware copy, and stops terminal pane headers from
+falling back to `~` for sessions that actually live in a real repo.
+A real-machine first-run check needs eyes-on:
+
+- [ ] **First run with no projects shows a 'Choose project folder'
+  step before agent cards become actionable.** Launch with no saved
+  workspace (`rm -rf ~/Library/Application Support/Senkani` or
+  equivalent), open the app, confirm the Welcome surface shows the
+  `Choose project folder` button at the top and that the Claude +
+  Ollama agent cards read `Choose a project folder first` and look
+  disabled. Plain Shell stays clickable but its title reads
+  `Open Plain Shell in home folder` (no silent default).
+- [ ] **Picking a project unlocks the agent cards with project-aware
+  titles.** Click `Choose project folder`, pick a real repo,
+  confirm the chooser collapses to a `Project: <name>` row with a
+  `Change` link, and the agent cards now read
+  `Start Claude in <name>` and `Start Ollama in <name>` with active
+  styling (no longer dim).
+- [ ] **Terminal pane header shows the actual working directory.**
+  Launch a Plain Shell into the chosen project; the pane header
+  context label should display the abbreviated repo path
+  (e.g. `~/Desktop/projects/senkani`) rather than a bare `~`. Cross-
+  check by `cd`-ing inside the shell — the header reflects the
+  pane's launch directory, not the live shell `pwd` (this is
+  expected; the launch path is the truthful identifier).
+- [ ] **'Change' affordance re-opens the picker without losing
+  panes.** With a project selected and at least one pane open,
+  click `Change`, pick a different folder, confirm the new project
+  is appended and active. Original panes still belong to the prior
+  project (verifiable via the sidebar).
+- [ ] **Plain-shell escape hatch is honoured.** From the no-project
+  state, click `Open Plain Shell in home folder`. A terminal pane
+  opens at `~`, the implicit `Default` project is created (this is
+  the documented escape hatch), and the header context label shows
+  `~` correctly.
+
 ### Phase U.6c round 1 — Plan-variance histogram in AnalyticsView 2026-04-30
 
 Round 3 of U.6 lands the operator-visible chart + the ≥ 90 % pairing

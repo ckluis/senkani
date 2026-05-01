@@ -63,22 +63,26 @@
     <div class="step">
       <div class="step-num">Step 1</div>
       <h3>Open the workspace</h3>
-      <pre class="code">senkani</pre>
-      <p>Or open SenkaniApp from /Applications if you dragged it there. A single empty canvas appears.</p>
+      <p>Open SenkaniApp from /Applications (or build it locally and run <code>.build/release/SenkaniApp</code>). A Welcome surface appears with a <strong>Choose project folder</strong> step at the top — Senkani won't start an agent until you tell it which repo to run in.</p>
     </div>
 
     <div class="step">
       <div class="step-num">Step 2</div>
-      <h3>Open three panes</h3>
-      <p>⌘K → type "Terminal" → Enter. ⌘K → "Analytics". ⌘K → "Agent Timeline". Three panes side by side.</p>
+      <h3>Pick the project folder</h3>
+      <p>Click <strong>Choose project folder</strong> and select the directory of the repo you want the agent to work in. The Welcome surface collapses to a <code>Project: &lt;name&gt;</code> row, and the Claude / Ollama agent cards flip from <em>Choose a project folder first</em> to <strong>Start Claude in &lt;name&gt;</strong> / <strong>Start Ollama in &lt;name&gt;</strong>.</p>
+      <p>Prefer a tracked shell in your home folder instead? Click <strong>Open Plain Shell in home folder</strong> — that's the deliberate escape hatch and the only path that lands a session at <code>~</code>.</p>
     </div>
 
     <div class="step">
       <div class="step-num">Step 3</div>
       <h3>Start the agent</h3>
-      <p>In the Terminal pane:</p>
-      <pre class="code">claude</pre>
-      <p>Claude Code starts; MCP handshake happens automatically (you can confirm via the "MCP connected" indicator in the status bar).</p>
+      <p>Click <strong>Start Claude in &lt;project&gt;</strong>. Senkani opens a Terminal pane in the project root and launches <code>claude</code>; the MCP handshake happens automatically (you can confirm via the "MCP connected" indicator in the status bar). The pane header reads the actual working directory — <code>~/Desktop/projects/&lt;project&gt;</code> — not a bare <code>~</code>.</p>
+    </div>
+
+    <div class="step">
+      <div class="step-num">Step 3b (optional)</div>
+      <h3>Open inspection panes</h3>
+      <p>⌘K → "Analytics". ⌘K → "Agent Timeline". Two extra panes side by side with the Terminal pane — the optimization layer is already running; these surfaces let you watch it.</p>
     </div>
 
     <div class="step">

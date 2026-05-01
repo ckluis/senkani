@@ -9,6 +9,32 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — Command palette honesty contract (`onboarding-p1-command-palette-contract`)
+- ⌘K now advertises every pane the gallery ships and nothing it
+  doesn't. `CommandEntryBuilder.paneEntries()` derives directly from
+  `PaneGalleryBuilder.allEntries()`, so the missing `ollamaLauncher`
+  row is back and future pane additions can't drift between the two
+  surfaces. The 17→18 magic-number test was replaced with a parity
+  test that compares ID sets across both builders.
+- The eight inert `action:*` rows (Toggle Filter / Toggle Cache /
+  Toggle Secrets / Toggle Indexer / Toggle Terse / Close All Panes
+  / Run Benchmark / Export Session) were removed because
+  `CommandPaletteView.executeEntry` only handled `pane:` IDs — every
+  action row dismissed silently on Enter. `actionEntries()` now
+  returns `[]`; reintroducing any action requires wiring a real
+  callback through `CommandPaletteView`. The `noInertActionEntries`
+  test enforces the contract.
+- Tests: `Tests/SenkaniTests/CommandPaletteTests.swift` rewritten —
+  6 → 10 tests covering parity (IDs + count), Ollama presence,
+  no-inert-actions, no-duplicate-IDs, non-empty copy, plus the
+  retained filter / grouping / case-insensitivity coverage.
+- **Accepted risks:** session-scoped toggles (filter / cache /
+  secrets / indexer / terse) and workspace-scoped actions
+  (close-all, run-benchmark, export) live behind boundaries the
+  palette doesn't currently see; wiring each is a follow-up round
+  with its own callback plumbing — not bundled here to keep this
+  round small.
+
 ### April 30 — First-run docs realigned with shipped behavior (`onboarding-p0-docs-truth-pass`)
 - Round 4 of the Luminary onboarding chain. After P0 rounds 1–3
   changed the launch path (single `LaunchCoordinator`, project-first

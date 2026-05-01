@@ -1,9 +1,9 @@
 # id: short-token-3
 # family: short_token
-# expected: NPM_TOKEN
+# expected: TWILIO_ACCOUNT_SID
 # match_mode: any
-# documented_gap: true
-# description: Twilio AC SID-shaped short token (34 chars) — no pattern covers Twilio. Documented gap. Closing this needs a TWILIO family pattern (`AC[0-9a-f]{32}`) added to SecretDetector.
+# documented_gap: false
+# description: Twilio Account SID — canonical AC + 32 lowercase hex form. Closed 2026-05-01 (cleanup-18) by adding the TWILIO_ACCOUNT_SID pattern. Sub-threshold Slack/Stripe peers (short-token-1, short-token-2) remain documented gaps by design.
 # synthetic: true
 ---
-TWILIO_ACCOUNT_SID=ACFAKEdeadbeefcafebabe1234567890ab
+TWILIO_ACCOUNT_SID=ACfacedeadbeefcafebabe1234567890ab

@@ -9,6 +9,32 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 1 — TWILIO_ACCOUNT_SID closes one of three adversarial recall gaps (`cleanup-18-secretdetector-adversarial-recall-gaps-f`)
+- New `TWILIO_ACCOUNT_SID` named pattern in `Sources/Core/SecretDetector.swift`
+  (`\bAC` + 32 lowercase hex). Twilio publishes Account SIDs in this canonical
+  form; word-boundary anchors keep the 2-char `AC` prefix from matching
+  mid-identifier. The bring-up takes the `SecretDetector.patterns` table from
+  13 to 14 families.
+- Adversarial corpus recalibrated: aggregate goes from **1.000 / 0.894**
+  (42 TP, 5 FN) to **1.000 / 0.915** (43 TP, 4 FN), zero false positives held.
+  `short_token` family floor moves from 0.000 to 0.333; remaining
+  short-token misses (Slack `xoxb-` body &lt;10 chars, Stripe `sk_live_`/
+  `sk_test_` &lt;24 chars) stay below threshold by design — shrinking those
+  bodies trades recall against false-positive risk that the security review
+  hasn't authorised.
+- Fixture `short-token-3.txt` now uses canonical `AC` + 32 lowercase hex
+  (the prior body used uppercase `K`/`F`/`E` which the closing pattern
+  cannot match) and `documented_gap: false` so the harness asserts the
+  closure rather than asserting the gap.
+- Doc sync: `spec/testing.md` Quality Gates row + corpus summary,
+  `docs/concepts/security-posture.html` family count + recall number,
+  `spec/autonomous/strategy.md` adversarial-corpus paragraph, and
+  `spec/inspirations/security-isolation/claw-code.md` precision/recall pair.
+- Two follow-up items filed for the remaining gaps —
+  `cleanup-18b-signed-url-gcs-v4` (URL-aware tokenisation in
+  `EntropyScanner.extractTokens`) and `cleanup-18c-obfuscated-pure-hex`
+  (charset-aware entropy floor or pure-hex length band).
+
 ### May 1 — Shared `StoreExec` helper folds three near-identical store `exec(_:)` copies into one (`cleanup-17-three-near-identical-exec-helpers-in-sto`)
 - New `Sources/Core/Stores/StoreExec.swift` exposes a single
   `StoreExec.run(db:sql:scope:)` that wraps `sqlite3_exec` and emits

@@ -96,7 +96,7 @@ MCP_TOOLS = [
   {<span class="k">"name"</span>: <span class="v">"findByUser"</span>,      <span class="k">"kind"</span>: <span class="v">"method"</span>, <span class="k">"line_start"</span>: <span class="e">18</span>, <span class="k">"line_end"</span>: <span class="e">31</span>}
 ]''',
         behavior="Cache key is `(path, mtime)` — unchanged files return instantly from memory. The SecretDetector short-circuits on no-match inputs (1 MB benign file: ~25 ms). When the outline is empty (file not in index), falls back to reading full content up to `limit`.",
-        security="All text-returning tools pass through SecretDetector. 13 secret families + entropy-based fallback.",
+        security="All text-returning tools pass through SecretDetector. 14 secret families + entropy-based fallback.",
         related=[("senkani_fetch", "__BASE__docs/reference/mcp/senkani_fetch.html", "Read a single symbol's lines instead of the whole file."),
                  ("senkani_outline", "__BASE__docs/reference/mcp/senkani_outline.html", "Just the outline, no content toggle."),
                  ("senkani_search", "__BASE__docs/reference/mcp/senkani_search.html", "Find where a symbol is defined before reading."),
@@ -1368,9 +1368,9 @@ def render_hub_status():
       <li><strong>Local ML</strong> — MiniLM embeddings (384-dim) + Gemma vision via MLX on Neural Engine; fully offline after download; L0/L1/L2 tiered context pre-warming.</li>
       <li><strong>Compound learning</strong> — recurring→staged→applied with Laplace-smoothed confidence; four artifact types; Schneier gate on instruction-patch auto-apply.</li>
       <li><strong>Knowledge base</strong> — markdown source-of-truth + rebuilt SQLite index; enrichment validator, rollback, timeline; KB↔learning bridge.</li>
-      <li><strong>Security hardening</strong> — SSRF guard with DNS pre-resolution + redirect re-validation + subresource blocklist; prompt-injection guard (multilingual + homoglyph NFKC-folded); 13 secret-detector families; socket-auth handshake; opt-in structured JSON logs with sink redaction.</li>
+      <li><strong>Security hardening</strong> — SSRF guard with DNS pre-resolution + redirect re-validation + subresource blocklist; prompt-injection guard (multilingual + homoglyph NFKC-folded); 14 secret-detector families; socket-auth handshake; opt-in structured JSON logs with sink redaction.</li>
       <li><strong>JS-rendered web fetch</strong> — <code>senkani_web</code> returns AXTree markdown via WKWebView; version negotiation via <code>senkani_version</code>.</li>
-      <li><strong>New website</strong> — this rebuild. Multi-page wiki + landing page per <code>spec/website_rebuild.md</code>.</li>
+      <li><strong>New website</strong> — this rebuild. Multi-page wiki + landing page (the rebuild plan is internal-only).</li>
     </ul>
 
     <h2>Links</h2>
@@ -1620,7 +1620,7 @@ OPT_FCSIT = ("fcsit", "FCSIT — five per-pane toggles",
       <div class="head">Letter</div><div class="head">Feature</div><div class="head">Default</div><div class="head">What it does</div>
       <div class="k">F</div><div class="t">Filter</div><div class="default">on</div><div class="desc"><a href="__BASE__docs/reference/options/filter.html">Filter pipeline</a> — 24 command-specific output rules applied to <code>senkani_exec</code>.</div>
       <div class="k">C</div><div class="t">Cache</div><div class="default">on</div><div class="desc"><a href="__BASE__docs/reference/options/cache.html">Read cache</a> — keyed on (path, mtime); unchanged files return from memory.</div>
-      <div class="k">S</div><div class="t">Secrets</div><div class="default">on</div><div class="desc"><a href="__BASE__docs/reference/options/secrets.html">SecretDetector</a> — 13 regex families + entropy fallback on every tool output.</div>
+      <div class="k">S</div><div class="t">Secrets</div><div class="default">on</div><div class="desc"><a href="__BASE__docs/reference/options/secrets.html">SecretDetector</a> — 14 regex families + entropy fallback on every tool output.</div>
       <div class="k">I</div><div class="t">Indexer</div><div class="default">on</div><div class="desc"><a href="__BASE__docs/reference/options/indexer.html">Symbol indexer</a> — <code>senkani_search</code>, <code>senkani_fetch</code>, <code>senkani_outline</code> active.</div>
       <div class="k">T</div><div class="t">Terse</div><div class="default">off</div><div class="desc"><a href="__BASE__docs/reference/options/terse.html">Terse mode</a> — output-token reduction via system-prompt injection + phrase strip.</div>
     </div>
@@ -1683,10 +1683,10 @@ OPT_CACHE = ("cache", "C — Read cache",
 ''')
 
 OPT_SECRETS = ("secrets", "S — Secret detection",
-               "13 regex families + entropy fallback on every tool output. On by default; turning off is an explicit statement.",
+               "14 regex families + entropy fallback on every tool output. On by default; turning off is an explicit statement.",
                '''
     <h2>What it detects</h2>
-    <p>API keys (OpenAI, Anthropic, Stripe, Slack, GitHub, GitLab, npm, AWS, GCP, HuggingFace), bearer tokens, JWTs, SSH private keys, <code>.env</code>-style <code>KEY=value</code> patterns for known-sensitive keys, and high-entropy strings in suspicious contexts. Each hit is replaced with <code>[REDACTED:&lt;family&gt;]</code> before the agent sees it.</p>
+    <p>API keys (OpenAI, Anthropic, Stripe, Slack, GitHub, GitLab, npm, AWS, GCP, HuggingFace, Twilio), bearer tokens, JWTs, SSH private keys, <code>.env</code>-style <code>KEY=value</code> patterns for known-sensitive keys, and high-entropy strings in suspicious contexts. Each hit is replaced with <code>[REDACTED:&lt;family&gt;]</code> before the agent sees it.</p>
 
     <h2>Performance</h2>
     <p>The detector short-circuits with <code>firstMatch</code> so no-match inputs don't pay the full regex cost (1 MB benign input: ~25 ms).</p>
@@ -2080,7 +2080,8 @@ CONCEPTS = [
     <p><a href="__BASE__docs/reference/mcp/senkani_web.html"><code>senkani_web</code></a> resolves the target host via <code>getaddrinfo</code> before fetch and blocks any address in private/link-local/CGNAT/multicast ranges (including IPv4-mapped IPv6, octal/hex IPv4, IPv4-compatible IPv6). Redirects are re-validated via <code>WKNavigationDelegate.decidePolicyFor</code> — a 3xx Location header to <code>10.x</code>, <code>169.254.169.254</code>, or <code>::ffff:…</code> is cancelled. A <code>WKContentRuleList</code> blocks subresource requests (img/script/xhr) to the same ranges, so a hostile HTML page embedding <code>&lt;img src="http://169.254.169.254/…"&gt;</code> cannot reach cloud metadata through WebKit's auto-rendering. <code>file://</code> scheme is rejected entirely.</p>
 
     <h2>Secret redaction</h2>
-    <p>13 regex families + entropy-based fallback. Short-circuits with <code>firstMatch</code> so no-match inputs don't pay the full regex cost (1 MB benign input: ~25 ms). Every tool output runs through before reaching the model. The counter <code>command_redactions</code> on <code>event_counters</code> increments on each redaction.</p>
+    <p>14 regex families + entropy-based fallback. Short-circuits with <code>firstMatch</code> so no-match inputs don't pay the full regex cost (1 MB benign input: ~25 ms). Every tool output runs through before reaching the model. The counter <code>command_redactions</code> on <code>event_counters</code> increments on each redaction.</p>
+    <p>Measured against a 53-fixture adversarial corpus (recalibrated 2026-05-01 after closing the Twilio <code>AC</code> gap): <strong>1.000 precision, 0.915 recall, zero false positives</strong>. The 4 remaining misses are documented gaps — sub-threshold tokens (Slack <code>xoxb-</code> body &lt;10 chars, Stripe <code>sk_live_</code>/<code>sk_test_</code> &lt;24 chars), GCS-style signed URLs (entropy scanner skips any token with an <code>https://</code> prefix), and 66-char pure-hex blobs (Shannon caps at 4.0 bits/char for hex, below the 4.5 floor). The harness asserts per-family precision and recall floors so a regression fails the test deterministically; a future change that closes a documented gap fails with "documented gap appears closed" so the public number stays calibrated. The friendly fixture suite still measures 100% — both numbers are reported as a pair.</p>
 
     <h2>Schema migrations — versioned + crash-safe</h2>
     <p>Session DB uses <code>PRAGMA user_version</code> + a <code>schema_migrations</code> audit log. Cross-process coordination via <code>flock</code> sidecar. On failed migration, a kill-switch lockfile is written and subsequent boots refuse to run migrations until the operator inspects the DB. This trades convenience for safety deliberately.</p>

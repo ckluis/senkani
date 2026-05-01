@@ -140,7 +140,7 @@ import Foundation
         .init(family: "jwt_bare",             minPrecision: 1.00, minRecall: 1.00, note: "Bare JWTs detected via entropy on the long base64 token."),
         .init(family: "pem_key",              minPrecision: 1.00, minRecall: 1.00, note: "PEM body lines redacted via entropy."),
         .init(family: "signed_url",           minPrecision: 1.00, minRecall: 0.50, note: "GAP: GCS-style signed URLs leak (URL-prefix exclusion swallows the whole token). 1/2 fixtures detected."),
-        .init(family: "short_token",          minPrecision: 1.00, minRecall: 0.00, note: "GAP: sub-threshold tokens (Slack <10ch body, Stripe <24ch, Twilio AC unsupported) cannot match by design."),
+        .init(family: "short_token",          minPrecision: 1.00, minRecall: 0.33, note: "TWILIO_ACCOUNT_SID closes 1/3 (cleanup-18, 2026-05-01); remaining gaps are sub-threshold Slack <10ch body and Stripe <24ch — by design."),
         .init(family: "dotenv",               minPrecision: 1.00, minRecall: 1.00, note: "PASSWORD/SECRET env names use entropy fallback."),
         .init(family: "obfuscated",           minPrecision: 1.00, minRecall: 0.50, note: "GAP: 66-char pure-hex blobs sit below the 4.5 entropy floor (max 4.0 for hex)."),
         .init(family: "multi_secret",         minPrecision: 1.00, minRecall: 1.00, note: "All secrets in fixture must redact (match_mode: all)."),

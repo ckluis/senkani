@@ -12,7 +12,7 @@ import Foundation
 /// Tests use `Logger._setTestSink` to observe events in-process; the sink
 /// is a tee that runs alongside the normal stderr emit, so tests don't
 /// dup2 fd 2.
-@Suite("LoggerRouting")
+@Suite("LoggerRouting", .serialized)
 struct LoggerRoutingTests {
 
     // MARK: - Sink helpers
@@ -79,9 +79,14 @@ struct LoggerRoutingTests {
         let bogus = "/dev/null/senkani-routing-\(UUID().uuidString).db"
         withSink { sink in
             _ = SessionDatabase(path: bogus)
-            #expect(sink.count(of: "db.session.open_failed") >= 1,
-                    "expected db.session.open_failed; saw \(sink.names)")
-            let fields = sink.first(named: "db.session.open_failed") ?? [:]
+            // Filter by path so cross-suite events can't muddle attribution.
+            let mine = sink.events.filter { ev in
+                ev.0 == "db.session.open_failed"
+                    && pathField(ev.1, "path") == bogus
+            }
+            #expect(!mine.isEmpty,
+                    "expected db.session.open_failed for our path; saw \(sink.names)")
+            let fields = mine.first?.1 ?? [:]
             #expect(stringField(fields, "outcome") == "error")
             #expect(stringField(fields, "mode") == "test",
                     "test-init path must tag mode=test")
@@ -97,10 +102,17 @@ struct LoggerRoutingTests {
         defer { cleanup(path) }
         withSink { sink in
             _ = SessionDatabase(path: path)
-            // Fresh DB applies all known migrations (>=1 version).
-            #expect(sink.count(of: "db.session.migrations_applied") == 1,
-                    "fresh DB should fire migrations_applied exactly once; saw \(sink.names)")
-            let fields = sink.first(named: "db.session.migrations_applied") ?? [:]
+            // Fresh DB applies all known migrations (>=1 version). Filter
+            // by path so concurrent fresh DB opens in other suites don't
+            // bleed into the count — Logger._testSink is a process-global
+            // singleton, but the production event carries its DB path.
+            let mine = sink.events.filter { ev in
+                ev.0 == "db.session.migrations_applied"
+                    && pathField(ev.1, "path") == path
+            }
+            #expect(mine.count == 1,
+                    "fresh DB should fire migrations_applied exactly once for our path; saw \(mine.count) of \(sink.count(of: "db.session.migrations_applied")) total")
+            let fields = mine.first?.1 ?? [:]
             #expect(stringField(fields, "outcome") == "success")
             let count = intField(fields, "count") ?? 0
             #expect(count >= 1, "fresh DB must apply at least one migration; got count=\(count)")
@@ -114,11 +126,17 @@ struct LoggerRoutingTests {
         defer { cleanup(path) }
         // Pre-migrate.
         _ = SessionDatabase(path: path)
-        // Re-open: no migrations applied this round.
+        // Re-open: no migrations applied this round for THIS path. Filter
+        // by path because other suites' concurrent fresh DB opens emit the
+        // same event into the shared sink.
         withSink { sink in
             _ = SessionDatabase(path: path)
-            #expect(sink.count(of: "db.session.migrations_applied") == 0,
-                    "re-open of migrated DB must NOT fire migrations_applied; saw \(sink.names)")
+            let mine = sink.events.filter { ev in
+                ev.0 == "db.session.migrations_applied"
+                    && pathField(ev.1, "path") == path
+            }
+            #expect(mine.isEmpty,
+                    "re-open of migrated DB must NOT fire migrations_applied for our path; saw \(mine.count)")
         }
     }
 
@@ -131,7 +149,11 @@ struct LoggerRoutingTests {
         let bogus = "/dev/null/senkani-mode-\(UUID().uuidString).db"
         withSink { sink in
             _ = SessionDatabase(path: bogus)
-            let fields = sink.first(named: "db.session.open_failed") ?? [:]
+            let mine = sink.events.first { ev in
+                ev.0 == "db.session.open_failed"
+                    && pathField(ev.1, "path") == bogus
+            }
+            let fields = mine?.1 ?? [:]
             let mode = stringField(fields, "mode")
             #expect(mode == "test" || mode == "default",
                     "open_failed must tag mode=test|default; got \(mode ?? "nil")")
@@ -237,7 +259,11 @@ struct LoggerRoutingTests {
         let bogus = "/dev/null/senkani-shape-\(UUID().uuidString).db"
         withSink { sink in
             _ = SessionDatabase(path: bogus)
-            let fields = sink.first(named: "db.session.open_failed") ?? [:]
+            let mine = sink.events.first { ev in
+                ev.0 == "db.session.open_failed"
+                    && pathField(ev.1, "path") == bogus
+            }
+            let fields = mine?.1 ?? [:]
             // Required fields on open_failed.
             for key in ["mode", "path", "error", "outcome"] {
                 #expect(fields[key] != nil, "open_failed must include \(key); saw \(Array(fields.keys))")

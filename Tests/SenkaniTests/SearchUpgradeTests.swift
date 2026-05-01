@@ -25,7 +25,13 @@ private func parseResponse(_ data: Data) -> (decision: String?, reason: String?)
 
 // MARK: - Tests
 
-@Suite("HookRouter — Search Upgrade Hint")
+// `.serialized` is required: every test mutates the global
+// `HookRouter.readDenialTracker` singleton via `reset()` +
+// `recordAndCount(...)`. Running in parallel within the suite, one
+// test's writes leak into another's count assertions — most acutely
+// in `expiredEntriesIgnored`, which sleeps 200 ms between operations
+// and counts what's left.
+@Suite("HookRouter — Search Upgrade Hint", .serialized)
 struct SearchUpgradeTests {
 
     @Test func noHintForTwoReads() {

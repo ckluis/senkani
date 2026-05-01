@@ -40,16 +40,38 @@ public final class SessionDatabase: @unchecked Sendable {
     internal var db: OpaquePointer?
     internal let queue = DispatchQueue(label: "com.senkani.sessiondb", qos: .utility)
 
+    /// Specific marker the queue carries so `deinit` (and any future
+    /// reentrant caller) can detect whether it is *already* running on
+    /// `queue` and skip a `queue.sync` that would deadlock. The
+    /// previous `deinit { queue.sync { ... } }` racily SIGTRAPped under
+    /// the chunked test harness — when the last strong reference to
+    /// `self` was an async block executing ON `queue`, the strong-drop
+    /// at block end triggered `deinit` on the queue thread, and the
+    /// inner `queue.sync` deadlocked into a dispatch precondition fail.
+    /// Bisect: round `bisect-sigtrap-source` traced this back to T.6a
+    /// expanding the migration count from 10 → 13, lengthening the
+    /// async-recordEvent burst at init time and widening the race.
+    private static let queueKey = DispatchSpecificKey<Int>()
+    private static let queueMarker: Int = 0xC0_DE_BA_5E
+
     // Extracted stores. Each owns its tables end-to-end and shares the
     // parent's connection/queue.
     internal var commandStore: CommandStore!
     internal var tokenEventStore: TokenEventStore!
     internal var sandboxStore: SandboxStore!
     internal var validationStore: ValidationStore!
+    internal var paneRefreshStateStore: PaneRefreshStateStore!
+    internal var agentTraceEventStore: AgentTraceEventStore!
+    internal var annotationStore: AnnotationStore!
+    internal var confirmationStore: ConfirmationStore!
+    internal var trustAuditStore: TrustAuditStore!
+    internal var annotationRateCapStore: AnnotationRateCapStore!
+    internal var contextPlanStore: ContextPlanStore!
 
     // MARK: - Init
 
     private init() {
+        queue.setSpecific(key: Self.queueKey, value: Self.queueMarker)
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -77,11 +99,26 @@ public final class SessionDatabase: @unchecked Sendable {
         sandboxStore.setupSchema()
         validationStore = ValidationStore(parent: self)
         validationStore.setupSchema()
-        runMigrations(path: dbPath)
+        paneRefreshStateStore = PaneRefreshStateStore(parent: self)
+        paneRefreshStateStore.setupSchema()
+        agentTraceEventStore = AgentTraceEventStore(parent: self)
+        agentTraceEventStore.setupSchema()
+        annotationStore = AnnotationStore(parent: self)
+        annotationStore.setupSchema()
+        confirmationStore = ConfirmationStore(parent: self)
+        confirmationStore.setupSchema()
+        trustAuditStore = TrustAuditStore(parent: self)
+        trustAuditStore.setupSchema()
+        annotationRateCapStore = AnnotationRateCapStore(parent: self)
+        annotationRateCapStore.setupSchema()
+        contextPlanStore = ContextPlanStore(parent: self)
+        contextPlanStore.setupSchema()
+        runMigrations(path:dbPath)
     }
 
     /// Testable initializer — opens a DB at a custom path (use a temp file).
     public init(path: String) {
+        queue.setSpecific(key: Self.queueKey, value: Self.queueMarker)
         let dir = (path as NSString).deletingLastPathComponent
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
 
@@ -104,7 +141,21 @@ public final class SessionDatabase: @unchecked Sendable {
         sandboxStore.setupSchema()
         validationStore = ValidationStore(parent: self)
         validationStore.setupSchema()
-        runMigrations(path: path)
+        paneRefreshStateStore = PaneRefreshStateStore(parent: self)
+        paneRefreshStateStore.setupSchema()
+        agentTraceEventStore = AgentTraceEventStore(parent: self)
+        agentTraceEventStore.setupSchema()
+        annotationStore = AnnotationStore(parent: self)
+        annotationStore.setupSchema()
+        confirmationStore = ConfirmationStore(parent: self)
+        confirmationStore.setupSchema()
+        trustAuditStore = TrustAuditStore(parent: self)
+        trustAuditStore.setupSchema()
+        annotationRateCapStore = AnnotationRateCapStore(parent: self)
+        annotationRateCapStore.setupSchema()
+        contextPlanStore = ContextPlanStore(parent: self)
+        contextPlanStore.setupSchema()
+        runMigrations(path:path)
     }
 
     // MARK: - Observability counters (migration v2)
@@ -233,6 +284,7 @@ public final class SessionDatabase: @unchecked Sendable {
                     Logger.log("db.session.migrations_applied", fields: [
                         "versions": .string(applied.map(String.init).joined(separator: ",")),
                         "count": .int(applied.count),
+                        "path": .path(path),
                         "outcome": .string("success"),
                     ])
                 }
@@ -260,9 +312,27 @@ public final class SessionDatabase: @unchecked Sendable {
     }
 
     deinit {
-        // Ensure all queued work completes before closing.
-        queue.sync {
+        // Reentrancy guard. If `deinit` was triggered by the strong-
+        // ref drop at the END of an async block executing ON `queue`,
+        // we are *already* on the queue thread. Calling `queue.sync`
+        // from there deadlocks → dispatch precondition fail → SIGTRAP
+        // → swiftpm-testing-helper exits with `signal code 5`. The
+        // race is widened by long bursts of `recordEvent(...)` async
+        // tasks during `runMigrations` (round T.6a's migration v11
+        // pushed the burst from 10 to 13 entries — see
+        // `bisect-sigtrap-source`).
+        //
+        // Detect via DispatchSpecific: when the marker is present we
+        // are on `queue` already and can close the db directly.
+        // Otherwise the historical guarantee — "all queued work
+        // completes before close" — is preserved by `queue.sync`.
+        let onQueue = DispatchQueue.getSpecific(key: Self.queueKey) == Self.queueMarker
+        if onQueue {
             if let db = db { sqlite3_close(db) }
+        } else {
+            queue.sync {
+                if let db = db { sqlite3_close(db) }
+            }
         }
     }
 

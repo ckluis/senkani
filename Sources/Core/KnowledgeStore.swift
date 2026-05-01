@@ -17,6 +17,12 @@ public struct KnowledgeEntity: Sendable, Equatable {
     public let stalenessScore: Double       // 0.0 (fresh) → 1.0 (stale)
     public let createdAt: Date
     public let modifiedAt: Date
+    /// Phase V.5 round 1 — provenance tag. `nil` ONLY for rows
+    /// read out of pre-V.5 history (column was NULL); never set to
+    /// nil when constructing a new entity in code. New inserts
+    /// route through `AuthorshipTracker` and carry an explicit
+    /// `AuthorshipTag`. See `Sources/Core/AuthorshipTag.swift`.
+    public let authorship: AuthorshipTag?
 
     public init(
         id: Int64 = 0,
@@ -31,7 +37,8 @@ public struct KnowledgeEntity: Sendable, Equatable {
         sessionMentions: Int = 0,
         stalenessScore: Double = 0.0,
         createdAt: Date = Date(),
-        modifiedAt: Date = Date()
+        modifiedAt: Date = Date(),
+        authorship: AuthorshipTag? = nil
     ) {
         self.id = id; self.name = name; self.entityType = entityType
         self.sourcePath = sourcePath; self.markdownPath = markdownPath
@@ -39,6 +46,7 @@ public struct KnowledgeEntity: Sendable, Equatable {
         self.lastEnriched = lastEnriched; self.mentionCount = mentionCount
         self.sessionMentions = sessionMentions; self.stalenessScore = stalenessScore
         self.createdAt = createdAt; self.modifiedAt = modifiedAt
+        self.authorship = authorship
     }
 }
 

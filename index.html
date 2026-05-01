@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>senkani — compression layer for AI coding agents</title>
-<meta name="description" content="Senkani is a native macOS trust boundary between your AI coding agent and your filesystem. Hook relay, symbol indexer, and 19 MCP tools cut 50–90% of tokens before the request leaves your machine. Claude Code, Cursor, Copilot.">
+<meta name="description" content="Senkani is a native macOS trust boundary between your AI coding agent and your filesystem. Hook relay, symbol indexer, and 20 MCP tools cut 50–90% of tokens before the request leaves your machine. Claude Code, Cursor, Copilot.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -51,7 +51,7 @@
     <span>Universal binary · Swift 6.0+</span>
     <span>macOS 14+</span>
     <span>Fully offline after install</span>
-    <span>1,837 tests green</span>
+    <span>2,400 tests green</span>
   </div>
 </header>
 
@@ -101,18 +101,18 @@
 </section>
 
 <!-- ===================================================================
-     HERO 2 — MCP intelligence (19 tools)
+     HERO 2 — MCP intelligence (20 tools)
      =================================================================== -->
 <section class="product-band dark" aria-label="MCP intelligence">
   <div class="product-hero reverse">
     <div class="product-hero-text">
       <span class="overline">MCP intelligence</span>
-      <h2>19 tools your agent <span class="accent">actually wants.</span></h2>
+      <h2>20 tools your agent <span class="accent">actually wants.</span></h2>
       <p>Every senkani MCP tool is designed for a specific friction point in an agent-driven coding session. Compressed reads, filtered shells, symbol lookups, sandboxed parse, local embed + vision, budget-bounded repo bundles.</p>
       <ul class="product-hero-bullets">
         <li><strong>Perception tools</strong> — <code>senkani_read</code>, <code>senkani_search</code>, <code>senkani_fetch</code>, <code>senkani_outline</code>, <code>senkani_explore</code>, <code>senkani_deps</code>. Backed by 25-language tree-sitter index + FTS5.</li>
         <li><strong>Local ML</strong> — <code>senkani_embed</code> (MiniLM, 384-dim) + <code>senkani_vision</code> (Gemma). Zero API cost. Fully offline.</li>
-        <li><strong>External</strong> — <code>senkani_web</code> (JS-rendered + SSRF-guarded) and <code>senkani_repo</code> (GitHub, host-allowlisted).</li>
+        <li><strong>External</strong> — <code>senkani_web</code> (JS-rendered + SSRF-guarded), <code>senkani_search_web</code> (DuckDuckGo Lite, no key, <code>guard-research</code>-filtered), <code>senkani_repo</code> (GitHub, host-allowlisted).</li>
       </ul>
       <a class="product-hero-cta" href="docs/reference/mcp.html">Browse every tool <span aria-hidden="true">→</span></a>
     </div>
@@ -128,8 +128,9 @@
         <div class="viz-grid-item"><span class="code-name">senkani_vision</span><span class="code-tag">Local ML</span></div>
         <div class="viz-grid-item"><span class="code-name">senkani_web</span><span class="code-tag">External</span></div>
         <div class="viz-grid-item"><span class="code-name">senkani_repo</span><span class="code-tag">External</span></div>
+        <div class="viz-grid-item"><span class="code-name">senkani_search_web</span><span class="code-tag">External</span></div>
         <div class="viz-grid-item"><span class="code-name">senkani_bundle</span><span class="code-tag">Knowledge</span></div>
-        <div class="viz-grid-item"><span class="code-name">+ 8 more</span><span class="code-tag">Session · Knowledge · Meta</span></div>
+        <div class="viz-grid-item"><span class="code-name">+ 7 more</span><span class="code-tag">Session · Knowledge · Meta</span></div>
       </div>
     </div>
   </div>
@@ -145,7 +146,7 @@
       <h2>18 panes. <span class="accent">One canvas.</span> Your layout.</h2>
       <p>A horizontal canvas of typed panes. Each pane is a primitive — Terminal, Code Editor, Browser, Hook Timeline, Analytics, Knowledge Base, Sprint Review — and you arrange them however makes sense for what you're doing right now. Senkani persists the layout per project.</p>
       <ul class="product-hero-bullets">
-        <li><strong>⌘K command palette.</strong> Open any pane, run any action, switch themes, in one keystroke.</li>
+        <li><strong>⌘K command palette.</strong> Search-as-you-type for any of the 18 pane types — derived directly from the Add-Pane gallery so what's listed is what launches.</li>
         <li><strong>Per-pane toggles.</strong> F/C/S/I/T controls run independent compression per pane — a terse research pane next to a full-fidelity build pane.</li>
         <li><strong>Sub-3 ms renders.</strong> SwiftTerm + Metal on M-series. p50 ~2.1 ms, p99 ~3.4 ms.</li>
       </ul>
@@ -154,7 +155,7 @@
     <div class="product-hero-visual" aria-hidden="true">
       <div class="viz-panes">
         <div class="viz-pane-tile green"><span class="name">Terminal</span><span class="desc">SwiftTerm, broadcast mode</span></div>
-        <div class="viz-pane-tile blue"><span class="name">Analytics</span><span class="desc">Tokens + cost charts</span></div>
+        <div class="viz-pane-tile blue"><span class="name">Analytics</span><span class="desc">Tokens + cost + tier-routing charts</span></div>
         <div class="viz-pane-tile amber"><span class="name">Code Editor</span><span class="desc">tree-sitter · 25 langs</span></div>
         <div class="viz-pane-tile purple"><span class="name">Hook Timeline</span><span class="desc">Allow/deny events</span></div>
         <div class="viz-pane-tile cyan"><span class="name">Browser</span><span class="desc">WKWebView + Design Mode</span></div>
@@ -217,6 +218,7 @@
         <li><strong>FTS5 search + BM25 ranking.</strong> <code>senkani_knowledge</code> or <code>senkani kb search</code>.</li>
         <li><strong>Enrichment validator</strong> flags information loss, contradiction, excessive rewrite before any Gemma enrichment commits.</li>
         <li><strong>Rollback + timeline.</strong> Every change is append-only history; <code>senkani kb rollback</code> reverts; <code>senkani kb timeline</code> shows the full chronology.</li>
+        <li><strong>Portable vault.</strong> <code>senkani kb migrate --to ~/My-Vault</code> relocates the markdown out of the project tree; per-project slug keeps multi-repo vaults isolated. Idempotent migrate / unmigrate, conflict detection, no silent overwrite.</li>
       </ul>
       <a class="product-hero-cta" href="docs/concepts/knowledge-base.html">How the KB stays coherent <span aria-hidden="true">→</span></a>
     </div>
@@ -291,7 +293,7 @@
         <div class="label">Live-session median — Phase G capture in progress, target 2026-05-31. <a href="docs/reference/panes/savings-test.html" style="color:var(--accent-hi);">Savings Test pane</a> shows the live floor on your own sessions today.</div>
       </div>
       <div class="stat">
-        <div class="num"><em>1,837</em></div>
+        <div class="num"><em>2,340</em></div>
         <div class="label">Passing unit tests. Every MCP tool, every filter rule, every denial path.</div>
       </div>
       <div class="stat">
@@ -312,18 +314,21 @@
 <section class="gallery" aria-label="Install">
   <span class="overline">Get started</span>
   <h2>Install in three minutes.</h2>
-  <p class="lede">Clone, build with Swift Package Manager, register hooks, launch the workspace. Idempotent — safe to re-run.</p>
+  <p class="lede">Clone, build with Swift Package Manager, launch SenkaniApp, then register hooks per project. Idempotent — safe to re-run.</p>
   <pre class="code" style="max-width:680px;"><span class="c"># clone + build</span>
 git clone https://github.com/ckluis/senkani
 cd senkani
 swift build -c release
 
-<span class="c"># register globally (idempotent)</span>
-.build/release/senkani init
+<span class="c"># launch the workspace (auto-registers global MCP + hook wrapper)</span>
+.build/release/SenkaniApp
 
-<span class="c"># verify + launch</span>
-.build/release/senkani doctor
-.build/release/senkani</pre>
+<span class="c"># register PreToolUse + PostToolUse hooks for THIS project</span>
+cd /path/to/your/project
+/path/to/senkani/.build/release/senkani init
+
+<span class="c"># verify</span>
+/path/to/senkani/.build/release/senkani doctor</pre>
   <div class="cta-row" style="margin-top:32px;">
     <a class="btn btn-primary" href="docs/guides/install.html">Full install guide</a>
     <a class="btn btn-secondary" href="docs/guides/claude-code.html">Wire up Claude Code</a>

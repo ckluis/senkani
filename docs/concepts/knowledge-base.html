@@ -86,6 +86,9 @@
     <h2>Layer 1 coordinator</h2>
     <p><code>KBLayer1Coordinator</code> detects SQLite index staleness (markdown newer than indexed) and corruption (unreadable pragmas). In either case it rebuilds from markdown without stopping the MCP server. Hand-edits to <code>.senkani/knowledge/*.md</code> are safe — the index follows.</p>
 
+    <h2>Portable vault (Phase V.7)</h2>
+    <p>The markdown vault is project-local by default but relocatable. Set <code>kb_vault_path</code> in <code>~/.senkani/config.json</code> (or pass <code>senkani kb migrate --to &lt;path&gt;</code> — the CLI persists the path for you) to keep the vault next to other Obsidian vaults instead of inside the project tree. The resolver appends <code>&lt;project-slug&gt;</code> per-project so multiple repos sharing one vault root never collide on entity name. <code>senkani kb migrate</code> and <code>senkani kb unmigrate</code> move files in either direction; both are content-hash idempotent (running twice is a no-op) and surface conflicts (dest content differs) as a non-zero exit instead of silently overwriting. <code>WikiLinkResolver</code> handles click-through resolution for <code>[[Name]]</code> with folder-hint disambiguation (<code>[[skills/auth/Login]]</code> vs <code>[[skills/admin/Login]]</code>).</p>
+
     <h2>Bridge to compound learning</h2>
     <p>See <a href="../../docs/concepts/compound-learning.html">compound learning</a> for the KB ↔ learning bridge: entity-mention counts boost proposal confidence; applied context docs seed entity stubs; rolling back an entity invalidates derived context docs.</p>
 

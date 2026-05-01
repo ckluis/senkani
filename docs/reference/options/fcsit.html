@@ -89,6 +89,9 @@
     <h2>Per-pane vs global</h2>
     <p>FCSIT is <strong>per-pane</strong>. Different panes can run different combinations — a terse-mode research pane alongside a full-fidelity build pane. Global defaults come from <code>~/.senkani/config.json</code>; env vars override per pane; the UI toggle is the final say for the current session.</p>
 
+    <h2>First-use disclosure</h2>
+    <p>The compact <strong>F C S I T</strong> letters in a pane header expand into a one-shot disclosure popover the first time a user hovers over them or taps any letter. The popover names every letter (Filter, Cache, Secrets, Indexer, Terse), quotes the savings band each unlocks, and explains the tap-to-toggle / double-click-for-details affordances; dismissing it via <strong>Got it</strong> sets a versioned <code>UserDefaults</code> flag (<code>senkani.fcsit.firstUseDisclosureSeen.v1</code>) so the popover never re-fires for that user. VoiceOver names each toggle in literal feature terms ("Filter, on" / "Filter, off") with the toggle's effect on the accessibility hint, so the letter glyph is never the only handle a user has on the control.</p>
+
   </article>
 </main>
 <footer class="site-foot">

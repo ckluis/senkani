@@ -45,6 +45,14 @@ final class KBPaneViewModel {
     var isDirty: Bool = false
     var isSaving: Bool = false
 
+    // V.5b — authorship prompt state. `pendingAuthorshipPrompt` is
+    // bound to a SwiftUI `.sheet` in `KnowledgeBaseView`. Set true when
+    // a save is queued but the row's prior `authorship` is `.unset` or
+    // `nil`; cleared by `resolveAuthorship(_:)` (operator picked a tag,
+    // save proceeds) or `skipAuthorship()` (operator deferred, save
+    // aborts and the editor stays dirty).
+    var pendingAuthorshipPrompt: Bool = false
+
     // MARK: - List actions
 
     /// Load entity list from store. Dispatches DB read to background, posts to main.
@@ -137,7 +145,41 @@ final class KBPaneViewModel {
     }
 
     /// Save edited understanding to DB (always) and .md file (when layer + parsed content available).
+    /// V.5b — when the row's prior authorship is `.unset` or `nil`,
+    /// surfaces the prompt sheet first; the save commits only after
+    /// `resolveAuthorship(_:)` lands an explicit tag. `skipAuthorship()`
+    /// aborts the save and leaves the editor dirty.
     func saveUnderstanding() {
+        guard let entity = selectedEntity else { return }
+        if AuthorshipPromptResolver.needsPrompt(priorAuthorship: entity.authorship) {
+            pendingAuthorshipPrompt = true
+            return
+        }
+        // Prior tag is one of the three explicit values — preserve it.
+        let preserved = entity.authorship ?? .unset
+        commitSave(authorship: preserved)
+    }
+
+    /// V.5b — operator picked a tag in the prompt. Resolve through
+    /// `AuthorshipPromptResolver` and complete the save with the
+    /// chosen explicit tag (never silently inferred).
+    func resolveAuthorship(_ choice: AuthorshipTag) {
+        pendingAuthorshipPrompt = false
+        commitSave(authorship: AuthorshipPromptResolver.resolve(choice: choice))
+    }
+
+    /// V.5b — operator hit Skip. No save. Row stays dirty so the
+    /// operator can still resolve later. Cavoukian red flag: never
+    /// silently persist `.unset` through this path.
+    func skipAuthorship() {
+        pendingAuthorshipPrompt = false
+        // isDirty stays true; isSaving was never set.
+    }
+
+    /// Internal — commit the in-flight edit to the DB + on-disk
+    /// markdown with an explicit tag. Called from both the no-prompt
+    /// fast path and the post-resolution path.
+    private func commitSave(authorship: AuthorshipTag) {
         guard let entity = selectedEntity else { return }
         isSaving = true
         let understanding = understandingText
@@ -162,7 +204,7 @@ final class KBPaneViewModel {
                 createdAt: entity.createdAt,
                 modifiedAt: Date()
             )
-            _ = store.upsertEntity(updated)
+            _ = store.upsertEntity(updated, authorship: authorship)
 
             // 2. Sync to .md — only when a parsed KBContent exists (entity was previously enriched)
             if let layer, let orig = original {

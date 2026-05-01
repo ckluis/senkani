@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Wire up Claude Code — guide</title>
-<meta name="description" content="Senkani&#x27;s MCP server registers globally with Claude Code via &lt;code&gt;senkani init&lt;/code&gt;. No config files to maintain.">
+<meta name="description" content="SenkaniApp auto-registers its MCP server globally on launch; senkani init wires PreToolUse + PostToolUse hooks per project. Two paths, no config files to maintain.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -58,21 +58,29 @@
     </nav>
     <span class="quadrant guide">Guide · How-to</span>
     <h1 class="page-title">Wire up Claude Code</h1>
-    <p class="lede">Senkani's MCP server registers globally with Claude Code via <code>senkani init</code>. No config files to maintain.</p>
+    <p class="lede">SenkaniApp auto-registers its MCP server globally on launch; <code>senkani init</code> wires PreToolUse + PostToolUse hooks per project. Two paths, no config files to maintain.</p>
+
+    <h2>What SenkaniApp does on launch</h2>
+    <ol>
+      <li>Installs the hook wrapper at <code>~/.senkani/bin/senkani-hook</code> (compiled Mach-O when available, &lt; 5 ms startup; bash fallback otherwise).</li>
+      <li>Ensures a single global MCP entry in <code>~/.claude/settings.json</code> under <code>mcpServers</code>:
+        <pre class="code"><span class="k">"mcpServers"</span>: {
+  <span class="k">"senkani"</span>: {
+    <span class="k">"command"</span>: <span class="v">"/Users/you/.../SenkaniApp"</span>,
+    <span class="k">"args"</span>: [<span class="v">"--mcp-server"</span>]
+  }
+}</pre>
+      </li>
+      <li>Strips any legacy global hook entries — Senkani never pollutes the global Claude Code hook chain.</li>
+      <li>Idempotent on every launch. No sudo. No shell profile changes.</li>
+    </ol>
 
     <h2>What <code>senkani init</code> modifies</h2>
     <ol>
-      <li>Writes <code>~/.senkani/bin/senkani-hook</code> (the compiled Mach-O hook binary, zero deps, &lt; 5 ms startup).</li>
-      <li>Appends an entry to <code>~/.claude/settings.json</code> under <code>mcpServers</code>:
-        <pre class="code"><span class="k">"mcpServers"</span>: {{
-  <span class="k">"senkani"</span>: {{
-    <span class="k">"command"</span>: <span class="v">"/Users/you/.senkani/bin/senkani"</span>,
-    <span class="k">"args"</span>: []
-  }}
-}}</pre>
-      </li>
-      <li>Appends PreToolUse + PostToolUse hook entries with matcher <code>Read|Bash|Grep|Write|Edit</code>.</li>
-      <li>Does not touch any other settings. Does not require sudo. Does not modify shell profiles.</li>
+      <li>Run from a project root: registers PreToolUse + PostToolUse hook entries in <code>&lt;project&gt;/.claude/settings.json</code>, pointing at <code>~/.senkani/bin/senkani-hook</code>.</li>
+      <li>Touches only the project's <code>.claude/settings.json</code> — never global. Idempotent.</li>
+      <li>Reverse with <code>senkani init --uninstall</code>; pin a specific binary with <code>senkani init --hook-path /path/to/senkani-hook</code>.</li>
+      <li><strong>Does not</strong> register the MCP server (that's the app's job above) and <strong>does not</strong> install the hook binary (the app does that too).</li>
     </ol>
 
     <h2>Verify</h2>
@@ -81,9 +89,9 @@
 
     <h2>First session</h2>
     <ol>
-      <li>Launch the senkani app (<code>senkani</code> with no args, or open SenkaniApp).</li>
-      <li>Open a Terminal pane (⌘K → "Terminal").</li>
-      <li>Run <code>claude</code> inside the pane. The MCP server starts; the agent sees all 19 senkani tools on top of Claude Code's built-ins.</li>
+      <li>Launch SenkaniApp (open it from <code>/Applications</code> or run <code>.build/release/SenkaniApp</code>). The Welcome surface gates Claude / Ollama launches behind a project-folder pick.</li>
+      <li>Click <strong>Choose project folder</strong> and select the repo you want the agent to work in. The Claude card flips to <strong>Start Claude in &lt;project&gt;</strong>.</li>
+      <li>Click <strong>Start Claude in &lt;project&gt;</strong>. Senkani opens a Terminal pane in the project root and launches <code>claude</code>; the agent sees all senkani MCP tools on top of Claude Code's built-ins.</li>
       <li>Open an Analytics pane side-by-side (⌘K → "Analytics"). Watch token savings accumulate as the session runs.</li>
     </ol>
 

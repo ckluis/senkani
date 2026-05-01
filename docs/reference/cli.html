@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CLI commands — reference</title>
-<meta name="description" content="Reference for all 20 senkani CLI commands.">
+<meta name="description" content="Reference for all 23 senkani CLI commands.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -38,7 +38,7 @@
       </ul>
     </div>
     <div class="wiki-nav-group">
-      <h4>CLI commands (20)</h4>
+      <h4>CLI commands (22)</h4>
       <ul>
         <li><a href="../../docs/reference/cli/senkani-exec.html"><code>senkani exec</code></a></li>
         <li><a href="../../docs/reference/cli/senkani-search.html"><code>senkani search</code></a></li>
@@ -60,6 +60,8 @@
         <li><a href="../../docs/reference/cli/senkani-eval.html"><code>senkani eval</code></a></li>
         <li><a href="../../docs/reference/cli/senkani-ml-eval.html"><code>senkani ml-eval</code></a></li>
         <li><a href="../../docs/reference/cli/senkani-learn.html"><code>senkani learn</code></a></li>
+        <li><a href="../../docs/reference/cli/senkani-authorship.html"><code>senkani authorship</code></a></li>
+        <li><a href="../../docs/reference/cli/senkani-skill.html"><code>senkani skill</code></a></li>
       </ul>
     </div>
   </aside>
@@ -87,7 +89,7 @@
       <a class="listing-row" href="../../docs/reference/cli/senkani-export.html"><div class="listing-name">senkani export</div><div class="listing-desc">JSONL dump of sessions + commands + token_events. GDPR-adjacent data portability.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
       <a class="listing-row" href="../../docs/reference/cli/senkani-wipe.html"><div class="listing-name">senkani wipe</div><div class="listing-desc">Destructive: delete session DB + socket-auth token.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
       <a class="listing-row" href="../../docs/reference/cli/senkani-bench.html"><div class="listing-name">senkani bench</div><div class="listing-desc">Run the benchmark suite: 10 tasks × 7 configs.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
-      <a class="listing-row" href="../../docs/reference/cli/senkani-init.html"><div class="listing-name">senkani init</div><div class="listing-desc">Register MCP server + hooks with Claude Code. Idempotent.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../../docs/reference/cli/senkani-init.html"><div class="listing-name">senkani init</div><div class="listing-desc">Register Senkani's hooks for the current project. Idempotent.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
       <a class="listing-row" href="../../docs/reference/cli/senkani-doctor.html"><div class="listing-name">senkani doctor</div><div class="listing-desc">Diagnose and optionally repair hook registration, binary paths, grammar versions, config.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
       <a class="listing-row" href="../../docs/reference/cli/senkani-compare.html"><div class="listing-name">senkani compare</div><div class="listing-desc">Diff two files or git revisions through the filter pipeline.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
       <a class="listing-row" href="../../docs/reference/cli/senkani-grammars.html"><div class="listing-name">senkani grammars</div><div class="listing-desc">Show installed tree-sitter grammar versions.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
@@ -97,6 +99,8 @@
       <a class="listing-row" href="../../docs/reference/cli/senkani-eval.html"><div class="listing-name">senkani eval</div><div class="listing-desc">Quality gates: bench savings + KB health + regression detection.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
       <a class="listing-row" href="../../docs/reference/cli/senkani-ml-eval.html"><div class="listing-name">senkani ml-eval</div><div class="listing-desc">Per-tier Gemma 4 output quality eval — drives the 20-task harness against each installed tier and writes <code>~/.senkani/ml-tier-eval.json</code>.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
       <a class="listing-row" href="../../docs/reference/cli/senkani-learn.html"><div class="listing-name">senkani learn</div><div class="listing-desc">Compound learning CLI — review staged proposals, accept/reject, audit.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../../docs/reference/cli/senkani-authorship.html"><div class="listing-name">senkani authorship</div><div class="listing-desc">Bulk-tag legacy KB rows whose <code>authorship</code> column is NULL. Operator-triggered; never automatic.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../../docs/reference/cli/senkani-skill.html"><div class="listing-name">senkani skill</div><div class="listing-desc">Lint and export <code>HandManifest</code> skill packages. Round-trips one canonical manifest into Claude Code, Cursor, Codex, OpenCode, or Senkani output.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
     </div>
   </article>
 </main>

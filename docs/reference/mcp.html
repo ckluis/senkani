@@ -38,7 +38,7 @@
       </ul>
     </div>
     <div class="wiki-nav-group">
-      <h4>MCP tools (19)</h4>
+      <h4>MCP tools (20)</h4>
       <ul>
         <li><a href="../../docs/reference/mcp/senkani_read.html"><code>senkani_read</code></a></li>
         <li><a href="../../docs/reference/mcp/senkani_exec.html"><code>senkani_exec</code></a></li>
@@ -59,6 +59,7 @@
         <li><a href="../../docs/reference/mcp/senkani_version.html"><code>senkani_version</code></a></li>
         <li><a href="../../docs/reference/mcp/senkani_bundle.html"><code>senkani_bundle</code></a></li>
         <li><a href="../../docs/reference/mcp/senkani_repo.html"><code>senkani_repo</code></a></li>
+        <li><a href="../../docs/reference/mcp/senkani_search_web.html"><code>senkani_search_web</code></a></li>
       </ul>
     </div>
   </aside>
@@ -70,7 +71,7 @@
     </nav>
     <span class="quadrant reference">Reference · Information</span>
     <h1 class="page-title">MCP tools</h1>
-    <p class="lede">19 tools that sit between your agent and your filesystem. Each tool has its own page with inputs, outputs, examples, security notes, and source pointers. Pick any.</p>
+    <p class="lede">20 tools that sit between your agent and your filesystem. Each tool has its own page with inputs, outputs, examples, security notes, and source pointers. Pick any.</p>
 
     <div class="listing">
       <div class="listing-row head">
@@ -95,6 +96,7 @@
       <a class="listing-row" href="../../docs/reference/mcp/senkani_version.html"><div class="listing-name">senkani_version</div><div class="listing-desc">Version negotiation: server_version, tool_schemas_version, schema_db_version, and the list of exposed tools.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
       <a class="listing-row" href="../../docs/reference/mcp/senkani_bundle.html"><div class="listing-name">senkani_bundle</div><div class="listing-desc">Budget-bounded repo snapshot — symbol outlines + dep graph + KB entities + README in a canonical, truncation-robust order. Local or remote.</div><div class="listing-savings">repo-level</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
       <a class="listing-row" href="../../docs/reference/mcp/senkani_repo.html"><div class="listing-name">senkani_repo</div><div class="listing-desc">Query any public GitHub repo without cloning. Actions: tree, file, readme, search.</div><div class="listing-savings">query-level</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <a class="listing-row" href="../../docs/reference/mcp/senkani_search_web.html"><div class="listing-name">senkani_search_web</div><div class="listing-desc">Web search via DuckDuckGo Lite (no key, no quota). Returns {title, url, snippet} triples; host-pinned, redirect-pinned, SecretDetector-scanned. <code>guard-research</code> denies queries with workstation paths, globs, or secret tokens.</div><div class="listing-savings">query-level</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
     </div>
 
     <div class="callout callout-info">

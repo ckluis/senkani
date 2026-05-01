@@ -38,7 +38,7 @@
       </ul>
     </div>
     <div class="wiki-nav-group">
-      <h4>MCP tools (19)</h4>
+      <h4>MCP tools (20)</h4>
       <ul>
         <li><a href="../../../docs/reference/mcp/senkani_read.html"><code>senkani_read</code></a></li>
         <li><a href="../../../docs/reference/mcp/senkani_exec.html"><code>senkani_exec</code></a></li>
@@ -59,6 +59,7 @@
         <li><a href="../../../docs/reference/mcp/senkani_version.html"><code>senkani_version</code></a></li>
         <li><a href="../../../docs/reference/mcp/senkani_bundle.html" class="active"><code>senkani_bundle</code></a></li>
         <li><a href="../../../docs/reference/mcp/senkani_repo.html"><code>senkani_repo</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_search_web.html"><code>senkani_search_web</code></a></li>
       </ul>
     </div>
   </aside>
@@ -98,13 +99,16 @@
     <h2>Example</h2>
     <pre class="code">{<span class="k">"tool"</span>:<span class="v">"senkani_bundle"</span>,<span class="k">"args"</span>:{<span class="k">"budget_tokens"</span>:<span class="e">6000</span>}}</pre>
 
-    
+    <h2>Details</h2>
+    <p>The composer fills sections in canonical order — <code>readme</code> → <code>outlines</code> → <code>deps</code> → <code>kb</code> — and stops once the budget is consumed, so a truncated bundle is still parseable from the top. Remote mode reuses <code>senkani_repo</code>'s TTL+LRU cache, so repeated bundles of the same <code>owner/name@ref</code> are warm. <code>format: "json"</code> emits a stable-schema <code>BundleDocument</code>; the schema version travels in <code>tool_schemas_version</code> from <code>senkani_version</code>, so callers can pin compatibility.</p>
+
     <div class="callout callout-security"><span class="callout-icon">⚔</span><div>Host allowlist (api.github.com, raw.githubusercontent.com) + SecretDetector on every scanned file.</div></div>
 
     <div class="seealso">
       <h3>See also</h3>
       <ul>
         <li><a href="../../../docs/reference/mcp/senkani_repo.html"><code>senkani_repo</code></a> — Remote bundle's underlying GitHub access.</li>
+        <li><a href="../../../docs/reference/mcp/senkani_search_web.html"><code>senkani_search_web</code></a></li>
         <li><a href="../../../docs/concepts/knowledge-base.html"><code>Knowledge base concept</code></a> — What KB entities end up in the bundle.</li>
       </ul>
     </div>

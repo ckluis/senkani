@@ -2,18 +2,45 @@ import SwiftUI
 import Core
 
 /// First-run experience when no panes are open.
-/// Auto-detects available AI tools and grays out unavailable options.
+///
+/// Project-first, task-first flow. The user picks a project folder,
+/// then chooses a verb-first task starter ("Ask Claude in <project>",
+/// "Use Ollama", "Open a tracked shell", "Inspect this project").
+/// The full pane gallery lives one level deeper behind a "Show all
+/// panes" link so first-run isn't a feature inventory.
+///
+/// Plain Shell remains usable without a project as the deliberate
+/// escape hatch for a tracked shell in `$HOME`.
 struct WelcomeView: View {
-    /// Terminal launch (Claude Code shell, Plain Shell).
-    let onStart: (String, String) -> Void  // (title, command)
-    /// Ollama launch: opens a first-class `ollamaLauncher` pane rather
-    /// than shelling out `ollama run <hardcoded>` via a terminal pane.
-    /// The pane owns its default-model selector + availability gate.
-    let onStartOllama: () -> Void
+    /// Workspace state — drives the "is a project chosen?" gate.
+    let workspace: WorkspaceModel
+    /// Resolve a task starter into a concrete launch. ContentView
+    /// switches on `starter.kind` and routes through LaunchCoordinator.
+    let onStartTask: (TaskStarter) -> Void
+    /// Open the project-folder picker. ContentView wires this to
+    /// `NSOpenPanel` + `workspace.addProject(...)`.
+    let onChooseProject: () -> Void
+    /// Show the full pane gallery (advanced path). ContentView wires
+    /// this to `showAddPaneSheet = true`.
+    let onShowAllPanes: () -> Void
 
     @State private var claudeAvailable: Bool?
     @State private var ollamaAvailable: Bool?
-    @State private var showClaudeLaunch = false
+    @State private var milestoneSummary: OnboardingMilestoneProgression.Summary =
+        OnboardingMilestoneProgression.summary(completed: [])
+
+    /// True when the user has picked at least one project. The
+    /// implicit "Default" project (auto-created by `addPane(...)` for
+    /// non-Welcome call sites) is not user-chosen, so we treat
+    /// `projects.isEmpty` as "no project" — that's the only state
+    /// reachable on first run before the user clicks anything.
+    private var hasProject: Bool {
+        !workspace.projects.isEmpty
+    }
+
+    private var activeProjectName: String? {
+        workspace.activeProject?.name
+    }
 
     var body: some View {
         VStack(spacing: 24) {
@@ -29,57 +56,142 @@ struct WelcomeView: View {
                 .font(.system(size: 14))
                 .foregroundStyle(.secondary)
 
-            VStack(spacing: 12) {
-                AgentCard(
-                    title: "Start Claude Code",
-                    subtitle: claudeAvailable == false
-                        ? "Not found — install from claude.ai/download"
-                        : "Full compression pipeline + MCP integration",
-                    icon: "brain",
-                    color: .blue,
-                    available: claudeAvailable ?? false,
-                    detecting: claudeAvailable == nil,
-                    installURL: URL(string: "https://claude.ai/download")
-                ) {
-                    showClaudeLaunch = true
-                }
-
-                AgentCard(
-                    title: "Start Ollama",
-                    subtitle: ollamaAvailable == false
-                        ? "Not found — install from ollama.com"
-                        : "Local LLM with filtered output",
-                    icon: "cpu",
-                    color: .green,
-                    available: ollamaAvailable ?? false,
-                    detecting: ollamaAvailable == nil,
-                    installURL: URL(string: "https://ollama.com")
-                ) {
-                    onStartOllama()
-                }
-
-                AgentCard(
-                    title: "Plain Shell",
-                    subtitle: "Terminal with token tracking only",
-                    icon: "terminal",
-                    color: .gray,
-                    available: true,
-                    detecting: false
-                ) {
-                    onStart("Terminal", "")
+            // Step 1 — project chooser. Always rendered so the user
+            // sees the precondition; the chosen project is shown
+            // inline once selected, with a "Change" affordance.
+            VStack(spacing: 8) {
+                if hasProject, let name = activeProjectName {
+                    HStack(spacing: 8) {
+                        Image(systemName: "folder.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                        Text("Project: \(name)")
+                            .font(.system(size: 12, weight: .medium))
+                        Spacer()
+                        Button("Change") { onChooseProject() }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.blue)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color(.controlBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                } else {
+                    Button(action: onChooseProject) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "folder.badge.plus")
+                                .font(.system(size: 14))
+                                .foregroundStyle(.blue)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Choose project folder")
+                                    .font(.system(size: 13, weight: .medium))
+                                Text("Step 1 — pick the repo your agent will run in")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(12)
+                        .background(Color(.controlBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             .frame(maxWidth: 320)
+
+            // Step 2 — task starters. Outcome-first, verb-first labels.
+            // The full pane gallery is one level deeper behind the
+            // "Show all panes" link below so first-run isn't a feature
+            // inventory.
+            VStack(spacing: 12) {
+                ForEach(TaskStarterCatalog.all()) { starter in
+                    TaskStarterCard(
+                        starter: starter,
+                        projectName: activeProjectName,
+                        toolAvailable: toolAvailability(for: starter),
+                        installURL: installURL(for: starter)
+                    ) {
+                        onStartTask(starter)
+                    }
+                }
+            }
+            .frame(maxWidth: 320)
+
+            // Onboarding next-step banner — surfaces the next early-
+            // use milestone the user hasn't hit yet. Hidden once the
+            // user completes the seven-milestone arc; never blocks
+            // the primary task-starter flow above.
+            OnboardingNextStepBanner(summary: milestoneSummary)
+                .frame(maxWidth: 320)
+
+            // Advanced path — the 18-pane gallery. Demoted to a
+            // single secondary affordance so first-run users see the
+            // task starters first.
+            Button(action: onShowAllPanes) {
+                HStack(spacing: 6) {
+                    Image(systemName: "square.grid.2x2")
+                        .font(.system(size: 10))
+                    Text("Show all panes")
+                        .font(.system(size: 11))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                }
+                .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 4)
 
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.windowBackgroundColor))
-        .task { await detectTools() }
-        .sheet(isPresented: $showClaudeLaunch) {
-            ClaudeLaunchSheet { command in
-                onStart("Claude Code", command)
-            }
+        .task {
+            refreshMilestoneSummary()
+            await detectTools()
+        }
+        .onChange(of: workspace.projects.count) { _, _ in
+            refreshMilestoneSummary()
+        }
+    }
+
+    /// Pull the latest set of completed milestones off disk and
+    /// refresh the summary the banner reads. Called on `.task` and
+    /// when the workspace's project count changes (since that is the
+    /// most likely trigger for the first milestone to fire).
+    private func refreshMilestoneSummary() {
+        let completed = Set(OnboardingMilestoneStore.completed().keys)
+        milestoneSummary = OnboardingMilestoneProgression.summary(
+            completed: completed
+        )
+    }
+
+    /// Tool-availability state for a starter — Claude card needs the
+    /// `claude` CLI, Ollama card needs Ollama running, the rest are
+    /// always available.
+    private func toolAvailability(for starter: TaskStarter) -> Bool? {
+        switch starter.kind {
+        case .claude:         return claudeAvailable
+        case .ollama:         return ollamaAvailable
+        case .trackedShell,
+             .inspectProject: return true
+        }
+    }
+
+    /// Install URL when the underlying tool is missing.
+    private func installURL(for starter: TaskStarter) -> URL? {
+        switch starter.kind {
+        case .claude where claudeAvailable == false:
+            return URL(string: "https://claude.ai/download")
+        case .ollama where ollamaAvailable == false:
+            return URL(string: "https://ollama.com")
+        default:
+            return nil
         }
     }
 
@@ -130,15 +242,59 @@ struct WelcomeView: View {
     }
 }
 
-struct AgentCard: View {
-    let title: String
-    let subtitle: String
-    let icon: String
-    let color: Color
-    var available: Bool = true
-    var detecting: Bool = false
-    var installURL: URL? = nil
+/// Card representation of a `TaskStarter`. Composes the verb-first
+/// label, outcome subtitle, project gate, and tool-availability state
+/// into one tappable affordance. Replaces the per-agent `AgentCard`
+/// shape used before the task-starter round.
+struct TaskStarterCard: View {
+    let starter: TaskStarter
+    let projectName: String?
+    /// nil = still detecting; true = ready; false = tool not found.
+    let toolAvailable: Bool?
+    let installURL: URL?
     let action: () -> Void
+
+    private var hasProject: Bool { projectName != nil }
+
+    /// True when the user can act on the card right now. Project-
+    /// gated starters need a project chosen AND (when applicable) the
+    /// underlying tool installed/running.
+    private var available: Bool {
+        if starter.requiresProject && !hasProject { return false }
+        if toolAvailable == false { return false }
+        return true
+    }
+
+    private var detecting: Bool {
+        toolAvailable == nil && (starter.kind == .claude || starter.kind == .ollama)
+    }
+
+    private var title: String {
+        starter.displayLabel(for: projectName)
+    }
+
+    /// Subtitle composes the missing-precondition message ahead of
+    /// the outcome description. Tool-not-found takes precedence over
+    /// project-not-chosen so the user sees the actionable next step.
+    private var subtitle: String {
+        if toolAvailable == false {
+            switch starter.kind {
+            case .claude: return "Not found — install from claude.ai/download"
+            case .ollama: return "Not found — install from ollama.com"
+            default:      break
+            }
+        }
+        return starter.displaySubtitle(for: projectName)
+    }
+
+    private var iconColor: Color {
+        switch starter.kind {
+        case .claude:         return .blue
+        case .ollama:         return .green
+        case .trackedShell:   return .gray
+        case .inspectProject: return .purple
+        }
+    }
 
     var body: some View {
         Button(action: {
@@ -149,9 +305,9 @@ struct AgentCard: View {
             }
         }) {
             HStack(spacing: 12) {
-                Image(systemName: icon)
+                Image(systemName: starter.icon)
                     .font(.system(size: 20))
-                    .foregroundStyle(available ? color : .gray)
+                    .foregroundStyle(available ? iconColor : .gray)
                     .frame(width: 32)
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -184,5 +340,54 @@ struct AgentCard: View {
             .opacity(available || detecting ? 1.0 : 0.6)
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Compact "Next: <action>" banner that surfaces the first early-use
+/// milestone the user hasn't reached yet. Hidden when every milestone
+/// has fired so a returning user isn't nagged after onboarding ends.
+///
+/// Reads ``OnboardingMilestoneProgression.summary`` which the parent
+/// view refreshes on `.task` and on workspace changes — the banner
+/// itself stays a pure value-driven view so source-level tests can
+/// pin its contract without a SwiftUI test harness.
+struct OnboardingNextStepBanner: View {
+    let summary: OnboardingMilestoneProgression.Summary
+
+    var body: some View {
+        if let entry = summary.nextEntry, !summary.allComplete {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text("Next:")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        Text(entry.title)
+                            .font(.system(size: 11, weight: .medium))
+                        Spacer(minLength: 0)
+                        Text(summary.progressLabel)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    }
+                    Text(entry.nextAction)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color(.controlBackgroundColor).opacity(0.6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.secondary.opacity(0.18), lineWidth: 0.5)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                "Next early-use milestone: \(entry.title). \(entry.nextAction). \(summary.progressLabel) complete."
+            )
+        }
     }
 }

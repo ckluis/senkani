@@ -44,7 +44,10 @@ public enum KBLayer1Coordinator {
         projectRoot: String,
         fileManager fm: FileManager = .default
     ) -> RebuildDecision {
-        let mdDir = projectRoot + "/" + markdownSubdir
+        let mdDir = KBVaultConfig.resolvedVaultDir(projectRoot: projectRoot)
+        // The Layer-2 SQLite DB still lives next to the project (it's derived
+        // state, not user-edited markdown). Pinning it here keeps `senkani kb`
+        // discovery working unchanged when the vault is externalized.
         let dbPath = projectRoot + "/" + markdownSubdir + "/" + dbFilename
 
         // 1. Any .md files?

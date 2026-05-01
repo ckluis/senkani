@@ -65,12 +65,12 @@
 <span class="k">export</span> SENKANI_BUDGET_DAILY=5.00
 <span class="k">export</span> SENKANI_BUDGET_WEEKLY=25.00</pre>
     <p>Or in <code>~/.senkani/config.json</code>:</p>
-    <pre class="code">{{
-  <span class="k">"budget"</span>: {{
+    <pre class="code">{
+  <span class="k">"budget"</span>: {
     <span class="k">"daily_usd"</span>: <span class="e">5.00</span>,
     <span class="k">"weekly_usd"</span>: <span class="e">25.00</span>
-  }}
-}}</pre>
+  }
+}</pre>
 
     <h2>How enforcement fires</h2>
     <p>Before every tool call, the PreToolUse hook queries <code>costForToday()</code> and <code>costForWeek()</code> from the session DB. If either exceeds the cap, the hook denies the call with a structured message the agent sees.</p>

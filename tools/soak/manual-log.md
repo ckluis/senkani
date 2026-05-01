@@ -12,6 +12,627 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### onboarding-p2-early-use-milestones — Local-only early-use milestones 2026-05-01
+
+Round 9 of the Luminary onboarding chain. Pure-Foundation model + store +
+progression ship in `Sources/Core/OnboardingMilestone.swift`,
+`Sources/Core/OnboardingMilestoneStore.swift`, and
+`Sources/Core/OnboardingMilestoneProgression.swift`; the SwiftUI surface is
+the new `OnboardingNextStepBanner` rendered inside `WelcomeView`. 15 new
+tests pin every leg (enum order, copy completeness, store round-trip +
+idempotency + reset + 0600 file mode + env gate + path layout, progression
+`next` / `summary` / `elapsed`, source-level Welcome wiring). The pieces
+that need a real-machine pass:
+
+- [ ] **Banner appears empty-state on first launch.** With
+  `~/.senkani/onboarding/milestones.json` deleted (`rm -f ~/.senkani/onboarding/milestones.json`),
+  launch SenkaniApp on an empty workspace. The banner below the task
+  starters should read "Next: Pick a project" with a "0 of 7" progress
+  label. The banner must not block the project chooser or any task
+  starter — they must remain clickable.
+- [ ] **Banner refreshes when a milestone is recorded.** Run a quick
+  manual record from a debug REPL or a tracked-shell pane:
+
+      swift -e 'import Core; OnboardingMilestoneStore.record(.projectSelected)'
+
+  (or use the operator's preferred manual-record path once the
+  `onboarding-p2-milestone-callsites` round lands the real triggers.)
+  Re-render the Welcome screen by closing and reopening any pane that
+  triggers a workspace update. The banner should flip to "Next: Launch
+  your first agent — 1 of 7".
+- [ ] **Banner hides when all seven milestones fire.** Manually
+  populate every milestone (each `record(.X)` call) and confirm the
+  banner disappears entirely from the Welcome surface. The banner
+  must not collapse to "7 of 7 done" or any congratulatory state —
+  it should be gone.
+- [ ] **Privacy gate disables every read and write.** Set
+  `SENKANI_ONBOARDING_MILESTONES=off` in the launch environment
+  (e.g., `launchctl setenv SENKANI_ONBOARDING_MILESTONES off` then
+  re-launch SenkaniApp). The Welcome banner must read the empty-set
+  state regardless of what's on disk. Records made while the gate is
+  off must not create the file at all (`ls
+  ~/.senkani/onboarding/` should not show a `milestones.json` if
+  there wasn't one already).
+- [ ] **File mode is 0600 on real disk.** After a real-machine
+  launch where at least one milestone has been recorded, run
+  `ls -l ~/.senkani/onboarding/milestones.json`. Permissions must
+  read `-rw-------`.
+- [ ] **5-user first-10-minutes research script** (Torres synthesis):
+  recruit five new users (no prior Senkani exposure) and observe each
+  for the first 10 minutes after `SenkaniApp` launch. Don't intervene;
+  let them self-direct. After each session, capture the contents of
+  `~/.senkani/onboarding/milestones.json` plus the user's verbal
+  notes. The dataset to extract:
+    1. Which milestones fired in the 10-minute window?
+    2. Time from launch (file mtime of the first recorded milestone)
+       to each subsequent milestone — this is the time-to-first-win
+       data the `OnboardingMilestoneProgression.elapsed(...)` helper
+       reads.
+    3. Where did each user stall? Note in their words.
+    4. Did the Welcome banner's "Next:" copy match the user's
+       perceived next step? Where did it diverge?
+  The dataset stays local — these milestone logs do not leave the
+  user's machine. Aggregate findings live in
+  `spec/inspirations/early-use-research-2026-05-XX.md` (created by
+  the operator after the sessions); the per-user JSON files do not.
+
+### onboarding-p2-copy-fcsit-empty-states — FCSIT first-use disclosure + actionable empty states 2026-05-01
+
+Round 8 of the Luminary onboarding chain. Pure-Foundation deciders
+ship in `Sources/Core/FCSITDisclosure.swift` and
+`Sources/Core/EmptyStateGuidance.swift`; SwiftUI consumers
+(`PaneContainerView.featureButton`, the new `FCSITFirstUsePopover`,
+`AnalyticsView.chartPlaceholder`, `KnowledgeBaseView.emptyListState`,
+`ModelManagerView.emptyStateView`, `SprintReviewPane.emptyState`)
+are thin shells over them. 6 new tests pin the deciders + the
+SwiftUI wiring source-side. The behavioral / accessibility pieces
+need a real-machine pass:
+
+- [ ] **First-launch FCSIT popover fires once.** With the
+  `senkani.fcsit.firstUseDisclosureSeen.v1` defaults key cleared
+  (`defaults delete <bundle> senkani.fcsit.firstUseDisclosureSeen.v1`
+  or via a fresh `~/Library/Preferences/<bundle>.plist`), launch the
+  app, open any pane, and hover the FCSIT row in the header. The
+  320 pt popover should appear with the title "Five per-pane
+  optimizers" and one body line per letter (Filter / Cache / Secrets
+  / Indexer / Terse) plus a "Got it" button. The popover should NOT
+  appear before any hover or tap. Dismissing via the "Got it" button
+  (or `Return` / `Enter` since it carries `.defaultAction`) should
+  clear it; re-hovering must NOT re-show it.
+- [ ] **Tap-only path works (popover triggers on first tap too).**
+  In the same fresh-defaults state, do not hover — tap any FCSIT
+  letter directly. The toggle should flip AND the popover should
+  appear on the same tap so a touch-only user (Vision Pro) is not
+  stranded.
+- [ ] **Persistence across launches.** With the seen flag set,
+  quit and relaunch the app. The popover must NOT show on first
+  hover or tap of any FCSIT letter in any pane.
+- [ ] **VoiceOver names every FCSIT toggle.** With VoiceOver on,
+  navigate to the FCSIT row in a pane header. Each letter must
+  announce as "Filter, on / off" / "Cache, on / off" / "Secrets, on
+  / off" / "Indexer, on / off" / "Terse, on / off" plus the effect
+  string as the accessibility hint. Verify state-toggle round-trip:
+  flip Filter off, VoiceOver should read "Filter, off"; flip back,
+  "Filter, on".
+- [ ] **Keyboard focus reaches every FCSIT toggle.** Enable
+  Full-Keyboard-Access and tab through the pane header. Each FCSIT
+  letter should receive focus in order F → C → S → I → T with a
+  visible focus ring. `Space` or `Return` on a focused letter should
+  toggle it.
+- [ ] **Analytics empty state surfaces a concrete next action.**
+  Open Analytics on a fresh project with no events. The empty state
+  should end with "Launch a tracked session from the Welcome screen
+  — savings appear within seconds." (not just "Data will appear as
+  commands are intercepted"). Launching a tracked session and
+  running one tool call should populate the chart.
+- [ ] **Knowledge Base empty state surfaces a concrete next
+  action.** Open the Knowledge Base pane on a fresh project. The
+  empty state should end with "Run a tracked Claude session and ask
+  about the codebase — the first entities land here within one
+  session." (not just "Entities appear after Claude mentions
+  project components across sessions").
+- [ ] **Model Manager empty state surfaces a concrete next
+  action.** Open the Model Manager with no models installed. The
+  empty state should end with "Install Ollama, then run
+  `ollama pull qwen3:1.7b` — the model registers here
+  automatically."
+- [ ] **Sprint Review empty state surfaces a concrete next
+  action.** Open the Sprint Review pane on a project with no staged
+  proposals. The empty state should end with "Use Senkani for a few
+  sessions; the first staged proposal usually appears within 24
+  hours of the first sweep."
+
+### onboarding-p1-first-value-layout — first-value layout 2026-05-01
+
+The first agent launch now assembles a witnessed layout instead of
+dropping the user into a single Terminal pane. Picking
+**Ask Claude in <project>** or **Open a tracked shell** opens a
+Terminal pane plus an Agent Timeline insight pane next to it, so
+optimization events appear as the user works without anyone opening
+⌘K. Picking Ollama or Inspect skips the insight pane (their primary
+panes already carry their own proof/status surface). Subsequent
+clicks of the same starter add only the primary pane — no duplicate
+timelines. Decider lives in `Sources/Core/FirstValueLayout.swift`
+(unit-tested across all four kinds and idempotency); SwiftUI funnel
+is `ContentView.assembleFirstValueLayout(for:command:)`. The
+behavioral pieces — actual layout / responsive widths / repeated
+clicks — need a real-machine pass:
+
+- [ ] **First-run Ask Claude opens Terminal + Agent Timeline.**
+  Empty workspace. Pick a project, click Ask Claude, complete the
+  launch sheet. Both panes should appear side by side. The Agent
+  Timeline empty state should read "No optimization events yet
+  / Use the terminal next to this pane — every Senkani-aware tool
+  call appears here with bytes saved."
+- [ ] **First-run Open a tracked shell opens Terminal + Agent
+  Timeline.** From a fresh empty workspace, click the tracked-shell
+  starter. Same layout: Terminal + Agent Timeline. The Terminal
+  header should read the project root (or `home folder` if no
+  project chosen).
+- [ ] **First-run Use Ollama opens ONLY the launcher.** Empty
+  workspace, pick a project, click Use Ollama. Only the
+  OllamaLauncher pane should appear — no Agent Timeline next to
+  it. The OllamaLauncher's own header is the proof/status surface.
+- [ ] **First-run Inspect opens ONLY the code editor.** Empty
+  workspace, pick a project, click Inspect this project. Only the
+  codeEditor pane should appear.
+- [ ] **Re-clicking Ask Claude does not stack a second Agent
+  Timeline.** From the post-first-run state (Terminal + Agent
+  Timeline), open the Welcome again (close all panes or use the
+  ⌘K palette to reopen Welcome) and click Ask Claude a second
+  time. Only one new Terminal should appear; the Agent Timeline
+  count must not increase.
+- [ ] **Layout fits a 13" laptop display.** With Terminal + Agent
+  Timeline visible, the canvas should scroll horizontally if the
+  combined column widths exceed the viewport (existing behaviour).
+  Both panes should be readable without manual resize. No truncated
+  pane titles, no clipped chips on the proof strip.
+- [ ] **Layout uses an external display sensibly.** On a 27"+ external
+  monitor, the same Terminal + Agent Timeline layout should still
+  show both panes side-by-side without leaving most of the canvas
+  empty (the existing per-type `columnWidth` defaults are
+  responsible — confirm they don't look stranded).
+- [ ] **Layout persists through close/reopen.** With the first-value
+  layout open, quit the app and relaunch. The Terminal + Agent
+  Timeline pair should restore in their original positions
+  (workspace persistence runs via `LaunchCoordinator`'s save call).
+- [ ] **Agent Timeline empty-state copy is legible at the smallest
+  default width.** The new copy is multi-line and centered with
+  `padding(.horizontal, 16)`. On a default-width Agent Timeline
+  pane the body text should wrap cleanly — no awkward single-word
+  lines, no clipping.
+
+### onboarding-p1-task-presets — task-starter Welcome 2026-04-30
+
+The first-run Welcome screen now renders four outcome-first task
+starters (Ask Claude, Use Ollama, Open a tracked shell, Inspect
+this project) sourced from `Sources/Core/TaskStarterCatalog.swift`
+instead of the old per-agent feature inventory. The 18-pane
+gallery is one level deeper behind a "Show all panes" link that
+opens the existing AddPaneSheet. Each starter resolves to a
+deterministic LaunchCoordinator outcome: Claude opens the launch
+sheet, Ollama opens the ollamaLauncher pane, tracked shell opens
+a terminal, Inspect this project opens the code editor. The
+catalog and project-aware rendering are unit-tested but the
+end-to-end Welcome flow needs a 10-minute walkthrough on a real
+machine. Tick each step as it's verified:
+
+- [ ] **First-run Welcome shows the project chooser before the
+  starters.** Launch Senkani in a fresh workspace (no projects
+  selected). The window should show the "Choose project folder"
+  affordance above any starter cards, and every starter except
+  "Open a tracked shell" should be visibly disabled with a
+  "Choose a project folder first" subtitle.
+- [ ] **Picking a project enables the project-required starters
+  and updates labels.** Click "Choose project folder" and pick a
+  repo. The four starter cards should rerender — Ask Claude,
+  Use Ollama, and Inspect this project become enabled, and each
+  label gains the "in <projectName>" suffix. The tracked-shell
+  card swaps "in home folder" for "in <projectName>".
+- [ ] **Each starter opens the right pane on the first click.**
+  Ask Claude → ClaudeLaunchSheet appears, picking a launcher
+  opens a Terminal pane in the project. Use Ollama → an
+  ollamaLauncher pane opens. Open a tracked shell → a Terminal
+  pane opens. Inspect this project → the codeEditor pane opens
+  with the project root showing.
+- [ ] **"Show all panes" demotes the gallery to one level
+  deeper.** From a fresh Welcome, click the "Show all panes"
+  link below the four starters. AddPaneSheet should open with
+  all 18 pane types. Closing it returns to the four-starter
+  Welcome with no extra panes created.
+- [ ] **Claude / Ollama install affordances still work when the
+  tool is missing.** On a machine without Claude Code installed,
+  the Ask Claude card should show "Install" and link to
+  claude.ai/download. Same for Ollama.
+- [ ] **Time the full first-run walkthrough end-to-end.** Reset
+  workspace state, then time how long it takes a fresh user to
+  go from app launch → project selected → Claude session live in
+  the project. Target ≤ 10 minutes including any tool installs.
+  Record the time so the P2 milestone work has a baseline.
+
+### onboarding-p0-active-proof-strip — Senkani Active proof strip 2026-04-30
+
+The active terminal pane now renders a five-chip "Senkani Active"
+proof strip (PROJECT, MCP, HOOKS, TRACK, EVENTS) with literal labels,
+state tokens, and a banner-row next action when any chip is missing.
+The five derivation states are unit-tested but the chip rendering,
+the 1-second `TimelineView` tick cadence, and the runnable
+next-action recovery flows need eyes-on at least once on a real
+install. Tick each line as it's verified:
+
+- [ ] **Fully-ready state shows five OK chips and the `✓ Senkani
+  active` prefix.** With Senkani's MCP registered globally, hooks
+  installed in the project (`senkani init` already run), the
+  terminal pane's session watcher running, and at least one
+  Claude command intercepted, the strip should read
+  `✓ Senkani active  OK PROJECT ~/<repo>  OK MCP registered with
+  Claude Code  OK HOOKS project hooks active  OK TRACK watching
+  Claude session  OK EVENTS last <N>s ago` with a faint green
+  background tint. No banner row should appear.
+- [ ] **No-events-yet shows the `··` waiting token and an
+  actionable hint.** Open a brand-new terminal pane in a project
+  where Senkani has never logged a token event yet (e.g. a fresh
+  test repo). The EVENTS chip should read `·· EVENTS no events
+  yet`, the strip's prefix should drop the green check, and the
+  banner row should read `Run a Claude command — events should
+  land within a second.` Run a Claude command and confirm the
+  chip flips to `OK EVENTS last <N>s ago` within ~1 s of the
+  next tick.
+- [ ] **Missing project hooks surface the `senkani init`
+  recovery.** From a project where the global MCP is registered
+  but `.claude/settings.json` does not yet carry a senkani-hook
+  entry, the HOOKS chip should read `! HOOKS not installed in
+  this project` and the banner row should read `Run \`senkani
+  init\` in the project root to install hooks.` Run that command
+  in the pane, confirm the chip flips to `OK HOOKS …` within the
+  next tick.
+- [ ] **Missing MCP suggests a re-register.** Manually delete
+  the `mcpServers.senkani` key from `~/.claude/settings.json` and
+  confirm the MCP chip reads `! MCP not registered` with a banner
+  pointing at `senkani mcp-install --global` or "Restart
+  Senkani". Restart the app and confirm the chip recovers to
+  `OK MCP registered with Claude Code`.
+- [ ] **No project / no watcher cases are also reachable.**
+  Open a Plain Shell with no saved workspace (the "Open Plain
+  Shell in home folder" path) and confirm the strip reports
+  `! PROJECT no project selected` with the Welcome-screen
+  next-action; tick this off when the banner copy reads as
+  intended on a real run. Separately, force the session watcher
+  to be unset (e.g. by hot-reload during dev) and confirm the
+  TRACK chip reports `! TRACK session watcher not running` with
+  the "Restart the terminal pane" next-action.
+- [ ] **Strip respects active-pane-only mounting.** Open two
+  terminal panes side-by-side; only the focused pane should
+  render the strip. Click between panes and confirm the strip
+  follows the focus ring without flicker.
+
+### onboarding-p0-project-first-welcome — Project-first Welcome flow 2026-04-30
+
+The empty-workspace Welcome surface now gates Claude / Ollama launches
+behind a chosen project, replaces the marketing-copy subtitles with
+verb-first project-aware copy, and stops terminal pane headers from
+falling back to `~` for sessions that actually live in a real repo.
+A real-machine first-run check needs eyes-on:
+
+- [ ] **First run with no projects shows a 'Choose project folder'
+  step before agent cards become actionable.** Launch with no saved
+  workspace (`rm -rf ~/Library/Application Support/Senkani` or
+  equivalent), open the app, confirm the Welcome surface shows the
+  `Choose project folder` button at the top and that the Claude +
+  Ollama agent cards read `Choose a project folder first` and look
+  disabled. Plain Shell stays clickable but its title reads
+  `Open Plain Shell in home folder` (no silent default).
+- [ ] **Picking a project unlocks the agent cards with project-aware
+  titles.** Click `Choose project folder`, pick a real repo,
+  confirm the chooser collapses to a `Project: <name>` row with a
+  `Change` link, and the agent cards now read
+  `Start Claude in <name>` and `Start Ollama in <name>` with active
+  styling (no longer dim).
+- [ ] **Terminal pane header shows the actual working directory.**
+  Launch a Plain Shell into the chosen project; the pane header
+  context label should display the abbreviated repo path
+  (e.g. `~/Desktop/projects/senkani`) rather than a bare `~`. Cross-
+  check by `cd`-ing inside the shell — the header reflects the
+  pane's launch directory, not the live shell `pwd` (this is
+  expected; the launch path is the truthful identifier).
+- [ ] **'Change' affordance re-opens the picker without losing
+  panes.** With a project selected and at least one pane open,
+  click `Change`, pick a different folder, confirm the new project
+  is appended and active. Original panes still belong to the prior
+  project (verifiable via the sidebar).
+- [ ] **Plain-shell escape hatch is honoured.** From the no-project
+  state, click `Open Plain Shell in home folder`. A terminal pane
+  opens at `~`, the implicit `Default` project is created (this is
+  the documented escape hatch), and the header context label shows
+  `~` correctly.
+
+### Phase U.6c round 1 — Plan-variance histogram in AnalyticsView 2026-04-30
+
+Round 3 of U.6 lands the operator-visible chart + the ≥ 90 % pairing
+eval. Unit + corpus tests cover the data flow (paired / unpaired /
+rejected / throws, histogram bin classification, median residual).
+The chart's visual rendering on a real machine needs eyes-on:
+
+- [ ] **Empty-state copy reads correctly with no combinator data.**
+  Open Analytics on a fresh-ish session that has zero combinator
+  calls. The "Plan Variance — Actual vs. Planned Cost" card should
+  render the empty-state copy (chart icon, "No combinator plans in
+  this window — variance appears once split / filter / reduce calls
+  land traces."). The header stat row should NOT render when no
+  bars are drawn.
+- [ ] **Under-N threshold copy reads correctly with 1–2 paired
+  plans.** Drive a single `split` call through a debug hook (or via
+  a future test seam in `OptimizationPipeline`); confirm the chart
+  still shows the empty state with the under-threshold message
+  ("Need ≥ 3 paired plans for a stable histogram…"). No bars.
+- [ ] **Bars render with three or more paired plans.** Drive ≥ 3
+  combinator calls (mix of `split` / `filter` / `reduce`); confirm
+  the histogram now draws bars colour-coded under (green) / exact
+  (gray) / over (red), with the bin labels visible on the X axis
+  and a count annotation on top of each non-empty bar. The Y axis
+  ticks should be integer.
+- [ ] **Header stats reflect ground truth.** With a known mix of
+  paired (some over-budget, some under, some exact) + at least one
+  rejected plan, confirm the four header cells show the expected
+  N paired, unpaired, signed median Δ (with leading `+` when
+  positive), and % paired. The percent should round to a whole
+  number and never exceed 100.
+- [ ] **24h / 7d picker scopes the window without flicker.** Toggle
+  the picker between 24h and 7d; the chart should re-render with
+  the wider/narrower window's data without showing the empty state
+  in between (data is fetched on the same timer tick as tier
+  distribution).
+- [ ] **Rejected plans appear in unpaired count, never in bars.**
+  Drive one combinator call whose `estimatedCost` exceeds the
+  active `BudgetConfig` daily-equivalent ceiling. Confirm the
+  unpaired count increments by 1 and the histogram bar counts do
+  not — rejection and execution must be pivot-distinct.
+
+### Phase V.12b round 1 — HookRouter denials → DiffViewerPane annotations 2026-04-30
+
+Round 2 of V.12 wires `HookRouter` denials into the V.12a sidebar
+via `HookAnnotationFeed.shared`. Unit tests cover the data flow
+(emit, rate cap, deny-response invariance, rate-cap log). UI
+behavior needs eyes-on:
+
+- [ ] **ConfirmationGate deny renders as a `[must-fix]` row.**
+  Open the Diff Viewer with two files (left = original, right =
+  modified). Inject a deny resolver into `ConfirmationGate` (e.g.
+  via a debug hook or by setting `ConfirmationGate.resolver` from
+  a scratch script) so an Edit on `<rightPath>` denies. Trigger
+  Edit on the right file from Claude Code; confirm a `[must-fix]`
+  badge appears in the sidebar with the deny reason as the body
+  and `hookrouter:Edit` as the author handle, pinned to the first
+  hunk. Click the badge — the diff scrolls to the first hunk.
+- [ ] **Read / Bash / Grep redirects do NOT badge.** Trigger a
+  vanilla Read on a file in the active diff; no annotation should
+  appear in the sidebar. The senkani_read advisory is a routing
+  nudge, not a policy violation.
+- [ ] **Rate cap suppresses past 5 must-fix in a minute.** Drive
+  six ConfirmationGate denies in under a minute via repeated Edits.
+  The first five render in the sidebar; the sixth does not. The
+  agent still sees the deny in its tool response on every call.
+- [ ] **Rate-cap log row appears after window roll.** After the
+  flood above, wait 60 s + trigger one more deny. Confirm a row
+  appears in `annotation_rate_cap_log` (`sqlite3` query against
+  `~/Library/Application\ Support/Senkani/senkani.db`):
+  `SELECT severity, suppressed_count, threshold FROM annotation_rate_cap_log ORDER BY id DESC LIMIT 1;`
+  should return `must-fix | 1 | 5` (one suppression carried into
+  the log).
+- [ ] **Multiple Diff Viewer panes don't double-badge.** Open two
+  Diff Viewer panes against the same file pair. A single deny
+  should badge in BOTH sidebars — both subscribe to the same
+  feed. Acceptable today; future cleanup will centralize.
+
+### Phase V.12a round 1 — Hunk render + severity-tagged annotations sidebar 2026-04-30
+
+Round 1 refactors `SenkaniApp/Views/DiffViewerPane.swift` to show
+LCS hunk blocks with an annotations sidebar; the four-tag severity
+vocabulary `[must-fix]` / `[suggestion]` / `[question]` / `[nit]`
+ships frozen with distinct colors + glyphs + labels. Unit tests
+cover the layout helpers; UI behavior needs eyes-on:
+
+- [ ] **Hunk blocks render with stable headers.** Open the Diff
+  Viewer pane against two files with three or more separated
+  changes. Each hunk should render as a labeled `@@ -orig, +mod`
+  block with red removed / green added rows. Confirm hunk count
+  matches what `git diff` would show.
+- [ ] **Severity chip row in the file bar.** All four severity
+  chips render even when there are no annotations (counts show 0).
+  Order: must-fix / suggestion / question / nit. Hover tooltip
+  shows the severity label.
+- [ ] **Annotation sidebar.** With no annotations the sidebar
+  shows "No annotations on these hunks." (V.12a ships the surface;
+  V.12b wires HookRouter denials in — until then the annotations
+  list is intentionally empty.) The sidebar header shows
+  `Annotations` + count.
+- [ ] **Click-to-jump.** Once V.12b lands or while injecting
+  fixture annotations via debugger, click any annotation row in the
+  sidebar. The matching hunk should scroll into view at the top
+  edge with a brief animation. Clicking the same row twice in a
+  row must still re-trigger the scroll (state resets between
+  clicks).
+- [ ] **Colorblind readability.** Squint or run macOS Color Filters
+  → Greyscale. Each severity must remain distinguishable by glyph
+  + label even with color removed (must-fix octagon, suggestion
+  lightbulb, question questionmark.circle, nit scribble).
+
+### Phase U.1c round 1 — Tier-distribution chart in AnalyticsView 2026-04-30
+
+Round 1 ships `AgentTraceEventStore.tierDistribution` + `tracesForTier`
+plus the new "Routing — TaskTier Distribution" card in
+`SenkaniApp/Views/AnalyticsView.swift`. Unit tests cover the store
+queries (counts, NULL-tier exclusion, `since` cutoff, drill-down DESC
++ limit) but Charts rendering and click-to-drill require eyes on the
+real machine.
+
+- [ ] **Stacked vs Grouped layout.** Open Analytics in a workspace
+  that has TaskTier-tagged traces. Switch between Stacked (default)
+  and Grouped — Grouped should split each tier into Primary /
+  Fallback 1 / Fallback 2 bars. Confirm legend colors match the
+  intended palette (Primary = green, Fallback 1 = yellow, Fallback 2
+  = orange) and that bars annotate with their counts in Grouped mode.
+- [ ] **24h vs 7d cutoff.** Change the window picker. Bars should
+  redraw within ~2 s; counts should be ≤ when narrowing from 7d → 24h
+  (never larger).
+- [ ] **Click-to-drill sheet.** Click any bar. The drill-down sheet
+  should render with the tier name + window in the title, list rows
+  newest-first, and close cleanly via Done / Esc. A control row from
+  a different tier must NOT appear.
+- [ ] **Empty-state copy.** On a fresh DB or in a 24h window with no
+  routing data, the empty-state should read exactly: "No routing
+  data yet — TaskTier was introduced in u1a; charts populate as new
+  traces land." If the wording drifts (e.g. truncation, missing
+  hyphen), file a regression — Podmajersky pinned this string.
+
+### Phase W.4 round 1 — `ContextSaturationGate` + `PreCompactHandoffWriter` 2026-04-29
+
+Round 1 ships the gate, the handoff card, and the loader as Core
+helpers. Unit tests pin every branch in-process. Three things only a
+real session can confirm:
+
+- [ ] **Live saturation read.** Run a long Claude Code session. Pull
+  `agentTraceTokenUsage(pane:)` from a senkani CLI shim or a custom
+  pane and confirm the running total tracks roughly with the agent's
+  reported context-window usage. If the two diverge sharply (>20 %),
+  the active-window slice may be wrong for this model and the
+  `Threshold.budgetTokens` default needs revisiting.
+- [ ] **End-to-end handoff round-trip.** Force a saturation block
+  (`evaluate(currentTokens: 180_000, threshold: .default)` →
+  `.block`), call `PreCompactHandoffWriter.compose(...) | write(...)`,
+  start a fresh session, and confirm `PreCompactHandoffLoader.load(...)`
+  returns the card with `currentIntent` and `lastValidation` intact.
+  Eyeball the JSON at `~/.senkani/handoffs/<sessionId>.json` for any
+  surprise field truncation.
+- [ ] **<1 s SLO under real load.** Tests assert <1 s on a quiet
+  machine with a small card. Soak: run `write` against a card that
+  embeds a 4 KB advisory string AND a full 10-key trace tail while
+  the disk is busy with concurrent test output. The SLO should still
+  hold; if it doesn't, file the regression because the gate is now
+  too expensive to drop into a hook path.
+
+### Phase W.1 round 1 — `senkani_search_web` MCP tool 2026-04-29
+
+Round 1 ships a fully fixture-tested DuckDuckGo Lite backend (host pin,
+SSRF guard, redirect pin, `guard-research` query filter, snippet
+redaction). Three things only a real run against `lite.duckduckgo.com`
+can validate:
+
+- [ ] **Live shape match.** From a real session: call
+  `senkani_search_web` with a public topic ("rust async runtime
+  comparison"). Confirm the parser pulls out at least 5 results with
+  non-empty title + url + snippet. If the regex misses a row, that's
+  a DDG markup drift — capture the served HTML for a fixture update.
+- [ ] **CAPTCHA backoff visible.** Hammer the tool ~50× in a minute to
+  trigger a soft block; confirm the response is `BackendBlocked`
+  (structured error, not silent zero results) and that the next call
+  after a few minutes recovers.
+- [ ] **`autoresearch` preset round-trip.** Install the `autoresearch`
+  scheduled preset (`senkani schedule preset install autoresearch`),
+  let one fire run, confirm `~/.senkani/research/<date>.md` lands and
+  contains LLM-summarised bullets — no `[REDACTED:…]` accidents in
+  the summary.
+
+### Phase U.8 round 1 — NaturalLanguageSchedule foundations 2026-04-29
+
+Round 1 shipped the data-model + protocol + math + minimal pane
+affordance behind the autonomous loop. The pieces that need a real
+machine to validate land in u8b, but the round-1 surface needs at
+least one real-machine smoke-check before u8b builds on it:
+
+- [ ] Create a schedule via `senkani schedule create` with a cron,
+  then hand-edit `~/.senkani/schedules/<name>.json` to add a
+  `proseCadence` field and re-launch the Schedules pane. Confirm
+  the row renders the prose pill (not the cron pill) and the tooltip
+  shows the compiled cron from `compiledCadence`. (Validates the
+  round-1 round-trip path end to end without needing the New
+  Schedule form prose input.)
+- [ ] Hand-edit a schedule JSON to set `eventCounterCadence: "every
+  5 tool_calls"` (and an empty `cronPattern`). Confirm the row
+  renders the orange counter-cadence pill with the correct tooltip
+  text.
+- [ ] Verify pre-U.8 schedule JSON files on disk (the morning-brief
+  / autoresearch / log-rotation defaults) still load + render
+  exactly as before (cron-direct path).
+
+If any of these surface a regression, mark the round NEEDS-FIX and
+file under u8a-fix in the backlog before u8b queues.
+
+### Full-suite test-bundle SIGTRAP — INVESTIGATE 2026-04-28 (pre-existing, found during V.7)
+
+`swift test` (no `--filter`) crashes the test bundle with `signal code 5`
+(SIGTRAP) before reaching the summary line. Confirmed reproducible on
+`main` without any V.7 changes — this is **not** a V.7 regression. All
+focused suites still pass (V.7 added 12 tests; KnowledgeFileLayer × 12,
+KBLayer1Coordinator × 5, KBPaneViewModel × 11, WikiLinkCompletion × 14
+all green). The crash likely lives in cross-suite parallel test
+interaction, not in any single test (each suite passes independently).
+
+What to verify on your machine when you're back at it:
+
+1. Run `swift test --no-parallel` — does the SIGTRAP go away? If yes,
+   the failure is races between parallel test bundles (env mutation,
+   file system contention on `/tmp`, or shared mutable state).
+2. Run the suite in a worktree (`git worktree add ../senkani-soak main`)
+   under `swift test --num-workers 1` and capture which suite was last
+   running just before the crash. Add `--xunit-output` for a parsable
+   transcript.
+3. Bisect parallel-unsafe suites: env-mutating tests in
+   `KBVaultV7Tests`, `KBVaultConfigTests`, `WorkstreamTests`,
+   `FeatureConfigTests` are the usual suspects.
+
+Once isolated, file a follow-up backlog item to either serialize the
+offending suite (`.serialized` trait at `@Suite` level) or move the env
+read out of process-level state.
+
+### `senkani doctor --repair-chain` UX validation — RUNNABLE 2026-04-27 (Phase T.5 round 4)
+
+Round 4 of T.5 shipped the repair scaffolding green in CI (1879 tests pass, 9
+new round-4 tests including the load-bearing pre-segment-OK / post-segment-OK
+test). The scaffolding is correct mechanically; the **double-confirm prompt
+copy and the typed-string ergonomics** still need a real-tty walk-through
+before this round is considered fully shipped.
+
+What to verify on your machine:
+
+1. **Happy path — interactive.** Pick a workspace DB
+   (`~/Library/Application Support/Senkani/senkani.db`), pick a real rowid
+   in `token_events` (e.g. `sqlite3 ~/Library/Application\ Support/Senkani/senkani.db
+   'SELECT MAX(id) FROM token_events;'`), then run:
+   ```
+   senkani doctor --repair-chain --table token_events --from-rowid <N>
+   ```
+   Confirm the prompt explanation reads cleanly. Type `REPAIR` then the
+   table name. Verify the outcome message lists table / from-rowid / new
+   anchor id / prior tip / rows rebound, and the closing line points at
+   `senkani doctor --verify-chain`.
+
+2. **`--force` non-tty path.** `echo | senkani doctor --repair-chain
+   --table token_events --from-rowid <N> --force` — should run without
+   prompts and print the same outcome.
+
+3. **Refusal — non-tty without `--force`.** `echo | senkani doctor
+   --repair-chain --table token_events --from-rowid <N>` — should refuse
+   with the "refuses non-tty invocations without --force" message, exit
+   non-zero.
+
+4. **Wrong typed string aborts.** Run interactively, type anything other
+   than `REPAIR` at the first prompt — should print "Aborted (input was
+   not 'REPAIR')." and exit non-zero.
+
+5. **Idempotency guard.** Run the repair twice in a row (without
+   `--force` on the second). Second invocation should refuse with
+   "a repair anchor already exists for '<table>' (anchor id N).
+   Use --force to open a second repair anchor."
+
+6. **Verification after repair.** Run `senkani doctor --verify-chain`
+   after a repair. Should show `chain integrity: OK across … / 1 repairs`
+   (or however many repairs you ran).
+
+If any prompt copy reads ambiguous, file follow-up backlog items rather
+than re-opening this round — the scaffolding is fixed; the copy is text
+and ships independently.
+
 ### Per-RAM-tier Gemma 4 quality eval — RUNNABLE 2026-04-25
 
 Round `luminary-2026-04-24-4-gemma-tier-quality-eval` (harness 04-24)

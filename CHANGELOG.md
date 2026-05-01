@@ -9,6 +9,1887 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 1 — `SessionDatabase.deinit` deadlock fix (`bisect-sigtrap-source`)
+- Root cause for the deterministic `swiftpm-testing-helper` SIGTRAP
+  documented in `harness-chunk-test-safe`: a deinit-on-queue
+  deadlock in `SessionDatabase`.
+- `recordEvent(...)` schedules every counter bump as a
+  `queue.async { [weak self] in guard let self ... }` block. The
+  `guard let self` upgrades the captured weak reference to a strong
+  one *for the duration of the block*. When the test pattern was
+  `_ = SessionDatabase(path: ...)` (or any short-lived strong ref),
+  the recordEvent burst at init time queued 13 tasks each holding a
+  strong ref. As the LAST queued task's block exited, the
+  strong-drop triggered `deinit` on the queue thread itself —
+  inside the queue's serial slot. The historic
+  `deinit { queue.sync { sqlite3_close(db) } }` then deadlocked on
+  itself, dispatch's precondition checker tripped, and
+  swiftpm-testing-helper exited with `signal code 5` (SIGTRAP).
+- Bisect (round `bisect-sigtrap-source`) traced the regression to
+  commit `8e2a72e` (T.6a — ConfirmationGate). T.6a's only
+  contribution to the race was migration v11 — it pushed the
+  init-time recordEvent burst from 10 to 13 queued tasks, widening
+  the race window enough to make the SIGTRAP deterministic on
+  CI runners and on a clean local checkout. The bug existed
+  before T.6a as a flake; T.6a made it reproducible.
+- Fix: reentrancy guard in `SessionDatabase.deinit`. The queue now
+  carries a `DispatchSpecific` marker set at init time. `deinit`
+  reads the marker via `DispatchQueue.getSpecific(...)`. When the
+  marker is present, deinit was reached from the queue thread
+  itself — close the db directly, skip the `queue.sync`. When
+  absent (the normal off-queue path), the historical
+  "wait for queued work, then close" guarantee is preserved.
+- Validated: `tools/test-safe.sh --chunk session` 3/3 green at
+  ~3 s per run; full chunked harness 8/8 green in ~37 s wall time.
+  CI gate restored to green.
+- Follow-up filed (`sessiondb-deinit-regression-guard`): add a
+  unit test that drives `recordEvent` to full burst and then drops
+  the only strong ref while the queue is busy, asserting deinit
+  completes without deadlock. The repro is racy by construction
+  but the chunked harness will surface a regression within 3
+  retries.
+
+### May 1 — Chunked test harness (`harness-chunk-test-safe`)
+- `tools/test-safe.sh` rewritten to run the suite in named chunks
+  (parsers / learning / kb / pane / hook / session / onboarding /
+  other), each a separate `swift test --no-parallel --filter <regex>`
+  invocation. A SIGTRAP in one chunk fails only that chunk; the
+  rest run to completion and contribute their pass/fail signal.
+  Per-chunk retry-on-flake (3×, configurable via `TEST_SAFE_RETRIES`)
+  preserved.
+- New modes: `--chunk NAME` (single named chunk; useful for bisect
+  and CI matrix), `--list-chunks` (prints the regex table),
+  `--filter Foo` passthrough preserved for the legacy ad-hoc
+  single-process workflow.
+- Failed chunks emit a `::error title=chunk[NAME] failed::…` GitHub
+  annotation so the PR UI links straight to the offending chunk
+  instead of forcing log archaeology.
+- `.github/workflows/test.yml` simplified: the outer 3-retry loop
+  around the whole suite is gone (chunks retry internally), and a
+  diagnostic step prints the chunk inventory on every run so
+  reviewers see what's in each chunk without reading the script.
+- Motivation: the v0.3.0 batch turned the previously-occasional
+  `swiftpm-testing-helper` SIGTRAP deterministic in the
+  `session` chunk (Migration / SessionDatabase / Chain / Agent /
+  ClaudeSession / ValidationStore area). Single-process harness
+  meant we lost signal for the ~600 tests that would have run
+  after the crash. Chunking restores deterministic per-area
+  signal and gives `bisect-sigtrap-source` (next round) a
+  targeted reproducer.
+- `spec/testing.md` "Full-suite hang" section updated with the
+  chunk table, the new modes, and the current state (7 of 8
+  chunks green in ~35 s wall time; `session` chunk
+  deterministically SIGTRAPs pending the bisect round).
+
+### May 1 — Local-only early-use milestones (`onboarding-p2-early-use-milestones`)
+- Round 9 of the Luminary onboarding chain. After the first-value
+  layout shipped (round 8) the open question was whether returning
+  users actually reach value or stall — Torres / Swyx wanted a local
+  signal without sending telemetry off-machine.
+- New `Sources/Core/OnboardingMilestone.swift` — pure enum +
+  copy table for the seven early-use milestones (project selected,
+  agent launched, first tracked event, first non-zero savings,
+  first budget set, first workstream created, first staged
+  proposal reviewed). Each milestone carries a literal title,
+  populating-event description, and imperative next-action so the
+  Welcome banner can render them without duplicating copy.
+- New `Sources/Core/OnboardingMilestoneStore.swift` — file-backed
+  log at `~/.senkani/onboarding/milestones.json`, mode 0600,
+  atomic temp-file→rename writes. Idempotent record (the first
+  observation wins), `reset()` for tests + the rare debug
+  affordance, and an `SENKANI_ONBOARDING_MILESTONES=off` env gate
+  that turns every read and write into a no-op for privacy-strict
+  users.
+- New `Sources/Core/OnboardingMilestoneProgression.swift` — pure
+  derivation: `next(after:)` walks the canonical surfacing order
+  and returns the first milestone the user hasn't hit; `summary`
+  carries the count + next-entry + a stable `"N of 7"` progress
+  label; `elapsed(from:to:in:)` powers the manual-log time-to-
+  first-win research script without an automated telemetry path.
+- `WelcomeView` renders an `OnboardingNextStepBanner` below the
+  task starters. Banner is hidden when `summary.allComplete` so a
+  returning user isn't nagged after onboarding ends; never gates
+  the existing primary flow. Source-level guard pins the wiring.
+- Privacy posture (Cavoukian audit, 2026-05-01): the file holds
+  only `{milestone-key: ISO8601-timestamp}` — no project paths, no
+  session IDs, no agent text. Senkani never reads it off the local
+  machine; manual research uses it in place as observation
+  markers, not as an analytics feed. Module header declares the
+  stance explicitly.
+- Tests: 15 new in `OnboardingMilestoneTests` — enum order, copy
+  completeness, store round-trip + idempotency + reset + env gate
+  + 0600 file mode + path layout, progression `next` /
+  `summary` / `elapsed`, and the source-level WelcomeView wiring
+  guard. `tools/test-safe.sh` covers the same SIGTRAP envelope it
+  did before this round (signal-5 cutoff at the
+  `MigrationTests.migrationsAppliedDoesNotFireOnAlreadyMigratedDB`
+  test was reproduced at the pre-round HEAD; treated as accepted
+  pre-existing risk per `spec/testing.md` "Full-suite hang" notes).
+- Followup-on-deck: a separate round wires
+  `OnboardingMilestoneStore.record(.X)` into the seven actual
+  callsites (TaskStarter launch, BudgetConfig saves,
+  WorkstreamModel additions, sprint-review approve/reject, etc.).
+  Acceptance was scoped to land the model + store + UI surface
+  this round, with the wiring round on the backlog as
+  `onboarding-p2-milestone-callsites`.
+
+### May 1 — FCSIT first-use disclosure + actionable empty states (`onboarding-p2-copy-fcsit-empty-states`)
+- Round 8 of the Luminary onboarding chain. The first-run user no
+  longer faces five unexplained letters ("F C S I T") in the pane
+  header or four passive "data will appear when…" walls in the
+  early-use panes.
+- New `Sources/Core/FCSITDisclosure.swift` — pure decider holding
+  the canonical letter → name → effect → first-use-explanation
+  mapping for the five per-pane optimizers. SwiftUI consumers
+  (`PaneContainerView`'s `featureButton`, the new
+  `FCSITFirstUsePopover`) read from it so a copy edit ships in one
+  place. Versioned `UserDefaults` key
+  (`senkani.fcsit.firstUseDisclosureSeen.v1`) gates the popover so
+  returning users see it exactly once.
+- `PaneContainerView.featureButton` now publishes a state-aware
+  `accessibilityLabel` ("Filter, on" / "Filter, off"), an
+  `accessibilityHint` carrying the toggle's effect, and the
+  `.isButton` trait — VoiceOver announces a control instead of
+  reading the bare letter glyph. The first-use popover triggers on
+  hover OR on the first tap and lists every letter together so the
+  user only has to learn the alphabet once.
+- New `Sources/Core/EmptyStateGuidance.swift` — four canonical
+  triplets (headline / populating event / concrete next action) for
+  Analytics, Knowledge Base, Model Manager, and Sprint Review. Each
+  surface's empty state now ends in an imperative the user can act
+  on ("Launch a tracked session…", "Run a tracked Claude session
+  and ask about the codebase…", "Install Ollama, then run
+  `ollama pull qwen3:1.7b`…", "Use Senkani for a few sessions…")
+  rather than describing a wait.
+- Tests: 6 new in `OnboardingP2DisclosureTests` — pin the FCSIT
+  render order, the accessibility-label format, the first-use
+  predicate + versioned defaults key, completeness of every
+  `EmptyStateGuidance.Surface` case, and source-level wiring guards
+  on `PaneContainerView` plus the four empty-state views.
+- Manual-log entry queues a VoiceOver / keyboard-focus smoke pass
+  on the FCSIT row + a first-run popover dismissal check (popover
+  must show, "Got it" defaults-action key dismiss must clear the
+  flag, second hover must NOT re-show).
+
+### May 1 — First-value layout assembled on first agent launch (`onboarding-p1-first-value-layout`)
+- Round 7 of the Luminary onboarding chain. After a project is
+  chosen, picking **Ask Claude** or **Open a tracked shell** from
+  the Welcome surface no longer drops the user into a single
+  terminal pane and waits for them to discover the Agent Timeline
+  manually. The first agent launch now assembles a witnessed
+  layout: terminal pane plus a live **Agent Timeline** pane next
+  to it so optimization events surface as the user works.
+- New `Sources/Core/FirstValueLayout.swift` — pure decider that
+  resolves a `TaskStarter.Kind` plus the workspace's existing pane
+  type IDs into the spec list the launcher should add. Claude and
+  tracked-shell starters get the primary pane plus an `agentTimeline`
+  insight pane on a true first-run; Ollama and Inspect skip the
+  insight pane because their primary pane already carries its own
+  proof/status surface (the OllamaLauncher header / the code
+  editor). Subsequent same-starter clicks in a non-empty workspace
+  add ONLY the primary pane — re-clicking "Ask Claude" never stacks
+  duplicate timelines next to duplicate terminals.
+- `ContentView.assembleFirstValueLayout(for:command:)` is the new
+  starter→pane funnel. The Claude launch sheet's `onLaunch` and the
+  Welcome non-Claude branches both flow through it, so every spec
+  the decider returns lands through `LaunchCoordinator.launchPane`
+  — hook registration, session-watcher start, and workspace persist
+  fire for the insight pane the same way they fire for the primary.
+- `AgentTimelinePane` empty-state copy retargeted at the first-run
+  user: instead of the abstract "Run an MCP tool to see it here"
+  the pane now reads "Use the terminal next to this pane — every
+  Senkani-aware tool call appears here with bytes saved", which
+  names the concrete next action (the terminal it's docked beside)
+  and what the user will see when it works.
+- Tests: 8 new in `FirstValueLayoutTests` covering primary+insight
+  on first run, primary-only on subsequent runs, the Ollama/Inspect
+  no-insight rule, and a source-level guard that ContentView
+  actually wires through the decider. Existing
+  `TaskStarterCatalogTests` regression check rewritten to assert
+  the consolidated `case .ollama, .trackedShell, .inspectProject:`
+  branch and the `assembleFirstValueLayout(for: starter.kind, …)`
+  call site rather than the old per-kind hardcoded `addPane`
+  switch.
+- Manual-log entry queues a real-machine first-launch visual
+  check at laptop and external-display widths so the multi-pane
+  starter layout's responsive behaviour gets eyes on it before
+  ship.
+
+### April 30 — Task-starter Welcome replaces feature inventory (`onboarding-p1-task-presets`)
+- Round 5 of the Luminary onboarding chain. The first-run Welcome
+  surface now reads as a list of jobs the user might want to do,
+  not a list of features Senkani ships. Four outcome-first verb-
+  led starters render in canonical order: **Ask Claude in
+  &lt;project&gt;**, **Use Ollama in &lt;project&gt;**, **Open a tracked
+  shell** (the no-project escape hatch — keeps "in home folder" /
+  "in &lt;project&gt;" suffix), and **Inspect this project** (opens the
+  read-only code-editor pane).
+- New `Sources/Core/TaskStarterCatalog.swift` is the source of
+  truth: a `TaskStarter` value type (`id`, `label`, `subtitle`,
+  `icon`, `kind`, `paneTypeID`, `requiresProject`) plus a four-
+  entry catalog. Each starter resolves to exactly one
+  `LaunchCoordinator` outcome through a `TaskStarter.Kind` switch
+  in `ContentView.startTask(_:)`. `displayLabel(for:)` /
+  `displaySubtitle(for:)` render the project-aware "<verb> ... in
+  &lt;projectName&gt;" suffix and surface the missing-precondition gate
+  before the outcome description. Naming note: deliberately *not*
+  `Preset` — that noun is taken by `Sources/Core/Presets/` (cron-
+  style scheduled-automation jobs).
+- 18-pane gallery is one level deeper now. A single demoted
+  **Show all panes** link below the four starter cards opens the
+  existing `AddPaneSheet`, so the advanced path is preserved
+  without dominating first-run.
+- Tests: 11 new tests in
+  `Tests/SenkaniTests/TaskStarterCatalogTests.swift` covering
+  catalog shape (canonical order, renderable surfaces, unique
+  kinds, project-gate exclusivity), copy clarity (verb-first
+  labels, no FCSIT/MCP shorthand), project-aware rendering,
+  Welcome + ContentView wiring, and the manual-log entry. The
+  prior P0 `WelcomeFlowProjectFirstTests` was relaxed in two
+  places to assert against the new catalog source of truth
+  instead of the prior literal `Start Claude in` /
+  `&& hasProject` substrings.
+- **Accepted risks:** the catalog is hard-coded today — adding a
+  fifth starter is a Luminary-grade decision because the four-
+  card surface is the first-run IA. The Ask Claude starter still
+  routes through the existing launch sheet for command picking;
+  bypassing it for a smart-default Claude command is a separate
+  UX decision deferred to the P2 milestone work.
+
+### April 30 — Command palette honesty contract (`onboarding-p1-command-palette-contract`)
+- ⌘K now advertises every pane the gallery ships and nothing it
+  doesn't. `CommandEntryBuilder.paneEntries()` derives directly from
+  `PaneGalleryBuilder.allEntries()`, so the missing `ollamaLauncher`
+  row is back and future pane additions can't drift between the two
+  surfaces. The 17→18 magic-number test was replaced with a parity
+  test that compares ID sets across both builders.
+- The eight inert `action:*` rows (Toggle Filter / Toggle Cache /
+  Toggle Secrets / Toggle Indexer / Toggle Terse / Close All Panes
+  / Run Benchmark / Export Session) were removed because
+  `CommandPaletteView.executeEntry` only handled `pane:` IDs — every
+  action row dismissed silently on Enter. `actionEntries()` now
+  returns `[]`; reintroducing any action requires wiring a real
+  callback through `CommandPaletteView`. The `noInertActionEntries`
+  test enforces the contract.
+- Tests: `Tests/SenkaniTests/CommandPaletteTests.swift` rewritten —
+  6 → 10 tests covering parity (IDs + count), Ollama presence,
+  no-inert-actions, no-duplicate-IDs, non-empty copy, plus the
+  retained filter / grouping / case-insensitivity coverage.
+- **Accepted risks:** session-scoped toggles (filter / cache /
+  secrets / indexer / terse) and workspace-scoped actions
+  (close-all, run-benchmark, export) live behind boundaries the
+  palette doesn't currently see; wiring each is a follow-up round
+  with its own callback plumbing — not bundled here to keep this
+  round small.
+
+### April 30 — First-run docs realigned with shipped behavior (`onboarding-p0-docs-truth-pass`)
+- Round 4 of the Luminary onboarding chain. After P0 rounds 1–3
+  changed the launch path (single `LaunchCoordinator`, project-first
+  Welcome flow, Senkani Active proof strip), the public install /
+  Claude Code / Cursor-Copilot / first-session guides and the
+  `senkani-init` reference still advertised flags the binary has
+  never accepted (`senkani init --hooks-only`, `senkani init
+  --dry-run`) and an MCP-registration step that lives in SenkaniApp's
+  launch path, not in `senkani init`. Procida's red flag: docs
+  currently break trust before the app gets a chance.
+- Updated `docs/guides/install.html`, `docs/guides/claude-code.html`,
+  `docs/guides/cursor-copilot.html`, `docs/guides/first-session.html`,
+  `docs/guides.html` (cards), `docs/reference/cli.html` (listing),
+  `docs/reference/cli/senkani-init.html`, and the README quick-start.
+  `senkani init` is now described accurately as project-only hook
+  registration; SenkaniApp's launch-time auto-registration is named
+  separately. The first-session guide names the proof strip's five
+  chips (PROJECT / MCP / HOOKS / TRACK / EVENTS) so users can read
+  the strip before the first command runs.
+- Tests: 2 new tests in
+  `Tests/SenkaniTests/DocsTruthGuardTests.swift`. A negative-list
+  guard fails if any of the eight first-run surfaces re-introduces
+  a banned phrase (`init --hooks-only`, `init --dry-run`, …); a
+  positive-list test asserts the senkani-init reference page
+  continues to name the real flags (`--uninstall`, `--hook-path`).
+
+### April 30 — Senkani Active proof strip on the active terminal pane (`onboarding-p0-active-proof-strip`)
+- Round 3 of the Luminary onboarding chain. The active terminal
+  pane now renders a five-chip proof strip at the top of its body —
+  PROJECT, MCP, HOOKS, TRACK, EVENTS — answering "is Senkani
+  actually working in this project and pane?" before the user has
+  to wait for the first intercepted command. Each chip carries a
+  literal label, a state token (`OK` / `··` / `!`) so meaning
+  doesn't depend on color alone, and a one-sentence detail
+  ("registered with Claude Code", "last 12s ago", etc.).
+- When any chip is missing, a banner row beneath the strip surfaces
+  the first missing component's runnable next action — `senkani
+  init`, `senkani mcp-install --global`, restart the pane, choose
+  a project from Welcome — instead of failing silently.
+- Derivation lives in `Sources/Core/ActivationStatus.swift` as a
+  pure function over `ActivationProbes`. Filesystem probes are
+  factored into `ActivationProbeIO` so the JSON checks against
+  `~/.claude/settings.json` and the project's `.claude/settings.json`
+  are independently testable. The strip itself is a SwiftUI
+  `TimelineView` ticking every second — relative-age labels stay
+  current without a global refresh loop.
+- Tests: 11 new tests in
+  `Tests/SenkaniTests/ActivationStatusTests.swift` covering ready,
+  missing-MCP, missing-hooks, no-session, no-events-yet, and
+  no-project derivation states, plus the relative-age formatter,
+  home-path shorthand, and the two filesystem probes.
+
+### April 30 — Project-first Welcome flow + truthful terminal header (`onboarding-p0-project-first-welcome`)
+- Round 2 of the Luminary onboarding chain. The empty-workspace
+  Welcome surface now opens with an explicit "Choose project folder"
+  step. Claude / Ollama agent cards stay disabled until a project
+  is selected, then read `Start Claude in <project>` and
+  `Start Ollama in <project>` — verb-first, project-aware, no more
+  generic "Full compression pipeline + MCP integration" subtitle.
+- Plain Shell remains the deliberate escape hatch and now names its
+  destination ("Open Plain Shell in home folder" / "in <project>")
+  so a no-project launch is an explicit choice, not a silent default.
+- Bug fixed: terminal pane headers were reading `pane.previewFilePath`
+  for the context label, which is empty for terminals — every
+  terminal showed `~` regardless of where the shell actually opened.
+  The header now reads `pane.workingDirectory`, so a Claude session
+  in `~/Desktop/projects/senkani` finally reports that path instead
+  of pretending it lives in the home directory.
+- Tests: 8 new source-level guards in
+  `Tests/SenkaniTests/WelcomeFlowProjectFirstTests.swift` lock down
+  the Welcome contract (workspace + onChooseProject parameters, the
+  project gate on Claude / Ollama, verb-first copy, the Plain Shell
+  escape-hatch wording, the ContentView NSOpenPanel wiring, and the
+  PaneContainerView terminal header fix). Manual-log entry queues a
+  real-machine first-run check.
+
+### April 30 — LaunchCoordinator unifies every pane-launch path (`onboarding-p0-launch-coordinator`)
+- Round 1 of the Luminary onboarding chain queued earlier today.
+  Centralizes pane creation behind one app-layer primitive so every
+  user-visible launch path performs the same four side effects:
+  `WorkspaceModel.addPane`, `HookRegistration.registerForProject`
+  (terminal panes only), `SessionRegistry.startSession`, and
+  workspace persistence. Welcome cards, the AddPaneSheet, the
+  Sidebar "Add Pane → Claude Code…" sheet, the `⌘K` command
+  palette, and the pane IPC `.add` action all funnel through the
+  coordinator now.
+- Bug fixed: the Sidebar Claude launch was calling
+  `workspace.addPane(...)` directly, which skipped hook
+  registration and the session watcher start. Users could believe
+  Senkani was active in a Claude pane that had no MCP gate-key
+  bundle and no Claude session watcher. The coordinator route
+  closes the gap and matches the Welcome-card behavior.
+- New file: `SenkaniApp/Services/LaunchCoordinator.swift`. Plain
+  class (not `@MainActor`) so it slots into both the SwiftUI
+  view-update path and the static pane-IPC handler — callers must
+  already be on main when mutating `WorkspaceModel`. Hook-
+  registration failures are intentionally `try?`-swallowed to
+  match existing per-call-site behavior; surfacing them is a
+  separate future round.
+- `WorkspaceModel.addPane(...)` keeps its role as the pure model
+  mutation. Side effects live entirely in the coordinator now;
+  there is exactly one place to look when adding a new launch
+  path.
+- Source-level regression guard at
+  `Tests/SenkaniTests/LaunchCoordinatorRoutingTests.swift` —
+  six tests scan `SenkaniApp/` and assert no SwiftUI View calls
+  `workspace.addPane(...)` directly (only the model itself and
+  the coordinator are allowed). Comment-stripping pass keeps
+  doc-comments that mention the call shape from tripping the
+  guard. Future regressions in either Sidebar Claude, IPC `.add`,
+  Welcome, AddPaneSheet, or CommandPalette routing fail this
+  test instead of silently shipping a broken Senkani-active
+  state.
+
+### April 30 — Plan-variance histogram + ≥ 90% pairing eval (`phase-u6c-variance-histogram`)
+- Third slice of the U.6 split. Lands the operator-visible surface
+  (variance chart in `AnalyticsView`) plus the parent's headline
+  acceptance metric (≥ 90% of corpus operations land paired plan +
+  trace rows after a synthetic combinator run).
+- New `db.contextPlanPairs(since:)` API forwards to
+  `ContextPlanStore.planActualPairs(since:)`, a `LEFT JOIN` of
+  `context_plans` against `agent_trace_event` on `plan_id` — one row
+  per plan; `actualCostCents` is `nil` for rejected plans and
+  closure-thrown plans (the on-disk signal U.6b ships).
+- New `PlanActualPair` Sendable model in `Sources/Core/ContextPlan.swift`
+  carries plan + actual + computed `residualCents` (Karpathy:
+  `actual − planned`). Pure helpers in the new `VarianceHistogram`
+  enum bin residuals into fixed signed ranges (`[-100, -50, -10, 0,
+  10, 50, 100]`-edged `[…)` half-open bins, plus open-ended `<` / `≥`
+  end bins so the histogram never silently drops a row), tag each
+  bin as under / exact / over so the chart can colour-code, and
+  expose a signed median for the header.
+- `AnalyticsView` gains a "Plan Variance — Actual vs. Planned Cost"
+  card between the tier-distribution and cost-projection cards. 24h
+  / 7d window picker mirrors the tier card. Header surfaces four
+  stat cells (N paired, unpaired, median Δ¢, % paired); chart waits
+  for ≥ 3 paired plans before drawing bars (Gelman gate against
+  thin-data misreads); empty-state copy explains both the no-plans
+  case and the under-N-threshold case so the operator never thinks
+  the analytics broke.
+- New `Tests/SenkaniTests/Fixtures/context-plan-corpus.json` —
+  20-item synthetic corpus (6 split / 6 filter / 6 reduce + 1
+  rejected + 1 throws) exercising both happy and edge paths.
+- New `Tests/SenkaniTests/ContextPlanCorpusTests.swift` —
+  7 tests: corpus integrity (≥ 15 items, every `ReducerChoice`
+  exercised), the parent acceptance #1 metric (≥ 90 % of executable
+  items land paired rows), rejected-items-no-trace pin, throw-leaves-
+  plan-only pin, histogram bin classification (under/exact/over with
+  unpaired excluded), and signed-median definition pin.
+- Manual-log entry filed under `tools/soak/manual-log.md` for the
+  histogram visual check on a real machine.
+- Tests: +7 in new `ContextPlanCorpusTests` suite. Full safe suite
+  passes (2215 reported with the documented pre-existing
+  `LoggerRouting/migrationsAppliedFiresOnFreshDB` SIGTRAP suite
+  skipped per project convention).
+
+### April 30 — `split` / `filter` / `reduce` combinators + BudgetGate plan rejection (`phase-u6b-combinator-budget-rejection`)
+- Second slice of the U.6 split. Builds on u6a's `ContextPlan`
+  persistence to add the actual write path + the rejection path.
+  Internal API only — no UI yet (the variance histogram + corpus eval
+  ride in u6c).
+- New `Sources/Core/CombinatorPipeline.swift` adds three named
+  operators (`split` / `filter` / `reduce`) that map to the closed
+  `ReducerChoice` vocabulary (`merge` / `select` / `summarize`). Each
+  call writes a `ContextPlan` row up-front, asks `BudgetGate` whether
+  the plan fits the active `BudgetConfig`'s daily-equivalent ceiling,
+  and either runs the caller's closure (stamping `plan_id` onto the
+  returned `AgentTraceEvent` so the trace pairs with the plan) or
+  returns a structured `PlanRejection(reason:, ceilingCents:,
+  estimatedCost:, planId:)` and skips the closure. Rejected plans
+  still land in `context_plans` for analytics; their absence from
+  `agent_trace_event` is the on-disk pairing signal.
+- `BudgetGate.rejectPlan(estimatedCost:budget:planId:)` extends the
+  existing `clamp(taskTier:budget:)` shape — same `dailyEquivalentCents`
+  ceiling, scope-based ("would this single plan burn the entire daily
+  budget on its own?"). Unlimited budgets (no limits configured) never
+  reject. Strict `>` so an exact-ceiling cost still allows.
+- `AgentTraceEvent.withPlanId(_:)` returns a copy with `planId`
+  stamped — used internally by `CombinatorPipeline.run` so callers
+  don't have to thread the id through their closure.
+- The closure-throw third state (plan persisted, trace not, throw
+  propagates) is pinned by a test rather than papered over: it
+  matches the reality of mid-execution crashes, and u6c's residual
+  chart filters `plan_id IS NOT NULL` for the pairing percentage.
+- Tests: +11 in new `CombinatorPipelineTests` suite covering happy
+  paths for all three combinators + reducer-choice persistence,
+  pairing observable from both `+ContextPlanAPI` and `+AgentTraceAPI`,
+  BudgetGate rejection with closure-not-called proof + plan-row
+  still-persisted, unlimited-budget never-rejects, allowed-under-
+  ceiling executes, `BudgetGate.rejectPlan` direct-call field shape,
+  exact-ceiling-allows boundary, closure-throw third state, and
+  `withPlanId` field-by-field stamping. Full safe suite 2205 → 2216
+  green.
+
+### April 30 — `ContextPlan` schema + `agent_trace_event.plan_id` (`phase-u6a-context-plan-schema`)
+- First slice of the U.6 split (parent had been carved into u6a / u6b /
+  u6c on 2026-04-30 to keep each round autonomous-tractable). U.6a is
+  pure-Swift schema plumbing — no combinator API yet, no BudgetGate
+  rejection path, no UI.
+- New `Sources/Core/ContextPlan.swift` exposes the `ContextPlan` struct
+  (id / sessionId / plannedFanout / leafSize / reducerChoice /
+  estimatedCost / createdAt) plus the closed `ReducerChoice` enum
+  (`merge` / `summarize` / `select`).
+- New `Sources/Core/Stores/ContextPlanStore.swift` owns the
+  `context_plans` table; `Sources/Core/SessionDatabase+ContextPlanAPI.swift`
+  exposes `recordContextPlan` / `contextPlan(id:)` /
+  `contextPlans(forSession:)` / `contextPlanCount()` on the
+  SessionDatabase façade.
+- Migration v14 lands `context_plans` (TEXT primary key, session-scoped
+  newest-first index) and ALTERs `agent_trace_event` to add a nullable
+  `plan_id` FK column. `REFERENCES context_plans(id)` is declarative —
+  `PRAGMA foreign_keys` stays at its default (off) per the existing
+  convention (matches `commands.session_id REFERENCES sessions(id)`).
+  Purely additive: a v13 DB upgrades cleanly with no data loss; pre-
+  v14 trace rows read `plan_id` as NULL.
+- `AgentTraceEvent` gains a `planId: String?` field that round-trips
+  through the V.2 canonical-row write path.
+  `SessionDatabase.agentTraceEvent(idempotencyKey:)` reads back the
+  full row (including planId) for tests + diagnostics.
+- Tests: +9 in new `ContextPlanStoreTests` suite covering schema shape
+  on both tables, ContextPlan round-trip, all `ReducerChoice` cases,
+  per-session ordering, duplicate-id dedup, plan_id round-trip on
+  AgentTraceEvent, plan_id-nil staying NULL, and a v13→v14 upgrade
+  fixture asserting no data loss. Full safe suite 2196 → 2205 green.
+
+### April 30 — Sweep stale CLI count headings on three reference pages (`phase-11f-cli-page-heading-stale-counts`)
+- Follow-up to the parent sidebar sweep
+  (`phase-11f-sitewide-sidebar-stale-counts`). Three page `<h4>`
+  headings carried stale CLI counts that didn't fit the parent's
+  `(20)→(22)` literal-pattern acceptance and were filed for a
+  cleanup round rather than scope-creeping that one.
+- Edits (3 files / 3 lines): `docs/reference/cli.html` `(21)` →
+  `(22)`; `docs/reference/cli/senkani-authorship.html` `(24)` →
+  `(22)`; `docs/reference/cli/senkani-skill.html` `(24)` → `(22)`.
+- Verification: re-running
+  `grep -rEn "MCP tools \([0-9]+\)|CLI commands \([0-9]+\)" docs/`
+  now returns 54 matches, all `MCP tools (20)` or `CLI commands
+  (22)`. No strays remain.
+
+### April 30 — Sitewide sweep of stale MCP/CLI counts in nav sidebar (`phase-11f-sitewide-sidebar-stale-counts`)
+- Filed by the 11b narrative rubric pass: shared site-nav sidebar
+  carried stale tool counts baked into per-page HTML — 6 pages
+  read `MCP tools (19)` against the current truth of 20, and
+  25 pages read `CLI commands (20)` against the current 22.
+- Sweep: 26 files / 31 line edits (matching the spec's ~31
+  estimate exactly). MCP `(19)` → `(20)` across 5 sidebars +
+  the `mcp.html` heading; CLI `(20)` → `(22)` across 5 sidebars
+  + 20 CLI subpage headings. Pane count `(18)` already matched
+  reality and was left untouched.
+- Out-of-scope stragglers surfaced during verification —
+  `cli.html` heading at `(21)`, `senkani-authorship.html` /
+  `senkani-skill.html` headings at `(24)` — filed as
+  `11f-cli-page-heading-stale-counts` for a follow-up round
+  rather than scope-creep this one.
+
+### April 30 — Voice rubric pass on 21 narrative pages (`website-rebuild-11b-rubric-narrative`)
+- `## Narrative pages` section appended to
+  `spec/website_rebuild_audit_round11.md`. 21 / 21 narrative pages
+  (5 hubs + 7 concepts + 9 guides) PASS the 7-dimension rubric.
+  Closes the 11b rubric pass at 91 / 91 documented pages
+  (70 reference from 11a + 21 narrative from 11b). Voice anchors
+  identified per page-shape: `docs/concepts/security-posture.html`
+  for opinionated multi-defense concept pages,
+  `docs/concepts/compound-learning.html` for staged-lifecycle
+  concept pages, `docs/concepts/hook-relay.html` for
+  multi-round-extension concept pages, `docs/guides/install.html`
+  for step-numbered guides, `docs/guides/troubleshooting.html` for
+  symptom-based how-to pages, `index.html` for landing positioning,
+  `docs/what-is-senkani.html` for category-level positioning hubs.
+- 5 small-edit fixes shipped in-pass:
+  - `docs/about.html` — H1 jumped straight to H2 with no lede
+    paragraph, so the rubric's first question ("what does the
+    reader gain") had no answer on the page. Added a one-paragraph
+    lede stating what About delivers (license, credits, the name
+    `閃蟹` with inline translation, project links).
+  - `docs/status.html` — three numbers on one page disagreed about
+    reality (lede claimed 2,000 tests, stat-card said 1,837, MCP /
+    CLI counts lagged the current 11a coverage at 19 / 19 vs
+    20 / 22). Lede + stat-cards now cite 2,350 tests (matching
+    landing page meta strip) and 20 MCP / 22 CLI / 18 panes
+    (matching the 11a rubric coverage rows).
+  - `docs/changelog.html` — website-rebuild bullet contained a
+    literal Python f-string artifact (`{len(PANES)}`) that was
+    rendering as plain text in the browser, plus understated CLI
+    count ("19 CLI commands"). Fixed in one edit: artifact
+    replaced with the literal pane count (18), CLI count corrected
+    to 22.
+  - `docs/guides/claude-code.html` — `~/.claude/settings.json`
+    example carried double-brace `{{` / `}}` from a Python
+    f-string template rather than the literal single braces a JSON
+    config takes. Copying the example into a real settings file
+    would have produced invalid JSON. Replaced four `{{` / `}}`
+    pairs with single braces.
+  - `docs/guides/budget-setup.html` — same shape as
+    `claude-code.html`: `~/.senkani/config.json` example had four
+    `{{` / `}}` pairs from the same template generation pass.
+    Fixed in the same shape. Both guide pages now show valid JSON
+    that copy-pastes into a working config.
+- 1 below-threshold filing deferred to 11f:
+  - `11f-sitewide-sidebar-stale-counts` — the shared site-nav
+    sidebar reads `MCP tools (19)` on 6 pages and
+    `CLI commands (20)` on 25 pages, against the current 20 / 22
+    truth. Numbers are baked into per-page navigation HTML rather
+    than a single template, so the sweep is ~31 mechanical edits
+    across the site. Out of scope for the voice rubric (this round
+    only fixed the 5 narrative pages whose page body cited
+    counts). Same shape as the CLI slice's literal-backtick filing:
+    pure reference hygiene, no prose drift, mechanical edit per
+    match.
+
+### April 30 — Voice rubric pass on 18 pane reference pages (`website-rebuild-11a-panes-rubric`)
+- `## Panes` section appended to
+  `spec/website_rebuild_audit_round11.md`. 18 / 18 pane reference
+  pages PASS the 7-dimension rubric (lead-with-outcome,
+  one-idea-per-paragraph, code-blocks-don't-narrate, claims-cite,
+  no-empty-calories, respects-skimmers,
+  fail-open-for-technical-reader). Pane pages have their own
+  page-shape contract — lede + 0–3 feature-specific H2s + Keyboard
+  + Related — distinct from MCP / CLI / options. The `Related`
+  links (`senkani_pane` MCP tool + FCSIT options) are the
+  technical-reader exit ramp for thin UI panes; rich panes
+  (`dashboard`, `diff-viewer`, `model-manager`) carry inline
+  citations to specific Swift classes, tables, and migration
+  numbers as the next layer down.
+- 8 small-edit fixes shipped in-pass:
+  - `docs/reference/panes/terminal.html`,
+    `docs/reference/panes/code-editor.html`,
+    `docs/reference/panes/browser.html` — ledes led with the
+    framework (SwiftTerm / NSTextView / WKWebView) rather than the
+    operator outcome. Each lede now leads with what the operator
+    gets, with the framework name closing as a one-line
+    implementation cite. Meta descriptions matched.
+  - `docs/reference/panes/browser.html`,
+    `docs/reference/panes/knowledge-base.html`,
+    `docs/reference/panes/markdown-preview.html`,
+    `docs/reference/panes/ollama-launcher.html`,
+    `docs/reference/panes/sprint-review.html` — literal
+    markdown-style backticks in ledes (e.g.
+    `` `senkani learn review` ``) replaced with proper
+    `<code>…</code>` spans. `markdown-preview.html` additionally
+    had an unescaped `<img>` tag inside its lede that the browser
+    was interpreting as a real (broken) image element; that token
+    is now properly HTML-escaped (`&lt;img&gt;`) inside the
+    `<code>` span. Same pattern as the CLI slice's
+    `phase-11f-cli-literal-backticks-pass`, but at five-page
+    scale fix-in-pass was the right move rather than filing a
+    follow-up.
+  - `docs/reference/panes/ollama-launcher.html` — original lede
+    stacked three distinct mechanisms (tri-state availability
+    gate, five-model catalog drawer, MCP env passthrough) into one
+    paragraph. Lede now keeps the gate + env passthrough; the
+    five-model catalog drawer was lifted into its own
+    `## Curated catalog drawer` H2 with each model name wrapped
+    in a `<code>` span.
+  - `docs/reference/panes/savings-test.html` — opinionated lede
+    claim ("the live number is the honest one") had no cite, and
+    the page was so thin (lede + Keyboard + Related only) that the
+    technical reader had no body H2 to verify the claim against.
+    Added a `## Live multiplier` H2 citing `SavingsTestRunner`,
+    the 7-day default window, the cross-link to `senkani eval`'s
+    live-multiplier regression check, and the 80.37× fixture
+    ceiling from `senkani bench`. Lede unchanged.
+- 0 pages filed as `11f-page-rewrites` follow-ups; 0 deeper
+  rewrites needed for the panes slice.
+- Page voice anchors recorded for the panes group:
+  `dashboard.html` for multi-tile dashboards (cites
+  `PaneRefreshScheduler`, `pane_refresh_state`, the per-tile cache
+  values, and the bounded-worker-pool cap),
+  `diff-viewer.html` for layered backing systems (V.12a hunks +
+  V.12b denial pipe each its own H2; cites `HookAnnotationFeed`,
+  `annotation_rate_cap_log`, Migration v13, severity literals;
+  documents what the system explicitly does *not* do — advisory
+  denials don't emit annotations), and `model-manager.html` for
+  state-machine panes (seven-state bullet list with one
+  state-name + role per row, closing with the `senkani doctor`
+  check #5 cross-link).
+- Slice cumulative: 70 of 70 reference pages rubric-passed
+  (20 MCP + 22 CLI + 10 options + 18 panes). 11a rubric pass
+  closes; `website-rebuild-11b-rubric-narrative` becomes pickable.
+
+### April 30 — Voice rubric pass on 10 options/env reference pages (`website-rebuild-11a-options-rubric`)
+- `## Options & env` section appended to
+  `spec/website_rebuild_audit_round11.md`. 10 / 10 options/env pages
+  PASS the 7-dimension rubric (lead-with-outcome, one-idea-per-
+  paragraph, code-blocks-don't-narrate, claims-cite, no-empty-
+  calories, respects-skimmers, fail-open-for-technical-reader).
+  Options pages do not carry the MCP-style `Details` section — the
+  reference lookup contract (env-var name + default + opinionated
+  override consequence) gives the careful reader the next layer
+  down without a separate H2.
+- 1 small-edit fix shipped in-pass:
+  - `docs/reference/options/compound-learning.html` — original lede
+    led with the *labels* of the knobs ("Confidence thresholds,
+    recurrence gates, Gemma enrichment rate limits.") rather than
+    the *outcome* of turning them. Lede now states the outcome
+    ("Tune how aggressively senkani promotes mined patterns from
+    `.recurring` to `.staged` — recurrence floor, confidence
+    floor, sweep cadence.") and surfaces the
+    instruction-patch-never-auto-applies invariant (Schneier gate)
+    in the lede so the security contract isn't buried in an H2.
+    Meta description updated to match. No body changes.
+- 0 pages filed as `11f-page-rewrites` follow-ups; 0 deeper
+  rewrites needed for the options slice.
+- Page voice anchors recorded for the options group: `security.html`
+  for opinionated env-var-as-H2 lookup pages (every section names a
+  specific defense site, file mode, token format, or migration
+  number), and `terse.html` for layered-mechanism options pages
+  (system-prompt injection layer + algorithmic strip layer, each
+  its own H2, with a Synergy section that ties terse back to F/C/S/I
+  via the input-vs-output token framing).
+- Slice cumulative across 11a so far: 52 of 70 reference pages
+  rubric-passed (20 MCP + 22 CLI + 10 options); 18 pane pages
+  remain for `website-rebuild-11a-panes-rubric` to close the rubric
+  pass on the reference quadrant.
+
+### April 30 — Literal markdown backticks → `<code>` spans on 7 CLI pages (`phase-11f-cli-literal-backticks-pass`)
+- Pure HTML hygiene fix routed out of `website-rebuild-11a-cli-rubric`.
+  Seven CLI reference pages — `senkani-init`, `senkani-grammars`,
+  `senkani-fetch`, `senkani-uninstall`, `senkani-search`,
+  `senkani-stats`, `senkani-wipe` — carried literal markdown-style
+  backticks in their `<h2>Behavior</h2>` paragraphs that browsers
+  rendered as plain characters rather than inline code. Each
+  backticked phrase is now a proper `<code>…</code>` span matching
+  the existing styling used elsewhere on the page (See-also entries,
+  flag rows). No prose changes.
+- The eighth page in the original filing (`senkani-index.html`) had
+  no literal backticks in Behavior — likely a stray entry from the
+  original audit. Verified clean and skipped.
+- Acceptance grep across the slice now returns zero matches.
+
+### April 30 — Voice rubric pass on 22 CLI command reference pages (`website-rebuild-11a-cli-rubric`)
+- `## CLI commands` section appended to
+  `spec/website_rebuild_audit_round11.md`. 22 / 22 CLI command pages
+  PASS the 7-dimension rubric (lead-with-outcome, one-idea-per-
+  paragraph, code-blocks-don't-narrate, claims-cite, no-empty-
+  calories, respects-skimmers, fail-open-for-technical-reader). CLI
+  pages don't carry a `Details` section the way MCP pages do — the
+  canonical CLI shape (lede → Syntax → Behavior → Example → Flags →
+  See also → Source) was sufficient to satisfy the technical-reader
+  dimension once the Source pointer named a specific file.
+- 3 small-edit fixes shipped in-pass:
+  - `docs/reference/cli/senkani-bench.html` — lede now leads with
+    the reproducible 80.37× compression figure rather than the
+    suite shape; Source pointer expanded from `Sources/Bench/`
+    (directory) to three specific files (`BenchmarkScenarios.swift`,
+    `BenchmarkTasks.swift`, `BenchBaseline.swift`).
+  - `docs/reference/cli/senkani-compare.html` — page documented
+    file-diff behavior the command does not have. Actual behavior:
+    runs one command across four `FilterPipeline` permutations
+    (passthrough / filter only / secrets only / all features) and
+    prints a per-permutation byte / saved-% / bar-graph table.
+    Lede, Syntax (also fixed two raw `<a> <b>` tags the browser
+    parsed as anchor / bold), Behavior, Example, Flags row, and
+    See-also list rewritten against `Sources/CLI/CompareCommand.swift`.
+  - `docs/reference/cli/senkani-eval.html` — Behavior section
+    rewritten to cite `BenchmarkTasks.all()`, `SavingsTestRunner`,
+    `KBGateComputer`, and the live-multiplier regression check
+    (default 7-day window, savings-regression-always-fails vs.
+    `--strict`-fails-everything contract). Source pointer expanded
+    from one file to three (`EvalCommand.swift`,
+    `SavingsTestRunner.swift`, `KBEvalRunner.swift`).
+- 1 batch-formatting filing deferred:
+  `11f-cli-literal-backticks-pass` — eight CLI pages
+  (`init`, `grammars`, `index`, `search`, `stats`, `fetch`,
+  `uninstall`, `wipe`) carry literal markdown-style backticks in
+  Behavior paragraphs that the browser renders as plain characters.
+  Not voice work; pure HTML hygiene. Routed to the page-rewrites
+  follow-up rather than rewriting eight pages in this voice round.
+- Page voice anchors recorded for the CLI group:
+  `senkani-authorship.html` for full-Behavior depth,
+  `senkani-doctor.html` for multi-subsystem aggregator pages,
+  `senkani-ml-eval.html` for feature pages that have to teach a
+  tier matrix.
+
+### April 30 — Voice rubric pass on 20 MCP tool reference pages (`website-rebuild-11a-mcp-rubric`)
+- `spec/website_rebuild_audit_round11.md` is created as the canonical
+  audit doc for the round 11 voice + a11y + perf pass. Skeleton
+  carries section headers for every downstream slice — `## CLI
+  commands`, `## Options & env`, `## Panes`, `## Narrative pages`,
+  `## Appendix · accessibility`, `## Appendix · performance`,
+  `## Closing verdicts` — so 11a-cli, 11a-options, 11a-panes, 11b,
+  11c, 11d, and 11e append rather than restructure.
+- 20 / 20 MCP tool pages PASS the 7-dimension rubric
+  (lead-with-outcome, one-idea-per-paragraph, code-blocks-don't-
+  narrate, claims-cite, no-empty-calories, respects-skimmers,
+  fail-open-for-technical-reader). Page voice anchors:
+  `senkani_search_web.html` for prose density,
+  `senkani_read.html` for canonical structure.
+- 2 small-edit fixes shipped in-pass: `docs/reference/mcp/senkani_repo
+  .html` and `docs/reference/mcp/senkani_bundle.html` each gained a
+  `Details` section (rate-limit + cache key on repo; canonical-order
+  budget fill + `BundleDocument` schema-version pin on bundle) so
+  every MCP tool page now has the same 7-section shape.
+- 0 pages filed as `11f-page-rewrites` follow-ups; 0 deeper rewrites
+  needed for the MCP slice.
+
+### April 30 — HookRouter denials → `[must-fix]` annotations + per-minute rate cap (`phase-v12b-hookrouter-denials`, V.12b)
+- `Sources/Core/HookAnnotationFeed.swift` is the deny-side fan-out:
+  a process-singleton with a per-window must-fix rate cap (default
+  5 per 60 s). `HookAnnotation` carries severity, body, toolName,
+  filePath, sessionId; subscribers (DiffViewerPane) are notified
+  only on admitted records. Admitted/suppressed outcomes are
+  observable to callers but do NOT change the deny response —
+  suppression is non-blocking by design.
+- `HookRouter.handle(...)` emits `must-fix` annotations only at the
+  two real-blocker call sites: budget gate and ConfirmationGate
+  deny. Read/Bash/Grep advisory denials (token-saving redirects)
+  are excluded so the diff sidebar isn't flooded with badges that
+  aren't really blockers. `HookRouter.annotationFeed` is the test
+  seam.
+- New table `annotation_rate_cap_log` (Migration v13) records one
+  row per closed window in which at least one must-fix was
+  suppressed: `window_start`, `window_end`, `severity`,
+  `suppressed_count`, `threshold`. Not chain-hashed — derived flood
+  marker; source denials are already chained via T.5.
+  `Sources/Core/Stores/AnnotationRateCapStore.swift` owns the
+  table; public API at `SessionDatabase.recordAnnotationRateCap` /
+  `recentAnnotationRateCaps`.
+- `SenkaniApp/Views/DiffViewerPane.swift` subscribes to the feed
+  on appear and converts incoming `HookAnnotation` to
+  `DiffAnnotation` pinned to the first hunk when `filePath`
+  matches `leftPath` or `rightPath`. The `convertToDiffAnnotation`
+  static helper is exposed for unit-test reach.
+- 4 tests in `Tests/SenkaniTests/HookAnnotationFeedTests.swift`
+  cover deny → must-fix emit, threshold suppression, deny-response
+  invariance under suppression, and rate-cap log on window roll.
+  V.12b suite 4/4 green.
+
+### April 30 — Hunk-based `DiffViewerPane` + frozen severity vocab (`phase-v12a-hunks-and-render`, V.12a)
+- `SenkaniApp/Views/DiffViewerPane.swift` switches from a paired-line
+  stream to LCS-hunk blocks driven by the existing
+  `DiffEngine.computeHunks`. Each hunk shows `@@ -orig, +mod` plus
+  red removed / green added rows. The pane gains an annotations
+  sidebar with click-to-jump (`ScrollViewReader.scrollTo(hunk.id)`).
+- `Sources/Core/DiffAnnotation.swift` introduces the value-type
+  `DiffAnnotation` (Identifiable; Codable severity) and
+  `DiffAnnotationLayout` (pure `groupByHunk` / `sidebarOrder` /
+  `severityCounts` helpers — testable without SwiftUI).
+- The four-tag severity vocabulary `[must-fix]` / `[suggestion]` /
+  `[question]` / `[nit]` is **frozen** as part of V.12a. Each case
+  carries a one-sentence purpose docstring, a distinct `visualWeight`
+  for sort, an SF Symbol glyph, and a theme-routed color (`ansiRed`
+  / `ansiBlue` / `ansiYellow` / `ansiCyan`). rawValue is what
+  V.12b+ persistence encodes — renaming a case is a schema break.
+- V.12a ships rendering surface only; `runDiff()` initializes
+  `annotations = []`. V.12b wires `HookRouter` denials in.
+- 12 tests in `Tests/SenkaniTests/DiffAnnotationTests.swift`. Full
+  safe suite 2180 → 2192 (+12) green.
+
+### April 30 — `FragmentationDetector` + `TrustScorer` + `trust_audits` (`phase-u4a-soft-flag-scaffolding`, U.4a)
+- `Sources/Core/FragmentationDetector.swift` is the soft-flag detector
+  — NSLock-guarded per-session sliding window with three observation
+  patterns: `toolBurst` (≥3 same-tool calls inside the burst window),
+  `fragmentStitch` (overlapping prompt fragments inside the stitch
+  window), `crossPane` (same tool firing in two panes inside one
+  session). Pure Core, no SwiftUI imports; deterministic and cheap on
+  the HookRouter hot path.
+- `Sources/Core/TrustScorer.swift` is the pure 0–100 aggregator —
+  defaults: ceiling 100, floor 0, −8 per burst, −12 per stitch, −6
+  per cross-pane.
+- Migration v12 adds the chained `trust_audits` table (two row kinds
+  — `flag` and `label` — with the T.5 chain columns). FP/TP labels
+  are NEW rows referencing the flag's rowid, so re-labelling is
+  detectable without breaking append-only.
+- `Sources/Core/Stores/TrustAuditStore.swift` +
+  `Sources/Core/SessionDatabase+TrustAuditAPI.swift` expose
+  `recordTrustFlag`, `recordTrustLabel`, `recentTrustFlags`,
+  `trustLabelsForFlag`, `trustFlagStats(since:)`,
+  `trustFlagStatsLast30Days(now:)`.
+- `HookRouter.handle(...)` records every event into the detector and
+  persists fired flags through an injectable `trustFlagSink`. The
+  denial path is unchanged — soft flags do NOT deny calls. U.4b
+  promotes the detector to blocking after 30 days of operator FP/TP
+  labelling.
+- `Sources/CLI/DoctorCommand.swift` adds the canonical line `trust
+  flags — soft flags last 30d: N | confirmed FP: M | confirmed TP: K`.
+- `SenkaniApp/Views/TrustFlagsView.swift` is the Trust Flags sidebar
+  tool — orange ⚠ inline badge per flagged row, plain-language
+  "False alarm" / "Real" labelling buttons (no FP/TP jargon on the
+  operator surface).
+- `Tests/SenkaniTests/FragmentationDetectorTests.swift` (14 new tests,
+  target was 12) — schema, three detector reasons + scoping +
+  windowing, session isolation, scorer weights + floor, chain
+  prev/entry hash linkage, FP/TP round-trip + flip on re-label,
+  doctor-line format, HookRouter detector wired non-blocking.
+- Deferred (operator-only): `phase-u4b-promotion-gate` waits on a
+  30-day labelled FP/TP sample + a documented promotion threshold
+  before flipping the detector into blocking mode.
+
+### April 30 — `StdoutSink` + `MacOSLocalSink` + `NotificationRouter` (`phase-t6b-stdout-macos-sinks`, T.6b)
+- `Sources/Core/StdoutSink.swift` writes one canonical JSON line per
+  `NotifyEvent` to an injectable `Writer` (defaults to
+  `FileHandle.standardOutput`). Wire shape is sorted-key,
+  scalar-only, plus an ISO-8601 `ts` —
+  `{"kind":"notify_done","tool":"Edit","summary":"...","ts":"..."}`.
+  `NSLock`-guarded so concurrent fan-outs never interleave partial
+  lines on the same FileHandle.
+- `Sources/Core/MacOSLocalSink.swift` introduces `LocalNotifierBridge`
+  (the App's seam to wire `UNUserNotificationCenter`),
+  `NullLocalNotifierBridge` (default in headless CLI / MCP / CI),
+  `SpyLocalNotifierBridge` (records `(title, subtitle, body)` for
+  tests + can throw on demand), and the `MacOSLocalSink` itself
+  which deterministically maps `NotifyEvent` → banner copy ("Senkani
+  — done / failed / schedule" with the tool or schedule id as
+  subtitle and the human summary/reason as body).
+- `Sources/Core/NotificationRouter.swift` owns the JSON-only matrix
+  describing which named sink fires for which event variant.
+  `~/.senkani/notifications.json` decodes into `Config.sinks[name].events`;
+  sinks listed in `make(sinks:config:)` but absent from the file
+  default to subscribe-all (under-notification hides failures, so
+  the safe default is on). Missing/malformed file → `loadConfig` ⇒
+  `nil`, which the router treats as "every sink subscribes to
+  every variant".
+- `Tests/SenkaniTests/StdoutMacOSSinkTests.swift` (8 new tests,
+  target was 6): wire shape per variant, writer round-trip with
+  serialised access, MacOS sink → spy bridge banner mapping, default
+  Null bridge stays silent, throwing real sink does NOT block other
+  real sinks (closes the round-1 gap that the T.6a tolerance test
+  only proved with `MockNotificationSink`), router event filter,
+  `make` defaults missing sinks to all events, `loadConfig` returns
+  nil on missing file.
+- Deferred (operator follow-ups): `phase-t6b'` for the Settings →
+  Notifications matrix UI; `phase-t6c-pushover-sink` for the
+  Pushover adapter + `senkani doctor --seed-pushover-key`.
+
+### April 30 — ConfirmationGate scaffolding + NotificationSink protocol (`phase-t6a-confirmation-gate`, T.6a)
+- Migration v11 adds `confirmations` table with `tool_name`,
+  `requested_at`, `decided_at`, `decision` (`approve`/`deny`/`auto`),
+  `decided_by` (`operator`/`policy`/`auto`), `reason`, plus the three
+  Phase T.5 chain columns. Tamper-evident via `ChainHasher`/
+  `ChainState`, same primitive `TokenEventStore` uses.
+- `Sources/Core/MCPToolConfig.swift` introduces `MCPToolTag`
+  (`read`/`write`/`exec`/`network`) and `MCPToolCatalog` keyed by
+  tool name. The default catalog tags Claude Code hook tools
+  (`Edit`/`Write`/`Bash`) and the senkani MCP surface; `senkani_exec`
+  is `.exec`, the rest of senkani's MCP tools are `.read`. An
+  operator override seam (`setOverride`) lets a future Settings UI
+  flip individual tools without touching the source.
+- `Sources/Core/ConfirmationGate.swift` ships the gate. Read-tagged
+  tools and unknowns short-circuit with `.auto` and no row; write/
+  exec-tagged tools walk an injectable `PolicyResolver` and persist
+  the outcome as a chained row. The default resolver returns `.auto`
+  so production Edit/Write/Bash today is "approve, but log a chained
+  row" — Schneier's auditability contract for the round-1 default.
+- `Sources/Core/NotificationSink.swift` defines the `NotificationSink`
+  protocol (`notify(_:NotifyEvent)`), three event variants
+  (`notifyDone`, `notifyFailure`, `scheduleEnd`),
+  `NullNotificationSink`, `MockNotificationSink` (test recorder with
+  optional throw), and `NotificationFanout.deliver(_:to:)` which
+  swallows throws so a bad adapter doesn't block other sinks.
+- `Sources/Core/Stores/ConfirmationStore.swift` owns the table —
+  schema, chained inserts via `ChainHasher`/`ChainState`, recent()
+  reads. `Sources/Core/SessionDatabase+ConfirmationAPI.swift`
+  exposes `recordConfirmation(_:)`, `confirmationCount()`,
+  `recentConfirmations(limit:)` on the façade.
+- `Sources/Core/HookRouter.swift` consults the gate on PreToolUse
+  before dispatching; `.deny` short-circuits with a structured
+  `permissionDecisionReason` carrying the tool name and resolver
+  reason. The existing budget gate runs first so a budget block
+  still wins over a confirmation question.
+- `Tests/SenkaniTests/ConfirmationGateTests.swift` (10 new tests,
+  target was 8): schema shape with chain columns, chain wiring
+  (prev_hash → entry_hash linkage + shared anchor id), default
+  catalog tags, operator override round-trip, every write/exec
+  call writes a row + reads/unknowns don't, deny path returns
+  structured error, default policy auto-approves with audit row,
+  HookRouter Edit→deny round-trips through hookSpecificOutput,
+  Null sink no-op, Mock sink + fan-out throw tolerance. Suite is
+  `.serialized` because `ConfirmationGate` carries process-global
+  resolver/database/catalog seams.
+- `spec/roadmap.md` T.6 row gains a "T.6a SHIPPED" call-out at the
+  top with the per-round detail; the original T.6 design text is
+  kept intact below for the t6b/t6c follow-ups.
+- Deferred (operator follow-ups): `phase-t6b-stdout-macos-sinks`
+  ships `StdoutSink` + `MacOSLocalSink` + Settings UI matrix;
+  `phase-t6c-pushover-sink` ships PushoverSink + Keychain seed.
+
+### April 30 — Tier-distribution chart in AnalyticsView (`phase-u1c-analytics-chart`, U.1c)
+- `AgentTraceEventStore.tierDistribution(since:)` rolls up
+  `agent_trace_event` rows per `(tier, ladder_position)` over a
+  caller-supplied window. Rows whose `tier` is NULL (pre-U.1
+  traces, non-routed paths) are excluded — the chart's empty state
+  explains why.
+- `AgentTraceEventStore.tracesForTier(_:since:limit:)` returns the
+  matching rows for the drill-down sheet, capped at 200 by default
+  to keep the sheet responsive on busy days.
+- Both functions are exposed via `SessionDatabase` —
+  `agentTraceTierDistribution(since:)` and
+  `agentTraceRowsForTier(_:since:limit:)`.
+- `SenkaniApp/Views/AnalyticsView.swift` adds a new
+  "Routing — TaskTier Distribution" card. A 24h/7d segmented
+  picker scopes the window; a Stacked/Grouped picker switches
+  between tier totals (default) and a per-rung split that
+  surfaces fallback churn at a glance. Tap on a bar opens an
+  inline drill-down sheet listing the underlying trace rows
+  (feature, model, tokens, latency, result).
+- The drill-down lands as a sheet, not the DiffViewerPane that
+  the U.1c scope originally named — DiffViewerPane is a
+  file-diff tool and the wrong target for trace-row inspection.
+- Empty-state copy ships verbatim from the U.1c scope: "No
+  routing data yet — TaskTier was introduced in u1a; charts
+  populate as new traces land." This keeps the operator from
+  thinking the analytics broke when a fresh DB has no router
+  output yet.
+- `Tests/SenkaniTests/TierDistributionTests.swift` (6 new tests,
+  target was 6) covers per-tier counts, per-ladder-position
+  splits, NULL-tier exclusion, empty windows, the `since` cutoff
+  honoring 24h vs 7d vs all-time, and the drill-down DESC + limit
+  contract.
+- Visual verification (chart layout, drill-down click, animation)
+  cannot be automated in CI; pushed to
+  `tools/soak/manual-log.md` for real-machine confirmation.
+
+### April 29 — Routing corpus + ≥0.85 accuracy gate + ladder_position migration (`phase-u1b-routing-corpus`, U.1b)
+- `Tests/SenkaniTests/Fixtures/routing-corpus.json` ships 60 hand-
+  labeled prompts (≥10 per `TaskTier`) drawn from realistic senkani
+  usage — trivial shell verbs, routine build/test/install/lint/format
+  flows, refactor/debug/audit/optimize work, and frontier
+  multi-system / from-scratch / across-multiple work. The corpus is
+  the eval substrate for the U.1c chart: any future tweak to the
+  classifier has to keep accuracy on this substrate above the gate.
+- `ModelRouter.classify(prompt:)` is the new pure-function classifier
+  on the prompt → `TaskTier` axis. It composes existing
+  `scoreDifficulty` with the new `taskTierForScore` boundary mapping
+  (1-2 simple, 3-4 standard, 5-7 complex, 8-10 reasoning), parallel
+  to `tierForScore` on the `ModelTier` axis. No new heuristic — same
+  string-scan signals U.1a already pinned.
+- `ModelRouter.Decision` now carries `taskTier: TaskTier?` (the
+  intent the router chose, after budget-clamp) and
+  `ladderPosition: Int` (which rung produced the resolved
+  `ModelTier` — 0 primary, 1 first fallback, 1 for synthesized
+  fallbacks too). `resolve(taskTier:)` populates both; the legacy
+  preset path leaves `taskTier` nil.
+- Migration v10 appends `ladder_position INTEGER` to
+  `agent_trace_event`. Forward-only — pre-migration rows stay NULL
+  (historical traces predate the FallbackLadder concept; no
+  defensible value to backfill). The existing `tier` column,
+  reserved by V.2 for U.1's eventual writes, is untouched.
+- `AgentTraceEvent` gains `ladderPosition: Int?`; the store insert
+  binds the new column with a nil-aware helper. Existing call sites
+  that omit `ladderPosition` continue to write NULL.
+- `Tests/SenkaniTests/RoutingCorpusTests.swift` (11 new tests, target
+  was 6): corpus-loads, ≥10-per-tier, all-labels-parse,
+  ≥0.85-accuracy gate, four `Decision.taskTier`/`ladderPosition`
+  propagation cases (primary rung, walk-past-local, budget-clamp
+  records the clamped tier, synthesized fallback at position 1),
+  three migration-and-store round-trip cases (schema has the column,
+  round-trips a value, omitted writes NULL).
+- `Tests/SenkaniTests/AgentTraceEventStoreTests.swift` schemaShape
+  expectation extended to include `ladder_position`.
+- `spec/roadmap.md` U.1b row flips to ✅ SHIPPED with per-round
+  detail.
+
+### April 29 — TaskTier + FallbackLadder + BudgetGate.clamp routing types (`phase-u1a-tier-types`, U.1a)
+- `Sources/Core/TaskTier.swift` introduces `TaskTier` (`simple` /
+  `standard` / `complex` / `reasoning`) — names *the work*, distinct
+  from the existing `ModelTier` which names *the engine* (local /
+  quick / balanced / frontier). The pair separates "what kind of
+  task is this" from "which model bin runs it" so routing can clamp
+  the former by budget without reshaping the latter.
+- `FallbackLadder` carries 1-3 ordered `ModelTier` entries with a
+  hard 3-rung cap. Construction `precondition`s on cap violation;
+  `init?(safe:)` returns nil for tests that pin rejection. Default
+  ladders: `simple → [.local, .quick]`, `standard → [.quick,
+  .balanced]`, `complex → [.balanced, .frontier]`, `reasoning →
+  [.frontier]` (opt-in; no auto-fallback). The 3-cap is Senkani's
+  discipline — Manifest's 5-rung default is the deliberately-
+  undercut anti-pattern that masks upstream failures.
+- `BudgetGate.clamp(taskTier:budget:)` is a pure function that
+  floors the desired tier to what the configured budget can afford
+  using a daily-equivalent ceiling (daily wins, weekly÷7 fallback,
+  session×5 fallback). It's a *plan* gate, not a *spend* gate — it
+  reads ceilings, not current spend, so reasoning-tier work cannot
+  schedule on a $5/day pane regardless of today's accumulated
+  charge. Spend gates remain at `HookRouter.checkHookBudgetGate` /
+  `BudgetConfig.check`.
+- `ModelRouter.resolve(taskTier:budget:availableRAMGB:gemma4Downloaded:ladder:)`
+  is a new overload that consults the ladder + clamp; it walks past
+  a `.local` rung when Gemma 4 isn't installed and synthesizes a
+  `.quick` fallback only if the ladder lacks a second rung. The
+  legacy `resolve(prompt:preset:...)` heuristic path is untouched —
+  no caller migration in this slice.
+- `Tests/SenkaniTests/ModelRouterTests.swift` gains the
+  "TaskTier Ladder" suite — 18 tests covering cap rejection (4
+  entries fails, empty fails, 1-3 succeed), default-ladder shapes,
+  clamp boundaries (unlimited, $0.50/day, $3/day, $15/day,
+  $50/day, weekly÷7, never-elevate), `resolve(taskTier:)` rung
+  walking, explicit-ladder bypass, and one-rung-local synthesis.
+- `spec/roadmap.md` U.1a row flips to ✅ SHIPPED with per-round
+  detail.
+
+### April 29 — Diátaxis Documentation Standard + structural docs-shape lint (`phase-w6-diataxis-doc-split`, W.6)
+- `spec/spec.md` gains a **Documentation Standard** section
+  codifying the four Diátaxis shapes — tutorial (learning-oriented
+  set-up), how-to (task-oriented recipes), reference (schemas +
+  APIs), explanation (why it exists) — as the docs requirement for
+  every Phase T/U/V/W component before its Exit Criteria are
+  checked. The section includes the canonical tutorial-vs-how-to
+  distinction (different reader posture, different page) and a
+  "ship the explanation page first" heuristic so the other three
+  shapes don't drift on shared vocabulary.
+- `Sources/Core/DocsShapeLint.swift` ships the structural lint:
+  `DocsShape` enum, `ComponentDocs(id:paths:)` manifest, and
+  `DocsShapeLinter.lint(components:fileSystem:)` returning
+  `DocsShapeIssue` rows for missing declaration, missing-on-disk
+  file, or zero-byte stub. `FileSystemProbe.real` is the default;
+  tests inject `.inMemory(files:)`. Length / quality / freshness
+  checks are deliberately out of scope — the v1 gate is binary and
+  fast so authors can't argue about whether a paragraph "counts."
+- `Tests/SenkaniTests/DocsShapeLintTests.swift` (4 tests, target
+  was 4): all-shapes-present clean pass, missing-declaration flags
+  the right shape, declared-but-missing-file flags `fileNotFound`,
+  and a multi-component fixture with mixed missing + empty
+  conditions reports both issues in deterministic order.
+- `spec/roadmap.md` W.6 row flips to ✅ SHIPPED with per-round
+  detail.
+
+### April 29 — Quant-frontier review cadence + first 2026-Q2 report (`phase-w5-quant-frontier-cadence`, W.5)
+- `spec/ml_models.md` gains a "Quantization Frontiers" subsection
+  defining a quarterly review cadence (first business day of every
+  quarter), the per-candidate tracking schema (KL-max, imatrix
+  calibration mix, license, recipe class, footprint), and a binding
+  five-condition **promotion gate** — any candidate Gemma 4 quant
+  must beat the incumbent by ≥10 % on KL-max at equal-or-smaller
+  RAM, carry imatrix coverage of chat + code + tool-calling, post
+  `acceptable+` on `senkani ml-eval` real-machine, stay in-family
+  (no third on-device model family), and ship under a permissive
+  license. The section is explicitly walled off from the routing
+  surface so quant fashion never leaks into request-path code.
+- First quarterly report ships at
+  `~/.senkani/reports/quant-frontier-2026-Q2.md`. Reviews APEX
+  (Qwen3.6-35B-A3B + the `gemma-4-*-APEX-GGUF` family forward
+  signal), Ternary Bonsai (1.58-bit), and dots.ocr against the
+  promotion gate. Outcome: zero promotions — APEX recipe wins are
+  absorbed as policy (KL-max as headline metric, imatrix calibration
+  mix as the target, per-variant "best for" labels), Bonsai is
+  flagged as a forward signal for any future ≤2-bit Gemma 4 release,
+  dots.ocr is rejected as a third family but flagged as a candidate
+  for the OCR-specialist path *inside* `senkani_vision` (out of W.5
+  scope).
+- Cadence on the team calendar: recurring quarterly, first business
+  day of the quarter. Next review 2026-07-01.
+- Zero code, zero new tests; W.5 is a policy round. "Two Models, Not
+  Ten" remains the binding architectural constraint.
+
+### April 29 — `ContextSaturationGate` + `PreCompactHandoffWriter` ship (`phase-w4-context-saturation-gate`, W.4)
+- `Sources/Core/ContextSaturationGate.swift` ships the pure
+  decision function. `evaluate(currentTokens:threshold:)` returns
+  `.ok / .warn / .block` against a configurable
+  `Threshold(warnAt:blockAt:budgetTokens:)`. Defaults follow
+  Continuous Claude v4.7: warn 65 %, block 80 %, against a
+  200 000-token active window. The `block` reason names the percent
+  and tells the caller to write a handoff card before continuing.
+- A DB-backed convenience overload reads `tokens_in + tokens_out`
+  from `agent_trace_event` (V.2 canonical row) for a pane / project
+  / time window, so callers don't have to thread the running total
+  themselves. New `tokenUsage(...)` and `recentTraceKeys(...)`
+  queries on `AgentTraceEventStore` plus public forwarders on
+  `SessionDatabase`.
+- `Sources/Core/PreCompactHandoffWriter.swift` ships the
+  structured handoff card. `HandoffCard` is `Codable` with
+  `schemaVersion` (currently 1), `sessionId`, `savedAt`,
+  `contextPercent`, `openFiles`, `currentIntent`, `lastValidation`
+  (outcome / file / advisory pulled from `validation_results`),
+  `nextActionHint`, and `recentTraceKeys`. `write(_:rootDir:)`
+  serialises to JSON, lands in a temp file, fsyncs, then renames
+  into `<rootDir>/<sessionId>.json` (default `~/.senkani/handoffs/`)
+  so a crash mid-write never leaves a half-card readable.
+- `compose(...)` builds a card from `SessionDatabase` facts plus
+  caller-supplied intent / openFiles / nextAction. The W.4 round
+  ships the writer + composer; Hook-Router PreCompact wiring is
+  W.4-bis (operator decision pending — needs a review of which
+  hook payload fields the writer should auto-fill).
+- `PreCompactHandoffLoader.load(sessionId:rootDir:)` and
+  `loadLatest(rootDir:)` read a card on next-session start.
+  Returns nil for missing files, corrupt JSON, OR cards written
+  under a future schema version — Norman's "no fallback"
+  policy: a card the next session can't trust is worse than no
+  card.
+- 15 new tests in `ContextSaturationGateTests` (6) +
+  `PreCompactHandoffWriterTests` (9): every threshold band,
+  custom thresholds, malformed-budget fallback, DB-backed
+  derivation, Codable round-trip, atomic overwrite, real-clock
+  <1 s SLO assertion (the W.4 acceptance row), DB-driven compose,
+  missing-file / corrupt-JSON / future-schema → nil, and
+  `loadLatest` mtime ordering. Full safe suite 2094 → 2109 green.
+
+### April 29 — Markdown-first content negotiation ships (`phase-w2-markdown-first-fetch`, W.2)
+- `Sources/Core/ContentNegotiator.swift` adds the three-tier
+  fetch ladder used by `senkani_web` and `senkani_bundle`'s remote
+  mode: `Accept: text/markdown` first, deterministic HTML→markdown
+  transform on origin HTML, headless render only when both fail.
+  Cheapest-correct-first per the markdown.new pattern, with
+  caller-forceable tiers via `MarkdownFirstFetcher.fetch(url:method:)`
+  (`.auto` default, `.transform`, `.render`).
+- Every `ContentNegotiationResult` carries `tier`, `tokensEstimate`
+  (`bytes/4`, the local-first analogue of `x-markdown-tokens`),
+  `originBytes`, `needsRender`, and an optional `renderHint`. When
+  tier 2 can't extract usefully, the raw HTML is handed back so the
+  renderer doesn't pay a second fetch.
+- `HTMLToMarkdown` is a protocol; the round ships a deterministic
+  default transformer (strips `<script>` / `<style>` / `<head>` /
+  `<svg>`, preserves `<h1>`–`<h6>`, paragraphs, list items, link
+  syntax, and common HTML entities). The Gemma-4 adapter slot
+  mirrors U.8's `ProseCadenceCompiler` DI pattern so Core stays
+  MLX-free.
+- 12 new tests in `ContentNegotiatorTests`: tier-1 native return +
+  Accept header preference, tier-2 transform on HTML, tier-3
+  render fallback (transformer-nil + empty body), `method=.render`
+  short-circuits before any fetch, `method=.transform` forces tier 2
+  even when origin advertises markdown, origin failure →
+  `originUnreachable`, ≥40 % token reduction on a docs-page fixture,
+  transformer preserves headings + drops `<script>`, transformer
+  returns nil for empty input.
+- Deferred to W.2-bis: live wire-up to `WebFetchTool` /
+  `BundleTool` argument plumbing (`method` arg + `tokensEstimate`
+  in tool-result metadata) and a Gemma-4-backed `HTMLToMarkdown`
+  adapter (the deterministic transformer is the round-1 stand-in).
+
+### April 29 — `senkani_search_web` MCP tool ships (`phase-w1-search-web-mcp`, W.1)
+- `Sources/MCP/Tools/SearchWebTool.swift` adds `senkani_search_web`
+  with DuckDuckGo Lite as the default backend. Schema:
+  `{ query, limit (1–30, default 10), region (default "wt-wt"),
+  recency ("any"|"d"|"w"|"m"|"y", default "any") }`. Returns
+  formatted `{title, url, snippet}` triples in compact markdown.
+- Defense in depth: URL builder pins the host to
+  `lite.duckduckgo.com`; the backend re-checks the host pre-fetch,
+  reuses `senkani_web`'s DNS-resolved private-range guard,
+  rejects off-host redirects via a `URLSessionTaskDelegate`, and
+  re-validates the final response host. Cookies disabled, ephemeral
+  session per request.
+- `guard-research` lands as a query-side filter at the tool
+  boundary (`SearchWebQueryGuard`): blocks workstation paths
+  (`/Users/`, `/etc/`, `~/...`, Windows drives), glob patterns
+  (`/foo/*`, `**/*`), and any token flagged by `SecretDetector`.
+  Public `site:` operators and ordinary phrase searches pass.
+- Snippet + title outputs are passed through `SecretDetector`
+  before formatting, so any third-party leak in DDG's organic
+  results gets `[REDACTED:...]`-stamped before reaching the
+  model. CAPTCHA / soft-block pages surface as a structured
+  `BackendBlocked` error rather than silently returning zero
+  results.
+- `Sources/Core/Presets/PresetPrerequisiteCheck.swift` flips
+  `senkani_search_web` and `guard-research` from "always warn"
+  to ready — `autoresearch` and `competitive-scan` presets now
+  satisfy those prerequisites against this binary.
+- `Tests/SenkaniTests/SearchWebToolTests.swift` covers the parser
+  (Lite-shaped HTML + CAPTCHA + entity decode + limit cap), the
+  URL builder (region/recency/host pin), the `guard-research`
+  filter (Unix paths + tilde-home + globs + ten secret families
+  + clean queries), the redirect-pin delegate, the foreign-host
+  rejection, end-to-end with an injected backend, and a
+  100-fixture corpus that confirms every embedded secret-shaped
+  token gets redacted in the formatted output. 23 new tests.
+
+### April 29 — `NaturalLanguageSchedule` foundations (`phase-u8-natural-language-schedule`, U.8 round 1)
+- `ScheduledTask` (in `Sources/Core/ScheduleConfig.swift`) gains
+  optional `proseCadence`, `compiledCadence`, `eventCounterCadence`,
+  and `locale` JSON fields. Backward-compat decoding: pre-U.8
+  task JSON on disk decodes with these fields as `nil` and renders
+  in the Schedules pane exactly as before.
+- `Sources/Core/ProseCadenceCompiler.swift` defines the
+  prose-to-cron protocol with `NullProseCadenceCompiler` (default
+  when no LLM is installed; throws `.unavailable` so callers can
+  fall back to operator-entered cron) and `MockProseCadenceCompiler`
+  (test-time adapter that validates emitted cron via `CronToLaunchd`
+  before returning a `ProseCadence`). Mirrors the `RationaleLLM`
+  pattern — Core stays MLX-free; the production Gemma 4 adapter
+  lives in MCPServer / App and wires in via DI when the model
+  is downloaded.
+- `Sources/Core/CronPreview.swift` emits the next N fire times
+  for a 5-field cron string by walking minute-by-minute against
+  `CronToLaunchd`'s launchd-interval expansion. Powers a
+  Schedules-pane "show next 5 fires" tooltip + the
+  `AmplificationGuard` sub-minute check; horizon caps at 1 year
+  to terminate on degenerate crons.
+- `Sources/Core/CounterCadenceRateLimiter.swift` is the
+  in-process per-schedule rate limiter for counter-driven
+  cadences ("every 10 tool_calls"). Default ≤ 1 fire / 60 s,
+  per-schedule independent windows, NSLock-guarded. Defends
+  against the Hermes amplification scenario where a power user
+  fires 100 sessions in a day.
+- `Sources/Core/AmplificationGuard.swift` is the pre-save
+  validator: returns `.ok` or `.amplification(reason, floor)`
+  for prose that compiles to a sub-minute cron OR for counter
+  cadences with N ≤ 1. Includes `CounterCadence.parse` for
+  "every N events" / "every Nth event" expressions.
+- `SenkaniApp/Views/ScheduleView.swift` task row now surfaces
+  prose / counter cadences with a tooltip exposing the compiled
+  cron; cron-direct rows fall through to the existing
+  human-readable cron rendering.
+- 13 new tests in `Tests/SenkaniTests/NaturalLanguageScheduleTests.swift`
+  cover Codable backward-compat, prose round-trip,
+  Null/MockProseCadenceCompiler boundaries, CronPreview daily /
+  weekly / invalid, rate-limiter block + allow + per-schedule
+  isolation, AmplificationGuard amplification-detection +
+  daily-cron pass, CounterCadence parsing.
+- Deferred to follow-up u8b: Schedules pane "New Schedule" form
+  prose input + "Show next 5 fires" preview button; real
+  MLX-backed Gemma 4 adapter wiring; `HookRouter` post-tool
+  counter-cadence runner that queries `SessionDatabase` event
+  counts and fires the schedule subject to the rate limiter.
+
+### April 29 — `PromptArtifactRegressionGate` + `ReflectiveLearningRun` (`phase-v4-regression-gate`, V.4 round 1)
+- `Sources/Core/PromptArtifactRegressionGate.swift` is the V.4
+  pre-merge gate for prompt-side artifacts (skills, hook prompts,
+  MCP tool descriptions, brief templates) — distinct namespace
+  from the Phase H+1 `RegressionGate`, which scores `FilterRule`
+  savings deltas against `FilterEngine`. Bach's audit: distinct
+  surfaces, distinct names, no payload-conflation. `EvalCorpus`
+  is `[EvalCase]`; each case carries a `Requirement`
+  (`.mustContain` / `.mustNotContain` / `.maxLength`) — round-1's
+  three constructors cover the lowest-friction skill/hook
+  invariants without committing to an LLM evaluator (V.4-bis
+  extension point). `ArtifactScore = (passing, total, cost)`
+  persists `total` for future uncertainty calibration (Gelman's
+  audit) and `cost` as utf8 byte count of the body (Karpathy's
+  audit: defensible token-cost proxy without a tokenizer in V.4).
+  Gate accepts when `candidate.passing ≥ baseline.passing` (cost-
+  only improvements are legal — the Pareto frontier filters
+  dominated entries downstream); empty corpus and nil baseline
+  accept unconditionally.
+- `Sources/Core/ReflectiveLearningRun.swift` ships the
+  `PromptMutator` protocol (Karpathy's "MutationStrategy" hook)
+  and a five-mutator deterministic suite (`concise_prefix` /
+  `trim_trailing_ws` / `drop_empty_lines` / `first_sentence_only`
+  / `append_safety_footer`) as the round-1 stand-in. Karpathy red
+  flag: this is **not** a GEPA implementation — round 1 is the
+  scaffold; V.4-bis swaps in an MLX-backed mutator behind the
+  same protocol. `ParetoFrontier.consider(_:)` enforces strict
+  dominance (≥ on one dimension, > on the other), evicts
+  dominated entries, and rejects exact-duplicate body+score
+  pairs. Persistence: `<projectRoot>/.senkani/learn/pareto/<kind>.json`
+  with `[.sortedKeys, .prettyPrinted]` + `.iso8601` JSON for
+  byte-stable round-trip; per-kind partition means the four
+  artifact kinds evolve independently.
+- `Sources/Core/CompoundLearning.swift` adds
+  `runReflectiveLearning(seed:corpus:projectRoot:mutators:db:)`
+  — the V.4 Propose-step hook. Loads the existing frontier,
+  runs the reflective loop, persists the merged frontier, and
+  bumps `compound_learning.prompt_artifact.run` once per call +
+  `compound_learning.prompt_artifact.proposed` by the
+  newly-added entry count. **Operator-triggered**, not
+  auto-fired in `runPostSession` (Schneier-style: silent prompt
+  mutation churn is opt-in; V.4-bis adds a `senkani gate run`
+  CLI + scheduled cadence).
+- `spec/compound_learning.md` adds a "Phase V.4 — Prompt-side
+  artifact gate" section documenting the corpus format, score
+  shape, gate semantics, Pareto dominance rule, persistence
+  layout, and the V.4-bis deferred work (LLM mutator, CLI
+  surface, auto-fire, frontier UI, V.6-round-3 fails-evidence →
+  EvalCase wiring).
+- 20 new tests across two suites (`PromptArtifactRegressionGateTests`,
+  `ReflectiveLearningRunTests`): score reports `passing`/`total`/
+  `cost` honestly; vacuous-truth pct on empty corpus;
+  equal-passing accepted (cost-only improvement legal);
+  strictly-better accepted; **fixture-injected regression
+  rejected (acceptance #1)**; nil baseline accepts; empty corpus
+  accepts; `maxLength` counts utf8 bytes; strict dominance on
+  lower-cost-same-passing; non-dominated coexist; ties
+  distinguished by body; **save/load round-trips byte-stably +
+  per-kind partition (acceptance #2)**; deterministic mutators
+  are pure; run includes the seed; run drops dominated
+  mutations; **`CompoundLearning.runReflectiveLearning` persists
+  + bumps event counter (acceptance #3)**; idempotent re-run;
+  stable `PromptArtifactKind.rawValue` contract.
+
+### April 28 — `AnnotationStore` + signal generator backend (`phase-v6-annotation-system`, V.6 round 1)
+- `Sources/Core/Migrations.swift` adds Migration v9 — a new
+  `annotations` table. One row per operator-tagged segment of a
+  skill or KB entity, append-only. Columns: `target_kind`,
+  `target_id`, `range_start`, `range_end`, `verdict`
+  (`works` / `fails` / `note`), `notes`, `authored_by`,
+  `authorship` (the V.5 `AuthorshipTag` rawValue, explicit by
+  construction), `created_at`, plus the three Phase T.5 chain
+  columns (`prev_hash` / `entry_hash` / `chain_anchor_id`)
+  nullable for forward compatibility. Three covering indexes —
+  `(target_kind, target_id, created_at DESC)`,
+  `(verdict, created_at DESC)`, and `(authorship)` — back the
+  byTarget / verdict-rollup / authorship-pivot read paths.
+- `Sources/Core/Stores/AnnotationStore.swift` owns the table:
+  `record(_:)` returns the new rowid, `byTarget(kind:id:)` and
+  `recent(limit:)` are newest-first reads, `verdictRollup(targetKind:)`
+  buckets works/fails/note per `(kind, target)`, and
+  `renameTarget(kind:fromId:toId:)` rewrites `target_id` so an
+  artifact rename / fork preserves annotation lineage (Torres
+  acceptance criterion).
+- `Sources/Core/SessionDatabase+AnnotationAPI.swift` exposes the
+  store on `SessionDatabase` matching the per-feature `+API.swift`
+  convention: `recordAnnotation(_:)`, `annotationCount()`,
+  `annotations(kind:id:)`, `recentAnnotations(limit:)`,
+  `renameAnnotationTarget(kind:from:to:)`,
+  `annotationVerdictRollup(targetKind:)`.
+- `Sources/Core/AnnotationSignalGenerator.swift` is the read-side
+  bridge to CompoundLearning Analyze. `analyze(db:targetKind:minTotal:limit:)`
+  rolls up annotation rows into deterministic
+  `AnnotationEvidence` rows tagged `failing` / `working` / `mixed`
+  per a coarse classifier. Round 1 stops at evidence — no rule
+  mutation, no auto-staging (Karpathy's red flag in the V.6
+  audit synthesis: annotations are operator attestation, not
+  agent inference).
+- `Sources/Core/CompoundLearning.swift` adds
+  `runAnnotationSignalDetection(projectRoot:db:)` and wires it
+  into `runPostSession`. Each evidence row bumps
+  `compound_learning.annotation.observed` plus a
+  `compound_learning.annotation.{failing,working,mixed}` counter
+  so operators can see the signal land via
+  `senkani stats --security` without a UI surface.
+- `Sources/Core/Stores/AnnotationStore.swift` ships three public
+  enums: `AnnotationTargetKind` (`skill`, `kb-entity`),
+  `AnnotationVerdict` (`works`, `fails`, `note`), and the
+  `AnnotationVerdictRollup` / `AnnotationEvidence` structs that
+  shape the analytics handoff.
+- 12 new tests in `Tests/SenkaniTests/AnnotationStoreTests.swift`:
+  schema shape; record + count; field round-trip; byTarget
+  filtering + unknown empties; recent ordering + limit; rename
+  preserves rows + does not cross kinds; verdictRollup buckets
+  by works/fails/note; verdictRollup filters by kind;
+  authorship `.unset` round-trip; the 100-fixture acceptance
+  test that proves every annotation flows into
+  `AnnotationSignalGenerator.analyze`; counters bump through
+  `runAnnotationSignalDetection`.
+- Accepted risks deferred to follow-up rounds: annotation rows
+  schema-include but do not yet write the audit-chain hashes
+  (V.6 round 2); SwiftUI annotation surface in SkillsLibrary /
+  KnowledgeBase panes (V.6b); `fails` evidence → learned-rule
+  Propose pathway (V.6 round 3).
+
+### April 28 — `HandManifest` schema v1 + `senkani skill` CLI (`phase-u5-hand-manifest`, U.5 round 1)
+- New `Sources/Core/HandManifest.swift` is the canonical
+  capability-package shape: 13 fields covering identity
+  (`name`, `description`, `version`), capability surface
+  (`tools`, `settings`, `metrics`, `capabilities`), prompt
+  structure (`system_prompt.phases`, `skill_md`), and runtime
+  policy (`guardrails.requires_confirm/egress_allow/secret_scope`,
+  `cadence.triggers/schedule`, `sandbox`).
+- `Sources/Core/HandManifestLinter.swift` enforces 12 invariants
+  Codable can't catch — schema-version pin, identity-field
+  non-empty + kebab-case warning, phase non-empty,
+  `requires_confirm` ⊆ `tools[]`, known `cadence.triggers`,
+  non-empty `egress_allow` hosts. `lintJSON(_:)` surfaces decode
+  failures as one error-severity issue at path `(decode)`.
+- `Sources/Core/HandManifestExporter.swift` translates one
+  manifest to five harnesses. First-class: `claude-code` (SKILL.md
+  YAML frontmatter + sectioned phases) and `senkani` (WARP.md
+  with `tools:` + `sandbox:` frontmatter). Shape-only: `cursor`
+  (`.mdc` rule), `codex` and `opencode` (JSON envelope
+  `{harness, manifest}`). Per-harness installer hardening lands
+  in V.10 / V.11.
+- `Sources/CLI/SkillCommand.swift` wires `senkani skill lint
+  <path>` (with `--json`) and `senkani skill export --target
+  <harness> <path>`. Export refuses to emit when lint reports
+  errors. `Senkani.swift` registers `Skill.self` as a top-level
+  subcommand.
+- `spec/skills.md` is the frozen schema doc with field table,
+  lint matrix, exporter status table, CLI surface, and round
+  history. `spec/autonomous-manifest.yaml` adds the `skills`
+  subsystem mapping so future doc-sync routes here.
+- 20 new tests across three suites
+  (`HandManifestTests`, `HandManifestLinterTests`,
+  `HandManifestExporterTests`) covering happy-path decode,
+  decode rejects unknown sandbox, multi-phase round-trip, every
+  lint invariant, and one assertion per exporter target.
+
+### April 28 — `agent_trace_event` canonical row + idempotency keys (`phase-v2-canonical-trace-row`, V.2)
+- `Sources/Core/Migrations.swift` adds Migration v8 — a new
+  `agent_trace_event` table with one wide row per tool call.
+  Conformed dimensions: `pane`, `project`, `model`, `tier`,
+  `feature`, `result`. Measures: `started_at`, `completed_at`,
+  `latency_ms`, `tokens_in`, `tokens_out`, `cost_cents`,
+  `redaction_count`, `validation_status`,
+  `confirmation_required`, `egress_decisions`. The Stripe-style
+  accumulator pre-rolls everything an analytics query would
+  otherwise stitch from raw `token_events`. Three covering
+  indexes — `(project, started_at)`, `(pane, started_at)`,
+  `(feature, started_at)` — back the three pivot helpers.
+- `idempotency_key` is `UNIQUE`. Writes go through
+  `INSERT … ON CONFLICT(idempotency_key) DO NOTHING`, so a
+  retry from the call site lands one row, not two. The dedup
+  test fires 100 retries with the same key and asserts the
+  table holds exactly one row.
+- `Sources/Core/Stores/AgentTraceEventStore.swift` owns the
+  writes + reads. Three pivots ship: `pivotByProject`,
+  `pivotByFeature` (with success/failure split),
+  `pivotByResult`. All three respect an optional `since:` filter.
+- `Sources/Core/SessionDatabase+AgentTraceAPI.swift` exposes
+  the public façade — `recordAgentTraceEvent`,
+  `agentTracePivotByProject`, `agentTracePivotByFeature`,
+  `agentTracePivotByResult`.
+- `spec/architecture.md` documents the conformed-dimension
+  vocabulary in a new "Canonical Trace Rows (Phase V.2)"
+  section. Accepted risk: the canonical row is *derived*, so it
+  is not chain-anchored — the source `token_events` rows are.
+- 14 new tests in `Tests/SenkaniTests/AgentTraceEventStoreTests.swift`:
+  schema shape, UNIQUE-constraint enforcement, 100-retry dedup,
+  inserted-vs-deduped flag, distinct-keys split rows, full
+  dimension/measure roundtrip, NULL-tier default (filled by U.1
+  later), all three pivot rollups, NULL-project bucket, `since:`
+  filter, coexistence with existing `token_events` analytics, and
+  EXPLAIN-QUERY-PLAN proof the project index is used. The
+  existing 161-test DB / store / migration / chain regression
+  suite still passes.
+- Reference: `spec/inspirations/analytics-visibility/stripe-canonical-log-lines.md`,
+  `spec/inspirations/analytics-visibility/future-agi.md`.
+
+### April 28 — MarkdownStreamingTranscoder Swift port (`phase-v8-markdown-streaming-transcoder`, V.8)
+- `Sources/Core/MarkdownStreamingTranscoder.swift` ports the
+  `@wterm/markdown` per-line dispatcher pattern to Swift. `push(_:)`
+  appends delta chunks, splits on `\n`, processes complete lines to
+  ANSI-styled output, and keeps the trailing partial line buffered
+  for the next call. `flush()` drains the orphan tail and closes any
+  open code fence. Inline scanner is a single forward pass: backtick
+  code spans win first (their content is pasted verbatim), then `**`
+  bold, `*` italic, and `[text](url)` links. Block dispatch covers
+  ATX headings (`# … ######`), bullet lists (`-`/`*`/`+`), ordered
+  lists (`N.`), and blockquotes (`> `). State is just `_buffer`,
+  `_inCodeBlock`, and the open fence's language hint.
+- `Tests/SenkaniTests/MarkdownStreamingTranscoderTests.swift` —
+  10 tests covering the load-bearing wterm streaming describe:
+  buffer-on-incomplete-line, multi-chunk pushes across line
+  boundaries, code-fence open/close (including the rule that
+  asterisks inside a fenced block survive verbatim), inline bold +
+  italic, inline-code protecting its body from re-scan, headings +
+  links, `flush()` draining an orphan code block, list items, the
+  `transcode(_:)` static convenience, and a streaming jitter
+  benchmark — 5 K-character corpus pushed one byte at a time
+  finishes in ~4 ms (budget is <50 ms / three frames at 60 Hz).
+- Reference: `spec/inspirations/native-app-ux/wterm.md` →
+  "What Senkani Should Borrow / Concrete Senkani Actions". Terminal
+  pane integration (route MCP-streaming text responses through the
+  transcoder) is the follow-up wedge — the algorithmic core landed
+  here so any caller can consume it.
+
+### April 28 — KB markdown vault is configurable + portable (`phase-v7-knowledgebase-plain-md`, V.7)
+- `Sources/Core/KBVaultConfig.swift` resolves the per-project
+  knowledge dir against three layers: `SENKANI_KB_VAULT_ROOT` env
+  override, `~/.senkani/config.json` `kb_vault_path`, then the
+  legacy `<projectRoot>/.senkani/knowledge` default. When a vault
+  root is configured, the resolved dir is `<vault_root>/<project-slug>`
+  so multiple projects don't collide on entity name. `getenv` is read
+  live so test setenv calls take effect without stale snapshots.
+- `Sources/Core/KBVaultMigrator.swift` copies the vault between two
+  directories, content-hash idempotent: `migrate` skips files already
+  present byte-for-byte, surfaces conflicts (different content) as a
+  separate list rather than silently overwriting, and never deletes
+  the source unless the operator passes `--prune`. `unmigrate` is the
+  same operation in reverse.
+- `Sources/Core/WikiLinkResolver.swift` is the click-through resolver
+  complementing `WikiLinkHelpers` completion. Stems resolve exact;
+  multi-hits without a folder hint return `.ambiguous([URL])` so the
+  caller can disambiguate; `folder/Name` and `nested/folder/Name`
+  hints anchor the suffix of the path components.
+- `Sources/CLI/KBCommand.swift` adds `senkani kb migrate --to <path>
+  [--prune]` (persists path to `~/.senkani/config.json` for the next
+  session) and `senkani kb unmigrate [--prune]` (clears the config
+  key when pruning). Conflicts cause non-zero exit so the operator
+  must reconcile manually — Cavoukian's "no silent data leak across
+  vaults" rule.
+- `Sources/Core/KnowledgeFileLayer.swift` gains
+  `init(vaultDir:store:)` for explicit paths; the existing
+  `init(projectRoot:store:)` is now a convenience that delegates
+  through `KBVaultConfig.resolvedVaultDir`. Same plumbing in
+  `KBLayer1Coordinator.decideRebuild` so staleness detection follows
+  the relocated vault. The Layer-2 SQLite DB still pins to
+  `<projectRoot>/.senkani/knowledge/knowledge.db` — derived state,
+  not user-edited markdown.
+- 12 new tests in `Tests/SenkaniTests/KBVaultV7Tests.swift` cover
+  config defaults / env override / slug sanitization, migrator
+  copy / idempotency / unmigrate / conflict-not-overwrite, resolver
+  exact / folder-hint / ambiguous / not-found, and the layer
+  end-to-end round-trip through `init(vaultDir:)`.
+- All KB-touching test suites green: 12 new V.7 + 12 KnowledgeFileLayer
+  + 5 KBLayer1Coordinator + 11 KBPaneViewModel + 14 WikiLinkCompletion
+  = 54 tests. The full `swift test` run hits a pre-existing test-bundle
+  SIGTRAP (verified to reproduce on `main` without these changes); see
+  manual-log entry for the soak follow-up.
+
+### April 28 — Authorship badges in KB / Timeline / Skills panes (`phase-v5d-authorship-ui-badges`, V.5 round 4)
+- `Sources/Core/AuthorshipBadge.swift` is a pure-Core descriptor that
+  is total over `AuthorshipTag?` × `BadgeContext`
+  (`.knowledgeBase` / `.timeline` / `.skills`). It returns a
+  `(label, weight, tooltip)` triple where `Weight` distinguishes the
+  three explicit tags (`.explicit`), an in-band `.unset` row owing a
+  decision (`.unset`), a legacy NULL on the KB (`.legacy`), and a
+  surface that doesn't yet carry the column at all (`.untracked`).
+  The three non-explicit weights all label as "Untagged" — the host
+  never silently relabels a missing tag as AI / Human / Mixed
+  (Cavoukian's V.5 contract).
+- `SenkaniApp/Views/AuthorshipBadgeView.swift` is the SwiftUI host —
+  monospaced 8-pt capsule with surface-aware tooltips. Visual weight
+  scales: `.explicit` rides the KB accent, `.unset` shows a small
+  orange nudge for the operator's decision, `.legacy` and `.untracked`
+  fade into the row chrome.
+- Wiring: `KnowledgeBaseView` renders the badge in the entity row and
+  the entity detail header (real authorship column);
+  `AgentTimelinePane` renders the `.untracked` badge on every timeline
+  row with a tooltip explaining that `token_events` doesn't carry the
+  column today; `SkillBrowserView` does the same for the skill list
+  row + skill detail header (filesystem-scanned, no DB column).
+- 10 new tests in `Tests/SenkaniTests/AuthorshipBadgeTests.swift` lock
+  the explicit-tag → label/weight/tooltip mapping, the no-silent-
+  inference contract across every untagged cell, the explicit-tag
+  context-invariance, and the Podmajersky single-sentence ≤150-char
+  tooltip rule.
+- 1948 → 1958 tests green; build green via `swift test --no-parallel`.
+
+### April 28 — `senkani authorship backfill` CLI (`phase-v5c-authorship-cli-backfill`, V.5 round 3)
+- `Sources/CLI/AuthorshipCommand.swift` adds the operator-triggered
+  `senkani authorship backfill --since YYYY-MM-DD --tag <aiAuthored|humanAuthored|mixed>`
+  CLI for healing legacy NULL `authorship` rows on the KB
+  (`knowledge_entities`). The in-band `.unset` sentinel is **never**
+  overwritten — it represents an explicit operator deferral, distinct
+  from the pre-V.5 NULL state. Without `--yes` the command prints a
+  dry-run preview (count + project root + tag); `--yes` writes.
+- `Sources/Core/KnowledgeStore/EntityStore.swift` gains
+  `countNullAuthorship(since:)` and `backfillNullAuthorship(since:tag:)`.
+  The UPDATE matches `created_at >= since AND authorship IS NULL` only,
+  wrapped in `BEGIN IMMEDIATE`/`COMMIT`. Idempotent by construction —
+  a second pass with the same args writes 0 rows because the predicate
+  no longer matches.
+- `Sources/Core/AuthorshipBackfillRunner.swift` bridges the KB write
+  with the chain-participating audit log: each non-empty batch opens a
+  fresh session in `SessionDatabase.shared` and records one row in the
+  `commands` table with `tool_name="authorship.backfill"`. That row
+  carries `prev_hash` / `entry_hash` / `chain_anchor_id` (Phase T.5
+  round 3 chain) — the "self-audited row in the chain" required by
+  V.5c.
+- Cavoukian invariants: bulk operations are operator-triggered, never
+  automatic; the CLI rejects `--tag unset` because backfill exists to
+  record an explicit decision; `.unset` and the three explicit tags are
+  preserved on every backfill pass.
+- Tests: 7 new tests in `Tests/SenkaniTests/AuthorshipBackfillTests.swift`
+  cover the SQL contract (since-cutoff, idempotency, `.unset` and
+  explicit-tag preservation, all three explicit tags) plus the
+  audit-chain runner integration (one chain row per non-empty batch
+  with a 64-char SHA-256 entry_hash; no audit row on empty batches).
+
+### April 28 — Save-path authorship prompt sheet (`phase-v5b-authorship-ui-prompts`, V.5 round 2)
+- `Sources/Core/AuthorshipPromptResolver.swift` is a pure-Core resolver
+  that owns the V.5b decision: `needsPrompt(priorAuthorship:)` returns
+  true exactly when the row's stored tag is `.unset` (V.5 round 1
+  sentinel) or `nil` (legacy NULL); the three explicit tags pass
+  through silently. `resolve(choice:)` is a documented pass-through to
+  `AuthorshipTracker.tag(forExplicitChoice:)` — no inference, no
+  defaulting, no timeout-based silent resolution. Cavoukian's red flag
+  holds: the operator is the sole authority on which tag a row carries.
+- `SenkaniApp/Views/AuthorshipPromptSheet.swift` is the SwiftUI host
+  for the resolver. Podmajersky-reviewed copy: 1-line verb-first
+  question ("Who wrote this?", 16 chars), three buttons matching
+  `AuthorshipTag.displayLabel` exactly (AI / Human / Mixed) with no
+  preselected default, plus a tertiary "Skip for now" that returns
+  control to the editor without saving (Skip preserves dirty state —
+  it never silently writes `.unset` through this path).
+- `KBPaneViewModel.saveUnderstanding()` now gates on
+  `AuthorshipPromptResolver.needsPrompt`; when true it sets
+  `pendingAuthorshipPrompt = true` and defers the write. The new
+  `resolveAuthorship(_:)` and `skipAuthorship()` callbacks complete or
+  abort the save; the existing fast path (prior tag explicit) preserves
+  the row's authorship value verbatim. `KnowledgeBaseView` binds the
+  flag to a `.sheet` modifier so the prompt surfaces inline in the KB
+  pane.
+- Bypass for headless callers is unchanged: `KnowledgeStore.upsertEntity(_,authorship:)`
+  takes an explicit tag and never touches the prompt path.
+  `KBCompoundBridge.seedKBEntity` (`.aiAuthored`) and tests that pass
+  `authorship:` continue to work as before.
+- Tests: 10 new tests in `Tests/SenkaniTests/AuthorshipPromptResolverTests.swift`
+  covering the predicate (5 cases — `nil`, `.unset`, three explicit
+  tags), the pass-through resolution invariant across all enum cases,
+  the Podmajersky copy contract (verb-first / one-line / button labels
+  match `displayLabel` / Skip distinct from primaries), and the
+  end-to-end bypass round-trip on `upsertEntity`.
+
+### April 28 — `AuthorshipTag` + KB schema migration v7 + `AuthorshipTracker` facade (`phase-v5-authorship-tracker`, V.5 round 1)
+- `Sources/Core/AuthorshipTag.swift` adds the four-case provenance
+  enum (`aiAuthored`, `humanAuthored`, `mixed`, **`unset`**) used by
+  every artifact row from V.5 forward. Round 1 honors Gebru's red
+  flag from the Phase 5 synthesis: `.unset` is the explicit "operator
+  has not yet chosen" sentinel — never silently equivalent to
+  `.humanAuthored`.
+- `Sources/Core/AuthorshipTracker.swift` is a pure facade for
+  resolving a tag from an explicit operator action. There is no
+  inference path — every code site that wants a tag routes through
+  one of three call surfaces (`tag(forExplicitChoice:)`,
+  `tagForUnknownProvenance()`, `decode(_:)`). `grep -n
+  "AuthorshipTracker"` finds every authorship resolution in the
+  codebase.
+- Migration v7 lands the `authorship` TEXT NULL column on
+  `knowledge_entities`, with a non-unique index for read-side
+  filtering. NULL is the legacy "pre-V.5 row" state and is distinct
+  from the in-band `.unset` rawValue. New inserts always carry an
+  explicit tag string.
+- `EntityStore.upsertEntity(_:authorship:)` requires an explicit
+  `AuthorshipTag` parameter (non-optional). The
+  `KnowledgeStore.upsertEntity(_:authorship:)` facade defaults the
+  parameter to `.unset`, which preserves source compatibility for
+  ~75 existing test call sites without softening the contract — the
+  default is the explicit unresolved sentinel, not silent inference.
+- The two production callers in `Sources/Core/KBCompoundBridge.swift`
+  (compound-learning seed → `.aiAuthored`) and
+  `Sources/Core/KnowledgeFileLayer.swift` (markdown-vault sync →
+  `.unset`, awaiting V.5b prompt) pass explicit tags.
+- Tests: 13 new tests in `Tests/SenkaniTests/AuthorshipTrackerTests.swift`
+  covering enum surface, facade pass-through invariants, decode
+  round-trip + corrupt-row signal, schema column existence, all-cases
+  upsert round-trip, conflict-overwrite, default-arg-lands-as-unset
+  contract, and FTS5 search column-shift regression.
+- Round 1 deliberately defers the V.5 UI prompts (`phase-v5b`),
+  CLI backfill (`phase-v5c`), and pane badges (`phase-v5d`) — those
+  ride on this round's enum + column foundation.
+
+### April 27 — Partial-result notice strip + a11y on Dashboard tiles (`phase-v1c-pane-refresh-notice-ui`, V.1 round 3)
+- `Sources/Core/PaneRefreshTileDisplay.swift` extracts a pure,
+  unit-testable display projection of `PaneRefreshState`. Three
+  tones — `normal`, `warning`, `error` — drive distinct tile chrome
+  in `DashboardView.liveTileCard`: error renders a red strip with
+  an `exclamationmark.octagon.fill`, notice renders a yellow strip
+  with `exclamationmark.triangle.fill`, and the precedence rule
+  ensures the UI never shows both at once (error wins).
+- Each tile now sets `accessibilityLabel` so VoiceOver reads a
+  single coherent phrase (e.g. "Budget Burn, partial: no spend
+  yet") instead of an unlabeled stack of `Text` nodes.
+- `paneRefreshFixtureFetch(failuresBeforePartial:notice:)` ships
+  alongside the display helper as a test-mode fetch that injects
+  `.failure` for the first N calls then `.partial(notice:)`,
+  exercising the notice surface end-to-end through the worker pool.
+- 6 new tests in
+  `Tests/SenkaniTests/PaneRefreshTileDisplayTests.swift`: tone
+  routing for normal / notice / error, error-precedence-over-notice,
+  warming a11y label, and the 3-tick round-trip where the third
+  tick flips the fixture from `.failure` to `.partial(notice:)` and
+  the resulting display projects a warning strip with the expected
+  a11y label.
+- Test count: 1912 → 1918 (+6).
+- Closes V.1 by clearing the deferred row "Partial-result notice
+  rendered on a fixture-injected upstream failure" from the
+  original V.1 acceptance.
+
+### April 27 — `pane_refresh_state` persistence + Dashboard tile coordinator (`phase-v1b-pane-refresh-persistence`, V.1 round 2)
+- `Sources/Core/Stores/PaneRefreshStateStore.swift` and migration v6
+  add `pane_refresh_state` (project_root, tile_id, the seven Glance
+  state fields, plus `prev_hash` / `entry_hash` / `chain_anchor_id`
+  for tamper-evidence). Append-only by design — every
+  `applyOutcome` writes a fresh row; `paneRefreshStates` reads
+  latest-per-tile via `idx_pane_refresh_state_latest`. Writes go
+  through `ChainState`, so verification + repair work the same
+  way as the four T.5 chain participants.
+  `ChainVerifier.verifyAll` now returns five entries (token_events,
+  validation_results, sandboxed_results, commands,
+  pane_refresh_state).
+- `Sources/Core/PaneRefreshCoordinator.swift` owns the three round-2
+  Dashboard tiles — budget burn (30 s), validation queue (5 s),
+  repo dirty state (10 s) — under one `PaneRefreshWorkerPool`
+  (default cap 4). `tick(now:)` sweeps every refresher whose
+  `requiresUpdate` is true, persists the outcome, and bumps the
+  `pane_refresh.persisted` counter. `rehydrate()` restores tile
+  state on app start in one query and bumps the
+  `pane_refresh.rehydrated` counter.
+- `SenkaniApp/Views/DashboardView.swift` adds a "Live Tiles"
+  section rendering the three coordinator-backed states; the
+  existing 2 s timer drives both the legacy `refreshData` path
+  and the new `coordinator.tick()` sweep. Visual polish for the
+  notice strip ships in V.1 round 3 (`phase-v1c`).
+- 9 new tests across
+  `Tests/SenkaniTests/PaneRefreshStateStoreTests.swift` +
+  `Tests/SenkaniTests/PaneRefreshCoordinatorTests.swift`:
+  migration shape, append-only / latest-wins, bulk rehydrate,
+  chain OK after clean writes, tamper detection at the right
+  rowid, tick persists + surfaces outcomes, rehydrate round-trip,
+  failure outcome propagates to snapshot, bounded pool peak ≤ 4
+  across 12 simultaneous wakes.
+- _Deferred to a follow-up:_ FSEvents-driven invalidation for
+  `repo_dirty_state` (today's 10 s polling is the bridge), and
+  rewiring the existing summary cards on the scheduler (V.1
+  round 3 territory).
+- Test count: 1903 → 1912 (+9).
+
+### April 27 — `PaneRefreshScheduler` Core protocol layer (`phase-v1-pane-refresh-scheduler`, V.1 round 1)
+- `Sources/Core/PaneRefreshScheduler.swift` ships the per-tile
+  refresh contract borrowed from Glance's `widgetBase`. The
+  `PaneRefreshScheduler` protocol declares `state`,
+  `requiresUpdate(now:)`, `update(ctx:)`, `scheduleNextUpdate(now:)`,
+  and `scheduleEarlyUpdate(now:)`. `PaneRefreshState` carries the
+  seven required fields — `cacheType`, `cacheDuration`,
+  `nextUpdate`, `retryCount`, `lastError`, `notice`,
+  `contentAvailable`. `PaneCacheType` covers `infinite` /
+  `duration` / `onTheHour`.
+- `PaneRefreshOutcome` is `success` | `partial(notice:)` |
+  `failure(error:)`. `success` clears retry count + error +
+  notice and flips `contentAvailable` true. `partial` preserves
+  prior `contentAvailable`, clears the error, and surfaces the
+  notice — the Glance pattern for keeping a stale-but-usable tile
+  on screen with an inline warning. `failure` bumps `retryCount`,
+  records the error, and uses `PaneRefreshBackoff` (squared
+  minutes, 1800 s default cap) for the early retry — capped by
+  the natural `nextUpdate` so a slow-moving tile doesn't retry
+  past its own freshness budget.
+- `StatefulPaneRefresher` is the reference implementation:
+  thread-safe via `NSLock`, takes a `@Sendable` fetch closure,
+  exposes `replaceState` for round-2 SessionDatabase rehydration.
+  `PaneRefreshWorkerPool` is a Swift actor with FIFO continuation
+  waiters, bounded by `maxConcurrent` — Dashboard / Analytics /
+  monitoring tiles dispatch through the pool so a wave of
+  on-the-hour boundary updates doesn't fan out into a thundering
+  herd.
+- 17 new tests in `Tests/SenkaniTests/PaneRefreshSchedulerTests.swift`
+  cover `requiresUpdate` for each `cacheType`,
+  `scheduleNextUpdate` alignment (duration / onTheHour /
+  infinite), squared backoff + cap-by-natural-nextUpdate,
+  outcome semantics (success / partial / failure), and worker
+  pool bounded concurrency + waiter queueing.
+- **Split note:** V.1's full exit criteria require schema
+  migration for scheduler-state persistence and three Dashboard
+  tile migrations (budget burn, validation queue, repository
+  dirty). Following the `phase-t5-audit-chain` precedent, those
+  are spinning out as `phase-v1b-pane-refresh-persistence`
+  (SessionDatabase + tile migrations) and
+  `phase-v1c-pane-refresh-notice-ui` (DashboardView notice
+  surface). Round 1 ships the protocol layer + worker pool only.
+
+### April 27 — Paired-numbers section + companion-stack section in README + spec/app.md (`phase-v16-paired-numbers-readme`)
+- `README.md` ships a top-level **Paired Performance Numbers**
+  section that supersedes the old "Performance" + "About the
+  numbers" block. The 80.37× fixture and the pending live-session
+  median are cited together as a 2-row table; a "Why a pair"
+  paragraph names the rule that 80× never appears unpaired
+  outside the testing.md gate's `±4 lines` qualifier window. The
+  full caveat link points at `spec/testing.md` Live Session
+  Caveat. Adjacent sub-table now also surfaces hot-path SLOs and
+  release commitments alongside the savings claim, per V.14
+  dependency.
+- `README.md` ships a new **Companion Stack (remote-operator
+  pattern)** section after Building from Source. Tutorial-shaped
+  per Procida: numbered steps for Tailscale (Personal $0) +
+  Screens 5 ($179.99 lifetime / $29.99 yr) + Pushover (~$4.99 /
+  platform, 10 k msgs/mo free), with the closed-loop narrative
+  (Senkani job ends → Pushover push → `screens://<tailnet-host>`
+  → Screens 5 opens that Mac's desktop). Disclaims explicitly
+  that none of the three is a Senkani feature; names the
+  durable contract as "any WireGuard mesh + any VNC client +
+  any HTTP-API push service." Links to
+  `spec/inspirations/native-app-ux/tailscale-plus-screens-5.md`.
+- `spec/app.md` ships a top-level **Paired Performance Numbers**
+  section after "Invisible Optimization vs On-Demand Inspection"
+  documenting the same pairing rule for the in-spec audience —
+  with a note that `tools/check-multiplier-claims.sh` is the
+  automated gate enforcing the contract.
+- `tools/check-multiplier-claims.sh` continues to pass — every
+  80.37× / 80× mention is paired with `fixture` / `live` /
+  `synthetic` / `pending` qualifiers within the gate's window.
+  Test count unchanged (V.16 is text-only): 1886 green.
+
+### April 27 — Release-commitment SLOs + measure-slos.sh + doctor surface (`phase-v14-slo-commitments`)
+- `spec/slos.md` gains a "Release commitments (Phase V.14)" section
+  publishing four numbers per release: cold-start (< 250 ms p95),
+  idle memory (< 75 MB), install size (< 50 MB), classifier (< 2 ms
+  p95, slot pending U.1 TierScorer). p95 not p99 because these are
+  cold operations measured at low N.
+- `tools/measure-slos.sh` captures all four and appends a JSON row
+  to `~/.senkani/slo-history.jsonl` with `git_sha` + `version` for
+  trend correlation. Idle-memory and classifier slots emit `null`
+  when not measurable (daemon not running, or U.1 not yet shipped).
+- `Sources/Core/ReleaseSLO.swift` ships `ReleaseSLOHistory` —
+  median-of-5 baseline regression detector that flags any
+  measurement ≥10% over baseline as `.regression` and any
+  measurement over the published threshold as `.overBudget`.
+  Improvements never fail the gate; missing slots are skipped.
+- `senkani doctor` Check 15 ("Release commitments (Phase V.14)")
+  prints the latest row + per-SLO baseline + percentage delta. The
+  fresh-checkout case prints `n/a — run tools/measure-slos.sh to
+  populate <path>`.
+- 7 new tests in `Tests/SenkaniTests/ReleaseSLOTests.swift`: row
+  decode roundtrip, no-history verdict, single-row OK with
+  no-baseline, median-of-5 regression flag at ≥10%, improvement
+  doesn't regress, over-budget flagged without baseline, malformed
+  JSONL line tolerance.
+
+### April 27 — Tamper-evident audit chain on `SessionDatabase` rows (`phase-t5-audit-chain` rounds 1–4)
+- Round 1 — `Sources/Core/ChainHasher.swift` ships pure-function
+  canonical-bytes + SHA-256 chain primitives. Migration v4 adds
+  `prev_hash` / `entry_hash` / `chain_anchor_id` columns to
+  `token_events` and a `chain_anchors` table; existing rows are
+  anchor-from-now under a `migration-v4` anchor.
+- Round 2 — `TokenEventStore.recordTokenEvent` computes and binds
+  the chain columns; `Sources/Core/ChainVerifier.swift` walks the
+  chain and reports `.ok` / `.brokenAt(table, rowid, expected,
+  actual)` / `.noChain`. New `senkani doctor --verify-chain` flag
+  exits 0 OK / non-zero on tamper; `senkani doctor` (full mode)
+  emits `chain integrity: OK since <ISO-date> / N repairs`.
+- Round 3 — `Sources/Core/ChainState.swift` extracted as a shared
+  per-table primitive. Migration v5 extends the chain to
+  `validation_results`, `sandboxed_results`, `commands`. Verifier
+  gains `verifyAll(_:)` returning `[String: Result]` plus
+  per-table walkers; `senkani doctor` Check 15 reports per-table
+  integrity with one aggregated summary line.
+- Round 4 — `Sources/Core/ChainRepairer.swift` ships
+  `senkani doctor --repair-chain --table <T> --from-rowid <N>`
+  with typed-string double-confirm UX (`REPAIR` then `<table>`),
+  tty enforcement (refuses non-tty without `--force`), prior-tip
+  hash recorded in the new repair anchor's `operator_note`,
+  idempotency guard (refuses second repair against an existing
+  repair anchor without `--force`), and a single
+  `BEGIN IMMEDIATE` transaction for atomic repair. Verifier walk
+  SQL gains `entry_hash IS NOT NULL` filter so anchor-from-now
+  rebound rows are skipped during verification.
+- `spec/architecture.md` → "Tamper-Evident Audit Chain (Phase T.5)"
+  documents the full design + multi-round rollout. Test count
+  1843 → 1879 across the four rounds (+36 chain tests).
+
 ### April 27 — Uninstall scanner finds project-level hooks at their actual install location (`fix-uninstall-project-hooks`)
 - Found during the v0.2.0 release-checklist §A1 walkthrough on a
   real install. Operator's three Senkani-managed projects had hook

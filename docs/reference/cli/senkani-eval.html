@@ -38,7 +38,7 @@
       </ul>
     </div>
     <div class="wiki-nav-group">
-      <h4>CLI commands (20)</h4>
+      <h4>CLI commands (22)</h4>
       <ul>
         <li><a href="../../../docs/reference/cli/senkani-exec.html"><code>senkani exec</code></a></li>
         <li><a href="../../../docs/reference/cli/senkani-search.html"><code>senkani search</code></a></li>
@@ -80,7 +80,7 @@
     <div class="ref-signature">senkani eval [--update-baseline]</div>
 
     <h2>Behavior</h2>
-    <p>`--strict` for CI (nonzero exit on regression). `--json` for scripting.</p>
+    <p>Runs <code>BenchmarkTasks.all()</code> through <code>SavingsTestRunner</code>, then layers <code>KBGateComputer</code> health checks and a live-multiplier regression check (default 7-day window, optionally filtered by <code>--agent</code>). Each gate appends a row to the report; the savings regression always fails the run, the rest fail only with <code>--strict</code>. <code>--update-baseline</code> locks the current numbers as the new baseline; <code>--json</code> emits the full report for scripting.</p>
 
     <h2>Example</h2>
     <pre class="code">$ senkani eval --strict</pre>
@@ -99,7 +99,7 @@
     </div>
 
     <div class="source-pointer">
-      <strong>Source:</strong> <code>Sources/CLI/EvalCommand.swift</code>
+      <strong>Source:</strong> <code>Sources/CLI/EvalCommand.swift</code>, <code>Sources/Bench/SavingsTestRunner.swift</code>, <code>Sources/Bench/KBEvalRunner.swift</code> (<code>KBGateComputer</code>)
     </div>
   </article>
 </main>

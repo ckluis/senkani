@@ -94,6 +94,29 @@ public struct ModelRouter: Sendable {
         public let tier: ModelTier
         public let score: Int
         public let reason: String
+        /// TaskTier the router chose (intent), independent of the
+        /// concrete `tier` (engine). nil for the legacy preset path
+        /// where TaskTier wasn't computed.
+        public let taskTier: TaskTier?
+        /// Which rung of the FallbackLadder produced `tier`.
+        /// 0 = primary, 1 = first fallback, 2 = second fallback.
+        /// Synthesized fallbacks (e.g. one-rung-local + no Gemma) report
+        /// the synthetic position as 1.
+        public let ladderPosition: Int
+
+        public init(
+            tier: ModelTier,
+            score: Int,
+            reason: String,
+            taskTier: TaskTier? = nil,
+            ladderPosition: Int = 0
+        ) {
+            self.tier = tier
+            self.score = score
+            self.reason = reason
+            self.taskTier = taskTier
+            self.ladderPosition = ladderPosition
+        }
     }
 
     // MARK: - Difficulty Scoring
@@ -163,6 +186,28 @@ public struct ModelRouter: Sendable {
         }
     }
 
+    /// Map a difficulty score (1-10) to a TaskTier (the *work*).
+    /// Boundaries align with `tierForScore`:
+    ///   1-2 → simple    (local-class — small / trivial)
+    ///   3-4 → standard  (quick-class — routine engineering)
+    ///   5-7 → complex   (balanced-class — non-trivial reasoning)
+    ///   8-10 → reasoning (frontier-class — opt-in deep work)
+    public static func taskTierForScore(_ score: Int) -> TaskTier {
+        switch score {
+        case 1...2: return .simple
+        case 3...4: return .standard
+        case 5...7: return .complex
+        default:    return .reasoning  // 8-10
+        }
+    }
+
+    /// Classify a prompt to its TaskTier — the U.1b corpus gate calls
+    /// this. Pure function over `scoreDifficulty`; no I/O, no allocs
+    /// beyond the input scan.
+    public static func classify(prompt: String) -> TaskTier {
+        taskTierForScore(scoreDifficulty(prompt))
+    }
+
     // MARK: - Resolution
 
     /// Resolve the final model tier for a prompt + preset combination.
@@ -204,5 +249,61 @@ public struct ModelRouter: Sendable {
             return Decision(tier: tier, score: score,
                 reason: "Auto scored \(score) → \(tier.displayName)")
         }
+    }
+
+    // MARK: - TaskTier-aware Resolution (U.1a)
+
+    /// Resolve a TaskTier-driven routing decision through the
+    /// FallbackLadder + BudgetGate clamp. Distinct from the legacy
+    /// `resolve(prompt:preset:...)` path — callers that have a
+    /// TaskTier in hand (e.g. from a planner output) skip the
+    /// difficulty-scoring heuristic.
+    ///
+    /// Resolution order:
+    ///   1. Clamp the desired TaskTier against the budget ceiling.
+    ///   2. Pick the ladder (custom or default-for-clamped-tier).
+    ///   3. Try the primary rung. If it's `.local` and Gemma 4 is
+    ///      unavailable, walk to the next rung. Synthesize `.quick`
+    ///      as a final fallback only if the ladder lacks a second
+    ///      rung — keeps the "no silent surprises" contract.
+    public static func resolve(
+        taskTier desired: TaskTier,
+        budget: BudgetConfig = BudgetConfig.load(),
+        availableRAMGB: Int = Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024)),
+        gemma4Downloaded: Bool = false,
+        ladder: FallbackLadder? = nil
+    ) -> Decision {
+        let clamped = BudgetGate.clamp(taskTier: desired, budget: budget)
+        let chosenLadder = ladder ?? FallbackLadder.default(for: clamped)
+        let clampNote = (clamped == desired)
+            ? ""
+            : " (clamped from \(desired.rawValue) by budget)"
+
+        var tier = chosenLadder.primary
+        var rungUsed = 0
+
+        // RAM-gate the local rung — walk to the next rung if Gemma 4
+        // can't actually run.
+        let canRunLocal = gemma4Downloaded && availableRAMGB >= 4
+        if tier == .local && !canRunLocal {
+            if chosenLadder.entries.count > 1 {
+                tier = chosenLadder.entries[1]
+                rungUsed = 1
+            } else {
+                tier = .quick
+                let reason = "TaskTier \(desired.rawValue)\(clampNote) → \(tier.displayName) (synthesized fallback — local unavailable, ladder had no second rung)"
+                return Decision(
+                    tier: tier, score: 0, reason: reason,
+                    taskTier: clamped, ladderPosition: 1
+                )
+            }
+        }
+
+        let rungNote = rungUsed == 0 ? "primary rung" : "rung \(rungUsed + 1)"
+        let reason = "TaskTier \(desired.rawValue)\(clampNote) → \(tier.displayName) (\(rungNote))"
+        return Decision(
+            tier: tier, score: 0, reason: reason,
+            taskTier: clamped, ladderPosition: rungUsed
+        )
     }
 }

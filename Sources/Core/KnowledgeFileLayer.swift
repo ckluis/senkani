@@ -39,12 +39,19 @@ public final class KnowledgeFileLayer: @unchecked Sendable {
 
     // MARK: Init
 
-    public init(projectRoot: String, store: KnowledgeStore) throws {
+    public convenience init(projectRoot: String, store: KnowledgeStore) throws {
+        try self.init(
+            vaultDir: KBVaultConfig.resolvedVaultDir(projectRoot: projectRoot),
+            store: store)
+    }
+
+    /// Construct against an explicit vault directory. Used by the V.7 vault
+    /// migrator and by callers that already resolved the path themselves.
+    public init(vaultDir: String, store: KnowledgeStore) throws {
         self.store = store
-        let base = projectRoot + "/.senkani/knowledge"
-        knowledgeDir = base
-        stagedDir    = base + "/.staged"
-        historyDir   = base + "/.history"
+        knowledgeDir = vaultDir
+        stagedDir    = vaultDir + "/.staged"
+        historyDir   = vaultDir + "/.history"
 
         for dir in [knowledgeDir, stagedDir, historyDir] {
             do {
@@ -415,7 +422,16 @@ public final class KnowledgeFileLayer: @unchecked Sendable {
         let entity = content.toKnowledgeEntity(
             name: name, markdownPath: relPath, contentHash: hash
         )
-        let entityId = store.upsertEntity(entity)
+        // Phase V.5 — markdown-vault sync writes have unknown
+        // provenance (the file on disk could have been edited by an
+        // agent or by the operator). Round 1 lands these rows as
+        // `.unset` so the V.5b prompt path can resolve them on next
+        // operator interaction. We do NOT silently call them human-
+        // or AI-authored — that's the Gebru red flag.
+        let entityId = store.upsertEntity(
+            entity,
+            authorship: AuthorshipTracker.tagForUnknownProvenance()
+        )
         guard entityId > 0 else { return }
 
         // Replace all links (re-parsed on every sync)

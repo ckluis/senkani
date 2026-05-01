@@ -38,7 +38,7 @@
       </ul>
     </div>
     <div class="wiki-nav-group">
-      <h4>MCP tools (19)</h4>
+      <h4>MCP tools (20)</h4>
       <ul>
         <li><a href="../../../docs/reference/mcp/senkani_read.html"><code>senkani_read</code></a></li>
         <li><a href="../../../docs/reference/mcp/senkani_exec.html"><code>senkani_exec</code></a></li>
@@ -59,6 +59,7 @@
         <li><a href="../../../docs/reference/mcp/senkani_version.html"><code>senkani_version</code></a></li>
         <li><a href="../../../docs/reference/mcp/senkani_bundle.html"><code>senkani_bundle</code></a></li>
         <li><a href="../../../docs/reference/mcp/senkani_repo.html"><code>senkani_repo</code></a></li>
+        <li><a href="../../../docs/reference/mcp/senkani_search_web.html"><code>senkani_search_web</code></a></li>
       </ul>
     </div>
   </aside>
@@ -85,6 +86,9 @@
     <h2>Behavior</h2>
     <p>Uses WKWebView + semantic DOM walk. Returns headings, links, buttons, form fields — not the raw HTML. SSRF guard: DNS-resolves the host via `getaddrinfo` before fetch and blocks any address in private/link-local/CGNAT/multicast ranges (including IPv4-mapped IPv6 and octal/hex IPv4). `decidePolicyFor` re-validates every redirect. A `WKContentRuleList` blocks subresource requests (`<img>`, `<script>`, `<xhr>`) to the same private ranges — a hostile page embedding `<img src="http://169.254.169.254/...">` cannot reach cloud metadata through WebKit's auto-rendering. `file://` scheme is NOT accepted — use `senkani_read` for local files.</p>
 
+    <h2>Markdown-first content negotiation (W.2)</h2>
+    <p><code>Sources/Core/ContentNegotiator.swift</code> ships a three-tier ladder — <code>Accept: text/markdown</code> first, deterministic HTML→markdown transform on origin HTML, headless render only when both fail. <code>MarkdownFirstFetcher.fetch(url:method:)</code> takes <code>auto</code> (default), <code>transform</code>, or <code>render</code>. Every <code>ContentNegotiationResult</code> carries <code>tier</code>, <code>tokensEstimate</code> (the local-first analogue of <code>x-markdown-tokens</code>), <code>originBytes</code>, and <code>needsRender</code>. Wiring this ladder into <code>senkani_web</code>'s argument plumbing is W.2-bis; the Core capability ships now so callers (and the Gemma-4-backed transformer adapter) can land independently.</p>
+
 
     <h2>Inputs</h2>
     <div class="ref-io-table">
@@ -106,6 +110,7 @@
       <ul>
         <li><a href="../../../docs/reference/mcp/senkani_read.html"><code>senkani_read</code></a> — For local files; file:// not accepted here.</li>
         <li><a href="../../../docs/reference/mcp/senkani_repo.html"><code>senkani_repo</code></a> — Structured GitHub repo access (allowlisted).</li>
+        <li><a href="../../../docs/reference/mcp/senkani_search_web.html"><code>senkani_search_web</code></a></li>
         <li><a href="../../../docs/reference/options/security.html"><code>Security env vars</code></a> — All SENKANI_WEB_* overrides.</li>
       </ul>
     </div>

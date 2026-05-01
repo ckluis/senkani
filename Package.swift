@@ -402,7 +402,11 @@ let package = Package(
                 .product(name: "Testing", package: "swift-testing"),
             ],
             path: "Tests/SenkaniTests",
-            resources: [.copy("Fixtures/secrets-adversarial")]
+            resources: [
+                .copy("Fixtures/secrets-adversarial"),
+                .copy("Fixtures/routing-corpus.json"),
+                .copy("Fixtures/context-plan-corpus.json"),
+            ]
         ),
     ]
 )

@@ -12,6 +12,9 @@ struct PaneContainerView: View {
     @State private var showSettings = false
     @State private var showFeatureDrawer = false
     @State private var selectedFeature: String?
+    @State private var showFCSITFirstUse = false
+    @AppStorage(FCSITDisclosure.firstUseSeenDefaultsKey)
+    private var fcsitFirstUseSeen: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -249,6 +252,20 @@ struct PaneContainerView: View {
                 featureButton("I", key: "indexer", isOn: $pane.features.indexer, color: SenkaniTheme.toggleIndexer)
                 featureButton("T", key: "terse", isOn: $pane.features.terse, color: SenkaniTheme.toggleTerse)
             }
+            .onHover { hovering in
+                guard hovering,
+                      FCSITDisclosure.shouldShowFirstUse(seen: fcsitFirstUseSeen)
+                else { return }
+                showFCSITFirstUse = true
+            }
+            .popover(isPresented: $showFCSITFirstUse, arrowEdge: .bottom) {
+                FCSITFirstUsePopover(onDismiss: {
+                    fcsitFirstUseSeen = true
+                    showFCSITFirstUse = false
+                })
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(Text("Per-pane optimizers: Filter, Cache, Secrets, Indexer, Terse."))
 
             // Disclosure chevron for feature drawer
             Button {
@@ -312,48 +329,15 @@ struct PaneContainerView: View {
     private var paneBody: some View {
         switch pane.paneType {
         case .terminal:
-            TerminalViewRepresentable(
-                paneId: pane.id,
-                initialCommand: pane.initialCommand,
-                environment: pane.features.environmentVars
-                    .merging(PaneLaunchEnv.terminal(PaneLaunchEnv.Inputs(
-                        paneID: pane.id,
+            VStack(spacing: 0) {
+                if isActive {
+                    ActivationProofStrip(
                         projectRoot: pane.workingDirectory,
-                        metricsFilePath: pane.metricsFilePath,
-                        configFilePath: pane.configFilePath,
-                        workspaceSlug: paneDiaryWorkspaceSlug(pane.workingDirectory),
-                        paneSlug: pane.paneType.rawValue,
-                        filterOn: pane.features.filter,
-                        cacheOn: pane.features.cache,
-                        secretsOn: pane.features.secrets,
-                        indexerOn: pane.features.indexer,
-                        terseOn: pane.features.terse
-                    ))) { _, new in new }
-                    .merging([
-                        // Terminal-only extras (model routing) layered on top.
-                        "CLAUDE_MODEL":         resolvedClaudeModel,
-                        "SENKANI_MODEL_PRESET": pane.modelPreset.rawValue,
-                    ]) { _, new in new },
-                workingDirectory: pane.workingDirectory,
-                isActive: isActive,
-                fontSize: pane.fontSize,
-                fontFamily: pane.fontFamily,
-                onProcessExited: { code in
-                    pane.processState = .exited(code)
-                    pane.shellPid = nil
-                },
-                onProcessStarted: { pid in
-                    pane.shellPid = pid
-                    pane.processState = .running
-                },
-                onActivate: {
-                    workspace?.activePaneID = pane.id
+                        isSessionWatcherRunning: pane.claudeSessionWatcher != nil
+                    )
                 }
-            )
-            .onAppear {
-                pane.processState = .running
+                terminalRepresentable
             }
-            .onChange(of: pane.features) { _, _ in pane.features.persist(to: pane.configFilePath) }
         case .analytics:
             if let workspace = workspace {
                 AnalyticsView(workspace: workspace)
@@ -396,12 +380,63 @@ struct PaneContainerView: View {
         }
     }
 
+    // MARK: - Terminal Representable
+
+    @ViewBuilder
+    private var terminalRepresentable: some View {
+        TerminalViewRepresentable(
+            paneId: pane.id,
+            initialCommand: pane.initialCommand,
+            environment: pane.features.environmentVars
+                .merging(PaneLaunchEnv.terminal(PaneLaunchEnv.Inputs(
+                    paneID: pane.id,
+                    projectRoot: pane.workingDirectory,
+                    metricsFilePath: pane.metricsFilePath,
+                    configFilePath: pane.configFilePath,
+                    workspaceSlug: paneDiaryWorkspaceSlug(pane.workingDirectory),
+                    paneSlug: pane.paneType.rawValue,
+                    filterOn: pane.features.filter,
+                    cacheOn: pane.features.cache,
+                    secretsOn: pane.features.secrets,
+                    indexerOn: pane.features.indexer,
+                    terseOn: pane.features.terse
+                ))) { _, new in new }
+                .merging([
+                    // Terminal-only extras (model routing) layered on top.
+                    "CLAUDE_MODEL":         resolvedClaudeModel,
+                    "SENKANI_MODEL_PRESET": pane.modelPreset.rawValue,
+                ]) { _, new in new },
+            workingDirectory: pane.workingDirectory,
+            isActive: isActive,
+            fontSize: pane.fontSize,
+            fontFamily: pane.fontFamily,
+            onProcessExited: { code in
+                pane.processState = .exited(code)
+                pane.shellPid = nil
+            },
+            onProcessStarted: { pid in
+                pane.shellPid = pid
+                pane.processState = .running
+            },
+            onActivate: {
+                workspace?.activePaneID = pane.id
+            }
+        )
+        .onAppear {
+            pane.processState = .running
+        }
+        .onChange(of: pane.features) { _, _ in pane.features.persist(to: pane.configFilePath) }
+    }
+
     // MARK: - Feature Button
 
     /// Feature toggle that also selects the feature for the detail drawer.
     /// Tap toggles the feature. Option-click opens the detail drawer for that feature.
     private func featureButton(_ label: String, key: String, isOn: Binding<Bool>, color: Color) -> some View {
-        Text(label)
+        let entry = FCSITDisclosure.entry(forKey: key)
+        let helpText = entry.map { "\($0.name) — \($0.effect) Tap to toggle. Double-click for details." }
+            ?? "Tap to toggle \(key). Double-click for details."
+        return Text(label)
             .font(.system(size: 9, weight: .bold, design: .monospaced))
             .foregroundStyle(isOn.wrappedValue ? color : SenkaniTheme.textTertiary.opacity(0.5))
             .padding(.horizontal, 2)
@@ -417,6 +452,9 @@ struct PaneContainerView: View {
             .contentShape(Rectangle())
             .onTapGesture {
                 isOn.wrappedValue.toggle()
+                if FCSITDisclosure.shouldShowFirstUse(seen: fcsitFirstUseSeen) {
+                    showFCSITFirstUse = true
+                }
             }
             .simultaneousGesture(
                 TapGesture(count: 2).onEnded {
@@ -430,7 +468,10 @@ struct PaneContainerView: View {
                     }
                 }
             )
-            .help("Tap to toggle \(key). Double-click for details.")
+            .help(helpText)
+            .accessibilityLabel(Text(FCSITDisclosure.accessibilityLabel(forKey: key, isOn: isOn.wrappedValue)))
+            .accessibilityHint(Text(FCSITDisclosure.accessibilityHint(forKey: key)))
+            .accessibilityAddTraits(.isButton)
     }
 
     // MARK: - Helpers
@@ -476,9 +517,13 @@ struct PaneContainerView: View {
     private var contextLabel: String {
         switch pane.paneType {
         case .terminal:
-            // Show abbreviated working directory
+            // Show abbreviated working directory. Use the pane's
+            // own `workingDirectory` (the path the shell actually
+            // opens in), not `previewFilePath` — the latter is
+            // empty for terminals and would show a bogus "~" even
+            // when the shell is running in `/Users/me/repo`.
             let home = NSHomeDirectory()
-            let path = pane.previewFilePath.isEmpty ? "~" : pane.previewFilePath
+            let path = pane.workingDirectory.isEmpty ? "~" : pane.workingDirectory
             return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
         case .analytics:
             return "\(pane.metrics.commandCount) cmds"

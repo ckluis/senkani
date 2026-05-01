@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>senkani init — CLI reference</title>
-<meta name="description" content="Register MCP server + hooks with Claude Code. Idempotent.">
+<meta name="description" content="Register Senkani's PreToolUse + PostToolUse hooks for the current project. Idempotent.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -38,7 +38,7 @@
       </ul>
     </div>
     <div class="wiki-nav-group">
-      <h4>CLI commands (20)</h4>
+      <h4>CLI commands (22)</h4>
       <ul>
         <li><a href="../../../docs/reference/cli/senkani-exec.html"><code>senkani exec</code></a></li>
         <li><a href="../../../docs/reference/cli/senkani-search.html"><code>senkani search</code></a></li>
@@ -74,22 +74,25 @@
     <h1 class="page-title"><code style="background:none;padding:0;color:var(--accent-lo);font-size:0.82em;">senkani init</code></h1>
     <div class="tag-row" style="margin-bottom:18px;"><span class="badge badge-live">Live</span></div>
 
-    <p class="lede">Register MCP server + hooks with Claude Code. Idempotent.</p>
+    <p class="lede">Register Senkani's PreToolUse + PostToolUse hooks for the current project. Idempotent.</p>
 
     <h2>Syntax</h2>
-    <div class="ref-signature">senkani init [--hooks-only]</div>
+    <div class="ref-signature">senkani init [--uninstall] [--hook-path &lt;path&gt;]</div>
 
     <h2>Behavior</h2>
-    <p>Writes the hook binary to `~/.senkani/bin/senkani-hook`, appends an MCP server entry to `~/.claude/settings.json`, and registers PreToolUse + PostToolUse hooks with matcher `Read|Bash|Grep|Write|Edit`. `--hooks-only` skips the MCP entry for Cursor / Copilot users.</p>
+    <p>Run from a project root. Registers PreToolUse + PostToolUse hook entries in <code>&lt;project&gt;/.claude/settings.json</code>, pointing at the hook wrapper at <code>~/.senkani/bin/senkani-hook</code> (auto-detected; override with <code>--hook-path</code>). Idempotent — safe to re-run. Touches only the project's settings file; never modifies the global <code>~/.claude/settings.json</code>. Does <strong>not</strong> register the MCP server (SenkaniApp does that on launch) and does <strong>not</strong> install the hook binary itself.</p>
 
     <h2>Example</h2>
-    <pre class="code">$ senkani init            # Claude Code
-$ senkani init --hooks-only   # Cursor / Copilot</pre>
+    <pre class="code">$ cd /path/to/your/project
+$ senkani init                                          # register hooks for this project
+$ senkani init --uninstall                              # remove the registration
+$ senkani init --hook-path /opt/senkani/senkani-hook    # pin a specific hook binary</pre>
 
     <h2>Flags</h2>
     <div class="ref-io-table">
       <div class="head">Flag</div><div class="head"></div><div class="head"></div><div class="head">Description</div>
-      <div class="k">--hooks-only</div><div class="t"></div><div class="default"></div><div class="desc">Skip MCP server registration.</div><div class="k">--dry-run</div><div class="t"></div><div class="default"></div><div class="desc">Print intended changes without writing.</div>
+      <div class="k">--uninstall</div><div class="t"></div><div class="default">false</div><div class="desc">Remove Senkani's hook entries from the project's <code>.claude/settings.json</code>.</div>
+      <div class="k">--hook-path</div><div class="t">path</div><div class="default">auto-detect</div><div class="desc">Path to the senkani-hook binary. Defaults to <code>~/.senkani/bin/senkani-hook</code> or a sibling <code>.build/release/senkani-hook</code>.</div>
     </div>
 
     <div class="seealso">

@@ -16,6 +16,12 @@ struct DashboardView: View {
     @State private var insights: [Insight] = []
     @State private var hoveredProjectID: UUID?
 
+    // V.1 round 2 — three live tiles backed by the pane refresh scheduler +
+    // bounded worker pool. Coordinator persists state per-tick so values
+    // survive an app restart.
+    @State private var liveTiles: PaneRefreshCoordinator.Snapshot?
+    @State private var coordinator: PaneRefreshCoordinator?
+
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     // MARK: - Data Models
@@ -49,6 +55,7 @@ struct DashboardView: View {
                 VStack(spacing: 24) {
                     heroSavingsCard
                     summaryCards
+                    liveTilesSection
                     projectBreakdownTable
                     chartsSection
                     insightsSection
@@ -58,8 +65,139 @@ struct DashboardView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.windowBackgroundColor))
-        .onReceive(timer) { _ in refreshData() }
-        .onAppear { refreshData() }
+        .onReceive(timer) { _ in
+            refreshData()
+            tickLiveTiles()
+        }
+        .onAppear {
+            refreshData()
+            startLiveTiles()
+        }
+    }
+
+    // MARK: - Live tiles (V.1 round 2)
+
+    private var liveTilesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Live Tiles")
+                .font(.system(size: 13, weight: .semibold))
+
+            if let snapshot = liveTiles {
+                HStack(spacing: 12) {
+                    liveTileCard(
+                        title: "Budget Burn",
+                        state: snapshot.budgetBurn,
+                        valueText: snapshot.budgetBurn.contentAvailable
+                            ? "30s cache" : "warming"
+                    )
+                    liveTileCard(
+                        title: "Validation Queue",
+                        state: snapshot.validationQueue,
+                        valueText: snapshot.validationQueue.contentAvailable
+                            ? "5s cache" : "warming"
+                    )
+                    liveTileCard(
+                        title: "Repo Dirty",
+                        state: snapshot.repoDirtyState,
+                        valueText: snapshot.repoDirtyState.contentAvailable
+                            ? "10s cache" : "warming"
+                    )
+                }
+            } else {
+                Text("Live tiles will populate after first tick")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(12)
+        .background(Color(.controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func liveTileCard(title: String, state: PaneRefreshState, valueText: String) -> some View {
+        let display = PaneRefreshTileDisplay(tileTitle: title, state: state, valueText: valueText)
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text(valueText)
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                .foregroundStyle(toneTextColor(display.tone))
+            if display.hasErrorStrip, let err = display.errorText {
+                tileNoticeStrip(
+                    iconSystemName: display.iconSystemName ?? "exclamationmark.octagon.fill",
+                    text: err,
+                    foreground: .red,
+                    background: Color.red.opacity(0.12)
+                )
+            } else if display.hasNoticeStrip, let notice = display.noticeText {
+                tileNoticeStrip(
+                    iconSystemName: display.iconSystemName ?? "exclamationmark.triangle.fill",
+                    text: notice,
+                    foreground: .yellow,
+                    background: Color.yellow.opacity(0.12)
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color(.controlBackgroundColor).opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(display.accessibilityLabel))
+    }
+
+    private func tileNoticeStrip(iconSystemName: String, text: String, foreground: Color, background: Color) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: iconSystemName)
+                .font(.system(size: 9))
+                .foregroundStyle(foreground)
+            Text(text)
+                .font(.system(size: 9))
+                .foregroundStyle(foreground)
+                .lineLimit(2)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(background)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+
+    private func toneTextColor(_ tone: PaneRefreshTileDisplay.Tone) -> Color {
+        switch tone {
+        case .normal: return .primary
+        case .warning: return .yellow
+        case .error: return .red
+        }
+    }
+
+    private func startLiveTiles() {
+        guard coordinator == nil,
+              let project = workspace?.activeProject ?? workspace?.projects.first else { return }
+        let projectRoot = project.path
+        let db = SessionDatabase.shared
+        let coord = PaneRefreshCoordinator(
+            database: db,
+            projectRoot: projectRoot,
+            budgetBurnFetch: { _ in
+                let stats = db.tokenStatsForProject(projectRoot)
+                return stats.commandCount > 0 ? .success : .partial(notice: "no spend yet")
+            },
+            validationQueueFetch: { _ in .success },
+            repoDirtyStateFetch: { _ in .success }
+        )
+        coord.rehydrate()
+        coordinator = coord
+        liveTiles = coord.snapshot()
+    }
+
+    private func tickLiveTiles() {
+        guard let coord = coordinator else { return }
+        Task { @MainActor in
+            await coord.tick()
+            self.liveTiles = coord.snapshot()
+        }
     }
 
     // MARK: - Header

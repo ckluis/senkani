@@ -38,7 +38,7 @@
       </ul>
     </div>
     <div class="wiki-nav-group">
-      <h4>CLI commands (20)</h4>
+      <h4>CLI commands (22)</h4>
       <ul>
         <li><a href="../../../docs/reference/cli/senkani-exec.html"><code>senkani exec</code></a></li>
         <li><a href="../../../docs/reference/cli/senkani-search.html"><code>senkani search</code></a></li>
@@ -74,7 +74,7 @@
     <h1 class="page-title"><code style="background:none;padding:0;color:var(--accent-lo);font-size:0.82em;">senkani bench</code></h1>
     <div class="tag-row" style="margin-bottom:18px;"><span class="badge badge-live">Live</span></div>
 
-    <p class="lede">Run the benchmark suite: 10 tasks × 7 configs.</p>
+    <p class="lede">Reproduce the published 80.37× compression figure on your hardware. The suite drives 10 task fixtures through 7 feature configs, default 256 iterations.</p>
 
     <h2>Syntax</h2>
     <div class="ref-signature">senkani bench [--iterations N]</div>
@@ -99,7 +99,7 @@
     </div>
 
     <div class="source-pointer">
-      <strong>Source:</strong> <code>Sources/Bench/</code>
+      <strong>Source:</strong> <code>Sources/Bench/BenchmarkScenarios.swift</code> (orchestrator), <code>Sources/Bench/BenchmarkTasks.swift</code> (task fixtures), <code>Sources/Bench/BenchBaseline.swift</code> (baseline storage)
     </div>
   </article>
 </main>

@@ -4,7 +4,7 @@ import MCPServer
 
 /// Which sidebar tool view is currently shown (nil = workspace/panes).
 enum ToolView: Equatable {
-    case models, analytics, skills, schedules, themes, knowledge
+    case models, analytics, skills, schedules, themes, knowledge, trustFlags
 }
 
 /// Main application view: custom HStack layout with sidebar + canvas + status bar.
@@ -15,8 +15,15 @@ struct ContentView: View {
     @State var activeToolView: ToolView?
     @State var showAddPaneSheet = false
     @State var showCommandPalette = false
+    @State private var showClaudeLaunch = false
     @State private var broadcastEnabled = false
     @State private var broadcastText = ""
+
+    /// Single launch primitive — every user-visible pane creation
+    /// (Welcome, AddPaneSheet, Sidebar Claude, CommandPalette, IPC
+    /// `.add`) routes through this coordinator so hook registration
+    /// and session-watcher start are never skipped.
+    @State private var launcher: LaunchCoordinator?
 
     var body: some View {
         ZStack {
@@ -26,7 +33,12 @@ struct ContentView: View {
                 SidebarView(
                     workspace: workspace,
                     activeToolView: $activeToolView,
-                    onRequestAddPane: { showAddPaneSheet = true }
+                    onRequestAddPane: { showAddPaneSheet = true },
+                    onLaunchPane: { type, title, command in
+                        ensureLauncher().launchPane(
+                            type: type, title: title, command: command
+                        )
+                    }
                 )
 
                 // Thin divider between sidebar and canvas
@@ -89,6 +101,11 @@ struct ContentView: View {
         .sheet(isPresented: $showAddPaneSheet) {
             AddPaneSheet { type, title, command in
                 addPane(type: type, title: title, command: command)
+            }
+        }
+        .sheet(isPresented: $showClaudeLaunch) {
+            ClaudeLaunchSheet { command in
+                assembleFirstValueLayout(for: TaskStarter.Kind.claude, command: command)
             }
         }
         .onAppear {
@@ -170,12 +187,12 @@ struct ContentView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             } else if workspace.panes.isEmpty {
                 WelcomeView(
-                    onStart: { title, command in
-                        addPane(type: .terminal, title: title, command: command)
+                    workspace: workspace,
+                    onStartTask: { starter in
+                        startTask(starter)
                     },
-                    onStartOllama: {
-                        addPane(type: .ollamaLauncher, title: "Ollama", command: "")
-                    }
+                    onChooseProject: openProjectFolderPicker,
+                    onShowAllPanes: { showAddPaneSheet = true }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .transition(.opacity.combined(with: .scale(scale: 0.95)))
@@ -192,6 +209,7 @@ struct ContentView: View {
         case .skills:    SkillBrowserView()
         case .schedules: ScheduleView()
         case .knowledge: KnowledgeBaseView()
+        case .trustFlags: TrustFlagsView()
         }
     }
 
@@ -200,7 +218,11 @@ struct ContentView: View {
     private func restoreWorkspace() {
         if let restored = WorkspaceStorage.load() {
             workspace = restored
-            // Start sessions (metrics watchers) for all restored panes
+            // Start sessions (metrics watchers) for all restored panes.
+            // Restore is not a launch — panes already exist, so we run
+            // the same per-pane side effects (hook reg + session start)
+            // inline rather than going through LaunchCoordinator (which
+            // would also call workspace.addPane and saveWorkspace).
             for pane in workspace.allPanes {
                 if pane.paneType == .terminal {
                     try? HookRegistration.registerForProject(
@@ -213,6 +235,22 @@ struct ContentView: View {
         // Always start metrics AFTER restore, so projects array is populated.
         // Safe even if restore fails — default project may still exist.
         MetricsStore.shared.start(projects: workspace.projects)
+    }
+
+    /// Lazy-initialize the LaunchCoordinator so `@State workspace` and
+    /// `@State sessions` are first observed by SwiftUI before we
+    /// capture references. The coordinator owns no state of its own —
+    /// it's a thin façade — so re-using the same instance for the
+    /// lifetime of the view is fine.
+    private func ensureLauncher() -> LaunchCoordinator {
+        if let existing = launcher { return existing }
+        let coord = LaunchCoordinator(
+            workspace: workspace,
+            sessions: sessions,
+            saveWorkspace: { WorkspaceStorage.save(workspace) }
+        )
+        launcher = coord
+        return coord
     }
 
     private func saveWorkspace() {
@@ -293,15 +331,20 @@ struct ContentView: View {
             let title = command.params["title"] ?? paneType.rawValue
             let cmd = command.params["command"] ?? ""
 
-            workspace.addPane(type: paneType, title: title, command: cmd,
-                              previewFilePath: command.params["url"] ?? "")
-            if let pane = workspace.panes.last {
-                if pane.paneType == .terminal {
-                    try? HookRegistration.registerForProject(
-                        at: pane.workingDirectory,
-                        hookBinaryPath: AutoRegistration.hookWrapperPath)
-                }
-                sessions.startSession(for: pane)
+            // Route IPC `.add` through the same primitive UI launch
+            // paths use, so programmatic creation matches user-driven
+            // creation (hooks registered, session started, workspace
+            // saved). The handler always runs on the main actor —
+            // see `registerPaneSocketHandler` above.
+            let coord = LaunchCoordinator(
+                workspace: workspace,
+                sessions: sessions,
+                saveWorkspace: { WorkspaceStorage.save(workspace) }
+            )
+            if let pane = coord.launchPane(
+                type: paneType, title: title, command: cmd,
+                previewFilePath: command.params["url"] ?? ""
+            ) {
                 return PaneIPCResponse(id: command.id, success: true,
                                        result: "Added pane: \(pane.id.uuidString)")
             }
@@ -344,17 +387,69 @@ struct ContentView: View {
         }
     }
 
+    /// Thin shim around `LaunchCoordinator.launchPane(...)` so call
+    /// sites that only know type/title/command (AddPaneSheet,
+    /// WelcomeView, CommandPalette) keep their compact API. All
+    /// SwiftUI launch paths funnel through here, which funnels into
+    /// the coordinator.
     private func addPane(type: PaneType = .terminal, title: String, command: String) {
-        workspace.addPane(type: type, title: title, command: command)
-        if let pane = workspace.panes.last {
-            if pane.paneType == .terminal {
-                try? HookRegistration.registerForProject(
-                    at: pane.workingDirectory,
-                    hookBinaryPath: AutoRegistration.hookWrapperPath)
-            }
-            sessions.startSession(for: pane)
+        ensureLauncher().launchPane(type: type, title: title, command: command)
+    }
+
+    /// Open the macOS folder picker and add the chosen directory as
+    /// a project. WelcomeView calls this for its project-first gate;
+    /// the same NSOpenPanel shape is used by `SidebarView.openFolderPicker`.
+    private func openProjectFolderPicker() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Select a project directory"
+        panel.prompt = "Add Project"
+        if panel.runModal() == .OK, let url = panel.url {
+            workspace.addProject(path: url.path)
         }
-        saveWorkspace()
+    }
+
+    /// Resolve a `TaskStarter` from the Welcome screen into a concrete
+    /// launch. Each `kind` maps to exactly one outcome — Claude opens
+    /// the launch sheet first (the sheet's onLaunch routes through
+    /// `assembleFirstValueLayout`), everything else flows straight into
+    /// the assembler so the first-run user gets the multi-pane
+    /// witnessed layout without manually opening Agent Timeline.
+    /// Keep this switch exhaustive so `TaskStarterCatalog` additions
+    /// fail to compile until they have a launch path.
+    private func startTask(_ starter: TaskStarter) {
+        switch starter.kind {
+        case .claude:
+            showClaudeLaunch = true
+        case .ollama, .trackedShell, .inspectProject:
+            assembleFirstValueLayout(for: starter.kind, command: "")
+        }
+    }
+
+    /// First-value layout assembler. Resolves the starter kind through
+    /// `FirstValueLayout`, then drives `LaunchCoordinator` once per
+    /// returned pane spec so the side effects (hook reg, session
+    /// watcher, workspace save) fire for every pane added — not just
+    /// the primary one. Idempotent by construction: the layout decider
+    /// reads `workspace` and only emits an insight pane when the
+    /// workspace was empty.
+    private func assembleFirstValueLayout(
+        for kind: TaskStarter.Kind,
+        command: String
+    ) {
+        let existingTypeIDs = workspace.allPanes.map { $0.paneType.rawValue }
+        let specs = FirstValueLayout.assemble(
+            for: kind, existingPaneTypeIDs: existingTypeIDs
+        )
+        for spec in specs {
+            let paneType = PaneType(rawValue: spec.typeID) ?? .terminal
+            let cmd = (spec.role == .primary) ? command : ""
+            ensureLauncher().launchPane(
+                type: paneType, title: spec.title, command: cmd
+            )
+        }
     }
 
     /// Add a pane by type ID string (from command palette).

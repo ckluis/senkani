@@ -196,6 +196,11 @@ struct SkillBrowserView: View {
                         .background(Color(.controlBackgroundColor))
                         .clipShape(RoundedRectangle(cornerRadius: 3))
                         .foregroundStyle(.tertiary)
+
+                    // V.5d — skills are filesystem-scanned, no DB
+                    // authorship column. Badge renders the subdued
+                    // untracked affordance with an explanatory tooltip.
+                    AuthorshipBadgeView(tag: nil, context: .skills)
                 }
                 .padding(.vertical, 2)
                 .tag(skill)
@@ -237,6 +242,8 @@ struct SkillBrowserView: View {
                                         .padding(.vertical, 2)
                                         .background(Color(.controlBackgroundColor))
                                         .clipShape(Capsule())
+
+                                    AuthorshipBadgeView(tag: nil, context: .skills)
                                 }
                             }
                         }

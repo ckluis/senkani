@@ -18,6 +18,9 @@ final class ValidationStore: @unchecked Sendable {
         self.parent = parent
     }
 
+    /// Drop the chain cache after a `--repair-chain` motion.
+    func invalidateChainCache() { chain.invalidate() }
+
     // MARK: - Schema
 
     /// Create the historical baseline table + indexes. Delivery metadata
@@ -47,6 +50,8 @@ final class ValidationStore: @unchecked Sendable {
 
     // MARK: - Public API (delegated from SessionDatabase)
 
+    private let chain = ChainState(table: "validation_results")
+
     /// Store a validation attempt from auto-validate.
     func insertValidationResult(
         sessionId: String,
@@ -62,12 +67,38 @@ final class ValidationStore: @unchecked Sendable {
     ) {
         let now = Date().timeIntervalSince1970
         let resolvedOutcome = outcome ?? (exitCode == 0 ? "clean" : "advisory")
-        parent.queue.async { [weak parent] in
-            guard let parent, let db = parent.db else { return }
+        parent.queue.async { [weak parent, weak self] in
+            guard let parent, let self, let db = parent.db else { return }
+
+            // T.5 round 3: chain-aware insert.
+            let anchorId = self.chain.resolveAnchorId(db: db)
+            let prevHash = self.chain.latestEntryHash(db: db, anchorId: anchorId)
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "session_id":     .text(sessionId),
+                "file_path":      .text(filePath),
+                "validator_name": .text(validatorName),
+                "category":       .text(category),
+                "exit_code":      .integer(Int64(exitCode)),
+                "raw_output":     rawOutput.map { .text($0) } ?? .null,
+                "advisory":       .text(advisory),
+                "duration_ms":    .integer(Int64(durationMs)),
+                "created_at":     .real(now),
+                // `delivered`, `outcome`, `reason`, `surfaced_at` are part of
+                // the table's data shape after migrations 3+. They're hashed.
+                "delivered":      .integer(0),
+                "outcome":        .text(resolvedOutcome),
+                "reason":         reason.map { .text($0) } ?? .null,
+                "surfaced_at":    .null,
+            ]
+            let entryHash = ChainHasher.entryHash(
+                table: "validation_results", columns: columns, prev: prevHash
+            )
+
             let sql = """
                 INSERT INTO validation_results
-                (session_id, file_path, validator_name, category, exit_code, raw_output, advisory, duration_ms, created_at, outcome, reason)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                (session_id, file_path, validator_name, category, exit_code, raw_output, advisory, duration_ms, created_at, outcome, reason,
+                 prev_hash, entry_hash, chain_anchor_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
@@ -89,7 +120,12 @@ final class ValidationStore: @unchecked Sendable {
             sqlite3_bind_double(stmt, 9, now)
             sqlite3_bind_text(stmt, 10, (resolvedOutcome as NSString).utf8String, -1, nil)
             Self.bindOptionalText(stmt, 11, reason)
-            if sqlite3_step(stmt) != SQLITE_DONE {
+            Self.bindOptionalText(stmt, 12, prevHash)
+            sqlite3_bind_text(stmt, 13, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(stmt, 14, anchorId)
+            if sqlite3_step(stmt) == SQLITE_DONE {
+                self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
+            } else {
                 Logger.log("auto_validate.db_write.step_failed", fields: [
                     "table": .string("validation_results"),
                     "operation": .string("insert"),

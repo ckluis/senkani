@@ -200,7 +200,9 @@ struct CommandPaletteView: View {
             let typeId = String(entry.id.dropFirst(5))
             onAddPane(typeId)
         }
-        // Action entries would be wired here via additional callbacks
+        // Action entries are intentionally empty until each candidate is
+        // wired here with a real callback (toggles, close-all, run benchmark,
+        // export session). See `noInertActionEntries` in CommandPaletteTests.
         dismiss()
     }
 }

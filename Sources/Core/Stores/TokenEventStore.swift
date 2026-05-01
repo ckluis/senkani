@@ -16,9 +16,18 @@ import SQLite3
 final class TokenEventStore: @unchecked Sendable {
     private unowned let parent: SessionDatabase
 
+    // T.5 round 2 — tamper-evident audit chain. ChainState owns the per-
+    // table anchor lookup + last-hash cache; round 3 generalized it so all
+    // four chain participants share the same primitive.
+    private let chain = ChainState(table: "token_events")
+
     init(parent: SessionDatabase) {
         self.parent = parent
     }
+
+    /// Drop the chain cache after a `--repair-chain` motion. Caller must
+    /// be on `parent.queue`.
+    func invalidateChainCache() { chain.invalidate() }
 
     // MARK: - Schema
 
@@ -88,13 +97,44 @@ final class TokenEventStore: @unchecked Sendable {
         let normalizedRoot = SessionDatabase.normalizePath(projectRoot)
         let now = Date().timeIntervalSince1970
         let redactedCommand = PersistenceRedaction.redactedString(command)
-        parent.queue.async { [weak parent] in
-            guard let parent, let db = parent.db else { return }
+        parent.queue.async { [weak parent, weak self] in
+            guard let parent, let self, let db = parent.db else { return }
+
+            // T.5 round 2: resolve current chain anchor (lazy-create
+            // 'fresh-install' if none exists for this table) and look up the
+            // latest entry_hash for prev linkage.
+            let anchorId = self.chain.resolveAnchorId(db: db)
+            let prevHash = self.chain.latestEntryHash(db: db, anchorId: anchorId)
+
+            // Build the canonical-byte input from the to-be-bound values. The
+            // three chain columns are excluded by `ChainHasher` — they cannot
+            // appear in their own input.
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "timestamp":      .real(now),
+                "session_id":     .text(sessionId),
+                "pane_id":        Self.canonical(paneId),
+                "project_root":   Self.canonical(normalizedRoot),
+                "source":         .text(source),
+                "tool_name":      Self.canonical(toolName),
+                "model":          Self.canonical(model),
+                "input_tokens":   .integer(Int64(inputTokens)),
+                "output_tokens":  .integer(Int64(outputTokens)),
+                "saved_tokens":   .integer(Int64(savedTokens)),
+                "cost_cents":     .integer(Int64(costCents)),
+                "feature":        Self.canonical(feature),
+                "command":        Self.canonical(redactedCommand),
+                "model_tier":     Self.canonical(modelTier),
+            ]
+            let entryHash = ChainHasher.entryHash(
+                table: "token_events", columns: columns, prev: prevHash
+            )
+
             let sql = """
                 INSERT INTO token_events
                 (timestamp, session_id, pane_id, project_root, source, tool_name, model,
-                 input_tokens, output_tokens, saved_tokens, cost_cents, feature, command, model_tier)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 input_tokens, output_tokens, saved_tokens, cost_cents, feature, command, model_tier,
+                 prev_hash, entry_hash, chain_anchor_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -114,9 +154,26 @@ final class TokenEventStore: @unchecked Sendable {
             Self.bindOptionalText(stmt, 12, feature)
             Self.bindOptionalText(stmt, 13, redactedCommand)
             Self.bindOptionalText(stmt, 14, modelTier)
+            Self.bindOptionalText(stmt, 15, prevHash)
+            sqlite3_bind_text(stmt, 16, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(stmt, 17, anchorId)
 
-            sqlite3_step(stmt)
+            if sqlite3_step(stmt) == SQLITE_DONE {
+                // Update cache only on successful insert. parent.queue
+                // serialization means no other write can interleave between
+                // the prev_hash read and this update.
+                self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
+            }
         }
+    }
+
+    // MARK: - T.5 chain helpers (round 2; generalised in round 3)
+
+    /// Coerce an optional string to a `ChainHasher.CanonicalValue` — empty
+    /// strings count as text per SQLite semantics; nil becomes NULL.
+    private static func canonical(_ value: String?) -> ChainHasher.CanonicalValue {
+        guard let value else { return .null }
+        return .text(value)
     }
 
     /// Record a hook event from the senkani-hook binary. Rows land in

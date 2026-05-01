@@ -40,6 +40,25 @@ public enum HookRouter {
     /// Test seam for validation advisory delivery. Production uses `.shared`.
     nonisolated(unsafe) static var validationDatabase: SessionDatabase = .shared
 
+    /// V.12b test seam — tests inject a feed with a short window or
+    /// a custom rate-cap sink to assert the suppression behavior
+    /// without polluting the shared feed's state. Production uses
+    /// `HookAnnotationFeed.shared`.
+    nonisolated(unsafe) public static var annotationFeed: HookAnnotationFeed = .shared
+
+    /// Phase U.4a — process-wide detector instance. Soft-flag only:
+    /// nothing in this file's denial paths reads its output. Tests
+    /// reach into the detector via `fragmentationDetector.reset()`.
+    public static let fragmentationDetector = FragmentationDetector()
+
+    /// Persistence sink for soft flags. Tests inject a recorder closure
+    /// to assert flags surface; production wires it to
+    /// `SessionDatabase.shared.recordTrustFlag(...)`. Default sink is
+    /// the production path so HookRouter "just works" with no setup.
+    nonisolated(unsafe) public static var trustFlagSink: (FragmentationDetector.Flag, Int) -> Void = { flag, score in
+        _ = SessionDatabase.shared.recordTrustFlag(flag, score: score)
+    }
+
     /// Process a hook event JSON and return a response JSON.
     /// Returns `{}` (passthrough) for unrecognized or unroutable events.
     public static func handle(eventJSON: Data) -> Data {
@@ -61,6 +80,25 @@ public enum HookRouter {
                 eventType: eventName,
                 projectRoot: projectRoot
             )
+
+            // Phase U.4a — non-blocking soft-flag pass. Detector returns
+            // any FragmentationDetector.Flag observations triggered by
+            // this event; the sink persists them. NOTHING here can
+            // deny the call — promotion-to-blocking lives in U.4b.
+            let paneId = event["pane_id"] as? String
+            let fragment = (toolInput["prompt"] as? String)
+                ?? (toolInput["command"] as? String)
+                ?? (toolInput["file_path"] as? String)
+            let flags = fragmentationDetector.record(.init(
+                sessionId: sid,
+                paneId: paneId,
+                toolName: toolName,
+                fragment: fragment
+            ))
+            for flag in flags {
+                let score = TrustScorer.score(flags: [flag])
+                trustFlagSink(flag, score)
+            }
         }
 
         // PostToolUse: record + enqueue auto-validation if Edit/Write
@@ -88,8 +126,45 @@ public enum HookRouter {
 
         // Budget enforcement on the hook path
         if case .block(let reason) = checkHookBudgetGate(projectRoot: projectRoot) {
+            // V.12b: budget gate is a real blocker — emit must-fix.
+            emitDenialAnnotation(
+                severity: .mustFix,
+                body: reason,
+                toolName: toolName,
+                toolInput: toolInput,
+                sessionId: sessionId
+            )
             return appendAndMarkValidationIfSurfaced(
                 blockResponse(reason, eventName: eventName),
+                advisory: validationAdvisory,
+                rows: validationRows,
+                projectRoot: projectRoot
+            )
+        }
+
+        // T.6a: ConfirmationGate on write/exec-tagged tools. Read-tagged
+        // tools and unknowns short-circuit at the gate with `.auto` and
+        // no row written. The default policy resolver also returns
+        // `.auto`, so production behavior on Edit/Write/Bash today is
+        // "approve, but log a chained row" — Schneier's auditability
+        // contract. A test-injected resolver can return `.deny` to
+        // exercise the structured-error path.
+        let confirmation = ConfirmationGate.evaluate(toolName: toolName)
+        if confirmation.decision == .deny {
+            // V.12b: ConfirmationGate deny is a real blocker — emit
+            // must-fix. The deny response itself is unchanged so the
+            // agent still sees the deny (acceptance: non-blocking
+            // suppression).
+            let body = ConfirmationGate.denyReason(toolName: toolName, reason: confirmation.reason)
+            emitDenialAnnotation(
+                severity: .mustFix,
+                body: body,
+                toolName: toolName,
+                toolInput: toolInput,
+                sessionId: sessionId
+            )
+            return appendAndMarkValidationIfSurfaced(
+                blockResponse(body, eventName: eventName),
                 advisory: validationAdvisory,
                 rows: validationRows,
                 projectRoot: projectRoot
@@ -118,6 +193,38 @@ public enum HookRouter {
             rows: validationRows,
             projectRoot: projectRoot
         )
+    }
+
+    // MARK: - V.12b denial-annotation emit
+
+    /// Emit a `HookAnnotation` for a denial that is *tied to a code
+    /// change* — the gate-level denials (budget + ConfirmationGate)
+    /// where the agent's tool call would have mutated the project.
+    /// Read/Bash/Grep advisory denials are excluded by design: those
+    /// are token-saving redirects, not policy violations, and would
+    /// flood the diff sidebar with "[must-fix]" badges.
+    ///
+    /// Goes through `HookAnnotationFeed.shared`; the feed enforces
+    /// the per-minute must-fix rate cap and writes the suppression
+    /// log row when a window rolls. Subscribers (DiffViewerPane in
+    /// SenkaniApp) are notified iff the annotation is admitted.
+    private static func emitDenialAnnotation(
+        severity: DiffAnnotationSeverity,
+        body: String,
+        toolName: String,
+        toolInput: [String: Any],
+        sessionId: String?
+    ) {
+        let filePath = (toolInput["file_path"] as? String)
+            ?? (toolInput["path"] as? String)
+        let annotation = HookAnnotation(
+            severity: severity,
+            body: body,
+            toolName: toolName,
+            filePath: filePath,
+            sessionId: sessionId
+        )
+        annotationFeed.record(annotation)
     }
 
     // MARK: - Search Upgrade (Phase I)

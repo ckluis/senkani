@@ -63,22 +63,35 @@
     <div class="step">
       <div class="step-num">Step 1</div>
       <h3>Open the workspace</h3>
-      <pre class="code">senkani</pre>
-      <p>Or open SenkaniApp from /Applications if you dragged it there. A single empty canvas appears.</p>
+      <p>Open SenkaniApp from /Applications (or build it locally and run <code>.build/release/SenkaniApp</code>). A Welcome surface appears with a <strong>Choose project folder</strong> step at the top — Senkani won't start an agent until you tell it which repo to run in.</p>
     </div>
 
     <div class="step">
       <div class="step-num">Step 2</div>
-      <h3>Open three panes</h3>
-      <p>⌘K → type "Terminal" → Enter. ⌘K → "Analytics". ⌘K → "Agent Timeline". Three panes side by side.</p>
+      <h3>Pick the project folder</h3>
+      <p>Click <strong>Choose project folder</strong> and select the directory of the repo you want the agent to work in. The Welcome surface collapses to a <code>Project: &lt;name&gt;</code> row, and the four task starter cards below flip from <em>Choose a project folder first</em> to project-aware verbs: <strong>Ask Claude in &lt;name&gt;</strong>, <strong>Use Ollama in &lt;name&gt;</strong>, <strong>Open a tracked shell in &lt;name&gt;</strong>, and <strong>Inspect this project in &lt;name&gt;</strong>.</p>
+      <p>Prefer a tracked shell in your home folder instead? Click <strong>Open a tracked shell in home folder</strong> — that's the deliberate escape hatch and the only path that lands a session at <code>~</code>. Need a pane the four starters don't cover? Use the <strong>Show all panes</strong> link below the starter cards to open the full 18-pane gallery.</p>
+      <p>Below the starter cards, a modest <strong>Next: &lt;step&gt;</strong> banner names the early-use milestone you haven't hit yet — first project picked, first agent launched, first tracked event, first non-zero savings, first budget set, first workstream created, first staged proposal reviewed. The banner disappears once all seven fire so a returning user isn't nagged after onboarding ends. Senkani records the timestamps locally at <code>~/.senkani/onboarding/milestones.json</code> (mode <code>0600</code>, no upload path); set <code>SENKANI_ONBOARDING_MILESTONES=off</code> to opt out entirely.</p>
     </div>
 
     <div class="step">
       <div class="step-num">Step 3</div>
       <h3>Start the agent</h3>
-      <p>In the Terminal pane:</p>
-      <pre class="code">claude</pre>
-      <p>Claude Code starts; MCP handshake happens automatically (you can confirm via the "MCP connected" indicator in the status bar).</p>
+      <p>Click <strong>Ask Claude in &lt;project&gt;</strong>. Senkani opens a launcher sheet for picking the Claude command, then assembles the first-value layout: a Terminal pane in the project root running the chosen launcher (the MCP handshake happens automatically) and an <strong>Agent Timeline</strong> pane next to it so optimization events appear as the agent works — no need to open it manually. The Terminal pane header reads the actual working directory — <code>~/Desktop/projects/&lt;project&gt;</code> — not a bare <code>~</code>. Re-clicking <strong>Ask Claude</strong> later only adds another Terminal pane; the timeline isn't duplicated.</p>
+      <p>Above the terminal output, the active terminal pane shows a <strong>Senkani Active</strong> proof strip with five labelled chips. Each chip flips to <code>OK</code> when its component is wired up; if any are missing, a banner row beneath the chips surfaces the next runnable action — no waiting for the first intercepted command to learn whether Senkani is in the loop.</p>
+      <ul>
+        <li><strong>PROJECT</strong> — a project root is selected for the pane.</li>
+        <li><strong>MCP</strong> — Senkani's MCP server entry exists in <code>~/.claude/settings.json</code>.</li>
+        <li><strong>HOOKS</strong> — PreToolUse + PostToolUse hooks are registered in <code>&lt;project&gt;/.claude/settings.json</code> (run <code>senkani init</code> if missing).</li>
+        <li><strong>TRACK</strong> — the in-process session watcher is running.</li>
+        <li><strong>EVENTS</strong> — at least one tool-call event has been recorded for this project (relative-age detail keeps updating).</li>
+      </ul>
+    </div>
+
+    <div class="step">
+      <div class="step-num">Step 3b (optional)</div>
+      <h3>Open extra inspection panes</h3>
+      <p>The Agent Timeline already opened next to the Terminal as part of the first-value layout. To see compression numbers across every pane, ⌘K → "Analytics". To watch a specific pane's filter pipeline, ⌘K → "Savings Test". The optimization layer is already running; these surfaces let you watch it from a different angle.</p>
     </div>
 
     <div class="step">

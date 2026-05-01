@@ -77,6 +77,9 @@
 
     <p class="lede">Multi-project portfolio: total savings across every workspace, project-level table, per-feature charts, and insights (top filter rule by hit, freshest KB entity, etc.).</p>
 
+    <h2>Live tiles</h2>
+    <p>The Dashboard's <em>Live Tiles</em> strip shows three coordinator-backed tiles — Budget Burn (30 s cache), Validation Queue (5 s), and Repo Dirty (10 s) — each driven by a <code>PaneRefreshScheduler</code> under one bounded worker pool (cap 4). State is persisted per tile in <code>pane_refresh_state</code> so values survive an app restart.</p>
+    <p>When a fetch returns a partial result, the tile renders a yellow warning strip with a triangle icon and the notice text (e.g. <em>"no spend yet"</em>); a hard failure renders a red strip with an octagon icon. Error wins over notice — the tile never shows both at once. Each tile sets a single <code>accessibilityLabel</code> so VoiceOver reads "<em>tile name, partial: notice</em>" or "<em>tile name, error: detail</em>" instead of an unlabeled stack.</p>
 
     <h2>Keyboard</h2>
     <p>Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas).</p>

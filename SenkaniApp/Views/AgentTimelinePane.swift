@@ -60,18 +60,19 @@ struct AgentTimelinePane: View {
 
             // Event list
             if events.isEmpty {
-                VStack {
+                VStack(spacing: 8) {
                     Spacer()
                     Image(systemName: "waveform.path")
                         .font(.system(size: 32))
                         .foregroundStyle(SenkaniTheme.textTertiary.opacity(0.5))
-                    Text("Waiting for optimization events...")
-                        .font(.system(size: 11))
+                    Text("No optimization events yet")
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(SenkaniTheme.textTertiary)
-                        .padding(.top, 8)
-                    Text("Run an MCP tool to see it here.")
+                    Text("Use the terminal next to this pane — every Senkani-aware tool call appears here with bytes saved.")
                         .font(.system(size: 10))
-                        .foregroundStyle(SenkaniTheme.textTertiary.opacity(0.6))
+                        .foregroundStyle(SenkaniTheme.textTertiary.opacity(0.7))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 16)
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -252,6 +253,11 @@ private struct TimelineRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
+
+                // V.5d — token_events doesn't carry authorship; the
+                // badge surfaces the "Untagged" affordance with a
+                // tooltip explaining where the column lives today.
+                AuthorshipBadgeView(tag: nil, context: .timeline)
 
                 if event.savedTokens > 0 {
                     Text(formatCompact(event.savedTokens))

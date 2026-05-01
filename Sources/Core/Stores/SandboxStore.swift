@@ -25,6 +25,9 @@ final class SandboxStore: @unchecked Sendable {
         self.parent = parent
     }
 
+    /// Drop the chain cache after a `--repair-chain` motion.
+    func invalidateChainCache() { chain.invalidate() }
+
     // MARK: - Schema
 
     /// Create the `sandboxed_results` table + its two indexes. Idempotent —
@@ -57,6 +60,8 @@ final class SandboxStore: @unchecked Sendable {
     /// output would otherwise live on disk for 24 h in plaintext.
     /// Line/byte counts are computed on the redacted form so the summary
     /// matches what the caller will later retrieve.
+    private let chain = ChainState(table: "sandboxed_results")
+
     func storeSandboxedResult(sessionId: String, command: String, output: String) -> String {
         let resultId = "r_" + UUID().uuidString.prefix(12).lowercased()
         let now = Date().timeIntervalSince1970
@@ -67,9 +72,28 @@ final class SandboxStore: @unchecked Sendable {
 
         parent.queue.sync {
             guard let db = parent.db else { return }
+
+            // T.5 round 3: chain-aware insert.
+            let anchorId = self.chain.resolveAnchorId(db: db)
+            let prevHash = self.chain.latestEntryHash(db: db, anchorId: anchorId)
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "id":          .text(resultId),
+                "session_id":  .text(sessionId),
+                "created_at":  .real(now),
+                "command":     .text(redactedCommand),
+                "full_output": .text(redactedOutput),
+                "line_count":  .integer(Int64(lineCount)),
+                "byte_count":  .integer(Int64(byteCount)),
+            ]
+            let entryHash = ChainHasher.entryHash(
+                table: "sandboxed_results", columns: columns, prev: prevHash
+            )
+
             let sql = """
-                INSERT INTO sandboxed_results (id, session_id, created_at, command, full_output, line_count, byte_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?);
+                INSERT INTO sandboxed_results
+                (id, session_id, created_at, command, full_output, line_count, byte_count,
+                 prev_hash, entry_hash, chain_anchor_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -81,7 +105,16 @@ final class SandboxStore: @unchecked Sendable {
             sqlite3_bind_text(stmt, 5, (redactedOutput as NSString).utf8String, -1, nil)
             sqlite3_bind_int64(stmt, 6, Int64(lineCount))
             sqlite3_bind_int64(stmt, 7, Int64(byteCount))
-            sqlite3_step(stmt)
+            if let prev = prevHash {
+                sqlite3_bind_text(stmt, 8, (prev as NSString).utf8String, -1, nil)
+            } else {
+                sqlite3_bind_null(stmt, 8)
+            }
+            sqlite3_bind_text(stmt, 9, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(stmt, 10, anchorId)
+            if sqlite3_step(stmt) == SQLITE_DONE {
+                self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
+            }
         }
 
         return resultId

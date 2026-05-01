@@ -22,6 +22,15 @@ struct KnowledgeBaseView: View {
         .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
             if !vm.isDirty { vm.loadEntities() }
         }
+        // V.5b — surfaces the AuthorshipTag prompt when a save is
+        // queued but the row's prior tag is `.unset` or `nil`. Sheet
+        // calls back into the VM to resolve or skip.
+        .sheet(isPresented: $vm.pendingAuthorshipPrompt) {
+            AuthorshipPromptSheet(
+                onChoice: { tag in vm.resolveAuthorship(tag) },
+                onSkip:   { vm.skipAuthorship() }
+            )
+        }
     }
 
     // MARK: - Entity List
@@ -177,6 +186,8 @@ struct KnowledgeBaseView: View {
                     .padding(.vertical, 1)
                     .background(Capsule().fill(typeColor(entity.entityType).opacity(0.12)))
 
+                AuthorshipBadgeView(tag: entity.authorship, context: .knowledgeBase)
+
                 Text("\(entity.mentionCount)")
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundStyle(entity.mentionCount > 0
@@ -204,19 +215,29 @@ struct KnowledgeBaseView: View {
     }
 
     private var emptyListState: some View {
-        VStack(spacing: 10) {
+        let guidance = EmptyStateGuidance.entry(for: .knowledgeBase)
+        return VStack(spacing: 10) {
             Image(systemName: "brain.head.profile")
                 .font(.system(size: 28))
                 .foregroundStyle(SenkaniTheme.textTertiary)
-            Text("No entities yet")
+            Text(guidance.headline)
                 .font(.subheadline)
                 .foregroundStyle(SenkaniTheme.textSecondary)
-            Text("Entities appear after Claude mentions\nproject components across sessions.")
+            Text(guidance.populatingEvent)
                 .font(.caption)
                 .foregroundStyle(SenkaniTheme.textTertiary)
                 .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+            Text(guidance.nextAction)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(SenkaniTheme.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+                .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text("\(guidance.headline). \(guidance.populatingEvent) \(guidance.nextAction)"))
     }
 
     // MARK: - Entity Detail
@@ -262,6 +283,8 @@ struct KnowledgeBaseView: View {
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
                         .background(Capsule().fill(typeColor(entity.entityType).opacity(0.15)))
+
+                    AuthorshipBadgeView(tag: entity.authorship, context: .knowledgeBase)
 
                     Button {
                         if vm.showingGraph {

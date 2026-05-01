@@ -8,7 +8,11 @@ struct KB: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "kb",
         abstract: "Query the Senkani knowledge base.",
-        subcommands: [KBList.self, KBGet.self, KBSearch.self, KBRollback.self, KBHistory.self, KBTimeline.self]
+        subcommands: [
+            KBList.self, KBGet.self, KBSearch.self,
+            KBRollback.self, KBHistory.self, KBTimeline.self,
+            KBMigrate.self, KBUnmigrate.self,
+        ]
     )
 
     @Option(name: .long, help: "Project root directory.")
@@ -309,6 +313,129 @@ struct KBTimeline: ParsableCommand {
             print("  [\(kbShortDate(entry.createdAt))] \(entry.whatWasLearned)")
             if !entry.source.isEmpty {
                 print("         source: \(entry.source)")
+            }
+        }
+    }
+}
+
+// MARK: - kb migrate (V.7)
+
+struct KBMigrate: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "migrate",
+        abstract: "Migrate the project KB markdown vault to a new location."
+    )
+
+    @Option(name: .long, help: "External vault root. Persisted to ~/.senkani/config.json. If omitted, uses the path already in config.")
+    var to: String?
+
+    @Flag(name: .long, help: "Remove project-local copies after migration.")
+    var prune: Bool = false
+
+    @Option(name: .long, help: "Project root directory.")
+    var root: String?
+
+    func run() throws {
+        guard let projectRoot = resolveKBRoot(root) else {
+            fputs("No Senkani KB found.\n", stderr)
+            throw ExitCode(2)
+        }
+
+        // Persist --to to config so the next session resolves the same vault.
+        if let target = to {
+            do { try KBVaultConfig.writeConfiguredVaultRoot(target) }
+            catch {
+                fputs("Failed to write \(KBVaultConfig.userConfigPath()): \(error.localizedDescription)\n", stderr)
+                throw ExitCode(1)
+            }
+        }
+
+        guard KBVaultConfig.readConfiguredVaultRoot() != nil
+                || ProcessInfo.processInfo.environment["SENKANI_KB_VAULT_ROOT"] != nil
+        else {
+            fputs("No vault path configured. Pass --to <path> or edit \(KBVaultConfig.userConfigPath()).\n", stderr)
+            throw ExitCode(2)
+        }
+
+        let source = projectRoot + "/.senkani/knowledge"
+        let dest = KBVaultConfig.resolvedVaultDir(projectRoot: projectRoot)
+        if source == dest {
+            print("Vault already at \(dest) — nothing to migrate.")
+            return
+        }
+
+        let report: KBVaultMigrator.Report
+        do {
+            report = try KBVaultMigrator.migrate(from: source, to: dest, removeSourceAfter: prune)
+        } catch {
+            fputs("Migration failed: \(error.localizedDescription)\n", stderr)
+            throw ExitCode(1)
+        }
+
+        print("Migrated KB → \(dest)")
+        print("  Copied   : \(report.copied.count)")
+        print("  Skipped  : \(report.skipped.count) (already up-to-date)")
+        print("  Conflicts: \(report.conflicts.count)")
+        if report.hasConflicts {
+            print("\nConflicting files (vault has different content):")
+            for f in report.conflicts { print("  ! \(f)") }
+            print("\nResolve manually then re-run `senkani kb migrate`.")
+            throw ExitCode(1)
+        }
+    }
+}
+
+// MARK: - kb unmigrate (V.7)
+
+struct KBUnmigrate: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "unmigrate",
+        abstract: "Move the KB markdown vault back into the project tree."
+    )
+
+    @Flag(name: .long, help: "Remove the external copies after restoring the project-local vault, then clear ~/.senkani/config.json kb_vault_path.")
+    var prune: Bool = false
+
+    @Option(name: .long, help: "Project root directory.")
+    var root: String?
+
+    func run() throws {
+        guard let projectRoot = resolveKBRoot(root) else {
+            fputs("No Senkani KB found.\n", stderr)
+            throw ExitCode(2)
+        }
+
+        guard KBVaultConfig.isExternalized(projectRoot: projectRoot) else {
+            print("KB is already project-local — nothing to unmigrate.")
+            return
+        }
+
+        let source = KBVaultConfig.resolvedVaultDir(projectRoot: projectRoot)
+        let dest = projectRoot + "/.senkani/knowledge"
+
+        let report: KBVaultMigrator.Report
+        do {
+            report = try KBVaultMigrator.unmigrate(from: source, to: dest, removeSourceAfter: prune)
+        } catch {
+            fputs("Unmigrate failed: \(error.localizedDescription)\n", stderr)
+            throw ExitCode(1)
+        }
+
+        print("Unmigrated KB → \(dest)")
+        print("  Copied   : \(report.copied.count)")
+        print("  Skipped  : \(report.skipped.count) (already up-to-date)")
+        print("  Conflicts: \(report.conflicts.count)")
+        if report.hasConflicts {
+            print("\nConflicting files (project copy has different content):")
+            for f in report.conflicts { print("  ! \(f)") }
+            print("\nResolve manually then re-run `senkani kb unmigrate`.")
+            throw ExitCode(1)
+        }
+
+        if prune {
+            do { try KBVaultConfig.writeConfiguredVaultRoot(nil) }
+            catch {
+                fputs("Warning: failed to clear config: \(error.localizedDescription)\n", stderr)
             }
         }
     }

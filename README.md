@@ -11,21 +11,49 @@ One macOS binary, two jobs: a **native multi-pane workspace** (SwiftUI, sub-3ms 
 ```bash
 git clone https://github.com/ckluis/senkani.git && cd senkani
 swift build -c release
-.build/release/SenkaniApp           # launch the workspace
+.build/release/SenkaniApp           # launch the workspace (auto-registers global MCP + hook wrapper)
+cd /path/to/your/project
+.build/release/senkani init         # register PreToolUse + PostToolUse hooks for THIS project
 .build/release/senkani doctor       # verify setup + MCP registration
 ```
 
-The MCP server auto-registers globally in `~/.claude/settings.json` on first
-launch and only activates inside Senkani-managed terminal panes (gated by the
-`SENKANI_PANE_ID` env var). Non-Senkani terminals never see the tools even if
-the app is running. See [CHANGELOG.md](CHANGELOG.md) for the full shipped
-feature list and roadmap.
+SenkaniApp's first launch installs the hook wrapper at `~/.senkani/bin/senkani-hook`
+and writes the global MCP entry to `~/.claude/settings.json`. The MCP server only
+activates inside Senkani-managed terminal panes (gated by `SENKANI_PANE_ID`) — non-
+Senkani terminals never see the tools even if the app is running. `senkani init`
+is per-project: it only writes hook entries to `<project>/.claude/settings.json`,
+never global. See [CHANGELOG.md](CHANGELOG.md) for the full shipped feature list
+and roadmap.
+
+The empty-workspace surface is project-first and task-first: pick a project
+folder, then choose one of four verb-led starters — **Ask Claude in &lt;project&gt;**,
+**Use Ollama in &lt;project&gt;**, **Open a tracked shell**, or **Inspect this project**.
+The full 18-pane gallery is one level deeper behind a **Show all panes** link
+for advanced users. The first agent launch auto-assembles a witnessed layout —
+**Ask Claude** and **Open a tracked shell** open the terminal next to a live
+**Agent Timeline** pane so optimization events appear as the user works, with
+no manual "open Agent Timeline" step. Subsequent launches add only the primary
+pane so re-clicking a starter never stacks duplicate timelines.
+The first time the user reaches a pane, the compact **F C S I T** letters in
+the pane header trigger a one-shot disclosure popover that names each
+optimizer (Filter, Cache, Secrets, Indexer, Terse) and what it does, and
+every early-use empty state — Analytics, Knowledge, Models, Sprint Review —
+ends in a concrete next action instead of a passive "data will appear" wall.
+A modest **Next: &lt;step&gt;** banner on the Welcome screen surfaces the next
+early-use milestone the user hasn't reached yet (project picked → agent
+launched → first tracked event → first non-zero savings → first budget
+set → first workstream created → first staged proposal reviewed); the
+banner disappears once all seven fire. The milestone log is local-only at
+`~/.senkani/onboarding/milestones.json` (mode 0600, no upload path) — opt
+out with `SENKANI_ONBOARDING_MILESTONES=off`.
+See [docs/guides/first-session.html](docs/guides/first-session.html)
+for the walkthrough.
 
 ---
 
 ## The MCP Intelligence Layer
 
-19 tools that sit between Claude and your filesystem, compressing everything before it hits your token budget.
+20 tools that sit between Claude and your filesystem, compressing everything before it hits your token budget.
 
 | Tool | What it does | Savings |
 |------|-------------|---------|
@@ -41,13 +69,14 @@ feature list and roadmap.
 | `senkani_embed` | Text embeddings on Apple Silicon (no API cost) | $0/call |
 | `senkani_vision` | Vision model on Apple Silicon (no API cost) | $0/call |
 | `senkani_watch` | FSEvents ring buffer — query changed files by cursor + glob | near-zero |
-| `senkani_web` | Render `http://`/`https://` page with full JS, return AXTree markdown. DNS-resolved SSRF guard + redirect re-validation; `file://` not accepted (use `senkani_read`). | ~99% vs raw HTML |
+| `senkani_web` | Render `http://`/`https://` page with full JS, return AXTree markdown. DNS-resolved SSRF guard + redirect re-validation; `file://` not accepted (use `senkani_read`). The W.2 `MarkdownFirstFetcher` gives a three-tier ladder (`Accept: text/markdown` → HTML→markdown transform → headless render) with caller-forceable `method`; tier wired into the tool path is W.2-bis. | ~99% vs raw HTML |
 | `senkani_pane` | Control workspace panes — open, close, focus, resize (via Unix socket) | — |
 | `senkani_session` | View stats, toggle features, pin/unpin symbol context (`pin`/`unpin`/`pins`) | — |
 | `senkani_knowledge` | Query/update the project knowledge graph — entities, links, decisions, FTS5 search. `full: true` for complete entity detail (summary is default). | near-zero |
 | `senkani_version` | Version negotiation: `server_version`, `tool_schemas_version`, `schema_db_version`, list of exposed tools. Cache client schemas keyed on `tool_schemas_version`. | — |
 | `senkani_bundle` | Budget-bounded repo snapshot. Local mode composes symbol outlines + dep graph + KB entities + README in a canonical truncation-robust order. Remote mode (`remote: "owner/name"`) snapshots any public GitHub repo via `senkani_repo` — same host allowlist + `SecretDetector`. Emits `format: "markdown"` (default) or stable-schema `format: "json"` (`BundleDocument`). Path-validated. | repo-level |
 | `senkani_repo` | Query any public GitHub repo without cloning. Actions: tree / file / readme / search. Host-allowlisted (api.github.com + raw.githubusercontent.com), anonymous by default (60 req/h); `GITHUB_TOKEN` env raises the limit. All responses SecretDetector-scanned. TTL+LRU cache. | query-level |
+| `senkani_search_web` | Web search via DuckDuckGo Lite (no key, no quota). Returns `{title, url, snippet}` triples. Host-pinned to `lite.duckduckgo.com`, SSRF-guarded, redirect-pinned, every snippet + title scanned by `SecretDetector`. `guard-research` denies queries containing absolute paths, globs, or secret-shaped tokens. Snippets are adversarial third-party text — pass URLs through `senkani_web` before acting. | query-level |
 
 **Compound learning** (Phase K) — the system learns your workflow across sessions. Proposals go `.recurring → .staged → .applied` with a lazy session-start sweep (`recurrence ≥ 3 + confidence ≥ 0.7`). Four artifact types:
 - **Filter rules** (H, H+1) — `head(50)` + substring `stripMatching(...)` from the post-session waste analyzer. Regression-gated on real `commands.output_preview` samples. Laplace-smoothed confidence.
@@ -61,6 +90,16 @@ Gemma 4 optionally enriches rationale strings (H+2a) — contained to a dedicate
 
 **Knowledge base** (Phase F + F+1..F+5) integrates with compound learning: `.senkani/knowledge/*.md` is the source of truth, SQLite is a rebuilt index (`KBLayer1Coordinator` detects staleness + corrupt-DB recovery), entities mentioned ≥5× per session get queued for Gemma enrichment, `EnrichmentValidator` flags information loss / contradiction / excessive rewrite before commit, `senkani kb rollback / history / timeline` wrap the append-only evidence + history archive. `KBCompoundBridge` knits the two systems: high-mention entities boost compound-learning confidence; applied context docs seed KB entity stubs; rolling back a KB entity cascades to invalidate derived context docs.
 
+**Plain-md vault** (Phase V.7) makes the markdown vault portable. Set `kb_vault_path` in `~/.senkani/config.json` (or pass `senkani kb migrate --to <path>`) to relocate the vault out of the project tree — useful for keeping it next to existing Obsidian vaults. The resolver appends `<project-slug>` per-project so multi-project vaults don't collide. `senkani kb migrate` and `senkani kb unmigrate` move files in either direction; both are content-hash idempotent and surface conflicts rather than silently overwriting. `WikiLinkResolver` provides click-through resolution for `[[Name]]` with folder-hint disambiguation.
+
+**Authorship tags** (Phase V.5) carry explicit provenance — `ai-authored` / `human-authored` / `mixed` / `unset` — on every KB entity. The save path prompts before persisting an ambiguous row (V.5b), `senkani authorship backfill` heals legacy NULL rows under a chain-participating audit row (V.5c), and the KB / Timeline / Skills panes render typographic badges that surface "Untagged" rather than silently inferring a tag (V.5d). Cavoukian's contract: provenance metadata, never policy.
+
+**`HandManifest` skills** (Phase U.5 round 1) are a portable canonical capability-package shape: one JSON manifest carries `tools`, `settings`, `metrics`, multi-phase `system_prompt`, `skill_md`, `guardrails` (`requires_confirm` / `egress_allow` / `secret_scope`), `cadence` (HookRouter triggers + cron), `sandbox`, and declared `capabilities`. `senkani skill lint <path>` enforces 12 schema invariants (kebab-case names, `requires_confirm` ⊆ `tools[]`, known cadence triggers); `senkani skill export --target claude-code|cursor|codex|opencode|senkani <path>` round-trips one source into per-harness output (claude-code SKILL.md and senkani WARP.md are first-class; cursor/codex/opencode emit canonical envelopes pending V.10/V.11 hardening). Schema v1 is frozen at `spec/skills.md`.
+
+**Session continuity** (Phase W.4) — `ContextSaturationGate` is a pure decision (`.ok / .warn / .block`) that reads `tokens_in + tokens_out` from `agent_trace_event` and compares against a configurable budget (defaults: warn 65 %, block 80 %, 200 000-token active window). When the gate blocks, `PreCompactHandoffWriter` lands a structured handoff card under `~/.senkani/handoffs/<sessionId>.json` — `openFiles`, `currentIntent`, `lastValidation` (pulled from `validation_results`), `nextActionHint`, `recentTraceKeys` — atomically (temp+rename, <1 s SLO). `PreCompactHandoffLoader.load(...)` / `loadLatest(...)` reads the card on the next session start and returns nil for missing / corrupt / future-schema files. HookRouter PreCompact wiring + a status-bar saturation chip + `senkani doctor --handoff` are W.4-bis (operator-decision pending).
+
+**Annotation evidence** (Phase V.6 round 1) lets the operator mark working/failing portions of a skill or KB entity. Each row is append-only — `target_kind` (skill / kb-entity), inclusive byte range, verdict (`works` / `fails` / `note`), free-text notes, an `authored_by` handle, and a V.5 `AuthorshipTag` (explicit by construction). `renameAnnotationTarget` rewrites `target_id` so the lineage survives an artifact rename or fork. `AnnotationSignalGenerator` rolls up evidence per `(kind, target)` and feeds it into `CompoundLearning.runPostSession` — read-only in round 1: each evidence row bumps `compound_learning.annotation.observed` plus a `failing` / `working` / `mixed` counter. Future rounds (V.6 round 3) can wire annotations into the Propose pathway; round 1 stops at evidence so an operator's `fails` call is never silently mutated into a learned rule.
+
 ---
 
 ## The Workspace
@@ -69,7 +108,7 @@ A horizontal canvas of panes. Each pane is a primitive type; you arrange them ho
 
 **18 pane types:**
 
-- **Terminal** — SwiftTerm, configurable font size, kill/restart buttons, broadcast mode
+- **Terminal** — SwiftTerm, configurable font size, kill/restart buttons, broadcast mode. The active terminal pane shows a five-chip "Senkani Active" proof strip (PROJECT, MCP, HOOKS, TRACK, EVENTS) that surfaces a runnable next action whenever a setup component is missing — no need to wait for the first intercepted command to know whether Senkani is wired in.
 - **Dashboard** — multi-project portfolio: total savings, project table, feature charts, insights
 - **Code Editor** — tree-sitter syntax highlighting (25 languages, incl. Dart/TOML/GraphQL), symbol navigation, file tree
 - **Browser** — WKWebView embedded, localhost or any URL. Optional click-to-capture Design Mode (env-gate `SENKANI_BROWSER_DESIGN=on`, ⌥⇧D toggles) — click an element, get a fixed-schema Markdown block on the clipboard.
@@ -79,7 +118,7 @@ A horizontal canvas of panes. Each pane is a primitive type; you arrange them ho
 - **Savings Test** — fixture bench + live session replay + scenario simulator
 - **Agent Timeline** — timeline of optimization events, interactive tool calls, and scheduled-task runs (start/end/blocked)
 - **Knowledge Base** — project knowledge entities, freshness indicators
-- **Diff Viewer** — side-by-side LCS diff (correct insertions, deletions, replacements)
+- **Diff Viewer** — LCS-hunk blocks with a severity-tagged annotations sidebar (`[must-fix]` / `[suggestion]` / `[question]` / `[nit]`); click any annotation to jump to its hunk. HookRouter denials that block real work (ConfirmationGate, budget gate) feed `[must-fix]` annotations into the same sidebar via `HookAnnotationFeed` (V.12b); a per-minute rate cap suppresses must-fix floods without changing the deny response, with each closed window writing to `annotation_rate_cap_log` (Migration v13).
 - **Log Viewer** — searchable log output
 - **Scratchpad** — auto-saving markdown notepad
 - **Schedules** — manage recurring tasks via launchd. Ships with five day-1 presets (`log-rotation`, `morning-brief`, `autoresearch`, `competitive-scan`, `senkani-improve`) installable from the pane or via `senkani schedule preset install <name>`; each preset's resolved command is secret-scanned before install, and missing companion prerequisites (Ollama daemon, `guard-research` hook preset, `senkani brief` CLI, …) surface as warnings, not blockers.
@@ -105,7 +144,12 @@ Senkani is a trust boundary for LLM-driven tool calls. Security-sensitive featur
 - **Structured logging — opt-in + sink-redacted.** `SENKANI_LOG_JSON=1` emits one JSON object per critical event to stderr. Every `.string(_)` log field passes through `SecretDetector.scan` at emit time (Cavoukian C5), so a stray API key / bearer token / AWS / Slack / Stripe / GCP / npm / HuggingFace / GitHub token in a log field is automatically `[REDACTED:…]`'d. Use `LogValue.path(_)` for filesystem paths — `/Users/<name>` collapses to `~` (current user) or `/Users/***` (foreign). Default is backward-compatible `[event] key=value` format.
 - **Observability counters — surfaced via CLI + MCP tool.** Every security-defense site increments an `event_counters` row (migration v2): injection detections, SSRF blocks, socket handshake rejections, schema migrations, retention prunes, command redactions. Read them via `senkani stats --security` (Gelman rate annotation: `count/total (pct%)`) or `senkani_session action:"stats"`. Per-project paths are redacted (Cavoukian C2).
 - **Published SLOs — surfaced via `senkani doctor`.** Four latency contracts on the hot path (cache hit p99 < 1 ms, pipeline cache-miss p99 < 20 ms, hook passthrough p99 < 1 ms, hook active p99 < 3 ms). 24-hour rolling window with a 1% error budget. `senkani doctor` shows green / warn / burn / unknown per SLO with the rolling p99 and sample count. The CI perf gate (`tools/perf-gate.sh` and `Tests/SenkaniTests/SLOTests.swift`) synthesises a representative workload for each SLO and fails the build if any p99 crosses its ceiling. See [`spec/slos.md`](spec/slos.md).
+- **Release commitments — four shape numbers per release.** Beyond the runtime SLOs above, every release reports cold-start (< 250 ms p95), idle memory (< 75 MB), install size (< 50 MB), and classifier latency (< 2 ms p95, slot pending U.1 TierScorer). Capture is `tools/measure-slos.sh`, which appends a row to `~/.senkani/slo-history.jsonl` with `git_sha` + `version` for trend correlation. `senkani doctor` reads the latest row and runs a median-of-5 baseline regression check — anything ≥10% over baseline fails the gate. Improvements never fail.
 - **Data portability (GDPR-adjacent).** `senkani export --output <file> [--since DATE] [--redact]` streams sessions + commands + token_events as JSONL via a read-only SQLite connection — doesn't block the live MCP server.
+- **Tamper-evident audit chain (Phase T.5).** Every row in `token_events`, `validation_results`, `sandboxed_results`, and `commands` carries `prev_hash` + `entry_hash` + `chain_anchor_id`. `entry_hash = SHA-256(prev_hash || canonical_row_bytes)` — a single-byte tamper at row N invalidates row N's hash and every subsequent row's hash. `senkani doctor --verify-chain` walks all four chains and reports OK or names the first broken `(table, rowid)`; the integrity line surfaces in `senkani doctor` as `chain integrity: OK since <ISO-date> / N repairs`. Recovery via `senkani doctor --repair-chain --table <T> --from-rowid <N>` opens a fresh chain segment with typed-string double-confirm, tty enforcement, and prior-tip linkage in the new anchor's `operator_note`.
+- **Confirmation gate (Phase T.6a).** Every write/exec-tagged tool call walks `ConfirmationGate` and writes a chained `confirmations` row recording the decision (`approve`/`deny`/`auto`) and who decided it (`operator`/`policy`/`auto`). `MCPToolCatalog` tags Claude Code hook tools (`Edit`/`Write`/`Bash`) and the senkani MCP surface with `read`/`write`/`exec`/`network`; read-only tools short-circuit with no row. Default policy is auto-approve so today's flow is unblocked, but every approval is auditable through the T.5 chain. Real notification adapters (`StdoutSink`, `MacOSLocalSink`, `PushoverSink`) land in T.6b/T.6c; round 1 ships the `NotificationSink` protocol + null/mock implementations + a fan-out helper that swallows throws so a bad adapter doesn't block other sinks.
+- **Notification sinks (Phase T.6b).** `StdoutSink` writes one canonical JSON line per `NotifyEvent` (sorted-key, scalar-only payload + ISO-8601 `ts`) — pipe `senkani` stdout into a structured-log collector and the gate's outcomes round-trip cleanly. `MacOSLocalSink` posts banners via an injected `LocalNotifierBridge` so the App can wire `UNUserNotificationCenter` while CLI / MCP / CI run with `NullLocalNotifierBridge`; CI tests use `SpyLocalNotifierBridge`. `NotificationRouter` reads `~/.senkani/notifications.json` (`{"sinks": {"stdout": {"events": ["notify_failure"]}}}`) to pick which sink fires for which event variant — defaults to subscribe-all when the file is missing. The Pushover adapter + Settings matrix UI are still on T.6c.
+- **Soft-flag fragmentation detector (Phase U.4a).** `FragmentationDetector` watches a per-session sliding window of HookRouter events and emits flags when three patterns hit: `toolBurst` (≥3 same-tool calls inside 10 s), `fragmentStitch` (overlapping prompt fragments inside 30 s), `crossPane` (same tool in two panes inside one session). `TrustScorer` aggregates flags into a 0–100 score. Flags persist into the chained `trust_audits` table (Migration v12) — operator FP/TP labels are append-only rows so re-labelling is detectable. The detector is **non-blocking by design**: nothing in HookRouter's denial path reads its output. The Trust Flags sidebar tool surfaces the flags with plain-language "False alarm" / "Real" buttons, and `senkani doctor` reports `trust flags — soft flags last 30d: N | confirmed FP: M | confirmed TP: K`. Promotion to blocking is U.4b — gated on a 30-day operator-labelled FP rate.
 
 Call `senkani_version` (tool) or `senkani doctor` to confirm the active security posture.
 
@@ -138,25 +182,45 @@ Per-pane model presets control which Claude model handles tasks:
 | **Quick** | Haiku 3.5 | ~$0.12/hr |
 | **Local** | Gemma 4 on-device | $0/hr |
 
+**TaskTier + FallbackLadder + BudgetGate (Phase U.1a, internal API).** A second routing surface alongside the prompt-scored heuristic: callers who already have a `TaskTier` (`simple` / `standard` / `complex` / `reasoning`) hand it to `ModelRouter.resolve(taskTier:budget:...)`, which clamps the desired tier against the configured budget (daily-equivalent ceiling) and walks a 3-rung-capped `FallbackLadder` to a concrete `ModelTier`. `TaskTier` names *the work*; `ModelTier` (`local` / `quick` / `balanced` / `frontier`) names *the engine* — the separation lets the budget gate floor what kind of task can run without reshaping the model bins. The 3-rung cap is a deliberate undercut against ladder-bloat anti-patterns.
+
+**Routing corpus + ≥0.85 accuracy gate (Phase U.1b).** `ModelRouter.classify(prompt:)` maps a prompt to its `TaskTier`; a 60-row hand-labeled corpus (≥10 per tier) at `Tests/SenkaniTests/Fixtures/routing-corpus.json` pins the classifier at ≥0.85 accuracy in CI. The gate is loose by design — flakiness is more expensive than a tight bar that catches nothing. `ModelRouter.Decision` now carries `taskTier` + `ladderPosition` and migration v10 adds `ladder_position` to `agent_trace_event` so the U.1c Analytics chart can split "primary rung used" from "fell back" without a second schema change.
+
+**Tier-distribution chart in AnalyticsView (Phase U.1c).** A new "Routing — TaskTier Distribution" card in Analytics renders router output across the past 24h or 7d, per `TaskTier`. Stacked view (default) shows totals per tier; Grouped view splits each tier into Primary / Fallback 1 / Fallback 2 bars so operators can spot fallback churn without a second query. Tapping a bar opens a drill-down sheet listing the underlying `agent_trace_event` rows (feature, model, tokens, latency, result). Empty-state copy explicitly links the blank chart back to U.1a so operators don't think the analytics broke.
+
+**`ContextPlan` schema + plan/actual pairing (Phase U.6a, internal API).** First slice of the context-orchestration split. New `ContextPlan` Swift struct in `Sources/Core/` (id / sessionId / plannedFanout / leafSize / reducerChoice / estimatedCost / createdAt) backed by a `context_plans` table (Migration v14) with `insert` / `fetchById` / `fetchBySession`. `agent_trace_event` gains a nullable `plan_id` foreign-key column so combinator-emitted plans can be paired with their realized actuals. The combinator API + BudgetGate rejection path (U.6b) and the variance histogram + 90% pairing eval (U.6c) ride on top of this schema. Pure-Swift plumbing — no UI or operator-visible surface yet.
+
+**`split` / `filter` / `reduce` combinators + BudgetGate plan rejection (Phase U.6b, internal API).** New `Sources/Core/CombinatorPipeline.swift` adds three named operators that map to the closed `ReducerChoice` vocabulary (`split` → `merge`, `filter` → `select`, `reduce` → `summarize`). Each call writes a `ContextPlan` row up-front, asks `BudgetGate.rejectPlan(estimatedCost:budget:planId:)` whether the plan fits the active budget's daily-equivalent ceiling, and either runs the caller's closure (stamping `plan_id` onto the returned `AgentTraceEvent` with `withPlanId(_:)` so callers can't accidentally drop the pairing) or returns a structured `PlanRejection(reason:, ceilingCents:, estimatedCost:, planId:)`. Rejected plans persist the plan row but skip the trace; closure throws propagate with the plan still persisted (matches the reality of mid-execution crashes). The variance histogram + 90% pairing eval ride on this in U.6c.
+
+**Plan-variance histogram + ≥ 90% pairing eval (Phase U.6c).** AnalyticsView gains a "Plan Variance — Actual vs. Planned Cost" card that plots Karpathy's residual (actual − planned cost in cents) for the U.6b combinator pairings. New `db.contextPlanPairs(since:)` joins `context_plans` to `agent_trace_event` on `plan_id`; pure helpers in `VarianceHistogram` (Core) bin residuals into signed `[…)` ranges with under-budget / exact / over-budget kinds so the chart can colour-code without re-deriving. Header surfaces N paired, unpaired count, median Δ, and percent paired; the chart waits for ≥ 3 paired plans before drawing bars (Gelman gate against thin-data misreads). A new `Tests/SenkaniTests/ContextPlanCorpusTests.swift` exercises `split` / `filter` / `reduce` over a 20-item synthetic corpus and pins the parent acceptance #1 metric: ≥ 90% of executable corpus operations land paired plan + trace rows.
+
 ---
 
-## Performance
+## Paired Performance Numbers
 
-Numbers from the built-in benchmark suite (`senkani bench`):
+Senkani publishes its savings claim as a **pair of numbers**, never one alone. The fixture multiplier measures the optimization math under controlled conditions; the live-session multiplier measures the same stack on real Claude Code sessions. Both are legitimate, and the *pairing* is the differentiator — citing only the ceiling sets the product up for a credibility loss when real-world performance lands lower.
+
+| Number | Value | What it measures |
+|--------|-------|------------------|
+| **Fixture bench multiplier** | **80.37×** (synthetic, controlled) | 10-task × 7-config bench in `Sources/Bench/BenchmarkFixtures.swift`. Maximizes cache reuse, picks commands with aggressive filter rules. The optimization math's ceiling. |
+| **Live-session multiplier** | **pending** (target capture: 2026-05-31) | Median of 5–10 representative Claude Code sessions replayed through `SessionDatabase.liveSessionMultiplier(projectRoot:since:)`. Lower than the fixture by design — the floor. |
+
+**Why a pair, not a point estimate.** Real sessions read mostly-novel files (cache hit rate drops), pay symbol-index cold-start costs, vary in command output shape, and don't follow the bench's linear permutation. The fixture number is the honest *ceiling*; the live number is the honest *floor*. We report both so operators can pre-calibrate expectations before the first session, then reconcile against their own workflow once they've run it. Hard rule for the README and any marketing surface: **80×** never appears without its paired live-session number (or the explicit `pending` placeholder while Phase G capture is in flight).
+
+The full caveat — including the action item, owner, and the `tools/check-multiplier-claims.sh` automated gate that fails the build on bare claims — lives at [`spec/testing.md` → Live Session Caveat](https://github.com/ckluis/senkani/blob/main/spec/testing.md#live-session-caveat-important).
+
+**Other published numbers (see `senkani doctor` for current values):**
 
 | Metric | Value |
 |--------|-------|
-| Fixture bench multiplier | **80.37x** (synthetic, controlled conditions) |
-| Live session multiplier | **Varies by workflow** — see Savings Test pane |
-| Terminal render latency | p50 ~2ms, p99 ~3.4ms |
-| Filter throughput | >10k lines/sec |
-| Symbol search | <5ms cold, <1ms cached |
-| Secret scan | <2ms per KB |
-| Hook latency | <5ms active, <1ms passthrough |
-| Unit tests | **1433 passing** |
+| Hot-path SLOs | cache hit p99 < 1 ms · pipeline cache-miss p99 < 20 ms · hook passthrough p99 < 1 ms · hook active p99 < 3 ms |
+| Release commitments | cold-start < 250 ms p95 · idle memory < 75 MB · install size < 50 MB · classifier latency < 2 ms p95 (slot pending U.1) |
+| Terminal render | p50 ~2 ms, p99 ~3.4 ms |
+| Filter throughput | > 10 k lines/sec |
+| Symbol search | < 5 ms cold, < 1 ms cached |
+| Secret scan | < 2 ms / KB |
+| Unit tests | **2325 passing** |
 | Binary size | ~28 MB universal |
-
-**About the numbers:** The 80.37x figure is from the fixture benchmark — synthetic tasks designed to exercise each optimization layer. Real sessions produce a lower multiplier. The Savings Test pane shows both numbers side by side: fixture ceiling and live floor. The live number is the honest one.
 
 ---
 
@@ -164,14 +228,14 @@ Numbers from the built-in benchmark suite (`senkani bench`):
 
 | Module | Deps | Role |
 |--------|------|------|
-| **Core** | Filter | Session DB, feature config, metrics, budget, hook routing, model routing, auto-validate, adaptive truncation |
+| **Core** | Filter | Session DB (incl. canonical trace rows), feature config, metrics, budget, hook routing, model routing, auto-validate, adaptive truncation |
 | **Filter** | — | Token compression: 44 cmd rules, ANSI strip, dedup, secrets, terse |
 | **Indexer** | SwiftTreeSitter | 25 tree-sitter backends, FTS5 search, dependency graph, incremental parsing, FSEvents |
 | **Bench** | Core, Filter, Indexer | Token savings test suite: 10 tasks × 7 configs, quality gates, JSON export |
-| **MCP** | Core, Filter, Indexer, Bundle, MLX | 18 MCP tools, socket server (mcp + hook + pane), vision + embedding inference, Gemma 4 rationale adapter |
+| **MCP** | Core, Filter, Indexer, Bundle, MLX | 20 MCP tools, socket server (mcp + hook + pane), vision + embedding inference, Gemma 4 rationale adapter |
 | **Bundle** | Core, Filter, Indexer | `BundleComposer` — budget-bounded repo-snapshot composition for `senkani_bundle` |
 | **HookRelay** | — | Zero-dep hook relay library shared by senkani-hook binary and app's --hook mode |
-| **CLI** | Core, Filter, Indexer, Bench | 18 commands: exec, search, bench, doctor, grammars, kb, eval, learn, init, … |
+| **CLI** | Core, Filter, Indexer, Bench | 23 commands: exec, search, bench, doctor, grammars, kb, eval, learn, init, authorship, … |
 | **SenkaniApp** | All + SwiftTerm | SwiftUI workspace: 18 pane types, multi-project, ⌘K palette, dashboard, menu bar |
 
 ---
@@ -197,6 +261,20 @@ senkani doctor       # verify grammar and database setup
 > migrated off cooperative-pool blocking primitives.
 
 The GUI target (`SenkaniApp`) includes SwiftUI, SwiftTerm, and MLX. The CLI (`senkani`) and hook (`senkani-hook`) targets are lean — no MLX, no SwiftUI.
+
+---
+
+## Companion Stack (remote-operator pattern)
+
+Senkani runs locally on a Mac. When the operator wants to drive a headless Mac mini from a phone or laptop on the road, the documented pattern is three off-the-shelf tools — **not Senkani features**, just the stack we recommend:
+
+1. **Tailscale (Personal tier, free).** WireGuard mesh that gives every device a stable hostname inside your tailnet without exposing any port to the public internet. The Personal tier covers up to 6 users and unlimited devices — comfortably above any solo operator's needs. Install Tailscale on the Senkani Mac and on the operator's phone/laptop; both sign into the same tailnet.
+2. **Screens 5 (one-time $179.99 lifetime, or $29.99/year subscription).** Native VNC client on iOS and macOS. Tap a saved Mac on the iPhone, get the actual Senkani desktop over the WireGuard tunnel. Use the `screens://<saved-name>` URL scheme — on macOS, `vnc://` and `ssh://` may be intercepted by Screen Sharing or Terminal. The lifetime tier is the right fit for the Senkani audience; if that flinches, take the annual subscription, not a fork-and-self-host alternative.
+3. **Pushover (one-time ~$4.99 per platform, 10 k messages/mo free tier).** Simple HTTPS push API — `POST https://api.pushover.net/1/messages.json` with `token` + `user` + `message`. Senkani's `NotificationSink` adapter populates the `url` field with `screens://<tailnet-host>` so the notification itself becomes the deep link.
+
+**The closed loop:** a Senkani job finishes → Pushover fires a push to the operator's phone → the notification's `url` field is `screens://<tailnet-host>` → tap → Screens 5 opens that exact Mac's desktop over the tunnel. No Senkani-side daemon ever listened on the public internet.
+
+Macs go to sleep — set **System Settings → Battery → Power Adapter → Wake for network access** so the headless Mac mini answers when Tailscale pokes it. Tailscale Personal-tier policy and Screens pricing have shifted before; treat the named products as the *current* recommendation and the *pattern* — any WireGuard mesh + any VNC client + any HTTP-API push service — as the durable contract. See [`spec/inspirations/native-app-ux/tailscale-plus-screens-5.md`](spec/inspirations/native-app-ux/tailscale-plus-screens-5.md) for the full design analysis.
 
 ---
 

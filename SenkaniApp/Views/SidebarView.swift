@@ -8,6 +8,11 @@ struct SidebarView: View {
     @Bindable var workspace: WorkspaceModel
     @Binding var activeToolView: ToolView?
     let onRequestAddPane: () -> Void
+    /// Launch a pane through the parent's `LaunchCoordinator`. The
+    /// sidebar must NOT call `workspace.addPane(...)` directly —
+    /// doing so skipped hook + session setup and was the original
+    /// motivation for the LaunchCoordinator round.
+    let onLaunchPane: (PaneType, String, String) -> Void
     @State private var showClaudeLaunch = false
     @State private var enrichmentBadge: Int = 0
 
@@ -45,6 +50,10 @@ struct SidebarView: View {
                                 .padding(.trailing, 8)
                                 .help("\(enrichmentBadge) enrichment candidate(s)")
                         }
+                    }
+                    toolRow(icon: "exclamationmark.triangle", label: "Trust Flags",
+                            isActive: activeToolView == .trustFlags) {
+                        activateTool(.trustFlags)
                     }
 
                     // Thin divider
@@ -308,7 +317,7 @@ struct SidebarView: View {
         .menuStyle(.borderlessButton)
         .sheet(isPresented: $showClaudeLaunch) {
             ClaudeLaunchSheet { command in
-                workspace.addPane(title: "Claude Code", command: command)
+                onLaunchPane(.terminal, "Claude Code", command)
             }
         }
     }

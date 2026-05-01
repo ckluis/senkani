@@ -13,6 +13,24 @@ struct Doctor: ParsableCommand {
     @Flag(name: .long, help: "Automatically fix issues (default is report-only).")
     var fix = false
 
+    @Flag(name: .long, help: "Run only the audit-chain integrity check (Phase T.5). Exit 0 on OK, non-zero on tamper.")
+    var verifyChain = false
+
+    @Flag(name: .long, help: "Open a fresh audit-chain segment after a verified tamper. Requires --table and --from-rowid. Double-confirms unless --force.")
+    var repairChain = false
+
+    @Option(name: .long, help: "Table to repair (token_events | validation_results | commands).")
+    var table: String?
+
+    @Option(name: .long, help: "First rowid to re-anchor under the new repair anchor.")
+    var fromRowid: Int64?
+
+    @Flag(name: .long, help: "Skip the typed-string double-confirm. Required when stdin is not a tty, or to override the 'repair anchor already exists' guard.")
+    var force = false
+
+    @Option(name: .long, help: "Free-form note recorded on the new repair anchor's operator_note field.")
+    var note: String?
+
     // MARK: - Counters
 
     private struct Results {
@@ -23,6 +41,22 @@ struct Doctor: ParsableCommand {
     }
 
     func run() throws {
+        // T.5 round 4: focused repair mode. Required: --table and
+        // --from-rowid. Double-confirm prompts unless --force is supplied.
+        if repairChain {
+            try runRepairChain()
+            return
+        }
+
+        // T.5 round 2: focused verify mode — only the audit chain check,
+        // scriptable exit code, no other noise.
+        if verifyChain {
+            var results = Results()
+            checkAuditChain(&results)
+            if results.failed > 0 { throw ExitCode.failure }
+            return
+        }
+
         print("Senkani Doctor")
         print("==============")
 
@@ -73,6 +107,16 @@ struct Doctor: ParsableCommand {
         // 14. SLO pack — three published SLOs + hook-active ceiling
         checkSLOs(&results)
 
+        // 15. Release commitments (Phase V.14) — cold-start, idle
+        // memory, install size, classifier slot.
+        checkReleaseSLOs(&results)
+
+        // 16. Audit chain integrity (Phase T.5)
+        checkAuditChain(&results)
+
+        // 17. Trust flags — soft-flag FP-rate counter (Phase U.4a)
+        checkTrustFlags(&results)
+
         print("")
         var parts: [String] = []
         if results.passed > 0 { parts.append("\(results.passed) passed") }
@@ -84,6 +128,195 @@ struct Doctor: ParsableCommand {
         if results.failed > 0 {
             throw ExitCode.failure
         }
+    }
+
+    // MARK: - --repair-chain (Phase T.5 round 4)
+
+    private func runRepairChain() throws {
+        guard let table else {
+            FileHandle.standardError.write(Data("error: --repair-chain requires --table <token_events|validation_results|commands>\n".utf8))
+            throw ExitCode.failure
+        }
+        guard let fromRowid else {
+            FileHandle.standardError.write(Data("error: --repair-chain requires --from-rowid <N>\n".utf8))
+            throw ExitCode.failure
+        }
+        guard ChainRepairer.supportedTables.contains(table) else {
+            FileHandle.standardError.write(Data("error: --table '\(table)' is not supported. Supported: token_events, validation_results, commands\n".utf8))
+            throw ExitCode.failure
+        }
+
+        // Tty enforcement: refuse to run interactively when stdin isn't a
+        // tty unless --force is passed. This is the load-bearing security
+        // gate Schneier called for during the round audit — a non-tty
+        // invocation might be a script bypassing the typed-string confirm.
+        let stdinIsTTY = isatty(fileno(stdin)) == 1
+        if !stdinIsTTY && !force {
+            FileHandle.standardError.write(Data("""
+                error: --repair-chain refuses non-tty invocations without --force.
+                       Run interactively, or pass --force to indicate you've reviewed
+                       the operation in a script.
+                """.utf8))
+            throw ExitCode.failure
+        }
+
+        // Three-phase prompt (Norman): explain, confirm typed string, show
+        // diff, confirm second typed string. The two typed-string asks are
+        // 'REPAIR' then '<table>' so muscle-memory y/N can't bypass them.
+        printRepairExplanation(table: table, fromRowid: fromRowid)
+
+        if !force {
+            print("Type 'REPAIR' to confirm the operation, or anything else to abort:")
+            print("> ", terminator: "")
+            let line1 = readLine() ?? ""
+            guard line1 == "REPAIR" else {
+                print("Aborted (input was not 'REPAIR').")
+                throw ExitCode.failure
+            }
+
+            print("Type '\(table)' to confirm the affected table, or anything else to abort:")
+            print("> ", terminator: "")
+            let line2 = readLine() ?? ""
+            guard line2 == table else {
+                print("Aborted (input was not '\(table)').")
+                throw ExitCode.failure
+            }
+        }
+
+        let outcome: ChainRepairer.RepairOutcome
+        do {
+            outcome = try SessionDatabase.shared.repairChain(
+                table: table,
+                fromRowid: fromRowid,
+                operatorNote: note,
+                force: force
+            )
+        } catch {
+            FileHandle.standardError.write(Data("error: \(error)\n".utf8))
+            throw ExitCode.failure
+        }
+
+        let priorTip = outcome.priorTipHash.map { String($0.prefix(16)) + "…" } ?? "<empty>"
+        print("""
+        Repair complete.
+          Table:        \(outcome.table)
+          From rowid:   \(outcome.fromRowid)
+          New anchor:   \(outcome.newAnchorId)
+          Prior tip:    \(priorTip)
+          Rows rebound: \(outcome.rowsRebound)
+        Run `senkani doctor --verify-chain` to confirm both segments verify.
+        """)
+    }
+
+    private func printRepairExplanation(table: String, fromRowid: Int64) {
+        print("""
+        Senkani Doctor — chain repair
+
+        You are about to OPEN A NEW AUDIT-CHAIN SEGMENT for the table:
+            \(table)
+        starting at rowid >= \(fromRowid).
+
+        What this does:
+          1. Inserts a new row in `chain_anchors` with reason=`repair-\(fromRowid)`.
+             The new anchor's `operator_note` records the prior chain's tip hash
+             so a third party can audit the cryptographic linkage.
+          2. Re-binds every row with id >= \(fromRowid) in `\(table)` to the new
+             anchor and CLEARS its prev_hash + entry_hash.
+          3. The next insert into `\(table)` starts a fresh chain under the new
+             anchor. Pre-repair rows continue to verify against the prior anchor;
+             the repair count surfaces in `senkani doctor --verify-chain`.
+
+        What this does NOT do:
+          - It does not delete the prior chain. Pre-repair rows verify
+            independently against the prior anchor's tip.
+          - It does not retroactively re-hash the rebound rows. They become
+            anchor-from-now under the new anchor.
+
+        This is an admin operation. After you confirm, the change is logged in
+        the new chain segment itself (the repair is auditable).
+        """)
+        if !force {
+            print("\nThis prompt requires TWO typed-string confirmations to proceed.\n")
+        } else {
+            print("\n--force is set — proceeding without typed-string confirms.\n")
+        }
+    }
+
+    // MARK: - Check 15: Audit chain integrity (Phase T.5)
+
+    private func checkAuditChain(_ results: inout Results) {
+        // T.5 round 3: verify all four tables. Surface a per-table line so
+        // the operator sees where a tamper happened, plus a summary line.
+        // T.5 round 4: total repair count comes from the central
+        // SessionDatabase API so the summary is consistent across CLI
+        // invocations even if a verification produced .noChain (no anchor
+        // start date) but repairs still exist.
+        let database = SessionDatabase.shared
+        let perTable = ChainVerifier.verifyAll(database)
+        let order = ["token_events", "validation_results", "sandboxed_results", "commands"]
+        var anyBroken = false
+        var earliestStart: Date?
+
+        for table in order {
+            guard let result = perTable[table] else { continue }
+            switch result {
+            case .ok(let startedAt, _):
+                if let s = startedAt {
+                    if let cur = earliestStart {
+                        if s < cur { earliestStart = s }
+                    } else {
+                        earliestStart = s
+                    }
+                }
+            case .brokenAt(_, let rowid, let expected, let actual):
+                printStatus(
+                    .fail,
+                    "chain integrity (\(table)): BROKEN at row \(rowid) — expected \(expected.prefix(16))…, got \(actual.prefix(16))…"
+                )
+                results.failed += 1
+                anyBroken = true
+            case .noChain:
+                // Per-table noChain is fine — it just means no rows yet.
+                continue
+            }
+        }
+
+        let totalRepairs = database.totalRepairCount()
+
+        guard !anyBroken else { return }
+
+        // Summary line — the canonical "chain integrity: OK since …" surface
+        // promised in `spec/architecture.md`.
+        let since: String
+        if let earliestStart {
+            let fmt = ISO8601DateFormatter()
+            fmt.formatOptions = [.withFullDate]
+            since = " since \(fmt.string(from: earliestStart))"
+        } else {
+            since = ""
+        }
+        if earliestStart == nil {
+            printStatus(.skip, "chain integrity: no chain anchors yet (fresh DB)")
+            results.skipped += 1
+        } else {
+            printStatus(
+                .pass,
+                "chain integrity: OK across token_events / validation_results / sandboxed_results / commands\(since) / \(totalRepairs) repairs"
+            )
+            results.passed += 1
+        }
+    }
+
+    // MARK: - Check 17: Trust flags (Phase U.4a)
+
+    /// Surface the rolling 30-day soft-flag count + confirmed FP/TP
+    /// totals. U.4a is non-blocking — the counter is informational
+    /// only. U.4b promotes the FP rate to a release gate once the
+    /// operator has labelled enough samples.
+    private func checkTrustFlags(_ results: inout Results) {
+        let stats = SessionDatabase.shared.trustFlagStatsLast30Days()
+        printStatus(.pass, "trust flags — \(stats.doctorLine)")
+        results.passed += 1
     }
 
     // MARK: - Check 1: Settings JSON
@@ -672,6 +905,81 @@ struct Doctor: ParsableCommand {
     private func formatMs(_ ms: Double) -> String {
         if ms < 10 { return String(format: "%.2fms", ms) }
         return String(format: "%.0fms", ms)
+    }
+
+    // MARK: - Release commitments (Phase V.14)
+
+    private func checkReleaseSLOs(_ results: inout Results) {
+        let history = ReleaseSLOHistory.shared
+        let evaluations = history.evaluateAll()
+
+        // Surface as one labelled block; aggregate verdict drives one
+        // pass/skip/fail counter so this check doesn't quadruple-count
+        // on the doctor summary line.
+        let allNoHistory = evaluations.allSatisfy { $0.verdict == .noHistory }
+        if allNoHistory {
+            printStatus(.skip,
+                "Release commitments: n/a — run tools/measure-slos.sh to populate "
+                + history.historyPath)
+            results.skipped += 1
+            return
+        }
+
+        let anyFailing = evaluations.contains { e in
+            e.verdict == .overBudget || e.verdict == .regression
+        }
+
+        if anyFailing {
+            printStatus(.fail, "Release commitments (Phase V.14):")
+            results.failed += 1
+        } else {
+            printStatus(.pass, "Release commitments (Phase V.14):")
+            results.passed += 1
+        }
+
+        for evaluation in evaluations {
+            print("    " + releaseSLOLine(evaluation))
+        }
+    }
+
+    private func releaseSLOLine(_ e: ReleaseSLOEvaluation) -> String {
+        let head = "  \(e.slo.rawValue) (\(e.slo.thresholdLabel))"
+        switch e.verdict {
+        case .noHistory:
+            return "\(head): n/a — no history yet"
+        case .missing:
+            let why = e.missingReason ?? "not captured"
+            return "\(head): n/a — \(why)"
+        case .ok:
+            return "\(head): \(formatReleaseValue(e.latest, unit: e.slo.unit))"
+                + baselineSuffix(e)
+        case .regression:
+            return "\(head): \(formatReleaseValue(e.latest, unit: e.slo.unit))"
+                + baselineSuffix(e) + " — REGRESSION (≥10% over baseline)"
+        case .overBudget:
+            return "\(head): \(formatReleaseValue(e.latest, unit: e.slo.unit))"
+                + baselineSuffix(e) + " — OVER BUDGET"
+        }
+    }
+
+    private func formatReleaseValue(_ v: Double?, unit: String) -> String {
+        guard let v else { return "n/a" }
+        if unit == "ms" {
+            if v < 10 { return String(format: "%.2f ms", v) }
+            return String(format: "%.0f ms", v)
+        }
+        return String(format: "%.1f %@", v, unit)
+    }
+
+    private func baselineSuffix(_ e: ReleaseSLOEvaluation) -> String {
+        guard let baseline = e.baseline, let pct = e.percentOverBaseline else {
+            return " (no baseline yet)"
+        }
+        let sign = pct >= 0 ? "+" : ""
+        return String(
+            format: " (baseline %@, %@%.1f%%)",
+            formatReleaseValue(baseline, unit: e.slo.unit), sign, pct
+        )
     }
 
     // MARK: - Output Helpers

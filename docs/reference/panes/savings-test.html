@@ -77,6 +77,8 @@
 
     <p class="lede">Fixture benchmark + live session replay + scenario simulator. Shows the fixture ceiling and the live multiplier side by side — the live number is the honest one.</p>
 
+    <h2>Live multiplier</h2>
+    <p>The live multiplier is computed by <code>SavingsTestRunner</code> (also driven by <code>senkani eval</code>) over the operator's most recent session window — default 7 days, clamped by the live-multiplier regression check that fails the eval when this number drops below baseline. The fixture ceiling reflects the published 80.37× peak from <code>senkani bench</code>; the live number is what the same filter / cache / secrets / indexer / terse stack actually delivered on real traffic on this machine. Both are surfaced because the gap between them is the most useful signal a Savings Test can give.</p>
 
     <h2>Keyboard</h2>
     <p>Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas).</p>

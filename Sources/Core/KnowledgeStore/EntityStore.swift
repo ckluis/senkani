@@ -37,6 +37,13 @@ final class EntityStore: @unchecked Sendable {
                     modified_at      REAL NOT NULL
                 );
             """)
+            // Phase V.5 round 1 — additive `authorship` column. Nullable
+            // by design: NULL = pre-V.5 row that has not yet been backfilled.
+            // The migration runner (v7) lands the same column on existing
+            // DBs; this guard keeps fresh-install schema in sync. Idempotent
+            // because `execSilent` swallows duplicate-column errors.
+            execSilent("ALTER TABLE knowledge_entities ADD COLUMN authorship TEXT;")
+            exec("CREATE INDEX IF NOT EXISTS idx_knowledge_entities_authorship ON knowledge_entities(authorship);")
 
             // FTS5 with porter stemmer — content= means FTS reads from knowledge_entities.
             // snippet() and highlight() read live content from the backing table.
@@ -79,8 +86,14 @@ final class EntityStore: @unchecked Sendable {
 
     // MARK: - Entity CRUD
 
+    /// Upsert a `KnowledgeEntity` with an **explicit** `AuthorshipTag`.
+    /// Phase V.5 round 1 — the tag parameter is non-optional so the
+    /// caller cannot silently inherit a previous row's authorship or
+    /// land a NULL through the write path. Callers that don't yet
+    /// know the tag pass `AuthorshipTracker.tagForUnknownProvenance()`
+    /// (returns `.unset`) so the prompt path (V.5b) can resolve it.
     @discardableResult
-    func upsertEntity(_ entity: KnowledgeEntity) -> Int64 {
+    func upsertEntity(_ entity: KnowledgeEntity, authorship: AuthorshipTag) -> Int64 {
         let now = Date().timeIntervalSince1970
         return parent.queue.sync {
             guard let db = parent.db else { return 0 }
@@ -88,8 +101,8 @@ final class EntityStore: @unchecked Sendable {
                 INSERT INTO knowledge_entities
                     (name, entity_type, source_path, markdown_path, content_hash, content,
                      last_enriched, mention_count, session_mentions, staleness_score,
-                     created_at, modified_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                     created_at, modified_at, authorship)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(name) DO UPDATE SET
                     entity_type      = excluded.entity_type,
                     source_path      = excluded.source_path,
@@ -100,7 +113,8 @@ final class EntityStore: @unchecked Sendable {
                     mention_count    = excluded.mention_count,
                     session_mentions = excluded.session_mentions,
                     staleness_score  = excluded.staleness_score,
-                    modified_at      = excluded.modified_at;
+                    modified_at      = excluded.modified_at,
+                    authorship       = excluded.authorship;
             """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
@@ -117,6 +131,7 @@ final class EntityStore: @unchecked Sendable {
             sqlite3_bind_double(stmt, 10, entity.stalenessScore)
             sqlite3_bind_double(stmt, 11, entity.createdAt.timeIntervalSince1970)
             sqlite3_bind_double(stmt, 12, now)
+            sqlite3_bind_text(stmt, 13, cstr(AuthorshipTracker.encode(authorship)), -1, nil)
             sqlite3_step(stmt)
 
             // last_insert_rowid is unreliable for UPSERT update path — query explicitly.
@@ -278,6 +293,69 @@ final class EntityStore: @unchecked Sendable {
         return min(1.0, delta / (7.0 * 86_400.0))
     }
 
+    // MARK: - Phase V.5c — bulk authorship backfill (legacy NULL only)
+
+    /// Count rows whose `authorship` column is **literally NULL** (not the
+    /// in-band `.unset` sentinel) and whose `created_at >= since`. This is
+    /// the dry-run preview surface for `senkani authorship backfill`.
+    /// Cavoukian: bulk operations are operator-triggered — the count comes
+    /// out, the operator decides, no implicit writes ever happen here.
+    func countNullAuthorship(since: Date) -> Int {
+        let cutoff = since.timeIntervalSince1970
+        return parent.queue.sync {
+            guard let db = parent.db else { return 0 }
+            var stmt: OpaquePointer?
+            let sql = """
+                SELECT COUNT(*) FROM knowledge_entities
+                 WHERE created_at >= ? AND authorship IS NULL;
+                """
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_double(stmt, 1, cutoff)
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+            return Int(sqlite3_column_int64(stmt, 0))
+        }
+    }
+
+    /// Bulk-tag legacy rows. Matches `created_at >= since AND authorship
+    /// IS NULL` only — never touches the in-band `.unset` sentinel (which
+    /// represents an explicit operator deferral) or any of the three
+    /// already-resolved tags. Idempotent: a second call with the same
+    /// args matches zero rows because the first pass flipped them off the
+    /// NULL predicate. Returns the number of rows written.
+    @discardableResult
+    func backfillNullAuthorship(since: Date, tag: AuthorshipTag) -> Int {
+        let cutoff = since.timeIntervalSince1970
+        let now = Date().timeIntervalSince1970
+        let raw = AuthorshipTracker.encode(tag)
+        return parent.queue.sync {
+            guard let db = parent.db else { return 0 }
+            guard sqlite3_exec(db, "BEGIN IMMEDIATE;", nil, nil, nil) == SQLITE_OK else { return 0 }
+            var committed = false
+            defer {
+                if !committed { sqlite3_exec(db, "ROLLBACK;", nil, nil, nil) }
+            }
+            var stmt: OpaquePointer?
+            let sql = """
+                UPDATE knowledge_entities
+                   SET authorship = ?, modified_at = ?
+                 WHERE created_at >= ? AND authorship IS NULL;
+                """
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (raw as NSString).utf8String, -1, nil)
+            sqlite3_bind_double(stmt, 2, now)
+            sqlite3_bind_double(stmt, 3, cutoff)
+            guard sqlite3_step(stmt) == SQLITE_DONE else { return 0 }
+            let changes = Int(sqlite3_changes(db))
+            if sqlite3_exec(db, "COMMIT;", nil, nil, nil) == SQLITE_OK {
+                committed = true
+                return changes
+            }
+            return 0
+        }
+    }
+
     // MARK: - FTS5 Search
 
     /// Full-text search across name and compiled understanding.
@@ -297,6 +375,7 @@ final class EntityStore: @unchecked Sendable {
                 SELECT ke.id, ke.name, ke.entity_type, ke.source_path, ke.markdown_path,
                        ke.content_hash, ke.content, ke.last_enriched, ke.mention_count,
                        ke.session_mentions, ke.staleness_score, ke.created_at, ke.modified_at,
+                       ke.authorship,
                        snippet(knowledge_fts, 1, '\u{AB}', '\u{BB}', '\u{2026}', 16) AS snip,
                        knowledge_fts.rank AS bm25_rank
                 FROM knowledge_fts
@@ -313,9 +392,12 @@ final class EntityStore: @unchecked Sendable {
 
             var out: [KnowledgeSearchResult] = []
             while sqlite3_step(stmt) == SQLITE_ROW {
-                let entity = rowToEntity(stmt)           // cols 0–12
-                let snip = colText(stmt, 13) ?? ""
-                let rank = sqlite3_column_double(stmt, 14)
+                // rowToEntity reads cols 0–13 (entity + authorship);
+                // snippet sits at 14, rank at 15. Phase V.5 round 1
+                // shifted the snippet/rank indices by one.
+                let entity = rowToEntity(stmt)
+                let snip = colText(stmt, 14) ?? ""
+                let rank = sqlite3_column_double(stmt, 15)
                 out.append(KnowledgeSearchResult(entity: entity, snippet: snip, bm25Rank: rank))
             }
             return out
@@ -327,11 +409,19 @@ final class EntityStore: @unchecked Sendable {
     private let entityCols = """
         id, name, entity_type, source_path, markdown_path, content_hash,
         content, last_enriched, mention_count, session_mentions,
-        staleness_score, created_at, modified_at
+        staleness_score, created_at, modified_at, authorship
     """
 
     private func rowToEntity(_ stmt: OpaquePointer?) -> KnowledgeEntity {
-        KnowledgeEntity(
+        // Phase V.5 round 1 — read the authorship column. NULL maps to
+        // `nil` (legacy / pre-migration row); a non-NULL string routes
+        // through `AuthorshipTracker.decode` for parse + sentinel-empty
+        // handling. An unknown rawValue (corrupt row) yields `nil` —
+        // round 1 chooses to surface that as "untagged" rather than
+        // crash, since the prompt path (V.5b) will heal it on next save.
+        let rawAuthorship = colText(stmt, 13)
+        let authorship: AuthorshipTag? = rawAuthorship.flatMap { AuthorshipTracker.decode($0) }
+        return KnowledgeEntity(
             id:                   sqlite3_column_int64(stmt, 0),
             name:                 String(cString: sqlite3_column_text(stmt, 1)),
             entityType:           String(cString: sqlite3_column_text(stmt, 2)),
@@ -346,7 +436,8 @@ final class EntityStore: @unchecked Sendable {
             sessionMentions:      Int(sqlite3_column_int64(stmt, 9)),
             stalenessScore:       sqlite3_column_double(stmt, 10),
             createdAt:            Date(timeIntervalSince1970: sqlite3_column_double(stmt, 11)),
-            modifiedAt:           Date(timeIntervalSince1970: sqlite3_column_double(stmt, 12))
+            modifiedAt:           Date(timeIntervalSince1970: sqlite3_column_double(stmt, 12)),
+            authorship:           authorship
         )
     }
 
@@ -372,6 +463,24 @@ final class EntityStore: @unchecked Sendable {
     private func exec(_ sql: String) {
         guard let db = parent.db else { return }
         rawExec(db, sql)
+    }
+
+    /// Run `sql` and swallow `duplicate column name` errors. Used for
+    /// idempotent ALTERs that re-run on every fresh-install setup
+    /// without breaking when migration v7 already landed the column.
+    /// All other errors print to stderr (same channel as `rawExec`).
+    private func execSilent(_ sql: String) {
+        guard let db = parent.db else { return }
+        var err: UnsafeMutablePointer<CChar>?
+        let rc = sqlite3_exec(db, sql, nil, nil, &err)
+        if rc == SQLITE_OK {
+            if let err { sqlite3_free(err) }
+            return
+        }
+        let msg = err.map { String(cString: $0) } ?? "unknown"
+        if let err { sqlite3_free(err) }
+        if msg.contains("duplicate column name") { return }
+        fputs("[KnowledgeStore] SQL error: \(msg)\n", stderr)
     }
 }
 

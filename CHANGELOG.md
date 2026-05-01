@@ -9,6 +9,46 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 1 — `SessionDatabase.deinit` deadlock fix (`bisect-sigtrap-source`)
+- Root cause for the deterministic `swiftpm-testing-helper` SIGTRAP
+  documented in `harness-chunk-test-safe`: a deinit-on-queue
+  deadlock in `SessionDatabase`.
+- `recordEvent(...)` schedules every counter bump as a
+  `queue.async { [weak self] in guard let self ... }` block. The
+  `guard let self` upgrades the captured weak reference to a strong
+  one *for the duration of the block*. When the test pattern was
+  `_ = SessionDatabase(path: ...)` (or any short-lived strong ref),
+  the recordEvent burst at init time queued 13 tasks each holding a
+  strong ref. As the LAST queued task's block exited, the
+  strong-drop triggered `deinit` on the queue thread itself —
+  inside the queue's serial slot. The historic
+  `deinit { queue.sync { sqlite3_close(db) } }` then deadlocked on
+  itself, dispatch's precondition checker tripped, and
+  swiftpm-testing-helper exited with `signal code 5` (SIGTRAP).
+- Bisect (round `bisect-sigtrap-source`) traced the regression to
+  commit `8e2a72e` (T.6a — ConfirmationGate). T.6a's only
+  contribution to the race was migration v11 — it pushed the
+  init-time recordEvent burst from 10 to 13 queued tasks, widening
+  the race window enough to make the SIGTRAP deterministic on
+  CI runners and on a clean local checkout. The bug existed
+  before T.6a as a flake; T.6a made it reproducible.
+- Fix: reentrancy guard in `SessionDatabase.deinit`. The queue now
+  carries a `DispatchSpecific` marker set at init time. `deinit`
+  reads the marker via `DispatchQueue.getSpecific(...)`. When the
+  marker is present, deinit was reached from the queue thread
+  itself — close the db directly, skip the `queue.sync`. When
+  absent (the normal off-queue path), the historical
+  "wait for queued work, then close" guarantee is preserved.
+- Validated: `tools/test-safe.sh --chunk session` 3/3 green at
+  ~3 s per run; full chunked harness 8/8 green in ~37 s wall time.
+  CI gate restored to green.
+- Follow-up filed (`sessiondb-deinit-regression-guard`): add a
+  unit test that drives `recordEvent` to full burst and then drops
+  the only strong ref while the queue is busy, asserting deinit
+  completes without deadlock. The repro is racy by construction
+  but the chunked harness will surface a regression within 3
+  retries.
+
 ### May 1 — Chunked test harness (`harness-chunk-test-safe`)
 - `tools/test-safe.sh` rewritten to run the suite in named chunks
   (parsers / learning / kb / pane / hook / session / onboarding /

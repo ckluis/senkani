@@ -40,6 +40,20 @@ public final class SessionDatabase: @unchecked Sendable {
     internal var db: OpaquePointer?
     internal let queue = DispatchQueue(label: "com.senkani.sessiondb", qos: .utility)
 
+    /// Specific marker the queue carries so `deinit` (and any future
+    /// reentrant caller) can detect whether it is *already* running on
+    /// `queue` and skip a `queue.sync` that would deadlock. The
+    /// previous `deinit { queue.sync { ... } }` racily SIGTRAPped under
+    /// the chunked test harness — when the last strong reference to
+    /// `self` was an async block executing ON `queue`, the strong-drop
+    /// at block end triggered `deinit` on the queue thread, and the
+    /// inner `queue.sync` deadlocked into a dispatch precondition fail.
+    /// Bisect: round `bisect-sigtrap-source` traced this back to T.6a
+    /// expanding the migration count from 10 → 13, lengthening the
+    /// async-recordEvent burst at init time and widening the race.
+    private static let queueKey = DispatchSpecificKey<Int>()
+    private static let queueMarker: Int = 0xC0_DE_BA_5E
+
     // Extracted stores. Each owns its tables end-to-end and shares the
     // parent's connection/queue.
     internal var commandStore: CommandStore!
@@ -57,6 +71,7 @@ public final class SessionDatabase: @unchecked Sendable {
     // MARK: - Init
 
     private init() {
+        queue.setSpecific(key: Self.queueKey, value: Self.queueMarker)
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -103,6 +118,7 @@ public final class SessionDatabase: @unchecked Sendable {
 
     /// Testable initializer — opens a DB at a custom path (use a temp file).
     public init(path: String) {
+        queue.setSpecific(key: Self.queueKey, value: Self.queueMarker)
         let dir = (path as NSString).deletingLastPathComponent
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
 
@@ -296,9 +312,27 @@ public final class SessionDatabase: @unchecked Sendable {
     }
 
     deinit {
-        // Ensure all queued work completes before closing.
-        queue.sync {
+        // Reentrancy guard. If `deinit` was triggered by the strong-
+        // ref drop at the END of an async block executing ON `queue`,
+        // we are *already* on the queue thread. Calling `queue.sync`
+        // from there deadlocks → dispatch precondition fail → SIGTRAP
+        // → swiftpm-testing-helper exits with `signal code 5`. The
+        // race is widened by long bursts of `recordEvent(...)` async
+        // tasks during `runMigrations` (round T.6a's migration v11
+        // pushed the burst from 10 to 13 entries — see
+        // `bisect-sigtrap-source`).
+        //
+        // Detect via DispatchSpecific: when the marker is present we
+        // are on `queue` already and can close the db directly.
+        // Otherwise the historical guarantee — "all queued work
+        // completes before close" — is preserved by `queue.sync`.
+        let onQueue = DispatchQueue.getSpecific(key: Self.queueKey) == Self.queueMarker
+        if onQueue {
             if let db = db { sqlite3_close(db) }
+        } else {
+            queue.sync {
+                if let db = db { sqlite3_close(db) }
+            }
         }
     }
 

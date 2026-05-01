@@ -12,6 +12,72 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### onboarding-p2-copy-fcsit-empty-states — FCSIT first-use disclosure + actionable empty states 2026-05-01
+
+Round 8 of the Luminary onboarding chain. Pure-Foundation deciders
+ship in `Sources/Core/FCSITDisclosure.swift` and
+`Sources/Core/EmptyStateGuidance.swift`; SwiftUI consumers
+(`PaneContainerView.featureButton`, the new `FCSITFirstUsePopover`,
+`AnalyticsView.chartPlaceholder`, `KnowledgeBaseView.emptyListState`,
+`ModelManagerView.emptyStateView`, `SprintReviewPane.emptyState`)
+are thin shells over them. 6 new tests pin the deciders + the
+SwiftUI wiring source-side. The behavioral / accessibility pieces
+need a real-machine pass:
+
+- [ ] **First-launch FCSIT popover fires once.** With the
+  `senkani.fcsit.firstUseDisclosureSeen.v1` defaults key cleared
+  (`defaults delete <bundle> senkani.fcsit.firstUseDisclosureSeen.v1`
+  or via a fresh `~/Library/Preferences/<bundle>.plist`), launch the
+  app, open any pane, and hover the FCSIT row in the header. The
+  320 pt popover should appear with the title "Five per-pane
+  optimizers" and one body line per letter (Filter / Cache / Secrets
+  / Indexer / Terse) plus a "Got it" button. The popover should NOT
+  appear before any hover or tap. Dismissing via the "Got it" button
+  (or `Return` / `Enter` since it carries `.defaultAction`) should
+  clear it; re-hovering must NOT re-show it.
+- [ ] **Tap-only path works (popover triggers on first tap too).**
+  In the same fresh-defaults state, do not hover — tap any FCSIT
+  letter directly. The toggle should flip AND the popover should
+  appear on the same tap so a touch-only user (Vision Pro) is not
+  stranded.
+- [ ] **Persistence across launches.** With the seen flag set,
+  quit and relaunch the app. The popover must NOT show on first
+  hover or tap of any FCSIT letter in any pane.
+- [ ] **VoiceOver names every FCSIT toggle.** With VoiceOver on,
+  navigate to the FCSIT row in a pane header. Each letter must
+  announce as "Filter, on / off" / "Cache, on / off" / "Secrets, on
+  / off" / "Indexer, on / off" / "Terse, on / off" plus the effect
+  string as the accessibility hint. Verify state-toggle round-trip:
+  flip Filter off, VoiceOver should read "Filter, off"; flip back,
+  "Filter, on".
+- [ ] **Keyboard focus reaches every FCSIT toggle.** Enable
+  Full-Keyboard-Access and tab through the pane header. Each FCSIT
+  letter should receive focus in order F → C → S → I → T with a
+  visible focus ring. `Space` or `Return` on a focused letter should
+  toggle it.
+- [ ] **Analytics empty state surfaces a concrete next action.**
+  Open Analytics on a fresh project with no events. The empty state
+  should end with "Launch a tracked session from the Welcome screen
+  — savings appear within seconds." (not just "Data will appear as
+  commands are intercepted"). Launching a tracked session and
+  running one tool call should populate the chart.
+- [ ] **Knowledge Base empty state surfaces a concrete next
+  action.** Open the Knowledge Base pane on a fresh project. The
+  empty state should end with "Run a tracked Claude session and ask
+  about the codebase — the first entities land here within one
+  session." (not just "Entities appear after Claude mentions
+  project components across sessions").
+- [ ] **Model Manager empty state surfaces a concrete next
+  action.** Open the Model Manager with no models installed. The
+  empty state should end with "Install Ollama, then run
+  `ollama pull qwen3:1.7b` — the model registers here
+  automatically."
+- [ ] **Sprint Review empty state surfaces a concrete next
+  action.** Open the Sprint Review pane on a project with no staged
+  proposals. The empty state should end with "Use Senkani for a few
+  sessions; the first staged proposal usually appears within 24
+  hours of the first sweep."
+
 ### onboarding-p1-first-value-layout — first-value layout 2026-05-01
 
 The first agent launch now assembles a witnessed layout instead of

@@ -828,7 +828,8 @@ struct AnalyticsView: View {
     // MARK: - Chart Placeholder
 
     private func chartPlaceholder(_ message: String) -> some View {
-        HStack {
+        let guidance = EmptyStateGuidance.entry(for: .analytics)
+        return HStack {
             Spacer()
             VStack(spacing: 6) {
                 Image(systemName: "chart.line.uptrend.xyaxis")
@@ -837,10 +838,18 @@ struct AnalyticsView: View {
                 Text(message)
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
+                Text(guidance.nextAction)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(SenkaniTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 2)
             }
             .padding(.vertical, 40)
             Spacer()
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text("\(guidance.headline). \(guidance.populatingEvent) \(guidance.nextAction)"))
     }
 
     // MARK: - Computed Data

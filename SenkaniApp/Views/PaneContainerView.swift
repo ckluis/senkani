@@ -12,6 +12,9 @@ struct PaneContainerView: View {
     @State private var showSettings = false
     @State private var showFeatureDrawer = false
     @State private var selectedFeature: String?
+    @State private var showFCSITFirstUse = false
+    @AppStorage(FCSITDisclosure.firstUseSeenDefaultsKey)
+    private var fcsitFirstUseSeen: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -249,6 +252,20 @@ struct PaneContainerView: View {
                 featureButton("I", key: "indexer", isOn: $pane.features.indexer, color: SenkaniTheme.toggleIndexer)
                 featureButton("T", key: "terse", isOn: $pane.features.terse, color: SenkaniTheme.toggleTerse)
             }
+            .onHover { hovering in
+                guard hovering,
+                      FCSITDisclosure.shouldShowFirstUse(seen: fcsitFirstUseSeen)
+                else { return }
+                showFCSITFirstUse = true
+            }
+            .popover(isPresented: $showFCSITFirstUse, arrowEdge: .bottom) {
+                FCSITFirstUsePopover(onDismiss: {
+                    fcsitFirstUseSeen = true
+                    showFCSITFirstUse = false
+                })
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(Text("Per-pane optimizers: Filter, Cache, Secrets, Indexer, Terse."))
 
             // Disclosure chevron for feature drawer
             Button {
@@ -416,7 +433,10 @@ struct PaneContainerView: View {
     /// Feature toggle that also selects the feature for the detail drawer.
     /// Tap toggles the feature. Option-click opens the detail drawer for that feature.
     private func featureButton(_ label: String, key: String, isOn: Binding<Bool>, color: Color) -> some View {
-        Text(label)
+        let entry = FCSITDisclosure.entry(forKey: key)
+        let helpText = entry.map { "\($0.name) — \($0.effect) Tap to toggle. Double-click for details." }
+            ?? "Tap to toggle \(key). Double-click for details."
+        return Text(label)
             .font(.system(size: 9, weight: .bold, design: .monospaced))
             .foregroundStyle(isOn.wrappedValue ? color : SenkaniTheme.textTertiary.opacity(0.5))
             .padding(.horizontal, 2)
@@ -432,6 +452,9 @@ struct PaneContainerView: View {
             .contentShape(Rectangle())
             .onTapGesture {
                 isOn.wrappedValue.toggle()
+                if FCSITDisclosure.shouldShowFirstUse(seen: fcsitFirstUseSeen) {
+                    showFCSITFirstUse = true
+                }
             }
             .simultaneousGesture(
                 TapGesture(count: 2).onEnded {
@@ -445,7 +468,10 @@ struct PaneContainerView: View {
                     }
                 }
             )
-            .help("Tap to toggle \(key). Double-click for details.")
+            .help(helpText)
+            .accessibilityLabel(Text(FCSITDisclosure.accessibilityLabel(forKey: key, isOn: isOn.wrappedValue)))
+            .accessibilityHint(Text(FCSITDisclosure.accessibilityHint(forKey: key)))
+            .accessibilityAddTraits(.isButton)
     }
 
     // MARK: - Helpers

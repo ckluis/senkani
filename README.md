@@ -34,6 +34,11 @@ for advanced users. The first agent launch auto-assembles a witnessed layout —
 **Agent Timeline** pane so optimization events appear as the user works, with
 no manual "open Agent Timeline" step. Subsequent launches add only the primary
 pane so re-clicking a starter never stacks duplicate timelines.
+The first time the user reaches a pane, the compact **F C S I T** letters in
+the pane header trigger a one-shot disclosure popover that names each
+optimizer (Filter, Cache, Secrets, Indexer, Terse) and what it does, and
+every early-use empty state — Analytics, Knowledge, Models, Sprint Review —
+ends in a concrete next action instead of a passive "data will appear" wall.
 See [docs/guides/first-session.html](docs/guides/first-session.html)
 for the walkthrough.
 

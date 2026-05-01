@@ -9,6 +9,44 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 1 — FCSIT first-use disclosure + actionable empty states (`onboarding-p2-copy-fcsit-empty-states`)
+- Round 8 of the Luminary onboarding chain. The first-run user no
+  longer faces five unexplained letters ("F C S I T") in the pane
+  header or four passive "data will appear when…" walls in the
+  early-use panes.
+- New `Sources/Core/FCSITDisclosure.swift` — pure decider holding
+  the canonical letter → name → effect → first-use-explanation
+  mapping for the five per-pane optimizers. SwiftUI consumers
+  (`PaneContainerView`'s `featureButton`, the new
+  `FCSITFirstUsePopover`) read from it so a copy edit ships in one
+  place. Versioned `UserDefaults` key
+  (`senkani.fcsit.firstUseDisclosureSeen.v1`) gates the popover so
+  returning users see it exactly once.
+- `PaneContainerView.featureButton` now publishes a state-aware
+  `accessibilityLabel` ("Filter, on" / "Filter, off"), an
+  `accessibilityHint` carrying the toggle's effect, and the
+  `.isButton` trait — VoiceOver announces a control instead of
+  reading the bare letter glyph. The first-use popover triggers on
+  hover OR on the first tap and lists every letter together so the
+  user only has to learn the alphabet once.
+- New `Sources/Core/EmptyStateGuidance.swift` — four canonical
+  triplets (headline / populating event / concrete next action) for
+  Analytics, Knowledge Base, Model Manager, and Sprint Review. Each
+  surface's empty state now ends in an imperative the user can act
+  on ("Launch a tracked session…", "Run a tracked Claude session
+  and ask about the codebase…", "Install Ollama, then run
+  `ollama pull qwen3:1.7b`…", "Use Senkani for a few sessions…")
+  rather than describing a wait.
+- Tests: 6 new in `OnboardingP2DisclosureTests` — pin the FCSIT
+  render order, the accessibility-label format, the first-use
+  predicate + versioned defaults key, completeness of every
+  `EmptyStateGuidance.Surface` case, and source-level wiring guards
+  on `PaneContainerView` plus the four empty-state views.
+- Manual-log entry queues a VoiceOver / keyboard-focus smoke pass
+  on the FCSIT row + a first-run popover dismissal check (popover
+  must show, "Got it" defaults-action key dismiss must clear the
+  flag, second hover must NOT re-show).
+
 ### May 1 — First-value layout assembled on first agent launch (`onboarding-p1-first-value-layout`)
 - Round 7 of the Luminary onboarding chain. After a project is
   chosen, picking **Ask Claude** or **Open a tracked shell** from

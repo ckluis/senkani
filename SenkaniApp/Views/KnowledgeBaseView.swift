@@ -215,19 +215,29 @@ struct KnowledgeBaseView: View {
     }
 
     private var emptyListState: some View {
-        VStack(spacing: 10) {
+        let guidance = EmptyStateGuidance.entry(for: .knowledgeBase)
+        return VStack(spacing: 10) {
             Image(systemName: "brain.head.profile")
                 .font(.system(size: 28))
                 .foregroundStyle(SenkaniTheme.textTertiary)
-            Text("No entities yet")
+            Text(guidance.headline)
                 .font(.subheadline)
                 .foregroundStyle(SenkaniTheme.textSecondary)
-            Text("Entities appear after Claude mentions\nproject components across sessions.")
+            Text(guidance.populatingEvent)
                 .font(.caption)
                 .foregroundStyle(SenkaniTheme.textTertiary)
                 .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+            Text(guidance.nextAction)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(SenkaniTheme.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+                .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text("\(guidance.headline). \(guidance.populatingEvent) \(guidance.nextAction)"))
     }
 
     // MARK: - Entity Detail

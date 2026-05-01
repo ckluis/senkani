@@ -122,25 +122,36 @@ struct ModelManagerView: View {
     // MARK: - Empty State
 
     private var emptyStateView: some View {
-        VStack(spacing: 16) {
+        let guidance = EmptyStateGuidance.entry(for: .modelManager)
+        return VStack(spacing: 16) {
             Spacer()
 
             Image(systemName: "brain")
                 .font(.system(size: 40))
                 .foregroundStyle(.tertiary)
 
-            Text("No Models Configured")
+            Text(guidance.headline)
                 .font(.system(size: 16, weight: .medium))
 
-            Text("ML models power senkani_embed (semantic search)\nand senkani_vision (image understanding).\nModels will appear here when available.")
+            Text(guidance.populatingEvent)
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .lineSpacing(2)
+                .padding(.horizontal, 24)
+
+            Text(guidance.nextAction)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+                .padding(.top, 4)
 
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text("\(guidance.headline). \(guidance.populatingEvent) \(guidance.nextAction)"))
     }
 
     // MARK: - Error Banner

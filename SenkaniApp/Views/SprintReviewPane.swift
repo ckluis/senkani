@@ -104,20 +104,29 @@ struct SprintReviewPane: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
+        let guidance = EmptyStateGuidance.entry(for: .sprintReview)
+        return VStack(spacing: 8) {
             Image(systemName: "checkmark.circle")
                 .font(.system(size: 28))
                 .foregroundStyle(SenkaniTheme.textTertiary)
-            Text("No staged proposals")
+            Text(guidance.headline)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(SenkaniTheme.textSecondary)
-            Text("Staged artifacts surface once the daily sweep promotes them from `recurring`.")
+            Text(guidance.populatingEvent)
                 .font(.system(size: 10))
                 .foregroundStyle(SenkaniTheme.textTertiary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
+            Text(guidance.nextAction)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(SenkaniTheme.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+                .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text("\(guidance.headline). \(guidance.populatingEvent) \(guidance.nextAction)"))
     }
 
     private func sectionHeader(_ kind: SprintReviewArtifactKind, count: Int) -> some View {

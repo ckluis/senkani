@@ -19,10 +19,11 @@
   --rule:      rgba(26,26,26,0.18);
   --rule-soft: rgba(26,26,26,0.10);
 
-  /* Accent */
-  --accent:    #ff6200;
+  /* Accent — only `--accent-lo` and `--accent-shade` are AA-safe on cream.
+     Use `--accent` only on dark surfaces (mockup chrome, terminal panes). */
+  --accent:    #ff6200;   /* 2.66:1 on --bg — non-text decoration only */
   --accent-hi: #ff8534;
-  --accent-lo: #a63d00;   /* 4.7:1 on --bg — links + inline code */
+  --accent-lo: #a63d00;   /* 4.7:1 on --bg — text on cream + button bg */
   --accent-shade: #c94a00;
   --secondary:     #ffd4a8;
   --secondary-ink: #6b2e00;   /* 6.3:1 on --secondary */
@@ -138,14 +139,14 @@ h1 {
   max-width: 16ch;
 }
 h1.page-title { font-size: clamp(32px, 4vw, 44px); max-width: none; margin-bottom: 16px; }
-h1 .accent { color: var(--accent); }
+h1 .accent { color: var(--accent-lo); }
 h2 {
   font-size: clamp(26px, 3vw, 34px);
   font-weight: 700;
   letter-spacing: -0.025em;
   margin: 0 0 16px 0;
 }
-h2 .accent { color: var(--accent); }
+h2 .accent { color: var(--accent-lo); }
 h3 { font-size: 22px; font-weight: 700; margin: 0 0 10px; }
 h4 { font-size: 18px; font-weight: 700; margin: 0 0 8px; }
 h5 { font-size: 16px; font-weight: 700; margin: 0 0 6px; letter-spacing: -0.01em; }
@@ -174,7 +175,7 @@ a {
   text-underline-offset: 3px;
   text-decoration-thickness: 1px;
 }
-a:hover { color: var(--accent); text-decoration-thickness: 2px; }
+a:hover { color: var(--accent-lo); text-decoration-thickness: 2px; }
 a.plain { text-decoration: none; color: inherit; }
 
 .overline {
@@ -204,7 +205,7 @@ a.plain { text-decoration: none; color: inherit; }
   background: var(--bg-elev);
   border: 1px solid var(--rule-soft);
 }
-.quadrant::before { content: "◆"; color: var(--accent); font-size: 9px; }
+.quadrant::before { content: "◆"; color: var(--accent-lo); font-size: 9px; }
 .quadrant.reference::before { color: var(--app-blue); }
 .quadrant.concept::before { color: var(--app-purple); }
 .quadrant.guide::before { color: var(--app-green); }
@@ -249,7 +250,7 @@ nav.topnav {
   text-decoration: none;
   white-space: nowrap;
 }
-.wordmark .accent { color: var(--accent); }
+.wordmark .accent { color: var(--accent-lo); }
 .wordmark small {
   font-family: var(--font-code);
   font-weight: 500;
@@ -399,8 +400,8 @@ nav.topnav {
   cursor: pointer;
   line-height: 1.2;
 }
-.btn-primary   { background: var(--accent); color: #fff; border-color: var(--accent); }
-.btn-primary:hover { background: var(--accent-hi); border-color: var(--accent-hi); }
+.btn-primary   { background: var(--accent-lo); color: #fff; border-color: var(--accent-lo); }
+.btn-primary:hover { background: var(--accent-shade); border-color: var(--accent-shade); }
 .btn-secondary { background: var(--secondary); color: var(--secondary-ink); border-color: var(--secondary); }
 .btn-secondary:hover { background: #ffc38a; }
 .btn-ghost     { background: transparent; color: var(--ink); border-color: var(--ink); }
@@ -485,7 +486,7 @@ nav.topnav {
   font-family: var(--font-code);
   flex-wrap: wrap;
 }
-.landing-hero .meta span::before { content: "→ "; color: var(--accent); }
+.landing-hero .meta span::before { content: "→ "; color: var(--accent-lo); }
 
 /* --- Positioning table ------------------------------------- */
 .positioning {
@@ -578,7 +579,7 @@ nav.topnav {
   font-size: 14px;
   font-weight: 700;
   letter-spacing: 1px;
-  color: var(--accent);
+  color: var(--accent-lo);
 }
 .teaser h3 { margin: 0; font-size: 24px; letter-spacing: -0.02em; }
 .teaser p { margin: 0; font-size: 16px; color: var(--ink-soft); flex: 1; line-height: 1.55; }
@@ -663,7 +664,7 @@ nav.topnav {
 }
 .gallery-grid a::after {
   content: "→";
-  color: var(--accent);
+  color: var(--accent-lo);
   font-weight: 700;
   margin-left: 12px;
 }
@@ -690,7 +691,7 @@ footer.site-foot {
   line-height: 0.9;
   margin-bottom: 12px;
 }
-.foot-wordmark .accent { color: var(--accent); }
+.foot-wordmark .accent { color: var(--accent-lo); }
 .foot-tagline { font-size: 15px; color: var(--ink-soft); max-width: 320px; line-height: 1.55; margin: 0; }
 .foot-col h4 {
   font-size: 13px;
@@ -844,9 +845,9 @@ footer.site-foot {
 .callout strong { color: var(--ink); }
 .callout-icon { font-size: 18px; flex-shrink: 0; line-height: 1.3; }
 .callout-info  { border-left-color: var(--app-blue); }
-.callout-info  .callout-icon { color: var(--app-blue); }
+.callout-info  .callout-icon { color: #155789; }  /* 5.8:1 on --bg-elev — was --app-blue (2.1:1, dark-bg only) */
 .callout-warn  { border-left-color: #b46e0a; }
-.callout-warn  .callout-icon { color: #b46e0a; }
+.callout-warn  .callout-icon { color: #7a4900; }  /* 5.4:1 on --bg-elev — was #b46e0a (3.25:1) */
 .callout-success { border-left-color: #0f5a2a; }
 .callout-success .callout-icon { color: #0f5a2a; }
 .callout-security { border-left-color: var(--accent-lo); }
@@ -951,11 +952,14 @@ footer.site-foot {
   letter-spacing: -0.03em;
   margin-bottom: 4px;
 }
-.fcsit-letter.f .ltr { color: var(--tog-f); }
-.fcsit-letter.c .ltr { color: var(--tog-c); }
-.fcsit-letter.s .ltr { color: var(--tog-s); }
-.fcsit-letter.i .ltr { color: var(--tog-i); }
-.fcsit-letter.t .ltr { color: var(--tog-t); }
+/* Letter cards live on cream — AA needs ≥3:1 for large text. The --tog-* tokens
+   are tuned for dark `.fcsit-btn` chrome; on cream they fall to ~2.5:1, so the
+   letter cards override with darker AA-compliant variants. */
+.fcsit-letter.f .ltr { color: #1d5e9a; }
+.fcsit-letter.c .ltr { color: #1a7c44; }
+.fcsit-letter.s .ltr { color: var(--accent-lo); }
+.fcsit-letter.i .ltr { color: #7c3da6; }
+.fcsit-letter.t .ltr { color: #8a6620; }
 .fcsit-letter .name {
   font-size: 15px;
   font-weight: 600;
@@ -1074,7 +1078,7 @@ footer.site-foot {
   line-height: 1;
   color: var(--ink);
 }
-.stat-card .num em { color: var(--accent); font-style: normal; }
+.stat-card .num em { color: var(--accent-lo); font-style: normal; }
 .stat-card .label {
   font-size: 14px;
   color: var(--ink-mute);
@@ -1153,6 +1157,15 @@ footer.site-foot {
 .product-band.dark .product-hero-cta { color: var(--accent-hi); }
 .product-band.dark .product-hero-cta:hover { color: #fff; }
 .product-band.dark .product-hero-bullets li { color: rgba(245,241,232,.85); }
+/* On dark, code + accent need a brighter orange — --accent-lo (cream variant) is too dark. */
+.product-band.dark code,
+.product-band.dark .product-hero h2 .accent,
+.stat-strip code {
+  color: var(--accent-hi);
+  background: rgba(255,133,52,.14);
+}
+.stat-strip a > code,
+.product-band.dark a > code { color: inherit; background: rgba(255,255,255,.06); }
 
 .product-hero {
   max-width: var(--content-max);
@@ -1172,7 +1185,7 @@ footer.site-foot {
   margin-bottom: 20px;
   max-width: 14ch;
 }
-.product-hero h2 .accent { color: var(--accent); }
+.product-hero h2 .accent { color: var(--accent-lo); /* AA on cream — was --accent */ }
 .product-hero p {
   font-size: 19px;
   line-height: 1.55;
@@ -1199,7 +1212,7 @@ footer.site-foot {
   position: absolute;
   left: 0;
   top: 2px;
-  color: var(--accent);
+  color: var(--accent-lo);
   font-size: 12px;
 }
 .product-hero-bullets li strong { color: var(--ink); font-weight: 600; }
@@ -1216,7 +1229,7 @@ footer.site-foot {
   padding-bottom: 2px;
   transition: color .15s, gap .15s;
 }
-.product-hero-cta:hover { color: var(--accent); gap: 12px; }
+.product-hero-cta:hover { color: var(--accent-shade); gap: 12px; }
 
 .product-hero-visual { min-width: 0; }
 .product-hero-visual .mockup { margin: 0; }
@@ -1287,7 +1300,7 @@ footer.site-foot {
   font-family: var(--font-code);
   font-weight: 700;
   font-size: 13px;
-  color: var(--accent);
+  color: var(--accent-lo);
   letter-spacing: 1px;
 }
 .viz-flow-step .viz-step-body { flex: 1; color: var(--ink-soft); }

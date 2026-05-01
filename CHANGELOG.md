@@ -9,6 +9,51 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 1 — Website AA harness + sitewide brand-color rebind (`website-rebuild-11c-a11y-tooling` + `website-rebuild-11d-perf-tooling` + `website-rebuild-11e-closing-audit`)
+- New on-demand harness at `tools/website-checks/` driven by three
+  Bash entry points under `scripts/`:
+  - `site-serve.sh` (Python static server against the repo root)
+  - `a11y-check.sh` (pa11y-ci HTML_CodeSniffer + axe-core 4.11 via
+    `@axe-core/puppeteer`, full sweep or 18-page sample)
+  - `perf-check.sh` (Lighthouse mid-tier mobile baseline — Moto G
+    Power, 4× CPU slowdown, 1638 Kbps / 150 ms RTT throttling).
+  All three drive Puppeteer's bundled Chrome for Testing, so they
+  do not depend on a system Chrome install (works around the macOS
+  26 Gatekeeper block on unsigned `--cask chromium`).
+- First sweep recorded **234 pa11y AA errors and 238 axe violations
+  across all 99 pages** — overwhelmingly one root cause: brand
+  orange `--accent` (`#ff6200`) used as text on cream `--bg`
+  (`#f5f1e8`), 2.66:1 vs the 4.5:1 normal-text ceiling. Plus four
+  local one-offs (`<img>` template artifacts on `panes.html` and
+  `senkani_web.html`, `aria-required-children` on
+  `what-is-senkani.html`, `scrollable-region-focusable` on
+  `senkani-kb.html`).
+- Sitewide rebind: every text use of `--accent` on cream / cream-elev
+  swapped to `--accent-lo` (`#a63d00`, 4.7:1) — wordmark, foot-wordmark,
+  page accents, hover states, button CTAs, gallery arrows, teaser nums,
+  stat-card emphasis. The bright `--accent` is now reserved for dark
+  surfaces (`.product-band.dark`, `.stat-strip`, mockup chrome,
+  terminal panes), where new dark-band overrides point code spans + the
+  `<span class="accent">` page-title accent at `--accent-hi`
+  (`#ff8534`, ~7:1 on `--ink`).
+- Callout-icon retunes: `.callout-info` icon `#5aa7e0 → #155789`
+  (5.8:1 on `--bg-elev`); `.callout-warn` icon `#b46e0a → #7a4900`
+  (5.4:1). FCSIT letter cards (`.fcsit-letter.{f,c,s,i,t} .ltr`)
+  pick AA-on-cream variants since the source `--tog-*` tokens are
+  tuned for the dark `.fcsit-btn` UI.
+- Local fixes: `<code>&lt;img&gt;</code>` escapes on the two
+  template-artifact pages; `tabindex="0"` + `role="group"` on the
+  long `senkani kb` `.ref-signature`; `role="region"` (was
+  `role="table"`) on the what-is-senkani positioning grid.
+- Verification sweep: **0 pa11y AA errors, 0 axe violations across
+  all 99 pages.** No `11f-page-rewrites` filings.
+- `spec/website_rebuild_audit_round11.md` grew an
+  `## Appendix · accessibility` section with the per-page rebind
+  table, an `## Appendix · performance` section with the per-page
+  Lighthouse score, and the per-luminary `## Closing verdicts`. The
+  website-rebuild-0 umbrella flips to DELIVERED on the back of the
+  closing verdicts.
+
 ### May 1 — Early-use milestones wired into the seven real triggers (`onboarding-p2-milestone-callsites`)
 - Follow-up to `onboarding-p2-early-use-milestones`. That round
   shipped the milestone model, store, and Welcome banner; this

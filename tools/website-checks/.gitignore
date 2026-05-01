@@ -1,0 +1,4 @@
+node_modules/
+results/
+all-urls.txt
+pa11y-ci.json

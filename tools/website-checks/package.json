@@ -1,0 +1,20 @@
+{
+  "name": "website-checks",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@axe-core/cli": "^4.11.3",
+    "@axe-core/puppeteer": "^4.11.3",
+    "lighthouse": "^13.2.0",
+    "pa11y-ci": "^4.1.0",
+    "puppeteer": "^24.42.0"
+  }
+}

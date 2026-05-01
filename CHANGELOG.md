@@ -9,6 +9,32 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### April 30 — Senkani Active proof strip on the active terminal pane (`onboarding-p0-active-proof-strip`)
+- Round 3 of the Luminary onboarding chain. The active terminal
+  pane now renders a five-chip proof strip at the top of its body —
+  PROJECT, MCP, HOOKS, TRACK, EVENTS — answering "is Senkani
+  actually working in this project and pane?" before the user has
+  to wait for the first intercepted command. Each chip carries a
+  literal label, a state token (`OK` / `··` / `!`) so meaning
+  doesn't depend on color alone, and a one-sentence detail
+  ("registered with Claude Code", "last 12s ago", etc.).
+- When any chip is missing, a banner row beneath the strip surfaces
+  the first missing component's runnable next action — `senkani
+  init`, `senkani mcp-install --global`, restart the pane, choose
+  a project from Welcome — instead of failing silently.
+- Derivation lives in `Sources/Core/ActivationStatus.swift` as a
+  pure function over `ActivationProbes`. Filesystem probes are
+  factored into `ActivationProbeIO` so the JSON checks against
+  `~/.claude/settings.json` and the project's `.claude/settings.json`
+  are independently testable. The strip itself is a SwiftUI
+  `TimelineView` ticking every second — relative-age labels stay
+  current without a global refresh loop.
+- Tests: 11 new tests in
+  `Tests/SenkaniTests/ActivationStatusTests.swift` covering ready,
+  missing-MCP, missing-hooks, no-session, no-events-yet, and
+  no-project derivation states, plus the relative-age formatter,
+  home-path shorthand, and the two filesystem probes.
+
 ### April 30 — Project-first Welcome flow + truthful terminal header (`onboarding-p0-project-first-welcome`)
 - Round 2 of the Luminary onboarding chain. The empty-workspace
   Welcome surface now opens with an explicit "Choose project folder"

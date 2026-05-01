@@ -312,48 +312,15 @@ struct PaneContainerView: View {
     private var paneBody: some View {
         switch pane.paneType {
         case .terminal:
-            TerminalViewRepresentable(
-                paneId: pane.id,
-                initialCommand: pane.initialCommand,
-                environment: pane.features.environmentVars
-                    .merging(PaneLaunchEnv.terminal(PaneLaunchEnv.Inputs(
-                        paneID: pane.id,
+            VStack(spacing: 0) {
+                if isActive {
+                    ActivationProofStrip(
                         projectRoot: pane.workingDirectory,
-                        metricsFilePath: pane.metricsFilePath,
-                        configFilePath: pane.configFilePath,
-                        workspaceSlug: paneDiaryWorkspaceSlug(pane.workingDirectory),
-                        paneSlug: pane.paneType.rawValue,
-                        filterOn: pane.features.filter,
-                        cacheOn: pane.features.cache,
-                        secretsOn: pane.features.secrets,
-                        indexerOn: pane.features.indexer,
-                        terseOn: pane.features.terse
-                    ))) { _, new in new }
-                    .merging([
-                        // Terminal-only extras (model routing) layered on top.
-                        "CLAUDE_MODEL":         resolvedClaudeModel,
-                        "SENKANI_MODEL_PRESET": pane.modelPreset.rawValue,
-                    ]) { _, new in new },
-                workingDirectory: pane.workingDirectory,
-                isActive: isActive,
-                fontSize: pane.fontSize,
-                fontFamily: pane.fontFamily,
-                onProcessExited: { code in
-                    pane.processState = .exited(code)
-                    pane.shellPid = nil
-                },
-                onProcessStarted: { pid in
-                    pane.shellPid = pid
-                    pane.processState = .running
-                },
-                onActivate: {
-                    workspace?.activePaneID = pane.id
+                        isSessionWatcherRunning: pane.claudeSessionWatcher != nil
+                    )
                 }
-            )
-            .onAppear {
-                pane.processState = .running
+                terminalRepresentable
             }
-            .onChange(of: pane.features) { _, _ in pane.features.persist(to: pane.configFilePath) }
         case .analytics:
             if let workspace = workspace {
                 AnalyticsView(workspace: workspace)
@@ -394,6 +361,54 @@ struct PaneContainerView: View {
             OllamaLauncherPane(pane: pane, isActive: isActive)
                 .onChange(of: pane.features) { _, _ in pane.features.persist(to: pane.configFilePath) }
         }
+    }
+
+    // MARK: - Terminal Representable
+
+    @ViewBuilder
+    private var terminalRepresentable: some View {
+        TerminalViewRepresentable(
+            paneId: pane.id,
+            initialCommand: pane.initialCommand,
+            environment: pane.features.environmentVars
+                .merging(PaneLaunchEnv.terminal(PaneLaunchEnv.Inputs(
+                    paneID: pane.id,
+                    projectRoot: pane.workingDirectory,
+                    metricsFilePath: pane.metricsFilePath,
+                    configFilePath: pane.configFilePath,
+                    workspaceSlug: paneDiaryWorkspaceSlug(pane.workingDirectory),
+                    paneSlug: pane.paneType.rawValue,
+                    filterOn: pane.features.filter,
+                    cacheOn: pane.features.cache,
+                    secretsOn: pane.features.secrets,
+                    indexerOn: pane.features.indexer,
+                    terseOn: pane.features.terse
+                ))) { _, new in new }
+                .merging([
+                    // Terminal-only extras (model routing) layered on top.
+                    "CLAUDE_MODEL":         resolvedClaudeModel,
+                    "SENKANI_MODEL_PRESET": pane.modelPreset.rawValue,
+                ]) { _, new in new },
+            workingDirectory: pane.workingDirectory,
+            isActive: isActive,
+            fontSize: pane.fontSize,
+            fontFamily: pane.fontFamily,
+            onProcessExited: { code in
+                pane.processState = .exited(code)
+                pane.shellPid = nil
+            },
+            onProcessStarted: { pid in
+                pane.shellPid = pid
+                pane.processState = .running
+            },
+            onActivate: {
+                workspace?.activePaneID = pane.id
+            }
+        )
+        .onAppear {
+            pane.processState = .running
+        }
+        .onChange(of: pane.features) { _, _ in pane.features.persist(to: pane.configFilePath) }
     }
 
     // MARK: - Feature Button

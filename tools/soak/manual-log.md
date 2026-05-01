@@ -12,6 +12,62 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### onboarding-p0-active-proof-strip — Senkani Active proof strip 2026-04-30
+
+The active terminal pane now renders a five-chip "Senkani Active"
+proof strip (PROJECT, MCP, HOOKS, TRACK, EVENTS) with literal labels,
+state tokens, and a banner-row next action when any chip is missing.
+The five derivation states are unit-tested but the chip rendering,
+the 1-second `TimelineView` tick cadence, and the runnable
+next-action recovery flows need eyes-on at least once on a real
+install. Tick each line as it's verified:
+
+- [ ] **Fully-ready state shows five OK chips and the `✓ Senkani
+  active` prefix.** With Senkani's MCP registered globally, hooks
+  installed in the project (`senkani init` already run), the
+  terminal pane's session watcher running, and at least one
+  Claude command intercepted, the strip should read
+  `✓ Senkani active  OK PROJECT ~/<repo>  OK MCP registered with
+  Claude Code  OK HOOKS project hooks active  OK TRACK watching
+  Claude session  OK EVENTS last <N>s ago` with a faint green
+  background tint. No banner row should appear.
+- [ ] **No-events-yet shows the `··` waiting token and an
+  actionable hint.** Open a brand-new terminal pane in a project
+  where Senkani has never logged a token event yet (e.g. a fresh
+  test repo). The EVENTS chip should read `·· EVENTS no events
+  yet`, the strip's prefix should drop the green check, and the
+  banner row should read `Run a Claude command — events should
+  land within a second.` Run a Claude command and confirm the
+  chip flips to `OK EVENTS last <N>s ago` within ~1 s of the
+  next tick.
+- [ ] **Missing project hooks surface the `senkani init`
+  recovery.** From a project where the global MCP is registered
+  but `.claude/settings.json` does not yet carry a senkani-hook
+  entry, the HOOKS chip should read `! HOOKS not installed in
+  this project` and the banner row should read `Run \`senkani
+  init\` in the project root to install hooks.` Run that command
+  in the pane, confirm the chip flips to `OK HOOKS …` within the
+  next tick.
+- [ ] **Missing MCP suggests a re-register.** Manually delete
+  the `mcpServers.senkani` key from `~/.claude/settings.json` and
+  confirm the MCP chip reads `! MCP not registered` with a banner
+  pointing at `senkani mcp-install --global` or "Restart
+  Senkani". Restart the app and confirm the chip recovers to
+  `OK MCP registered with Claude Code`.
+- [ ] **No project / no watcher cases are also reachable.**
+  Open a Plain Shell with no saved workspace (the "Open Plain
+  Shell in home folder" path) and confirm the strip reports
+  `! PROJECT no project selected` with the Welcome-screen
+  next-action; tick this off when the banner copy reads as
+  intended on a real run. Separately, force the session watcher
+  to be unset (e.g. by hot-reload during dev) and confirm the
+  TRACK chip reports `! TRACK session watcher not running` with
+  the "Restart the terminal pane" next-action.
+- [ ] **Strip respects active-pane-only mounting.** Open two
+  terminal panes side-by-side; only the focused pane should
+  render the strip. Click between panes and confirm the strip
+  follows the focus ring without flicker.
+
 ### onboarding-p0-project-first-welcome — Project-first Welcome flow 2026-04-30
 
 The empty-workspace Welcome surface now gates Claude / Ollama launches

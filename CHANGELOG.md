@@ -9,6 +9,25 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 1 — Deinit-on-queue regression guard (`sessiondb-deinit-regression-guard`)
+- New `Tests/SenkaniTests/SessionDatabaseDeinitTests.swift` exercises
+  the exact race that produced the `swiftpm-testing-helper` SIGTRAP
+  pre-fix: 30 parallel iterations of
+  `_ = SessionDatabase(path: ...)` followed by a 200 ms drain, so the
+  init-time recordEvent burst (13 queued tasks) is in flight when the
+  only strong reference drops. Surviving the loop without SIGTRAP is
+  the assertion.
+- The repro is racy by construction (no deterministic way to time the
+  strong-drop to land on the queue thread mid-burst), so the test
+  relies on volume + the chunked harness's 3-retry policy to surface a
+  regression. Confirmed to fire: locally reverting the
+  `DispatchSpecific` guard in `SessionDatabase.deinit` and re-running
+  the test ≥10 times reproduces the SIGTRAP — that revert + retest
+  loop is queued in `tools/soak/manual-log.md` for periodic CI-floor
+  verification.
+- `tools/test-safe.sh --chunk session` 242 → 243 tests, all green at
+  ~12 s wall time on a single attempt (no retries needed).
+
 ### May 1 — `SessionDatabase.deinit` deadlock fix (`bisect-sigtrap-source`)
 - Root cause for the deterministic `swiftpm-testing-helper` SIGTRAP
   documented in `harness-chunk-test-safe`: a deinit-on-queue
@@ -48,6 +67,22 @@ dated heading at release time._
   completes without deadlock. The repro is racy by construction
   but the chunked harness will surface a regression within 3
   retries.
+
+### May 1 — `SessionDatabase` deinit reentrancy regression test (`sessiondb-deinit-regression-guard`)
+- `Tests/SenkaniTests/SessionDatabaseDeinitTests.swift` added:
+  one `@Test` that runs 30 parallel allocate-and-drop iterations
+  via `withTaskGroup`. Each `_ = SessionDatabase(path: ...)` exits
+  scope while the init-time `recordEvent` burst is still queued.
+  Surviving the loop without a SIGTRAP is the assertion.
+- Pre-fix surfacing: revert the `DispatchSpecific` reentrancy
+  guard and the test process exits with `signal code 5` (SIGTRAP)
+  once the race lands. Post-fix: completes in ~0.3 s per run.
+- Lives in the `session` chunk (matched by the `SessionDatabase`
+  prefix in `tools/test-safe.sh`); the chunked harness's 3-retry
+  policy catches a future regression even at low per-iteration
+  hit-rate.
+- Manual revert-to-verify left to operator (acceptance criterion
+  #2 of the round); see `tools/soak/manual-log.md`.
 
 ### May 1 — Chunked test harness (`harness-chunk-test-safe`)
 - `tools/test-safe.sh` rewritten to run the suite in named chunks

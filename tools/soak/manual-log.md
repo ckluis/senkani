@@ -12,6 +12,42 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### sessiondb-deinit-regression-guard — Periodic revert-and-verify the guard 2026-05-01
+
+Round shipped `Tests/SenkaniTests/SessionDatabaseDeinitTests.swift`, a
+30-iteration parallel test that exercises the deinit-on-queue race
+fixed in `bisect-sigtrap-source`. The repro is racy by construction —
+unit tests can't deterministically time the strong-drop to land on the
+queue thread mid-burst — so the periodic check that the test still
+*catches* the regression class needs a manual revert-and-verify cycle.
+Run this at least once per release candidate, and after any
+`SessionDatabase` deinit-path edit:
+
+- [ ] **Revert the reentrancy guard.** In a scratch branch, undo the
+  `DispatchSpecific` marker logic in `SessionDatabase.deinit` so it
+  becomes the historic `deinit { queue.sync { sqlite3_close(db) } }`
+  again. Build is expected to compile; the regression is at runtime,
+  not at the type level.
+- [ ] **Run the deinit test ≥10 times in a row.**
+
+      for i in $(seq 1 10); do \
+        swift test --filter SessionDatabaseDeinitTests || break; \
+      done
+
+  Expected: at least one of the ten runs trips
+  `swiftpm-testing-helper signal code 5` (SIGTRAP) — the test correctly
+  surfaces the regression. If all ten runs pass with the guard
+  reverted, the test is no longer effective and needs a wider race
+  window (more iterations or a tighter drain) before the next release.
+- [ ] **Restore the guard + reconfirm green.** `git checkout` the
+  reentrancy guard back, run `tools/test-safe.sh --chunk session` once,
+  expect green on first attempt.
+
+Why manual: the test depends on macOS dispatch's preconditioning
+behavior, which is OS-version-sensitive. Running on the operator's
+real machine — and on whatever macOS the release target is supposed to
+ship against — is the only way to know the test is still load-bearing.
+
 ### onboarding-p2-early-use-milestones — Local-only early-use milestones 2026-05-01
 
 Round 9 of the Luminary onboarding chain. Pure-Foundation model + store +

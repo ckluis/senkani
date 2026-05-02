@@ -9,6 +9,25 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 2 — `ClaudeSessionWatcher` cleanup item closed after pre-audit re-verification (`cleanup-3-claudesessionwatcher-hardcodes-model-pri`)
+- `SenkaniApp/Services/ClaudeSessionWatcher.swift:190` keeps using
+  `ModelPricing.find(model ?? "sonnet")` — pricing source-of-truth
+  centralisation from 2026-04-18 is durable, no constants leaked back
+  in. The 2026-04-24 `print("🔵 / 💾")` noise removal is also durable;
+  diagnostics still flow through `Logger.log(...)` with `path:`
+  redaction.
+- No code change this round. The remaining "future refactor" — swap
+  the fsevents-driven watcher for the pure
+  `Sources/Core/ClaudeSessionReader.swift` (poll-based, cursor-
+  persisted, unit-tested) — is a design call (push vs poll, per-pane
+  vs global timer) that exceeds the cleanup envelope and is left for
+  a future phase item if pursued. Both paths already converge on the
+  same `recordTokenEvent` write so swapping later does not require
+  data-model changes.
+- Roster: Torvalds / Evans / Kleppmann all PASS, no red flags. Item
+  moved from `spec/autonomous/backlog/` to
+  `spec/autonomous/completed/2026/2026-05-02-cleanup-3-…`.
+
 ### May 1 — Direct unit tests for `lastExecResult` + `complianceRate` cross-store joins (`cleanup-19-sessiondatabase-store-coverage-gaps`)
 - `Tests/SenkaniTests/SessionDatabaseCrossStoreTests.swift` adds 7 focused
   tests against the two `SessionDatabase` cross-store composition methods

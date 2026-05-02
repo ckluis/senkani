@@ -9,6 +9,38 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 2 — `UninstallArtifactScanner` extended with `webContentRuleLists` (8th category)
+- The 2026-05-02 `release-v0-3-0-uninstall-pass` walk's broad orphan
+  sweep surfaced senkani-prefixed `WKContentRuleList` files surviving
+  a full `senkani uninstall --yes` under
+  `~/Library/WebKit/<bundle>/ContentRuleLists/`. The container dir
+  is macOS-managed but the rule list itself is Senkani-defined
+  data — compiled from `WebContentBlocklist.rulesJSON` (F2 SSRF
+  subresource filter) via `WKContentRuleListStore`. The scanner now
+  walks every `~/Library/WebKit/<bundle>/ContentRuleLists/` subdir
+  and removes files matching `ContentRuleList-senkani*`. Real-machine
+  evidence shows the file lands under three bundles: the main
+  `SenkaniApp`, `swiftpm-testing-helper`, and `com.apple.dt.xctest.tool`
+  (test-runner bundles compile the rule when integration tests run).
+- Pre-audit ruled the other two 2026-05-02-walk candidates
+  out-of-scope. `~/.claude/hooks/senkani-hook.sh` is operator
+  tooling (gstack), NOT senkani-written — senkani's hook lives at
+  `~/.senkani/bin/senkani-hook` (already covered by category-3
+  `hookBinary`). `~/.claude/skills/senkani-autonomous` is operator-
+  installed — only a doc-comment reference exists in
+  `Sources/Core/PromptArtifactRegressionGate.swift`. Scanner header
+  comment now documents the in-scope/out-of-scope reasoning so
+  future audits see the decision trail.
+- Tests: 2 new in `Tests/SenkaniTests/UninstallSmokeTests.swift` —
+  `discoveryFindsWebContentRuleListsAcrossAllBundles` (seeds three
+  bundle dirs + an unrelated rule list, asserts removal preserves
+  the unrelated file) and `scannerIgnoresNonSenkaniContentRuleLists`.
+  The pre-existing all-categories test renamed
+  `…SevenCategoriesWhenFullySeeded` → `…EightCategoriesWhenFullySeeded`
+  with seeders extended to cover the new category. Suite runs
+  9 tests in <50 ms. Source: `uninstall-scanner-audit-claude-global-paths`
+  backlog item.
+
 ### May 2 — Groomed Cowork-runnable test plan for `release-v0-3-0-uninstall-pass` (no code shipped)
 - The autonomous loop ran in **groom mode** against
   `release-v0-3-0-uninstall-pass`, which had been parked as

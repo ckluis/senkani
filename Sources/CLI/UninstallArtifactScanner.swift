@@ -5,10 +5,29 @@ import Core
 /// discovery logic can be exercised against a fixture HOME + appSupport dir.
 /// `UninstallCommand` constructs this with real paths (`NSHomeDirectory()` +
 /// `~/Library/Application Support/Senkani`); tests seed a tmp dir and pass it
-/// in. The seven categories mirror the `senkani uninstall` manual contract
-/// documented in `cleanup.md` #15.
+/// in. The eight categories mirror the `senkani uninstall` manual contract
+/// originally documented in `cleanup.md` #15.
+///
+/// Category-8 (`webContentRuleLists`) was added 2026-05-02 after the
+/// `release-v0-3-0-uninstall-pass` walk's broad orphan sweep
+/// (`uninstall-scanner-audit-claude-global-paths` backlog item) surfaced
+/// senkani-prefixed `WKContentRuleList` files surviving a full `--yes`
+/// uninstall under `~/Library/WebKit/<bundle>/ContentRuleLists/`. The
+/// rule list itself is Senkani-defined data (compiled from
+/// `WebContentBlocklist.rulesJSON` via `WKContentRuleListStore`), even
+/// though the parent directory is macOS-managed.
+///
+/// Out-of-scope (by design — same 2026-05-02 audit):
+/// - `~/Library/Caches/{dev.senkani,SenkaniApp}` — macOS-managed.
+/// - `~/Library/HTTPStorages/{SenkaniApp,senkani-mcp}` — macOS-managed.
+/// - `~/Library/Preferences/SenkaniApp.plist` — NSUserDefaults.
+/// - `~/Library/Application Support/CrashReporter/{senkani-mcp,SenkaniApp}_*.plist` — system-managed.
+/// - `~/.claude/hooks/senkani-hook.sh`, `~/.claude/skills/senkani-autonomous` —
+///   NOT senkani-written; sourced from operator tooling (e.g. gstack)
+///   or Claude Code itself. Senkani's hook lives at
+///   `~/.senkani/bin/senkani-hook` (category-3, `hookBinary`).
 struct UninstallArtifactScanner {
-    /// The seven artifact categories `senkani uninstall` can remove. The
+    /// The eight artifact categories `senkani uninstall` can remove. The
     /// string value is a stable identifier for assertions; user-facing text
     /// lives in `Artifact.description`.
     enum Category: String, CaseIterable, Sendable {
@@ -19,6 +38,7 @@ struct UninstallArtifactScanner {
         case sessionDatabase
         case launchdPlists
         case perProjectSenkaniDirs
+        case webContentRuleLists
     }
 
     struct Artifact {
@@ -46,6 +66,7 @@ struct UninstallArtifactScanner {
     var runtimeDir: String { homeDir + "/.senkani" }
     var launchAgentsDir: String { homeDir + "/Library/LaunchAgents" }
     var workspacePath: String { homeDir + "/.senkani/workspace.json" }
+    var webKitDir: String { homeDir + "/Library/WebKit" }
 
     func scan() -> [Artifact] {
         var items: [Artifact] = []
@@ -192,6 +213,40 @@ struct UninstallArtifactScanner {
                     remove: {
                         for dir in senkaniDirs {
                             try? fm.removeItem(atPath: dir)
+                        }
+                    }
+                ))
+            }
+        }
+
+        // 8. WebKit content rule lists — `WebContentBlocklist.compile()` writes
+        // `ContentRuleList-senkani.web.subresource-blocklist.v<N>` under
+        // `~/Library/WebKit/<bundle>/ContentRuleLists/`. The compile call is
+        // made by every senkani-using process that uses WebKit (the main
+        // SenkaniApp bundle, plus `swiftpm-testing-helper` /
+        // `com.apple.dt.xctest.tool` when integration tests run), so the
+        // file lands under multiple bundle dirs. Walk every WebKit subdir's
+        // ContentRuleLists folder and collect senkani-prefixed files.
+        let webKit = webKitDir
+        if fm.fileExists(atPath: webKit),
+           let bundles = try? fm.contentsOfDirectory(atPath: webKit) {
+            var ruleLists: [String] = []
+            for bundle in bundles {
+                let listsDir = webKit + "/" + bundle + "/ContentRuleLists"
+                guard let files = try? fm.contentsOfDirectory(atPath: listsDir) else { continue }
+                for file in files where file.hasPrefix("ContentRuleList-senkani") {
+                    ruleLists.append(listsDir + "/" + file)
+                }
+            }
+            if !ruleLists.isEmpty {
+                let paths = ruleLists  // capture for the closure
+                items.append(Artifact(
+                    category: .webContentRuleLists,
+                    icon: "\u{1F310}",
+                    description: "\(ruleLists.count) WebKit content rule list(s) under ~/Library/WebKit/",
+                    remove: {
+                        for path in paths {
+                            try? fm.removeItem(atPath: path)
                         }
                     }
                 ))

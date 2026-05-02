@@ -9,6 +9,56 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 2 — Groomed v2 amendments to the `release-v0-3-0-uninstall-pass` Cowork-runnable test plan (no code shipped)
+- The autonomous loop ran in **groom mode** against
+  `release-v0-3-0-uninstall-pass-v2-plan-amendments`, which had been
+  parked as `status: manual` + `groomable: true` since 2026-05-02
+  (filed when the v1 walk surfaced three runner / test-plan defects
+  that prevented strict-literal closure on A1, A3, A5).
+- The body was rewritten from the original Scope/Acceptance/Notes
+  shape into a deterministic Cowork-runnable plan that mirrors the
+  v1 plan's 8-step / 6-acceptance structure, but folds in the three
+  surgical fixes: (A1) Setup splits the sweep helper into
+  `sweep_targets()` (race-free, target-only, diff'd at Step 1) and
+  `sweep_broad()` (exploratory, NOT diff'd, used at Step 8 only),
+  eliminating the v1 `find $HOME -maxdepth 6` race window. (A3)
+  Step 3 splits into Step 3a (foreground `open -a "$RUNNER_APP"`
+  of the bundled `tools/soak/runner/SenkaniApp.app` with mandatory
+  pre-seed verification probes + screenshot) and Step 3b (the
+  actual `--yes` wipe with a `≥3 items removed` count assertion to
+  catch silent pre-seed failures). (A5) Step 7 iterates
+  `~/.senkani/workspace.json` projects and passes if ANY project's
+  `<path>/.claude/settings.json` contains a senkani hook with
+  mtime ≥ `TEST_START_EPOCH` — proving observable re-registration,
+  not stale residual.
+- Two Luminary-folded amendments beyond the operator's three-defect
+  brief: (Grace) added a `runner-app-fresh` pre-condition that
+  fails the test when the bundled `.app` mtime is older than the
+  newest `SenkaniApp/*.swift` source change (catches "testing
+  yesterday's code" on a stale runner bundle); documented the
+  Gatekeeper-on-first-launch pattern under `## Cowork hints`
+  Step-3a entry (bundle is `Signature=adhoc` per `codesign -dvv`,
+  so first launch needs operator hands). (Swyx) Step 7's mtime
+  constraint requires re-registration to be observable during this
+  test run — without it, a residual hook from a prior run could
+  spuriously pass.
+- Status flipped `manual` → `manual_ready`; the file stays in
+  `spec/autonomous/backlog/` until the operator (or Cowork in
+  Claude Desktop) executes the plan, flips status to `done`, and
+  the next loop's close-mode sweep mv's it to `completed/2026/`.
+- Doc-sync: a Cowork-runnable pointer was added to the top of
+  `tools/soak/manual-log.md` under the existing `## Cowork-runnable
+  test plans (groomed; ready to execute)` section. The v1 entry was
+  preserved (with a `Status note 2026-05-02` annotation describing
+  why its close-sweep is currently blocked) so operators have a
+  side-by-side view of v1's defects vs. v2's fixes.
+- No code change. No tests added. The 9 synthetic
+  `UninstallSmokeTests.swift` `@Test` functions remain the
+  fixture-HOME regression surface; this round closes the v1 walk's
+  test-plan ergonomics gaps so the next v0.x pass (v0.3.0 re-walk
+  OR v0.4.0 first walk — operator decision before running) can
+  close strict-literal green on all six A-bullets.
+
 ### May 2 — `UninstallArtifactScanner` extended with `webContentRuleLists` (8th category)
 - The 2026-05-02 `release-v0-3-0-uninstall-pass` walk's broad orphan
   sweep surfaced senkani-prefixed `WKContentRuleList` files surviving

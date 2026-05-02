@@ -9,6 +9,27 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 1 — Direct unit tests for `lastExecResult` + `complianceRate` cross-store joins (`cleanup-19-sessiondatabase-store-coverage-gaps`)
+- `Tests/SenkaniTests/SessionDatabaseCrossStoreTests.swift` adds 7 focused
+  tests against the two `SessionDatabase` cross-store composition methods
+  that previously had no direct coverage — they were exercised only
+  indirectly through MCP/hook flows.
+- `lastExecResult` (4 tests): full-tuple happy path, `project_root`
+  isolation across two roots with the same command string, nil return
+  when no exec matches, and the preview-half-misses case (token_events
+  has the row, commands does not → returns timestamp with nil preview).
+  This pins the `(token_events × commands)` join contract that
+  `HookRouter` depends on for command replay.
+- `complianceRate` (3 tests): the `(source = 'mcp' OR source = 'hook')`
+  numerator filter against a non-senkani `claude` source, project
+  isolation across two roots (1.0 vs 0.0), and the empty-data nil
+  sentinel.
+- I4 in `Sources/Core/Stores/INVARIANTS.md` claimed `project_root` is
+  applied uniformly to every cross-store read; two methods previously
+  had no test that proved the claim. This round closes that gap so the
+  next store-extraction round (KnowledgeStore or LearnedRulesStore) can
+  trust the same invariant.
+
 ### May 1 — Pure-hex length-band closes the 66-char hex-blob recall gap (`cleanup-18c-obfuscated-pure-hex`)
 - `EntropyScanner.scan` short-circuits to `HIGH_ENTROPY` for pure-hex
   tokens of length ≥ 40 chars (`isLongHexBlob`). Pure hex peaks at

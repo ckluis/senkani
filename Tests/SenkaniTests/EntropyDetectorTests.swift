@@ -121,6 +121,16 @@ struct EntropyScannerFalsePositiveTests {
         #expect(result.patterns.isEmpty, "MD5 digest (32 hex) must not be redacted")
         #expect(result.redacted == input)
     }
+
+    @Test func sha512DigestNotRedacted() {
+        // Exactly 128 all-hex chars — excluded by exact-128-hex rule (cleanup-18c).
+        // Without the exclusion, the long-hex-blob short-circuit would flag it.
+        let sha512 = "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"
+        let input = "sha512 checksum: \(sha512)"
+        let result = EntropyScanner.scan(input)
+        #expect(result.patterns.isEmpty, "SHA-512 digest (128 hex) must not be redacted")
+        #expect(result.redacted == input)
+    }
 }
 
 // MARK: - Suite 3: Entropy Calibration
@@ -142,6 +152,38 @@ struct EntropyScannerCalibrationTests {
         let h = EntropyScanner.shannonEntropy(token)
         #expect(h >= EntropyScanner.entropyThreshold,
             "Random key entropy \(h) should meet threshold \(EntropyScanner.entropyThreshold)")
+    }
+
+    @Test func pureHexBlobBelowEntropyButCaughtByLengthBand() {
+        // 66-char pure hex — entropy peaks at log2(16) = 4.0, below the 4.5
+        // floor. The pure-hex length-band short-circuit (cleanup-18c) catches
+        // it without lowering the entropy threshold.
+        let token = "6664feedabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123"
+        let h = EntropyScanner.shannonEntropy(token)
+        #expect(h < EntropyScanner.entropyThreshold,
+            "Pure-hex entropy \(h) should sit below threshold \(EntropyScanner.entropyThreshold)")
+        #expect(EntropyScanner.isLongHexBlob(token),
+            "66-char pure hex should match the long-hex-blob short-circuit")
+        let input = "HEX_SECRET=\(token)"
+        let result = EntropyScanner.scan(input)
+        #expect(result.patterns.contains("HIGH_ENTROPY"),
+            "Pure-hex blob should be redacted via the length-band short-circuit")
+        #expect(!result.redacted.contains(token))
+    }
+
+    @Test func pureHexBlobAtKnownDigestLengthsExcluded() {
+        // 32, 40, 64, 128 hex are well-known digest sizes (MD5, SHA-1, SHA-256,
+        // SHA-512). The long-hex-blob rule must not fire on these — `isExcluded`
+        // filters them upstream.
+        let md5    = String(repeating: "ab", count: 16)   // 32
+        let sha1   = String(repeating: "ab", count: 20)   // 40
+        let sha256 = String(repeating: "ab", count: 32)   // 64
+        let sha512 = String(repeating: "ab", count: 64)   // 128
+        for digest in [md5, sha1, sha256, sha512] {
+            let result = EntropyScanner.scan("digest: \(digest)")
+            #expect(result.patterns.isEmpty,
+                "Hex digest of length \(digest.count) must not be redacted")
+        }
     }
 }
 

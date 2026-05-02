@@ -9,6 +9,39 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 1 — Pure-hex length-band closes the 66-char hex-blob recall gap (`cleanup-18c-obfuscated-pure-hex`)
+- `EntropyScanner.scan` short-circuits to `HIGH_ENTROPY` for pure-hex
+  tokens of length ≥ 40 chars (`isLongHexBlob`). Pure hex peaks at
+  log₂(16) = 4.0 bits/char and would otherwise sit just below the 4.5
+  entropy floor — credential-shaped (HMAC outputs, hex-encoded random
+  keys) but missed by entropy alone. Known digest sizes (32, 40, 64, 128
+  hex) are filtered upstream by `isExcluded` so the rule only fires on
+  the unambiguous "long hex blob that isn't a digest" case.
+- `isExcluded` digest list extended to include SHA-512 (128 hex)
+  alongside MD5 (32) and SHA-256 (64); git-SHA (40) keeps its dedicated
+  branch. Lockfile `^sha\d+-|^md5-` exclusion still fires upstream of
+  the length check, so `"integrity": "sha512-…"` lines remain shielded.
+- `EntropyScanner.extractTokens` now splits on
+  `.whitespacesAndNewlines` (was `.whitespaces`) so a value followed by
+  a trailing newline (`SECRET=value\n`) extracts as a clean token. The
+  trailing newline previously survived the split and broke strict
+  charset checks like the new pure-hex length-band rule.
+- Adversarial corpus recalibrated: aggregate goes from **1.000 / 0.936**
+  (44 TP, 3 FN, 54 fixtures) to **1.000 / 0.957** (45 TP, 2 FN, 55
+  fixtures), zero false positives held. `obfuscated` family floor moves
+  from 0.500 to 1.000. Remaining 2 FN are by-design sub-threshold gaps
+  in `short_token` (Slack <10ch body, Stripe <24ch).
+- Fixture `obfuscated-2.txt` now flags `HIGH_ENTROPY` (was
+  `documented_gap: true`). Synthetic body retightened to truly pure hex
+  (`fake` → `feed`) so it exercises the new rule.
+- New FP-guard `fp-clean-8.txt` covers a 128-hex SHA-512 digest in
+  build output. Verifies the new length-band rule doesn't redact
+  well-known long digests.
+- Doc sync: `spec/testing.md` Quality Gates row + corpus summary,
+  `docs/concepts/security-posture.html` recall number,
+  `spec/autonomous/strategy.md` adversarial-corpus paragraph, and
+  `spec/inspirations/security-isolation/claw-code.md` precision/recall pair.
+
 ### May 1 — URL-aware tokenisation closes the GCS-V4 signed-URL recall gap (`cleanup-18b-signed-url-gcs-v4`)
 - `EntropyScanner.extractTokens` now treats `&` and `?` as token
   delimiters in addition to whitespace and `=:"'`. URL query-parameter

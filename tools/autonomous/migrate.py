@@ -593,7 +593,7 @@ def emit_backlog_index(items_by_status: dict[str, list], out_path: Path) -> None
     lines.append(f"_Last regenerated: {datetime.utcnow().strftime('%Y-%m-%d')}_")
     lines.append("")
 
-    def render_section(label: str, key: str, with_blocked: bool = False, with_reason: bool = False):
+    def render_section(label: str, key: str, with_blocked: bool = False, with_reason: bool = False, with_groomed: bool = False):
         bucket = items_by_status.get(key, [])
         lines.append(f"## {label}")
         lines.append("")
@@ -616,12 +616,17 @@ def emit_backlog_index(items_by_status: dict[str, list], out_path: Path) -> None
                 br = br.strip().split("\n")[0] if br else ""
                 if br:
                     row += f" — {br}"
+            if with_groomed:
+                gd = entry.get("groomed") or ""
+                if gd:
+                    row += f" — groomed `{gd}`"
             lines.append(row)
         lines.append("")
 
     render_section("Open Items", "open")
     render_section("Blocked Items", "blocked", with_blocked=True, with_reason=True)
     render_section("Manual Items", "manual", with_reason=True)
+    render_section("Manual Ready Items", "manual_ready", with_groomed=True)
     render_section("In-Progress", "in_progress")
 
     out_path.write_text("\n".join(lines))

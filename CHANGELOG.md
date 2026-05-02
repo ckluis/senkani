@@ -9,6 +9,30 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 2 — Groomed Cowork-runnable test plan for `release-v0-3-0-uninstall-pass` (no code shipped)
+- The autonomous loop ran in **groom mode** against
+  `release-v0-3-0-uninstall-pass`, which had been parked as
+  `status: manual` + `groomable: true` since 2026-05-01. The body
+  was rewritten from the original 6-bullet acceptance list into a
+  deterministic 8-step Cowork-runnable plan: pre-conditions table,
+  read-only setup probes, 8 execution steps with shell-or-GUI mode
+  flags and objective pass criteria, mapping back to the original
+  A1–A6 acceptance bullets, evidence-capture conventions, failure-
+  mode table, Cowork hints (window title `Senkani`, bundle ID
+  `dev.senkani.app`, exec `SenkaniApp`), and operator contract.
+- Status flipped `manual` → `manual_ready`; the file stays in
+  `spec/autonomous/backlog/` until the operator (or Cowork in
+  Claude Desktop) executes the plan, flips status to `done`, and
+  the next loop's close-mode sweep mv's it to `completed/2026/`.
+- Doc-sync: a Cowork-runnable pointer was added to the top of
+  `tools/soak/manual-log.md` under a new `## Cowork-runnable test
+  plans (groomed; ready to execute)` section.
+- No code change. No tests added. The 7 synthetic
+  `UninstallSmokeTests.swift` `@Test` functions remain the
+  fixture-HOME regression surface; this round closes the
+  real-install drift gap, which only a live macOS session can
+  exercise.
+
 ### May 2 — `senkani uninstall` cleanup item closed after pre-audit re-verification (`cleanup-8-senkani-uninstall-cli-command-listed-but`)
 - The cleanup-8 description ("Listed But Unimplemented") was stale by
   the time the autonomous loop picked it. `senkani uninstall` shipped

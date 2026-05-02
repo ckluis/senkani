@@ -10,6 +10,19 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ---
 
+## Cowork-runnable test plans (groomed; ready to execute)
+
+> Pointers to per-item test plans groomed by `/senkani-autonomous`.
+> The plan body lives in the per-item file; this section is a
+> cadence-friendly index. Operator (or Cowork in Claude Desktop)
+> picks one, runs it, follows the `## Operator contract` in the
+> linked file, and lets the next `/senkani-autonomous` close-mode
+> sweep finalize.
+
+- **release-v0-3-0-uninstall-pass — `senkani uninstall` real-install validation (8 steps, 6 acceptance bullets)** ([groomed plan](../../spec/autonomous/backlog/release-v0-3-0-uninstall-pass-real-install-validation-6-checks-on-live-macos-session.md)). Exec mode: **either** (Cowork-runnable for Steps 1–5, 7, 8; Step 6 SenkaniApp re-launch needs operator hands on first Gatekeeper prompt). Time: ~15 min operator-supervised. Pre-condition: PR #14 (`ship/v0.3.0-batch-2026-05-01`) landed and a registered SenkaniApp install. Highest-value step is Step 8 orphan sweep — finds new artifact paths the seven-category scanner missed. Groomed 2026-05-02 by `senkani-autonomous`.
+
+---
+
 ## Wave-by-wave (most recent first)
 
 ### onboarding-p2-milestone-callsites — Welcome banner advances on real-machine first run 2026-05-01
@@ -1103,18 +1116,22 @@ Operator action to unblock, pick ONE:
 
 - **Option A — screenshots.** Open the share link in a logged-in
   browser, capture each screen of the prototype (landing + every
-  sub-screen), drop the PNGs into a new `spec/assets/claude-prototype/`
-  directory, and re-mark the backlog item `pending`. The next
-  autonomous round will extract visual ideas from the screenshots
-  into `spec/website_rebuild_claude_prototype.md`.
+  sub-screen), drop the PNGs into a new
+  `spec/autonomous/assets/claude-prototype/` directory, re-mark the
+  backlog item `status: open`. The next autonomous round will
+  extract visual ideas from the screenshots and file each accepted
+  idea as a separate per-idea backlog item that closes by editing
+  `assets/theme.css` or `docs/**/*.html` directly.
 - **Option B — HTML/MHTML export.** From the logged-in share link,
   use browser "Save Page As… → Web Page, Complete" (or MHTML) and
-  commit the export under `spec/website_rebuild_claude_prototype_raw/`.
-  The next round can parse the HTML offline.
+  drop the export under
+  `spec/autonomous/assets/claude-prototype-raw/`. The next round
+  can parse the HTML offline.
 - **Option C — drop the item.** If the prototype is no longer
-  informing the rebuild, mark the item `status: skipped` in the
-  backlog with a short note and move on — item 12 has zero
-  downstream blockers.
+  informing the rebuild (the umbrella shipped DELIVERED 2026-05-01
+  without it), mark the item `status: skipped` in the backlog with
+  a `## Skip note` body section and `mv` to `completed/2026/`. Item
+  12 has zero downstream blockers.
 
 ### Phase S.1 — manifest schema + MCP tool gating (shipped 2026-04-20)
 
@@ -1281,10 +1298,15 @@ round — needs a real machine with Node / axe-core-cli available.
 
 ### `senkani uninstall` — real-install validation (synthetic smoke shipped 2026-04-19; release-checklist home shipped 2026-04-26)
 
-> **Canonical home: `spec/release-checklist.md` §A.** That file lists
-> the six checks (A1–A6) with owner + per-release sign-off. Run them
-> there before every minor-version bump. The wave entry below stays
-> as the rolling diary for ad-hoc runs that aren't tied to a release.
+> **Canonical home: `spec/autonomous/backlog/release-v0-3-0-uninstall-pass-*.md`**
+> (operator-local; the spec tree is gitignored). That backlog item
+> is the per-release uninstall validation checklist (the original
+> A1–A6 surface — six checks, real-install required) — closed by
+> appending pass/fail/note lines to its acceptance bullets and
+> moving it into `completed/<YYYY>/`. Each minor-version bump opens
+> a fresh `release-v<X.Y.0>-uninstall-pass` item. The wave entry
+> below stays as the rolling diary for ad-hoc runs that aren't
+> tied to a release.
 
 `Tests/SenkaniTests/UninstallSmokeTests.swift` fences the
 discovery + filter + removal logic against a fixture HOME (6 tests).

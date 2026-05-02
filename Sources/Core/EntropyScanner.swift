@@ -74,10 +74,15 @@ public enum EntropyScanner {
     // MARK: - Token extraction
 
     /// Split on whitespace and common key-value delimiters to isolate credential values.
-    /// Handles `SECRET=value`, `"key": "value"`, and `key: 'value'` patterns.
+    /// Handles `SECRET=value`, `"key": "value"`, `key: 'value'`, and URL query
+    /// strings `?key=value&key=value` — the `&` and `?` splits keep query-parameter
+    /// values evaluated independently so a high-entropy `X-Goog-Signature=...`
+    /// value isn't shielded by the URL-prefix exclusion that fires on the host
+    /// portion. Short benign params (e.g. `?utm_source=email`) still fall below
+    /// the 20-char minimum + 4.5 entropy floor.
     private static func extractTokens(_ input: String) -> [String] {
         input.components(separatedBy: CharacterSet.whitespaces
-            .union(CharacterSet(charactersIn: "=:\"'")))
+            .union(CharacterSet(charactersIn: "=&?:\"'")))
             .filter { !$0.isEmpty }
     }
 

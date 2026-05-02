@@ -9,6 +9,33 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 1 — URL-aware tokenisation closes the GCS-V4 signed-URL recall gap (`cleanup-18b-signed-url-gcs-v4`)
+- `EntropyScanner.extractTokens` now treats `&` and `?` as token
+  delimiters in addition to whitespace and `=:"'`. URL query-parameter
+  values (e.g. `X-Goog-Signature=…`) are extracted and entropy-scored
+  independently of the `https://` URL-prefix exclusion that fires on
+  the host portion. Pre-audit confirmed the existing `=` split already
+  isolated the value token; the new `&` split is defensive against
+  formats that don't pair `=` with each parameter, and `?` formally
+  separates the host token from the query string.
+- Adversarial corpus recalibrated: aggregate goes from **1.000 / 0.915**
+  (43 TP, 4 FN, 53 fixtures) to **1.000 / 0.936** (44 TP, 3 FN, 54
+  fixtures), zero false positives held. `signed_url` family floor moves
+  from 0.500 to 1.000.
+- Fixture `signed-url-2.txt` now flags `HIGH_ENTROPY` (was `documented_gap: true`).
+  Synthetic blob updated to a base64-shaped 64-char body so its entropy
+  clears the 4.5 floor; real GCS-V4 hex sigs remain below the floor and
+  are tracked separately under `cleanup-18c-obfuscated-pure-hex`
+  (charset-aware floor).
+- New FP-guard `fp-clean-7.txt` covers long benign URL query strings
+  (UTM tracking + readable slugs). Verifies the new split doesn't trip
+  entropy on marketing/tracking URLs — the 20-char min length and 4.5
+  entropy floor still filter them out.
+- Doc sync: `spec/testing.md` Quality Gates row + corpus summary,
+  `docs/concepts/security-posture.html` family count + recall number,
+  `spec/autonomous/strategy.md` adversarial-corpus paragraph, and
+  `spec/inspirations/security-isolation/claw-code.md` precision/recall pair.
+
 ### May 1 — TWILIO_ACCOUNT_SID closes one of three adversarial recall gaps (`cleanup-18-secretdetector-adversarial-recall-gaps-f`)
 - New `TWILIO_ACCOUNT_SID` named pattern in `Sources/Core/SecretDetector.swift`
   (`\bAC` + 32 lowercase hex). Twilio publishes Account SIDs in this canonical

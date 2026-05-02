@@ -9,6 +9,31 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 2 — `senkani uninstall` cleanup item closed after pre-audit re-verification (`cleanup-8-senkani-uninstall-cli-command-listed-but`)
+- The cleanup-8 description ("Listed But Unimplemented") was stale by
+  the time the autonomous loop picked it. `senkani uninstall` shipped
+  earlier on this branch via `c27d362` (feat — command + scanner +
+  Senkani.swift wiring), `7c5402e` (synthetic smoke tests, +6), and
+  `c131a96` (fix — discovery now also walks the modern per-project
+  `<projectPath>/.claude/settings.json` location, not just the legacy
+  `~/.claude/projects/<encoded>/settings.json` path).
+- Pre-audit verification this round: `swift test --filter
+  UninstallSmokeTests` → 7/7 green in 0.035s. Coverage spans empty
+  install, fully-seeded install (all seven artifact categories),
+  `--keep-data` carve-out for the session DB, modern-hook discovery
+  via `workspace.json`, non-senkani hooks/plists left untouched, and
+  idempotent re-scan after removal.
+- Out of scope for cleanup-8: live real-install validation on a
+  registered SenkaniApp install. That's separately gated by
+  `release-v0-3-0-uninstall-pass`, which is the manual blocker on the
+  v0.3.0 cut.
+- No code change this round. Per-item file moved from
+  `spec/autonomous/backlog/` to
+  `spec/autonomous/completed/2026/2026-05-02-…` with the close note
+  recording the seven-category artifact contract, the verifying test
+  filter, and the Torvalds / Evans / Kleppmann re-audit verdict
+  (PASS / PASS / PASS, no red flags).
+
 ### May 2 — `ClaudeSessionWatcher` cleanup item closed after pre-audit re-verification (`cleanup-3-claudesessionwatcher-hardcodes-model-pri`)
 - `SenkaniApp/Services/ClaudeSessionWatcher.swift:190` keeps using
   `ModelPricing.find(model ?? "sonnet")` — pricing source-of-truth

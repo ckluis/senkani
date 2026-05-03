@@ -9,6 +9,32 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 3 — `KnowledgeFileLayer` FSEvents stream: ported `FileWatcher` retain pattern (closed use-after-free hazard between in-flight callbacks and `deinit`)
+- Pre-audit grep found two FSEvents sites: `Sources/Indexer/FileWatcher.swift`
+  (correct: `passRetained` + paired release closure + invalidate-then-drain
+  in `stop()`) and `Sources/Core/KnowledgeFileLayer.swift:269-273` (broken:
+  `passUnretained` with `nil` release callback, no queue drain in
+  `stopWatching`). FSEvents holds the `info` pointer for the lifetime of
+  the stream and dispatches callbacks asynchronously on `watchQueue`, so
+  the unretained context plus the absent drain made an in-flight callback
+  on a deallocating `KnowledgeFileLayer` reachable — the same
+  `Object … of class … deallocated with non-zero retain count` SIGSEGV
+  pattern that `FileWatcher` already had a fix for.
+- Ported the pattern verbatim: `Unmanaged.passRetained(self).toOpaque()`
+  for the context info, paired `release:` closure that drops the +1, and
+  explicit failure-path releases for both `FSEventStreamCreate` (release
+  the +1 ourselves) and `FSEventStreamStart` (`Invalidate` + `Release` so
+  the stream's retain on `info` is dropped). `stopWatching` now drops the
+  lock before draining the watcher queue (`wq?.sync { }`), mirroring
+  `FileWatcher.stop()` and closing the in-flight-callback drain hazard
+  that lived alongside the retain bug.
+- New `@Suite("KnowledgeFileLayer — Lifetime Safety")` mirrors
+  `FileWatcherLifetimeTests`: 200-iteration churn test (drop without
+  `stopWatching()`), explicit-stop-races-FSEvents-callback drain test
+  (touch a `.md` file then immediately `stopWatching`), and an
+  idempotency test (`stopWatching` twice + on never-started layer).
+  KnowledgeFileLayer test count 12 → 15 (+3); `kb` chunk green.
+
 ### May 3 — `UninstallArtifactScanner` extended with 9th category `modelMetadataCache` for `~/Library/Caches/dev.senkani/`
 - Filed by 2026-05-03 v2 closure Finding #2: the broad orphan sweep
   surfaced `~/Library/Caches/dev.senkani/` surviving a full

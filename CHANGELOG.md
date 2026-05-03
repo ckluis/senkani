@@ -9,6 +9,61 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 3 — `release-v0-3-0-uninstall-pass-v2-plan-amendments` walked + closed strict-literal green on all six A-bullets (manual validation, no code shipped)
+- The operator walked the v2-amended Cowork-runnable test plan
+  (`spec/autonomous/backlog/release-v0-3-0-uninstall-pass-v2-plan-amendments-…`)
+  on a live macOS session 2026-05-02 13:12 EDT → 2026-05-03 07:40 EDT
+  (operator-supervised, Cowork-driven; long wall-clock from overnight
+  AFK gap, ~25 min active operator time). Evidence dir:
+  `tools/soak/evidence/release-v0-3-0-uninstall-pass-v2-20260502-131250/`
+  (tarball `release-v0-3-0-uninstall-pass-v2-20260502-131250.tgz`).
+- All six acceptance bullets PASSED strict-literal: A1 (Step 1 cancel
+  + race-free `sweep_targets` diff = 0); A2 (`--keep-data` keeps DB,
+  removes the other 7 categories); A3 (Step 3a foreground `.app`
+  pre-seed all-4-probes OK + Step 3b `--yes` removed 5 items + Step 4
+  idempotent message + exit 0); A4 (post-wipe `claude mcp list` and
+  `~/.claude/settings.json` both clean); A5 (re-launch re-seeds
+  `~/.senkani/`, MCP, workspace.json + Step 7 `FRESH-HOOK` against
+  `nonprofitEventPlanner` with mtime ≥ TEST_START_EPOCH — v2's
+  active-project fix held); A6 (`sweep_targets` clean across all 8
+  scanner categories). The v2 amendments — race-free sweep split, `.app`
+  bundle pre-seed, ANY-workspace-project hook fresh-mtime constraint —
+  all worked as designed.
+- Three operator findings filed for optional follow-up (NOT shipped in
+  this close round): (1) bundled `tools/soak/runner/SenkaniApp.app`
+  crashes on `open -a` despite the `runner-app-fresh` mtime check
+  passing — operator fell back to launching via Xcode's Play button;
+  candidate v3 plan amendment to add a smoke-launch probe to the
+  pre-conditions. (2) Step 8 BROAD section surfaced 4 candidate
+  scanner-extension paths outside the eight categories
+  (`~/.claude/hooks/senkani-hook.sh`, `~/Library/Caches/dev.senkani`,
+  `~/Library/Caches/senkani-mcp`, `~/Library/Caches/SenkaniApp`); the
+  hook file is highest-value if Senkani actually installs it.
+  (3) Pre-conditions should add `! pgrep SenkaniApp` to catch a
+  pre-test running instance (a still-running SenkaniApp re-created
+  `workspace.json` between Step 2 and Step 3 on this walk; the
+  strict-moment post-checks held but the transient contamination
+  warrants an upfront probe). Operator decides whether to file each
+  as a new backlog item.
+- Closure: close-mode sweep mv'd the per-item file from
+  `backlog/` to `completed/2026/`. The original `## Acceptance`
+  boxes were `- [ ]` at round entry — operator's `### Acceptance —
+  strict-literal verdict (2026-05-03 CK)` declared PASS for every
+  A1-A6 with no spirit-vs-strict distinction, so the sweep flipped
+  the boxes to `- [x]` and transcribed the verdict inline under each
+  one. The v1 plan
+  (`release-v0-3-0-uninstall-pass-real-install-validation-…`) remains
+  in `backlog/` because the operator's v1 walk preserved
+  fail-strict/pass-spirit distinctions on A1, A3, A5 that should not
+  be silently flipped.
+- No code change. The 9 synthetic `UninstallSmokeTests.swift` `@Test`
+  functions remain the fixture-HOME regression surface; this round
+  closes the live-machine validation loop for the v2-amended test
+  plan and unblocks the `release-v0-3-0-promote-changelog-heading`
+  blocked-by gate from this dependency (the other two passes —
+  `release-v0-3-0-onboarding-pass`, `release-v0-3-0-surface-pass` —
+  remain).
+
 ### May 2 — Groomed v2 amendments to the `release-v0-3-0-uninstall-pass` Cowork-runnable test plan (no code shipped)
 - The autonomous loop ran in **groom mode** against
   `release-v0-3-0-uninstall-pass-v2-plan-amendments`, which had been

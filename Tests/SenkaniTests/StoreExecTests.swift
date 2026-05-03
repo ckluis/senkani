@@ -48,11 +48,17 @@ struct StoreExecTests {
         return (SessionDatabase(path: path), path)
     }
 
-    private func cleanup(_ path: String) {
+    // close() must run before unlink — sqlite3_close in the SessionDatabase
+    // deinit otherwise lands on already-deleted -wal/-shm and SIGSEGVs the
+    // swiftpm-testing-helper. The .migrating sidecar is the flock lockfile
+    // from MigrationRunner; unlink it too so /tmp doesn't accumulate.
+    private func cleanup(_ db: SessionDatabase, _ path: String) {
+        db.close()
         let fm = FileManager.default
         try? fm.removeItem(atPath: path)
         try? fm.removeItem(atPath: path + "-wal")
         try? fm.removeItem(atPath: path + "-shm")
+        try? fm.removeItem(atPath: path + ".migrating")
     }
 
     @Test func nilDBIsNoop() {
@@ -65,18 +71,28 @@ struct StoreExecTests {
 
     @Test func successfulStatementEmitsNothing() {
         let (db, path) = openTempDB()
-        defer { cleanup(path) }
+        defer { cleanup(db, path) }
+        // Drain the init-time recordEvent burst — those blocks INSERT
+        // into event_counters on `db.queue`. Touching `db.db` from the
+        // test thread without draining races sqlite3 across threads
+        // and SIGSEGVs the helper.
+        db.queue.sync {}
         withSink { sink in
-            StoreExec.run(db: db.db, sql: "SELECT 1;", scope: "command")
+            db.queue.sync {
+                StoreExec.run(db: db.db, sql: "SELECT 1;", scope: "command")
+            }
             #expect(sink.count(of: "db.command.sql_error") == 0)
         }
     }
 
     @Test func failedStatementEmitsScopedSqlError() {
         let (db, path) = openTempDB()
-        defer { cleanup(path) }
+        defer { cleanup(db, path) }
+        db.queue.sync {}
         withSink { sink in
-            StoreExec.run(db: db.db, sql: "NOT VALID SQL;", scope: "command")
+            db.queue.sync {
+                StoreExec.run(db: db.db, sql: "NOT VALID SQL;", scope: "command")
+            }
             #expect(sink.count(of: "db.command.sql_error") == 1)
             let fields = sink.events.first { $0.0 == "db.command.sql_error" }?.1 ?? [:]
             #expect(stringField(fields, "outcome") == "error")
@@ -86,10 +102,13 @@ struct StoreExecTests {
 
     @Test func scopeTokenIsParameterized() {
         let (db, path) = openTempDB()
-        defer { cleanup(path) }
+        defer { cleanup(db, path) }
+        db.queue.sync {}
         withSink { sink in
-            StoreExec.run(db: db.db, sql: "NOT VALID SQL;", scope: "sandbox")
-            StoreExec.run(db: db.db, sql: "NOT VALID SQL;", scope: "validation")
+            db.queue.sync {
+                StoreExec.run(db: db.db, sql: "NOT VALID SQL;", scope: "sandbox")
+                StoreExec.run(db: db.db, sql: "NOT VALID SQL;", scope: "validation")
+            }
             #expect(sink.count(of: "db.sandbox.sql_error") == 1)
             #expect(sink.count(of: "db.validation.sql_error") == 1)
             #expect(sink.count(of: "db.command.sql_error") == 0)

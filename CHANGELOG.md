@@ -9,6 +9,30 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 3 — `tools/test-safe.sh` `other`-chunk SIGTRAP isolated to `StoreExecTests` concurrent-libsqlite3 race (full-suite green again)
+- Bisect filed alongside the FSEvents fix (commit `3b36b3d`) found the
+  catch-all `other` chunk SIGTRAPs deterministically post-`bisect-sigtrap-source`.
+  Halve-and-test across 235 catch-all suites narrowed the trigger to
+  `StoreExecTests.successfulStatementEmitsNothing()` (and its two DB-creating
+  siblings); the test passed `db.db` raw to `StoreExec.run` and called it
+  from the test thread WHILE the init-time 13-task `recordEvent` burst was
+  still draining on `db.queue`. Concurrent `sqlite3_*` calls on the same
+  connection from two threads = SIGSEGV/SIGBUS in libsqlite3 (~80-100%
+  reproducible in isolation, 100% under load).
+- Fix: drain `db.queue.sync {}` after init AND wrap each `StoreExec.run` in
+  `db.queue.sync { ... }` so all SQL goes through the queue. Cleanup also
+  closes the SessionDatabase before unlinking sidecar files (`-wal`, `-shm`,
+  `.migrating`) so deinit's late `sqlite3_close` can't land on deleted files.
+- Chunk topology: `StoreExec` added to the `session` chunk regex (topical
+  proximity — it's the SessionDatabase store-helper). Catch-all `other`
+  drops one suite. Full chunked harness 8/8 green: cold (342 s including
+  build) and warm (40 s), no retries needed on any chunk.
+- Two follow-ups filed for defects-outside-criteria:
+  `harness-test-safe-other-sigtrap-rootcause-sessiondb-raw-db-pointer-bypass`
+  (audit other `@testable` consumers + harden the `internal var db`
+  surface) and `harness-sessiondb-test-cleanup-leaks-migrating-flock-sidecars`
+  (centralize the `.migrating` unlink so /tmp doesn't accumulate).
+
 ### May 3 — `KnowledgeFileLayer` FSEvents stream: ported `FileWatcher` retain pattern (closed use-after-free hazard between in-flight callbacks and `deinit`)
 - Pre-audit grep found two FSEvents sites: `Sources/Indexer/FileWatcher.swift`
   (correct: `passRetained` + paired release closure + invalidate-then-drain

@@ -64,7 +64,7 @@ CHUNKS=(
   "kb:Knowledge|KB[A-Z]|PinnedContext|EntityTracker"
   "pane:Pane[A-Z]|PaneRefresh|PaneSocket|PaneFont|PaneGallery|PaneDiary|Browser|Workspace|Workstream|Schedule|Watch|RelationsGraph"
   "hook:Hook|ConfirmationGate|AutoValidate|InjectionGuard|SecretDetector|EntropyDetector|HookRelayHandshake"
-  "session:Migration|SessionDatabase|TokenEventStore|Chain[A-Z]|Agent[A-Z]|ClaudeSession|ValidationStore|Sandbox|Authorship|Daemon|RetentionScheduler|Logger|Persistence"
+  "session:Migration|SessionDatabase|TokenEventStore|Chain[A-Z]|Agent[A-Z]|ClaudeSession|ValidationStore|Sandbox|Authorship|Daemon|RetentionScheduler|Logger|Persistence|StoreExec"
   "onboarding:Onboarding|Welcome|FCSIT|FirstValue|TaskStarter|LaunchCoordinator|ActivationStatus|EmptyState|DocsTruth|DocsShape|CommandPalette"
 )
 

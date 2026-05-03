@@ -9,6 +9,30 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 3 — `release-v0-3-0-uninstall-pass` (v1) finalized: A1–A6 boxes flipped to `- [x]` (operator-directed cleanup); item archived to `completed/2026/`
+- The v1 plan was the original 2026-05-02 Cowork-driven walk. A6 (eight
+  scanner categories) closed strict-clean at walk time, but A1, A3, A5
+  closed `fail-strict / pass-spirit` (sweep-tool race; runner pre-seed
+  defect; active-project ambiguity). The operator preserved the boxes
+  as `- [ ]` to encode the strict-vs-spirit distinction, leaving the
+  per-item file parked in `backlog/` with `status: done` for two
+  prior `/senkani-autonomous` invocations (close-mode invariant
+  refused to finalize). On 2026-05-03 the operator directed Option A:
+  flip A1–A6 to `- [x]` (preserving the inline `2026-05-02 CK —
+  fail-strict / pass-spirit` annotations under each box) and let the
+  loop archive the item.
+- All four follow-ups surfaced by the v1 walk are tracked elsewhere:
+  v2-amendments (CLOSED), runner-bundle-smoke (CLOSED today),
+  uninstall-scanner-audit (OPEN, v0.4.0+ scanner extensions),
+  uninstall-test-plan-prerunning-process (OPEN, v3+ pre-condition).
+  No findings load-bearing on v1's archival.
+- The v0.3.0 release-blocking criterion (eight-category scanner
+  contract; A6) was GREEN at walk time and remains GREEN. The
+  `release-v0-3-0-promote-changelog-heading` blocked-by gate clears
+  the v1 dependency. Other two passes
+  (`release-v0-3-0-onboarding-pass`, `release-v0-3-0-surface-pass`)
+  remain. No code change; no test count change.
+
 ### May 3 — `runner-bundle-smoke-launch-precondition` shipped path (b): canonical Xcode-Play-button launcher + ready-to-paste smoke-launch / derived-data-fresh probes for v3+ uninstall walks
 - Filed by 2026-05-03 v2 closure Finding #1: bundled
   `tools/soak/runner/SenkaniApp.app` crashes on `open -a` despite

@@ -9,6 +9,48 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 3 — `UninstallArtifactScanner` extended with 9th category `modelMetadataCache` for `~/Library/Caches/dev.senkani/`
+- Filed by 2026-05-03 v2 closure Finding #2: the broad orphan sweep
+  surfaced `~/Library/Caches/dev.senkani/` surviving a full
+  `senkani uninstall --yes`. Pre-audit confirmed
+  `Sources/Core/ModelManager.swift:144-146` actively writes
+  `dev.senkani/models/models.json` (the model registry's
+  download/verification metadata) into that dir from any
+  senkani CLI / senkani-mcp / SenkaniApp invocation — making it
+  Senkani-managed state, not the OS cache it had been classified
+  as on 2026-05-02. Scanner header doc comment corrected in the
+  same commit (the `dev.senkani` line incorrectly listed it as
+  macOS-managed; now lists only `SenkaniApp` and `senkani-mcp`
+  caches there, both verified no-Senkani-write by grep).
+- New `Category.modelMetadataCache` strips the entire
+  `dev.senkani/` subtree on `senkani uninstall` (recursive
+  `removeItem`; future ModelManager fields landing in sibling
+  files inherit removal coverage).
+- `UninstallSmokeTests` 9 → 11 (+2 new): seedAll +
+  count test renamed from "Eight"→"Nine" (assertion uses
+  `Category.allCases.count`); positive
+  `discoveryFindsModelMetadataCacheAndIdempotentRemoval` seeds
+  `dev.senkani/models/models.json` plus OS-managed siblings
+  (`SenkaniApp`, `senkani-mcp` cache dirs) and asserts only
+  `dev.senkani` is removed; negative
+  `scannerIgnoresOSManagedSenkaniCachesWithoutDevSenkani` seeds
+  the OS-managed siblings alone and asserts zero artifacts.
+- The 4th broad-sweep candidate (`~/.claude/hooks/senkani-hook.sh`)
+  was re-verified out-of-scope: no grep hit in `Sources/`. Senkani's
+  hook lives at `~/.senkani/bin/senkani-hook` (category-3,
+  `hookBinary`); the `.claude/hooks/` path is operator/gstack
+  tooling. Same verdict as 2026-05-02; scanner header was already
+  correct on this point.
+- Real-machine Step 8 re-walk validation (acceptance bullet #5,
+  unrunnable from the autonomous loop) filed as follow-up
+  `uninstall-rewalk-step8-modelmetadatacache` (manual + groomable).
+- Three pre-existing flaky URLProtocol-stub tests
+  (`RemoteRepoClientTests.authHeaderPresent...`,
+  `BundleRemoteTests.fetchThenComposeYieldsUsableBundle`) surfaced
+  by full-suite run during this round's test phase — pass alone,
+  fail under parallel execution. Filed as
+  `swift-testing-parallel-runner-env-var-isolation` (open).
+
 ### May 3 — `release-v0-3-0-uninstall-pass` (v1) finalized: A1–A6 boxes flipped to `- [x]` (operator-directed cleanup); item archived to `completed/2026/`
 - The v1 plan was the original 2026-05-02 Cowork-driven walk. A6 (eight
   scanner categories) closed strict-clean at walk time, but A1, A3, A5

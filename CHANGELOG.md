@@ -9,6 +9,36 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 3 — `runner-bundle-smoke-launch-precondition` shipped path (b): canonical Xcode-Play-button launcher + ready-to-paste smoke-launch / derived-data-fresh probes for v3+ uninstall walks
+- Filed by 2026-05-03 v2 closure Finding #1: bundled
+  `tools/soak/runner/SenkaniApp.app` crashes on `open -a` despite
+  passing the v2 `runner-app-fresh` mtime probe — mtime-freshness
+  checks freshness, not correctness. The Luminary roster (Torvalds,
+  Grace) chose path (b): retire the runner-bundle launcher path
+  (don't bake-in a build-system fix the loop can't verify) and
+  canonicalize Xcode-Play-button → DerivedData binary as the
+  launcher, with smoke-launch + derived-data-fresh probes the next
+  plan can paste verbatim.
+- New `tools/soak/runner/README.md` documents: the deprecated bundle
+  status (do not delete — audit trail; do not launch — crashes); the
+  Xcode-Play-button workflow; the DerivedData binary path
+  (`~/Library/Developer/Xcode/DerivedData/senkani-*/Build/Products/Debug/SenkaniApp`,
+  globbed for machine portability); ready-to-paste **derived-data-fresh**,
+  **smoke-launch** (with `pkill`/`osascript` cleanup), and
+  **prerunning-process** (Finding #3 follow-up) probes; and an
+  inventory table tagging each v1 runner artifact (audit / superseded
+  / safe to delete).
+- `tools/soak/v2-walk/phase-1.sh` annotated in-place: the existing
+  `runner-app-bin` + `runner-app-fresh` probes get a `NOTE` comment
+  pointing v3+ authors at the README's replacement probes. The v2
+  script itself is unchanged — the v2 plan is closed and archived,
+  and modifying its post-hoc behaviour would be a retro-edit.
+- No code change; no test count change. Path (a) — actually
+  rebuilding the runner bundle so `open -a` works — is deferred and
+  remains tracked in the closed item's frontmatter; an operator can
+  re-file it as a new backlog item if/when restoring the
+  in-tree bundle is worth the build-system work.
+
 ### May 3 — `release-v0-3-0-uninstall-pass-v2-plan-amendments` walked + closed strict-literal green on all six A-bullets (manual validation, no code shipped)
 - The operator walked the v2-amended Cowork-runnable test plan
   (`spec/autonomous/backlog/release-v0-3-0-uninstall-pass-v2-plan-amendments-…`)

@@ -9,6 +9,43 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — workspace hygiene: 95 macOS Finder-duplicate `" 2.swift"` files quarantined; `.gitignore` recurrence-guarded (build unblock)
+
+- Prior state: the working tree on `fix/pane-refresh-worker-pool-test-flake`
+  carried 95 untracked `*\ 2.swift` files (plus 3 duplicate
+  resource/fixture directories) that macOS Finder had produced as
+  drag-and-drop or "save in" duplicates. Because `swift build`
+  pulls every `.swift` file in a target's `Sources/` tree, every
+  `Foo 2.swift` produced an in-module redeclaration of the type
+  defined in `Foo.swift`, collapsing `swift test` to ambiguous-symbol
+  errors across `Sources/Core`, `Sources/CLI`, `Sources/MCP`,
+  `Sources/Indexer`, `Sources/Bench`, `SenkaniApp`, and
+  `Tests/SenkaniTests`. The earlier `policy-modeltier-split-fields`
+  build round hit this on 2026-05-04 and aborted.
+- Sweep: 65 byte-identical (`cmp -s`) twins bulk-deleted; 30
+  divergent twins triaged via 4 representative diffs (smallest
+  1-line, largest 1163-line, largest test 301-line) — every
+  divergence had the same shape (canonical newer than `" 2"`
+  snapshot, newer features in canonical, no work missing) so the
+  blanket delete-`" 2"` decision was operator-approved and
+  applied. 3 stragglers (`INVARIANTS 2.md`, `check-multiplier-
+  claims 2.sh`, `render-ml-eval-fixtures 2.py`) caught the same
+  way.
+- Recurrence guard: `.gitignore` widened with `* 2.swift`,
+  `* 2.md`, `* 2.sh`, `* 2.py`, and `* 2/` patterns so a future
+  Finder slip stays out of `git status` and out of the build target.
+- Validation: `swift build` clean (12.70 s, no ambiguous-symbol /
+  redeclaration errors). Filtered `swift test` for chain + policy
+  + ConfirmationGate surfaces ran 57/57 — no regression in the
+  surfaces touched by the aborted `policy-snapshots-chain-anchor`
+  round. Pre-existing parallel-runner flake families remain
+  tracked under `swift-testing-parallel-runner-env-var-isolation`
+  and `parallel-runner-flake-additional-families-2026-05-04`.
+- Downstream unblock: `policy-snapshots-chain-anchor` (P0
+  security), `policy-modeltier-split-fields` (P2 cleanup), and
+  every other build-mode item previously hidden behind the
+  ambiguous-symbol blocker are now resolvable.
+
 ### May 4 — `policy_snapshots` audit baseline now refuses silent-empty hashes (data integrity)
 
 - Prior state: `PolicyConfig.policyHash()` and

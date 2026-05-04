@@ -9,6 +9,39 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — Release-cut gate consumer filed: `release-v0-4-0-mlx-pin-bump-pass` wires the trigger chosen for `mlx-swift-lm`'s revision pin
+
+- The 2026-05-04 freshness-revisit round chose RELEASE-CUT GATE as
+  the next-revisit trigger for `mlx-swift-lm`'s revision pin and
+  recorded it in `Package.swift`'s `## Pin rationale` block plus a
+  CHANGELOG bullet — but did not wire a concrete consumer. Without
+  a row that someone is required to tick on each cut, the trigger
+  is advisory.
+- This round files the consumer:
+  `spec/autonomous/backlog/release-v0-4-0-mlx-pin-bump-pass.md`.
+  Naming follows the `release-v0-X-Y-*` per-cluster pattern already
+  in use for the v0.3.0 cut (uninstall-pass, onboarding-pass,
+  surface-pass, promote-changelog-heading). The whoever-files-v0.4.0
+  promote-changelog-heading item is required to add this row to its
+  `blocked_by:` list.
+- The new row's `## Acceptance` is dual-path mirroring the Pin
+  rationale block: (a) bump applied → `Package.swift` +
+  `Package.resolved` updated, `./tools/test-safe.sh` + on-real-
+  machine MLX inference smoke green, Pin rationale block refreshed,
+  CHANGELOG bullet recorded; OR (b) bump rejected → regression
+  named in Execution evidence, Pin rationale block refreshed with
+  the regression and the next trigger, CHANGELOG bullet records
+  the held-pin decision.
+- Filed `status: manual` + `groomable: true` because real-machine
+  MLX inference smoke tests require Apple Silicon hardware that
+  the autonomous loop cannot drive. A future round can groom a
+  Cowork-runnable test plan with the specific senkani entry points
+  to exercise.
+- Audit chain preserved via `parent_finding`: this row →
+  `release-checklist-mlx-pin-bump-row` (filed today) →
+  `mlx-swift-lm-pin-freshness-revisit` (chose the trigger) →
+  `mlx-swift-lm-pin` (introduced the revision pin).
+
 ### May 4 — Session-DB schema authority decided: migrations canonical, `setupSchema` is a transitional shim
 
 - The session DB had two paths creating each table:

@@ -9,6 +9,29 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — Live-mode multiplier badge corrected to `.estimated` (per `Confidence.loosened(by:)` discipline)
+
+- Prior state: `SavingsTestView.swift:239` rendered
+  `confidenceBadge(.exact)` next to the live session multiplier. The
+  multiplier composite mixes exact tokens with cost-saved cents; the
+  cost figure is priced via `ModelPricing.active`, a runtime-mutable
+  UserDefaults read. `spec/testing.md` → "Confidence Tiers for
+  Reported Savings" makes the discipline non-negotiable: an
+  `estimated` number must never be presented as `exact`.
+- New `Sources/Bench/SurfaceConfidence.swift` exposes
+  `Confidence.defaultForSurface(_:)` for `SavingsSurface.fixtureBench`
+  / `.liveSessionReplay` / `.scenarioSimulator`. Live and scenarios
+  return `.estimated`; fixture returns `.exact`. `SavingsTestView`
+  call sites at lines 239 (live) and 479 (scenarios) now read this
+  helper, eliminating the hard-coded tier strings.
+- `spec/testing.md` surface-mapping table flipped Live Session Replay
+  to `estimated` with a note explaining the loosened-rollup
+  rationale; the `exact` example row no longer cites Live Replay.
+- Regression test: `Tests/SenkaniTests/SurfaceConfidenceTests.swift`
+  pins all three surface tiers. If a future round wires
+  `cost_ledger_version`-backed display so live cost is exact-by-row,
+  reconsider promoting back (see `cost-ledger-single-source` work).
+
 ### May 4 — Test-side cleanup callers route through `TempSessionDatabase.cleanup(path:)` / `.close(_:path:)` (single source of truth)
 
 - Prior state: the 2026-05-04 round shipped

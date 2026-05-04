@@ -236,7 +236,7 @@ struct SavingsTestView: View {
                     Text("session multiplier")
                         .font(.system(size: 9))
                         .foregroundStyle(SenkaniTheme.textTertiary)
-                    confidenceBadge(.exact)
+                    confidenceBadge(Confidence.defaultForSurface(.liveSessionReplay))
                 }
             }
 
@@ -476,7 +476,7 @@ struct SavingsTestView: View {
                         Text("estimated savings")
                             .font(.system(size: 9))
                             .foregroundStyle(SenkaniTheme.textTertiary)
-                        confidenceBadge(.estimated)
+                        confidenceBadge(Confidence.defaultForSurface(.scenarioSimulator))
                     }
                 }
 

@@ -95,9 +95,12 @@ struct SavingsTestView: View {
                         .font(.system(size: 24, weight: .bold, design: .monospaced))
                         .foregroundStyle(report.allGatesPassed ? SenkaniTheme.savingsGreen : .red)
 
-                    Text("cost reduction")
-                        .font(.system(size: 10))
-                        .foregroundStyle(SenkaniTheme.textTertiary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("cost reduction")
+                            .font(.system(size: 10))
+                            .foregroundStyle(SenkaniTheme.textTertiary)
+                        confidenceBadge(report.confidence)
+                    }
 
                     Spacer()
 
@@ -229,9 +232,12 @@ struct SavingsTestView: View {
                 Text(String(format: "%.1fx", multiplier))
                     .font(.system(size: 28, weight: .bold, design: .monospaced))
                     .foregroundStyle(SenkaniTheme.savingsGreen)
-                Text("session multiplier")
-                    .font(.system(size: 9))
-                    .foregroundStyle(SenkaniTheme.textTertiary)
+                HStack(spacing: 6) {
+                    Text("session multiplier")
+                        .font(.system(size: 9))
+                        .foregroundStyle(SenkaniTheme.textTertiary)
+                    confidenceBadge(.exact)
+                }
             }
 
             Divider().frame(height: 40)
@@ -466,9 +472,12 @@ struct SavingsTestView: View {
                     Text(String(format: "%.1fx", scenario.multiplier))
                         .font(.system(size: 24, weight: .bold, design: .monospaced))
                         .foregroundStyle(SenkaniTheme.savingsGreen)
-                    Text("estimated savings")
-                        .font(.system(size: 9))
-                        .foregroundStyle(SenkaniTheme.textTertiary)
+                    HStack(spacing: 6) {
+                        Text("estimated savings")
+                            .font(.system(size: 9))
+                            .foregroundStyle(SenkaniTheme.textTertiary)
+                        confidenceBadge(.estimated)
+                    }
                 }
 
                 Divider().frame(height: 36)
@@ -780,6 +789,26 @@ struct SavingsTestView: View {
         if tokens >= 1_000_000 { return String(format: "%.1fM", Double(tokens) / 1_000_000) }
         if tokens >= 1_000 { return String(format: "%.1fK", Double(tokens) / 1_000) }
         return "\(tokens)"
+    }
+
+    @ViewBuilder
+    private func confidenceBadge(_ tier: Confidence) -> some View {
+        let (label, color): (String, Color) = {
+            switch tier {
+            case .exact:            return ("exact", SenkaniTheme.savingsGreen)
+            case .estimated:        return ("estimated", .orange)
+            case .needsValidation:  return ("needs validation", .yellow)
+            case .unsupported:      return ("unsupported", .gray)
+            }
+        }()
+        Text(label)
+            .font(.system(size: 8, weight: .semibold, design: .monospaced))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(color.opacity(0.85))
+            .cornerRadius(3)
+            .help("Confidence tier — see spec/testing.md → Confidence Tiers for Reported Savings")
     }
 
     @ViewBuilder

@@ -13,7 +13,8 @@
 #   tools/website-checks/results/a11y/axe-<timestamp>.json
 #   tools/website-checks/results/a11y/summary-<timestamp>.md
 #
-# Acceptance gate (per spec/website_rebuild_audit_round11.md):
+# Acceptance gate (per the round-11 closing audit, operator-local
+# record at spec/autonomous/completed/2026/2026-05-01-website-rebuild-11c-a11y-tooling-*):
 #   0 AA violations + ≤3 warnings per page. Pages that fail the bar
 #   are listed in the summary for follow-up rewrite filing.
 set -euo pipefail

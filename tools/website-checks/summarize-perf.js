@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-// Aggregate Lighthouse JSON output into a Markdown summary suitable for
-// paste into spec/website_rebuild_audit_round11.md.
+// Aggregate Lighthouse JSON output into a Markdown summary suitable
+// for paste into the closing-audit completed record for the active
+// website-rebuild round (operator-local; round-11 lives under
+// spec/autonomous/completed/2026/2026-05-01-website-rebuild-11e-*).
 const fs = require('fs');
 const path = require('path');
 

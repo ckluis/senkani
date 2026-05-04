@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Lighthouse perf sweep against a local static server, throttled to a
-# Moto G Power profile on slow 3G — the mid-tier baseline declared in
-# spec/website_rebuild_audit_round11.md.
+# Moto G Power profile on slow 3G — the mid-tier baseline declared by
+# the round-11 closing audit (operator-local record at
+# spec/autonomous/completed/2026/2026-05-01-website-rebuild-11d-perf-tooling-*).
 #
 # Usage:
 #   ./scripts/perf-check.sh                    # sweep every site URL

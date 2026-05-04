@@ -23,7 +23,9 @@ The Bash entry points live in `../../scripts/`:
 
 Results land under `results/a11y/` and `results/perf/` with timestamped
 filenames; the most recent `summary-*.md` is suitable for paste into
-`spec/website_rebuild_audit_round11.md`.
+the closing-audit completed record for the active website-rebuild
+round (operator-local; the round-11 record lives under
+`spec/autonomous/completed/2026/2026-05-01-website-rebuild-11e-closing-audit-*`).
 
 `run-axe.js` drives `@axe-core/puppeteer` (axe-core 4.11.x). The
 JSON shape matches `@axe-core/cli`'s output so `summarize-a11y.js`

@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 // Aggregate pa11y-ci + axe-core/cli JSON output into a Markdown summary
-// suitable for paste into spec/website_rebuild_audit_round11.md.
+// suitable for paste into the closing-audit completed record for the
+// active website-rebuild round (operator-local; the round-11 record
+// lives under spec/autonomous/completed/2026/ — see the
+// 2026-05-01-website-rebuild-11e-closing-audit-* file for the prior
+// shape). Future rounds repeat the pattern in their own item.
 const fs = require('fs');
 const path = require('path');
 

@@ -55,6 +55,7 @@ public enum BenchmarkReporter {
         let verdict = report.allGatesPassed ? "PASS" : "FAIL"
         let multiplier = String(format: "%.2fx", report.overallMultiplier)
         lines.append("  Overall: \(multiplier)  Verdict: \(verdict)")
+        lines.append("  Confidence: \(report.confidence.rawValue)")
         lines.append("  Duration: \(String(format: "%.0fms", report.durationMs))")
         let doubleLine = String(repeating: "\u{2550}", count: 63)
         lines.append(doubleLine)

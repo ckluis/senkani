@@ -54,7 +54,8 @@ final class AgentTraceEventStore: @unchecked Sendable {
                     validation_status     TEXT,
                     confirmation_required INTEGER NOT NULL DEFAULT 0,
                     egress_decisions      INTEGER NOT NULL DEFAULT 0,
-                    plan_id               TEXT REFERENCES context_plans(id)
+                    plan_id               TEXT REFERENCES context_plans(id),
+                    cost_ledger_version   INTEGER
                 );
             """)
             execSilent("CREATE INDEX IF NOT EXISTS idx_agent_trace_project_started ON agent_trace_event(project, started_at);")
@@ -79,8 +80,8 @@ final class AgentTraceEventStore: @unchecked Sendable {
                      feature, result, started_at, completed_at, latency_ms,
                      tokens_in, tokens_out, cost_cents, redaction_count,
                      validation_status, confirmation_required, egress_decisions,
-                     plan_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     plan_id, cost_ledger_version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(idempotency_key) DO NOTHING;
             """
             var stmt: OpaquePointer?
@@ -106,6 +107,10 @@ final class AgentTraceEventStore: @unchecked Sendable {
             sqlite3_bind_int64(stmt, 17, row.confirmationRequired ? 1 : 0)
             sqlite3_bind_int64(stmt, 18, Int64(row.egressDecisions))
             Self.bindOptionalText(stmt, 19, row.planId)
+            // Default to the live ledger version so callers don't need
+            // to thread it through every call site. Replays and
+            // back-dated writes pass an explicit value.
+            sqlite3_bind_int64(stmt, 20, Int64(row.costLedgerVersion ?? CostLedger.currentVersion))
 
             guard sqlite3_step(stmt) == SQLITE_DONE else { return false }
             return sqlite3_changes(db) > 0
@@ -136,7 +141,7 @@ final class AgentTraceEventStore: @unchecked Sendable {
                        feature, result, started_at, completed_at, latency_ms,
                        tokens_in, tokens_out, cost_cents, redaction_count,
                        validation_status, confirmation_required, egress_decisions,
-                       plan_id
+                       plan_id, cost_ledger_version
                 FROM agent_trace_event
                 WHERE idempotency_key = ?;
             """
@@ -175,7 +180,8 @@ final class AgentTraceEventStore: @unchecked Sendable {
                 validationStatus: text(15),
                 confirmationRequired: sqlite3_column_int64(stmt, 16) != 0,
                 egressDecisions: Int(sqlite3_column_int64(stmt, 17)),
-                planId: text(18)
+                planId: text(18),
+                costLedgerVersion: int(19)
             )
         }
     }
@@ -337,6 +343,73 @@ final class AgentTraceEventStore: @unchecked Sendable {
             var out: [String] = []
             while sqlite3_step(stmt) == SQLITE_ROW {
                 out.append(String(cString: sqlite3_column_text(stmt, 0)))
+            }
+            return out
+        }
+    }
+
+    /// Mode 4 (counterfactual replay): full rows for a project window in
+    /// chronological order. Replay needs every dimension and measure on
+    /// every row (to project a per-row counterfactual), not a pivot. The
+    /// query is a forward scan on the existing `(project, started_at)`
+    /// index so it stays cheap even on long sessions.
+    func rowsInWindow(project: String?, since: Date?, limit: Int = 10_000) -> [AgentTraceEvent] {
+        return parent.queue.sync {
+            guard let db = parent.db, limit > 0 else { return [] }
+            var sql = """
+                SELECT idempotency_key, pane, project, model, tier, ladder_position,
+                       feature, result, started_at, completed_at, latency_ms,
+                       tokens_in, tokens_out, cost_cents, redaction_count,
+                       validation_status, confirmation_required, egress_decisions,
+                       plan_id, cost_ledger_version
+                FROM agent_trace_event
+                """
+            var clauses: [String] = []
+            if project != nil { clauses.append("project = ?") }
+            if since != nil { clauses.append("started_at >= ?") }
+            if !clauses.isEmpty { sql += " WHERE " + clauses.joined(separator: " AND ") }
+            sql += " ORDER BY started_at ASC LIMIT ?;"
+
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+
+            var idx: Int32 = 1
+            if let project { sqlite3_bind_text(stmt, idx, (project as NSString).utf8String, -1, nil); idx += 1 }
+            if let since { sqlite3_bind_double(stmt, idx, since.timeIntervalSince1970); idx += 1 }
+            sqlite3_bind_int64(stmt, idx, Int64(limit))
+
+            func text(_ i: Int32) -> String? {
+                sqlite3_column_type(stmt, i) == SQLITE_NULL ? nil : String(cString: sqlite3_column_text(stmt, i))
+            }
+            func intOpt(_ i: Int32) -> Int? {
+                sqlite3_column_type(stmt, i) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, i))
+            }
+
+            var out: [AgentTraceEvent] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                out.append(AgentTraceEvent(
+                    idempotencyKey: String(cString: sqlite3_column_text(stmt, 0)),
+                    pane: text(1),
+                    project: text(2),
+                    model: text(3),
+                    tier: text(4),
+                    ladderPosition: intOpt(5),
+                    feature: text(6),
+                    result: String(cString: sqlite3_column_text(stmt, 7)),
+                    startedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 8)),
+                    completedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 9)),
+                    latencyMs: Int(sqlite3_column_int64(stmt, 10)),
+                    tokensIn: Int(sqlite3_column_int64(stmt, 11)),
+                    tokensOut: Int(sqlite3_column_int64(stmt, 12)),
+                    costCents: Int(sqlite3_column_int64(stmt, 13)),
+                    redactionCount: Int(sqlite3_column_int64(stmt, 14)),
+                    validationStatus: text(15),
+                    confirmationRequired: sqlite3_column_int64(stmt, 16) != 0,
+                    egressDecisions: Int(sqlite3_column_int64(stmt, 17)),
+                    planId: text(18),
+                    costLedgerVersion: intOpt(19)
+                ))
             }
             return out
         }
@@ -531,6 +604,12 @@ public struct AgentTraceEvent: Sendable, Equatable {
     /// FK is declared via `REFERENCES context_plans(id)` for documented
     /// intent.
     public let planId: String?
+    /// Cost-ledger version under which `costCents` was priced. nil
+    /// means "not specified at write time" — the store will default to
+    /// `CostLedger.currentVersion`. Replays and back-dated writes pass
+    /// an explicit value so historical rates aren't silently rebased
+    /// when the live ledger advances.
+    public let costLedgerVersion: Int?
 
     public init(
         idempotencyKey: String,
@@ -551,7 +630,8 @@ public struct AgentTraceEvent: Sendable, Equatable {
         validationStatus: String? = nil,
         confirmationRequired: Bool = false,
         egressDecisions: Int = 0,
-        planId: String? = nil
+        planId: String? = nil,
+        costLedgerVersion: Int? = nil
     ) {
         self.idempotencyKey = idempotencyKey
         self.pane = pane
@@ -572,6 +652,7 @@ public struct AgentTraceEvent: Sendable, Equatable {
         self.confirmationRequired = confirmationRequired
         self.egressDecisions = egressDecisions
         self.planId = planId
+        self.costLedgerVersion = costLedgerVersion
     }
 }
 

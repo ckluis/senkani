@@ -16,6 +16,31 @@ private actor ConcurrencyTracker {
     func exit() { current -= 1 }
 }
 
+/// One-shot signal: `wait()` suspends until `signal()` lands. Lets a
+/// test hold a closure open inside an actor without leaning on
+/// `Task.sleep` timing assumptions that CI load can violate.
+private actor PoolTestGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var signaled = false
+
+    func signal() {
+        signaled = true
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func wait() async {
+        if signaled { return }
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            if signaled {
+                cont.resume()
+            } else {
+                self.continuation = cont
+            }
+        }
+    }
+}
+
 // MARK: - requiresUpdate
 
 @Suite(.serialized)
@@ -221,26 +246,47 @@ struct PaneRefreshWorkerPoolTests {
     @Test func saturatedPoolQueuesWaiters() async throws {
         let pool = PaneRefreshWorkerPool(maxConcurrent: 1)
         let started = ConcurrencyTracker()
+        let firstAcquired = PoolTestGate()
+        let firstHold = PoolTestGate()
 
-        async let first: Void = pool.run {
-            await started.enter()
-            try? await Task.sleep(nanoseconds: 80_000_000)
-            await started.exit()
+        // Unstructured Task {} starts more eagerly under cooperative-
+        // pool load than async-let — the prior async-let phrasing
+        // produced flakes on CI where neither closure got scheduled
+        // before the assertion fired (inflight=0, waiting=0).
+        let first = Task {
+            await pool.run {
+                await started.enter()
+                await firstAcquired.signal()
+                await firstHold.wait()
+                await started.exit()
+            }
         }
-        // Give `first` a moment to acquire the only slot.
-        try await Task.sleep(nanoseconds: 15_000_000)
-        async let second: Void = pool.run {
-            await started.enter()
-            await started.exit()
+        // Wait for `first` to definitively be inside `pool.run`'s body
+        // (so `inflight` has been incremented). No timing assumption.
+        await firstAcquired.wait()
+
+        let second = Task {
+            await pool.run {
+                await started.enter()
+                await started.exit()
+            }
         }
-        // Mid-flight: one running, one queued.
-        try await Task.sleep(nanoseconds: 15_000_000)
+        // Poll until `second` has reached `acquire()` and parked itself
+        // as a waiter. Yield (rather than sleep) so the cooperative
+        // pool picks up `second` even under heavy parallel-suite load.
+        var waiting = 0
+        for _ in 0..<2000 where waiting != 1 {
+            await Task.yield()
+            waiting = await pool.pendingWaiters
+        }
         let inflight = await pool.currentInflight
-        let waiting = await pool.pendingWaiters
         #expect(inflight == 1)
         #expect(waiting == 1)
 
-        _ = await (first, second)
+        // Release `first`; both tasks drain.
+        await firstHold.signal()
+        _ = await first.value
+        _ = await second.value
         let finalInflight = await pool.currentInflight
         let finalWaiting = await pool.pendingWaiters
         #expect(finalInflight == 0)

@@ -35,7 +35,8 @@ public enum ChainRepairer {
         public var description: String {
             switch self {
             case .unsupportedTable(let t):
-                return "ChainRepairer: table '\(t)' is not a chain participant. Supported: token_events, validation_results, sandboxed_results, commands."
+                let list = ChainRepairer.supportedTables.sorted().joined(separator: ", ")
+                return "ChainRepairer: table '\(t)' is not a chain participant. Supported: \(list)."
             case .noAnchor(let t):
                 return "ChainRepairer: table '\(t)' has no chain anchor — nothing to repair."
             case .fromRowidOutOfRange(let t, let from, let max):
@@ -56,13 +57,24 @@ public enum ChainRepairer {
         public let rowsRebound: Int
     }
 
-    /// Tables that participate in the chain. `sandboxed_results` uses TEXT
-    /// PKs and is currently repairable only by the operator-edit-by-hand
-    /// path; `--repair-chain` for it would require an `--from-created-at`
-    /// flag instead. Round 4 ships repair for the three integer-keyed
-    /// participants.
+    /// Tables that participate in the chain and are integer-keyed (so the
+    /// `--from-rowid` flag has a stable meaning). `sandboxed_results` uses
+    /// TEXT PKs and is currently repairable only by the operator-edit-by-
+    /// hand path; `--repair-chain` for it would require an
+    /// `--from-created-at` flag instead and stays out of this set.
+    ///
+    /// `annotation_rate_cap_log` (V.12b) is a derived flood-marker table
+    /// and is intentionally NOT chain-hashed — see
+    /// `AnnotationRateCapStore` for the design note. It does not appear
+    /// here.
     public static let supportedTables: Set<String> = [
-        "token_events", "validation_results", "commands",
+        "token_events",
+        "validation_results",
+        "commands",
+        "policy_snapshots",
+        "pane_refresh_state",
+        "confirmations",
+        "trust_audits",
     ]
 
     /// Open a new `chain_anchors` row (`reason="repair-<fromRowid>"`),
@@ -336,10 +348,28 @@ extension SessionDatabase {
                 // Drop per-store caches so the next insert picks up the new
                 // anchor. Each store holds its own cache; the closures run
                 // on the same queue, so this is race-free.
-                tokenEventStore?.invalidateChainCache()
-                validationStore?.invalidateChainCache()
-                sandboxStore?.invalidateChainCache()
-                commandStore?.invalidateChainCache()
+                //
+                // Switch on the repaired table — only that store's cache
+                // needs to drop. We still null-check every other store
+                // (sandbox is reachable via repair only after a future
+                // TEXT-PK extension) but a per-table dispatch keeps the
+                // invariant "the cache list can never lag the
+                // ChainRepairer.supportedTables list" load-bearing.
+                switch table {
+                case "token_events":       tokenEventStore?.invalidateChainCache()
+                case "validation_results": validationStore?.invalidateChainCache()
+                case "sandboxed_results":  sandboxStore?.invalidateChainCache()
+                case "commands":           commandStore?.invalidateChainCache()
+                case "policy_snapshots":   policyStore?.invalidateChainCache()
+                case "pane_refresh_state": paneRefreshStateStore?.invalidateChainCache()
+                case "confirmations":      confirmationStore?.invalidateChainCache()
+                case "trust_audits":       trustAuditStore?.invalidateChainCache()
+                default:
+                    // ChainRepairer.repair already rejected unsupported
+                    // tables; reaching here means a chain participant was
+                    // added to supportedTables without wiring its cache.
+                    assertionFailure("repairChain: cache invalidation missing for table '\(table)'")
+                }
             } catch {
                 caught = error
             }

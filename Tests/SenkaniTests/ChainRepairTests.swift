@@ -288,6 +288,236 @@ struct ChainRepairTests {
         }
     }
 
+    // MARK: - Widened supportedTables (chainrepairer-supportedtables-widen)
+
+    @Test("supportedTables covers every integer-keyed chain participant")
+    func supportedTablesShape() {
+        let expected: Set<String> = [
+            "token_events",
+            "validation_results",
+            "commands",
+            "policy_snapshots",
+            "pane_refresh_state",
+            "confirmations",
+            "trust_audits",
+        ]
+        #expect(ChainRepairer.supportedTables == expected)
+        // annotation_rate_cap_log is intentionally NOT a chain participant
+        // (see AnnotationRateCapStore) — guard against accidental inclusion.
+        #expect(!ChainRepairer.supportedTables.contains("annotation_rate_cap_log"))
+        // sandboxed_results uses TEXT PKs and stays out of --from-rowid
+        // repair (caller would need --from-created-at).
+        #expect(!ChainRepairer.supportedTables.contains("sandboxed_results"))
+    }
+
+    @Test("unsupportedTable error message lists every supported table")
+    func unsupportedTableMessageReflectsSet() {
+        let err = ChainRepairer.RepairError.unsupportedTable("annotation_rate_cap_log")
+        for table in ChainRepairer.supportedTables {
+            #expect(err.description.contains(table), "missing '\(table)' in '\(err.description)'")
+        }
+    }
+
+    @Test("Repair on policy_snapshots: tamper, doctor sees breach, repair, post-repair verify .ok")
+    func policySnapshotsRepair() throws {
+        let (db, path) = Self.makeDB()
+        defer { TempSessionDatabase.close(db, path: path) }
+
+        let sid = db.createSession(projectRoot: "/tmp/senkani-chain-repair", agentType: .claudeCode)
+        for i in 0..<3 {
+            let cfg = PolicyConfig(
+                features: PolicyFeatures(
+                    filter: true, secrets: true, indexer: true,
+                    terse: false, injectionGuard: true
+                ),
+                budget: PolicyBudget(
+                    perSessionLimitCents: 100 + i,
+                    dailyLimitCents: nil, weeklyLimitCents: nil,
+                    softLimitPercent: 0.8
+                ),
+                learnedRulesHash: "hash-\(i)",
+                modelId: "claude-haiku-4-5",
+                modelTier: nil,
+                agentType: "claude_code",
+                capturedAt: Date(timeIntervalSince1970: 1_700_000_000 + Double(i))
+            )
+            #expect(db.recordPolicySnapshot(sessionId: sid, config: cfg))
+        }
+        db.flushWrites()
+
+        // Tamper row 2.
+        try Self.tamper(
+            path, table: "policy_snapshots",
+            where_: "id = 2", set: "policy_json = '{\"tampered\":true}'"
+        )
+
+        // `senkani doctor --verify-chain` reports the breach.
+        let preRepair = ChainVerifier.verifyPolicySnapshots(db)
+        guard case .brokenAt(_, let rowid, _, _) = preRepair else {
+            Issue.record("expected brokenAt, got \(preRepair)")
+            return
+        }
+        #expect(rowid == 2)
+
+        // `senkani doctor --repair-chain --table policy_snapshots --from-rowid 2`
+        // opens a repair anchor.
+        let outcome = try db.repairChain(
+            table: "policy_snapshots",
+            fromRowid: 2,
+            force: true
+        )
+        #expect(outcome.table == "policy_snapshots")
+        #expect(outcome.fromRowid == 2)
+        #expect(outcome.rowsRebound == 2)  // rows 2, 3
+
+        // Add a fresh row under the new anchor and verify.
+        let freshCfg = PolicyConfig(
+            features: PolicyFeatures(filter: false, secrets: true, indexer: true, terse: false, injectionGuard: true),
+            budget: PolicyBudget(perSessionLimitCents: 999, dailyLimitCents: nil, weeklyLimitCents: nil, softLimitPercent: 0.5),
+            learnedRulesHash: "fresh",
+            modelId: "claude-sonnet-4-6",
+            modelTier: nil,
+            agentType: "claude_code",
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_500)
+        )
+        #expect(db.recordPolicySnapshot(sessionId: sid, config: freshCfg))
+        db.flushWrites()
+
+        let postRepair = ChainVerifier.verifyPolicySnapshots(db)
+        guard case .ok(_, let repairs) = postRepair else {
+            Issue.record("expected .ok, got \(postRepair)")
+            return
+        }
+        #expect(repairs >= 1)
+    }
+
+    @Test("Repair on pane_refresh_state: tamper, verify breach, repair, fresh write verifies .ok")
+    func paneRefreshStateRepair() throws {
+        let (db, path) = Self.makeDB()
+        defer { TempSessionDatabase.close(db, path: path) }
+
+        let projectRoot = "/tmp/senkani-chain-repair-prs"
+        for i in 0..<3 {
+            let state = PaneRefreshState(
+                cacheType: .duration,
+                cacheDuration: 30,
+                nextUpdate: Date(timeIntervalSince1970: 1_700_000_000 + Double(i)),
+                contentAvailable: true
+            )
+            db.recordPaneRefreshState(projectRoot: projectRoot, tileId: "tile-\(i)", state: state)
+        }
+        db.flushWrites()
+
+        // Tamper row 2 — flip its tile_id.
+        try Self.tamper(
+            path, table: "pane_refresh_state",
+            where_: "id = 2", set: "tile_id = 'tampered'"
+        )
+
+        let preRepair = ChainVerifier.verifyPaneRefreshState(db)
+        guard case .brokenAt(_, let rowid, _, _) = preRepair else {
+            Issue.record("expected brokenAt, got \(preRepair)")
+            return
+        }
+        #expect(rowid == 2)
+
+        let outcome = try db.repairChain(
+            table: "pane_refresh_state",
+            fromRowid: 2,
+            force: true
+        )
+        #expect(outcome.table == "pane_refresh_state")
+        #expect(outcome.rowsRebound == 2)
+
+        // Fresh write under the new anchor.
+        let fresh = PaneRefreshState(
+            cacheType: .duration, cacheDuration: 60,
+            nextUpdate: Date(timeIntervalSince1970: 1_700_000_500),
+            contentAvailable: false
+        )
+        db.recordPaneRefreshState(projectRoot: projectRoot, tileId: "tile-fresh", state: fresh)
+        db.flushWrites()
+
+        let postRepair = ChainVerifier.verifyPaneRefreshState(db)
+        guard case .ok(_, let repairs) = postRepair else {
+            Issue.record("expected .ok, got \(postRepair)")
+            return
+        }
+        #expect(repairs >= 1)
+    }
+
+    @Test("Repair on confirmations: opens a repair anchor (verifier coverage pending)")
+    func confirmationsRepairOpensAnchor() throws {
+        let (db, path) = Self.makeDB()
+        defer { TempSessionDatabase.close(db, path: path) }
+
+        for i in 0..<3 {
+            db.recordConfirmation(ConfirmationRow(
+                toolName: "Tool-\(i)",
+                requestedAt: Date(timeIntervalSince1970: 1_700_000_000 + Double(i)),
+                decidedAt: Date(timeIntervalSince1970: 1_700_000_001 + Double(i)),
+                decision: .auto,
+                decidedBy: .auto,
+                reason: nil
+            ))
+        }
+        db.flushWrites()
+
+        let outcome = try db.repairChain(
+            table: "confirmations",
+            fromRowid: 2,
+            force: true
+        )
+        #expect(outcome.table == "confirmations")
+        #expect(outcome.fromRowid == 2)
+        #expect(outcome.rowsRebound == 2)
+        #expect(outcome.newAnchorId > 0)
+
+        // Repair anchor row exists with reason='repair-2' and the prior tip
+        // recorded in operator_note.
+        var rdb: OpaquePointer?
+        try #require(sqlite3_open(path, &rdb) == SQLITE_OK)
+        defer { sqlite3_close(rdb) }
+        var stmt: OpaquePointer?
+        let sql = "SELECT reason, operator_note FROM chain_anchors WHERE id = ?;"
+        try #require(sqlite3_prepare_v2(rdb, sql, -1, &stmt, nil) == SQLITE_OK)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, outcome.newAnchorId)
+        try #require(sqlite3_step(stmt) == SQLITE_ROW)
+        let reason = String(cString: sqlite3_column_text(stmt, 0))
+        let note = String(cString: sqlite3_column_text(stmt, 1))
+        #expect(reason == "repair-2")
+        #expect(note.contains("prior_tip="))
+    }
+
+    @Test("Repair on trust_audits: opens a repair anchor (verifier coverage pending)")
+    func trustAuditsRepairOpensAnchor() throws {
+        let (db, path) = Self.makeDB()
+        defer { TempSessionDatabase.close(db, path: path) }
+
+        for i in 0..<3 {
+            let flag = FragmentationDetector.Flag(
+                createdAt: Date(timeIntervalSince1970: 1_700_000_000 + Double(i)),
+                sessionId: "s-\(i)",
+                paneId: nil,
+                toolName: "Tool",
+                reason: .toolBurst,
+                correlationCount: 3
+            )
+            #expect(db.recordTrustFlag(flag, score: 50 + i) >= 0)
+        }
+        db.flushWrites()
+
+        let outcome = try db.repairChain(
+            table: "trust_audits",
+            fromRowid: 2,
+            force: true
+        )
+        #expect(outcome.table == "trust_audits")
+        #expect(outcome.rowsRebound >= 2)
+        #expect(outcome.newAnchorId > 0)
+    }
+
     @Test("Repair on a chain with no tip hash (only backfilled rows) handles nil prior tip")
     func priorTipNilHandled() throws {
         // Set up a DB whose token_events anchor has only backfilled (NULL-hash)

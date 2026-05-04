@@ -133,8 +133,9 @@ struct Doctor: ParsableCommand {
     // MARK: - --repair-chain (Phase T.5 round 4)
 
     private func runRepairChain() throws {
+        let supportedList = ChainRepairer.supportedTables.sorted().joined(separator: "|")
         guard let table else {
-            FileHandle.standardError.write(Data("error: --repair-chain requires --table <token_events|validation_results|commands>\n".utf8))
+            FileHandle.standardError.write(Data("error: --repair-chain requires --table <\(supportedList)>\n".utf8))
             throw ExitCode.failure
         }
         guard let fromRowid else {
@@ -142,7 +143,8 @@ struct Doctor: ParsableCommand {
             throw ExitCode.failure
         }
         guard ChainRepairer.supportedTables.contains(table) else {
-            FileHandle.standardError.write(Data("error: --table '\(table)' is not supported. Supported: token_events, validation_results, commands\n".utf8))
+            let listText = ChainRepairer.supportedTables.sorted().joined(separator: ", ")
+            FileHandle.standardError.write(Data("error: --table '\(table)' is not supported. Supported: \(listText)\n".utf8))
             throw ExitCode.failure
         }
 

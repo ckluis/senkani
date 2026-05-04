@@ -9,6 +9,59 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — `ChainRepairer.supportedTables` widened to every integer-keyed chain participant (operator now has an auto-repair path on every audited table)
+
+- Prior state: after the May 4 `policy_snapshots` chain-anchor round,
+  `senkani doctor --verify-chain` could detect tamper on every
+  integer-keyed chain participant — but `senkani doctor --repair-chain`
+  refused everything except `token_events`, `validation_results`,
+  and `commands`. An operator who saw a verified breach in
+  `policy_snapshots`, `pane_refresh_state`, `confirmations`, or
+  `trust_audits` had no clean recovery path; the second half of the
+  "auto-detect tamper, auto-bind a repair anchor" promise was
+  missing.
+- `ChainRepairer.supportedTables` now includes `policy_snapshots`,
+  `pane_refresh_state`, `confirmations`, and `trust_audits` alongside
+  the original three. `sandboxed_results` (TEXT primary keys) stays
+  out — it needs an `--from-created-at` flag, deferred until concrete
+  operator demand. `annotation_rate_cap_log` is intentionally NOT a
+  chain participant per `AnnotationRateCapStore`'s design note (the
+  rate-cap log is a derived flood marker; tampering is detectable by
+  re-deriving from `hook_events` / `token_events` / `commands`) and
+  stays out of the set.
+- `SessionDatabase.repairChain` now switches on the repaired table
+  and invalidates only that store's chain cache (the prior round
+  invalidated the four original stores unconditionally — wrong shape
+  for the widened set). An `assertionFailure` in the default arm
+  guards the invariant "the cache list can never lag
+  `supportedTables`."
+- `RepairError.unsupportedTable`'s description string now derives the
+  supported-list dynamically from `supportedTables` instead of
+  hardcoding three names.
+- `senkani doctor --repair-chain` error messages also derive the
+  supported-list dynamically — operators who pass `--table foo` see
+  the current set, not a stale enumeration.
+- Tests: seven new tests under
+  `Tests/SenkaniTests/ChainRepairTests.swift`. Two are shape guards
+  (`supportedTables` covers exactly the integer-keyed participants;
+  `unsupportedTable` description names every entry). Two are full
+  verify-roundtrip integration tests on `policy_snapshots` and
+  `pane_refresh_state` — write three rows, tamper row 2,
+  `ChainVerifier.verify*` reports the breach, `repairChain` opens a
+  repair anchor with the right `rowsRebound` count, fresh write under
+  the new anchor, post-repair verify is `.ok` with `repairs >= 1`.
+  Two are smoke tests on `confirmations` and `trust_audits` —
+  `ChainVerifier` doesn't yet cover those tables (tracked separately
+  under `chainverifier-coverage-confirmations-trust-audits`), so the
+  tests assert outcome shape + repair anchor presence + prior-tip
+  linkage in `chain_anchors.operator_note` directly. Test count
+  2393 → 2400 (+7).
+- Filed as a defect-outside-criteria during this round:
+  `chainverifier-coverage-strip-annotation-rate-cap-premise` —
+  corrects the sibling `chainverifier-coverage-...` item's stale
+  premise that `AnnotationRateCapStore` participates in the chain
+  (it doesn't, by design).
+
 ### May 4 — `policy_snapshots` chain-anchored (counterfactual replay baseline now tamper-evident)
 
 - Prior state: `policy_snapshots` (the load-bearing record cited by

@@ -833,6 +833,96 @@ public enum MigrationRegistry {
             try exec("ALTER TABLE agent_trace_event ADD COLUMN cost_ledger_version INTEGER;",
                      allowDuplicateColumn: true)
         },
+        Migration(version: 17, description: "policy_snapshots chain-anchoring (Phase T.5 extension)") { db in
+            // policy_snapshots is the load-bearing record of "what
+            // configuration was active when this session ran."
+            // Counterfactual replay reports cite it as the audit
+            // baseline. Without chain anchoring, a write-capable
+            // attacker can rewrite a snapshot row post-hoc and the
+            // replay surface silently lies about the baseline.
+            //
+            // v17 adds the same three chain columns the rest of the
+            // chain participants carry (`prev_hash`, `entry_hash`,
+            // `chain_anchor_id`), opens a `migration-v17` anchor
+            // covering existing rows (anchor-from-now — predecessor
+            // rows keep NULL hashes), and indexes the anchor. New
+            // writes go through ChainHasher / ChainState in the same
+            // shape as ConfirmationStore.
+            //
+            // Idempotency: ALTER guards on duplicate column the same
+            // way as v3/v4/v5/v7/v8/v9/v10/v14/v16. CREATE is guarded.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v17", detail: msg)
+            }
+
+            // Self-contained CREATE matches the v3/v4/v5/v15 convention
+            // so v17 can run against a DB dropped in at any later state.
+            try exec("""
+                CREATE TABLE IF NOT EXISTS policy_snapshots (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id   TEXT NOT NULL,
+                    captured_at  REAL NOT NULL,
+                    policy_hash  TEXT NOT NULL,
+                    policy_json  TEXT NOT NULL,
+                    UNIQUE(session_id, policy_hash)
+                );
+            """)
+            try exec("ALTER TABLE policy_snapshots ADD COLUMN prev_hash TEXT;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE policy_snapshots ADD COLUMN entry_hash TEXT;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE policy_snapshots ADD COLUMN chain_anchor_id INTEGER;", allowDuplicateColumn: true)
+            try exec("CREATE INDEX IF NOT EXISTS idx_policy_snapshots_anchor ON policy_snapshots(chain_anchor_id, id);")
+
+            // Anchor existing rows under a 'migration-v17' anchor so
+            // post-migration writes verify cleanly while pre-migration
+            // rows stay anchor-from-now (NULL hashes). Inlined rather
+            // than reusing `anchorBackfill` because that helper hard-
+            // codes `reason='migration-v5'`.
+            var stmt: OpaquePointer?
+            let countSQL = "SELECT COUNT(*), COALESCE(MAX(id), 0) FROM policy_snapshots;"
+            guard sqlite3_prepare_v2(db, countSQL, -1, &stmt, nil) == SQLITE_OK else {
+                throw MigrationError.sqlFailed(stage: "v17 count", detail: String(cString: sqlite3_errmsg(db)))
+            }
+            var rowCount: Int64 = 0
+            var maxRowid: Int64 = 0
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                rowCount = sqlite3_column_int64(stmt, 0)
+                maxRowid = sqlite3_column_int64(stmt, 1)
+            }
+            sqlite3_finalize(stmt)
+
+            if rowCount > 0 {
+                let now = Date().timeIntervalSince1970
+                let insertSQL = """
+                    INSERT INTO chain_anchors
+                        (table_name, started_at, started_at_rowid, reason, operator_note)
+                    VALUES ('policy_snapshots', ?, ?, 'migration-v17', NULL);
+                """
+                guard sqlite3_prepare_v2(db, insertSQL, -1, &stmt, nil) == SQLITE_OK else {
+                    throw MigrationError.sqlFailed(stage: "v17 anchor insert", detail: String(cString: sqlite3_errmsg(db)))
+                }
+                sqlite3_bind_double(stmt, 1, now)
+                sqlite3_bind_int64(stmt, 2, maxRowid)
+                guard sqlite3_step(stmt) == SQLITE_DONE else {
+                    sqlite3_finalize(stmt)
+                    throw MigrationError.sqlFailed(stage: "v17 anchor step", detail: String(cString: sqlite3_errmsg(db)))
+                }
+                sqlite3_finalize(stmt)
+                let anchorId = sqlite3_last_insert_rowid(db)
+
+                let backfillSQL = """
+                    UPDATE policy_snapshots
+                       SET chain_anchor_id = \(anchorId)
+                     WHERE chain_anchor_id IS NULL;
+                """
+                try exec(backfillSQL)
+            }
+        },
     ]
 
     // MARK: - v5 helpers

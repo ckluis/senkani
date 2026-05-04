@@ -67,6 +67,7 @@ public enum ChainVerifier {
                 "sandboxed_results":  verifyTable(db: db, table: "sandboxed_results",  verify: verifyAnchorSandboxedResults),
                 "commands":           verifyTable(db: db, table: "commands",           verify: verifyAnchorCommands),
                 "pane_refresh_state": verifyTable(db: db, table: "pane_refresh_state", verify: verifyAnchorPaneRefreshState),
+                "policy_snapshots":   verifyTable(db: db, table: "policy_snapshots",   verify: verifyAnchorPolicySnapshots),
             ]
         }
     }
@@ -96,6 +97,13 @@ public enum ChainVerifier {
         return database.queue.sync {
             guard let db = database.db else { return .noChain }
             return verifyTable(db: db, table: "pane_refresh_state", verify: verifyAnchorPaneRefreshState)
+        }
+    }
+
+    public static func verifyPolicySnapshots(_ database: SessionDatabase) -> Result {
+        return database.queue.sync {
+            guard let db = database.db else { return .noChain }
+            return verifyTable(db: db, table: "policy_snapshots", verify: verifyAnchorPolicySnapshots)
         }
     }
 
@@ -317,6 +325,32 @@ public enum ChainVerifier {
             ]
             let prev = optionalText(stmt, 10)
             let stored = sqlite3_column_text(stmt, 11).map { String(cString: $0) } ?? ""
+            return (rowid, columns, prev, stored)
+        }
+    }
+
+    /// Walk `policy_snapshots` rows for one anchor.
+    /// `entry_hash IS NOT NULL` filter — see `verifyAnchorTokenEvents` notes.
+    /// Canonical input is the four data columns (the chain columns are
+    /// excluded by `ChainHasher.excludedColumns` contract).
+    private static func verifyAnchorPolicySnapshots(db: OpaquePointer, anchor: Anchor) -> Result? {
+        let sql = """
+            SELECT id, session_id, captured_at, policy_hash, policy_json,
+                   prev_hash, entry_hash
+              FROM policy_snapshots
+             WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
+             ORDER BY id ASC;
+        """
+        return walkTable(db: db, table: "policy_snapshots", anchor: anchor, sql: sql) { stmt in
+            let rowid = sqlite3_column_int64(stmt, 0)
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "session_id":  textValue(stmt, 1),
+                "captured_at": .real(sqlite3_column_double(stmt, 2)),
+                "policy_hash": textValue(stmt, 3),
+                "policy_json": textValue(stmt, 4),
+            ]
+            let prev = optionalText(stmt, 5)
+            let stored = sqlite3_column_text(stmt, 6).map { String(cString: $0) } ?? ""
             return (rowid, columns, prev, stored)
         }
     }

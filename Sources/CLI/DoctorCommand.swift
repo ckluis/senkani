@@ -253,7 +253,7 @@ struct Doctor: ParsableCommand {
         // start date) but repairs still exist.
         let database = SessionDatabase.shared
         let perTable = ChainVerifier.verifyAll(database)
-        let order = ["token_events", "validation_results", "sandboxed_results", "commands"]
+        let order = ["token_events", "validation_results", "sandboxed_results", "commands", "policy_snapshots"]
         var anyBroken = false
         var earliestStart: Date?
 
@@ -301,7 +301,7 @@ struct Doctor: ParsableCommand {
         } else {
             printStatus(
                 .pass,
-                "chain integrity: OK across token_events / validation_results / sandboxed_results / commands\(since) / \(totalRepairs) repairs"
+                "chain integrity: OK across token_events / validation_results / sandboxed_results / commands / policy_snapshots\(since) / \(totalRepairs) repairs"
             )
             results.passed += 1
         }

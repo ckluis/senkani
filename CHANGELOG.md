@@ -9,6 +9,44 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — `policy_snapshots` chain-anchored (counterfactual replay baseline now tamper-evident)
+
+- Prior state: `policy_snapshots` (the load-bearing record cited by
+  counterfactual replay reports as "what configuration was active
+  when this session ran") had no `prev_hash` / `entry_hash` /
+  `chain_anchor_id` columns. Every comparable audit-relevant table
+  — `confirmations`, `trust_audits`, `pane_refresh_state`, the
+  original Phase T.5 four — was already chain-anchored. A motivated
+  bad actor with DB write access could rewrite a snapshot row
+  post-hoc and replay reports would silently lie about the
+  baseline. The "agent_trace_event tampering is detectable by
+  re-deriving from chain-anchored sources" risk-acceptance from
+  `architecture.md` did NOT apply to `policy_snapshots` itself —
+  the snapshot IS the source, not a derivation.
+- Migration v17 adds the three chain columns + an
+  `idx_policy_snapshots_anchor` index; existing rows are folded
+  under a `migration-v17` anchor with anchor-from-now NULL hashes
+  (matching the v4 / v5 backfill convention).
+- `PolicyStore.capture` routes through `ChainHasher` / `ChainState`
+  the same way `ConfirmationStore` does — entry hash computed over
+  the four data columns (`session_id`, `captured_at`,
+  `policy_hash`, `policy_json`), prev_hash chained from the
+  segment's tip, dedup-no-advance discipline preserved (the
+  `ON CONFLICT(session_id, policy_hash) DO NOTHING` path no longer
+  poisons the chain cache).
+- `ChainVerifier.verifyAll` widened to include `policy_snapshots`;
+  new `verifyPolicySnapshots(_:)` public entry point.
+- `senkani doctor --verify-chain` now covers `policy_snapshots` —
+  the per-table walk + summary line both name it.
+- Tests: six new tests under
+  `Tests/SenkaniTests/PolicySnapshotsChainTests.swift` covering
+  schema shape (PRAGMA verifies the three chain columns), happy-
+  path chain-of-three, `verifyAll` membership, dedup-no-advance,
+  and tamper coordinates on `policy_json` + `policy_hash`. Test
+  count 2387 → 2393 (+6).
+- `ChainRound3Tests.verifyAll returns one entry per table`
+  expectation widened from 5 → 6 to reflect the new participant.
+
 ### May 4 — `PolicyConfig` splits conflated `modelTier` into `modelId` + `modelTier` (audit clarity)
 
 - Prior state: `Sources/Core/PolicyConfig.swift` resolved

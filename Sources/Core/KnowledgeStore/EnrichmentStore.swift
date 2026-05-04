@@ -175,6 +175,7 @@ final class EnrichmentStore: @unchecked Sendable {
     }
 
     private func exec(_ sql: String) {
+        dispatchPrecondition(condition: .onQueue(parent.queue))
         guard let db = parent.db else { return }
         var err: UnsafeMutablePointer<CChar>?
         if sqlite3_exec(db, sql, nil, nil, &err) != SQLITE_OK {

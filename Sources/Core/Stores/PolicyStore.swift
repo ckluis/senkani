@@ -127,6 +127,7 @@ final class PolicyStore: @unchecked Sendable {
     // MARK: - Helpers
 
     private func execSilent(_ sql: String) {
+        dispatchPrecondition(condition: .onQueue(parent.queue))
         guard let db = parent.db else { return }
         sqlite3_exec(db, sql, nil, nil, nil)
     }

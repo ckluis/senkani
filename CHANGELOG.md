@@ -9,6 +9,36 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — Queue-affinity contract on `SessionDatabase` raw-pointer leaves
+
+- Prior state: `SessionDatabase.db: OpaquePointer?` is `internal` so
+  extracted stores can share the connection without opening a second
+  handle, but the surface lets `@testable import Core` consumers reach
+  the raw pointer too. The 2026-05-03 round caught one such bypass in
+  `StoreExecTests` (test-thread `sqlite3_*` racing the init-time
+  recordEvent burst on `db.queue` = SIGSEGV in libsqlite3). The
+  surgical fix wrapped that test; the wider audit was deferred.
+- This round closed the audit. All 21 `db.db` references in tests
+  (across 8 files) are queue-internal — wrapped in
+  `db.queue.sync { ... }`. All 127 production `parent.db` references
+  (across 16 store files) are queue-internal too — inside
+  `parent.queue.sync { ... }` or `parent.queue.async { ... }`.
+- The regression-catcher: every store-private leaf (`exec(_:)`,
+  `execSilent(_:)` — 16 files, ~25 sites, both in `Sources/Core/Stores/`
+  and `Sources/Core/KnowledgeStore/`) now opens with
+  `dispatchPrecondition(condition: .onQueue(parent.queue))`. A future
+  caller that forgets the `queue.sync` wrapper trips
+  `__DISPATCH_ASSERTION_FAILURE__` SIGTRAP loud in debug builds
+  instead of silently racing libsqlite3.
+- The queue-affinity invariant + audit reference now lives in a doc
+  comment next to `internal var db` in `SessionDatabase.swift`, so
+  future auditors land on it before reaching the field.
+- The deferred-by-design moves stay deferred per the item's own
+  guidance: `internal var db` → `private var db` + `_testOnly_withDb`
+  helper (would touch 21 test sites — kept until a future round
+  consolidates), and the actor-based concurrency rewrite (different
+  question entirely). Tests: 2442 → 2442 (no change; hygiene round).
+
 ### May 4 — Centralized `.migrating`/`.schema.lock` cleanup across all `SessionDatabase(path:)` test callers
 
 - Prior state: `MigrationRunner` writes a `<dbPath>.migrating` flock

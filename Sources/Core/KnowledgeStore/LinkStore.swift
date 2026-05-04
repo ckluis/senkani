@@ -170,6 +170,7 @@ final class LinkStore: @unchecked Sendable {
     }
 
     private func exec(_ sql: String) {
+        dispatchPrecondition(condition: .onQueue(parent.queue))
         guard let db = parent.db else { return }
         rawExec(db, sql)
     }

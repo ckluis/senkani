@@ -37,6 +37,20 @@ public final class SessionDatabase: @unchecked Sendable {
     // `Sources/Core/Stores/` can share the connection + queue without opening
     // a second handle. External callers still go through the public API —
     // Core is not a place to reach into the raw SQLite pointer.
+    //
+    // Queue-affinity invariant (audit 2026-05-04, item
+    // `harness-test-safe-other-sigtrap-rootcause-sessiondb-raw-db-pointer-bypass`):
+    // every `sqlite3_*` call against this handle MUST happen on `queue`.
+    // libsqlite3 is built with SQLITE_THREADSAFE=1 (multi-thread, not
+    // serialized) on macOS — concurrent calls on the same connection from
+    // two threads SIGSEGV inside libsqlite3, not at the Swift boundary.
+    // The 2026-05-03 round bisected one such race in StoreExecTests; this
+    // round audits and locks in the contract at the leaves. Store-private
+    // `exec(_:)` / `execSilent(_:)` helpers (Sources/Core/Stores/*.swift,
+    // Sources/Core/KnowledgeStore/*.swift) all carry a
+    // `dispatchPrecondition(condition: .onQueue(parent.queue))` so a
+    // future caller that forgets the `queue.sync { ... }` wrapper fails
+    // loud in debug builds instead of silently racing libsqlite3.
     internal var db: OpaquePointer?
     internal let queue = DispatchQueue(label: "com.senkani.sessiondb", qos: .utility)
 

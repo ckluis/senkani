@@ -461,6 +461,7 @@ final class EntityStore: @unchecked Sendable {
     }
 
     private func exec(_ sql: String) {
+        dispatchPrecondition(condition: .onQueue(parent.queue))
         guard let db = parent.db else { return }
         rawExec(db, sql)
     }
@@ -470,6 +471,7 @@ final class EntityStore: @unchecked Sendable {
     /// without breaking when migration v7 already landed the column.
     /// All other errors print to stderr (same channel as `rawExec`).
     private func execSilent(_ sql: String) {
+        dispatchPrecondition(condition: .onQueue(parent.queue))
         guard let db = parent.db else { return }
         var err: UnsafeMutablePointer<CChar>?
         let rc = sqlite3_exec(db, sql, nil, nil, &err)

@@ -9,6 +9,27 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 3 — `BenchmarkReport.confidence` rollup wired through the runner (mixed-tier reports degrade correctly)
+- Pre-audit found `Confidence.loosened(by:)` already existed in
+  `Sources/Bench/BenchmarkTypes.swift` but was dead — `SavingsTestRunner`
+  built `BenchmarkReport` without passing `confidence:`, defaulting every
+  report to `.exact`, and `TaskResult` had no per-task `confidence` field
+  to roll up from. Cheap to fix; ships before any task surfaces a non-exact
+  tier and silently misreports as `.exact`.
+- Added `confidence: Confidence` to `TaskResult` (default `.exact`, no
+  call-site churn for the eight existing fixture-bench tasks). Synthesized
+  Codable picks the field up automatically; existing JSON round-trip test
+  (`jsonReportIsValidAndRoundTrips`) still green.
+- `SavingsTestRunner.run` now folds per-task confidences via
+  `results.reduce(.exact) { $0.loosened(by: $1.confidence) }` and passes
+  the rollup as `BenchmarkReport(confidence:)`. `loosened(by:)` is
+  associative+commutative max-over-ordered-enum, so fold order is safe;
+  empty-results yields `.exact` (correct neutral element).
+- Two new tests in `SavingsTestRunner — Confidence Rollup` suite:
+  one-`.estimated`-task report rolls up to `.estimated`, and a three-task
+  `.exact + .estimated + .needsValidation` mix rolls up to
+  `.needsValidation`. SavingsTestRunner suites: 14 → 16 tests (+2).
+
 ### May 3 — `tools/test-safe.sh` `other`-chunk SIGTRAP isolated to `StoreExecTests` concurrent-libsqlite3 race (full-suite green again)
 - Bisect filed alongside the FSEvents fix (commit `3b36b3d`) found the
   catch-all `other` chunk SIGTRAPs deterministically post-`bisect-sigtrap-source`.

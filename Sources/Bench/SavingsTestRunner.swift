@@ -22,6 +22,7 @@ public enum SavingsTestRunner {
         let gates = computeGates(results: results)
         let multiplier = computeOverallMultiplier(results: results)
         let duration = Date().timeIntervalSince(startTime) * 1000
+        let confidence = results.reduce(Confidence.exact) { $0.loosened(by: $1.confidence) }
 
         return BenchmarkReport(
             timestamp: Date(),
@@ -30,7 +31,8 @@ public enum SavingsTestRunner {
             results: results,
             gates: gates,
             overallMultiplier: multiplier,
-            allGatesPassed: gates.allSatisfy(\.passed)
+            allGatesPassed: gates.allSatisfy(\.passed),
+            confidence: confidence
         )
     }
 

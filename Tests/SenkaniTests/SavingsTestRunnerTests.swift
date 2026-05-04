@@ -147,3 +147,76 @@ struct SavingsTestRunnerMathTests {
         try #require(!regressionGate.passed, "Regression gate must fail when a task regresses")
     }
 }
+
+@Suite("SavingsTestRunner — Confidence Rollup")
+struct SavingsTestRunnerConfidenceTests {
+
+    /// One `.estimated` task in the set degrades the report's overall
+    /// confidence to `.estimated`.
+    @Test func reportRollsUpEstimatedFromSingleTask() {
+        let task = BenchmarkTask(
+            id: "estimated_task",
+            category: "filter",
+            description: "Synthetic estimated task",
+            execute: { config in
+                TaskResult(
+                    taskId: "estimated_task",
+                    configName: config.name,
+                    category: "filter",
+                    rawBytes: 100,
+                    compressedBytes: 50,
+                    durationMs: 1,
+                    confidence: .estimated
+                )
+            }
+        )
+        let report = SavingsTestRunner.run(tasks: [task], configs: [BenchmarkConfig.standardConfigs[0]])
+        #expect(report.confidence == .estimated)
+    }
+
+    /// A three-task mix of `.exact`, `.estimated`, `.needsValidation`
+    /// rolls up to the most permissive tier — `.needsValidation`.
+    @Test func reportRollsUpToNeedsValidationAcrossMixedTiers() {
+        let exactTask = BenchmarkTask(
+            id: "exact_task",
+            category: "filter",
+            description: "Exact",
+            execute: { config in
+                TaskResult(
+                    taskId: "exact_task", configName: config.name, category: "filter",
+                    rawBytes: 100, compressedBytes: 50, durationMs: 1,
+                    confidence: .exact
+                )
+            }
+        )
+        let estimatedTask = BenchmarkTask(
+            id: "estimated_task",
+            category: "cache",
+            description: "Estimated",
+            execute: { config in
+                TaskResult(
+                    taskId: "estimated_task", configName: config.name, category: "cache",
+                    rawBytes: 100, compressedBytes: 50, durationMs: 1,
+                    confidence: .estimated
+                )
+            }
+        )
+        let needsValidationTask = BenchmarkTask(
+            id: "nv_task",
+            category: "indexer",
+            description: "Needs validation",
+            execute: { config in
+                TaskResult(
+                    taskId: "nv_task", configName: config.name, category: "indexer",
+                    rawBytes: 100, compressedBytes: 50, durationMs: 1,
+                    confidence: .needsValidation
+                )
+            }
+        )
+        let report = SavingsTestRunner.run(
+            tasks: [exactTask, estimatedTask, needsValidationTask],
+            configs: [BenchmarkConfig.standardConfigs[0]]
+        )
+        #expect(report.confidence == .needsValidation)
+    }
+}

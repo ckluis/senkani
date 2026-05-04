@@ -9,6 +9,29 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — `policy_snapshots.session_id` declares `REFERENCES sessions(id)` (documentation parity with `commands.session_id`)
+
+- Prior state: Migration v15 (`policy_snapshots` table) + Migration
+  v17 (chain-anchoring extension)'s self-contained `CREATE TABLE`
+  statements, plus `PolicyStore.setupSchema`'s mirror, all declared
+  `session_id TEXT NOT NULL` without the `REFERENCES sessions(id)`
+  marker that `commands.session_id` (Migration v5 baseline) carries.
+  The relational intent ("every snapshot belongs to a session") was
+  implicit in every reader path but invisible in the schema.
+- All three CREATE statements now declare the FK in lockstep
+  (`Sources/Core/Migrations.swift` v15 + v17,
+  `Sources/Core/Stores/PolicyStore.swift` `setupSchema`). Effect is
+  fresh-install only — SQLite cannot retrofit FKs via
+  `ALTER TABLE`, and the project default of `PRAGMA foreign_keys =
+  OFF` means the declaration is durable documentation rather than
+  runtime enforcement. Existing databases migrate forward unchanged.
+- New `PolicySnapshotsChainTests.sessionIdForeignKey` asserts the FK
+  is present on fresh installs via
+  `PRAGMA foreign_key_list(policy_snapshots)`, preventing future
+  drift across the three CREATE statements.
+- Surfaced 2026-05-03 by Celko-lens luminary review of
+  `policy-snapshots-chain-anchor`.
+
 ### May 4 — `senkani doctor` chain-audit display now surfaces `pane_refresh_state` (verifier covered it; doctor was silently dropping it)
 
 - Prior state: `ChainVerifier.verifyAll` returned a result for

@@ -36,7 +36,7 @@ final class PolicyStore: @unchecked Sendable {
             execSilent("""
                 CREATE TABLE IF NOT EXISTS policy_snapshots (
                     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id      TEXT NOT NULL,
+                    session_id      TEXT NOT NULL REFERENCES sessions(id),
                     captured_at     REAL NOT NULL,
                     policy_hash     TEXT NOT NULL,
                     policy_json     TEXT NOT NULL,

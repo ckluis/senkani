@@ -103,6 +103,31 @@ struct PolicySnapshotsChainTests {
         #expect(columns.contains("chain_anchor_id"))
     }
 
+    @Test("schema: policy_snapshots.session_id declares REFERENCES sessions(id)")
+    func sessionIdForeignKey() {
+        let (db, path) = Self.makeDB()
+        defer { TempSessionDatabase.close(db, path: path) }
+
+        var raw: OpaquePointer?
+        #expect(sqlite3_open(path, &raw) == SQLITE_OK)
+        defer { sqlite3_close(raw) }
+        var stmt: OpaquePointer?
+        #expect(sqlite3_prepare_v2(raw, "PRAGMA foreign_key_list(policy_snapshots);", -1, &stmt, nil) == SQLITE_OK)
+        defer { sqlite3_finalize(stmt) }
+
+        // PRAGMA foreign_key_list columns: id, seq, table, from, to, on_update, on_delete, match.
+        var found = false
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let table = sqlite3_column_text(stmt, 2).map { String(cString: $0) } ?? ""
+            let from = sqlite3_column_text(stmt, 3).map { String(cString: $0) } ?? ""
+            let to = sqlite3_column_text(stmt, 4).map { String(cString: $0) } ?? ""
+            if table == "sessions" && from == "session_id" && to == "id" {
+                found = true
+            }
+        }
+        #expect(found, "policy_snapshots.session_id must declare REFERENCES sessions(id) — documents the relational intent that commands.session_id and other per-session tables already carry, even with PRAGMA foreign_keys off.")
+    }
+
     // MARK: - 2. Happy path: chain of three verifies
 
     @Test("Chain of three distinct snapshots verifies OK")

@@ -14,6 +14,8 @@ struct ContextSaturationGateTests {
         try? FileManager.default.removeItem(atPath: path)
         try? FileManager.default.removeItem(atPath: path + "-wal")
         try? FileManager.default.removeItem(atPath: path + "-shm")
+        try? FileManager.default.removeItem(atPath: path + ".migrating")
+        try? FileManager.default.removeItem(atPath: path + ".schema.lock")
     }
 
     @Test("ok decision below warn threshold")

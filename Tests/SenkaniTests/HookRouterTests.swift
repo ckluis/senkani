@@ -133,6 +133,8 @@ struct HookRouterMetricsTests {
             try? FileManager.default.removeItem(atPath: dbPath)
             try? FileManager.default.removeItem(atPath: dbPath + "-wal")
             try? FileManager.default.removeItem(atPath: dbPath + "-shm")
+            try? FileManager.default.removeItem(atPath: dbPath + ".migrating")
+            try? FileManager.default.removeItem(atPath: dbPath + ".schema.lock")
         }
 
         // Record a hook event directly (same call HookRouter makes)

@@ -16,6 +16,8 @@ struct PaneRefreshTileDisplayTests {
         try? fm.removeItem(atPath: path)
         try? fm.removeItem(atPath: path + "-wal")
         try? fm.removeItem(atPath: path + "-shm")
+        try? fm.removeItem(atPath: path + ".migrating")
+        try? fm.removeItem(atPath: path + ".schema.lock")
     }
 
     @Test("Normal state — no notice strip, no error strip, tile reads value text via a11y")

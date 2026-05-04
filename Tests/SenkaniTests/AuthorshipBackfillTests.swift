@@ -36,6 +36,8 @@ private func cleanup(_ path: String) {
     try? fm.removeItem(atPath: path)
     try? fm.removeItem(atPath: path + "-wal")
     try? fm.removeItem(atPath: path + "-shm")
+    try? fm.removeItem(atPath: path + ".migrating")
+    try? fm.removeItem(atPath: path + ".schema.lock")
 }
 
 /// Insert a row directly with `authorship = NULL` to simulate the

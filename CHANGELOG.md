@@ -9,6 +9,34 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — Centralized `.migrating`/`.schema.lock` cleanup across all `SessionDatabase(path:)` test callers
+
+- Prior state: `MigrationRunner` writes a `<dbPath>.migrating` flock
+  sidecar (and on failure a `<dbPath>.schema.lock` kill-switch) that's
+  never unlinked — production-safe, but every test that did
+  `SessionDatabase(path: "/tmp/...")` leaked a fresh `.migrating` per
+  call. The 2026-05-03 round caught 189 leftovers from `StoreExecTests`
+  alone; the follow-up filing
+  (`harness-sessiondb-test-cleanup-leaks-migrating-flock-sidecars`)
+  fixed StoreExecTests only.
+- This round generalizes. Every test file that creates
+  `SessionDatabase(path:)` now removes the full sidecar set —
+  `<path>`, `<path>-wal`, `<path>-shm`, `<path>.migrating`,
+  `<path>.schema.lock` — at teardown. New
+  `Tests/SenkaniTests/Helpers/TempSessionDatabase.swift` is the
+  canonical cleanup source-of-truth for new tests; its
+  `sidecarSuffixes` constant mirrors `Sources/CLI/WipeCommand.swift`
+  so test-side and prod-side stay in lockstep when a future sidecar
+  is added.
+- `tools/test-safe.sh` gained a /tmp staleness alarm (pre-flight +
+  post-flight): warns when `/tmp/senkani-*` accumulation crosses 50
+  leftover files in a single run, surfacing future regressions
+  locally instead of after months of buildup.
+  `SKIP_TMP_STALENESS_CHECK=1` opts out.
+- Verified: pre-clean `rm /tmp/senkani-*` → `./tools/test-safe.sh`
+  passes 8/8 chunks (1600+ tests, ~14 s warm) → `ls /tmp/senkani-*`
+  returns 0. Acceptance met without exception.
+
 ### May 4 — `CostLedger` version-boundary resolution gets test coverage before the first dated v2 entry lands
 
 - Prior state: every shipped `CostLedgerEntry` used

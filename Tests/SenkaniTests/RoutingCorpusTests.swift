@@ -170,6 +170,8 @@ struct LadderPositionMigrationTests {
             try? FileManager.default.removeItem(atPath: path)
             try? FileManager.default.removeItem(atPath: path + "-wal")
             try? FileManager.default.removeItem(atPath: path + "-shm")
+            try? FileManager.default.removeItem(atPath: path + ".migrating")
+            try? FileManager.default.removeItem(atPath: path + ".schema.lock")
         }
         let db = SessionDatabase(path: path)
         #expect(db.currentSchemaVersion() >= 10)
@@ -196,6 +198,8 @@ struct LadderPositionMigrationTests {
             try? FileManager.default.removeItem(atPath: path)
             try? FileManager.default.removeItem(atPath: path + "-wal")
             try? FileManager.default.removeItem(atPath: path + "-shm")
+            try? FileManager.default.removeItem(atPath: path + ".migrating")
+            try? FileManager.default.removeItem(atPath: path + ".schema.lock")
         }
         let db = SessionDatabase(path: path)
 
@@ -233,6 +237,8 @@ struct LadderPositionMigrationTests {
             try? FileManager.default.removeItem(atPath: path)
             try? FileManager.default.removeItem(atPath: path + "-wal")
             try? FileManager.default.removeItem(atPath: path + "-shm")
+            try? FileManager.default.removeItem(atPath: path + ".migrating")
+            try? FileManager.default.removeItem(atPath: path + ".schema.lock")
         }
         let db = SessionDatabase(path: path)
 

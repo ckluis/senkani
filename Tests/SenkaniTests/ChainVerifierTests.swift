@@ -19,6 +19,8 @@ struct ChainVerifierTests {
         try? fm.removeItem(atPath: path)
         try? fm.removeItem(atPath: path + "-wal")
         try? fm.removeItem(atPath: path + "-shm")
+        try? fm.removeItem(atPath: path + ".migrating")
+        try? fm.removeItem(atPath: path + ".schema.lock")
     }
 
     private static func record(_ db: SessionDatabase, _ tag: String, tokens: Int = 100) {

@@ -53,6 +53,8 @@ struct CommandRedactionTests {
             try? FileManager.default.removeItem(atPath: path)
             try? FileManager.default.removeItem(atPath: path + "-wal")
             try? FileManager.default.removeItem(atPath: path + "-shm")
+            try? FileManager.default.removeItem(atPath: path + ".migrating")
+            try? FileManager.default.removeItem(atPath: path + ".schema.lock")
         }
 
         let sid = db.createSession(projectRoot: "/tmp/redact-test-proj")
@@ -88,6 +90,8 @@ struct CommandRedactionTests {
             try? FileManager.default.removeItem(atPath: path)
             try? FileManager.default.removeItem(atPath: path + "-wal")
             try? FileManager.default.removeItem(atPath: path + "-shm")
+            try? FileManager.default.removeItem(atPath: path + ".migrating")
+            try? FileManager.default.removeItem(atPath: path + ".schema.lock")
         }
 
         let sid = db.createSession(projectRoot: "/tmp/stripe-test-proj")
@@ -120,6 +124,8 @@ struct CommandRedactionTests {
             try? FileManager.default.removeItem(atPath: path)
             try? FileManager.default.removeItem(atPath: path + "-wal")
             try? FileManager.default.removeItem(atPath: path + "-shm")
+            try? FileManager.default.removeItem(atPath: path + ".migrating")
+            try? FileManager.default.removeItem(atPath: path + ".schema.lock")
         }
 
         let sid = db.createSession(projectRoot: "/tmp/benign-test-proj")
@@ -148,6 +154,8 @@ struct CommandRedactionTests {
             try? FileManager.default.removeItem(atPath: path)
             try? FileManager.default.removeItem(atPath: path + "-wal")
             try? FileManager.default.removeItem(atPath: path + "-shm")
+            try? FileManager.default.removeItem(atPath: path + ".migrating")
+            try? FileManager.default.removeItem(atPath: path + ".schema.lock")
         }
 
         let sid = db.createSession(projectRoot: "/tmp/nil-test-proj")

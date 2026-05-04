@@ -16,6 +16,8 @@ private func cleanup(_ path: String) {
     try? fm.removeItem(atPath: path)
     try? fm.removeItem(atPath: path + "-wal")
     try? fm.removeItem(atPath: path + "-shm")
+    try? fm.removeItem(atPath: path + ".migrating")
+    try? fm.removeItem(atPath: path + ".schema.lock")
 }
 
 /// Generate a multi-line test output string.

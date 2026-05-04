@@ -42,7 +42,14 @@ public struct PolicyConfig: Codable, Sendable, Hashable {
     /// Capture the live policy state at this moment. Reads from
     /// `FeatureConfig.resolve(...)`, `BudgetConfig.load()`,
     /// `LearnedRulesStore.load()`, and `ProcessInfo.processInfo.environment`.
-    public static func capture(projectRoot: String? = nil) -> PolicyConfig {
+    ///
+    /// Throws `LearnedRulesHashError` when the rules file is present but
+    /// unreadable / unencodable — silent fall-through to an empty hash
+    /// would let two distinct broken states collapse to the same audit
+    /// row via `UNIQUE(session_id, policy_hash)`. The insert path
+    /// (`SessionDatabase.capturePolicySnapshot`) catches and turns the
+    /// failure into a refused write + an `event_counters` bump.
+    public static func capture(projectRoot: String? = nil) throws -> PolicyConfig {
         let features = FeatureConfig.resolve(projectRoot: projectRoot)
         let budget = BudgetConfig.load()
         let env = ProcessInfo.processInfo.environment
@@ -52,7 +59,7 @@ public struct PolicyConfig: Codable, Sendable, Hashable {
         return PolicyConfig(
             features: PolicyFeatures(from: features),
             budget: PolicyBudget(from: budget),
-            learnedRulesHash: LearnedRulesHasher.currentHash(),
+            learnedRulesHash: try LearnedRulesHasher.currentHash(),
             modelTier: modelTier,
             agentType: agentType
         )
@@ -62,7 +69,13 @@ public struct PolicyConfig: Codable, Sendable, Hashable {
     /// produce the same string regardless of process or wall-clock —
     /// `capturedAt` is excluded from the hash so two snapshots of the
     /// same configuration deduplicate via `policy_hash` UNIQUE.
-    public func policyHash() -> String {
+    ///
+    /// Throws `PolicyHashError.encodeFailed` rather than returning `""`
+    /// on encoder failure — collapsing two distinct broken configs to
+    /// the same empty hash would silently drop the second insert via
+    /// `ON CONFLICT(session_id, policy_hash) DO NOTHING`, hiding the
+    /// integrity breach the snapshot table is supposed to expose.
+    public func policyHash() throws -> String {
         let view = HashableView(
             features: features,
             budget: budget,
@@ -72,8 +85,12 @@ public struct PolicyConfig: Codable, Sendable, Hashable {
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(view) else { return "" }
-        return SHA256Hasher.hex(of: data)
+        do {
+            let data = try encoder.encode(view)
+            return SHA256Hasher.hex(of: data)
+        } catch {
+            throw PolicyHashError.encodeFailed(underlying: String(describing: error))
+        }
     }
 
     /// Encode to indented sorted-keys JSON for human-readable CLI output.
@@ -149,17 +166,59 @@ public struct PolicyBudget: Codable, Sendable, Hashable {
     }
 }
 
-/// Hashes the live learned-rules file. Returns `""` (treated as "no
-/// rules loaded") when the file is missing or unreadable so a fresh DB
-/// without learned state still gets a deterministic, comparable hash.
+/// Hashes the live learned-rules file.
+///
+/// Three outcomes — never the same empty string for two of them:
+///   - **No rules file on disk** → returns `absentSentinel` (`"none"`).
+///     Distinguishable from every real hash and from the failure paths.
+///   - **Rules file present but unreadable / undecodable** → throws
+///     `LearnedRulesHashError.fileUnreadable`. The caller MUST treat
+///     this as fatal-for-this-write; silently substituting a sentinel
+///     would hide a corrupt audit baseline.
+///   - **Rules file present and decodes, but JSON re-encoding throws**
+///     → throws `LearnedRulesHashError.encodeFailed`. Same caller
+///     contract.
 public enum LearnedRulesHasher {
-    public static func currentHash() -> String {
-        guard let file = LearnedRulesStore.load() else { return "" }
+    /// Stable sentinel returned when no learned-rules file exists on
+    /// disk. Matches `^[a-z]+$` so it can never collide with a SHA-256
+    /// hex digest. Stored alongside real hashes in
+    /// `policy_snapshots.policy_hash` and re-derivable on read.
+    public static let absentSentinel: String = "none"
+
+    public static func currentHash() throws -> String {
+        let filePath = LearnedRulesStore.path
+        guard FileManager.default.fileExists(atPath: filePath) else {
+            return absentSentinel
+        }
+        guard let file = LearnedRulesStore.load() else {
+            throw LearnedRulesHashError.fileUnreadable(path: filePath)
+        }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(file) else { return "" }
-        return SHA256Hasher.hex(of: data)
+        do {
+            let data = try encoder.encode(file)
+            return SHA256Hasher.hex(of: data)
+        } catch {
+            throw LearnedRulesHashError.encodeFailed(underlying: String(describing: error))
+        }
     }
+}
+
+/// Errors thrown by `PolicyConfig.policyHash()`. Stable, Sendable, and
+/// String-wrapped so the failure can be attached to the
+/// `event_counters` row without leaking a concrete EncodingError graph
+/// across module boundaries.
+public enum PolicyHashError: Error, Sendable, Equatable {
+    case encodeFailed(underlying: String)
+}
+
+/// Errors thrown by `LearnedRulesHasher.currentHash()`. The caller
+/// (`PolicyStore.capture` / `SessionDatabase.capturePolicySnapshot`)
+/// converts each variant into a refused insert + an
+/// `event_counters` bump.
+public enum LearnedRulesHashError: Error, Sendable, Equatable {
+    case fileUnreadable(path: String)
+    case encodeFailed(underlying: String)
 }
 
 /// Tiny SHA-256 hex shim. Centralized so the policy and audit-chain

@@ -35,7 +35,7 @@ private func makeConfig(
 @Suite("PolicyStore round-trip")
 struct PolicyStoreTests {
 
-    @Test func capturesAndReadsBack() {
+    @Test func capturesAndReadsBack() throws {
         let (db, path) = makeTempDB()
         defer { TempSessionDatabase.cleanup(path: path) }
 
@@ -47,7 +47,8 @@ struct PolicyStoreTests {
 
         let row = db.latestPolicySnapshot(sessionId: sid)
         #expect(row != nil)
-        #expect(row?.policyHash == cfg.policyHash())
+        let expectedHash = try cfg.policyHash()
+        #expect(row?.policyHash == expectedHash)
         let decoded = row?.decoded()
         #expect(decoded?.features.filter == true)
         #expect(decoded?.modelTier == "claude-haiku-4-5")
@@ -70,14 +71,16 @@ struct PolicyStoreTests {
         #expect(all.count == 1)
     }
 
-    @Test func differentConfigsMakeDifferentRows() {
+    @Test func differentConfigsMakeDifferentRows() throws {
         let (db, path) = makeTempDB()
         defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession(projectRoot: "/tmp/proj", agentType: .claudeCode)
         let cfg1 = makeConfig(filter: true)
         let cfg2 = makeConfig(filter: false)
-        #expect(cfg1.policyHash() != cfg2.policyHash())
+        let h1 = try cfg1.policyHash()
+        let h2 = try cfg2.policyHash()
+        #expect(h1 != h2)
 
         db.recordPolicySnapshot(sessionId: sid, config: cfg1)
         db.recordPolicySnapshot(sessionId: sid, config: cfg2)
@@ -86,13 +89,15 @@ struct PolicyStoreTests {
         #expect(all.count == 2)
     }
 
-    @Test func policyHashIsStableAcrossInstances() {
+    @Test func policyHashIsStableAcrossInstances() throws {
         let cfg1 = makeConfig()
         let cfg2 = makeConfig()
-        #expect(cfg1.policyHash() == cfg2.policyHash())
+        let h1 = try cfg1.policyHash()
+        let h2 = try cfg2.policyHash()
+        #expect(h1 == h2)
     }
 
-    @Test func capturedAtIsExcludedFromHash() {
+    @Test func capturedAtIsExcludedFromHash() throws {
         let cfg1 = PolicyConfig(
             features: PolicyFeatures(filter: true, secrets: true, indexer: true,
                                      terse: false, injectionGuard: true),
@@ -109,6 +114,151 @@ struct PolicyStoreTests {
             modelTier: cfg1.modelTier, agentType: cfg1.agentType,
             capturedAt: Date(timeIntervalSince1970: 999_999)
         )
-        #expect(cfg1.policyHash() == cfg2.policyHash())
+        let h1 = try cfg1.policyHash()
+        let h2 = try cfg2.policyHash()
+        #expect(h1 == h2)
+    }
+}
+
+// MARK: - Hash failure paths (policy-hash-no-silent-empty)
+
+/// Builds a `PolicyConfig` whose `softLimitPercent` is `.nan`. The
+/// default `JSONEncoder` rejects non-finite floating-point values,
+/// which gives us a deterministic encoder failure to drive the
+/// `policyHash() throws` and `PolicyStore.capture` refusal paths.
+private func makeConfigWithUnencodableBudget() -> PolicyConfig {
+    PolicyConfig(
+        features: PolicyFeatures(
+            filter: true, secrets: true, indexer: true,
+            terse: false, injectionGuard: true
+        ),
+        budget: PolicyBudget(
+            perSessionLimitCents: nil,
+            dailyLimitCents: nil,
+            weeklyLimitCents: nil,
+            softLimitPercent: .nan
+        ),
+        learnedRulesHash: "abc123",
+        modelTier: "claude-haiku-4-5",
+        agentType: "claude_code",
+        capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+}
+
+@Suite("PolicyConfig hash failure handling")
+struct PolicyHashFailureTests {
+
+    @Test func policyHashThrowsOnEncoderFailure() {
+        let cfg = makeConfigWithUnencodableBudget()
+        #expect(throws: PolicyHashError.self) {
+            _ = try cfg.policyHash()
+        }
+    }
+
+    @Test func captureRefusesInsertAndBumpsCounterOnHashFailure() {
+        let (db, path) = makeTempDB()
+        defer { TempSessionDatabase.cleanup(path: path) }
+
+        let sid = db.createSession(projectRoot: "/tmp/proj", agentType: .claudeCode)
+        let cfg = makeConfigWithUnencodableBudget()
+
+        let inserted = db.recordPolicySnapshot(sessionId: sid, config: cfg)
+        #expect(inserted == false)
+
+        // recordEvent is async-fire-and-forget — drain the SessionDatabase
+        // serial queue before reading.
+        db.queue.sync { } // drain async recordEvent
+
+        let counts = db.eventCounts(prefix: "security.policy.")
+        let hashFailed = counts.first { $0.eventType == "security.policy.hash_failed" }
+        #expect(hashFailed != nil)
+        #expect((hashFailed?.count ?? 0) >= 1)
+
+        // No row landed.
+        let all = db.allPolicySnapshots(sessionId: sid)
+        #expect(all.isEmpty)
+    }
+
+    @Test func twoBrokenConfigsDoNotSilentlyCollideOnEmptyHash() {
+        let (db, path) = makeTempDB()
+        defer { TempSessionDatabase.cleanup(path: path) }
+
+        let sid = db.createSession(projectRoot: "/tmp/proj", agentType: .claudeCode)
+        let cfgA = makeConfigWithUnencodableBudget()
+        let cfgB = makeConfigWithUnencodableBudget()
+
+        // Both fail. Pre-fix, both would have produced policy_hash = "" and
+        // the second insert would silently no-op via the UNIQUE constraint;
+        // the operator would see one row that "represents" two distinct
+        // broken states. Post-fix, neither insert lands, both bump the
+        // counter, and the audit baseline stays empty rather than corrupt.
+        #expect(db.recordPolicySnapshot(sessionId: sid, config: cfgA) == false)
+        #expect(db.recordPolicySnapshot(sessionId: sid, config: cfgB) == false)
+
+        db.queue.sync { } // drain async recordEvent
+
+        #expect(db.allPolicySnapshots(sessionId: sid).isEmpty)
+        let counts = db.eventCounts(prefix: "security.policy.")
+        let hashFailed = counts.first { $0.eventType == "security.policy.hash_failed" }
+        #expect((hashFailed?.count ?? 0) >= 2)
+    }
+}
+
+@Suite("LearnedRulesHasher")
+struct LearnedRulesHasherTests {
+
+    @Test func returnsAbsentSentinelWhenFileMissing() throws {
+        let tmp = "/tmp/senkani-learned-rules-missing-\(UUID().uuidString).json"
+        // File path is not created — guarantees fileExists == false.
+        let hash = try LearnedRulesStore.withPath(tmp) {
+            try LearnedRulesHasher.currentHash()
+        }
+        #expect(hash == LearnedRulesHasher.absentSentinel)
+        #expect(hash == "none")
+    }
+
+    @Test func throwsFileUnreadableWhenFilePresentButCorrupt() {
+        let tmp = "/tmp/senkani-learned-rules-corrupt-\(UUID().uuidString).json"
+        // Write garbage that decodes-as-LearnedRulesFile fails.
+        let dir = (tmp as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(
+            atPath: dir, withIntermediateDirectories: true, attributes: nil)
+        try? Data("not-valid-json{{{".utf8).write(to: URL(fileURLWithPath: tmp))
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        LearnedRulesStore.withPath(tmp) {
+            #expect(throws: LearnedRulesHashError.self) {
+                _ = try LearnedRulesHasher.currentHash()
+            }
+        }
+    }
+
+    @Test func captureBumpsLearnedRulesCounterOnCorruptFile() {
+        let (db, dbPath) = makeTempDB()
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
+
+        let sid = db.createSession(projectRoot: "/tmp/proj", agentType: .claudeCode)
+
+        let tmp = "/tmp/senkani-learned-rules-corrupt-cap-\(UUID().uuidString).json"
+        let dir = (tmp as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(
+            atPath: dir, withIntermediateDirectories: true, attributes: nil)
+        try? Data("garbage".utf8).write(to: URL(fileURLWithPath: tmp))
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let inserted = LearnedRulesStore.withPath(tmp) {
+            db.capturePolicySnapshot(sessionId: sid, projectRoot: "/tmp/proj")
+        }
+        #expect(inserted == false)
+
+        db.queue.sync { } // drain async recordEvent
+
+        let counts = db.eventCounts(prefix: "security.policy.")
+        let learnedFailed = counts.first { $0.eventType == "security.policy.learned_rules_hash_failed" }
+        #expect(learnedFailed != nil)
+        #expect((learnedFailed?.count ?? 0) >= 1)
+
+        // No snapshot row written.
+        #expect(db.allPolicySnapshots(sessionId: sid).isEmpty)
     }
 }

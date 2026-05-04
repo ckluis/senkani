@@ -42,11 +42,24 @@ final class PolicyStore: @unchecked Sendable {
 
     /// Persist `config` against `sessionId`. Returns `true` if a new
     /// row was inserted, `false` if the (session_id, policy_hash) pair
-    /// already existed (no-op via `ON CONFLICT DO NOTHING`).
+    /// already existed (no-op via `ON CONFLICT DO NOTHING`) **or** if
+    /// hash computation / JSON serialization failed — in the failure
+    /// case the call also bumps `event_counters("security.policy.hash_failed")`
+    /// so the breach surfaces in `senkani stats --security` rather than
+    /// silently colliding on `policy_hash = ""`.
     @discardableResult
     func capture(sessionId: String, config: PolicyConfig) -> Bool {
-        let hash = config.policyHash()
-        guard let json = try? config.prettyJSON() else { return false }
+        let hash: String
+        do {
+            hash = try config.policyHash()
+        } catch {
+            parent.recordEvent(type: "security.policy.hash_failed")
+            return false
+        }
+        guard let json = try? config.prettyJSON() else {
+            parent.recordEvent(type: "security.policy.hash_failed")
+            return false
+        }
         return parent.queue.sync {
             guard let db = parent.db else { return false }
             let sql = """

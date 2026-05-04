@@ -9,6 +9,40 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — `policy_snapshots` audit baseline now refuses silent-empty hashes (data integrity)
+
+- Prior state: `PolicyConfig.policyHash()` and
+  `LearnedRulesHasher.currentHash()` both returned `""` when their
+  `JSONEncoder` step threw, and `LearnedRulesHasher` further
+  collapsed "no rules file on disk" with "rules file present but
+  unparseable" — both became `""`. Combined with
+  `UNIQUE(session_id, policy_hash) ON CONFLICT DO NOTHING` on
+  `policy_snapshots`, two distinct corrupt configs would silently
+  collide on `policy_hash = ""` and the second insert was dropped.
+  The exact case where you most want an audible failure was the
+  case the code muted; audit surfaces could not distinguish "no
+  rules" from "broken rules."
+- `policyHash()` now throws `PolicyHashError.encodeFailed` on
+  encoder failure rather than returning `""`. The insert path
+  (`PolicyStore.capture`) catches the throw, refuses the write, and
+  bumps `event_counters("security.policy.hash_failed")`.
+- `LearnedRulesHasher.currentHash()` now throws
+  `LearnedRulesHashError.fileUnreadable` / `.encodeFailed` for the
+  failure cases and returns the stable sentinel
+  `LearnedRulesHasher.absentSentinel` (`"none"`) when no rules file
+  exists. The `"none"` sentinel cannot collide with a SHA-256 hex
+  digest. The boundary
+  (`SessionDatabase.capturePolicySnapshot`) catches the throw,
+  refuses the write, and bumps
+  `event_counters("security.policy.learned_rules_hash_failed")`.
+- Both new counter keys surface automatically through
+  `senkani stats --security` (existing `security.*` prefix scan).
+- Tests added for: (a) NaN-budget triggers `policyHash` throw;
+  (b) capture refuses insert + counter bumps; (c) two broken
+  configs no longer collide on empty hash; (d) missing rules file
+  → `"none"` sentinel; (e) corrupt rules file → throw +
+  counter bump + insert refusal.
+
 ### May 4 — `mlx-swift-lm` dependency pinned to a specific revision (build reproducibility)
 
 - Prior state: `Package.swift:23` declared

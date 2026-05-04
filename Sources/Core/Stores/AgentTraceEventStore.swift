@@ -460,7 +460,7 @@ final class AgentTraceEventStore: @unchecked Sendable {
             let sql = """
                 SELECT idempotency_key, pane, project, model, tier, ladder_position,
                        feature, result, started_at, latency_ms, tokens_in, tokens_out,
-                       cost_cents
+                       cost_cents, cost_ledger_version
                 FROM agent_trace_event
                 WHERE tier = ? AND started_at >= ?
                 ORDER BY started_at DESC
@@ -484,6 +484,7 @@ final class AgentTraceEventStore: @unchecked Sendable {
                 let feature = sqlite3_column_type(stmt, 6) == SQLITE_NULL ? nil : String(cString: sqlite3_column_text(stmt, 6))
                 let result = String(cString: sqlite3_column_text(stmt, 7))
                 let startedAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 8))
+                let ledgerVersion: Int? = sqlite3_column_type(stmt, 13) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 13))
                 out.append(AgentTraceTierRow(
                     idempotencyKey: key,
                     pane: pane, project: project, model: model,
@@ -492,7 +493,8 @@ final class AgentTraceEventStore: @unchecked Sendable {
                     latencyMs: Int(sqlite3_column_int64(stmt, 9)),
                     tokensIn: Int(sqlite3_column_int64(stmt, 10)),
                     tokensOut: Int(sqlite3_column_int64(stmt, 11)),
-                    costCents: Int(sqlite3_column_int64(stmt, 12))
+                    costCents: Int(sqlite3_column_int64(stmt, 12)),
+                    costLedgerVersion: ledgerVersion
                 ))
             }
             return out
@@ -725,11 +727,16 @@ public struct AgentTraceTierRow: Sendable, Equatable, Identifiable {
     public let tokensIn: Int
     public let tokensOut: Int
     public let costCents: Int
+    /// Ledger version stamped at write time. nil for rows written before
+    /// migration v16. The drill-down view uses this to decide whether to
+    /// surface a repriced number alongside the stored one.
+    public let costLedgerVersion: Int?
     public var id: String { idempotencyKey }
     public init(
         idempotencyKey: String, pane: String?, project: String?, model: String?,
         tier: String, ladderPosition: Int?, feature: String?, result: String,
-        startedAt: Date, latencyMs: Int, tokensIn: Int, tokensOut: Int, costCents: Int
+        startedAt: Date, latencyMs: Int, tokensIn: Int, tokensOut: Int, costCents: Int,
+        costLedgerVersion: Int? = nil
     ) {
         self.idempotencyKey = idempotencyKey
         self.pane = pane
@@ -744,5 +751,6 @@ public struct AgentTraceTierRow: Sendable, Equatable, Identifiable {
         self.tokensIn = tokensIn
         self.tokensOut = tokensOut
         self.costCents = costCents
+        self.costLedgerVersion = costLedgerVersion
     }
 }

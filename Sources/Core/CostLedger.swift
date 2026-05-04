@@ -21,6 +21,7 @@ import Foundation
 /// editing this file, which forces a code review.
 public struct CostLedgerEntry: Codable, Sendable, Equatable {
     public let modelId: String
+    public let displayName: String
     public let inputPerMillion: Double
     public let outputPerMillion: Double
     public let cachedInputPerMillion: Double
@@ -30,6 +31,7 @@ public struct CostLedgerEntry: Codable, Sendable, Equatable {
 
     public init(
         modelId: String,
+        displayName: String,
         inputPerMillion: Double,
         outputPerMillion: Double,
         cachedInputPerMillion: Double,
@@ -38,6 +40,7 @@ public struct CostLedgerEntry: Codable, Sendable, Equatable {
         version: Int
     ) {
         self.modelId = modelId
+        self.displayName = displayName
         self.inputPerMillion = inputPerMillion
         self.outputPerMillion = outputPerMillion
         self.cachedInputPerMillion = cachedInputPerMillion
@@ -64,42 +67,42 @@ public enum CostLedger {
         // any future ledger version must add NEW entries rather than
         // mutate these.
         CostLedgerEntry(
-            modelId: "claude-opus-4",
+            modelId: "claude-opus-4", displayName: "Claude Opus 4",
             inputPerMillion: 15.0, outputPerMillion: 75.0, cachedInputPerMillion: 1.50,
             effectiveFrom: epoch, effectiveTo: nil, version: 1
         ),
         CostLedgerEntry(
-            modelId: "claude-sonnet-4",
+            modelId: "claude-sonnet-4", displayName: "Claude Sonnet 4",
             inputPerMillion: 3.0, outputPerMillion: 15.0, cachedInputPerMillion: 0.30,
             effectiveFrom: epoch, effectiveTo: nil, version: 1
         ),
         CostLedgerEntry(
-            modelId: "claude-haiku-3.5",
+            modelId: "claude-haiku-3.5", displayName: "Claude Haiku 3.5",
             inputPerMillion: 0.80, outputPerMillion: 4.0, cachedInputPerMillion: 0.08,
             effectiveFrom: epoch, effectiveTo: nil, version: 1
         ),
         CostLedgerEntry(
-            modelId: "gpt-4o",
+            modelId: "gpt-4o", displayName: "GPT-4o",
             inputPerMillion: 2.50, outputPerMillion: 10.0, cachedInputPerMillion: 1.25,
             effectiveFrom: epoch, effectiveTo: nil, version: 1
         ),
         CostLedgerEntry(
-            modelId: "gpt-4o-mini",
+            modelId: "gpt-4o-mini", displayName: "GPT-4o Mini",
             inputPerMillion: 0.15, outputPerMillion: 0.60, cachedInputPerMillion: 0.075,
             effectiveFrom: epoch, effectiveTo: nil, version: 1
         ),
         CostLedgerEntry(
-            modelId: "o3",
+            modelId: "o3", displayName: "o3",
             inputPerMillion: 2.0, outputPerMillion: 8.0, cachedInputPerMillion: 1.0,
             effectiveFrom: epoch, effectiveTo: nil, version: 1
         ),
         CostLedgerEntry(
-            modelId: "gemini-2.5-pro",
+            modelId: "gemini-2.5-pro", displayName: "Gemini 2.5 Pro",
             inputPerMillion: 1.25, outputPerMillion: 10.0, cachedInputPerMillion: 0.3125,
             effectiveFrom: epoch, effectiveTo: nil, version: 1
         ),
         CostLedgerEntry(
-            modelId: "gemini-2.5-flash",
+            modelId: "gemini-2.5-flash", displayName: "Gemini 2.5 Flash",
             inputPerMillion: 0.15, outputPerMillion: 0.60, cachedInputPerMillion: 0.0375,
             effectiveFrom: epoch, effectiveTo: nil, version: 1
         ),
@@ -139,6 +142,25 @@ public enum CostLedger {
     /// that want to show "what rates produced this row?"
     public static func entries(forVersion version: Int) -> [CostLedgerEntry] {
         return entries.filter { $0.version == version }
+    }
+
+    /// Look up the entry for `modelId` pinned to a specific ledger
+    /// `version`. Reprice paths use this to find the rate a historical
+    /// row was originally priced under (its stamped
+    /// `cost_ledger_version`), independent of which entry is currently
+    /// active. Resolution order matches `rate(model:at:)`: exact
+    /// case-insensitive match wins, otherwise the longest substring
+    /// match.
+    public static func rate(model modelId: String, version: Int) -> CostLedgerEntry? {
+        let normalized = modelId.lowercased()
+        let candidates = entries.filter { $0.version == version }
+        if let exact = candidates.first(where: { $0.modelId.lowercased() == normalized }) {
+            return exact
+        }
+        return candidates
+            .filter { normalized.contains($0.modelId.lowercased()) }
+            .sorted { $0.modelId.count > $1.modelId.count }
+            .first
     }
 
     /// Stable epoch used as the universal `effective_from` for the v1

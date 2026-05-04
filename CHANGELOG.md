@@ -9,6 +9,44 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — `CostLedger` is now the sole source of truth for per-model rates; `ModelPricing` collapsed to a facade + new `SessionDatabase.repriceTraceRow(_:asOf:)`
+- Prior state: per-model rates were duplicated between
+  `ModelPricing.swift` (eight `static let` constants, used by every
+  cost display) and `CostLedger.swift` (the same eight rates restated
+  with zero readers). `agent_trace_event.cost_ledger_version` was
+  stamped on every row but never read — the ledger was scaffolding
+  without enforcement, ripe for silent drift.
+- `CostLedgerEntry` gained a `displayName` field so the ledger is
+  self-describing; `ModelPricing.allModels` is now a derived view over
+  `CostLedger.entries(forVersion: CostLedger.currentVersion)`.
+  `ModelPricing.find(_:)` delegates to `CostLedger.rate(model:at:)`,
+  falling back to `claudeSonnet4` only on miss. The named static
+  constants (`.claudeOpus4` etc.) remain for back-compat with the
+  16 call sites that reference them by name; a new
+  `ModelPricingLedgerParityTests` suite asserts byte-for-byte
+  equality so any future drift fails CI.
+- `CostLedger.rate(model:version:)` overload returns the entry that
+  was active for a model under a specific historical ledger version,
+  independent of which entry is currently active.
+- New `SessionDatabase.repriceTraceRow(_:asOf:)` (with an
+  `AgentTraceTierRow` overload for U.1c drill-down rows) reads the
+  row's stamped `cost_ledger_version`, looks up the historical and
+  current ledger entries, and returns a `RepricedTrace` whose
+  `confidence` tier honors the `spec/testing.md` discipline:
+  `exact` when no rebase happened, `needs_validation` when the
+  current rate differs, `unsupported` when the row's model isn't in
+  the ledger or the historical version was never published.
+- The Analytics tier-distribution drill-down sheet now renders the
+  per-row stored cost; when the live ledger has rebased a row, the
+  sheet shows the projected cents below the original tagged
+  `needs_validation` so operators see the rebase candidate without
+  it ever being mistaken for the recorded value.
+- `agent_trace_event.cost_ledger_version` is now meaningful: the
+  drill-down query selects it, `AgentTraceTierRow` carries it, and
+  the reprice path consumes it. Tests: 2358 → 2374 (+16 across two
+  new suites — `ModelPricing ↔ CostLedger byte-for-byte parity`,
+  `SessionDatabase.repriceTraceRow`).
+
 ### May 3 — `BenchmarkReport.confidence` rollup wired through the runner (mixed-tier reports degrade correctly)
 - Pre-audit found `Confidence.loosened(by:)` already existed in
   `Sources/Bench/BenchmarkTypes.swift` but was dead — `SavingsTestRunner`

@@ -9,6 +9,26 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — `CostLedger` version-boundary resolution gets test coverage before the first dated v2 entry lands
+
+- Prior state: every shipped `CostLedgerEntry` used
+  `effectiveFrom: epoch, effectiveTo: nil`, so `rate(model:at:)`'s
+  date-bound logic was exercised by zero tests — when v2 ships a real
+  Anthropic price change, latent off-by-one bugs at the boundary
+  would surface in production.
+- New internal overload `CostLedger.rate(model:at:in entries:)` lets
+  tests inject a synthetic two-version ledger fixture without
+  touching production data; the public `rate(model:at:)` delegates to
+  it so both paths exercise the same algorithm. Doc comment on
+  `CostLedgerEntry` now states the half-open `[from, to)` semantics
+  explicitly: the boundary instant belongs to the *next* version.
+- New `CostLedgerVersionBoundaryTests` suite (9 tests) locks in:
+  boundary-instant ownership, ±1s and sub-second-before-boundary
+  resolution, far-past / far-future bounds, substring routing across
+  the boundary, nil return for `at` past a closed final interval, and
+  a three-version chain with no overlap and no gap. Tests:
+  2358 → 2367 (+9).
+
 ### May 4 — `CostLedger` is now the sole source of truth for per-model rates; `ModelPricing` collapsed to a facade + new `SessionDatabase.repriceTraceRow(_:asOf:)`
 - Prior state: per-model rates were duplicated between
   `ModelPricing.swift` (eight `static let` constants, used by every

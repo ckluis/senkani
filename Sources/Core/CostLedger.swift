@@ -12,9 +12,13 @@ import Foundation
 /// a v2 ledger.
 ///
 /// New rates land by appending an entry with `effective_from` set to
-/// the new date and the prior entry's `effective_to` filled in. A row
-/// is "active for date X" when `effective_from ≤ X` and (`effective_to`
-/// is nil OR `effective_to > X`).
+/// the new date and the prior entry's `effective_to` filled in.
+/// Boundaries are **half-open `[from, to)`** — a row is "active for
+/// date X" when `effective_from ≤ X` AND (`effective_to` is nil OR
+/// `X < effective_to`). The boundary instant therefore belongs to the
+/// *next* version: setting `v1.effectiveTo = v2.effectiveFrom` makes
+/// the new rate effective starting at exactly that timestamp, with no
+/// overlap and no gap.
 ///
 /// The ledger is embedded as a Swift literal so it ships in every
 /// binary without resource-bundling plumbing. New entries land by
@@ -118,6 +122,19 @@ public enum CostLedger {
     /// appear in the input, the longest match wins — so `"gpt-4o-mini"`
     /// resolves to the `gpt-4o-mini` entry, not the broader `gpt-4o`.
     public static func rate(model modelId: String, at: Date = Date()) -> CostLedgerEntry? {
+        return rate(model: modelId, at: at, in: entries)
+    }
+
+    /// Test-injectable overload of `rate(model:at:)`. Production callers
+    /// use the no-argument form; tests pass a synthetic ledger fixture
+    /// to exercise version-boundary resolution without depending on the
+    /// shipped `entries` snapshot. Algorithm is identical to the public
+    /// path so both surfaces stay in lockstep.
+    internal static func rate(
+        model modelId: String,
+        at: Date,
+        in entries: [CostLedgerEntry]
+    ) -> CostLedgerEntry? {
         let normalized = modelId.lowercased()
         let active = { (entry: CostLedgerEntry) -> Bool in
             let afterStart = entry.effectiveFrom <= at

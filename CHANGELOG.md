@@ -9,6 +9,39 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — `ChainVerifier` covers `confirmations` + `trust_audits` (audit-log tamper-evidence promise now whole)
+
+- Prior state: `confirmations` (T.6a) and `trust_audits` (U.4a) wrote
+  through the T.5 audit chain at insert time — `prev_hash`,
+  `entry_hash`, and `chain_anchor_id` columns populated on every row —
+  but `ChainVerifier.verifyAll` walked only six tables and silently
+  skipped these two. A motivated bad actor with DB write access could
+  rewrite a `confirmations` row to make a denied tool call look
+  auto-approved, or flip a `trust_audits` label from FP to TP, and
+  `senkani doctor --verify-chain` would silently pass despite the
+  schema carrying tamper-evidence columns the operator was promised
+  would catch them. The chain was built but not verified — the worst-
+  of-both posture.
+- `ChainVerifier` gains `verifyAnchorConfirmations`,
+  `verifyAnchorTrustAudits`, and the matching `verifyConfirmations` /
+  `verifyTrustAudits` public entries. `verifyAll` now returns eight
+  tables (was six). `DoctorCommand.checkAuditChain` widens its `order`
+  array + summary line to surface both new participants.
+- `annotation_rate_cap_log` is intentionally NOT covered — the table
+  has no chain columns by design (per `AnnotationRateCapStore`'s
+  source comment: "Not chain-hashed: the row is a derived flood
+  marker. The source denials are already recorded via `hook_events`,
+  `token_events`, and `commands`; tampering with the rate-cap log is
+  detectable by re-deriving from those.").
+- Tamper tests cover both attack vectors named in the round: flipping
+  `confirmations.decision` from `deny` to `auto`, and flipping
+  `trust_audits.label` from `fp` to `tp`. Plus a third tamper on
+  `trust_audits.reason` (flag rows) for shape coverage.
+- Filed for the same reason `policy_snapshots` chain-anchoring shipped
+  on the same day: every audit-surface row whose schema carries
+  tamper-evidence columns must be walked by `verifyAll`, or the
+  operator's promised "I can detect tampering" capability is a lie.
+
 ### May 4 — `ChainRepairer.supportedTables` widened to every integer-keyed chain participant (operator now has an auto-repair path on every audited table)
 
 - Prior state: after the May 4 `policy_snapshots` chain-anchor round,

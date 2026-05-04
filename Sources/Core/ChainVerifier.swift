@@ -68,6 +68,8 @@ public enum ChainVerifier {
                 "commands":           verifyTable(db: db, table: "commands",           verify: verifyAnchorCommands),
                 "pane_refresh_state": verifyTable(db: db, table: "pane_refresh_state", verify: verifyAnchorPaneRefreshState),
                 "policy_snapshots":   verifyTable(db: db, table: "policy_snapshots",   verify: verifyAnchorPolicySnapshots),
+                "confirmations":      verifyTable(db: db, table: "confirmations",      verify: verifyAnchorConfirmations),
+                "trust_audits":       verifyTable(db: db, table: "trust_audits",       verify: verifyAnchorTrustAudits),
             ]
         }
     }
@@ -104,6 +106,20 @@ public enum ChainVerifier {
         return database.queue.sync {
             guard let db = database.db else { return .noChain }
             return verifyTable(db: db, table: "policy_snapshots", verify: verifyAnchorPolicySnapshots)
+        }
+    }
+
+    public static func verifyConfirmations(_ database: SessionDatabase) -> Result {
+        return database.queue.sync {
+            guard let db = database.db else { return .noChain }
+            return verifyTable(db: db, table: "confirmations", verify: verifyAnchorConfirmations)
+        }
+    }
+
+    public static func verifyTrustAudits(_ database: SessionDatabase) -> Result {
+        return database.queue.sync {
+            guard let db = database.db else { return .noChain }
+            return verifyTable(db: db, table: "trust_audits", verify: verifyAnchorTrustAudits)
         }
     }
 
@@ -382,6 +398,76 @@ public enum ChainVerifier {
             ]
             let prev = optionalText(stmt, 11)
             let stored = sqlite3_column_text(stmt, 12).map { String(cString: $0) } ?? ""
+            return (rowid, columns, prev, stored)
+        }
+    }
+
+    /// Walk `confirmations` rows for one anchor.
+    /// `entry_hash IS NOT NULL` filter — see `verifyAnchorTokenEvents` notes.
+    /// Canonical input is the six non-chain columns of `ConfirmationStore.record`.
+    private static func verifyAnchorConfirmations(db: OpaquePointer, anchor: Anchor) -> Result? {
+        let sql = """
+            SELECT id, tool_name, requested_at, decided_at, decision,
+                   decided_by, reason,
+                   prev_hash, entry_hash
+              FROM confirmations
+             WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
+             ORDER BY id ASC;
+        """
+        return walkTable(db: db, table: "confirmations", anchor: anchor, sql: sql) { stmt in
+            let rowid = sqlite3_column_int64(stmt, 0)
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "tool_name":    textValue(stmt, 1),
+                "requested_at": .real(sqlite3_column_double(stmt, 2)),
+                "decided_at":   .real(sqlite3_column_double(stmt, 3)),
+                "decision":     textValue(stmt, 4),
+                "decided_by":   textValue(stmt, 5),
+                "reason":       textOrNull(stmt, 6),
+            ]
+            let prev = optionalText(stmt, 7)
+            let stored = sqlite3_column_text(stmt, 8).map { String(cString: $0) } ?? ""
+            return (rowid, columns, prev, stored)
+        }
+    }
+
+    /// Walk `trust_audits` rows for one anchor. The store writes both flag
+    /// rows and label rows through the same canonical-input shape — every
+    /// non-chain column appears in the dictionary, with NULLs in the
+    /// kind-specific slots. Verification reads the same eleven columns
+    /// regardless of `kind`.
+    /// `entry_hash IS NOT NULL` filter — see `verifyAnchorTokenEvents` notes.
+    private static func verifyAnchorTrustAudits(db: OpaquePointer, anchor: Anchor) -> Result? {
+        let sql = """
+            SELECT id, kind, created_at, session_id, pane_id, tool_name,
+                   reason, score, correlation_count, flag_id, label, labeled_by,
+                   prev_hash, entry_hash
+              FROM trust_audits
+             WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
+             ORDER BY id ASC;
+        """
+        return walkTable(db: db, table: "trust_audits", anchor: anchor, sql: sql) { stmt in
+            let rowid = sqlite3_column_int64(stmt, 0)
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "kind":              textValue(stmt, 1),
+                "created_at":        .real(sqlite3_column_double(stmt, 2)),
+                "session_id":        textOrNull(stmt, 3),
+                "pane_id":           textOrNull(stmt, 4),
+                "tool_name":         textOrNull(stmt, 5),
+                "reason":            textOrNull(stmt, 6),
+                "score":             sqlite3_column_type(stmt, 7) == SQLITE_NULL
+                                        ? .null
+                                        : .integer(sqlite3_column_int64(stmt, 7)),
+                "correlation_count": sqlite3_column_type(stmt, 8) == SQLITE_NULL
+                                        ? .null
+                                        : .integer(sqlite3_column_int64(stmt, 8)),
+                "flag_id":           sqlite3_column_type(stmt, 9) == SQLITE_NULL
+                                        ? .null
+                                        : .integer(sqlite3_column_int64(stmt, 9)),
+                "label":             textOrNull(stmt, 10),
+                "labeled_by":        textOrNull(stmt, 11),
+            ]
+            let prev = optionalText(stmt, 12)
+            let stored = sqlite3_column_text(stmt, 13).map { String(cString: $0) } ?? ""
             return (rowid, columns, prev, stored)
         }
     }

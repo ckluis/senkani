@@ -106,8 +106,23 @@ public enum CounterfactualReplay {
 
     /// Walk rows in chronological order, accumulating cost. The first
     /// row whose cumulative cost crosses `capCents` is the cutoff —
-    /// everything after is "would have been blocked." Returns
-    /// `unsupported` if no cap is supplied.
+    /// that row and everything after are "would have been blocked."
+    ///
+    /// Edge behavior (pinned by `BudgetTightTests`):
+    ///   - **No cap supplied:** returns `.unsupported` with a hint to
+    ///     pass `--budget-cents`.
+    ///   - **Empty `rows` + cap supplied:** returns `.unsupported`. An
+    ///     empty trace cannot demonstrate cap behavior; aligns with
+    ///     `outline-first-strict` (which also returns `.unsupported`
+    ///     for empty input).
+    ///   - **Cumulative cost exactly equals cap:** the boundary row is
+    ///     PRESERVED. The cutoff comparison is strictly `>`, not `>=`,
+    ///     so a row that brings cumulative *to* the cap does not trip
+    ///     it. The notes field documents this rule when a cap is in
+    ///     effect.
+    ///   - **Single first row whose cost alone exceeds cap:** that row
+    ///     is the cutoff. Preserved prefix is empty (`rowCount == 0`),
+    ///     `affectedRowCount == 1`, confidence `.needsValidation`.
     private static func budgetTight(
         sessionId: String,
         rows: [AgentTraceEvent],
@@ -126,6 +141,19 @@ public enum CounterfactualReplay {
                 affectedRowCount: 0,
                 confidence: .unsupported,
                 notes: ["Pass --budget-cents to evaluate budget-tight."]
+            )
+        }
+
+        if rows.isEmpty {
+            return ReplayReport(
+                preset: .budgetTight,
+                sessionId: sessionId,
+                evaluatedAt: now,
+                baseline: baseline,
+                counterfactual: baseline,
+                affectedRowCount: 0,
+                confidence: .unsupported,
+                notes: ["Empty trace — cap behavior cannot be demonstrated."]
             )
         }
 
@@ -149,6 +177,7 @@ public enum CounterfactualReplay {
         } else {
             notes.append("Total cost (\(cumulative)¢) stayed under cap (\(cap)¢) — no rows would have been blocked.")
         }
+        notes.append("Boundary rule: cumulative cost exactly equal to the cap is preserved (cutoff is strictly `>`, not `>=`).")
         notes.append("Cap-walk is deterministic; whether the agent's work would have completed before the block is `needs_validation`.")
 
         return ReplayReport(

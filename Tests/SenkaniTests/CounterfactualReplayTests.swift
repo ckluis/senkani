@@ -139,6 +139,58 @@ struct BudgetTightTests {
         #expect(report.savedCostCents >= 0)
         #expect(report.counterfactual.totalCostCents <= report.baseline.totalCostCents)
     }
+
+    /// Cumulative cost exactly equals cap → boundary row is preserved
+    /// (cutoff is strictly `>`, not `>=`). The notes field documents
+    /// the rule whenever a cap is in effect.
+    @Test func cumulativeExactlyEqualsCapPreservesBoundaryRow() {
+        let rows = [
+            makeTrace(costCents: 30),
+            makeTrace(costCents: 30),
+            makeTrace(costCents: 40),  // cumulative reaches 100, exactly the cap
+        ]
+        let report = CounterfactualReplay.evaluate(
+            sessionId: "s1", rows: rows, preset: .budgetTight,
+            budgetCapCents: 100
+        )
+        #expect(report.affectedRowCount == 0)
+        #expect(report.counterfactual.rowCount == 3)
+        #expect(report.counterfactual.totalCostCents == 100)
+        #expect(report.confidence == .exact)
+        let documentsBoundaryRule = report.notes.contains {
+            $0.contains("strictly `>`") || $0.contains(">=")
+        }
+        #expect(documentsBoundaryRule, "notes must document the `>` (not `>=`) boundary rule")
+    }
+
+    /// Single first row whose cost alone exceeds the cap → that row is
+    /// the cutoff. Preserved prefix is empty; `affected == 1`;
+    /// confidence `.needsValidation`.
+    @Test func singleRowExceedingCapBlocksItself() {
+        let rows = [makeTrace(costCents: 200)]
+        let report = CounterfactualReplay.evaluate(
+            sessionId: "s1", rows: rows, preset: .budgetTight,
+            budgetCapCents: 50
+        )
+        #expect(report.affectedRowCount == 1)
+        #expect(report.counterfactual.rowCount == 0)
+        #expect(report.counterfactual.totalCostCents == 0)
+        #expect(report.confidence == .needsValidation)
+    }
+
+    /// Empty `rows` + cap supplied → `.unsupported`. Aligns with
+    /// `outline-first-strict`'s empty-trace behavior; cap semantics
+    /// cannot be demonstrated against zero rows.
+    @Test func emptyTraceWithCapReportsUnsupported() {
+        let report = CounterfactualReplay.evaluate(
+            sessionId: "s1", rows: [], preset: .budgetTight,
+            budgetCapCents: 100
+        )
+        #expect(report.confidence == .unsupported)
+        #expect(report.affectedRowCount == 0)
+        #expect(report.counterfactual.rowCount == 0)
+        #expect(report.savedCostCents == 0)
+    }
 }
 
 @Suite("ReplayReport — JSON envelope")

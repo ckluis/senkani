@@ -9,6 +9,33 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — Counterfactual replay `budget-tight` edges pinned: boundary `>` vs `>=`, single-row-exceeds-cap, empty-rows-with-cap
+
+- `Sources/Bench/CounterfactualReplay.swift`'s `budgetTight` had
+  three undocumented edge behaviors that no test pinned: cumulative
+  cost exactly equal to the cap, a single first row whose cost
+  alone exceeds the cap, and empty `rows` with a cap supplied.
+  Surfaced 2026-05-03 by Bach in luminary review.
+- Behavior change: empty `rows` + cap supplied now returns
+  `confidence: .unsupported` (previously `.exact`). Aligns with
+  `outline-first-strict`'s empty-trace behavior — an empty trace
+  cannot demonstrate cap behavior. No CLI/JSON callers branch on
+  this distinction (`Sources/CLI/ReplayCommand.swift` just renders
+  `confidence.rawValue`), so the fix is safe.
+- Boundary rule made explicit: the cutoff comparison is strictly
+  `>`, not `>=`. A row that brings cumulative *to* the cap is
+  preserved; only a row that pushes cumulative *past* the cap is
+  blocked. Documented in the function doc comment AND surfaced in
+  every cap-supplied report's `notes` field so consumers reading
+  reports learn the rule from the report itself.
+- Single-row-exceeds-cap behavior pinned: `affectedRowCount == 1`,
+  `counterfactual.rowCount == 0`, `confidence == .needsValidation`.
+  No code change — the existing cap-walk already produced this
+  shape; the test now keeps it stable across refactors.
+- Three new tests in `Tests/SenkaniTests/CounterfactualReplayTests.swift`
+  → `BudgetTightTests`: `cumulativeExactlyEqualsCapPreservesBoundaryRow`,
+  `singleRowExceedingCapBlocksItself`, `emptyTraceWithCapReportsUnsupported`.
+
 ### May 4 — Release-cut gate consumer filed: `release-v0-4-0-mlx-pin-bump-pass` wires the trigger chosen for `mlx-swift-lm`'s revision pin
 
 - The 2026-05-04 freshness-revisit round chose RELEASE-CUT GATE as

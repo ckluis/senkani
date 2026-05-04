@@ -18,15 +18,6 @@ struct ContextPlanStoreTests {
         return (SessionDatabase(path: path), path)
     }
 
-    private func cleanup(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-wal")
-        try? fm.removeItem(atPath: path + "-shm")
-        try? fm.removeItem(atPath: path + ".migrating")
-        try? fm.removeItem(atPath: path + ".schema.lock")
-    }
-
     private func samplePlan(
         id: String = UUID().uuidString,
         sessionId: String = "sess-1",
@@ -52,7 +43,7 @@ struct ContextPlanStoreTests {
     @Test("Migration v14 creates context_plans with the expected columns")
     func schemaShape() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         #expect(db.currentSchemaVersion() >= 14)
 
@@ -77,7 +68,7 @@ struct ContextPlanStoreTests {
     @Test("Migration v14 adds plan_id to agent_trace_event")
     func agentTraceHasPlanId() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         #expect(db.currentSchemaVersion() >= 14)
 
         let cols = db.queue.sync { () -> Set<String> in
@@ -100,7 +91,7 @@ struct ContextPlanStoreTests {
     @Test("ContextPlan round-trips through fetchById")
     func roundTripFetchById() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let plan = samplePlan(reducer: .summarize, estimatedCost: 73)
         #expect(db.recordContextPlan(plan))
@@ -113,7 +104,7 @@ struct ContextPlanStoreTests {
     @Test("All ReducerChoice cases round-trip")
     func reducerChoiceRoundTrip() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         for reducer in ReducerChoice.allCases {
             let plan = samplePlan(reducer: reducer)
@@ -127,7 +118,7 @@ struct ContextPlanStoreTests {
     @Test("fetchBySession returns plans newest-first, scoped to session")
     func fetchBySessionOrdering() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let session = "sess-ordering"
         let p1 = samplePlan(sessionId: session, createdAt: Date(timeIntervalSince1970: 1_750_000_000))
@@ -147,7 +138,7 @@ struct ContextPlanStoreTests {
     @Test("Duplicate id is a DO NOTHING no-op (returns false)")
     func duplicateIdDedups() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let plan = samplePlan(estimatedCost: 1)
         #expect(db.recordContextPlan(plan))
@@ -171,7 +162,7 @@ struct ContextPlanStoreTests {
     @Test("AgentTraceEvent round-trips plan_id through the store")
     func planIdRoundTrip() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let plan = samplePlan()
         #expect(db.recordContextPlan(plan))
@@ -193,7 +184,7 @@ struct ContextPlanStoreTests {
     @Test("AgentTraceEvent without planId persists plan_id = NULL")
     func planIdNilStaysNil() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let row = AgentTraceEvent(
             idempotencyKey: "u6a-nil-\(UUID().uuidString)",
@@ -220,7 +211,7 @@ struct ContextPlanStoreTests {
         //   3) the seeded row's `plan_id` reads as NULL (additive ALTER)
         //   4) `context_plans` exists and is empty
         let path = "/tmp/senkani-u6a-upgrade-\(UUID().uuidString).sqlite"
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // Stage 1: run with a v<=13 registry, then poke a row in.
         let truncatedRegistry = MigrationRegistry.all.filter { $0.version <= 13 }

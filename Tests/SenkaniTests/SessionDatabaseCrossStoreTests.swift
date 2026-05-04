@@ -13,15 +13,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (SessionDatabase(path: path), path)
 }
 
-private func cleanupDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-    try? fm.removeItem(atPath: path + ".migrating")
-    try? fm.removeItem(atPath: path + ".schema.lock")
-}
-
 // MARK: - lastExecResult
 
 @Suite("SessionDatabase — lastExecResult cross-store join")
@@ -29,7 +20,7 @@ struct SessionDatabaseLastExecResultTests {
 
     @Test func returnsTimestampAndPreviewWhenBothStoresAgree() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         db.recordTokenEvent(
             sessionId: "s1", paneId: nil, projectRoot: "/tmp/lex-A",
@@ -50,7 +41,7 @@ struct SessionDatabaseLastExecResultTests {
 
     @Test func projectIsolationDoesNotLeakAcrossRoots() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // Same command string in two projects.
         db.recordTokenEvent(
@@ -81,7 +72,7 @@ struct SessionDatabaseLastExecResultTests {
 
     @Test func returnsNilWhenNoExecMatches() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // A read event for an unrelated tool — must not surface as exec.
         db.recordTokenEvent(
@@ -101,7 +92,7 @@ struct SessionDatabaseLastExecResultTests {
         // matching row (or it is outside the ±2s window), the function still
         // returns the timestamp, with preview = nil.
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         db.recordTokenEvent(
             sessionId: "s1", paneId: nil, projectRoot: "/tmp/lex-E",
@@ -129,7 +120,7 @@ struct SessionDatabaseComplianceRateTests {
         // a non-senkani source ('claude'). One hook event, one claude event
         // → ratio = 0.5.
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         db.recordTokenEvent(
             sessionId: "s1", paneId: nil, projectRoot: "/tmp/cr-A",
@@ -152,7 +143,7 @@ struct SessionDatabaseComplianceRateTests {
 
     @Test func projectIsolationDoesNotLeakAcrossRoots() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // project-A: 1 hook, 0 non-senkani → 1.0
         db.recordTokenEvent(
@@ -183,7 +174,7 @@ struct SessionDatabaseComplianceRateTests {
 
     @Test func returnsNilWhenNoEventsForProject() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // Write events for a different project — querying our target project
         // should still see zero rows and return nil (the empty-data sentinel).

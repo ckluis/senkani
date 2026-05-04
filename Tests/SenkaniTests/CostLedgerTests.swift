@@ -58,18 +58,9 @@ struct AgentTraceCostVersionTests {
         return (SessionDatabase(path: path), path)
     }
 
-    private func cleanup(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-wal")
-        try? fm.removeItem(atPath: path + "-shm")
-        try? fm.removeItem(atPath: path + ".migrating")
-        try? fm.removeItem(atPath: path + ".schema.lock")
-    }
-
     @Test func defaultsToCurrentLedgerVersionOnWrite() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let event = makeAgentTraceEvent(costLedgerVersion: nil)
         let inserted = db.recordAgentTraceEvent(event)
@@ -82,7 +73,7 @@ struct AgentTraceCostVersionTests {
 
     @Test func preservesExplicitVersion() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let event = makeAgentTraceEvent(costLedgerVersion: 1)
         db.recordAgentTraceEvent(event)

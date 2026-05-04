@@ -15,14 +15,6 @@ struct PreCompactHandoffWriterTests {
         return (SessionDatabase(path: path), path)
     }
 
-    private func cleanup(db path: String) {
-        try? FileManager.default.removeItem(atPath: path)
-        try? FileManager.default.removeItem(atPath: path + "-wal")
-        try? FileManager.default.removeItem(atPath: path + "-shm")
-        try? FileManager.default.removeItem(atPath: path + ".migrating")
-        try? FileManager.default.removeItem(atPath: path + ".schema.lock")
-    }
-
     private func cleanup(root: URL) {
         try? FileManager.default.removeItem(at: root)
     }
@@ -114,7 +106,7 @@ struct PreCompactHandoffWriterTests {
     @Test("compose pulls recent trace keys + last validation from SessionDatabase")
     func composeReadsFromDB() {
         let (db, path) = tempDB()
-        defer { cleanup(db: path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // Seed two trace rows for pane=kb (newest first ordering).
         db.recordAgentTraceEvent(.init(

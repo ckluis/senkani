@@ -10,14 +10,6 @@ struct ContextSaturationGateTests {
         return (SessionDatabase(path: path), path)
     }
 
-    private func cleanup(_ path: String) {
-        try? FileManager.default.removeItem(atPath: path)
-        try? FileManager.default.removeItem(atPath: path + "-wal")
-        try? FileManager.default.removeItem(atPath: path + "-shm")
-        try? FileManager.default.removeItem(atPath: path + ".migrating")
-        try? FileManager.default.removeItem(atPath: path + ".schema.lock")
-    }
-
     @Test("ok decision below warn threshold")
     func okBelowWarn() {
         let d = ContextSaturationGate.evaluate(
@@ -78,7 +70,7 @@ struct ContextSaturationGateTests {
     @Test("DB-backed evaluate sums tokens_in + tokens_out for the pane window")
     func dbBackedDerivation() {
         let (db, path) = tempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // Three rows in pane "kb" — total tokens 100+50 + 200+100 + 50+25 = 525.
         // One row in pane "shell" should NOT be summed.

@@ -99,7 +99,7 @@ struct LoggerRoutingTests {
 
     @Test func migrationsAppliedFiresOnFreshDB() {
         let path = "/tmp/senkani-routing-\(UUID().uuidString).sqlite"
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         withSink { sink in
             _ = SessionDatabase(path: path)
             // Fresh DB applies all known migrations (>=1 version). Filter
@@ -123,7 +123,7 @@ struct LoggerRoutingTests {
 
     @Test func migrationsAppliedDoesNotFireOnAlreadyMigratedDB() {
         let path = "/tmp/senkani-routing-\(UUID().uuidString).sqlite"
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         // Pre-migrate.
         _ = SessionDatabase(path: path)
         // Re-open: no migrations applied this round for THIS path. Filter
@@ -196,7 +196,7 @@ struct LoggerRoutingTests {
         // "[CommandStore] SQL error", "[SandboxStore] SQL error",
         // "[ValidationStore] SQL error" strings on stderr/stdout.
         let path = "/tmp/senkani-routing-\(UUID().uuidString).sqlite"
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         withSink { sink in
             _ = SessionDatabase(path: path)
             // No SQL errors expected on a clean init.
@@ -273,12 +273,4 @@ struct LoggerRoutingTests {
 
     // MARK: - Helpers
 
-    private func cleanup(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-wal")
-        try? fm.removeItem(atPath: path + "-shm")
-        try? fm.removeItem(atPath: path + ".migrating")
-        try? fm.removeItem(atPath: path + ".schema.lock")
-    }
 }

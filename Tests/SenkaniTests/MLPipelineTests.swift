@@ -130,17 +130,9 @@ struct HotFilesTests {
         return (db, path)
     }
 
-    private func cleanupDB(_ path: String) {
-        try? FileManager.default.removeItem(atPath: path)
-        try? FileManager.default.removeItem(atPath: path + "-wal")
-        try? FileManager.default.removeItem(atPath: path + "-shm")
-        try? FileManager.default.removeItem(atPath: path + ".migrating")
-        try? FileManager.default.removeItem(atPath: path + ".schema.lock")
-    }
-
     @Test func hotFilesReturnsAccessedFiles() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let projectRoot = "/tmp/hotfiles-test"
         let sid = db.createSession(projectRoot: projectRoot)

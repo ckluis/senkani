@@ -18,15 +18,6 @@ struct CombinatorPipelineTests {
         return (SessionDatabase(path: path), path)
     }
 
-    private func cleanup(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-wal")
-        try? fm.removeItem(atPath: path + "-shm")
-        try? fm.removeItem(atPath: path + ".migrating")
-        try? fm.removeItem(atPath: path + ".schema.lock")
-    }
-
     private func sampleTrace(
         idempotencyKey: String = "u6b-\(UUID().uuidString)",
         startedAt: Date = Date(timeIntervalSince1970: 1_750_000_100),
@@ -47,7 +38,7 @@ struct CombinatorPipelineTests {
     @Test("split emits paired ContextPlan + AgentTraceEvent with reducer=merge")
     func splitPairsPlanAndTrace() throws {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         let pipeline = CombinatorPipeline(database: db, budget: BudgetConfig())
 
         let traceKey = "u6b-split-\(UUID().uuidString)"
@@ -83,7 +74,7 @@ struct CombinatorPipelineTests {
     @Test("filter persists ReducerChoice.select")
     func filterPersistsReducerSelect() throws {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         let pipeline = CombinatorPipeline(database: db, budget: BudgetConfig())
 
         let outcome = try pipeline.filter(
@@ -104,7 +95,7 @@ struct CombinatorPipelineTests {
     @Test("reduce persists ReducerChoice.summarize")
     func reducePersistsReducerSummarize() throws {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         let pipeline = CombinatorPipeline(database: db, budget: BudgetConfig())
 
         let outcome = try pipeline.reduce(
@@ -127,7 +118,7 @@ struct CombinatorPipelineTests {
     @Test("Plan/actual pairing observable via fetchBySession + fetchByIdempotencyKey")
     func pairingObservableFromBothSides() throws {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         let pipeline = CombinatorPipeline(database: db, budget: BudgetConfig())
 
         let traceKey = "u6b-pair-\(UUID().uuidString)"
@@ -156,7 +147,7 @@ struct CombinatorPipelineTests {
     @Test("BudgetGate rejects when estimatedCost exceeds daily-equivalent ceiling")
     func budgetGateRejectsOverBudgetPlan() throws {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let budget = BudgetConfig(dailyLimitCents: 100) // $1/day ceiling
         let pipeline = CombinatorPipeline(database: db, budget: budget)
@@ -191,7 +182,7 @@ struct CombinatorPipelineTests {
     @Test("Unlimited budget never rejects regardless of cost")
     func unlimitedBudgetNeverRejects() throws {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let pipeline = CombinatorPipeline(database: db, budget: BudgetConfig())
         let outcome = try pipeline.reduce(
@@ -210,7 +201,7 @@ struct CombinatorPipelineTests {
     @Test("Allowed plan: estimatedCost ≤ ceiling executes through")
     func allowedPlanExecutesUnderCeiling() throws {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let budget = BudgetConfig(dailyLimitCents: 1_000) // $10/day ceiling
         let pipeline = CombinatorPipeline(database: db, budget: budget)
@@ -265,7 +256,7 @@ struct CombinatorPipelineTests {
     @Test("Closure throw leaves plan persisted, trace absent, throw propagates")
     func closureThrowLeavesPlanWithoutTrace() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let pipeline = CombinatorPipeline(database: db, budget: BudgetConfig())
 

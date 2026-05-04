@@ -11,16 +11,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanup(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    // WAL and SHM files
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-    try? fm.removeItem(atPath: path + ".migrating")
-    try? fm.removeItem(atPath: path + ".schema.lock")
-}
-
 /// Record a token event and flush the async queue by calling a sync read.
 private func recordAndFlush(
     db: SessionDatabase,
@@ -55,7 +45,7 @@ struct SessionDatabaseProjectIsolationTests {
 
     @Test func twoProjectsGetSeparateStats() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         recordAndFlush(db: db, projectRoot: "/tmp/projectA", inputTokens: 1000, savedTokens: 500, costCents: 10)
         recordAndFlush(db: db, projectRoot: "/tmp/projectB", inputTokens: 2000, savedTokens: 800, costCents: 20)
@@ -76,7 +66,7 @@ struct SessionDatabaseProjectIsolationTests {
 
     @Test func nullProjectRootDoesNotContaminateNamedProjects() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // Record with nil project root
         recordAndFlush(db: db, projectRoot: nil, inputTokens: 9999, savedTokens: 9999)
@@ -91,7 +81,7 @@ struct SessionDatabaseProjectIsolationTests {
 
     @Test func tokenStatsAllProjectsAggregates() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         recordAndFlush(db: db, projectRoot: "/tmp/p1", inputTokens: 100, savedTokens: 10)
         recordAndFlush(db: db, projectRoot: "/tmp/p2", inputTokens: 200, savedTokens: 20)
@@ -111,7 +101,7 @@ struct SessionDatabasePathNormalizationTests {
 
     @Test func trailingSlashNormalized() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         recordAndFlush(db: db, projectRoot: "/tmp/project/", inputTokens: 500, savedTokens: 100)
 
@@ -123,7 +113,7 @@ struct SessionDatabasePathNormalizationTests {
 
     @Test func tildePrefixNormalized() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let home = NSHomeDirectory()
         recordAndFlush(db: db, projectRoot: "~/testproject", inputTokens: 500, savedTokens: 100)
@@ -136,7 +126,7 @@ struct SessionDatabasePathNormalizationTests {
 
     @Test func dotComponentsNormalized() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         recordAndFlush(db: db, projectRoot: "/tmp/project/./src/../", inputTokens: 500, savedTokens: 100)
 
@@ -153,7 +143,7 @@ struct SessionDatabaseTokenEventTests {
 
     @Test func recordAndRetrieveTokenEvent() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         db.recordTokenEvent(
             sessionId: "sess-001",
@@ -182,7 +172,7 @@ struct SessionDatabaseTokenEventTests {
 
     @Test func multipleEventsAccumulate() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         for i in 1...5 {
             recordAndFlush(
@@ -215,7 +205,7 @@ struct SessionDatabaseMigrationTests {
     @Test("Opening same DB twice runs migrations twice without crash")
     func migrationIdempotency() {
         let path = "/tmp/senkani-migration-test-\(UUID().uuidString).sqlite"
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // First open: creates schema + runs migrations
         let db1 = SessionDatabase(path: path)
@@ -241,14 +231,14 @@ struct SessionDatabaseLiveMultiplierTests {
     // No saved events → nil (vacuous)
     @Test func noDataReturnsNil() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         #expect(db.liveSessionMultiplier(projectRoot: "/tmp/no-events-ever-\(UUID().uuidString)") == nil)
     }
 
     // inputTokens=20, savedTokens=80 → raw=100, compressed=20 → multiplier=5.0
     @Test func correctMultiplierComputed() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         db.recordTokenEvent(
             sessionId: "s1", paneId: nil, projectRoot: "/tmp/lm-proj",
             source: "test", toolName: nil, model: nil,
@@ -270,7 +260,7 @@ struct SessionDatabaseRetentionTests {
     @Test("pruneTokenEvents deletes rows older than the cutoff")
     func prunesOldEvents() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // Write an event dated 100 days ago by inserting directly with a past timestamp
         let pastTimestamp = Date().addingTimeInterval(-100 * 86400).timeIntervalSince1970
@@ -304,7 +294,7 @@ struct SessionDatabaseRetentionTests {
     @Test("tokenStatsAllProjects includes 90-day WHERE clause (query executes without error)")
     func windowedQuerySucceeds() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         recordAndFlush(db: db, projectRoot: "/tmp/window-proj")
         let stats = db.tokenStatsAllProjects()

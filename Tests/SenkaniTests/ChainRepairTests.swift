@@ -14,15 +14,6 @@ struct ChainRepairTests {
         return (db, path)
     }
 
-    private static func cleanup(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-wal")
-        try? fm.removeItem(atPath: path + "-shm")
-        try? fm.removeItem(atPath: path + ".migrating")
-        try? fm.removeItem(atPath: path + ".schema.lock")
-    }
-
     private static func record(_ db: SessionDatabase, _ tag: String) {
         db.recordTokenEvent(
             sessionId: "s",
@@ -59,7 +50,7 @@ struct ChainRepairTests {
     @Test("Repair refuses an unsupported table")
     func unsupportedTableRejected() {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         do {
             _ = try db.repairChain(table: "sandboxed_results", fromRowid: 1, force: true)
@@ -79,7 +70,7 @@ struct ChainRepairTests {
     @Test("Repair refuses a fromRowid past the table's max id")
     func fromRowidOutOfRange() {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         Self.record(db, "first")
         // Only one row exists; --from-rowid 999 should be rejected.
@@ -101,7 +92,7 @@ struct ChainRepairTests {
     @Test("Repair after tamper: pre-segment OK, post-segment OK after a fresh write")
     func repairSegmentsBothVerify() throws {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         for i in 0..<5 { Self.record(db, "t-\(i)") }
         // Tamper row 3.
@@ -140,7 +131,7 @@ struct ChainRepairTests {
     @Test("totalRepairCount reflects every repair anchor across all tables")
     func totalRepairCountAcrossTables() throws {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         Self.record(db, "t-1")
         Self.record(db, "t-2")
@@ -161,7 +152,7 @@ struct ChainRepairTests {
     @Test("Idempotency guard: second repair without --force is rejected when prior anchor is repair-*")
     func secondRepairRequiresForce() throws {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         for i in 0..<3 { Self.record(db, "t-\(i)") }
 
@@ -191,7 +182,7 @@ struct ChainRepairTests {
     @Test("Repair anchor records prior tip hash in operator_note")
     func priorTipRecorded() throws {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         Self.record(db, "first")
         Self.record(db, "second")
@@ -228,7 +219,7 @@ struct ChainRepairTests {
     @Test("Repair with a fresh write afterward verifies, post-repair count rises")
     func freshWriteAfterRepairVerifies() throws {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         for i in 0..<4 { Self.record(db, "t-\(i)") }
 
@@ -249,7 +240,7 @@ struct ChainRepairTests {
     @Test("Repair on validation_results works end-to-end")
     func validationResultsRepair() throws {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         for i in 0..<3 {
             db.insertValidationResult(
@@ -302,7 +293,7 @@ struct ChainRepairTests {
         // Set up a DB whose token_events anchor has only backfilled (NULL-hash)
         // rows — i.e. the migration anchor with no post-migration writes yet.
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         Self.record(db, "t-1")
         Self.record(db, "t-2")

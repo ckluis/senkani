@@ -12,21 +12,12 @@ struct PaneRefreshStateStoreTests {
         return (db, path)
     }
 
-    private static func cleanup(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-wal")
-        try? fm.removeItem(atPath: path + "-shm")
-        try? fm.removeItem(atPath: path + ".migrating")
-        try? fm.removeItem(atPath: path + ".schema.lock")
-    }
-
     // MARK: - Migration shape
 
     @Test("Migration v6 creates pane_refresh_state with chain columns")
     func migrationCreatesTable() {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         // Sanity: schema_version >= 6.
         #expect(db.currentSchemaVersion() >= 6)
@@ -56,7 +47,7 @@ struct PaneRefreshStateStoreTests {
     @Test("Successive writes return the latest per (project_root, tile_id)")
     func appendOnlyLatestWins() {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         let projectRoot = "/tmp/proj-latest"
 
@@ -81,7 +72,7 @@ struct PaneRefreshStateStoreTests {
     @Test("latestStates returns one row per tile")
     func bulkRehydrate() {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         let projectRoot = "/tmp/proj-bulk"
 
@@ -117,7 +108,7 @@ struct PaneRefreshStateStoreTests {
     @Test("Chain verification is OK after a clean write sequence")
     func chainVerifiesAfterWrites() {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         let projectRoot = "/tmp/proj-chain"
         for i in 0..<5 {
@@ -169,7 +160,7 @@ struct PaneRefreshStateStoreTests {
         sqlite3_close(rawDB)
 
         let verify = SessionDatabase(path: path)
-        defer { verify.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(verify, path: path) }
 
         let result = ChainVerifier.verifyPaneRefreshState(verify)
         switch result {

@@ -7,15 +7,6 @@ private func makeTempKB() -> (KnowledgeStore, String) {
     return (KnowledgeStore(path: path), path)
 }
 
-private func cleanupKB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-    try? fm.removeItem(atPath: path + ".migrating")
-    try? fm.removeItem(atPath: path + ".schema.lock")
-}
-
 private func makeEntity(_ name: String) -> KnowledgeEntity {
     KnowledgeEntity(name: name, markdownPath: ".senkani/knowledge/\(name).md")
 }
@@ -29,7 +20,7 @@ struct LinkStoreInvariantTests {
 
     @Test func schemaSurvivesReopen() {
         let path = "/tmp/senkani-linkstore-reopen-\(UUID().uuidString).sqlite"
-        defer { cleanupKB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         do {
             let store = KnowledgeStore(path: path)
@@ -50,7 +41,7 @@ struct LinkStoreInvariantTests {
     /// entity must remove all of its outgoing links.
     @Test func cascadeDeleteOnSourceEntityRemoval() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let aId = store.upsertEntity(makeEntity("A"))
         _ = store.upsertEntity(makeEntity("B"))
@@ -68,7 +59,7 @@ struct LinkStoreInvariantTests {
     /// the link rows themselves (target_name is preserved).
     @Test func targetIdSetNullOnTargetEntityDelete() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let aId = store.upsertEntity(makeEntity("A"))
         _ = store.upsertEntity(makeEntity("B"))
@@ -90,7 +81,7 @@ struct LinkStoreInvariantTests {
     /// order users expect. Insert two links, the older one comes first.
     @Test func linksOrderedByCreatedAtAsc() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let aId = store.upsertEntity(makeEntity("A"))
         let earlier = EntityLink(sourceId: aId, targetName: "Old",
@@ -110,7 +101,7 @@ struct LinkStoreInvariantTests {
     /// source entity — other entities' links are untouched.
     @Test func deleteLinksScopesToSourceId() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let aId = store.upsertEntity(makeEntity("A"))
         let bId = store.upsertEntity(makeEntity("B"))
@@ -126,7 +117,7 @@ struct LinkStoreInvariantTests {
     /// links keep the id they were inserted with.
     @Test func resolveLinksOnlyTouchesUnresolved() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let aId = store.upsertEntity(makeEntity("A"))
         let cId = store.upsertEntity(makeEntity("C"))

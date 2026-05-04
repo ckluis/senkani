@@ -10,15 +10,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanupTempDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-    try? fm.removeItem(atPath: path + ".migrating")
-    try? fm.removeItem(atPath: path + ".schema.lock")
-}
-
 /// The store's write path is queue.async; force a sync read through the
 /// serial queue to flush pending writes before asserting.
 private func flush(_ db: SessionDatabase) {
@@ -32,7 +23,7 @@ struct TokenEventStoreTests {
 
     @Test func recordTokenEventPersistsAllFields() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession(projectRoot: "/tmp/proj")
         db.recordTokenEvent(
@@ -61,7 +52,7 @@ struct TokenEventStoreTests {
 
     @Test func recordHookEventLandsInTokenEventsWithHookSource() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession(projectRoot: "/tmp/proj")
         db.recordHookEvent(
@@ -81,7 +72,7 @@ struct TokenEventStoreTests {
 
     @Test func tokenStatsForProjectAggregatesAcrossEvents() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession(projectRoot: "/tmp/proj")
         for _ in 0..<3 {
@@ -102,7 +93,7 @@ struct TokenEventStoreTests {
 
     @Test func tokenStatsByFeatureSortsBySavedDescending() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession(projectRoot: "/tmp/proj")
         db.recordTokenEvent(
@@ -128,7 +119,7 @@ struct TokenEventStoreTests {
 
     @Test func liveSessionMultiplierReturnsNilWithoutData() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let m = db.liveSessionMultiplier(projectRoot: "/tmp/nothing")
         #expect(m == nil, "no events → nil multiplier")
@@ -136,7 +127,7 @@ struct TokenEventStoreTests {
 
     @Test func liveSessionMultiplierComputesRawOverCompressed() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession(projectRoot: "/tmp/proj")
         // input=200, saved=800 → raw=1000, compressed=200 → 5.0x
@@ -155,7 +146,7 @@ struct TokenEventStoreTests {
 
     @Test func hotFilesRanksByFrequency() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession(projectRoot: "/tmp/proj")
         // /hot read 3x, /cold read 1x
@@ -183,7 +174,7 @@ struct TokenEventStoreTests {
 
     @Test func sessionCursorUpsertsOnConflict() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let p = "/tmp/proj/session.jsonl"
         #expect(db.getSessionCursor(path: p) == (0, 0), "new path → (0, 0)")
@@ -204,7 +195,7 @@ struct TokenEventStoreTests {
 
     @Test func pruneTokenEventsRemovesOldRows() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession(projectRoot: "/tmp/proj")
         db.recordTokenEvent(

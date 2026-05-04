@@ -14,15 +14,6 @@ struct ChainRound3Tests {
         return (db, path)
     }
 
-    private static func cleanup(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-wal")
-        try? fm.removeItem(atPath: path + "-shm")
-        try? fm.removeItem(atPath: path + ".migrating")
-        try? fm.removeItem(atPath: path + ".schema.lock")
-    }
-
     private static func tamper(_ path: String, table: String, where_: String, set: String) throws {
         var db: OpaquePointer?
         guard sqlite3_open(path, &db) == SQLITE_OK else {
@@ -43,7 +34,7 @@ struct ChainRound3Tests {
     @Test("validation_results — chain of three writes verifies OK")
     func validationOK() {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         for i in 0..<3 {
             db.insertValidationResult(
@@ -69,7 +60,7 @@ struct ChainRound3Tests {
     @Test("validation_results — single-byte tamper caught at the tampered row")
     func validationTamperCaught() throws {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         for i in 0..<3 {
             db.insertValidationResult(
@@ -102,7 +93,7 @@ struct ChainRound3Tests {
     @Test("sandboxed_results — chain of three writes verifies OK")
     func sandboxOK() {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         _ = db.storeSandboxedResult(sessionId: "s1", command: "ls /tmp", output: "line\n")
         _ = db.storeSandboxedResult(sessionId: "s1", command: "ls /tmp", output: "more lines\n")
@@ -119,7 +110,7 @@ struct ChainRound3Tests {
     @Test("sandboxed_results — tamper on full_output is caught")
     func sandboxTamperCaught() throws {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         _ = db.storeSandboxedResult(sessionId: "s1", command: "ls /tmp", output: "line\n")
         _ = db.storeSandboxedResult(sessionId: "s1", command: "echo hello", output: "hello\n")
@@ -147,7 +138,7 @@ struct ChainRound3Tests {
     @Test("commands — chain of three writes verifies OK")
     func commandsOK() {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         let sid = db.createSession(paneCount: 1, projectRoot: "/tmp/proj", agentType: nil)
         db.recordCommand(sessionId: sid, toolName: "Read", command: "/tmp/a.swift",
@@ -167,7 +158,7 @@ struct ChainRound3Tests {
     @Test("commands — tamper on tool_name caught at the right row")
     func commandsTamperCaught() throws {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         let sid = db.createSession(paneCount: 1, projectRoot: "/tmp/proj", agentType: nil)
         db.recordCommand(sessionId: sid, toolName: "Read", command: "/tmp/a.swift",
@@ -195,7 +186,7 @@ struct ChainRound3Tests {
     @Test("verifyAll returns one entry per table")
     func verifyAllShape() {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         // Write into all four tables.
         db.recordTokenEvent(
@@ -235,7 +226,7 @@ struct ChainRound3Tests {
     @Test("Anchors are independent: tampering token_events does not break commands")
     func tamperOneTableLeavesOthersOK() throws {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         let sid = db.createSession(paneCount: 1, projectRoot: "/tmp", agentType: nil)
         db.recordCommand(sessionId: sid, toolName: "Read", command: "/tmp/a.swift",

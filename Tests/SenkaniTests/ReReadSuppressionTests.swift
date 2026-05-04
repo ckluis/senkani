@@ -10,15 +10,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanupDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-    try? fm.removeItem(atPath: path + ".migrating")
-    try? fm.removeItem(atPath: path + ".schema.lock")
-}
-
 private func makeHookEvent(
     toolName: String = "Read",
     filePath: String? = nil,
@@ -195,7 +186,7 @@ struct ReReadSuppressionTests {
         // Instead, verify that lastReadTimestamp returns a recent date and the 300s check works.
         // This test uses a temp DB to verify the query directly.
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
 
         let projectRoot = "/tmp/test-old-read"
 

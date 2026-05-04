@@ -11,15 +11,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanupTempDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-    try? fm.removeItem(atPath: path + ".migrating")
-    try? fm.removeItem(atPath: path + ".schema.lock")
-}
-
 @Suite("T.6a — ConfirmationGate + ConfirmationStore + NotificationSink", .serialized)
 struct ConfirmationGateTests {
 
@@ -28,7 +19,7 @@ struct ConfirmationGateTests {
     @Test("Migration v11 creates confirmations table with chain columns")
     func schemaShape() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         #expect(db.currentSchemaVersion() >= 11)
 
@@ -56,7 +47,7 @@ struct ConfirmationGateTests {
     @Test("Confirmation rows participate in the T.5 audit chain")
     func chainsViaT5() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         ConfirmationGate.database = db
         defer { ConfirmationGate.resetToDefaults() }
 
@@ -125,7 +116,7 @@ struct ConfirmationGateTests {
     @Test("Every write/exec-tagged call writes a chained confirmation row")
     func writeExecAlwaysAudits() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         ConfirmationGate.database = db
         defer { ConfirmationGate.resetToDefaults() }
 
@@ -149,7 +140,7 @@ struct ConfirmationGateTests {
     @Test("Operator-deny path returns a structured error reason")
     func denyPathStructuredError() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         ConfirmationGate.database = db
         ConfirmationGate.resolver = { _, _ in
             (.deny, .operator, "operator says no")
@@ -175,7 +166,7 @@ struct ConfirmationGateTests {
     @Test("Default policy auto-approves but still writes an audit row")
     func defaultPolicyAuditsAutoApprove() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         ConfirmationGate.database = db
         defer { ConfirmationGate.resetToDefaults() }
 
@@ -198,7 +189,7 @@ struct ConfirmationGateTests {
     @Test("HookRouter PreToolUse on a denied Edit returns a structured deny")
     func hookRouterDeniesEdit() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         ConfirmationGate.database = db
         ConfirmationGate.resolver = { _, _ in (.deny, .policy, "policy disallows Edit") }
         defer { ConfirmationGate.resetToDefaults() }

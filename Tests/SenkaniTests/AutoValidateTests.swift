@@ -10,15 +10,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanupDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-    try? fm.removeItem(atPath: path + ".migrating")
-    try? fm.removeItem(atPath: path + ".schema.lock")
-}
-
 private func eventCount(_ db: SessionDatabase, _ type: String, projectRoot: String? = nil) -> Int {
     db.flushWrites()
     return db.eventCounts(projectRoot: projectRoot, prefix: type)
@@ -112,7 +103,7 @@ struct ValidationResultsDBTests {
 
     @Test func insertAndFetch() {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         let sid = db.createSession(projectRoot: "/tmp/test")
 
         db.insertValidationResult(
@@ -132,7 +123,7 @@ struct ValidationResultsDBTests {
 
     @Test func fetchMarksDelivered() {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         let sid = db.createSession(projectRoot: "/tmp/test")
 
         db.insertValidationResult(
@@ -159,7 +150,7 @@ struct ValidationResultsDBTests {
 
     @Test func onlyErrorsReturned() {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         let sid = db.createSession(projectRoot: "/tmp/test")
 
         // Insert a success (exitCode 0) and an error (exitCode 1)
@@ -184,7 +175,7 @@ struct ValidationResultsDBTests {
 
     @Test func cleanAndDroppedOutcomesInspectableButNotPending() {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         let sid = db.createSession(projectRoot: "/tmp/test")
 
         db.insertValidationResult(
@@ -212,7 +203,7 @@ struct ValidationResultsDBTests {
 
     @Test func pruneOldResults() {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         let sid = db.createSession(projectRoot: "/tmp/test")
 
         db.insertValidationResult(
@@ -271,7 +262,7 @@ struct HookRouterAutoValidateTests {
 
     @Test func pendingAdvisorySurvivesPassthroughPreToolUse() {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         defer { HookRouter.validationDatabase = .shared }
 
         let sid = "advisory-test-session"
@@ -301,7 +292,7 @@ struct HookRouterAutoValidateTests {
 
     @Test func pendingAdvisoryAppendsOnceToDenyResponse() {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         defer { HookRouter.validationDatabase = .shared }
 
         let sid = "advisory-deny-session"
@@ -338,7 +329,7 @@ struct HookRouterAutoValidateTests {
 
     @Test func advisoryScopeDoesNotCrossSessions() {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         defer { HookRouter.validationDatabase = .shared }
 
         HookRouter.validationDatabase = db
@@ -460,7 +451,7 @@ struct AutoValidateQueueTests {
 
     @Test func excludedPathSkipped() async {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         let root = "/tmp/project"
         let queue = AutoValidateQueue(
             database: db,
@@ -483,7 +474,7 @@ struct AutoValidateQueueTests {
 
     @Test func unknownExtensionSkipped() async {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         let root = "/tmp/project"
         let queue = AutoValidateQueue(
             database: db,
@@ -505,7 +496,7 @@ struct AutoValidateQueueTests {
 
     @Test func cleanValidationPersistsOutcomeAndCounters() async {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         let root = "/tmp/senkani-queue-clean-\(UUID().uuidString)"
         try? FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: root) }

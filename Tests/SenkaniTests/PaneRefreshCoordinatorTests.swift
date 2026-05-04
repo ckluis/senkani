@@ -11,19 +11,10 @@ struct PaneRefreshCoordinatorTests {
         return (db, path)
     }
 
-    private static func cleanup(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-wal")
-        try? fm.removeItem(atPath: path + "-shm")
-        try? fm.removeItem(atPath: path + ".migrating")
-        try? fm.removeItem(atPath: path + ".schema.lock")
-    }
-
     @Test("tick() runs each tile through the pool and persists the outcome")
     func tickPersistsOutcomes() async {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         let coord = PaneRefreshCoordinator(
             database: db,
@@ -49,7 +40,7 @@ struct PaneRefreshCoordinatorTests {
     @Test("rehydrate() restores tile state from the DB")
     func rehydrateRestoresState() async {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         // First coordinator runs once to seed persistence.
         let coordA = PaneRefreshCoordinator(
@@ -85,7 +76,7 @@ struct PaneRefreshCoordinatorTests {
     @Test("Bounded worker pool caps concurrency at maxConcurrent across simultaneous tile wakes")
     func boundedPoolEnforcement() async {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         // 12 simultaneous tile wakes from a single tick are simulated by
         // dispatching 12 fetches through the coordinator's pool directly. The
@@ -128,7 +119,7 @@ struct PaneRefreshCoordinatorTests {
     @Test("Coordinator surfaces failure outcomes through snapshot.lastError")
     func failureOutcomeSurfacesInSnapshot() async {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         let coord = PaneRefreshCoordinator(
             database: db,

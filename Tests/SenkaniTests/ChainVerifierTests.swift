@@ -14,15 +14,6 @@ struct ChainVerifierTests {
         return (db, path)
     }
 
-    private static func cleanup(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-wal")
-        try? fm.removeItem(atPath: path + "-shm")
-        try? fm.removeItem(atPath: path + ".migrating")
-        try? fm.removeItem(atPath: path + ".schema.lock")
-    }
-
     private static func record(_ db: SessionDatabase, _ tag: String, tokens: Int = 100) {
         db.recordTokenEvent(
             sessionId: "s-\(tag)",
@@ -67,7 +58,7 @@ struct ChainVerifierTests {
     @Test("Fresh DB with no rows reports noChain")
     func freshDBNoChain() {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         let result = ChainVerifier.verifyTokenEvents(db)
         #expect(result == .noChain)
@@ -76,7 +67,7 @@ struct ChainVerifierTests {
     @Test("Single insert opens fresh-install anchor and verifies OK")
     func singleInsertOK() {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         Self.record(db, "first")
 
@@ -91,7 +82,7 @@ struct ChainVerifierTests {
     @Test("Multiple inserts chain cleanly and verify OK")
     func chainOfFiveVerifies() {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         for i in 0..<5 { Self.record(db, "t-\(i)", tokens: 100 + i) }
 
@@ -105,7 +96,7 @@ struct ChainVerifierTests {
     @Test("Single-byte tamper at row K is caught at row K (not earlier, not later)")
     func tamperAtRowKCaught() throws {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         for i in 0..<5 { Self.record(db, "t-\(i)") }
         // Get the rowid of the third inserted row.
@@ -131,7 +122,7 @@ struct ChainVerifierTests {
         db1.close()
 
         let db2 = SessionDatabase(path: path)
-        defer { db2.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db2, path: path) }
 
         Self.record(db2, "after-restart-1")
         Self.record(db2, "after-restart-2")
@@ -150,7 +141,7 @@ struct ChainVerifierTests {
         // anchor, NULL prev_hash + entry_hash. The verifier should NOT
         // walk those rows — they predate the chain by design.
         let path = "/tmp/senkani-chainverifier-pret5-\(UUID().uuidString).sqlite"
-        defer { Self.cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let db = SessionDatabase(path: path)
         // First, write rows under the fresh-install anchor that v4 would have
@@ -187,7 +178,7 @@ struct ChainVerifierTests {
     @Test("Independent computation of expected hash matches the stored entry_hash for row 1")
     func firstRowHashMatchesIndependentComputation() throws {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         Self.record(db, "exact")
 

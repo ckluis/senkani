@@ -8,15 +8,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanupTempDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-    try? fm.removeItem(atPath: path + ".migrating")
-    try? fm.removeItem(atPath: path + ".schema.lock")
-}
-
 private func makeConfig(
     filter: Bool = true,
     indexer: Bool = true,
@@ -46,7 +37,7 @@ struct PolicyStoreTests {
 
     @Test func capturesAndReadsBack() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession(projectRoot: "/tmp/proj", agentType: .claudeCode)
         let cfg = makeConfig()
@@ -65,7 +56,7 @@ struct PolicyStoreTests {
 
     @Test func dedupsIdenticalCaptures() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession(projectRoot: "/tmp/proj", agentType: .claudeCode)
         let cfg = makeConfig()
@@ -81,7 +72,7 @@ struct PolicyStoreTests {
 
     @Test func differentConfigsMakeDifferentRows() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession(projectRoot: "/tmp/proj", agentType: .claudeCode)
         let cfg1 = makeConfig(filter: true)

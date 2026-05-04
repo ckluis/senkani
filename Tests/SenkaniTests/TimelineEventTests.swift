@@ -10,15 +10,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanup(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-    try? fm.removeItem(atPath: path + ".migrating")
-    try? fm.removeItem(atPath: path + ".schema.lock")
-}
-
 /// Record a token event and flush the async queue by calling a sync read.
 private func recordEvent(
     db: SessionDatabase,
@@ -55,7 +46,7 @@ struct TimelineEventTests {
 
     @Test func recentTokenEventsReturnsNewestFirst() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         for i in 0..<5 {
             recordEvent(db: db, projectRoot: "/tmp/test", inputTokens: i * 10)
@@ -71,7 +62,7 @@ struct TimelineEventTests {
 
     @Test func recentTokenEventsRespectsLimit() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         for _ in 0..<50 {
             recordEvent(db: db, projectRoot: "/tmp/test")
@@ -83,7 +74,7 @@ struct TimelineEventTests {
 
     @Test func recentTokenEventsScopesToProject() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         for _ in 0..<3 {
             recordEvent(db: db, projectRoot: "/tmp/projectA")
@@ -100,7 +91,7 @@ struct TimelineEventTests {
 
     @Test func recentTokenEventsAllProjectsReturnsAll() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         for _ in 0..<3 {
             recordEvent(db: db, projectRoot: "/tmp/projectA")
@@ -115,7 +106,7 @@ struct TimelineEventTests {
 
     @Test func timelineEventFieldsPopulated() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         recordEvent(
             db: db,
@@ -146,7 +137,7 @@ struct TimelineEventTests {
 
     @Test func timelineEventHandlesNullFields() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         recordEvent(
             db: db,
@@ -192,7 +183,7 @@ struct TimelineEventTests {
 
     @Test func recentTokenEventsEmptyProjectReturnsEmpty() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         recordEvent(db: db, projectRoot: "/tmp/projectA")
 

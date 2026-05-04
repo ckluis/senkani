@@ -16,15 +16,6 @@ struct ObservabilityCountersTests {
         return (db, path)
     }
 
-    private static func cleanup(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-wal")
-        try? fm.removeItem(atPath: path + "-shm")
-        try? fm.removeItem(atPath: path + ".migrating")
-        try? fm.removeItem(atPath: path + ".schema.lock")
-    }
-
     /// `recordEvent` is async (dispatches to the DB queue); flush by
     /// running a sync read. `eventCounts` is already `queue.sync`, so
     /// calling it drains.
@@ -36,7 +27,7 @@ struct ObservabilityCountersTests {
 
     @Test func migrationV2CreatesEventCountersTable() {
         let (db, path) = Self.makeDB()
-        defer { Self.cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         // Recording an event is only possible if the table exists.
         db.recordEvent(type: "test.event")
         Self.flush(db)
@@ -49,7 +40,7 @@ struct ObservabilityCountersTests {
 
     @Test func incrementsOnRepeatedRecord() {
         let (db, path) = Self.makeDB()
-        defer { Self.cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         for _ in 0..<5 { db.recordEvent(type: "security.injection.detected") }
         Self.flush(db)
         let rows = db.eventCounts(prefix: "security.")
@@ -58,7 +49,7 @@ struct ObservabilityCountersTests {
 
     @Test func deltaParameterAddsAtomically() {
         let (db, path) = Self.makeDB()
-        defer { Self.cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         db.recordEvent(type: "retention.pruned.token_events", delta: 42)
         db.recordEvent(type: "retention.pruned.token_events", delta: 8)
         Self.flush(db)
@@ -69,7 +60,7 @@ struct ObservabilityCountersTests {
 
     @Test func zeroDeltaIsNoOp() {
         let (db, path) = Self.makeDB()
-        defer { Self.cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         db.recordEvent(type: "noop.event", delta: 0)
         Self.flush(db)
         #expect(db.eventCounts(prefix: "noop.").isEmpty,
@@ -80,7 +71,7 @@ struct ObservabilityCountersTests {
 
     @Test func projectScopedSeparateFromGlobal() {
         let (db, path) = Self.makeDB()
-        defer { Self.cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         db.recordEvent(type: "security.ssrf.blocked", projectRoot: "/proj/A")
         db.recordEvent(type: "security.ssrf.blocked", projectRoot: "/proj/A")
         db.recordEvent(type: "security.ssrf.blocked", projectRoot: "/proj/B")
@@ -100,7 +91,7 @@ struct ObservabilityCountersTests {
 
     @Test func prefixFilterLimitsResults() {
         let (db, path) = Self.makeDB()
-        defer { Self.cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         db.recordEvent(type: "security.injection.detected")
         db.recordEvent(type: "security.ssrf.blocked")
         db.recordEvent(type: "retention.pruned.token_events", delta: 10)
@@ -118,7 +109,7 @@ struct ObservabilityCountersTests {
 
     @Test func firstSeenFreezesLastSeenAdvances() async throws {
         let (db, path) = Self.makeDB()
-        defer { Self.cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         db.recordEvent(type: "timestamp.test")
         Self.flush(db)
         let initial = db.eventCounts(prefix: "timestamp.").first!
@@ -138,7 +129,7 @@ struct ObservabilityCountersTests {
 
     @Test func filterPipelineIncrementsInjectionCounter() {
         let (db, path) = Self.makeDB()
-        defer { Self.cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         // Record initial count (should be zero).
         let before = db.eventCounts(prefix: "security.injection")
         let beforeCount = before.first?.count ?? 0

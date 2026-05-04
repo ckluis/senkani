@@ -98,12 +98,7 @@ struct AuthorshipPromptResolverBypassTests {
     @Test func explicitTagBypassesPromptOnRoundTrip() {
         let path = "/tmp/senkani-v5b-bypass-\(UUID().uuidString).sqlite"
         defer {
-            let fm = FileManager.default
-            try? fm.removeItem(atPath: path)
-            try? fm.removeItem(atPath: path + "-wal")
-            try? fm.removeItem(atPath: path + "-shm")
-            try? fm.removeItem(atPath: path + ".migrating")
-            try? fm.removeItem(atPath: path + ".schema.lock")
+            TempSessionDatabase.cleanup(path: path)
         }
         let store = KnowledgeStore(path: path)
 

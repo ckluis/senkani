@@ -9,6 +9,28 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — Test-side cleanup callers route through `TempSessionDatabase.cleanup(path:)` / `.close(_:path:)` (single source of truth)
+
+- Prior state: the 2026-05-04 round shipped
+  `Tests/SenkaniTests/Helpers/TempSessionDatabase.swift` with the
+  canonical 5-suffix cleanup, but the 49 callers it was meant to serve
+  still ran their own per-suffix `removeItem(atPath:)` dance — the
+  helper's `sidecarSuffixes` constant only had one reader (the helper
+  itself). Adding a 6th sidecar (e.g., `.snapshot`, `.journal`) would
+  have required editing 49 files instead of one.
+- This round migrates every callsite. 51 test files (parent round's
+  49 + 2 added since) now route through the helper: 46 had a local
+  `cleanup*(path:)` helper (deleted, callers rewritten to
+  `TempSessionDatabase.cleanup(path: path)`), 5 had inline 5-line
+  defer blocks (replaced in-place), and 8 used the split close-then-
+  cleanup pattern (`db.close(); Self.cleanup(path)` → single
+  `TempSessionDatabase.close(db, path: path)`). `StoreExecTests`'s
+  combined `cleanup(_:db, _:path)` collapsed to the same single call.
+- `sidecarSuffixes` is now the single edit point for any future
+  sidecar. Acceptance: zero `removeItem(atPath:.*\.migrating)` and
+  zero `removeItem(atPath:.*"-wal")` matches outside the helper;
+  `tools/test-safe.sh` 8/8 green; `ls /tmp/senkani-*` = 0 post-run.
+
 ### May 4 — Queue-affinity contract on `SessionDatabase` raw-pointer leaves
 
 - Prior state: `SessionDatabase.db: OpaquePointer?` is `internal` so

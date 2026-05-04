@@ -19,22 +19,13 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanup(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-    try? fm.removeItem(atPath: path + ".migrating")
-    try? fm.removeItem(atPath: path + ".schema.lock")
-}
-
 @Suite("SandboxStore — writes, reads, prune")
 struct SandboxStoreTests {
 
     @Test("storeSandboxedResult returns a r_-prefixed 14-char ID")
     func storeReturnsWellFormedId() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sessionId = db.createSession()
         let id = db.storeSandboxedResult(sessionId: sessionId, command: "ls", output: "one\ntwo\nthree")
@@ -49,7 +40,7 @@ struct SandboxStoreTests {
     @Test("retrieveSandboxedResult round-trips command, output, and counts")
     func retrieveRoundTripsCounts() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sessionId = db.createSession()
         let output = (0..<12).map { "row \($0)" }.joined(separator: "\n")
@@ -66,7 +57,7 @@ struct SandboxStoreTests {
     @Test("pruneSandboxedResults drops rows older than the cutoff and returns the delete count")
     func pruneByAgeRemovesOldRows() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sessionId = db.createSession()
         let id = db.storeSandboxedResult(sessionId: sessionId, command: "old", output: "stale")
@@ -82,7 +73,7 @@ struct SandboxStoreTests {
     @Test("pruneSandboxedResults keeps rows younger than the cutoff")
     func pruneKeepsRecentRows() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sessionId = db.createSession()
         let id = db.storeSandboxedResult(sessionId: sessionId, command: "fresh", output: "keep")
@@ -95,7 +86,7 @@ struct SandboxStoreTests {
     @Test("retrieveSandboxedResult returns nil for an unknown ID")
     func retrieveMissingReturnsNil() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         #expect(db.retrieveSandboxedResult(resultId: "r_doesnotexist") == nil)
     }
@@ -103,7 +94,7 @@ struct SandboxStoreTests {
     @Test("rows from different sessions are isolated by ID but share the table")
     func multiSessionIsolation() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let s1 = db.createSession()
         let s2 = db.createSession()

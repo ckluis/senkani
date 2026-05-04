@@ -167,11 +167,7 @@ struct LadderPositionMigrationTests {
     func schemaHasLadderPosition() {
         let path = "/tmp/senkani-u1b-schema-\(UUID().uuidString).sqlite"
         defer {
-            try? FileManager.default.removeItem(atPath: path)
-            try? FileManager.default.removeItem(atPath: path + "-wal")
-            try? FileManager.default.removeItem(atPath: path + "-shm")
-            try? FileManager.default.removeItem(atPath: path + ".migrating")
-            try? FileManager.default.removeItem(atPath: path + ".schema.lock")
+            TempSessionDatabase.cleanup(path: path)
         }
         let db = SessionDatabase(path: path)
         #expect(db.currentSchemaVersion() >= 10)
@@ -195,11 +191,7 @@ struct LadderPositionMigrationTests {
     func ladderPositionRoundTrip() {
         let path = "/tmp/senkani-u1b-rt-\(UUID().uuidString).sqlite"
         defer {
-            try? FileManager.default.removeItem(atPath: path)
-            try? FileManager.default.removeItem(atPath: path + "-wal")
-            try? FileManager.default.removeItem(atPath: path + "-shm")
-            try? FileManager.default.removeItem(atPath: path + ".migrating")
-            try? FileManager.default.removeItem(atPath: path + ".schema.lock")
+            TempSessionDatabase.cleanup(path: path)
         }
         let db = SessionDatabase(path: path)
 
@@ -234,11 +226,7 @@ struct LadderPositionMigrationTests {
     func ladderPositionNullByDefault() {
         let path = "/tmp/senkani-u1b-null-\(UUID().uuidString).sqlite"
         defer {
-            try? FileManager.default.removeItem(atPath: path)
-            try? FileManager.default.removeItem(atPath: path + "-wal")
-            try? FileManager.default.removeItem(atPath: path + "-shm")
-            try? FileManager.default.removeItem(atPath: path + ".migrating")
-            try? FileManager.default.removeItem(atPath: path + ".schema.lock")
+            TempSessionDatabase.cleanup(path: path)
         }
         let db = SessionDatabase(path: path)
 

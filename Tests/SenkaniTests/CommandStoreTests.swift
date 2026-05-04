@@ -10,15 +10,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanupTempDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-    try? fm.removeItem(atPath: path + ".migrating")
-    try? fm.removeItem(atPath: path + ".schema.lock")
-}
-
 // MARK: - CommandStore CRUD + FTS tests
 
 @Suite("CommandStore — CRUD + FTS")
@@ -26,7 +17,7 @@ struct CommandStoreCRUDTests {
 
     @Test func createSessionReturnsIdAndPersists() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let id = db.createSession(paneCount: 3, projectRoot: "/tmp/proj", agentType: .claudeCode)
         #expect(!id.isEmpty, "createSession returns a non-empty UUID")
@@ -39,7 +30,7 @@ struct CommandStoreCRUDTests {
 
     @Test func recordCommandUpdatesSessionAggregates() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession()
         db.recordCommand(
@@ -59,7 +50,7 @@ struct CommandStoreCRUDTests {
 
     @Test func recordCommandRedactsSecrets() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession()
         let leaky = "curl -H 'Authorization: Bearer sk-ant-api03-aaaabbbbccccddddeeeeffff00001111222233334444555566667777888899990000-abcdeFGH' https://api.anthropic.com/v1/messages"
@@ -78,7 +69,7 @@ struct CommandStoreCRUDTests {
 
     @Test func endSessionSetsDuration() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession()
         db.recordCommand(sessionId: sid, toolName: "read", command: "ls", rawBytes: 10, compressedBytes: 5)
@@ -94,7 +85,7 @@ struct CommandStoreCRUDTests {
 
     @Test func loadSessionsCapsAt500() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // Sanity: the store clamps limit at 500 even when caller asks for more.
         // We can't easily create 500 sessions in a unit test — verify by
@@ -107,7 +98,7 @@ struct CommandStoreCRUDTests {
 
     @Test func searchFindsRecordedCommands() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession()
         db.recordCommand(sessionId: sid, toolName: "read", command: "zeppelin-migrate configure", rawBytes: 100, compressedBytes: 50)
@@ -121,7 +112,7 @@ struct CommandStoreCRUDTests {
 
     @Test func searchSanitizesFTSOperators() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession()
         db.recordCommand(sessionId: sid, toolName: "read", command: "just a plain command", rawBytes: 100, compressedBytes: 50)
@@ -161,7 +152,7 @@ struct CommandStoreCRUDTests {
         // we can verify that N writes leave N matching FTS rows visible and the
         // session aggregate equals N.
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession()
         let n = 25
@@ -188,7 +179,7 @@ struct CommandStoreCRUDTests {
         // CommandStore setup runs on every open. Open, write, close, reopen →
         // rows remain and the FTS index is queryable.
         let path = "/tmp/senkani-commandstore-reopen-\(UUID().uuidString).sqlite"
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         do {
             let db = SessionDatabase(path: path)

@@ -11,15 +11,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanupTempDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-    try? fm.removeItem(atPath: path + ".migrating")
-    try? fm.removeItem(atPath: path + ".schema.lock")
-}
-
 @Suite("U.4a — FragmentationDetector + TrustScorer + trust_audits", .serialized)
 struct FragmentationDetectorTests {
 
@@ -28,7 +19,7 @@ struct FragmentationDetectorTests {
     @Test("Migration v12 creates trust_audits table with chain columns")
     func schemaShape() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         #expect(db.currentSchemaVersion() >= 12)
 
@@ -203,7 +194,7 @@ struct FragmentationDetectorTests {
     @Test("Flag rows are chained — each row's prev_hash equals the previous row's entry_hash")
     func flagsAreChained() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         let now = Date()
         let f1 = FragmentationDetector.Flag(
             createdAt: now, sessionId: "S", paneId: nil,
@@ -244,7 +235,7 @@ struct FragmentationDetectorTests {
     @Test("FP/TP labels round-trip through trust_audits + flip in stats")
     func labelRoundTrip() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         let now = Date()
         let flagA = FragmentationDetector.Flag(
             createdAt: now, sessionId: "S", paneId: nil,
@@ -297,7 +288,7 @@ struct FragmentationDetectorTests {
     @Test("HookRouter detector is wired and never produces a deny response")
     func hookRouterNonBlocking() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         // Use the test seam so the hook path persists into our temp DB.
         let prevSink = HookRouter.trustFlagSink
         HookRouter.trustFlagSink = { flag, score in

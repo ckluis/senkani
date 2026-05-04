@@ -50,11 +50,7 @@ struct CommandRedactionTests {
         let path = "/tmp/senkani-cavoukian-\(UUID().uuidString).sqlite"
         let db = SessionDatabase(path: path)
         defer {
-            try? FileManager.default.removeItem(atPath: path)
-            try? FileManager.default.removeItem(atPath: path + "-wal")
-            try? FileManager.default.removeItem(atPath: path + "-shm")
-            try? FileManager.default.removeItem(atPath: path + ".migrating")
-            try? FileManager.default.removeItem(atPath: path + ".schema.lock")
+            TempSessionDatabase.cleanup(path: path)
         }
 
         let sid = db.createSession(projectRoot: "/tmp/redact-test-proj")
@@ -87,11 +83,7 @@ struct CommandRedactionTests {
         let path = "/tmp/senkani-cavoukian-\(UUID().uuidString).sqlite"
         let db = SessionDatabase(path: path)
         defer {
-            try? FileManager.default.removeItem(atPath: path)
-            try? FileManager.default.removeItem(atPath: path + "-wal")
-            try? FileManager.default.removeItem(atPath: path + "-shm")
-            try? FileManager.default.removeItem(atPath: path + ".migrating")
-            try? FileManager.default.removeItem(atPath: path + ".schema.lock")
+            TempSessionDatabase.cleanup(path: path)
         }
 
         let sid = db.createSession(projectRoot: "/tmp/stripe-test-proj")
@@ -121,11 +113,7 @@ struct CommandRedactionTests {
         let path = "/tmp/senkani-cavoukian-\(UUID().uuidString).sqlite"
         let db = SessionDatabase(path: path)
         defer {
-            try? FileManager.default.removeItem(atPath: path)
-            try? FileManager.default.removeItem(atPath: path + "-wal")
-            try? FileManager.default.removeItem(atPath: path + "-shm")
-            try? FileManager.default.removeItem(atPath: path + ".migrating")
-            try? FileManager.default.removeItem(atPath: path + ".schema.lock")
+            TempSessionDatabase.cleanup(path: path)
         }
 
         let sid = db.createSession(projectRoot: "/tmp/benign-test-proj")
@@ -151,11 +139,7 @@ struct CommandRedactionTests {
         let path = "/tmp/senkani-cavoukian-\(UUID().uuidString).sqlite"
         let db = SessionDatabase(path: path)
         defer {
-            try? FileManager.default.removeItem(atPath: path)
-            try? FileManager.default.removeItem(atPath: path + "-wal")
-            try? FileManager.default.removeItem(atPath: path + "-shm")
-            try? FileManager.default.removeItem(atPath: path + ".migrating")
-            try? FileManager.default.removeItem(atPath: path + ".schema.lock")
+            TempSessionDatabase.cleanup(path: path)
         }
 
         let sid = db.createSession(projectRoot: "/tmp/nil-test-proj")

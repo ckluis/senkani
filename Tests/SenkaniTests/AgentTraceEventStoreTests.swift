@@ -11,15 +11,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanupTempDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-    try? fm.removeItem(atPath: path + ".migrating")
-    try? fm.removeItem(atPath: path + ".schema.lock")
-}
-
 private func makeRow(
     key: String = UUID().uuidString,
     pane: String? = "kb",
@@ -59,7 +50,7 @@ struct AgentTraceEventStoreTests {
     @Test("Migration v8 creates agent_trace_event with the expected columns")
     func schemaShape() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // schema_migrations should be at v8 or later.
         #expect(db.currentSchemaVersion() >= 8)
@@ -89,7 +80,7 @@ struct AgentTraceEventStoreTests {
     @Test("idempotency_key has a UNIQUE constraint at the DB layer")
     func uniqueConstraintEnforced() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // Bypass the store's ON CONFLICT DO NOTHING and try a raw INSERT
         // that should hit a UNIQUE constraint failure.
@@ -119,7 +110,7 @@ struct AgentTraceEventStoreTests {
     @Test("100 retries of the same idempotency_key land exactly 1 row")
     func idempotencyDedup100() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let key = "fixture-tool-call-7f3a"
         for _ in 0..<100 {
@@ -132,7 +123,7 @@ struct AgentTraceEventStoreTests {
     @Test("First insert returns true; subsequent retries return false")
     func recordReturnsInsertedFlag() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let key = "first-vs-retry"
         let firstInserted = db.recordAgentTraceEvent(makeRow(key: key))
@@ -147,7 +138,7 @@ struct AgentTraceEventStoreTests {
     @Test("Different idempotency_keys land separate rows")
     func differentKeysLandSeparateRows() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         for i in 0..<25 {
             db.recordAgentTraceEvent(makeRow(key: "call-\(i)"))
@@ -160,7 +151,7 @@ struct AgentTraceEventStoreTests {
     @Test("Roundtrip preserves all conformed dimensions and measures")
     func roundtripDimensions() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let row = makeRow(
             key: "rtdim-1", pane: "timeline", project: "/tmp/p1",
@@ -221,7 +212,7 @@ struct AgentTraceEventStoreTests {
     @Test("tier column is NULL until U.1 lands the TierScorer")
     func tierIsNullByDefault() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         db.recordAgentTraceEvent(makeRow(key: "no-tier", tier: nil))
 
@@ -241,7 +232,7 @@ struct AgentTraceEventStoreTests {
     @Test("Pivot by project rolls up cost + tokens + mean latency")
     func pivotByProject() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         db.recordAgentTraceEvent(makeRow(key: "pp-1", project: "/proj/a", latencyMs: 10, tokensIn: 100, tokensOut: 30, costCents: 2))
         db.recordAgentTraceEvent(makeRow(key: "pp-2", project: "/proj/a", latencyMs: 30, tokensIn: 200, tokensOut: 70, costCents: 4))
@@ -267,7 +258,7 @@ struct AgentTraceEventStoreTests {
     @Test("Pivot by feature splits success from failure")
     func pivotByFeatureSuccessSplit() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         db.recordAgentTraceEvent(makeRow(key: "pf-1", feature: "search", result: "success", tokensIn: 100, tokensOut: 30))
         db.recordAgentTraceEvent(makeRow(key: "pf-2", feature: "search", result: "success", tokensIn: 100, tokensOut: 30))
@@ -294,7 +285,7 @@ struct AgentTraceEventStoreTests {
     @Test("Pivot by result distribution buckets each outcome")
     func pivotByResult() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         for i in 0..<5 { db.recordAgentTraceEvent(makeRow(key: "ok-\(i)", result: "success", latencyMs: 10, costCents: 1)) }
         for i in 0..<3 { db.recordAgentTraceEvent(makeRow(key: "err-\(i)", result: "error", latencyMs: 50, costCents: 0)) }
@@ -321,7 +312,7 @@ struct AgentTraceEventStoreTests {
     @Test("Pivots respect the `since` filter")
     func sinceFilter() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let oldDate = Date(timeIntervalSince1970: 1_000_000)
         let newDate = Date(timeIntervalSince1970: 2_000_000)
@@ -340,7 +331,7 @@ struct AgentTraceEventStoreTests {
     @Test("Existing token_events analytics still work alongside agent_trace_event")
     func existingAnalyticsRegression() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // Write to BOTH stores — confirm they coexist without contention.
         db.recordTokenEvent(
@@ -365,7 +356,7 @@ struct AgentTraceEventStoreTests {
     @Test("Pivot rolls NULL project under empty-string bucket without dropping rows")
     func pivotByProjectHandlesNull() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         db.recordAgentTraceEvent(makeRow(key: "np-1", project: nil))
         db.recordAgentTraceEvent(makeRow(key: "np-2", project: nil))
@@ -380,7 +371,7 @@ struct AgentTraceEventStoreTests {
     @Test("Pivot query plans use the (project, started_at) index")
     func pivotQueryUsesProjectIndex() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         db.recordAgentTraceEvent(makeRow(key: "ix-1", project: "/p"))
 

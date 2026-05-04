@@ -10,15 +10,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanupDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-    try? fm.removeItem(atPath: path + ".migrating")
-    try? fm.removeItem(atPath: path + ".schema.lock")
-}
-
 private func makeTempDir(files: [String] = []) -> String {
     let path = "/tmp/senkani-trivial-dir-\(UUID().uuidString)"
     try! FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
@@ -271,7 +262,7 @@ struct TrivialRoutingTests {
     @Test func recordsInterceptEvent() {
         let (db, dbPath) = makeTempDB()
         let dir = makeTempDir()
-        defer { cleanupDB(dbPath); try? FileManager.default.removeItem(atPath: dir) }
+        defer { TempSessionDatabase.cleanup(path: dbPath); try? FileManager.default.removeItem(atPath: dir) }
 
         let sid = db.createSession(projectRoot: dir)
 

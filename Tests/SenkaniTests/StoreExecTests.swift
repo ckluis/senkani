@@ -52,16 +52,6 @@ struct StoreExecTests {
     // deinit otherwise lands on already-deleted -wal/-shm and SIGSEGVs the
     // swiftpm-testing-helper. The .migrating sidecar is the flock lockfile
     // from MigrationRunner; unlink it too so /tmp doesn't accumulate.
-    private func cleanup(_ db: SessionDatabase, _ path: String) {
-        db.close()
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-wal")
-        try? fm.removeItem(atPath: path + "-shm")
-        try? fm.removeItem(atPath: path + ".migrating")
-        try? fm.removeItem(atPath: path + ".schema.lock")
-    }
-
     @Test func nilDBIsNoop() {
         withSink { sink in
             StoreExec.run(db: nil, sql: "SELECT 1;", scope: "command")
@@ -72,7 +62,7 @@ struct StoreExecTests {
 
     @Test func successfulStatementEmitsNothing() {
         let (db, path) = openTempDB()
-        defer { cleanup(db, path) }
+        defer { TempSessionDatabase.close(db, path: path) }
         // Drain the init-time recordEvent burst — those blocks INSERT
         // into event_counters on `db.queue`. Touching `db.db` from the
         // test thread without draining races sqlite3 across threads
@@ -88,7 +78,7 @@ struct StoreExecTests {
 
     @Test func failedStatementEmitsScopedSqlError() {
         let (db, path) = openTempDB()
-        defer { cleanup(db, path) }
+        defer { TempSessionDatabase.close(db, path: path) }
         db.queue.sync {}
         withSink { sink in
             db.queue.sync {
@@ -103,7 +93,7 @@ struct StoreExecTests {
 
     @Test func scopeTokenIsParameterized() {
         let (db, path) = openTempDB()
-        defer { cleanup(db, path) }
+        defer { TempSessionDatabase.close(db, path: path) }
         db.queue.sync {}
         withSink { sink in
             db.queue.sync {

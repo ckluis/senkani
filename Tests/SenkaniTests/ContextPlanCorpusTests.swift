@@ -42,15 +42,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (SessionDatabase(path: path), path)
 }
 
-private func cleanup(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-    try? fm.removeItem(atPath: path + ".migrating")
-    try? fm.removeItem(atPath: path + ".schema.lock")
-}
-
 private func makeTrace(idempotencyKey: String, costCents: Int) -> AgentTraceEvent {
     AgentTraceEvent(
         idempotencyKey: idempotencyKey,
@@ -139,7 +130,7 @@ struct ContextPlanCorpusTests {
     func pairingEvalGate() throws {
         let corpus = try #require(loadCorpus())
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // Daily ceiling per fixture meta — keeps rejected items
         // observably rejected (estimated_cost > ceiling_cents) and
@@ -172,7 +163,7 @@ struct ContextPlanCorpusTests {
     func rejectedItemsPersistPlanWithoutTrace() throws {
         let corpus = try #require(loadCorpus())
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let ceilingDollars = corpus._meta.ceiling_dollars_daily ?? 50
         let budget = BudgetConfig(dailyLimitCents: ceilingDollars * 100)
@@ -207,7 +198,7 @@ struct ContextPlanCorpusTests {
     func throwingItemsPersistPlanOnly() throws {
         let corpus = try #require(loadCorpus())
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let pipeline = CombinatorPipeline(database: db, budget: BudgetConfig())
         let throwers = corpus.items.filter { $0.`throws` }

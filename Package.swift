@@ -20,6 +20,44 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.3.0"),
         .package(url: "https://github.com/apple/swift-testing.git", from: "0.12.0"),
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.9.0"),
+        // # Pin rationale — mlx-swift-lm
+        //
+        // HOLD on revision "2a296f1…". This SHA is the verified-working
+        // starting point: the full test suite (2445 tests) was green
+        // against it when the pin was introduced (2026-05-04).
+        //
+        // Upstream publishes tagged releases (latest seen: 3.31.3) and
+        // `main` is past this SHA, so the pin is destined to go stale.
+        // We accept that staleness over the alternative (silent drift on
+        // `branch: "main"`) because:
+        //   1. MLX inference is a heavy behavioral surface — tokenizer,
+        //      sampler defaults, and model loaders can shift between tags
+        //      and require real-machine validation budget that build-
+        //      config rounds don't have.
+        //   2. The verified SHA is byte-identical to what we ship today;
+        //      bumping inside an infra round risks regressions whose
+        //      blast radius (hosted-LLM users) is wider than the round's
+        //      test envelope.
+        //
+        // Next-revisit trigger: RELEASE-CUT GATE. The next senkani
+        // release ceremony (v0.4.0 cut and onward) MUST run an
+        // mlx-swift-lm pin-bump pass:
+        //   • compare this revision to upstream's latest release tag,
+        //   • if newer, bump revision (or move to `from: "<tag>"`),
+        //     re-resolve, run `./tools/test-safe.sh` AND on-real-machine
+        //     MLX inference smoke tests,
+        //   • if green, ship the bump in the same release; otherwise
+        //     refresh this rationale block with the regression that
+        //     blocked the bump and the next trigger.
+        //
+        // The release-cut checklist owns enforcement; a follow-up
+        // backlog item (`release-checklist-mlx-pin-bump-row`) wires the
+        // row into the v0.4.0 cut.
+        //
+        // Release-cut gate was chosen over (a) calendar cadence (silently
+        // skippable) and (b) upstream-tag-watch automation (setup cost
+        // exceeds the round's budget; not yet justified at senkani's
+        // scale). Revisit the trigger choice if the gate misfires twice.
         .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", revision: "2a296f145c3129fea4290bb6e4a0a5fb458efa06"),
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0"),
         .package(url: "https://github.com/ChimeHQ/SwiftTreeSitter.git", from: "0.10.0"),

@@ -36,6 +36,42 @@ dated heading at release time._
   `spec/autonomous/backlog/mlx-swift-lm-pin-freshness-revisit.md` so
   the pin doesn't rot indefinitely.
 
+### May 4 — `mlx-swift-lm` revision-pin freshness trigger chosen: release-cut gate
+
+- Follow-up to the pin-introduction round earlier today. The
+  freshness-revisit item asked: now that the pin is fixed at a
+  verified-working SHA, what stops the pin from going silently stale?
+  Three triggers were weighed — calendar cadence (silently
+  skippable), release-cut gate (bakes into existing ceremony),
+  upstream-tag-watch automation (highest signal but highest setup
+  cost).
+- Decision: HOLD the current SHA, choose RELEASE-CUT GATE as the
+  next-revisit trigger. The next senkani release ceremony (v0.4.0
+  cut and onward) is now the bind point: the cut author runs an
+  mlx-swift-lm pin-bump pass — compare the current revision to
+  upstream's latest release tag, attempt the bump, run
+  `./tools/test-safe.sh` AND on-real-machine MLX inference smoke
+  tests, ship the bump if green or refresh the rationale block if
+  blocked.
+- A `## Pin rationale` comment block lives directly above the
+  `mlx-swift-lm` line in `Package.swift` so the trigger is in the
+  developer's path of vision rather than buried in this changelog.
+  The rationale block names the trigger, the alternatives weighed,
+  and the conditions under which the trigger choice itself should
+  be revisited (two consecutive misfires of the gate).
+- Calendar cadence rejected because senkani's release ceremony is
+  already the natural attention point for "is this version of the
+  world good enough to ship?" — splitting the question across a
+  separate calendar adds a parallel reminder that nobody owns.
+  Upstream-tag-watch automation rejected because the setup cost
+  (script + scheduled fire + escalation path) exceeds the round's
+  budget at the project's current scale; revisit if the gate
+  misfires.
+- Follow-up filed: `spec/autonomous/backlog/release-checklist-mlx-pin-bump-row.md`
+  wires the gate row into the v0.4.0 release-cut checklist so the
+  trigger has a concrete consumer. Without that row the trigger is
+  advisory; with it, it's enforced.
+
 ### May 4 — Live-mode multiplier badge corrected to `.estimated` (per `Confidence.loosened(by:)` discipline)
 
 - Prior state: `SavingsTestView.swift:239` rendered

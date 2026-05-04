@@ -9,6 +9,39 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — `senkani doctor` chain-audit display now surfaces `pane_refresh_state` (verifier covered it; doctor was silently dropping it)
+
+- Prior state: `ChainVerifier.verifyAll` returned a result for
+  `pane_refresh_state` (V.1 round 2), but `DoctorCommand.checkAuditChain`'s
+  per-table display loop walked a hardcoded `order` array that omitted
+  it — and the green-path summary line (`chain integrity: OK across …`)
+  named seven participants, not eight. A tampered `pane_refresh_state`
+  row would not produce a per-table `BROKEN at row …` line on the
+  operator-facing surface, even though `--verify-chain` would still
+  exit non-zero. Silent failure of the display surface for one of
+  eight chain participants.
+- `Doctor.chainAuditOrder` is now a single-source-of-truth `static let`
+  with all eight participants (`token_events`, `validation_results`,
+  `sandboxed_results`, `commands`, `pane_refresh_state`,
+  `policy_snapshots`, `confirmations`, `trust_audits`); the summary line
+  derives its participant list from the same constant. Adding a new
+  chain participant in the future requires extending one array, not
+  two.
+- `formatChainAuditLines` extracted as a pure helper returning
+  `[(Status, String)]` — the doctor surface is now unit-testable
+  without dup2-capturing stdout. New `DoctorAuditChainSurfaceTests`
+  asserts (a) `chainAuditOrder` includes `pane_refresh_state`,
+  (b) the order array is byte-for-byte aligned with
+  `ChainVerifier.verifyAll`'s table set, (c) the OK summary line
+  names `pane_refresh_state`, and (d) a tampered `pane_refresh_state`
+  row produces a `chain integrity (pane_refresh_state): BROKEN at row N`
+  line in the doctor output (mirrors the existing
+  `PaneRefreshStateStoreTests.tamperFailsVerification` fixture).
+- Filed off the `policy-snapshots-chain-anchor` round's pre-audit
+  inventory finding #3 — `policy-snapshots-chain-anchor` widened the
+  array to add `policy_snapshots` and named `pane_refresh_state` as
+  the single remaining display gap; this round closes it.
+
 ### May 4 — `ChainVerifier` covers `confirmations` + `trust_audits` (audit-log tamper-evidence promise now whole)
 
 - Prior state: `confirmations` (T.6a) and `trust_audits` (U.4a) wrote

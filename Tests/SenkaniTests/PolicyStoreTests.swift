@@ -12,7 +12,8 @@ private func makeConfig(
     filter: Bool = true,
     indexer: Bool = true,
     perSessionLimitCents: Int? = nil,
-    modelTier: String? = "claude-haiku-4-5"
+    modelId: String? = "claude-haiku-4-5",
+    modelTier: String? = nil
 ) -> PolicyConfig {
     PolicyConfig(
         features: PolicyFeatures(
@@ -26,6 +27,7 @@ private func makeConfig(
             softLimitPercent: 0.8
         ),
         learnedRulesHash: "abc123",
+        modelId: modelId,
         modelTier: modelTier,
         agentType: "claude_code",
         capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
@@ -51,7 +53,8 @@ struct PolicyStoreTests {
         #expect(row?.policyHash == expectedHash)
         let decoded = row?.decoded()
         #expect(decoded?.features.filter == true)
-        #expect(decoded?.modelTier == "claude-haiku-4-5")
+        #expect(decoded?.modelId == "claude-haiku-4-5")
+        #expect(decoded?.modelTier == nil)
         #expect(decoded?.learnedRulesHash == "abc123")
     }
 
@@ -104,6 +107,7 @@ struct PolicyStoreTests {
             budget: PolicyBudget(perSessionLimitCents: 100, dailyLimitCents: nil,
                                  weeklyLimitCents: nil, softLimitPercent: 0.8),
             learnedRulesHash: "h",
+            modelId: nil,
             modelTier: nil,
             agentType: nil,
             capturedAt: Date(timeIntervalSince1970: 1)
@@ -111,12 +115,167 @@ struct PolicyStoreTests {
         let cfg2 = PolicyConfig(
             features: cfg1.features, budget: cfg1.budget,
             learnedRulesHash: cfg1.learnedRulesHash,
-            modelTier: cfg1.modelTier, agentType: cfg1.agentType,
+            modelId: cfg1.modelId, modelTier: cfg1.modelTier,
+            agentType: cfg1.agentType,
             capturedAt: Date(timeIntervalSince1970: 999_999)
         )
         let h1 = try cfg1.policyHash()
         let h2 = try cfg2.policyHash()
         #expect(h1 == h2)
+    }
+
+    @Test func modelIdAndModelTierAreSeparateHashInputs() throws {
+        // Two configs that differ only in which split field is populated
+        // must produce different hashes — collapsing them to the same
+        // hash is exactly the bug the split is fixing.
+        let cfgWithModelId = makeConfig(modelId: "claude-sonnet-4", modelTier: nil)
+        let cfgWithModelTier = makeConfig(modelId: nil, modelTier: "claude-sonnet-4")
+        let h1 = try cfgWithModelId.policyHash()
+        let h2 = try cfgWithModelTier.policyHash()
+        #expect(h1 != h2)
+    }
+
+    @Test func modelTierTierVocabularyHashesDifferentlyFromModelId() throws {
+        let cfgTier = makeConfig(modelId: nil, modelTier: "standard")
+        let cfgId = makeConfig(modelId: "standard", modelTier: nil)
+        #expect(try cfgTier.policyHash() != cfgId.policyHash())
+    }
+}
+
+// MARK: - Legacy decode (pre-2026-05-04 conflated `modelTier` field)
+
+@Suite("PolicyConfig legacy decode")
+struct PolicyConfigLegacyDecodeTests {
+
+    private static let legacyJSONPrefix = """
+    {
+      "agentType": "claude_code",
+      "budget": {
+        "perSessionLimitCents": null,
+        "dailyLimitCents": null,
+        "weeklyLimitCents": null,
+        "softLimitPercent": 0.8
+      },
+      "capturedAt": "2023-11-14T22:13:20Z",
+      "features": {
+        "filter": true, "secrets": true, "indexer": true,
+        "terse": false, "injectionGuard": true
+      },
+      "learnedRulesHash": "abc123"
+    """
+
+    private static func decode(_ json: String) throws -> PolicyConfig {
+        let data = Data(json.utf8)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(PolicyConfig.self, from: data)
+    }
+
+    @Test func legacyModelIdValueRoutesToModelId() throws {
+        // Old single-field shape with a Claude model id value — the
+        // typical case (operators set CLAUDE_MODEL almost always).
+        let json = "\(Self.legacyJSONPrefix), \"modelTier\": \"claude-sonnet-4\" }"
+        let cfg = try Self.decode(json)
+        #expect(cfg.modelId == "claude-sonnet-4")
+        #expect(cfg.modelTier == nil)
+    }
+
+    @Test func legacyTierVocabularyValueRoutesToModelTier() throws {
+        // Old single-field shape but the value matches the U.1 tier
+        // vocabulary — route to the new `modelTier` field instead.
+        let json = "\(Self.legacyJSONPrefix), \"modelTier\": \"reasoning\" }"
+        let cfg = try Self.decode(json)
+        #expect(cfg.modelId == nil)
+        #expect(cfg.modelTier == "reasoning")
+    }
+
+    @Test func legacyMissingValueRoutesToBothNil() throws {
+        // Old shape with explicit null. Both new fields decode as nil.
+        let json = "\(Self.legacyJSONPrefix), \"modelTier\": null }"
+        let cfg = try Self.decode(json)
+        #expect(cfg.modelId == nil)
+        #expect(cfg.modelTier == nil)
+    }
+
+    @Test func legacyAbsentKeyRoutesToBothNil() throws {
+        // Old shape with no `modelTier` key at all. Defensive: pre-split
+        // code wrote the key with a string or null; absence shouldn't
+        // happen in real DB rows but the decoder must tolerate it.
+        let json = "\(Self.legacyJSONPrefix) }"
+        let cfg = try Self.decode(json)
+        #expect(cfg.modelId == nil)
+        #expect(cfg.modelTier == nil)
+    }
+
+    @Test func newShapeRoundTripsIdAndTierIndependently() throws {
+        // Encode in new shape, decode back, verify both fields land in
+        // the right place.
+        let original = PolicyConfig(
+            features: PolicyFeatures(filter: true, secrets: true, indexer: true,
+                                     terse: false, injectionGuard: true),
+            budget: PolicyBudget(perSessionLimitCents: nil, dailyLimitCents: nil,
+                                 weeklyLimitCents: nil, softLimitPercent: 0.8),
+            learnedRulesHash: "abc123",
+            modelId: "claude-opus-4-7",
+            modelTier: "reasoning",
+            agentType: "claude_code",
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(original)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(PolicyConfig.self, from: data)
+        #expect(decoded.modelId == "claude-opus-4-7")
+        #expect(decoded.modelTier == "reasoning")
+    }
+
+    @Test func newShapeWithBothNilStillCarriesDiscriminator() throws {
+        // Encode a new-shape PolicyConfig with both modelId and
+        // modelTier nil. The encoder MUST still emit `modelId` (as null)
+        // so a re-decode treats it as new shape and doesn't run the
+        // legacy classifier on a stray modelTier:null.
+        let original = PolicyConfig(
+            features: PolicyFeatures(filter: true, secrets: true, indexer: true,
+                                     terse: false, injectionGuard: true),
+            budget: PolicyBudget(perSessionLimitCents: nil, dailyLimitCents: nil,
+                                 weeklyLimitCents: nil, softLimitPercent: 0.8),
+            learnedRulesHash: "h",
+            modelId: nil,
+            modelTier: nil,
+            agentType: nil,
+            capturedAt: Date(timeIntervalSince1970: 1)
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(original)
+        let json = String(data: data, encoding: .utf8) ?? ""
+        #expect(json.contains("\"modelId\":null"))
+        #expect(json.contains("\"modelTier\":null"))
+    }
+}
+
+@Suite("LegacyModelTierClassifier")
+struct LegacyModelTierClassifierTests {
+
+    @Test func emptyOrNilIsEmpty() {
+        #expect(LegacyModelTierClassifier.classify(nil) == .empty)
+        #expect(LegacyModelTierClassifier.classify("") == .empty)
+    }
+
+    @Test func recognizedTierRoutesToModelTier() {
+        for tier in ["simple", "standard", "complex", "reasoning"] {
+            #expect(LegacyModelTierClassifier.classify(tier) == .modelTier(tier))
+        }
+    }
+
+    @Test func unrecognizedValueRoutesToModelId() {
+        #expect(LegacyModelTierClassifier.classify("claude-sonnet-4") == .modelId("claude-sonnet-4"))
+        #expect(LegacyModelTierClassifier.classify("haiku") == .modelId("haiku"))
+        #expect(LegacyModelTierClassifier.classify("custom-model-name") == .modelId("custom-model-name"))
     }
 }
 
@@ -139,7 +298,8 @@ private func makeConfigWithUnencodableBudget() -> PolicyConfig {
             softLimitPercent: .nan
         ),
         learnedRulesHash: "abc123",
-        modelTier: "claude-haiku-4-5",
+        modelId: "claude-haiku-4-5",
+        modelTier: nil,
         agentType: "claude_code",
         capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
     )

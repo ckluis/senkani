@@ -9,6 +9,42 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — `PolicyConfig` splits conflated `modelTier` into `modelId` + `modelTier` (audit clarity)
+
+- Prior state: `Sources/Core/PolicyConfig.swift` resolved
+  `modelTier = env["CLAUDE_MODEL"] ?? env["SENKANI_MODEL_TIER"]` —
+  two distinct vocabularies (concrete model ids like
+  `claude-sonnet-4` vs. operator-named tiers like `standard` /
+  `reasoning`) collapsed into one `modelTier: String?` field.
+  Replay diffs across two sessions reported spurious differences
+  if one session set `CLAUDE_MODEL` and the other set
+  `SENKANI_MODEL_TIER`; `senkani policy show` could not tell which
+  vocabulary it was inspecting.
+- Split: `PolicyConfig.modelId` (from `CLAUDE_MODEL`) and
+  `PolicyConfig.modelTier` (from `SENKANI_MODEL_TIER`, future
+  first-class router presets). Each field carries one vocabulary;
+  no fallback chain. `policyHash()` now includes both fields, so
+  changes in either produce a new audit row.
+- Backward-compat decode: existing `policy_snapshots.policy_json`
+  rows captured under the conflated single-field shape continue to
+  decode without error. The new decoder detects pre-split rows by
+  the absence of the `modelId` key and routes the legacy
+  `modelTier` value via `LegacyModelTierClassifier` — a value
+  matching the U.1 tier vocabulary (`simple` / `standard` /
+  `complex` / `reasoning`) routes to the new `modelTier` field;
+  any other value (the typical case: a Claude model id) routes to
+  `modelId`. New writes always emit both keys (null when nil) so
+  the discriminator the decoder relies on is durable across
+  re-encode round-trips.
+- Tests added for: legacy decode (model-id value), legacy decode
+  (tier vocabulary), legacy decode (null + missing), new-shape
+  round-trip, new-shape both-nil discriminator preservation,
+  hash-difference between modelId-only vs. modelTier-only configs,
+  classifier truth table (empty / known tier / unrecognized).
+- Glossary entry for `policy` (`spec/glossary.md`) and the
+  Policy-Snapshots section of `spec/architecture.md` updated to
+  enumerate both fields and reference the legacy classifier.
+
 ### May 4 — workspace hygiene: 95 macOS Finder-duplicate `" 2.swift"` files quarantined; `.gitignore` recurrence-guarded (build unblock)
 
 - Prior state: the working tree on `fix/pane-refresh-worker-pool-test-flake`

@@ -10,3 +10,15 @@ charter.md
 *.xcuserstate
 *.profraw
 .swiftpm/xcode/xcuserdata/
+
+# macOS Finder duplicates — `Foo 2.swift`/`Foo 2/` are produced when a
+# file or folder is duplicated in Finder; same-module redeclarations
+# break `swift build` with ambiguous-symbol errors. Ignored so a Finder
+# slip can't blow up the build silently again. (Resolved en masse on
+# 2026-05-04 via the workspace-hygiene round; see
+# spec/autonomous/backlog/workspace-hygiene-finder-duplicate-source-files-2026-05-04.md.)
+* 2.swift
+* 2.md
+* 2.sh
+* 2.py
+* 2/

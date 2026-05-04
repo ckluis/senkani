@@ -387,3 +387,89 @@ struct KnowledgeFileLayerStagingTests {
         #expect(mdCount == 10, "History should be pruned to 10 entries, got \(mdCount)")
     }
 }
+
+// MARK: - Suite 5: Lifetime Safety (FSEvents retain/release + queue drain)
+
+/// Mirrors `FileWatcherLifetimeTests` for the second FSEvents-using
+/// type in the codebase. Before the passRetained + paired-release fix
+/// in startWatching/stopWatching, an FSEvents callback could fire on
+/// the watcher's queue while the layer was being torn down, producing
+/// a use-after-free (`Object … of class KnowledgeFileLayer deallocated
+/// with non-zero retain count` followed by SIGSEGV at process exit).
+@Suite("KnowledgeFileLayer — Lifetime Safety")
+struct KnowledgeFileLayerLifetimeTests {
+
+    /// Reproduction harness for the use-after-free: many short-lived
+    /// layers that start watching and are dropped without an explicit
+    /// stopWatching(). 200 iterations on a real existing knowledge dir
+    /// exercises the FSEvents dispatch path that races with deinit.
+    /// A passing run means the FSEvents +1 keeps `self` alive across
+    /// any in-flight callback.
+    @Test("Implicit teardown survives churn")
+    func implicitTeardownSurvivesChurn() throws {
+        let root = "/tmp/senkani-kbfl-lifetime-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let store = KnowledgeStore(path: root + "/vault.db")
+
+        for _ in 0..<200 {
+            let layer = try KnowledgeFileLayer(projectRoot: root, store: store)
+            layer.startWatching { _ in }
+            // Intentionally drop without calling stopWatching() — the
+            // FSEvents +1 keeps the layer alive until process exit, but
+            // critically, no in-flight callback fires on a freed object.
+            _ = layer
+        }
+        // If we got here, no SIGSEGV. The harness itself is the assertion.
+        #expect(Bool(true))
+    }
+
+    /// Explicit stopWatching() while a callback could be in flight.
+    /// Drives the queue-drain path: start, touch a file to provoke an
+    /// FSEvents callback, then stop without sleeping. stopWatching must
+    /// drain cleanly and return only after any in-flight callback has
+    /// completed.
+    @Test("Explicit stopWatching drains in-flight callbacks")
+    func explicitStopWatchingDrainsInFlight() async throws {
+        let root = "/tmp/senkani-kbfl-stop-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let store = KnowledgeStore(path: root + "/vault.db")
+
+        for _ in 0..<20 {
+            let layer = try KnowledgeFileLayer(projectRoot: root, store: store)
+            layer.startWatching { _ in }
+            // Touch a file inside the watched dir to provoke a callback.
+            let probe = layer.knowledgeDir + "/probe.md"
+            FileManager.default.createFile(
+                atPath: probe,
+                contents: Data("# probe\n".utf8)
+            )
+            // Stop without sleeping — race the stop against the FSEvents
+            // dispatch. stopWatching must drain cleanly either way.
+            layer.stopWatching()
+            try? FileManager.default.removeItem(atPath: probe)
+        }
+        #expect(Bool(true))
+    }
+
+    /// stopWatching is idempotent: multiple calls and a never-started
+    /// layer both must be no-ops without crashing or deadlocking.
+    @Test("stopWatching is idempotent")
+    func stopWatchingIsIdempotent() throws {
+        let root = "/tmp/senkani-kbfl-idem-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let store = KnowledgeStore(path: root + "/vault.db")
+
+        // Never-started layer.
+        let cold = try KnowledgeFileLayer(projectRoot: root, store: store)
+        cold.stopWatching()
+        cold.stopWatching()
+
+        // Started, stopped, stopped again.
+        let warm = try KnowledgeFileLayer(projectRoot: root, store: store)
+        warm.startWatching { _ in }
+        warm.stopWatching()
+        warm.stopWatching()
+
+        #expect(Bool(true))
+    }
+}

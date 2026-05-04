@@ -10,7 +10,123 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ---
 
+## Cowork-runnable test plans (groomed; ready to execute)
+
+> Pointers to per-item test plans groomed by `/senkani-autonomous`.
+> The plan body lives in the per-item file; this section is a
+> cadence-friendly index. Operator (or Cowork in Claude Desktop)
+> picks one, runs it, follows the `## Operator contract` in the
+> linked file, and lets the next `/senkani-autonomous` close-mode
+> sweep finalize.
+
+- **uninstall-rewalk-step8-modelmetadatacache — confirm `~/Library/Caches/dev.senkani/` no longer survives `senkani uninstall --yes` after the 9th-category ship** ([groomable plan](../../spec/autonomous/backlog/uninstall-rewalk-step8-modelmetadatacache.md)). Exec mode: **either** (a Step-8 broad-sweep diff; Cowork-runnable, no GUI hands needed beyond the wrapping uninstall walk's pre-existing GUI steps). Time estimate: **~3-5 min standalone, free if folded into the next full uninstall walk**. Pre-condition: a real install with at least one ModelManager model registered (so `dev.senkani/models/models.json` actually exists pre-uninstall). Recommended: bundle into the next overall uninstall walk (likely `release-v0-3-0-uninstall-pass` v3 or v0.4.0's release pass) rather than a dedicated re-run. Filed 2026-05-03 by close of `uninstall-scanner-audit-claude-hook-and-library-caches`; awaits groom-mode → status: manual_ready → operator/Cowork execution → close.
+
+- **release-v0-3-0-uninstall-pass-v2-plan-amendments — `senkani uninstall` real-install validation, v2 (8 steps incl. split 3a/3b, 6 acceptance bullets)** ([archived plan](../../spec/autonomous/completed/2026/2026-05-03-release-v0-3-0-uninstall-pass-v2-plan-amendments-fix-three-defects-from-2026-05-02-walk.md)). Exec mode: **either** (Cowork-runnable for Steps 1, 2, 3b, 4, 5, 7, 8; Steps 3a + 6 SenkaniApp launch need operator hands on first Gatekeeper prompt — bundle is ad-hoc signed). Time: **~12-18 min operator-supervised** (down from 65 min on v1's walk; v2 removes the runner defects that caused retries). Pre-condition: PR #14 landed, a registered SenkaniApp install, AND `tools/soak/runner/SenkaniApp.app` bundle present + fresh (mtime ≥ newest `SenkaniApp/*.swift`). Three v1 defects fixed: A1 sweep race (split into `sweep_targets`/`sweep_broad`), A3 Step-3 pre-seed (foreground `open -a` of bundled `.app`), A5 Step-7 hardcoded target (now ANY workspace project + mtime ≥ TEST_START_EPOCH). Operator decides whether to re-walk on v0.3.0 or hold for v0.4.0 (recommended) BEFORE running. Groomed 2026-05-02 by `senkani-autonomous`. **Status note 2026-05-03: walked + closed strict-literal green on all six A-bullets; per-item file archived to `completed/2026/`. Three optional follow-up findings (runner-bundle launch defect, 4 BROAD scanner-extension candidates, `! pgrep SenkaniApp` pre-condition) are pending operator decision on whether to file as new backlog items. See CHANGELOG `## v0.3.0 — unreleased` → `### May 3` for the full closure record.**
+
+- **release-v0-3-0-uninstall-pass — `senkani uninstall` real-install validation (v1, 8 steps, 6 acceptance bullets)** ([archived plan](../../spec/autonomous/completed/2026/2026-05-02-release-v0-3-0-uninstall-pass-real-install-validation-6-checks-on-live-macos-session.md)). Exec mode: **either** (Cowork-runnable for Steps 1–5, 7, 8; Step 6 SenkaniApp re-launch needs operator hands on first Gatekeeper prompt). Time: ~15 min operator-supervised plan estimate (actual v1 walk: ~65 min — see v2 plan above for fixes). Pre-condition: PR #14 (`ship/v0.3.0-batch-2026-05-01`) landed and a registered SenkaniApp install. Highest-value step is Step 8 orphan sweep — finds new artifact paths the eight-category scanner missed (the `webContentRuleLists` 8th category came from this exact sweep on the 2026-05-02 walk). Groomed 2026-05-02 by `senkani-autonomous`. **Status note 2026-05-03: walked Cowork-driven 2026-05-02, closed on spirit-pass (A6 strict-clean; A1/A3/A5 fail-strict / pass-spirit); finalized 2026-05-03 (A1–A6 boxes flipped per operator-directed Option A) and archived to `completed/2026/`. Strict-fail follow-ups all tracked separately: v2-amendments CLOSED; runner-bundle-smoke CLOSED; uninstall-scanner-audit OPEN; uninstall-test-plan-prerunning-process OPEN. The v2 plan above amends the runner defects surfaced by this walk.**
+
+---
+
 ## Wave-by-wave (most recent first)
+
+### onboarding-p2-milestone-callsites — Welcome banner advances on real-machine first run 2026-05-01
+
+Round wired `OnboardingMilestoneStore.record(.X)` into the seven
+production callsites so the Welcome banner advances as users use
+Senkani. Behavioural tests cover the four Core-side callsites
+(`SessionDatabase.recordTokenEvent`, `BudgetConfig.loadFromDisk`,
+`SprintReviewViewModel.accept`/`.reject`); the three SwiftUI-side
+callsites (`WorkspaceModel.addProject`, `LaunchCoordinator.launchPane`,
+`WorkspaceModel.addWorkstream`) are guarded source-level only, since
+`SenkaniTests` cannot link `SenkaniApp`. Acceptance criterion was an
+explicit real-machine check that the banner advances on at least
+three of the seven milestones — that check belongs here.
+
+Walk-through (one user, one fresh launch, ~10 minutes):
+
+- [ ] **Reset state.** `rm -f ~/.senkani/onboarding/milestones.json`
+  then launch SenkaniApp. The Welcome banner should read **Next: Pick
+  a project** with progress label `0 of 7`.
+- [ ] **Pick a project** via the project chooser. The banner should
+  flip to **Next: Launch your first agent** (`1 of 7`). Verifies
+  `WorkspaceModel.addProject` records `.projectSelected`.
+- [ ] **Start Claude in `<project>`** (or any task starter). After the
+  pane opens, the banner should advance to **Next: Watch a tool call
+  get tracked** (`2 of 7`). Verifies `LaunchCoordinator.launchPane`
+  records `.agentLaunched`.
+- [ ] **Run any Claude command** (e.g. ask Claude to read a file). The
+  Agent Timeline pane should show the event within ~1 s, and the
+  banner should advance to **Next: Save your first tokens** (`3 of 7`).
+  Verifies `SessionDatabase.recordTokenEvent` records
+  `.firstTrackedEvent`. The fourth milestone (`.firstNonzeroSavings`)
+  fires the moment the Filter / Cache layer reports a non-zero saving;
+  on Claude Code via senkani_read this typically lands inside the
+  same first session.
+- [ ] **Set a daily budget.** Edit `~/.senkani/budget.json` to add a
+  non-default limit, e.g. `{"dailyLimitCents":1000,"softLimitPercent":0.8}`.
+  Trigger a tool call so `BudgetConfig.load()` re-reads from disk
+  (the cache TTL is 30s; a fresh launch also works). The banner
+  should advance to **Next: Create a workstream** (`5 of 7`).
+  Verifies `BudgetConfig.loadFromDisk` records `.firstBudgetSet`.
+- [ ] **Create a non-default workstream** in the project sidebar.
+  After the worktree creation succeeds the banner should advance to
+  **Next: Review a staged proposal** (`6 of 7`). Verifies
+  `WorkspaceModel.addWorkstream` records `.firstWorkstreamCreated`.
+- [ ] **Open Sprint Review** and approve or reject a staged
+  proposal (any kind). The banner should disappear (`7 of 7`,
+  `summary.allComplete == true`). Verifies
+  `SprintReviewViewModel.accept`/`.reject` record
+  `.firstStagedProposalReviewed`.
+- [ ] **Verify the privacy posture.** `cat ~/.senkani/onboarding/milestones.json`
+  — every entry should be `{milestone-key: ISO8601-timestamp}` only,
+  no project paths, no session IDs. Then re-run with
+  `SENKANI_ONBOARDING_MILESTONES=off senkani` (or the same env on
+  the SenkaniApp launch) and confirm the file is not re-written.
+- [ ] **Optional regression check.** Re-trigger any milestone (e.g.
+  add a second project). The on-disk timestamp for `.projectSelected`
+  must remain unchanged — the store guarantees first-observation wins
+  and callsites must not double-write.
+
+Tick the date line below when this walkthrough has been done on a
+real machine.
+
+- [ ] Walkthrough completed: `_____` (date / initials)
+
+### sessiondb-deinit-regression-guard — Periodic revert-and-verify the guard 2026-05-01
+
+Round shipped `Tests/SenkaniTests/SessionDatabaseDeinitTests.swift`, a
+30-iteration parallel test that exercises the deinit-on-queue race
+fixed in `bisect-sigtrap-source`. The repro is racy by construction —
+unit tests can't deterministically time the strong-drop to land on the
+queue thread mid-burst — so the periodic check that the test still
+*catches* the regression class needs a manual revert-and-verify cycle.
+Run this at least once per release candidate, and after any
+`SessionDatabase` deinit-path edit:
+
+- [ ] **Revert the reentrancy guard.** In a scratch branch, undo the
+  `DispatchSpecific` marker logic in `SessionDatabase.deinit` so it
+  becomes the historic `deinit { queue.sync { sqlite3_close(db) } }`
+  again. Build is expected to compile; the regression is at runtime,
+  not at the type level.
+- [ ] **Run the deinit test ≥10 times in a row.**
+
+      for i in $(seq 1 10); do \
+        swift test --filter SessionDatabaseDeinitTests || break; \
+      done
+
+  Expected: at least one of the ten runs trips
+  `swiftpm-testing-helper signal code 5` (SIGTRAP) — the test correctly
+  surfaces the regression. If all ten runs pass with the guard
+  reverted, the test is no longer effective and needs a wider race
+  window (more iterations or a tighter drain) before the next release.
+- [ ] **Restore the guard + reconfirm green.** `git checkout` the
+  reentrancy guard back, run `tools/test-safe.sh --chunk session` once,
+  expect green on first attempt.
+
+Why manual: the test depends on macOS dispatch's preconditioning
+behavior, which is OS-version-sensitive. Running on the operator's
+real machine — and on whatever macOS the release target is supposed to
+ship against — is the only way to know the test is still load-bearing.
 
 ### onboarding-p2-early-use-milestones — Local-only early-use milestones 2026-05-01
 
@@ -1004,18 +1120,22 @@ Operator action to unblock, pick ONE:
 
 - **Option A — screenshots.** Open the share link in a logged-in
   browser, capture each screen of the prototype (landing + every
-  sub-screen), drop the PNGs into a new `spec/assets/claude-prototype/`
-  directory, and re-mark the backlog item `pending`. The next
-  autonomous round will extract visual ideas from the screenshots
-  into `spec/website_rebuild_claude_prototype.md`.
+  sub-screen), drop the PNGs into a new
+  `spec/autonomous/assets/claude-prototype/` directory, re-mark the
+  backlog item `status: open`. The next autonomous round will
+  extract visual ideas from the screenshots and file each accepted
+  idea as a separate per-idea backlog item that closes by editing
+  `assets/theme.css` or `docs/**/*.html` directly.
 - **Option B — HTML/MHTML export.** From the logged-in share link,
   use browser "Save Page As… → Web Page, Complete" (or MHTML) and
-  commit the export under `spec/website_rebuild_claude_prototype_raw/`.
-  The next round can parse the HTML offline.
+  drop the export under
+  `spec/autonomous/assets/claude-prototype-raw/`. The next round
+  can parse the HTML offline.
 - **Option C — drop the item.** If the prototype is no longer
-  informing the rebuild, mark the item `status: skipped` in the
-  backlog with a short note and move on — item 12 has zero
-  downstream blockers.
+  informing the rebuild (the umbrella shipped DELIVERED 2026-05-01
+  without it), mark the item `status: skipped` in the backlog with
+  a `## Skip note` body section and `mv` to `completed/2026/`. Item
+  12 has zero downstream blockers.
 
 ### Phase S.1 — manifest schema + MCP tool gating (shipped 2026-04-20)
 
@@ -1182,10 +1302,15 @@ round — needs a real machine with Node / axe-core-cli available.
 
 ### `senkani uninstall` — real-install validation (synthetic smoke shipped 2026-04-19; release-checklist home shipped 2026-04-26)
 
-> **Canonical home: `spec/release-checklist.md` §A.** That file lists
-> the six checks (A1–A6) with owner + per-release sign-off. Run them
-> there before every minor-version bump. The wave entry below stays
-> as the rolling diary for ad-hoc runs that aren't tied to a release.
+> **Canonical home: `spec/autonomous/backlog/release-v0-3-0-uninstall-pass-*.md`**
+> (operator-local; the spec tree is gitignored). That backlog item
+> is the per-release uninstall validation checklist (the original
+> A1–A6 surface — six checks, real-install required) — closed by
+> appending pass/fail/note lines to its acceptance bullets and
+> moving it into `completed/<YYYY>/`. Each minor-version bump opens
+> a fresh `release-v<X.Y.0>-uninstall-pass` item. The wave entry
+> below stays as the rolling diary for ad-hoc runs that aren't
+> tied to a release.
 
 `Tests/SenkaniTests/UninstallSmokeTests.swift` fences the
 discovery + filter + removal logic against a fixture HOME (6 tests).

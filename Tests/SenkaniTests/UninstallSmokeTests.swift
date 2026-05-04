@@ -37,7 +37,7 @@ struct UninstallSmokeTests {
             try? FileManager.default.removeItem(at: root)
         }
 
-        /// Seed every one of the 7 categories that the scanner knows about.
+        /// Seed every one of the 9 categories that the scanner knows about.
         func seedAll() throws {
             try seedGlobalMCPRegistration()
             try seedProjectHooks()
@@ -46,6 +46,8 @@ struct UninstallSmokeTests {
             try seedSessionDatabase()
             try seedLaunchdPlist()
             try seedPerProjectSenkaniDirs()
+            try seedWebContentRuleLists()
+            try seedModelMetadataCache()
         }
 
         func seedGlobalMCPRegistration() throws {
@@ -193,6 +195,50 @@ struct UninstallSmokeTests {
             try mergeWorkspaceProjects([projA, projB])
         }
 
+        /// Seed senkani-prefixed `WKContentRuleList` files under three
+        /// `~/Library/WebKit/<bundle>/ContentRuleLists/` directories — the
+        /// main app bundle plus two swiftpm test-runner bundles, mirroring
+        /// the layout the 2026-05-02 walk found on the operator's machine.
+        /// Also seeds one unrelated rule list to verify the prefix filter.
+        func seedWebContentRuleLists() throws {
+            let fm = FileManager.default
+            let webKit = home + "/Library/WebKit"
+            let bundles = ["SenkaniApp", "swiftpm-testing-helper", "com.apple.dt.xctest.tool"]
+            for bundle in bundles {
+                let dir = webKit + "/" + bundle + "/ContentRuleLists"
+                try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+                try Data().write(to: URL(fileURLWithPath:
+                    dir + "/ContentRuleList-senkani.web.subresource-blocklist.v1"))
+            }
+            // Unrelated rule list — must be ignored by the scanner.
+            let otherDir = webKit + "/com.cmuxterm.app/ContentRuleLists"
+            try fm.createDirectory(atPath: otherDir, withIntermediateDirectories: true)
+            try Data().write(to: URL(fileURLWithPath:
+                otherDir + "/ContentRuleList-com.apple.WebPrivacy.ResourceMonitorURLsRuleList"))
+        }
+
+        /// Seed `~/Library/Caches/dev.senkani/models/models.json` mirroring
+        /// `ModelManager.shared`'s metadata-persistence path. Also seeds
+        /// the OS-managed sibling caches `~/Library/Caches/SenkaniApp` and
+        /// `~/Library/Caches/senkani-mcp` so the scanner's category-9
+        /// behavior is exercised against the v2-walk's actual broad-sweep
+        /// shape (the scanner must pick up `dev.senkani` and ignore the
+        /// other two).
+        func seedModelMetadataCache() throws {
+            let fm = FileManager.default
+            let cacheRoot = home + "/Library/Caches"
+            let senkaniCache = cacheRoot + "/dev.senkani/models"
+            try fm.createDirectory(atPath: senkaniCache, withIntermediateDirectories: true)
+            try Data("{}".utf8)
+                .write(to: URL(fileURLWithPath: senkaniCache + "/models.json"))
+
+            // OS-managed siblings — must NOT be flagged.
+            try fm.createDirectory(atPath: cacheRoot + "/SenkaniApp",
+                                   withIntermediateDirectories: true)
+            try fm.createDirectory(atPath: cacheRoot + "/senkani-mcp",
+                                   withIntermediateDirectories: true)
+        }
+
         func scanner(keepData: Bool = false) -> UninstallArtifactScanner {
             UninstallArtifactScanner(
                 homeDir: home, appSupportDir: appSupport, keepData: keepData)
@@ -201,7 +247,7 @@ struct UninstallSmokeTests {
 
     // MARK: - Tests
 
-    @Test func discoveryFindsAllSevenCategoriesWhenFullySeeded() throws {
+    @Test func discoveryFindsAllNineCategoriesWhenFullySeeded() throws {
         let f = try Fixture()
         try f.seedAll()
 
@@ -209,8 +255,9 @@ struct UninstallSmokeTests {
         let categories = Set(artifacts.map(\.category))
 
         #expect(categories == Set(UninstallArtifactScanner.Category.allCases),
-                "expected all 7 categories, got \(categories.map(\.rawValue).sorted())")
-        #expect(artifacts.count == 7, "one artifact per category when fully seeded")
+                "expected all 9 categories, got \(categories.map(\.rawValue).sorted())")
+        #expect(artifacts.count == UninstallArtifactScanner.Category.allCases.count,
+                "one artifact per category when fully seeded")
     }
 
     @Test func keepDataOmitsSessionDatabase() throws {
@@ -221,7 +268,8 @@ struct UninstallSmokeTests {
 
         #expect(!categories.contains(.sessionDatabase),
                 "--keep-data must suppress the sessionDatabase artifact")
-        #expect(categories.count == 6, "other 6 categories still discovered")
+        #expect(categories.count == UninstallArtifactScanner.Category.allCases.count - 1,
+                "all categories minus sessionDatabase are still discovered")
     }
 
     @Test func keepDataFalseIncludesSessionDatabase() throws {
@@ -250,7 +298,7 @@ struct UninstallSmokeTests {
 
         // First scan should find everything, then removal clears them all.
         let first = f.scanner().scan()
-        #expect(first.count == 7)
+        #expect(first.count == UninstallArtifactScanner.Category.allCases.count)
         for item in first {
             try item.remove()
         }
@@ -304,6 +352,62 @@ struct UninstallSmokeTests {
                 "after removal, the modern settings.json must have no hooks key (was the only senkani entry)")
     }
 
+    @Test func discoveryFindsWebContentRuleListsAcrossAllBundles() throws {
+        let f = try Fixture()
+        try f.seedWebContentRuleLists()
+
+        let artifacts = f.scanner().scan()
+        let categories = Set(artifacts.map(\.category))
+
+        #expect(categories.contains(.webContentRuleLists),
+                "senkani-prefixed WKContentRuleList files must be discovered")
+        #expect(artifacts.count == 1, "no other categories were seeded")
+
+        // Description should reflect the count from all three seeded bundles
+        // (not the unrelated rule list under com.cmuxterm.app).
+        if let item = artifacts.first(where: { $0.category == .webContentRuleLists }) {
+            #expect(item.description.contains("3 WebKit content rule list"),
+                    "expected count==3 in description, got: \(item.description)")
+        }
+
+        // Removal clears all three senkani-prefixed files but leaves the
+        // unrelated rule list and the parent ContentRuleLists directories
+        // alone (they are macOS-managed; only the senkani-defined data goes).
+        for item in artifacts where item.category == .webContentRuleLists {
+            try item.remove()
+        }
+
+        let fm = FileManager.default
+        let webKit = f.home + "/Library/WebKit"
+        for bundle in ["SenkaniApp", "swiftpm-testing-helper", "com.apple.dt.xctest.tool"] {
+            let path = webKit + "/" + bundle + "/ContentRuleLists/ContentRuleList-senkani.web.subresource-blocklist.v1"
+            #expect(!fm.fileExists(atPath: path),
+                    "senkani rule list should be gone at \(path)")
+        }
+        let unrelated = webKit + "/com.cmuxterm.app/ContentRuleLists/ContentRuleList-com.apple.WebPrivacy.ResourceMonitorURLsRuleList"
+        #expect(fm.fileExists(atPath: unrelated),
+                "unrelated rule list must NOT be removed")
+
+        // Re-scan must be empty (idempotent).
+        #expect(f.scanner().scan().isEmpty,
+                "after removal, scanner finds nothing")
+    }
+
+    @Test func scannerIgnoresNonSenkaniContentRuleLists() throws {
+        let f = try Fixture()
+        let fm = FileManager.default
+
+        // Only seed an unrelated rule list — no senkani prefix.
+        let dir = f.home + "/Library/WebKit/com.cmuxterm.app/ContentRuleLists"
+        try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try Data().write(to: URL(fileURLWithPath:
+            dir + "/ContentRuleList-com.apple.WebPrivacy.ResourceMonitorURLsRuleList"))
+
+        let categories = Set(f.scanner().scan().map(\.category))
+        #expect(!categories.contains(.webContentRuleLists),
+                "non-senkani-prefixed rule lists must not be flagged for removal")
+    }
+
     @Test func scannerIgnoresNonSenkaniHooksAndPlists() throws {
         let f = try Fixture()
         // Seed ONLY the unrelated surfaces — no senkani artifacts.
@@ -331,5 +435,64 @@ struct UninstallSmokeTests {
                 "non-senkani hooks must not be flagged for removal")
         #expect(!categories.contains(.launchdPlists),
                 "non-senkani plists must not be flagged for removal")
+    }
+
+    @Test func discoveryFindsModelMetadataCacheAndIdempotentRemoval() throws {
+        let f = try Fixture()
+        try f.seedModelMetadataCache()
+
+        // Scan should pick up dev.senkani only (the SenkaniApp + senkani-mcp
+        // siblings are seeded by seedModelMetadataCache as OS-managed
+        // controls; they must NOT be flagged).
+        let artifacts = f.scanner().scan()
+        let categories = Set(artifacts.map(\.category))
+        #expect(categories == [.modelMetadataCache],
+                "only modelMetadataCache should be discovered, got \(categories.map(\.rawValue).sorted())")
+
+        if let item = artifacts.first(where: { $0.category == .modelMetadataCache }) {
+            #expect(item.description.contains("dev.senkani"),
+                    "expected description to mention dev.senkani path, got: \(item.description)")
+        }
+
+        // Removal strips the whole dev.senkani/ subtree — including models/models.json.
+        for item in artifacts where item.category == .modelMetadataCache {
+            try item.remove()
+        }
+
+        let fm = FileManager.default
+        let cacheRoot = f.home + "/Library/Caches"
+        #expect(!fm.fileExists(atPath: cacheRoot + "/dev.senkani"),
+                "dev.senkani cache dir should be gone after removal")
+        #expect(!fm.fileExists(atPath: cacheRoot + "/dev.senkani/models/models.json"),
+                "models.json should be gone after removal")
+
+        // OS-managed siblings must remain untouched.
+        #expect(fm.fileExists(atPath: cacheRoot + "/SenkaniApp"),
+                "SenkaniApp cache (OS-managed) must NOT be removed")
+        #expect(fm.fileExists(atPath: cacheRoot + "/senkani-mcp"),
+                "senkani-mcp cache (OS-managed) must NOT be removed")
+
+        // Re-scan must be empty (idempotent).
+        #expect(f.scanner().scan().isEmpty,
+                "after removal, scanner finds nothing")
+    }
+
+    @Test func scannerIgnoresOSManagedSenkaniCachesWithoutDevSenkani() throws {
+        let f = try Fixture()
+        let fm = FileManager.default
+
+        // Seed ONLY the OS-managed Library/Caches siblings — no dev.senkani.
+        // These are auto-created by macOS for SenkaniApp + senkani-mcp
+        // processes regardless of whether senkani actively writes to them.
+        // Scanner must produce zero artifacts.
+        let cacheRoot = f.home + "/Library/Caches"
+        try fm.createDirectory(atPath: cacheRoot + "/SenkaniApp",
+                               withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: cacheRoot + "/senkani-mcp",
+                               withIntermediateDirectories: true)
+
+        let artifacts = f.scanner().scan()
+        #expect(artifacts.isEmpty,
+                "OS-managed sibling caches must not produce artifacts — got \(artifacts.map(\.category.rawValue))")
     }
 }

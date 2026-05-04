@@ -112,6 +112,10 @@ extension SessionDatabase {
             savedTokens: savedTokens, costCents: costCents,
             feature: feature, command: command, modelTier: modelTier
         )
+        OnboardingMilestoneStore.record(.firstTrackedEvent)
+        if savedTokens > 0 {
+            OnboardingMilestoneStore.record(.firstNonzeroSavings)
+        }
     }
 
     public func tokenStatsForProject(_ projectRoot: String, since: Date? = nil) -> PaneTokenStats {

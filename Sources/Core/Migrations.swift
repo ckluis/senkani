@@ -748,6 +748,91 @@ public enum MigrationRegistry {
             try exec("ALTER TABLE agent_trace_event ADD COLUMN plan_id TEXT REFERENCES context_plans(id);",
                      allowDuplicateColumn: true)
         },
+        Migration(version: 15, description: "policy_snapshots table (per-session PolicyConfig capture)") { db in
+            // Policy-snapshot prerequisite for counterfactual replay.
+            // One row per (session, distinct policy) pair, captured at
+            // session start. The (session_id, policy_hash) UNIQUE
+            // constraint dedups re-captures of the same configuration
+            // within a session so chatty bootstrap paths don't bloat
+            // the table.
+            //
+            // Forward-only and additive. Pre-migration sessions get no
+            // snapshot row; reads fall back to "policy unknown" rather
+            // than fabricating one.
+            //
+            // Idempotency: CREATE TABLE IF NOT EXISTS + CREATE INDEX IF
+            // NOT EXISTS — no ALTERs.
+            func exec(_ sql: String) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                throw MigrationError.sqlFailed(stage: "v15", detail: msg)
+            }
+
+            try exec("""
+                CREATE TABLE IF NOT EXISTS policy_snapshots (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id   TEXT NOT NULL,
+                    captured_at  REAL NOT NULL,
+                    policy_hash  TEXT NOT NULL,
+                    policy_json  TEXT NOT NULL,
+                    UNIQUE(session_id, policy_hash)
+                );
+            """)
+            try exec("CREATE INDEX IF NOT EXISTS idx_policy_snapshots_session ON policy_snapshots(session_id, captured_at DESC);")
+        },
+        Migration(version: 16, description: "cost_ledger_version on agent_trace_event (versioned cost lookup)") { db in
+            // Stamps every new agent_trace_event row with the cost-
+            // ledger version it was priced under. Without this, future
+            // rate changes silently rebase historical cost numbers
+            // because pricing today is computed at display time from
+            // ModelPricing.swift constants. Pre-migration rows get NULL
+            // — readers fall back to the current ledger and tag the
+            // resulting cost as `estimated` per the confidence-tier
+            // discipline.
+            //
+            // Idempotency: ALTER TABLE ... ADD COLUMN guarded the same
+            // way as v3/v4/v5/v7/v8/v9/v10/v14.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v16", detail: msg)
+            }
+
+            // Self-contained CREATE for agent_trace_event matches the
+            // post-v8 / v10 / v14 baseline so v16 can run against a DB
+            // dropped in at any later state.
+            try exec("""
+                CREATE TABLE IF NOT EXISTS agent_trace_event (
+                    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                    idempotency_key       TEXT NOT NULL UNIQUE,
+                    pane                  TEXT,
+                    project               TEXT,
+                    model                 TEXT,
+                    tier                  TEXT,
+                    feature               TEXT,
+                    result                TEXT NOT NULL,
+                    started_at            REAL NOT NULL,
+                    completed_at          REAL NOT NULL,
+                    latency_ms            INTEGER NOT NULL DEFAULT 0,
+                    tokens_in             INTEGER NOT NULL DEFAULT 0,
+                    tokens_out            INTEGER NOT NULL DEFAULT 0,
+                    cost_cents            INTEGER NOT NULL DEFAULT 0,
+                    redaction_count       INTEGER NOT NULL DEFAULT 0,
+                    validation_status     TEXT,
+                    confirmation_required INTEGER NOT NULL DEFAULT 0,
+                    egress_decisions      INTEGER NOT NULL DEFAULT 0
+                );
+            """)
+            try exec("ALTER TABLE agent_trace_event ADD COLUMN cost_ledger_version INTEGER;",
+                     allowDuplicateColumn: true)
+        },
     ]
 
     // MARK: - v5 helpers

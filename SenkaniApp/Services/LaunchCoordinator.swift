@@ -63,6 +63,7 @@ final class LaunchCoordinator {
         }
         sessions.startSession(for: pane)
         saveWorkspace()
+        OnboardingMilestoneStore.record(.agentLaunched)
         return pane
     }
 }

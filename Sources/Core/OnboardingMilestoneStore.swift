@@ -47,10 +47,50 @@ public enum OnboardingMilestoneStore {
     }
 
     /// Absolute path to the milestone file under `home` (defaults to
+    /// the process-global override if set, otherwise
     /// `NSHomeDirectory()`).
     public static func filePath(home: String? = nil) -> String {
-        let base = home ?? NSHomeDirectory()
+        let base = home ?? resolveDefaultHome()
         return (base as NSString).appendingPathComponent(relativePath)
+    }
+
+    // MARK: - Test home override
+    //
+    // Production callsites (WorkspaceModel.addProject,
+    // LaunchCoordinator.launchPane, SessionDatabase.recordTokenEvent,
+    // …) call `record(.X)` with no `home:` argument so they pick up the
+    // user's real home. Tests need to redirect those writes to a temp
+    // directory without monkey-patching every callsite. This override
+    // lets a test wrap a body in `withTestHome(_:)` and have every
+    // default-home call inside the body resolve to the temp path.
+    //
+    // The lock is `NSRecursiveLock` so a body that itself calls
+    // another `withTestHome` (or any default-home API) on the same
+    // thread doesn't deadlock — same shape as
+    // `BudgetConfig.testOverrideLock`.
+
+    nonisolated(unsafe) private static var _testHomeOverride: String?
+    private static let testHomeOverrideLock = NSRecursiveLock()
+
+    private static func resolveDefaultHome() -> String {
+        testHomeOverrideLock.lock()
+        defer { testHomeOverrideLock.unlock() }
+        return _testHomeOverride ?? NSHomeDirectory()
+    }
+
+    /// Test-only: run `body` with `home` installed as the default home
+    /// for every nil-`home:` API call. Restores the prior override on
+    /// exit even if `body` throws. Sync only — `NSRecursiveLock` is not
+    /// safe across `await` boundaries in Swift 6.
+    public static func withTestHome<T>(
+        _ home: String, _ body: () throws -> T
+    ) rethrows -> T {
+        testHomeOverrideLock.lock()
+        defer { testHomeOverrideLock.unlock() }
+        let prev = _testHomeOverride
+        _testHomeOverride = home
+        defer { _testHomeOverride = prev }
+        return try body()
     }
 
     /// All recorded milestones with their first-observed timestamps.

@@ -1063,7 +1063,8 @@ private struct TierDrillDownSheet: View {
     }
 
     private func tierRowView(_ row: AgentTraceTierRow) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+        let reprised = SessionDatabase.repriceTierRow(row)
+        return HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.feature ?? "—")
                     .font(.system(size: 11, weight: .medium))
@@ -1081,6 +1082,24 @@ private struct TierDrillDownSheet: View {
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(String(format: "$%.4f", Double(row.costCents) / 100.0))
+                    .font(.system(size: 10, design: .monospaced))
+                if reprised.didReprice {
+                    Text(String(format: "≈ $%.4f", Double(reprised.repricedCents) / 100.0))
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Text("needs_validation")
+                        .font(.system(size: 8, weight: .medium, design: .monospaced))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.yellow.opacity(0.18))
+                        .foregroundStyle(Color.yellow)
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
+            }
+            .frame(width: 90, alignment: .trailing)
 
             Text(row.result)
                 .font(.system(size: 9, weight: .medium, design: .monospaced))

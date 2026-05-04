@@ -1,0 +1,8 @@
+# id: fp-clean-7
+# family: false_positive_guard
+# expected: NONE
+# match_mode: none
+# description: Long benign URL with multiple query parameters (UTM tracking + readable slugs). After URL-aware tokenisation splits on `?` and `&`, individual query values must remain below the 20-char min length OR the 4.5 entropy floor — no FPs from marketing/tracking URLs.
+# synthetic: true
+---
+clicked https://example.com/products/category/spring-collection-2026?utm_source=newsletter-monthly&utm_medium=email&utm_campaign=spring-sale-clearance-final-version&utm_content=hero-banner-top&ref=homepage-2026-q2 and landed on the product page

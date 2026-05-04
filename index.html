@@ -255,7 +255,7 @@
       <p>v0.2.0 defaults are all secure: prompt-injection guard on, SSRF hardening on, secret redaction on, schema migrations versioned + crash-safe. Opt-outs are explicit env vars, not hidden flags. Every defense increments a counter you can inspect via <code>senkani stats --security</code>.</p>
       <ul class="product-hero-bullets">
         <li><strong>SSRF guard.</strong> DNS-pre-resolve + redirect re-validation + <code>WKContentRuleList</code> subresource blocklist. 169.254.169.254 and friends are unreachable.</li>
-        <li><strong>13 secret-detector families</strong> + entropy fallback. 1 MB benign input: ~25 ms. Every tool output scanned before the model sees it.</li>
+        <li><strong>14 secret-detector families</strong> + entropy fallback. 1 MB benign input: ~25 ms. Every tool output scanned before the model sees it.</li>
         <li><strong>Socket-auth handshake.</strong> Opt-in via <code>SENKANI_SOCKET_AUTH=on</code>. Flipping to on by default next release.</li>
       </ul>
       <a class="product-hero-cta" href="docs/concepts/security-posture.html">Read the full posture <span aria-hidden="true">→</span></a>
@@ -265,7 +265,7 @@
         <div class="viz-shield-item"><span class="check">✓</span><div><span class="viz-label">Prompt-injection guard</span><span class="viz-sub">Homoglyph-normalized; multilingual; zero-width strip; single linear pass.</span></div></div>
         <div class="viz-shield-item"><span class="check">✓</span><div><span class="viz-label">SSRF DNS pre-resolution</span><span class="viz-sub">Private/link-local/CGNAT/multicast blocked; redirects re-validated.</span></div></div>
         <div class="viz-shield-item"><span class="check">✓</span><div><span class="viz-label">Subresource blocklist</span><span class="viz-sub"><code>WKContentRuleList</code> stops <code>&lt;img&gt;</code>/<code>&lt;script&gt;</code>/<code>&lt;xhr&gt;</code> to private ranges.</span></div></div>
-        <div class="viz-shield-item"><span class="check">✓</span><div><span class="viz-label">13 secret families + entropy</span><span class="viz-sub">API keys, bearer, JWT, SSH, .env patterns, high-entropy blobs.</span></div></div>
+        <div class="viz-shield-item"><span class="check">✓</span><div><span class="viz-label">14 secret families + entropy</span><span class="viz-sub">API keys, bearer, JWT, SSH, .env patterns, high-entropy blobs.</span></div></div>
         <div class="viz-shield-item"><span class="check">✓</span><div><span class="viz-label">Schema migrations audit log</span><span class="viz-sub"><code>PRAGMA user_version</code> + <code>schema_migrations</code> table; kill-switch on failure.</span></div></div>
         <div class="viz-shield-item"><span class="check">✓</span><div><span class="viz-label">Retention scheduler</span><span class="viz-sub">token_events 90 d · sandboxed_results 24 h · validation_results 24 h.</span></div></div>
       </div>

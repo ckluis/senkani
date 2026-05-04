@@ -143,7 +143,7 @@ public enum Logger {
     /// Cavoukian C5: every user-influenced string field passes through
     /// `SecretDetector.scan` at emit time so planted API keys / bearer
     /// tokens / AWS creds get `[REDACTED:…]`'d in logs the same way
-    /// they are in MCP outputs. Cost: 13 regex `firstMatch` probes per
+    /// they are in MCP outputs. Cost: 14 regex `firstMatch` probes per
     /// string field; negligible vs. the `write(2)` that follows.
     internal static func sanitizeUserString(_ s: String) -> String {
         SecretDetector.scan(s).redacted

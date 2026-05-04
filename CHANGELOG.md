@@ -9,6 +9,645 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — `CostLedger` is now the sole source of truth for per-model rates; `ModelPricing` collapsed to a facade + new `SessionDatabase.repriceTraceRow(_:asOf:)`
+- Prior state: per-model rates were duplicated between
+  `ModelPricing.swift` (eight `static let` constants, used by every
+  cost display) and `CostLedger.swift` (the same eight rates restated
+  with zero readers). `agent_trace_event.cost_ledger_version` was
+  stamped on every row but never read — the ledger was scaffolding
+  without enforcement, ripe for silent drift.
+- `CostLedgerEntry` gained a `displayName` field so the ledger is
+  self-describing; `ModelPricing.allModels` is now a derived view over
+  `CostLedger.entries(forVersion: CostLedger.currentVersion)`.
+  `ModelPricing.find(_:)` delegates to `CostLedger.rate(model:at:)`,
+  falling back to `claudeSonnet4` only on miss. The named static
+  constants (`.claudeOpus4` etc.) remain for back-compat with the
+  16 call sites that reference them by name; a new
+  `ModelPricingLedgerParityTests` suite asserts byte-for-byte
+  equality so any future drift fails CI.
+- `CostLedger.rate(model:version:)` overload returns the entry that
+  was active for a model under a specific historical ledger version,
+  independent of which entry is currently active.
+- New `SessionDatabase.repriceTraceRow(_:asOf:)` (with an
+  `AgentTraceTierRow` overload for U.1c drill-down rows) reads the
+  row's stamped `cost_ledger_version`, looks up the historical and
+  current ledger entries, and returns a `RepricedTrace` whose
+  `confidence` tier honors the `spec/testing.md` discipline:
+  `exact` when no rebase happened, `needs_validation` when the
+  current rate differs, `unsupported` when the row's model isn't in
+  the ledger or the historical version was never published.
+- The Analytics tier-distribution drill-down sheet now renders the
+  per-row stored cost; when the live ledger has rebased a row, the
+  sheet shows the projected cents below the original tagged
+  `needs_validation` so operators see the rebase candidate without
+  it ever being mistaken for the recorded value.
+- `agent_trace_event.cost_ledger_version` is now meaningful: the
+  drill-down query selects it, `AgentTraceTierRow` carries it, and
+  the reprice path consumes it. Tests: 2358 → 2374 (+16 across two
+  new suites — `ModelPricing ↔ CostLedger byte-for-byte parity`,
+  `SessionDatabase.repriceTraceRow`).
+
+### May 3 — `BenchmarkReport.confidence` rollup wired through the runner (mixed-tier reports degrade correctly)
+- Pre-audit found `Confidence.loosened(by:)` already existed in
+  `Sources/Bench/BenchmarkTypes.swift` but was dead — `SavingsTestRunner`
+  built `BenchmarkReport` without passing `confidence:`, defaulting every
+  report to `.exact`, and `TaskResult` had no per-task `confidence` field
+  to roll up from. Cheap to fix; ships before any task surfaces a non-exact
+  tier and silently misreports as `.exact`.
+- Added `confidence: Confidence` to `TaskResult` (default `.exact`, no
+  call-site churn for the eight existing fixture-bench tasks). Synthesized
+  Codable picks the field up automatically; existing JSON round-trip test
+  (`jsonReportIsValidAndRoundTrips`) still green.
+- `SavingsTestRunner.run` now folds per-task confidences via
+  `results.reduce(.exact) { $0.loosened(by: $1.confidence) }` and passes
+  the rollup as `BenchmarkReport(confidence:)`. `loosened(by:)` is
+  associative+commutative max-over-ordered-enum, so fold order is safe;
+  empty-results yields `.exact` (correct neutral element).
+- Two new tests in `SavingsTestRunner — Confidence Rollup` suite:
+  one-`.estimated`-task report rolls up to `.estimated`, and a three-task
+  `.exact + .estimated + .needsValidation` mix rolls up to
+  `.needsValidation`. SavingsTestRunner suites: 14 → 16 tests (+2).
+
+### May 3 — `tools/test-safe.sh` `other`-chunk SIGTRAP isolated to `StoreExecTests` concurrent-libsqlite3 race (full-suite green again)
+- Bisect filed alongside the FSEvents fix (commit `3b36b3d`) found the
+  catch-all `other` chunk SIGTRAPs deterministically post-`bisect-sigtrap-source`.
+  Halve-and-test across 235 catch-all suites narrowed the trigger to
+  `StoreExecTests.successfulStatementEmitsNothing()` (and its two DB-creating
+  siblings); the test passed `db.db` raw to `StoreExec.run` and called it
+  from the test thread WHILE the init-time 13-task `recordEvent` burst was
+  still draining on `db.queue`. Concurrent `sqlite3_*` calls on the same
+  connection from two threads = SIGSEGV/SIGBUS in libsqlite3 (~80-100%
+  reproducible in isolation, 100% under load).
+- Fix: drain `db.queue.sync {}` after init AND wrap each `StoreExec.run` in
+  `db.queue.sync { ... }` so all SQL goes through the queue. Cleanup also
+  closes the SessionDatabase before unlinking sidecar files (`-wal`, `-shm`,
+  `.migrating`) so deinit's late `sqlite3_close` can't land on deleted files.
+- Chunk topology: `StoreExec` added to the `session` chunk regex (topical
+  proximity — it's the SessionDatabase store-helper). Catch-all `other`
+  drops one suite. Full chunked harness 8/8 green: cold (342 s including
+  build) and warm (40 s), no retries needed on any chunk.
+- Two follow-ups filed for defects-outside-criteria:
+  `harness-test-safe-other-sigtrap-rootcause-sessiondb-raw-db-pointer-bypass`
+  (audit other `@testable` consumers + harden the `internal var db`
+  surface) and `harness-sessiondb-test-cleanup-leaks-migrating-flock-sidecars`
+  (centralize the `.migrating` unlink so /tmp doesn't accumulate).
+
+### May 3 — `KnowledgeFileLayer` FSEvents stream: ported `FileWatcher` retain pattern (closed use-after-free hazard between in-flight callbacks and `deinit`)
+- Pre-audit grep found two FSEvents sites: `Sources/Indexer/FileWatcher.swift`
+  (correct: `passRetained` + paired release closure + invalidate-then-drain
+  in `stop()`) and `Sources/Core/KnowledgeFileLayer.swift:269-273` (broken:
+  `passUnretained` with `nil` release callback, no queue drain in
+  `stopWatching`). FSEvents holds the `info` pointer for the lifetime of
+  the stream and dispatches callbacks asynchronously on `watchQueue`, so
+  the unretained context plus the absent drain made an in-flight callback
+  on a deallocating `KnowledgeFileLayer` reachable — the same
+  `Object … of class … deallocated with non-zero retain count` SIGSEGV
+  pattern that `FileWatcher` already had a fix for.
+- Ported the pattern verbatim: `Unmanaged.passRetained(self).toOpaque()`
+  for the context info, paired `release:` closure that drops the +1, and
+  explicit failure-path releases for both `FSEventStreamCreate` (release
+  the +1 ourselves) and `FSEventStreamStart` (`Invalidate` + `Release` so
+  the stream's retain on `info` is dropped). `stopWatching` now drops the
+  lock before draining the watcher queue (`wq?.sync { }`), mirroring
+  `FileWatcher.stop()` and closing the in-flight-callback drain hazard
+  that lived alongside the retain bug.
+- New `@Suite("KnowledgeFileLayer — Lifetime Safety")` mirrors
+  `FileWatcherLifetimeTests`: 200-iteration churn test (drop without
+  `stopWatching()`), explicit-stop-races-FSEvents-callback drain test
+  (touch a `.md` file then immediately `stopWatching`), and an
+  idempotency test (`stopWatching` twice + on never-started layer).
+  KnowledgeFileLayer test count 12 → 15 (+3); `kb` chunk green.
+
+### May 3 — `UninstallArtifactScanner` extended with 9th category `modelMetadataCache` for `~/Library/Caches/dev.senkani/`
+- Filed by 2026-05-03 v2 closure Finding #2: the broad orphan sweep
+  surfaced `~/Library/Caches/dev.senkani/` surviving a full
+  `senkani uninstall --yes`. Pre-audit confirmed
+  `Sources/Core/ModelManager.swift:144-146` actively writes
+  `dev.senkani/models/models.json` (the model registry's
+  download/verification metadata) into that dir from any
+  senkani CLI / senkani-mcp / SenkaniApp invocation — making it
+  Senkani-managed state, not the OS cache it had been classified
+  as on 2026-05-02. Scanner header doc comment corrected in the
+  same commit (the `dev.senkani` line incorrectly listed it as
+  macOS-managed; now lists only `SenkaniApp` and `senkani-mcp`
+  caches there, both verified no-Senkani-write by grep).
+- New `Category.modelMetadataCache` strips the entire
+  `dev.senkani/` subtree on `senkani uninstall` (recursive
+  `removeItem`; future ModelManager fields landing in sibling
+  files inherit removal coverage).
+- `UninstallSmokeTests` 9 → 11 (+2 new): seedAll +
+  count test renamed from "Eight"→"Nine" (assertion uses
+  `Category.allCases.count`); positive
+  `discoveryFindsModelMetadataCacheAndIdempotentRemoval` seeds
+  `dev.senkani/models/models.json` plus OS-managed siblings
+  (`SenkaniApp`, `senkani-mcp` cache dirs) and asserts only
+  `dev.senkani` is removed; negative
+  `scannerIgnoresOSManagedSenkaniCachesWithoutDevSenkani` seeds
+  the OS-managed siblings alone and asserts zero artifacts.
+- The 4th broad-sweep candidate (`~/.claude/hooks/senkani-hook.sh`)
+  was re-verified out-of-scope: no grep hit in `Sources/`. Senkani's
+  hook lives at `~/.senkani/bin/senkani-hook` (category-3,
+  `hookBinary`); the `.claude/hooks/` path is operator/gstack
+  tooling. Same verdict as 2026-05-02; scanner header was already
+  correct on this point.
+- Real-machine Step 8 re-walk validation (acceptance bullet #5,
+  unrunnable from the autonomous loop) filed as follow-up
+  `uninstall-rewalk-step8-modelmetadatacache` (manual + groomable).
+- Three pre-existing flaky URLProtocol-stub tests
+  (`RemoteRepoClientTests.authHeaderPresent...`,
+  `BundleRemoteTests.fetchThenComposeYieldsUsableBundle`) surfaced
+  by full-suite run during this round's test phase — pass alone,
+  fail under parallel execution. Filed as
+  `swift-testing-parallel-runner-env-var-isolation` (open).
+
+### May 3 — `release-v0-3-0-uninstall-pass` (v1) finalized: A1–A6 boxes flipped to `- [x]` (operator-directed cleanup); item archived to `completed/2026/`
+- The v1 plan was the original 2026-05-02 Cowork-driven walk. A6 (eight
+  scanner categories) closed strict-clean at walk time, but A1, A3, A5
+  closed `fail-strict / pass-spirit` (sweep-tool race; runner pre-seed
+  defect; active-project ambiguity). The operator preserved the boxes
+  as `- [ ]` to encode the strict-vs-spirit distinction, leaving the
+  per-item file parked in `backlog/` with `status: done` for two
+  prior `/senkani-autonomous` invocations (close-mode invariant
+  refused to finalize). On 2026-05-03 the operator directed Option A:
+  flip A1–A6 to `- [x]` (preserving the inline `2026-05-02 CK —
+  fail-strict / pass-spirit` annotations under each box) and let the
+  loop archive the item.
+- All four follow-ups surfaced by the v1 walk are tracked elsewhere:
+  v2-amendments (CLOSED), runner-bundle-smoke (CLOSED today),
+  uninstall-scanner-audit (OPEN, v0.4.0+ scanner extensions),
+  uninstall-test-plan-prerunning-process (OPEN, v3+ pre-condition).
+  No findings load-bearing on v1's archival.
+- The v0.3.0 release-blocking criterion (eight-category scanner
+  contract; A6) was GREEN at walk time and remains GREEN. The
+  `release-v0-3-0-promote-changelog-heading` blocked-by gate clears
+  the v1 dependency. Other two passes
+  (`release-v0-3-0-onboarding-pass`, `release-v0-3-0-surface-pass`)
+  remain. No code change; no test count change.
+
+### May 3 — `runner-bundle-smoke-launch-precondition` shipped path (b): canonical Xcode-Play-button launcher + ready-to-paste smoke-launch / derived-data-fresh probes for v3+ uninstall walks
+- Filed by 2026-05-03 v2 closure Finding #1: bundled
+  `tools/soak/runner/SenkaniApp.app` crashes on `open -a` despite
+  passing the v2 `runner-app-fresh` mtime probe — mtime-freshness
+  checks freshness, not correctness. The Luminary roster (Torvalds,
+  Grace) chose path (b): retire the runner-bundle launcher path
+  (don't bake-in a build-system fix the loop can't verify) and
+  canonicalize Xcode-Play-button → DerivedData binary as the
+  launcher, with smoke-launch + derived-data-fresh probes the next
+  plan can paste verbatim.
+- New `tools/soak/runner/README.md` documents: the deprecated bundle
+  status (do not delete — audit trail; do not launch — crashes); the
+  Xcode-Play-button workflow; the DerivedData binary path
+  (`~/Library/Developer/Xcode/DerivedData/senkani-*/Build/Products/Debug/SenkaniApp`,
+  globbed for machine portability); ready-to-paste **derived-data-fresh**,
+  **smoke-launch** (with `pkill`/`osascript` cleanup), and
+  **prerunning-process** (Finding #3 follow-up) probes; and an
+  inventory table tagging each v1 runner artifact (audit / superseded
+  / safe to delete).
+- `tools/soak/v2-walk/phase-1.sh` annotated in-place: the existing
+  `runner-app-bin` + `runner-app-fresh` probes get a `NOTE` comment
+  pointing v3+ authors at the README's replacement probes. The v2
+  script itself is unchanged — the v2 plan is closed and archived,
+  and modifying its post-hoc behaviour would be a retro-edit.
+- No code change; no test count change. Path (a) — actually
+  rebuilding the runner bundle so `open -a` works — is deferred and
+  remains tracked in the closed item's frontmatter; an operator can
+  re-file it as a new backlog item if/when restoring the
+  in-tree bundle is worth the build-system work.
+
+### May 3 — `release-v0-3-0-uninstall-pass-v2-plan-amendments` walked + closed strict-literal green on all six A-bullets (manual validation, no code shipped)
+- The operator walked the v2-amended Cowork-runnable test plan
+  (`spec/autonomous/backlog/release-v0-3-0-uninstall-pass-v2-plan-amendments-…`)
+  on a live macOS session 2026-05-02 13:12 EDT → 2026-05-03 07:40 EDT
+  (operator-supervised, Cowork-driven; long wall-clock from overnight
+  AFK gap, ~25 min active operator time). Evidence dir:
+  `tools/soak/evidence/release-v0-3-0-uninstall-pass-v2-20260502-131250/`
+  (tarball `release-v0-3-0-uninstall-pass-v2-20260502-131250.tgz`).
+- All six acceptance bullets PASSED strict-literal: A1 (Step 1 cancel
+  + race-free `sweep_targets` diff = 0); A2 (`--keep-data` keeps DB,
+  removes the other 7 categories); A3 (Step 3a foreground `.app`
+  pre-seed all-4-probes OK + Step 3b `--yes` removed 5 items + Step 4
+  idempotent message + exit 0); A4 (post-wipe `claude mcp list` and
+  `~/.claude/settings.json` both clean); A5 (re-launch re-seeds
+  `~/.senkani/`, MCP, workspace.json + Step 7 `FRESH-HOOK` against
+  `nonprofitEventPlanner` with mtime ≥ TEST_START_EPOCH — v2's
+  active-project fix held); A6 (`sweep_targets` clean across all 8
+  scanner categories). The v2 amendments — race-free sweep split, `.app`
+  bundle pre-seed, ANY-workspace-project hook fresh-mtime constraint —
+  all worked as designed.
+- Three operator findings filed for optional follow-up (NOT shipped in
+  this close round): (1) bundled `tools/soak/runner/SenkaniApp.app`
+  crashes on `open -a` despite the `runner-app-fresh` mtime check
+  passing — operator fell back to launching via Xcode's Play button;
+  candidate v3 plan amendment to add a smoke-launch probe to the
+  pre-conditions. (2) Step 8 BROAD section surfaced 4 candidate
+  scanner-extension paths outside the eight categories
+  (`~/.claude/hooks/senkani-hook.sh`, `~/Library/Caches/dev.senkani`,
+  `~/Library/Caches/senkani-mcp`, `~/Library/Caches/SenkaniApp`); the
+  hook file is highest-value if Senkani actually installs it.
+  (3) Pre-conditions should add `! pgrep SenkaniApp` to catch a
+  pre-test running instance (a still-running SenkaniApp re-created
+  `workspace.json` between Step 2 and Step 3 on this walk; the
+  strict-moment post-checks held but the transient contamination
+  warrants an upfront probe). Operator decides whether to file each
+  as a new backlog item.
+- Closure: close-mode sweep mv'd the per-item file from
+  `backlog/` to `completed/2026/`. The original `## Acceptance`
+  boxes were `- [ ]` at round entry — operator's `### Acceptance —
+  strict-literal verdict (2026-05-03 CK)` declared PASS for every
+  A1-A6 with no spirit-vs-strict distinction, so the sweep flipped
+  the boxes to `- [x]` and transcribed the verdict inline under each
+  one. The v1 plan
+  (`release-v0-3-0-uninstall-pass-real-install-validation-…`) remains
+  in `backlog/` because the operator's v1 walk preserved
+  fail-strict/pass-spirit distinctions on A1, A3, A5 that should not
+  be silently flipped.
+- No code change. The 9 synthetic `UninstallSmokeTests.swift` `@Test`
+  functions remain the fixture-HOME regression surface; this round
+  closes the live-machine validation loop for the v2-amended test
+  plan and unblocks the `release-v0-3-0-promote-changelog-heading`
+  blocked-by gate from this dependency (the other two passes —
+  `release-v0-3-0-onboarding-pass`, `release-v0-3-0-surface-pass` —
+  remain).
+
+### May 2 — Groomed v2 amendments to the `release-v0-3-0-uninstall-pass` Cowork-runnable test plan (no code shipped)
+- The autonomous loop ran in **groom mode** against
+  `release-v0-3-0-uninstall-pass-v2-plan-amendments`, which had been
+  parked as `status: manual` + `groomable: true` since 2026-05-02
+  (filed when the v1 walk surfaced three runner / test-plan defects
+  that prevented strict-literal closure on A1, A3, A5).
+- The body was rewritten from the original Scope/Acceptance/Notes
+  shape into a deterministic Cowork-runnable plan that mirrors the
+  v1 plan's 8-step / 6-acceptance structure, but folds in the three
+  surgical fixes: (A1) Setup splits the sweep helper into
+  `sweep_targets()` (race-free, target-only, diff'd at Step 1) and
+  `sweep_broad()` (exploratory, NOT diff'd, used at Step 8 only),
+  eliminating the v1 `find $HOME -maxdepth 6` race window. (A3)
+  Step 3 splits into Step 3a (foreground `open -a "$RUNNER_APP"`
+  of the bundled `tools/soak/runner/SenkaniApp.app` with mandatory
+  pre-seed verification probes + screenshot) and Step 3b (the
+  actual `--yes` wipe with a `≥3 items removed` count assertion to
+  catch silent pre-seed failures). (A5) Step 7 iterates
+  `~/.senkani/workspace.json` projects and passes if ANY project's
+  `<path>/.claude/settings.json` contains a senkani hook with
+  mtime ≥ `TEST_START_EPOCH` — proving observable re-registration,
+  not stale residual.
+- Two Luminary-folded amendments beyond the operator's three-defect
+  brief: (Grace) added a `runner-app-fresh` pre-condition that
+  fails the test when the bundled `.app` mtime is older than the
+  newest `SenkaniApp/*.swift` source change (catches "testing
+  yesterday's code" on a stale runner bundle); documented the
+  Gatekeeper-on-first-launch pattern under `## Cowork hints`
+  Step-3a entry (bundle is `Signature=adhoc` per `codesign -dvv`,
+  so first launch needs operator hands). (Swyx) Step 7's mtime
+  constraint requires re-registration to be observable during this
+  test run — without it, a residual hook from a prior run could
+  spuriously pass.
+- Status flipped `manual` → `manual_ready`; the file stays in
+  `spec/autonomous/backlog/` until the operator (or Cowork in
+  Claude Desktop) executes the plan, flips status to `done`, and
+  the next loop's close-mode sweep mv's it to `completed/2026/`.
+- Doc-sync: a Cowork-runnable pointer was added to the top of
+  `tools/soak/manual-log.md` under the existing `## Cowork-runnable
+  test plans (groomed; ready to execute)` section. The v1 entry was
+  preserved (with a `Status note 2026-05-02` annotation describing
+  why its close-sweep is currently blocked) so operators have a
+  side-by-side view of v1's defects vs. v2's fixes.
+- No code change. No tests added. The 9 synthetic
+  `UninstallSmokeTests.swift` `@Test` functions remain the
+  fixture-HOME regression surface; this round closes the v1 walk's
+  test-plan ergonomics gaps so the next v0.x pass (v0.3.0 re-walk
+  OR v0.4.0 first walk — operator decision before running) can
+  close strict-literal green on all six A-bullets.
+
+### May 2 — `UninstallArtifactScanner` extended with `webContentRuleLists` (8th category)
+- The 2026-05-02 `release-v0-3-0-uninstall-pass` walk's broad orphan
+  sweep surfaced senkani-prefixed `WKContentRuleList` files surviving
+  a full `senkani uninstall --yes` under
+  `~/Library/WebKit/<bundle>/ContentRuleLists/`. The container dir
+  is macOS-managed but the rule list itself is Senkani-defined
+  data — compiled from `WebContentBlocklist.rulesJSON` (F2 SSRF
+  subresource filter) via `WKContentRuleListStore`. The scanner now
+  walks every `~/Library/WebKit/<bundle>/ContentRuleLists/` subdir
+  and removes files matching `ContentRuleList-senkani*`. Real-machine
+  evidence shows the file lands under three bundles: the main
+  `SenkaniApp`, `swiftpm-testing-helper`, and `com.apple.dt.xctest.tool`
+  (test-runner bundles compile the rule when integration tests run).
+- Pre-audit ruled the other two 2026-05-02-walk candidates
+  out-of-scope. `~/.claude/hooks/senkani-hook.sh` is operator
+  tooling (gstack), NOT senkani-written — senkani's hook lives at
+  `~/.senkani/bin/senkani-hook` (already covered by category-3
+  `hookBinary`). `~/.claude/skills/senkani-autonomous` is operator-
+  installed — only a doc-comment reference exists in
+  `Sources/Core/PromptArtifactRegressionGate.swift`. Scanner header
+  comment now documents the in-scope/out-of-scope reasoning so
+  future audits see the decision trail.
+- Tests: 2 new in `Tests/SenkaniTests/UninstallSmokeTests.swift` —
+  `discoveryFindsWebContentRuleListsAcrossAllBundles` (seeds three
+  bundle dirs + an unrelated rule list, asserts removal preserves
+  the unrelated file) and `scannerIgnoresNonSenkaniContentRuleLists`.
+  The pre-existing all-categories test renamed
+  `…SevenCategoriesWhenFullySeeded` → `…EightCategoriesWhenFullySeeded`
+  with seeders extended to cover the new category. Suite runs
+  9 tests in <50 ms. Source: `uninstall-scanner-audit-claude-global-paths`
+  backlog item.
+
+### May 2 — Groomed Cowork-runnable test plan for `release-v0-3-0-uninstall-pass` (no code shipped)
+- The autonomous loop ran in **groom mode** against
+  `release-v0-3-0-uninstall-pass`, which had been parked as
+  `status: manual` + `groomable: true` since 2026-05-01. The body
+  was rewritten from the original 6-bullet acceptance list into a
+  deterministic 8-step Cowork-runnable plan: pre-conditions table,
+  read-only setup probes, 8 execution steps with shell-or-GUI mode
+  flags and objective pass criteria, mapping back to the original
+  A1–A6 acceptance bullets, evidence-capture conventions, failure-
+  mode table, Cowork hints (window title `Senkani`, bundle ID
+  `dev.senkani.app`, exec `SenkaniApp`), and operator contract.
+- Status flipped `manual` → `manual_ready`; the file stays in
+  `spec/autonomous/backlog/` until the operator (or Cowork in
+  Claude Desktop) executes the plan, flips status to `done`, and
+  the next loop's close-mode sweep mv's it to `completed/2026/`.
+- Doc-sync: a Cowork-runnable pointer was added to the top of
+  `tools/soak/manual-log.md` under a new `## Cowork-runnable test
+  plans (groomed; ready to execute)` section.
+- No code change. No tests added. The 7 synthetic
+  `UninstallSmokeTests.swift` `@Test` functions remain the
+  fixture-HOME regression surface; this round closes the
+  real-install drift gap, which only a live macOS session can
+  exercise.
+
+### May 2 — `senkani uninstall` cleanup item closed after pre-audit re-verification (`cleanup-8-senkani-uninstall-cli-command-listed-but`)
+- The cleanup-8 description ("Listed But Unimplemented") was stale by
+  the time the autonomous loop picked it. `senkani uninstall` shipped
+  earlier on this branch via `c27d362` (feat — command + scanner +
+  Senkani.swift wiring), `7c5402e` (synthetic smoke tests, +6), and
+  `c131a96` (fix — discovery now also walks the modern per-project
+  `<projectPath>/.claude/settings.json` location, not just the legacy
+  `~/.claude/projects/<encoded>/settings.json` path).
+- Pre-audit verification this round: `swift test --filter
+  UninstallSmokeTests` → 7/7 green in 0.035s. Coverage spans empty
+  install, fully-seeded install (all seven artifact categories),
+  `--keep-data` carve-out for the session DB, modern-hook discovery
+  via `workspace.json`, non-senkani hooks/plists left untouched, and
+  idempotent re-scan after removal.
+- Out of scope for cleanup-8: live real-install validation on a
+  registered SenkaniApp install. That's separately gated by
+  `release-v0-3-0-uninstall-pass`, which is the manual blocker on the
+  v0.3.0 cut.
+- No code change this round. Per-item file moved from
+  `spec/autonomous/backlog/` to
+  `spec/autonomous/completed/2026/2026-05-02-…` with the close note
+  recording the seven-category artifact contract, the verifying test
+  filter, and the Torvalds / Evans / Kleppmann re-audit verdict
+  (PASS / PASS / PASS, no red flags).
+
+### May 2 — `ClaudeSessionWatcher` cleanup item closed after pre-audit re-verification (`cleanup-3-claudesessionwatcher-hardcodes-model-pri`)
+- `SenkaniApp/Services/ClaudeSessionWatcher.swift:190` keeps using
+  `ModelPricing.find(model ?? "sonnet")` — pricing source-of-truth
+  centralisation from 2026-04-18 is durable, no constants leaked back
+  in. The 2026-04-24 `print("🔵 / 💾")` noise removal is also durable;
+  diagnostics still flow through `Logger.log(...)` with `path:`
+  redaction.
+- No code change this round. The remaining "future refactor" — swap
+  the fsevents-driven watcher for the pure
+  `Sources/Core/ClaudeSessionReader.swift` (poll-based, cursor-
+  persisted, unit-tested) — is a design call (push vs poll, per-pane
+  vs global timer) that exceeds the cleanup envelope and is left for
+  a future phase item if pursued. Both paths already converge on the
+  same `recordTokenEvent` write so swapping later does not require
+  data-model changes.
+- Roster: Torvalds / Evans / Kleppmann all PASS, no red flags. Item
+  moved from `spec/autonomous/backlog/` to
+  `spec/autonomous/completed/2026/2026-05-02-cleanup-3-…`.
+
+### May 1 — Direct unit tests for `lastExecResult` + `complianceRate` cross-store joins (`cleanup-19-sessiondatabase-store-coverage-gaps`)
+- `Tests/SenkaniTests/SessionDatabaseCrossStoreTests.swift` adds 7 focused
+  tests against the two `SessionDatabase` cross-store composition methods
+  that previously had no direct coverage — they were exercised only
+  indirectly through MCP/hook flows.
+- `lastExecResult` (4 tests): full-tuple happy path, `project_root`
+  isolation across two roots with the same command string, nil return
+  when no exec matches, and the preview-half-misses case (token_events
+  has the row, commands does not → returns timestamp with nil preview).
+  This pins the `(token_events × commands)` join contract that
+  `HookRouter` depends on for command replay.
+- `complianceRate` (3 tests): the `(source = 'mcp' OR source = 'hook')`
+  numerator filter against a non-senkani `claude` source, project
+  isolation across two roots (1.0 vs 0.0), and the empty-data nil
+  sentinel.
+- I4 in `Sources/Core/Stores/INVARIANTS.md` claimed `project_root` is
+  applied uniformly to every cross-store read; two methods previously
+  had no test that proved the claim. This round closes that gap so the
+  next store-extraction round (KnowledgeStore or LearnedRulesStore) can
+  trust the same invariant.
+
+### May 1 — Pure-hex length-band closes the 66-char hex-blob recall gap (`cleanup-18c-obfuscated-pure-hex`)
+- `EntropyScanner.scan` short-circuits to `HIGH_ENTROPY` for pure-hex
+  tokens of length ≥ 40 chars (`isLongHexBlob`). Pure hex peaks at
+  log₂(16) = 4.0 bits/char and would otherwise sit just below the 4.5
+  entropy floor — credential-shaped (HMAC outputs, hex-encoded random
+  keys) but missed by entropy alone. Known digest sizes (32, 40, 64, 128
+  hex) are filtered upstream by `isExcluded` so the rule only fires on
+  the unambiguous "long hex blob that isn't a digest" case.
+- `isExcluded` digest list extended to include SHA-512 (128 hex)
+  alongside MD5 (32) and SHA-256 (64); git-SHA (40) keeps its dedicated
+  branch. Lockfile `^sha\d+-|^md5-` exclusion still fires upstream of
+  the length check, so `"integrity": "sha512-…"` lines remain shielded.
+- `EntropyScanner.extractTokens` now splits on
+  `.whitespacesAndNewlines` (was `.whitespaces`) so a value followed by
+  a trailing newline (`SECRET=value\n`) extracts as a clean token. The
+  trailing newline previously survived the split and broke strict
+  charset checks like the new pure-hex length-band rule.
+- Adversarial corpus recalibrated: aggregate goes from **1.000 / 0.936**
+  (44 TP, 3 FN, 54 fixtures) to **1.000 / 0.957** (45 TP, 2 FN, 55
+  fixtures), zero false positives held. `obfuscated` family floor moves
+  from 0.500 to 1.000. Remaining 2 FN are by-design sub-threshold gaps
+  in `short_token` (Slack <10ch body, Stripe <24ch).
+- Fixture `obfuscated-2.txt` now flags `HIGH_ENTROPY` (was
+  `documented_gap: true`). Synthetic body retightened to truly pure hex
+  (`fake` → `feed`) so it exercises the new rule.
+- New FP-guard `fp-clean-8.txt` covers a 128-hex SHA-512 digest in
+  build output. Verifies the new length-band rule doesn't redact
+  well-known long digests.
+- Doc sync: `spec/testing.md` Quality Gates row + corpus summary,
+  `docs/concepts/security-posture.html` recall number,
+  `spec/autonomous/strategy.md` adversarial-corpus paragraph, and
+  `spec/inspirations/security-isolation/claw-code.md` precision/recall pair.
+
+### May 1 — URL-aware tokenisation closes the GCS-V4 signed-URL recall gap (`cleanup-18b-signed-url-gcs-v4`)
+- `EntropyScanner.extractTokens` now treats `&` and `?` as token
+  delimiters in addition to whitespace and `=:"'`. URL query-parameter
+  values (e.g. `X-Goog-Signature=…`) are extracted and entropy-scored
+  independently of the `https://` URL-prefix exclusion that fires on
+  the host portion. Pre-audit confirmed the existing `=` split already
+  isolated the value token; the new `&` split is defensive against
+  formats that don't pair `=` with each parameter, and `?` formally
+  separates the host token from the query string.
+- Adversarial corpus recalibrated: aggregate goes from **1.000 / 0.915**
+  (43 TP, 4 FN, 53 fixtures) to **1.000 / 0.936** (44 TP, 3 FN, 54
+  fixtures), zero false positives held. `signed_url` family floor moves
+  from 0.500 to 1.000.
+- Fixture `signed-url-2.txt` now flags `HIGH_ENTROPY` (was `documented_gap: true`).
+  Synthetic blob updated to a base64-shaped 64-char body so its entropy
+  clears the 4.5 floor; real GCS-V4 hex sigs remain below the floor and
+  are tracked separately under `cleanup-18c-obfuscated-pure-hex`
+  (charset-aware floor).
+- New FP-guard `fp-clean-7.txt` covers long benign URL query strings
+  (UTM tracking + readable slugs). Verifies the new split doesn't trip
+  entropy on marketing/tracking URLs — the 20-char min length and 4.5
+  entropy floor still filter them out.
+- Doc sync: `spec/testing.md` Quality Gates row + corpus summary,
+  `docs/concepts/security-posture.html` family count + recall number,
+  `spec/autonomous/strategy.md` adversarial-corpus paragraph, and
+  `spec/inspirations/security-isolation/claw-code.md` precision/recall pair.
+
+### May 1 — TWILIO_ACCOUNT_SID closes one of three adversarial recall gaps (`cleanup-18-secretdetector-adversarial-recall-gaps-f`)
+- New `TWILIO_ACCOUNT_SID` named pattern in `Sources/Core/SecretDetector.swift`
+  (`\bAC` + 32 lowercase hex). Twilio publishes Account SIDs in this canonical
+  form; word-boundary anchors keep the 2-char `AC` prefix from matching
+  mid-identifier. The bring-up takes the `SecretDetector.patterns` table from
+  13 to 14 families.
+- Adversarial corpus recalibrated: aggregate goes from **1.000 / 0.894**
+  (42 TP, 5 FN) to **1.000 / 0.915** (43 TP, 4 FN), zero false positives held.
+  `short_token` family floor moves from 0.000 to 0.333; remaining
+  short-token misses (Slack `xoxb-` body &lt;10 chars, Stripe `sk_live_`/
+  `sk_test_` &lt;24 chars) stay below threshold by design — shrinking those
+  bodies trades recall against false-positive risk that the security review
+  hasn't authorised.
+- Fixture `short-token-3.txt` now uses canonical `AC` + 32 lowercase hex
+  (the prior body used uppercase `K`/`F`/`E` which the closing pattern
+  cannot match) and `documented_gap: false` so the harness asserts the
+  closure rather than asserting the gap.
+- Doc sync: `spec/testing.md` Quality Gates row + corpus summary,
+  `docs/concepts/security-posture.html` family count + recall number,
+  `spec/autonomous/strategy.md` adversarial-corpus paragraph, and
+  `spec/inspirations/security-isolation/claw-code.md` precision/recall pair.
+- Two follow-up items filed for the remaining gaps —
+  `cleanup-18b-signed-url-gcs-v4` (URL-aware tokenisation in
+  `EntropyScanner.extractTokens`) and `cleanup-18c-obfuscated-pure-hex`
+  (charset-aware entropy floor or pure-hex length band).
+
+### May 1 — Shared `StoreExec` helper folds three near-identical store `exec(_:)` copies into one (`cleanup-17-three-near-identical-exec-helpers-in-sto`)
+- New `Sources/Core/Stores/StoreExec.swift` exposes a single
+  `StoreExec.run(db:sql:scope:)` that wraps `sqlite3_exec` and emits
+  `db.<scope>.sql_error` on failure. CommandStore, SandboxStore, and
+  ValidationStore each previously inlined an 11-line copy that differed
+  only in the event-name token (`command` / `sandbox` / `validation`);
+  the three private `exec(_:)` helpers are now one-liners that delegate
+  to the shared call.
+- 4 new tests in `StoreExecTests` pin the contract directly: nil-DB is
+  a no-op, success emits nothing, a malformed statement emits exactly
+  one `db.<scope>.sql_error` with `outcome=error` + non-empty `error`
+  field, and the scope token is faithfully threaded through the event
+  name.
+- Why this matters: a future structured-field addition (e.g. a `sql:`
+  field naming the failed statement) is now a one-place change. Three
+  copies invited drift — one would have been forgotten.
+- Existing `LoggerRoutingTests` event-vocabulary contract
+  (`db.command.sql_error`, `db.sandbox.sql_error`,
+  `db.validation.sql_error` are the only emitters) is unchanged and
+  still green.
+
+### May 1 — Website AA harness + sitewide brand-color rebind (`website-rebuild-11c-a11y-tooling` + `website-rebuild-11d-perf-tooling` + `website-rebuild-11e-closing-audit`)
+- New on-demand harness at `tools/website-checks/` driven by three
+  Bash entry points under `scripts/`:
+  - `site-serve.sh` (Python static server against the repo root)
+  - `a11y-check.sh` (pa11y-ci HTML_CodeSniffer + axe-core 4.11 via
+    `@axe-core/puppeteer`, full sweep or 18-page sample)
+  - `perf-check.sh` (Lighthouse mid-tier mobile baseline — Moto G
+    Power, 4× CPU slowdown, 1638 Kbps / 150 ms RTT throttling).
+  All three drive Puppeteer's bundled Chrome for Testing, so they
+  do not depend on a system Chrome install (works around the macOS
+  26 Gatekeeper block on unsigned `--cask chromium`).
+- First sweep recorded **234 pa11y AA errors and 238 axe violations
+  across all 99 pages** — overwhelmingly one root cause: brand
+  orange `--accent` (`#ff6200`) used as text on cream `--bg`
+  (`#f5f1e8`), 2.66:1 vs the 4.5:1 normal-text ceiling. Plus four
+  local one-offs (`<img>` template artifacts on `panes.html` and
+  `senkani_web.html`, `aria-required-children` on
+  `what-is-senkani.html`, `scrollable-region-focusable` on
+  `senkani-kb.html`).
+- Sitewide rebind: every text use of `--accent` on cream / cream-elev
+  swapped to `--accent-lo` (`#a63d00`, 4.7:1) — wordmark, foot-wordmark,
+  page accents, hover states, button CTAs, gallery arrows, teaser nums,
+  stat-card emphasis. The bright `--accent` is now reserved for dark
+  surfaces (`.product-band.dark`, `.stat-strip`, mockup chrome,
+  terminal panes), where new dark-band overrides point code spans + the
+  `<span class="accent">` page-title accent at `--accent-hi`
+  (`#ff8534`, ~7:1 on `--ink`).
+- Callout-icon retunes: `.callout-info` icon `#5aa7e0 → #155789`
+  (5.8:1 on `--bg-elev`); `.callout-warn` icon `#b46e0a → #7a4900`
+  (5.4:1). FCSIT letter cards (`.fcsit-letter.{f,c,s,i,t} .ltr`)
+  pick AA-on-cream variants since the source `--tog-*` tokens are
+  tuned for the dark `.fcsit-btn` UI.
+- Local fixes: `<code>&lt;img&gt;</code>` escapes on the two
+  template-artifact pages; `tabindex="0"` + `role="group"` on the
+  long `senkani kb` `.ref-signature`; `role="region"` (was
+  `role="table"`) on the what-is-senkani positioning grid.
+- Verification sweep: **0 pa11y AA errors, 0 axe violations across
+  all 99 pages.** No `11f-page-rewrites` filings.
+- `spec/website_rebuild_audit_round11.md` grew an
+  `## Appendix · accessibility` section with the per-page rebind
+  table, an `## Appendix · performance` section with the per-page
+  Lighthouse score, and the per-luminary `## Closing verdicts`. The
+  website-rebuild-0 umbrella flips to DELIVERED on the back of the
+  closing verdicts.
+
+### May 1 — Early-use milestones wired into the seven real triggers (`onboarding-p2-milestone-callsites`)
+- Follow-up to `onboarding-p2-early-use-milestones`. That round
+  shipped the milestone model, store, and Welcome banner; this
+  round wires `OnboardingMilestoneStore.record(.X)` into the seven
+  production callsites so the banner advances as users use Senkani.
+- Records: `WorkspaceModel.addProject` →
+  `.projectSelected`; `LaunchCoordinator.launchPane` →
+  `.agentLaunched`; `SessionDatabase.recordTokenEvent` →
+  `.firstTrackedEvent` (and `.firstNonzeroSavings` when
+  `savedTokens > 0`); `BudgetConfig.loadFromDisk` →
+  `.firstBudgetSet` when the decoded config is non-default;
+  `WorkspaceModel.addWorkstream` → `.firstWorkstreamCreated`;
+  `SprintReviewViewModel.accept`/`.reject` →
+  `.firstStagedProposalReviewed`.
+- Idempotent at every callsite: no caller pre-checks
+  `isCompleted` — the store guarantees first-observation wins.
+- Privacy posture unchanged: every callsite goes through the
+  gated `record()` path which respects
+  `SENKANI_ONBOARDING_MILESTONES=off` and writes only
+  `{milestone-key: ISO8601-timestamp}` to
+  `~/.senkani/onboarding/milestones.json`.
+- Adds `OnboardingMilestoneStore.withTestHome(_:_:)` (sync,
+  `NSRecursiveLock`-guarded — same shape as
+  `BudgetConfig.withTestOverride`) so behavioural tests can
+  redirect every default-home call inside the body to a temp
+  path, never touching the developer's real
+  `~/.senkani/onboarding/milestones.json`.
+- New `Tests/SenkaniTests/OnboardingMilestoneCallsiteTests.swift`
+  covers all seven callsites — Core-side callsites get
+  behavioural assertions under `withTestHome`; SwiftUI-side
+  callsites get source-level guards in the same shape as
+  `LaunchCoordinatorRoutingTests`.
+- Side update: `BudgetConfig.loadFromDisk` now exposes a
+  `path:` parameter (default `budgetFilePath`) and adds
+  `BudgetConfig.isNonDefault` so the decode path can be
+  exercised in tests without touching `~/.senkani/budget.json`.
+
+### May 1 — Deinit-on-queue regression guard (`sessiondb-deinit-regression-guard`)
+- New `Tests/SenkaniTests/SessionDatabaseDeinitTests.swift` exercises
+  the exact race that produced the `swiftpm-testing-helper` SIGTRAP
+  pre-fix: 30 parallel iterations of
+  `_ = SessionDatabase(path: ...)` followed by a 200 ms drain, so the
+  init-time recordEvent burst (13 queued tasks) is in flight when the
+  only strong reference drops. Surviving the loop without SIGTRAP is
+  the assertion.
+- The repro is racy by construction (no deterministic way to time the
+  strong-drop to land on the queue thread mid-burst), so the test
+  relies on volume + the chunked harness's 3-retry policy to surface a
+  regression. Confirmed to fire: locally reverting the
+  `DispatchSpecific` guard in `SessionDatabase.deinit` and re-running
+  the test ≥10 times reproduces the SIGTRAP — that revert + retest
+  loop is queued in `tools/soak/manual-log.md` for periodic CI-floor
+  verification.
+- `tools/test-safe.sh --chunk session` 242 → 243 tests, all green at
+  ~12 s wall time on a single attempt (no retries needed).
+
 ### May 1 — `SessionDatabase.deinit` deadlock fix (`bisect-sigtrap-source`)
 - Root cause for the deterministic `swiftpm-testing-helper` SIGTRAP
   documented in `harness-chunk-test-safe`: a deinit-on-queue
@@ -48,6 +687,22 @@ dated heading at release time._
   completes without deadlock. The repro is racy by construction
   but the chunked harness will surface a regression within 3
   retries.
+
+### May 1 — `SessionDatabase` deinit reentrancy regression test (`sessiondb-deinit-regression-guard`)
+- `Tests/SenkaniTests/SessionDatabaseDeinitTests.swift` added:
+  one `@Test` that runs 30 parallel allocate-and-drop iterations
+  via `withTaskGroup`. Each `_ = SessionDatabase(path: ...)` exits
+  scope while the init-time `recordEvent` burst is still queued.
+  Surviving the loop without a SIGTRAP is the assertion.
+- Pre-fix surfacing: revert the `DispatchSpecific` reentrancy
+  guard and the test process exits with `signal code 5` (SIGTRAP)
+  once the race lands. Post-fix: completes in ~0.3 s per run.
+- Lives in the `session` chunk (matched by the `SessionDatabase`
+  prefix in `tools/test-safe.sh`); the chunked harness's 3-retry
+  policy catches a future regression even at low per-iteration
+  hit-rate.
+- Manual revert-to-verify left to operator (acceptance criterion
+  #2 of the round); see `tools/soak/manual-log.md`.
 
 ### May 1 — Chunked test harness (`harness-chunk-test-safe`)
 - `tools/test-safe.sh` rewritten to run the suite in named chunks

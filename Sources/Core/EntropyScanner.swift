@@ -7,8 +7,11 @@ import Foundation
 /// detection, sharing the `.secrets` feature gate.
 ///
 /// Calibration: H ≥ 4.5 bits/char, token ≥ 20 chars, ≥85% base64/hex charset.
-/// Git SHAs (~4.0), UUIDs (~3.8), and MD5/SHA-256 digests (~3.95) fall below the
-/// threshold or are excluded by exact-length rules before entropy is computed.
+/// Git SHAs (~4.0), UUIDs (~3.8), and MD5/SHA-256/SHA-512 digests (~3.95) fall
+/// below the threshold or are excluded by exact-length rules before entropy is
+/// computed. Pure-hex tokens of length ≥ 40 that are not a known digest size
+/// short-circuit to HIGH_ENTROPY — pure hex peaks at log₂(16) = 4.0 bits/char
+/// and would otherwise sit just below the 4.5 floor (cleanup-18c).
 public enum EntropyScanner {
 
     // MARK: - Thresholds (package-internal for test calibration)
@@ -44,7 +47,7 @@ public enum EntropyScanner {
             guard token.count >= minTokenLength else { continue }
             guard !isExcluded(token) else { continue }
             guard isCredentialCharset(token) else { continue }
-            guard shannonEntropy(token) >= entropyThreshold else { continue }
+            guard isLongHexBlob(token) || shannonEntropy(token) >= entropyThreshold else { continue }
             // Literal replacement — token was extracted from the string directly,
             // so exact match is correct and avoids regex metacharacter escaping.
             result = result.replacingOccurrences(of: token, with: "[REDACTED:HIGH_ENTROPY]")
@@ -74,10 +77,20 @@ public enum EntropyScanner {
     // MARK: - Token extraction
 
     /// Split on whitespace and common key-value delimiters to isolate credential values.
-    /// Handles `SECRET=value`, `"key": "value"`, and `key: 'value'` patterns.
+    /// Handles `SECRET=value`, `"key": "value"`, `key: 'value'`, and URL query
+    /// strings `?key=value&key=value` — the `&` and `?` splits keep query-parameter
+    /// values evaluated independently so a high-entropy `X-Goog-Signature=...`
+    /// value isn't shielded by the URL-prefix exclusion that fires on the host
+    /// portion. Short benign params (e.g. `?utm_source=email`) still fall below
+    /// the 20-char minimum + 4.5 entropy floor.
+    ///
+    /// `.whitespacesAndNewlines` (not `.whitespaces`) so a value followed by a
+    /// trailing newline (`SECRET=value\n`) extracts as a clean token rather
+    /// than `value\n`. The trailing newline previously survived the split and
+    /// broke strict charset checks like the pure-hex length-band rule.
     private static func extractTokens(_ input: String) -> [String] {
-        input.components(separatedBy: CharacterSet.whitespaces
-            .union(CharacterSet(charactersIn: "=:\"'")))
+        input.components(separatedBy: CharacterSet.whitespacesAndNewlines
+            .union(CharacterSet(charactersIn: "=&?:\"'")))
             .filter { !$0.isEmpty }
     }
 
@@ -95,8 +108,9 @@ public enum EntropyScanner {
         // Git SHA: exactly 40 hex chars
         if token.count == 40 && token.allSatisfy({ $0.isHexDigit }) { return true }
 
-        // MD5 (32 hex) and SHA-256 (64 hex) digests — common in build/test output
-        if (token.count == 32 || token.count == 64)
+        // MD5 (32 hex), SHA-256 (64 hex), and SHA-512 (128 hex) digests —
+        // common in build/test output and lockfiles.
+        if (token.count == 32 || token.count == 64 || token.count == 128)
             && token.allSatisfy({ $0.isHexDigit }) { return true }
 
         // UUID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (with or without braces)
@@ -141,6 +155,18 @@ public enum EntropyScanner {
         guard !token.isEmpty else { return false }
         let cred = token.unicodeScalars.filter { credentialChars.contains($0) }.count
         return Double(cred) / Double(token.unicodeScalars.count) >= credentialCharsetRatio
+    }
+
+    // MARK: - Long hex blob short-circuit
+
+    /// Returns true for pure-hex tokens of length ≥ 40 chars. Pure hex peaks at
+    /// log₂(16) = 4.0 bits/char and would otherwise sit just below the 4.5
+    /// entropy floor — credential-shaped (HMAC outputs, hex-encoded random
+    /// keys) but missed by entropy alone. Known digest sizes (32, 40, 64, 128)
+    /// are filtered upstream by `isExcluded`, so this rule only fires on the
+    /// unambiguous "long hex blob that isn't a digest" case (cleanup-18c).
+    static func isLongHexBlob(_ token: String) -> Bool {
+        token.count >= 40 && token.allSatisfy { $0.isHexDigit }
     }
 
     // MARK: - Shannon entropy

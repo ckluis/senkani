@@ -5,10 +5,42 @@ import Core
 /// discovery logic can be exercised against a fixture HOME + appSupport dir.
 /// `UninstallCommand` constructs this with real paths (`NSHomeDirectory()` +
 /// `~/Library/Application Support/Senkani`); tests seed a tmp dir and pass it
-/// in. The seven categories mirror the `senkani uninstall` manual contract
-/// documented in `cleanup.md` #15.
+/// in. The nine categories mirror the `senkani uninstall` manual contract
+/// originally documented in `cleanup.md` #15.
+///
+/// Category-8 (`webContentRuleLists`) was added 2026-05-02 after the
+/// `release-v0-3-0-uninstall-pass` walk's broad orphan sweep
+/// (`uninstall-scanner-audit-claude-global-paths` backlog item) surfaced
+/// senkani-prefixed `WKContentRuleList` files surviving a full `--yes`
+/// uninstall under `~/Library/WebKit/<bundle>/ContentRuleLists/`. The
+/// rule list itself is Senkani-defined data (compiled from
+/// `WebContentBlocklist.rulesJSON` via `WKContentRuleListStore`), even
+/// though the parent directory is macOS-managed.
+///
+/// Category-9 (`modelMetadataCache`) was added 2026-05-03 after the
+/// `release-v0-3-0-uninstall-pass-v2-plan-amendments` walk's Step 8 broad
+/// orphan sweep (`uninstall-scanner-audit-claude-hook-and-library-caches`
+/// backlog item) caught `~/Library/Caches/dev.senkani/` surviving a full
+/// `--yes` uninstall. The directory is bundle-id-named so it looks
+/// macOS-managed, but `Sources/Core/ModelManager.swift` actively writes
+/// `models/models.json` (model registry metadata) into it from any
+/// senkani-using process — making the dir Senkani-managed state, not an
+/// OS cache. Removal strips the whole `dev.senkani/` subtree.
+///
+/// Out-of-scope (by design — verified 2026-05-03):
+/// - `~/Library/Caches/SenkaniApp` — macOS-managed (auto-created per
+///   bundle name; no Senkani write code path).
+/// - `~/Library/Caches/senkani-mcp` — macOS-managed (auto-created per
+///   binary name; no Senkani write code path).
+/// - `~/Library/HTTPStorages/{SenkaniApp,senkani-mcp}` — macOS-managed.
+/// - `~/Library/Preferences/SenkaniApp.plist` — NSUserDefaults.
+/// - `~/Library/Application Support/CrashReporter/{senkani-mcp,SenkaniApp}_*.plist` — system-managed.
+/// - `~/.claude/hooks/senkani-hook.sh`, `~/.claude/skills/senkani-autonomous` —
+///   NOT senkani-written; sourced from operator tooling (e.g. gstack)
+///   or Claude Code itself. Senkani's hook lives at
+///   `~/.senkani/bin/senkani-hook` (category-3, `hookBinary`).
 struct UninstallArtifactScanner {
-    /// The seven artifact categories `senkani uninstall` can remove. The
+    /// The nine artifact categories `senkani uninstall` can remove. The
     /// string value is a stable identifier for assertions; user-facing text
     /// lives in `Artifact.description`.
     enum Category: String, CaseIterable, Sendable {
@@ -19,6 +51,8 @@ struct UninstallArtifactScanner {
         case sessionDatabase
         case launchdPlists
         case perProjectSenkaniDirs
+        case webContentRuleLists
+        case modelMetadataCache
     }
 
     struct Artifact {
@@ -46,6 +80,8 @@ struct UninstallArtifactScanner {
     var runtimeDir: String { homeDir + "/.senkani" }
     var launchAgentsDir: String { homeDir + "/Library/LaunchAgents" }
     var workspacePath: String { homeDir + "/.senkani/workspace.json" }
+    var webKitDir: String { homeDir + "/Library/WebKit" }
+    var modelMetadataCacheDir: String { homeDir + "/Library/Caches/dev.senkani" }
 
     func scan() -> [Artifact] {
         var items: [Artifact] = []
@@ -196,6 +232,58 @@ struct UninstallArtifactScanner {
                     }
                 ))
             }
+        }
+
+        // 8. WebKit content rule lists — `WebContentBlocklist.compile()` writes
+        // `ContentRuleList-senkani.web.subresource-blocklist.v<N>` under
+        // `~/Library/WebKit/<bundle>/ContentRuleLists/`. The compile call is
+        // made by every senkani-using process that uses WebKit (the main
+        // SenkaniApp bundle, plus `swiftpm-testing-helper` /
+        // `com.apple.dt.xctest.tool` when integration tests run), so the
+        // file lands under multiple bundle dirs. Walk every WebKit subdir's
+        // ContentRuleLists folder and collect senkani-prefixed files.
+        let webKit = webKitDir
+        if fm.fileExists(atPath: webKit),
+           let bundles = try? fm.contentsOfDirectory(atPath: webKit) {
+            var ruleLists: [String] = []
+            for bundle in bundles {
+                let listsDir = webKit + "/" + bundle + "/ContentRuleLists"
+                guard let files = try? fm.contentsOfDirectory(atPath: listsDir) else { continue }
+                for file in files where file.hasPrefix("ContentRuleList-senkani") {
+                    ruleLists.append(listsDir + "/" + file)
+                }
+            }
+            if !ruleLists.isEmpty {
+                let paths = ruleLists  // capture for the closure
+                items.append(Artifact(
+                    category: .webContentRuleLists,
+                    icon: "\u{1F310}",
+                    description: "\(ruleLists.count) WebKit content rule list(s) under ~/Library/WebKit/",
+                    remove: {
+                        for path in paths {
+                            try? fm.removeItem(atPath: path)
+                        }
+                    }
+                ))
+            }
+        }
+
+        // 9. Model metadata cache at ~/Library/Caches/dev.senkani/.
+        // `ModelManager.shared` (Sources/Core/ModelManager.swift) writes
+        // `dev.senkani/models/models.json` — the model registry's
+        // download/verification status. The directory is bundle-id-named
+        // but Senkani-written from any senkani CLI / senkani-mcp /
+        // SenkaniApp invocation. Strip the whole subtree because future
+        // ModelManager extensions may drop sibling files (eval scratch,
+        // weight checksums) into the same dir.
+        let modelCache = modelMetadataCacheDir
+        if fm.fileExists(atPath: modelCache) {
+            items.append(Artifact(
+                category: .modelMetadataCache,
+                icon: "\u{1F4BE}",
+                description: "Model metadata cache at ~/Library/Caches/dev.senkani/",
+                remove: { try fm.removeItem(atPath: modelCache) }
+            ))
         }
 
         return items

@@ -5,11 +5,16 @@ import Foundation
 /// Senkani primarily saves **input tokens** — by compressing tool output, fewer
 /// tokens are sent to the model. All prices are USD per million tokens.
 ///
-/// Pricing is computed at display time from raw saved bytes, not baked into the
-/// database. This means changing the active model immediately updates all cost
-/// displays (historical and current).
+/// `ModelPricing` is now a thin facade over ``CostLedger``: instance fields
+/// are populated from the live ledger entry on construction, and lookups
+/// (``find(_:)``, ``allModels``) read the ledger so the two never drift.
+/// The named static constants (``claudeOpus4`` etc.) remain as
+/// convenience handles for back-compat with call sites that reference a
+/// specific model by name; their values mirror their ledger entries
+/// byte-for-byte (verified by ``ModelPricingLedgerParityTests``).
 ///
-/// To add a new model: append to ``allModels`` and update ``find(_:)``.
+/// To add a new model: append a new entry to ``CostLedger.entries`` —
+/// ``allModels`` will surface it automatically.
 public struct ModelPricing: Codable, Sendable, Identifiable {
     public var id: String { modelId }
     public let modelId: String
@@ -78,12 +83,22 @@ extension ModelPricing {
         inputPerMillion: 0.15, outputPerMillion: 0.60, cachedInputPerMillion: 0.0375
     )
 
-    /// All known model pricings.
-    public static let allModels: [ModelPricing] = [
-        .claudeOpus4, .claudeSonnet4, .claudeHaiku35,
-        .gpt4o, .gpt4oMini, .o3,
-        .gemini25Pro, .gemini25Flash,
-    ]
+    /// All known model pricings — derived from
+    /// ``CostLedger.entries(forVersion:)`` at the live ``CostLedger.currentVersion``.
+    /// New models land by appending to ``CostLedger.entries``; this view
+    /// surfaces them automatically without duplicating data.
+    public static var allModels: [ModelPricing] {
+        CostLedger.entries(forVersion: CostLedger.currentVersion).map(ModelPricing.init(ledgerEntry:))
+    }
+
+    /// Materialize a `ModelPricing` from a `CostLedgerEntry`.
+    public init(ledgerEntry entry: CostLedgerEntry) {
+        self.modelId = entry.modelId
+        self.displayName = entry.displayName
+        self.inputPerMillion = entry.inputPerMillion
+        self.outputPerMillion = entry.outputPerMillion
+        self.cachedInputPerMillion = entry.cachedInputPerMillion
+    }
 }
 
 // MARK: - Active Model (user-configurable)
@@ -106,16 +121,12 @@ extension ModelPricing {
         }
     }
 
-    /// Look up pricing by model ID (exact or substring match).
+    /// Look up pricing by model ID. Delegates to ``CostLedger.rate(model:at:)``
+    /// — the ledger is the single source of truth — and falls back to
+    /// `claudeSonnet4` when no entry matches.
     public static func find(_ modelId: String) -> ModelPricing {
-        let lower = modelId.lowercased()
-        // Exact match first
-        if let exact = allModels.first(where: { $0.modelId.lowercased() == lower }) {
-            return exact
-        }
-        // Substring match
-        if let partial = allModels.first(where: { lower.contains($0.modelId.lowercased()) }) {
-            return partial
+        if let entry = CostLedger.rate(model: modelId) {
+            return ModelPricing(ledgerEntry: entry)
         }
         return .claudeSonnet4
     }

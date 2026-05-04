@@ -231,6 +231,13 @@ final class MCPSession: @unchecked Sendable {
         let sessionId: String? = SessionDatabase.shared.createSession(projectRoot: root, agentType: agentType)
         let paneId = ProcessInfo.processInfo.environment["SENKANI_PANE_ID"]
 
+        // Capture the active policy snapshot at session start so any
+        // future replay or audit can reconstruct what configuration was
+        // running. No-op if sessionId is nil (DB unavailable).
+        if let sid = sessionId {
+            SessionDatabase.shared.capturePolicySnapshot(sessionId: sid, projectRoot: root)
+        }
+
         Logger.log("mcp.session.resolved", fields: [
             "project_root": .path(root),
             "metrics_file": .path(metricsFile),

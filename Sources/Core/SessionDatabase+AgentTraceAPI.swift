@@ -68,4 +68,12 @@ extension SessionDatabase {
     public func agentTraceRowsForTier(_ tier: String, since: Date, limit: Int = 200) -> [AgentTraceTierRow] {
         return agentTraceEventStore.tracesForTier(tier, since: since, limit: limit)
     }
+
+    /// Mode 4 — full canonical trace rows for a project window in
+    /// chronological order. Reserved for the counterfactual replay
+    /// evaluator: it needs every dimension and measure to project a
+    /// per-row delta. Capped at `limit` to keep large sessions bounded.
+    public func agentTraceRowsInWindow(project: String?, since: Date?, limit: Int = 10_000) -> [AgentTraceEvent] {
+        return agentTraceEventStore.rowsInWindow(project: project, since: since, limit: limit)
+    }
 }

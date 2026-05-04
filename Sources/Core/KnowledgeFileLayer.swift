@@ -266,10 +266,23 @@ public final class KnowledgeFileLayer: @unchecked Sendable {
         let wq = DispatchQueue(label: "com.senkani.kbwatcher", qos: .utility)
         watchQueue = wq
 
+        // FSEvents holds the `info` pointer for the lifetime of the stream
+        // and dispatches callbacks asynchronously on `wq`. To prevent a
+        // use-after-free between an in-flight callback and a concurrent
+        // deinit, hand FSEvents a strong retain on self via `passRetained`
+        // and pair it with a release closure so the +1 is dropped only
+        // after `FSEventStreamInvalidate` has drained pending callbacks.
+        // Mirrors the pattern in Sources/Indexer/FileWatcher.swift.
+        let retainedSelf = Unmanaged.passRetained(self).toOpaque()
         var context = FSEventStreamContext(
             version: 0,
-            info: Unmanaged.passUnretained(self).toOpaque(),
-            retain: nil, release: nil, copyDescription: nil
+            info: retainedSelf,
+            retain: nil,
+            release: { ptr in
+                guard let ptr else { return }
+                Unmanaged<KnowledgeFileLayer>.fromOpaque(ptr).release()
+            },
+            copyDescription: nil
         )
 
         let flags = UInt32(
@@ -291,6 +304,10 @@ public final class KnowledgeFileLayer: @unchecked Sendable {
             kCFAllocatorDefault,
             { (_, info, numEvents, eventPaths, eventFlags, _) in
                 guard let info else { return }
+                // takeUnretainedValue is safe: FSEvents' own +1 (set via
+                // passRetained above) keeps `self` alive until the release
+                // callback fires, which only happens after invalidate has
+                // drained queued callbacks.
                 let layer = Unmanaged<KnowledgeFileLayer>.fromOpaque(info).takeUnretainedValue()
                 let paths = unsafeBitCast(eventPaths, to: NSArray.self) as! [String]
                 let flagsArr = Array(UnsafeBufferPointer(start: eventFlags, count: numEvents))
@@ -302,19 +319,45 @@ public final class KnowledgeFileLayer: @unchecked Sendable {
             0.05,
             flags
         ) else {
+            // FSEventStreamCreate didn't take ownership of our +1 —
+            // release it ourselves so we don't leak.
+            Unmanaged<KnowledgeFileLayer>.fromOpaque(retainedSelf).release()
+            watchQueue = nil
+            onChangeHandler = nil
             fputs("[KnowledgeFileLayer] FSEventStreamCreate failed\n", stderr)
             return
         }
 
         FSEventStreamSetDispatchQueue(stream, wq)
-        FSEventStreamStart(stream)
+        // FSEventStreamStart returns false if the stream could not be
+        // scheduled. Invalidate + release the stream here so FSEvents
+        // drops its +1 on the `info` pointer; otherwise the watcher
+        // would leak forever and no callbacks (including release) fire.
+        guard FSEventStreamStart(stream) else {
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+            watchQueue = nil
+            onChangeHandler = nil
+            fputs("[KnowledgeFileLayer] FSEventStreamStart failed\n", stderr)
+            return
+        }
         watchStream = stream
     }
 
+    /// Stop watching. Idempotent.
+    ///
+    /// After this returns, no further callbacks will fire and any callback
+    /// in flight at call time has completed. Safe to call from `deinit`
+    /// because the lock is dropped before draining the watcher queue.
     public func stopWatching() {
         watchLock.lock()
-        defer { watchLock.unlock() }
-        guard let stream = watchStream else { return }
+        guard let stream = watchStream else {
+            watchLock.unlock()
+            return
+        }
+        // Tear down FSEvents first so no new callbacks are scheduled. The
+        // release closure installed in startWatching drops the FSEvents-
+        // owned +1 on self once invalidate has drained queued callbacks.
         FSEventStreamStop(stream)
         FSEventStreamInvalidate(stream)
         FSEventStreamRelease(stream)
@@ -323,6 +366,17 @@ public final class KnowledgeFileLayer: @unchecked Sendable {
         debounceWork = nil
         pendingChanges.removeAll()
         onChangeHandler = nil
+        let wq = watchQueue
+        watchQueue = nil
+        // Release the lock BEFORE draining the watcher queue: an in-flight
+        // handleWatchEvents acquires the same lock, so holding it across
+        // the drain would deadlock. Mirrors FileWatcher.stop().
+        watchLock.unlock()
+
+        // Synchronously drain the watcher's serial queue. Any callback
+        // submitted before invalidate runs to completion before this
+        // returns; new callbacks won't arrive because we invalidated above.
+        wq?.sync { /* drain */ }
     }
 
     // MARK: Template

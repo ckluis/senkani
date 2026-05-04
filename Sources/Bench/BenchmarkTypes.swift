@@ -32,6 +32,11 @@ public struct TaskResult: Sendable, Codable {
     public let savedPct: Double
     public let durationMs: Double
     public let error: String?
+    /// Confidence tier for this single result. Most fixture-bench tasks
+    /// are `.exact`; tasks computed from measured ratios or template
+    /// assumptions surface `.estimated` so the runner's rollup can
+    /// degrade the report's overall tier accordingly.
+    public let confidence: Confidence
 
     public init(
         taskId: String,
@@ -40,7 +45,8 @@ public struct TaskResult: Sendable, Codable {
         rawBytes: Int,
         compressedBytes: Int,
         durationMs: Double,
-        error: String? = nil
+        error: String? = nil,
+        confidence: Confidence = .exact
     ) {
         self.taskId = taskId
         self.configName = configName
@@ -51,6 +57,7 @@ public struct TaskResult: Sendable, Codable {
         self.savedPct = rawBytes > 0 ? Double(rawBytes - compressedBytes) / Double(rawBytes) * 100 : 0
         self.durationMs = durationMs
         self.error = error
+        self.confidence = confidence
     }
 }
 
@@ -101,6 +108,33 @@ public struct QualityGate: Sendable, Codable {
     }
 }
 
+/// Confidence tier for a reported savings number. See
+/// `spec/testing.md` → "Confidence Tiers for Reported Savings".
+/// The discipline rule: an `estimated` number must never be presented
+/// as `exact` in any user-facing surface.
+public enum Confidence: String, Sendable, Codable {
+    /// Mechanically derived from receipts or pure-function computation.
+    /// Same inputs → byte-identical output.
+    case exact
+    /// Uses measured ratios or template assumptions to project what
+    /// *would* happen on inputs that weren't actually run.
+    case estimated
+    /// Depends on behavior that can't be re-derived without re-execution.
+    case needsValidation = "needs_validation"
+    /// Inputs lack the evidence to evaluate this question at all.
+    case unsupported
+
+    /// The most permissive tier of two. Used to roll up a mixed-tier
+    /// report to its weakest member: a pile containing one `estimated`
+    /// row reports `estimated` overall.
+    public func loosened(by other: Confidence) -> Confidence {
+        let order: [Confidence] = [.exact, .estimated, .needsValidation, .unsupported]
+        let lhs = order.firstIndex(of: self) ?? 0
+        let rhs = order.firstIndex(of: other) ?? 0
+        return order[max(lhs, rhs)]
+    }
+}
+
 /// Aggregated benchmark report.
 public struct BenchmarkReport: Sendable, Codable {
     public let timestamp: Date
@@ -110,6 +144,31 @@ public struct BenchmarkReport: Sendable, Codable {
     public let gates: [QualityGate]
     public let overallMultiplier: Double
     public let allGatesPassed: Bool
+    /// Confidence tier for the headline numbers in this report.
+    /// Defaults to `.exact` for the fixture bench (deterministic
+    /// computation over fixed inputs). Scenario simulator reports
+    /// override to `.estimated`. See `Confidence` above.
+    public let confidence: Confidence
+
+    public init(
+        timestamp: Date,
+        durationMs: Double,
+        configs: [BenchmarkConfig],
+        results: [TaskResult],
+        gates: [QualityGate],
+        overallMultiplier: Double,
+        allGatesPassed: Bool,
+        confidence: Confidence = .exact
+    ) {
+        self.timestamp = timestamp
+        self.durationMs = durationMs
+        self.configs = configs
+        self.results = results
+        self.gates = gates
+        self.overallMultiplier = overallMultiplier
+        self.allGatesPassed = allGatesPassed
+        self.confidence = confidence
+    }
 }
 
 extension BenchmarkReport {
@@ -123,7 +182,8 @@ extension BenchmarkReport {
             results: results,
             gates: merged,
             overallMultiplier: overallMultiplier,
-            allGatesPassed: merged.allSatisfy(\.passed)
+            allGatesPassed: merged.allSatisfy(\.passed),
+            confidence: confidence
         )
     }
 }

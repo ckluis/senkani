@@ -13,6 +13,11 @@ public enum SecretDetector {
     /// npm, HuggingFace, and a dedicated OpenAI project-key pattern. The
     /// generic OPENAI pattern `sk-[a-zA-Z0-9]{20,}` MISSES `sk-proj-...`
     /// because `-` breaks its character class — hence a dedicated entry.
+    ///
+    /// 2026-05-01 (cleanup-18 partial closure): added TWILIO_ACCOUNT_SID
+    /// (`\bAC` + 32 lowercase hex). Twilio publishes Account SIDs as 34-char
+    /// `AC` + lowercase-hex strings; word-boundary anchors prevent the
+    /// 2-char prefix from matching mid-identifier (e.g. `BACAFEBABE…`).
     static let patterns: [(name: String, regex: NSRegularExpression)] = {
         let defs: [(String, String)] = [
             ("ANTHROPIC_API_KEY", "sk-ant-[a-zA-Z0-9_-]{20,}"),
@@ -20,6 +25,7 @@ public enum SecretDetector {
             ("OPENAI_API_KEY", "sk-[a-zA-Z0-9]{20,}"),
             ("AWS_SECRET_ACCESS_KEY", "(?i)aws[_\\s]?secret[_\\s]?access[_\\s]?key[\\s]*[=:][\\s]*[A-Za-z0-9/+=]{20,}"),
             ("AWS_ACCESS_KEY_ID", "AKIA[0-9A-Z]{16}"),
+            ("TWILIO_ACCOUNT_SID", "\\bAC[0-9a-f]{32}\\b"),
             ("SLACK_TOKEN", "\\bxox[abprs]-[A-Za-z0-9-]{10,}"),
             ("GCP_OAUTH_TOKEN", "\\bya29\\.[a-zA-Z0-9_-]{60,}"),
             ("STRIPE_SECRET_KEY", "\\bsk_(?:live|test)_[a-zA-Z0-9]{24,}"),

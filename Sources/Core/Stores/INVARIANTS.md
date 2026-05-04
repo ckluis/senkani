@@ -155,9 +155,12 @@ must pass `""` explicitly to read process-global counters.
 - `Tests/SenkaniTests/SessionDatabaseTests.swift::trailingSlashNormalized`
   and the surrounding normalization tests guard
   `normalizePath`'s correctness.
-- **Gap:** `complianceRate` and `lastExecResult` have no direct
-  tests for project isolation. Filed as a follow-up in
-  `spec/cleanup.md`.
+- `Tests/SenkaniTests/SessionDatabaseCrossStoreTests.swift` pins
+  project isolation on the two cross-store composition methods that
+  previously had no direct coverage: `lastExecResult` (the
+  `(token_events × commands)` join) and `complianceRate` (the
+  `(source = 'mcp' OR source = 'hook')` ratio). Closed
+  2026-05-01 by `cleanup-19-sessiondatabase-store-coverage-gaps`.
 
 ## I5 — `token_events` is the single source of truth, with one writer
 
@@ -335,17 +338,14 @@ ValidationStore
 
 ---
 
-## Appendix — coverage gaps tracked in `spec/cleanup.md`
+## Appendix — coverage gaps closed 2026-05-01
 
-- `SessionDatabase.complianceRate` has no direct test — the file uses
-  it indirectly through MCP/hook flows.
-- `SessionDatabase.lastExecResult` has no direct test — it is a
-  cross-store JOIN that should have a unit test pinning project
-  isolation, missing-row, and the `output_preview ABS(timestamp - ?) < 2.0`
-  fuzziness.
-
-These are tracked as follow-ups under "SessionDatabase store
-coverage gaps" in `spec/cleanup.md`.
+- `SessionDatabase.complianceRate` and `SessionDatabase.lastExecResult`
+  now have direct unit tests in
+  `Tests/SenkaniTests/SessionDatabaseCrossStoreTests.swift` covering
+  project isolation, the numerator/preview-window filters, and
+  empty-data nil returns. Closed by
+  `cleanup-19-sessiondatabase-store-coverage-gaps` (round 2026-05-01).
 
 ---
 

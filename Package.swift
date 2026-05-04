@@ -20,7 +20,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.3.0"),
         .package(url: "https://github.com/apple/swift-testing.git", from: "0.12.0"),
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.9.0"),
-        .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", branch: "main"),
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", revision: "2a296f145c3129fea4290bb6e4a0a5fb458efa06"),
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0"),
         .package(url: "https://github.com/ChimeHQ/SwiftTreeSitter.git", from: "0.10.0"),
     ],

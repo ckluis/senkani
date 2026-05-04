@@ -9,6 +9,33 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — `mlx-swift-lm` dependency pinned to a specific revision (build reproducibility)
+
+- Prior state: `Package.swift:23` declared
+  `.package(url: "https://github.com/ml-explore/mlx-swift-lm.git", branch: "main")`.
+  Every other dependency in the manifest used a SemVer floor; this
+  one followed a moving branch. `swift package update` (or any cold
+  resolve on a fresh checkout) silently pulled whatever was on
+  `main` that moment, so model-loading behavior could change between
+  checkouts without anyone touching `Package.swift`. The pinned
+  `Package.resolved` SHA was already drifting behind upstream main
+  on 2026-05-04 (`2a296f1…` vs `7e2b710…`) without anyone noticing.
+- Pin replaced with
+  `revision: "2a296f145c3129fea4290bb6e4a0a5fb458efa06"` — the SHA
+  `Package.resolved` had already verified through the test suite
+  (2445 tests green pre-pin, same suite green post-pin). Behavior
+  is byte-identical to what was already shipping; the only thing
+  that changed is `swift package update` can no longer move it
+  silently. `Package.resolved` regenerated; the `mlx-swift-lm` pin
+  no longer carries a `"branch": "main"` field.
+- Choice of revision over a SemVer floor: upstream does publish
+  tagged releases (latest seen was `3.31.3` on 2026-05-04) but the
+  resolved SHA does not correspond to any tag, so a tag bump would
+  have introduced behavioral risk inside a build-config-only round.
+  Revisit cadence is filed as
+  `spec/autonomous/backlog/mlx-swift-lm-pin-freshness-revisit.md` so
+  the pin doesn't rot indefinitely.
+
 ### May 4 — Live-mode multiplier badge corrected to `.estimated` (per `Confidence.loosened(by:)` discipline)
 
 - Prior state: `SavingsTestView.swift:239` rendered

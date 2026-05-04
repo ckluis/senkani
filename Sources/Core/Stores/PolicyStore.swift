@@ -30,24 +30,33 @@ final class PolicyStore: @unchecked Sendable {
 
     /// Idempotent. Migrations v15 + v17 own the canonical schema;
     /// this method stays so the store init pattern matches every other
-    /// store (each calls `setupSchema()` after construction).
+    /// store (each calls `setupSchema()` after construction). The SQL
+    /// is exposed as a static so `PolicySchemaParityTests` can apply it
+    /// to a setupSchema-only DB and assert byte-identical parity with
+    /// the migrations-only path; until the session-DB schema-authority
+    /// cleanup ships (see `spec/architecture.md` → "Schema authority"),
+    /// the parity test is the guardrail against silent divergence.
+    static let schemaSQL: [String] = [
+        """
+        CREATE TABLE IF NOT EXISTS policy_snapshots (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id      TEXT NOT NULL REFERENCES sessions(id),
+            captured_at     REAL NOT NULL,
+            policy_hash     TEXT NOT NULL,
+            policy_json     TEXT NOT NULL,
+            prev_hash       TEXT,
+            entry_hash      TEXT,
+            chain_anchor_id INTEGER,
+            UNIQUE(session_id, policy_hash)
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_policy_snapshots_session ON policy_snapshots(session_id, captured_at DESC);",
+        "CREATE INDEX IF NOT EXISTS idx_policy_snapshots_anchor ON policy_snapshots(chain_anchor_id, id);",
+    ]
+
     func setupSchema() {
         parent.queue.sync {
-            execSilent("""
-                CREATE TABLE IF NOT EXISTS policy_snapshots (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id      TEXT NOT NULL REFERENCES sessions(id),
-                    captured_at     REAL NOT NULL,
-                    policy_hash     TEXT NOT NULL,
-                    policy_json     TEXT NOT NULL,
-                    prev_hash       TEXT,
-                    entry_hash      TEXT,
-                    chain_anchor_id INTEGER,
-                    UNIQUE(session_id, policy_hash)
-                );
-            """)
-            execSilent("CREATE INDEX IF NOT EXISTS idx_policy_snapshots_session ON policy_snapshots(session_id, captured_at DESC);")
-            execSilent("CREATE INDEX IF NOT EXISTS idx_policy_snapshots_anchor ON policy_snapshots(chain_anchor_id, id);")
+            for sql in Self.schemaSQL { execSilent(sql) }
         }
     }
 

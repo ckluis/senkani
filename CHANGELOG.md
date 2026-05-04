@@ -9,6 +9,33 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — Session-DB schema authority decided: migrations canonical, `setupSchema` is a transitional shim
+
+- The session DB had two paths creating each table:
+  `MigrationRegistry.all` and every store's `setupSchema()`. With
+  `CREATE TABLE IF NOT EXISTS` on both sides, a future schema edit
+  in only one path could silently produce "works on fresh DBs,
+  breaks on migrated ones" or vice versa. `policy_snapshots` was
+  the most recent example (v15 + v17 + `PolicyStore.setupSchema`
+  all carry the same DDL).
+- `spec/architecture.md` → "Schema authority (decided 2026-05-04)"
+  records the principle: migrations are the canonical authority for
+  the session DB; `setupSchema()` is a transitional shim. The
+  knowledge vault (`<projectRoot>/.senkani/vault.db`) is unaffected
+  — `setupSchema()` is its only authority because it has no
+  `MigrationRunner`.
+- Until the project-wide cleanup ships
+  (`session-db-schema-authority-collapse-to-migrations` filed as
+  follow-up), each dual-authority store carries a parity
+  regression test asserting `PRAGMA table_info` /
+  `index_list` + `index_info` / `foreign_key_list` produce
+  byte-identical results from the two paths. The first such test
+  ships now: `Tests/SenkaniTests/PolicySchemaParityTests.swift`.
+  `PolicyStore.schemaSQL` was extracted as a `static let [String]`
+  so the test and `setupSchema()` consume the same DDL — the test
+  catches divergence between that constant and migrations'
+  separate copy.
+
 ### May 4 — `policy_snapshots.session_id` declares `REFERENCES sessions(id)` (documentation parity with `commands.session_id`)
 
 - Prior state: Migration v15 (`policy_snapshots` table) + Migration

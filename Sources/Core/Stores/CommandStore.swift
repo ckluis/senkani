@@ -295,7 +295,7 @@ final class CommandStore: @unchecked Sendable {
             guard let db = parent.db else { return [] }
             let sql = """
                 SELECT id, started_at, duration_seconds, total_raw_bytes, total_saved_bytes,
-                       command_count, pane_count, cost_saved_cents
+                       command_count, pane_count, cost_saved_cents, project_root
                 FROM sessions
                 ORDER BY started_at DESC
                 LIMIT ?;
@@ -315,6 +315,9 @@ final class CommandStore: @unchecked Sendable {
                 let cmdCount = Int(sqlite3_column_int(stmt, 5))
                 let paneCount = Int(sqlite3_column_int(stmt, 6))
                 let costCents = Int(sqlite3_column_int(stmt, 7))
+                let projectRoot: String? = sqlite3_column_type(stmt, 8) == SQLITE_NULL
+                    ? nil
+                    : String(cString: sqlite3_column_text(stmt, 8))
 
                 rows.append(SessionSummaryRow(
                     id: id,
@@ -324,7 +327,8 @@ final class CommandStore: @unchecked Sendable {
                     totalSaved: savedBytes,
                     commandCount: cmdCount,
                     paneCount: paneCount,
-                    costSavedCents: costCents
+                    costSavedCents: costCents,
+                    projectRoot: projectRoot
                 ))
             }
             return rows

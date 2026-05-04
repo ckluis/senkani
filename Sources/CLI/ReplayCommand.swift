@@ -73,14 +73,12 @@ struct Replay: ParsableCommand {
         }
 
         private func sessionProjectRoot(db: SessionDatabase, sessionId: String) -> String? {
-            // The current SessionSummaryRow shape doesn't surface project
-            // root; fall back to nil (= replay across all projects in the
-            // window). A future round can plumb project_root through.
-            return nil
+            let recent = db.loadSessions(limit: 500)
+            return recent.first(where: { $0.id == sessionId })?.projectRoot
         }
 
         private func sessionStartedAt(db: SessionDatabase, sessionId: String) -> Date? {
-            let recent = db.loadSessions(limit: 100)
+            let recent = db.loadSessions(limit: 500)
             return recent.first(where: { $0.id == sessionId })?.timestamp
         }
 

@@ -51,6 +51,7 @@ public struct SessionSummaryRow: Identifiable, Sendable {
     public let commandCount: Int
     public let paneCount: Int
     public let costSavedCents: Int
+    public let projectRoot: String?
 
     public var savingsPercent: Double {
         guard totalRaw > 0 else { return 0 }

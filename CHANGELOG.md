@@ -9,6 +9,31 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — `senkani replay run --session ID` now scopes by the session's project_root
+
+- `Sources/CLI/ReplayCommand.swift`'s `sessionProjectRoot(db:sessionId:)`
+  previously returned `nil` for every session (self-flagged in the
+  source: "A future round can plumb project_root through"). The
+  downstream `agentTraceRowsInWindow(project: nil, since:)` call
+  then pulled every project's trace rows since `sessionStart`. On
+  any host with concurrent multi-project work the replay's baseline
+  was over-inflated and the deltas were wrong.
+- Surface the session's `project_root` on `SessionSummaryRow`
+  (`Sources/Core/SessionDatabase+CommandAPI.swift`) and add it to
+  the `loadSessions` SELECT in `CommandStore` so callers can join a
+  session id back to its project. The CLI helper now reads
+  `recent.first(where: { $0.id == sessionId })?.projectRoot` and
+  passes that to the trace-window query.
+- `--session` lookup limit bumped to 500 (the public cap on
+  `loadSessions`) so a `--session` flag for a not-most-recent
+  session resolves reliably.
+- Surfaced 2026-05-03 in luminary review (Torvalds + Bach lenses).
+- Two new tests in `Tests/SenkaniTests/ReplayScopeByProjectTests.swift`:
+  `loadSessionsSurfacesProjectRoot` (regression guard against the
+  CommandStore SELECT dropping the column) and
+  `replayWindowScopesToSessionProjectRoot` (end-to-end
+  two-project fixture asserting only A's rows land in A's window).
+
 ### May 4 — Counterfactual replay `budget-tight` edges pinned: boundary `>` vs `>=`, single-row-exceeds-cap, empty-rows-with-cap
 
 - `Sources/Bench/CounterfactualReplay.swift`'s `budgetTight` had

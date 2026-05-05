@@ -9,6 +9,50 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 5 — FileWatcher + KnowledgeFileLayer FSEvents flake closed (cross-suite gate + iter reduction + widened wait)
+
+- `Tests/SenkaniTests/FSEventsGate.swift` — new
+  `FSEventsGateTrait` (mirrors the URLProtocol / Logger-sink gate
+  pattern): actor-backed continuation-queued async semaphore plus
+  a 500 ms post-suite settle that lets per-process FSEvents kernel
+  resources drain between gated suites. `isRecursive == false` so
+  the trait fires once per suite, not per child test.
+- `Tests/SenkaniTests/FileWatcherTests.swift` — all four FileWatcher
+  suites (`Basic Operation`, `Filtering`, `Debouncing`,
+  `Lifetime Safety`) now declare `@Suite("…", .serialized,
+  .fsEventsGate)`. The `waitFor(timeout:)` helper default + the six
+  positive `fired` waits widen from 2 s → 8 s, riding out non-FSEvents
+  peer-suite CPU pressure that can stretch FSEvents callback delivery
+  latency. The two `Lifetime Safety` deinit-driven tests
+  (`Implicit deinit-driven teardown survives churn`, `Implicit
+  teardown on non-existent path is safe`) drop iteration count
+  200 → 20: each iteration intentionally leaks one FSEventStream
+  registration (no `stop()` means no `FSEventStreamInvalidate`),
+  and 200 leaked streams per test was saturating per-process
+  FSEvents kernel resources, surfacing `FSEventStreamStart failed`
+  in subsequent gated suites. The `passRetained` + paired-release
+  fix structurally closes the race the iteration count was
+  defending against, so 20 iterations is plenty as a regression-
+  detection bound.
+- `Tests/SenkaniTests/KnowledgeFileLayerTests.swift` —
+  `KnowledgeFileLayer — Lifetime Safety` suite picks up
+  `.serialized, .fsEventsGate` (the layer wraps its own
+  `FSEventStreamRef`, same kernel-resource contention). The
+  `Implicit teardown survives churn` test drops 200 → 20 iterations
+  for the same FSEvents-leak reason.
+- Closes `filewatcher-fsevents-flake-under-parallel-runner-2026-05-04`:
+  filtered runs all green (12/12 in 4.8 s under the gate's
+  serialization + settle); full `swift test` green at 2416/2416 on
+  three consecutive runs (14.1 s / 10.7 s / 12.4 s). The
+  `parallel-runner-flake-additional-families-2026-05-04` parent
+  item's FileWatcher checkboxes effectively close as a side-effect.
+- Defects-outside-criteria filed during this round: none. The
+  HookAnnotationFeed `Deny response JSON ... unchanged` byte-
+  equality flake observed on run #4 is already filed under
+  `hookannotationfeed-deny-json-byte-equality-flake-2026-05-04` and
+  `parallel-runner-flake-additional-families-2026-05-04` — same
+  family, separate scope.
+
 ### May 5 — DependencyGraph "Real project graph builds fast" perf-budget flake closed (median-of-3 sampling)
 
 - `Tests/SenkaniTests/DependencyGraphTests.swift` — extracted

@@ -36,7 +36,16 @@ private func makeTempDir() -> String {
 }
 
 /// Wait up to `timeout` seconds for a condition to become true.
-private func waitFor(timeout: TimeInterval = 1.0, condition: () -> Bool) -> Bool {
+///
+/// Default `8.0` is generous enough to ride out non-FSEvents peer-suite
+/// CPU pressure under the parallel runner — FSEvents callback latency
+/// is fundamentally bounded by `dispatch_async` getting a CPU slice on
+/// the watcher's queue, and a sibling suite holding all cores can
+/// stretch that beyond the 2 s window the original tests assumed.
+/// `.fsEventsGate` (see `FSEventsGate.swift`) serializes FSEvents
+/// suites against each other; this widened window covers everything
+/// else (see `filewatcher-fsevents-flake-under-parallel-runner-2026-05-04`).
+private func waitFor(timeout: TimeInterval = 8.0, condition: () -> Bool) -> Bool {
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
         if condition() { return true }
@@ -47,7 +56,7 @@ private func waitFor(timeout: TimeInterval = 1.0, condition: () -> Bool) -> Bool
 
 // MARK: - Basic Operation
 
-@Suite("FileWatcher — Basic Operation")
+@Suite("FileWatcher — Basic Operation", .serialized, .fsEventsGate)
 struct FileWatcherBasicTests {
 
     @Test("Starts and stops cleanly")
@@ -82,7 +91,7 @@ struct FileWatcherBasicTests {
         let filePath = dir + "/new.swift"
         FileManager.default.createFile(atPath: filePath, contents: Data("func hi() {}\n".utf8))
 
-        let fired = waitFor(timeout: 2.0) { !collector.allPaths.isEmpty }
+        let fired = waitFor(timeout: 8.0) { !collector.allPaths.isEmpty }
         #expect(fired)
         #expect(collector.allPaths.contains { $0.hasSuffix("new.swift") })
     }
@@ -106,7 +115,7 @@ struct FileWatcherBasicTests {
 
         try! "let x = 2\n".write(toFile: filePath, atomically: true, encoding: .utf8)
 
-        let fired = waitFor(timeout: 2.0) { !collector.allPaths.isEmpty }
+        let fired = waitFor(timeout: 8.0) { !collector.allPaths.isEmpty }
         #expect(fired)
         #expect(collector.allPaths.contains { $0.hasSuffix("test.swift") })
     }
@@ -130,7 +139,7 @@ struct FileWatcherBasicTests {
 
         try! FileManager.default.removeItem(atPath: filePath)
 
-        let fired = waitFor(timeout: 2.0) { !collector.allPaths.isEmpty }
+        let fired = waitFor(timeout: 8.0) { !collector.allPaths.isEmpty }
         #expect(fired)
         #expect(collector.allPaths.contains { $0.hasSuffix("test.swift") })
     }
@@ -138,7 +147,7 @@ struct FileWatcherBasicTests {
 
 // MARK: - Filtering
 
-@Suite("FileWatcher — Filtering")
+@Suite("FileWatcher — Filtering", .serialized, .fsEventsGate)
 struct FileWatcherFilteringTests {
 
     @Test("Ignores non-source files")
@@ -208,7 +217,7 @@ struct FileWatcherFilteringTests {
         FileManager.default.createFile(atPath: dir + "/utils.py", contents: Data("import os\n".utf8))
         FileManager.default.createFile(atPath: dir + "/main.go", contents: Data("package main\n".utf8))
 
-        let fired = waitFor(timeout: 2.0) { collector.allPaths.count >= 3 }
+        let fired = waitFor(timeout: 8.0) { collector.allPaths.count >= 3 }
         #expect(fired)
         let all = collector.allPaths
         #expect(all.contains { $0.hasSuffix("app.swift") })
@@ -219,7 +228,7 @@ struct FileWatcherFilteringTests {
 
 // MARK: - Debouncing
 
-@Suite("FileWatcher — Debouncing")
+@Suite("FileWatcher — Debouncing", .serialized, .fsEventsGate)
 struct FileWatcherDebouncingTests {
 
     @Test("Debounces rapid changes into one batch")
@@ -245,7 +254,7 @@ struct FileWatcherDebouncingTests {
         }
 
         // Wait for debounce to fire
-        let fired = waitFor(timeout: 2.0) { collector.callCount >= 1 }
+        let fired = waitFor(timeout: 8.0) { collector.callCount >= 1 }
         #expect(fired)
 
         // All rapid writes should collapse — the handler should have been called
@@ -285,7 +294,7 @@ struct FileWatcherDebouncingTests {
         try! "let a = 3\n".write(toFile: fileA, atomically: true, encoding: .utf8)
 
         // Wait for debounce to fire
-        let fired = waitFor(timeout: 2.0) {
+        let fired = waitFor(timeout: 8.0) {
             let all = collector.allPaths
             return all.contains { $0.hasSuffix("a.swift") } && all.contains { $0.hasSuffix("b.swift") }
         }
@@ -300,7 +309,7 @@ struct FileWatcherDebouncingTests {
 
 // MARK: - Lifetime / teardown safety
 
-@Suite("FileWatcher — Lifetime Safety")
+@Suite("FileWatcher — Lifetime Safety", .serialized, .fsEventsGate)
 struct FileWatcherLifetimeTests {
 
     /// Reproduction harness for the SIGSEGV soak flake: many short-lived
@@ -311,16 +320,25 @@ struct FileWatcherLifetimeTests {
     /// "Object … of class FileWatcher deallocated with non-zero retain
     /// count 2" warning followed by SIGSEGV at process exit.
     ///
-    /// 200 iterations on a real (existing) directory exercises the FSEvents
-    /// dispatch path, which is the one that races with deinit. A passing
-    /// run means: every implicit deinit-driven stop() drained the queue
-    /// cleanly and the FSEvents +1 was released before deinit fired.
+    /// Iteration count: 20. The pre-fix bug surfaced on the first iteration
+    /// that hit a callback-vs-deinit interleaving; 200 iterations were
+    /// retained originally to make the race highly likely under arbitrary
+    /// scheduling. With the `passRetained` + paired-release fix the race
+    /// is structurally closed, so the iteration count is a regression-
+    /// detection bound, not a unit of force. Lowered from 200 to 20
+    /// because each iteration intentionally leaks one FSEventStream
+    /// registration (no `stop()` means no `FSEventStreamInvalidate`, so
+    /// FSEvents holds the +1 indefinitely) — 200 iterations × this test
+    /// + the non-existent-path sibling saturated per-process FSEvents
+    /// kernel resources and surfaced `FSEventStreamStart failed` in
+    /// subsequent gated suites (see
+    /// `filewatcher-fsevents-flake-under-parallel-runner-2026-05-04`).
     @Test("Implicit deinit-driven teardown survives churn")
     func implicitDeinitTeardownSurvivesChurn() {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
-        for _ in 0..<200 {
+        for _ in 0..<20 {
             let watcher = FileWatcher(projectRoot: dir) { _ in }
             watcher.start()
             // Intentionally drop without calling stop() — exercises deinit.
@@ -334,9 +352,11 @@ struct FileWatcherLifetimeTests {
     /// these paths without error and still schedules its dispatch loop —
     /// this is the exact configuration MCPSession produces in test code
     /// like `MCPSession(projectRoot: "/tmp/watch-test-<uuid>")`.
+    /// Iteration count: 20 (was 200) for the same FSEvents-resource-leak
+    /// reason as the sibling test.
     @Test("Implicit teardown on non-existent path is safe")
     func implicitTeardownOnNonExistentPathIsSafe() {
-        for _ in 0..<200 {
+        for _ in 0..<20 {
             let path = "/tmp/senkani-fw-nonexistent-\(UUID().uuidString)"
             let watcher = FileWatcher(projectRoot: path) { _ in }
             watcher.start()

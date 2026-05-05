@@ -9,6 +9,34 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 5 — Typed `ToolDefinition` registry collapses the MCP dispatch + catalog drift hazard (`toolrouter-typed-registry`)
+
+- `Sources/MCP/ToolRegistry.swift` (new) — `ToolDefinition` (name +
+  `Tool` schema + `ToolHandler`) and `ToolRegistry.definitions` /
+  `ToolRegistry.byName` make one record per tool the single source of
+  truth for the MCP surface. `ToolHandler` is a `Sendable` enum with
+  `.asyncHandler` (cooperative-pool dispatch) and `.syncHandler`
+  (wrapped on `ToolRouter.toolQueue`) — preserving identical async/
+  sync routing semantics so heavy synchronous I/O still runs off the
+  cooperative pool.
+- `Sources/MCP/ToolRouter.swift` — the parallel `switch
+  normalizedParams.name` dispatch table and the hand-maintained
+  `static func allTools() -> [Tool]` array literal both delete out.
+  Dispatch is now `ToolRegistry.byName[name]` lookup; `allTools()` is
+  `ToolRegistry.definitions.map(\.schema)`. File drops from 556 lines
+  to 232.
+- `Tests/SenkaniTests/ToolRouterRegistryTests.swift` (new) — pins the
+  historical 20-tool surface, asserts `Set(allTools().names) ==
+  Set(byName.keys)`, asserts `ToolDefinition.name` equals
+  `schema.name`, and confirms uniqueness. The test makes drift-by-
+  forgetting impossible to ship — silent regressions in either
+  surface fail at test time, not at MCP-client probe time.
+- Adding a new MCP tool now means appending one `ToolDefinition` and
+  bumping the historical-surface guard. The existing requirement to
+  also register the tool in `MCPToolCatalog.defaults` (tag set) and
+  add a `ToolIntent` case (canonical trace row) is unchanged — see
+  `spec/mcp_tools.md` → "Typed `ToolDefinition` registry".
+
 ### May 5 — Typed `ToolIntent` + `CallResult` enums replace primitive strings on `AgentTraceEvent` (`tool-intent-result-enums`)
 
 - `Sources/Core/Stores/ToolIntent.swift` (new) — `ToolIntent`

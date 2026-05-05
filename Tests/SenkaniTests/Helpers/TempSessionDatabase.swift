@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 @testable import Core
 
 /// Centralized cleanup for tests that create `SessionDatabase(path:)`.
@@ -50,5 +51,29 @@ enum TempSessionDatabase {
     static func close(_ db: SessionDatabase, path: String) {
         db.close()
         cleanup(path: path)
+    }
+
+    /// Default busy timeout for secondary test handles that share a
+    /// sqlite file with a live `SessionDatabase`. SessionDatabase enables
+    /// WAL mode but does not set a busy timeout, so a second handle that
+    /// races a primary writer/checkpoint sees `SQLITE_BUSY` immediately.
+    /// 5s is well above any plausible test-side write window.
+    static let secondaryHandleBusyTimeoutMs: Int32 = 5000
+
+    /// Open a second sqlite handle on `path` with `busy_timeout` set, for
+    /// tests that need to tamper with on-disk rows or read raw columns
+    /// while the primary `SessionDatabase` is live. Caller owns
+    /// `sqlite3_close` on the returned handle (use `defer`).
+    ///
+    /// Returns `nil` if `sqlite3_open` fails — caller treats this as a
+    /// fixture-setup error.
+    static func openSecondaryHandle(_ path: String) -> OpaquePointer? {
+        var handle: OpaquePointer?
+        guard sqlite3_open(path, &handle) == SQLITE_OK else {
+            if let handle { sqlite3_close(handle) }
+            return nil
+        }
+        sqlite3_busy_timeout(handle, secondaryHandleBusyTimeoutMs)
+        return handle
     }
 }

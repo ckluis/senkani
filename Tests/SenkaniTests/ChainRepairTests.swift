@@ -3,7 +3,12 @@ import Foundation
 import SQLite3
 @testable import Core
 
-@Suite("ChainRepairer — T.5 round 4")
+// `.serialized` belt-and-suspenders alongside the busy_timeout fix in
+// `TempSessionDatabase.openSecondaryHandle`: the suite mutates on-disk
+// sqlite rows via a second handle, and parallel-runner CPU/IO pressure
+// was masking writer lock contention as `tamper code 2 "database is
+// locked"`. See `chainrepairer-pane-refresh-state-database-locked-2026-05-04`.
+@Suite("ChainRepairer — T.5 round 4", .serialized)
 struct ChainRepairTests {
 
     // MARK: - Helpers
@@ -33,8 +38,9 @@ struct ChainRepairTests {
     }
 
     private static func tamper(_ path: String, table: String, where_: String, set: String) throws {
-        var db: OpaquePointer?
-        guard sqlite3_open(path, &db) == SQLITE_OK else { throw NSError(domain: "tamper", code: 1) }
+        guard let db = TempSessionDatabase.openSecondaryHandle(path) else {
+            throw NSError(domain: "tamper", code: 1)
+        }
         defer { sqlite3_close(db) }
         let sql = "UPDATE \(table) SET \(set) WHERE \(where_);"
         var err: UnsafeMutablePointer<CChar>?
@@ -202,8 +208,7 @@ struct ChainRepairTests {
 
         // Read back the new anchor's operator_note: must contain prior_tip=
         // and the user-supplied note.
-        var rdb: OpaquePointer?
-        try #require(sqlite3_open(path, &rdb) == SQLITE_OK)
+        let rdb = try #require(TempSessionDatabase.openSecondaryHandle(path))
         defer { sqlite3_close(rdb) }
         var stmt: OpaquePointer?
         let sql = "SELECT operator_note FROM chain_anchors WHERE id = ?;"
@@ -475,8 +480,7 @@ struct ChainRepairTests {
 
         // Repair anchor row exists with reason='repair-2' and the prior tip
         // recorded in operator_note.
-        var rdb: OpaquePointer?
-        try #require(sqlite3_open(path, &rdb) == SQLITE_OK)
+        let rdb = try #require(TempSessionDatabase.openSecondaryHandle(path))
         defer { sqlite3_close(rdb) }
         var stmt: OpaquePointer?
         let sql = "SELECT reason, operator_note FROM chain_anchors WHERE id = ?;"
@@ -529,8 +533,7 @@ struct ChainRepairTests {
         Self.record(db, "t-2")
         Self.record(db, "t-3")
         // Manually wipe hashes to simulate a pre-T.5 backfill state.
-        var rdb: OpaquePointer?
-        try #require(sqlite3_open(path, &rdb) == SQLITE_OK)
+        let rdb = try #require(TempSessionDatabase.openSecondaryHandle(path))
         defer { sqlite3_close(rdb) }
         var err: UnsafeMutablePointer<CChar>?
         try #require(sqlite3_exec(rdb, "UPDATE token_events SET prev_hash=NULL, entry_hash=NULL;", nil, nil, &err) == SQLITE_OK)

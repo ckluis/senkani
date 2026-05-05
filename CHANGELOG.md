@@ -9,6 +9,43 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — ChainRepairer paneRefreshStateRepair sqlite "database is locked" flake closed (test fixture busy_timeout + suite serialized)
+
+- `Tests/SenkaniTests/Helpers/TempSessionDatabase.swift` —
+  new `openSecondaryHandle(_:)` returns a second sqlite handle on
+  the primary `SessionDatabase`'s file with `sqlite3_busy_timeout`
+  set to 5 s. `SessionDatabase` enables WAL but does not set a busy
+  timeout, so a second handle that races a primary writer or WAL
+  checkpoint sees `SQLITE_BUSY` immediately — wrapped by the test's
+  `tamper` helper as `tamper code 2 "database is locked"`. 5 s is
+  well above any plausible test-side write window.
+- `Tests/SenkaniTests/ChainRepairTests.swift` — `tamper(_:table:where_:set:)`
+  and the three peek-handle sites (lines previously at 206, 479, 533)
+  migrate from bare `sqlite3_open` to `TempSessionDatabase.openSecondaryHandle`.
+  `@Suite("ChainRepairer — T.5 round 4")` gains `.serialized` as
+  belt-and-suspenders alongside the busy_timeout fix; the suite
+  mutates on-disk sqlite rows via a second handle, and parallel-runner
+  CPU/IO pressure was the proximate trigger for the lock contention.
+- Closes `chainrepairer-pane-refresh-state-database-locked-2026-05-04`:
+  filter-only runs green 5/5 at ~0.15 s; ChainRepairer suite passes
+  cleanly under full-suite parallel load (run C of three).
+- Defects-outside-criteria filed during this round:
+  `chainverifier-policysnapshots-secondary-handle-busy-timeout-2026-05-04`
+  (same multi-handle pattern in `ChainVerifierTests` and
+  `PolicySnapshotsChainTests` — proactive migration to the shared
+  opener);
+  `filewatcher-fsevents-flake-under-parallel-runner-2026-05-04`
+  (FSEventStream callback misses under full-suite parallel load —
+  `Starts and stops cleanly`, `Tracks source files at top level`,
+  `Fires handler on file create/modify/delete`, `Debounces rapid
+  changes into one batch`, `Resets debounce on new changes`);
+  `dependencygraph-real-project-graph-perf-budget-flake-2026-05-04`
+  (`DependencyGraph "Real project graph builds fast"` 5 s wall-clock
+  budget exceeded under parallel-runner CPU contention);
+  `hookannotationfeed-deny-json-byte-equality-flake-2026-05-04`
+  (`HookAnnotationFeed "Deny response JSON unchanged"` byte-equality
+  fails with both sides at 158 bytes — same length, different bytes).
+
 ### May 4 — AutoValidateQueue cleanValidation parallel-runner flake closed (drainForTesting widened + suite serialized)
 
 - `Sources/Core/AutoValidateQueue.swift` —

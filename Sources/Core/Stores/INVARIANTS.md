@@ -273,20 +273,26 @@ table schema.
 
 ## I9 — Schema migrations belong to the façade
 
-**Rule.** `MigrationRunner.run` is invoked exactly once, by
-`SessionDatabase.runMigrations`, after all stores have called their
-`setupSchema`. Stores own `CREATE TABLE IF NOT EXISTS` and idempotent
-`ALTER TABLE` for their tables only. Cross-store schema changes (a
-new index that joins two tables, a column that affects two stores)
-must land as a numbered migration in
-`Sources/Core/Migrations.swift`, not as an `execSilent` ALTER inside
-a store's `setupSchema`.
+**Rule.** Every schema change to a session-DB table lands as a
+numbered migration in `Sources/Core/Migrations.swift`, full stop.
+`MigrationRunner.run` is invoked exactly once, by
+`SessionDatabase.runMigrations`, BEFORE any store is constructed.
+The four stores that still carry a `setupSchema()` (`CommandStore`,
+`TokenEventStore`, `SandboxStore`, `ValidationStore`) cover only
+residual DDL that has not yet been folded into a numbered migration
+— `sessions`, `commands_fts`, the FTS triggers, the historical
+`commands` / `sessions` ALTERs, `claude_session_cursors`, the
+`token_events.model_tier` ALTER, and the store-private query indexes.
+Stores whose tables and indexes are fully owned by migrations no
+longer carry a `setupSchema()`.
 
 **Why.** The version stamp on the DB (`PRAGMA user_version`) is what
-`senkani doctor` reports and what the migration kill-switch
-lockfile checks. A store-local schema bump that doesn't land as a
-numbered migration leaves the DB in a state that can't be diagnosed
-or rolled forward.
+`senkani doctor` reports and what the migration kill-switch lockfile
+checks. A store-local schema bump that doesn't land as a numbered
+migration leaves the DB in a state that can't be diagnosed or rolled
+forward. Migrations-first ordering means that on every open path —
+fresh DB or pre-existing — the schema is created exactly once, by
+the same code, and the version stamp matches the schema shape.
 
 **Tests.**
 - `Tests/SenkaniTests/SessionDatabaseTests.swift` — "Opening same DB

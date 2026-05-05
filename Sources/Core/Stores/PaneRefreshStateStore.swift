@@ -24,36 +24,6 @@ public final class PaneRefreshStateStore: @unchecked Sendable {
     /// already be on `parent.queue`.
     func invalidateChainCache() { chain.invalidate() }
 
-    // MARK: - Schema
-
-    /// Idempotent — safe to call on every open. The migration v6 path is the
-    /// canonical creator; this mirror exists so a fresh DB on the v6 codebase
-    /// gets the table even before `runMigrations` baselines.
-    func setupSchema() {
-        parent.queue.sync {
-            self.exec("""
-                CREATE TABLE IF NOT EXISTS pane_refresh_state (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    project_root TEXT NOT NULL,
-                    tile_id TEXT NOT NULL,
-                    cache_type TEXT NOT NULL,
-                    cache_duration REAL NOT NULL,
-                    next_update REAL NOT NULL,
-                    retry_count INTEGER NOT NULL DEFAULT 0,
-                    last_error TEXT,
-                    notice TEXT,
-                    content_available INTEGER NOT NULL DEFAULT 0,
-                    written_at REAL NOT NULL,
-                    prev_hash TEXT,
-                    entry_hash TEXT,
-                    chain_anchor_id INTEGER
-                );
-            """)
-            self.execSilent("CREATE INDEX IF NOT EXISTS idx_pane_refresh_state_latest ON pane_refresh_state(project_root, tile_id, id DESC);")
-            self.execSilent("CREATE INDEX IF NOT EXISTS idx_pane_refresh_state_anchor ON pane_refresh_state(chain_anchor_id, id);")
-        }
-    }
-
     // MARK: - Writes
 
     /// Append a state row for a tile. The chain primitive populates

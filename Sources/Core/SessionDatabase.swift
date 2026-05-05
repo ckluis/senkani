@@ -106,6 +106,13 @@ public final class SessionDatabase: @unchecked Sendable {
             db = nil
         }
         enableWAL()
+        // Migrations run BEFORE store construction. MigrationRegistry.all is
+        // canonical for every session-DB table; setupSchema (where it still
+        // exists) covers the residual DDL that has not yet been folded into
+        // a numbered migration (e.g. CommandStore's `sessions`, FTS5 virtual
+        // table, and triggers; TokenEventStore's `claude_session_cursors`
+        // and the ALTER for `model_tier`).
+        runMigrations(path: dbPath)
         commandStore = CommandStore(parent: self)
         commandStore.setupSchema()
         tokenEventStore = TokenEventStore(parent: self)
@@ -115,22 +122,13 @@ public final class SessionDatabase: @unchecked Sendable {
         validationStore = ValidationStore(parent: self)
         validationStore.setupSchema()
         paneRefreshStateStore = PaneRefreshStateStore(parent: self)
-        paneRefreshStateStore.setupSchema()
         agentTraceEventStore = AgentTraceEventStore(parent: self)
-        agentTraceEventStore.setupSchema()
         annotationStore = AnnotationStore(parent: self)
-        annotationStore.setupSchema()
         confirmationStore = ConfirmationStore(parent: self)
-        confirmationStore.setupSchema()
         trustAuditStore = TrustAuditStore(parent: self)
-        trustAuditStore.setupSchema()
         annotationRateCapStore = AnnotationRateCapStore(parent: self)
-        annotationRateCapStore.setupSchema()
         contextPlanStore = ContextPlanStore(parent: self)
-        contextPlanStore.setupSchema()
         policyStore = PolicyStore(parent: self)
-        policyStore.setupSchema()
-        runMigrations(path:dbPath)
     }
 
     /// Testable initializer — opens a DB at a custom path (use a temp file).
@@ -150,6 +148,7 @@ public final class SessionDatabase: @unchecked Sendable {
             db = nil
         }
         enableWAL()
+        runMigrations(path: path)
         commandStore = CommandStore(parent: self)
         commandStore.setupSchema()
         tokenEventStore = TokenEventStore(parent: self)
@@ -159,22 +158,13 @@ public final class SessionDatabase: @unchecked Sendable {
         validationStore = ValidationStore(parent: self)
         validationStore.setupSchema()
         paneRefreshStateStore = PaneRefreshStateStore(parent: self)
-        paneRefreshStateStore.setupSchema()
         agentTraceEventStore = AgentTraceEventStore(parent: self)
-        agentTraceEventStore.setupSchema()
         annotationStore = AnnotationStore(parent: self)
-        annotationStore.setupSchema()
         confirmationStore = ConfirmationStore(parent: self)
-        confirmationStore.setupSchema()
         trustAuditStore = TrustAuditStore(parent: self)
-        trustAuditStore.setupSchema()
         annotationRateCapStore = AnnotationRateCapStore(parent: self)
-        annotationRateCapStore.setupSchema()
         contextPlanStore = ContextPlanStore(parent: self)
-        contextPlanStore.setupSchema()
         policyStore = PolicyStore(parent: self)
-        policyStore.setupSchema()
-        runMigrations(path:path)
     }
 
     // MARK: - Observability counters (migration v2)

@@ -31,29 +31,14 @@ final class TokenEventStore: @unchecked Sendable {
 
     // MARK: - Schema
 
-    /// Create the `token_events` + `claude_session_cursors` tables, their
-    /// indexes, and apply the one historical column migration
-    /// (`token_events.model_tier`). Idempotent.
+    /// Residual DDL that has not yet been folded into a numbered migration.
+    /// MigrationRegistry.all v4 owns `token_events`; this method covers the
+    /// five `token_events` indexes, the `model_tier` ALTER, and the
+    /// `claude_session_cursors` table. Called AFTER `runMigrations` so the
+    /// underlying `token_events` table already exists; CREATE … IF NOT
+    /// EXISTS / ALTER guards keep the call idempotent.
     func setupSchema() {
         parent.queue.sync {
-            exec("""
-                CREATE TABLE IF NOT EXISTS token_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp REAL NOT NULL,
-                    session_id TEXT NOT NULL,
-                    pane_id TEXT,
-                    project_root TEXT,
-                    source TEXT NOT NULL,
-                    tool_name TEXT,
-                    model TEXT,
-                    input_tokens INTEGER DEFAULT 0,
-                    output_tokens INTEGER DEFAULT 0,
-                    saved_tokens INTEGER DEFAULT 0,
-                    cost_cents INTEGER DEFAULT 0,
-                    feature TEXT,
-                    command TEXT
-                );
-            """)
             execSilent("CREATE INDEX IF NOT EXISTS idx_token_events_pane ON token_events(pane_id);")
             execSilent("CREATE INDEX IF NOT EXISTS idx_token_events_project ON token_events(project_root);")
             execSilent("CREATE INDEX IF NOT EXISTS idx_token_events_time ON token_events(timestamp);")

@@ -27,10 +27,13 @@ final class CommandStore: @unchecked Sendable {
 
     // MARK: - Schema
 
-    /// Create the sessions / commands / commands_fts surface. Idempotent —
-    /// safe to call on every open. The FTS5 triggers keep the virtual table
-    /// in sync with `commands`; the `recordCommand` path wraps those writes
-    /// in a BEGIN IMMEDIATE transaction (see below).
+    /// Residual DDL that has not yet been folded into a numbered migration.
+    /// MigrationRegistry.all v5 owns `commands`; this method covers the
+    /// remaining surface (`sessions`, `commands_fts` virtual table, FTS
+    /// triggers, the three historical ALTERs, and the two `sessions`
+    /// indexes). Called AFTER `runMigrations` so the underlying tables
+    /// already exist; CREATE … IF NOT EXISTS / CREATE TRIGGER IF NOT EXISTS
+    /// keep the call idempotent.
     func setupSchema() {
         let stmts = [
             """
@@ -44,19 +47,6 @@ final class CommandStore: @unchecked Sendable {
                 command_count INTEGER DEFAULT 0,
                 pane_count INTEGER DEFAULT 0,
                 cost_saved_cents INTEGER DEFAULT 0
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS commands (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL REFERENCES sessions(id),
-                timestamp REAL NOT NULL,
-                tool_name TEXT NOT NULL,
-                command TEXT,
-                raw_bytes INTEGER NOT NULL,
-                compressed_bytes INTEGER NOT NULL,
-                feature TEXT,
-                output_preview TEXT
             );
             """,
             """

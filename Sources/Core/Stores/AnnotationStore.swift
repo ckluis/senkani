@@ -29,36 +29,6 @@ final class AnnotationStore: @unchecked Sendable {
         self.parent = parent
     }
 
-    // MARK: - Schema
-
-    /// Idempotent — Migration v9 owns the canonical schema. This method
-    /// stays so the store init pattern matches the other stores (every
-    /// store calls `setupSchema()` after construction).
-    func setupSchema() {
-        parent.queue.sync {
-            execSilent("""
-                CREATE TABLE IF NOT EXISTS annotations (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    target_kind     TEXT NOT NULL,
-                    target_id       TEXT NOT NULL,
-                    range_start     INTEGER NOT NULL,
-                    range_end       INTEGER NOT NULL,
-                    verdict         TEXT NOT NULL,
-                    notes           TEXT,
-                    authored_by     TEXT NOT NULL,
-                    authorship      TEXT NOT NULL,
-                    created_at      REAL NOT NULL,
-                    prev_hash       TEXT,
-                    entry_hash      TEXT,
-                    chain_anchor_id INTEGER
-                );
-            """)
-            execSilent("CREATE INDEX IF NOT EXISTS idx_annotations_target ON annotations(target_kind, target_id, created_at DESC);")
-            execSilent("CREATE INDEX IF NOT EXISTS idx_annotations_verdict ON annotations(verdict, created_at DESC);")
-            execSilent("CREATE INDEX IF NOT EXISTS idx_annotations_authorship ON annotations(authorship);")
-        }
-    }
-
     // MARK: - Writes
 
     /// Insert one annotation row. Returns the new rowid, or -1 on

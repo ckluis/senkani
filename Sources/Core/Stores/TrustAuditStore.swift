@@ -32,37 +32,6 @@ final class TrustAuditStore: @unchecked Sendable {
     /// Drop the chain cache after a `--repair-chain` motion.
     func invalidateChainCache() { chain.invalidate() }
 
-    // MARK: - Schema
-
-    /// Idempotent — Migration v12 is canonical.
-    func setupSchema() {
-        parent.queue.sync {
-            execSilent("""
-                CREATE TABLE IF NOT EXISTS trust_audits (
-                    id                INTEGER PRIMARY KEY AUTOINCREMENT,
-                    kind              TEXT NOT NULL,
-                    created_at        REAL NOT NULL,
-                    session_id        TEXT,
-                    pane_id           TEXT,
-                    tool_name         TEXT,
-                    reason            TEXT,
-                    score             INTEGER,
-                    correlation_count INTEGER,
-                    flag_id           INTEGER,
-                    label             TEXT,
-                    labeled_by        TEXT,
-                    prev_hash         TEXT,
-                    entry_hash        TEXT,
-                    chain_anchor_id   INTEGER
-                );
-            """)
-            execSilent("CREATE INDEX IF NOT EXISTS idx_trust_audits_kind_time ON trust_audits(kind, created_at DESC);")
-            execSilent("CREATE INDEX IF NOT EXISTS idx_trust_audits_flag ON trust_audits(flag_id);")
-            execSilent("CREATE INDEX IF NOT EXISTS idx_trust_audits_session ON trust_audits(session_id, created_at DESC);")
-            execSilent("CREATE INDEX IF NOT EXISTS idx_trust_audits_anchor ON trust_audits(chain_anchor_id, id);")
-        }
-    }
-
     // MARK: - Writes
 
     /// Insert one flag row for a `FragmentationDetector.Flag`. Returns

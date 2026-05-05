@@ -25,45 +25,6 @@ final class AgentTraceEventStore: @unchecked Sendable {
         self.parent = parent
     }
 
-    // MARK: - Schema
-
-    /// Idempotent — Migration v8 owns the original canonical schema;
-    /// migration v10 (Phase U.1b) appends `ladder_position`. This method
-    /// stays so the store init pattern matches the other stores (every
-    /// store calls `setupSchema()` after construction).
-    func setupSchema() {
-        parent.queue.sync {
-            execSilent("""
-                CREATE TABLE IF NOT EXISTS agent_trace_event (
-                    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-                    idempotency_key       TEXT NOT NULL UNIQUE,
-                    pane                  TEXT,
-                    project               TEXT,
-                    model                 TEXT,
-                    tier                  TEXT,
-                    ladder_position       INTEGER,
-                    feature               TEXT,
-                    result                TEXT NOT NULL,
-                    started_at            REAL NOT NULL,
-                    completed_at          REAL NOT NULL,
-                    latency_ms            INTEGER NOT NULL DEFAULT 0,
-                    tokens_in             INTEGER NOT NULL DEFAULT 0,
-                    tokens_out            INTEGER NOT NULL DEFAULT 0,
-                    cost_cents            INTEGER NOT NULL DEFAULT 0,
-                    redaction_count       INTEGER NOT NULL DEFAULT 0,
-                    validation_status     TEXT,
-                    confirmation_required INTEGER NOT NULL DEFAULT 0,
-                    egress_decisions      INTEGER NOT NULL DEFAULT 0,
-                    plan_id               TEXT REFERENCES context_plans(id),
-                    cost_ledger_version   INTEGER
-                );
-            """)
-            execSilent("CREATE INDEX IF NOT EXISTS idx_agent_trace_project_started ON agent_trace_event(project, started_at);")
-            execSilent("CREATE INDEX IF NOT EXISTS idx_agent_trace_pane_started ON agent_trace_event(pane, started_at);")
-            execSilent("CREATE INDEX IF NOT EXISTS idx_agent_trace_feature_started ON agent_trace_event(feature, started_at);")
-        }
-    }
-
     // MARK: - Writes
 
     /// Record one canonical trace row. A retry with the same

@@ -9,6 +9,44 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — Session-DB schema authority collapsed onto migrations
+
+- `MigrationRegistry.all` is now the single canonical authority for
+  every session-DB table. `SessionDatabase` invokes
+  `MigrationRunner.run` BEFORE constructing any store, so on every
+  open path — fresh DB or pre-existing — schema lands through one
+  code path and the `PRAGMA user_version` stamp matches the schema
+  shape.
+- Eight stores lose `setupSchema()` entirely because their tables
+  and indexes are fully owned by migrations: `PaneRefreshStateStore`
+  (v6), `AgentTraceEventStore` (v8/v10/v14/v16),
+  `AnnotationStore` (v9), `ConfirmationStore` (v11),
+  `TrustAuditStore` (v12), `AnnotationRateCapStore` (v13),
+  `ContextPlanStore` (v14), `PolicyStore` (v15/v17). The
+  `PolicyStore.schemaSQL` static, exposed only for the parity
+  guardrail, is removed in the same pass.
+- Four stores keep a slimmed `setupSchema()` for the residual DDL
+  that has not yet been folded into a numbered migration —
+  `CommandStore` (`sessions`, `commands_fts`, FTS triggers, three
+  ALTERs, two `sessions` indexes), `TokenEventStore`
+  (`claude_session_cursors`, the `model_tier` ALTER, five
+  `token_events` indexes), `SandboxStore` (two store-private
+  indexes), `ValidationStore` (two store-private indexes). Each
+  carries a comment naming the residual surface and pointing at the
+  migration that already owns the table.
+- `Tests/SenkaniTests/PolicySchemaParityTests.swift` is retired in
+  the same round — the duality it guarded no longer exists.
+- `Sources/Core/Stores/INVARIANTS.md` I9 is updated: every schema
+  change to a session-DB table now lands as a numbered migration,
+  full stop. `spec/architecture.md` → "Schema authority" is
+  updated to reflect the cleanup shipped.
+- Vault DB (`<projectRoot>/.senkani/vault.db`) is unchanged —
+  there is no `MigrationRunner` for the vault, so its
+  `setupSchema()` calls remain the single authority.
+- Closes `session-db-schema-authority-collapse-to-migrations`,
+  filed by the parent finding in
+  `policy-store-setupschema-dedup`.
+
 ### May 4 — `senkani replay run --session ID` now scopes by the session's project_root
 
 - `Sources/CLI/ReplayCommand.swift`'s `sessionProjectRoot(db:sessionId:)`

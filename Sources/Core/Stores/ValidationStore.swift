@@ -23,26 +23,14 @@ final class ValidationStore: @unchecked Sendable {
 
     // MARK: - Schema
 
-    /// Create the historical baseline table + indexes. Delivery metadata
-    /// (`outcome`, `reason`, `surfaced_at`) is added by migration v3, so this
-    /// remains compatible with both fresh DB bootstrap and historical DBs.
+    /// Residual DDL that has not yet been folded into a numbered migration.
+    /// MigrationRegistry.all v3/v5 own `validation_results` and its
+    /// outcome/anchor indexes; this method covers the two store-private
+    /// query indexes (`idx_validation_session_delivered`,
+    /// `idx_validation_file`). Called AFTER `runMigrations` so the
+    /// underlying table already exists.
     func setupSchema() {
         parent.queue.sync {
-            self.exec("""
-                CREATE TABLE IF NOT EXISTS validation_results (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id TEXT NOT NULL,
-                    file_path TEXT NOT NULL,
-                    validator_name TEXT NOT NULL,
-                    category TEXT NOT NULL,
-                    exit_code INTEGER NOT NULL,
-                    raw_output TEXT,
-                    advisory TEXT NOT NULL,
-                    duration_ms INTEGER NOT NULL,
-                    created_at REAL NOT NULL,
-                    delivered INTEGER DEFAULT 0
-                );
-            """)
             self.execSilent("CREATE INDEX IF NOT EXISTS idx_validation_session_delivered ON validation_results(session_id, delivered);")
             self.execSilent("CREATE INDEX IF NOT EXISTS idx_validation_file ON validation_results(file_path);")
         }

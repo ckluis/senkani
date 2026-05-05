@@ -446,7 +446,15 @@ struct AutoValidateWorkerTests {
 
 // MARK: - Suite 6: AutoValidateQueue
 
-@Suite("AutoValidateQueue — Enqueue Logic")
+// `.serialized` contains within-suite ordering effects on the three
+// tests below — `cleanValidationPersistsOutcomeAndCounters` spawns
+// `/bin/sh -c 'exit 0'` via `Task.detached(priority: .utility)`, and
+// running it concurrently with future subprocess-spawning tests in the
+// same suite would compound the cooperative-pool starvation already
+// observed under the parallel runner (see
+// `autovalidatequeue-clean-validation-flake-2026-05-04`). Cross-suite
+// contention is absorbed by the widened `drainForTesting` default.
+@Suite("AutoValidateQueue — Enqueue Logic", .serialized)
 struct AutoValidateQueueTests {
 
     @Test func excludedPathSkipped() async {

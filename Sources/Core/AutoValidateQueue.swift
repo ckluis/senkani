@@ -103,7 +103,20 @@ public actor AutoValidateQueue {
 
     /// Test/support seam: waits until debounced pending work and detached
     /// validation tasks have drained, then flushes queued DB writes.
-    public func drainForTesting(timeoutMs: Int = 5_000) async {
+    ///
+    /// Default `timeoutMs` of 15 s absorbs cooperative-pool starvation
+    /// under the Swift Testing parallel runner. The pipeline crosses the
+    /// cooperative pool three times (debounce `Task.sleep`, actor-hop into
+    /// `startValidation`, actor-hop back from `validationCompleted`) plus
+    /// a `Task.detached(priority: .utility)` whose body blocks on
+    /// `Process.run` + `waitUntilExit`. Under full-suite parallel load
+    /// the detached `.utility` task can be deprioritized for several
+    /// seconds; the original 5 s budget lost the dice roll often enough
+    /// to flake (see `autovalidatequeue-clean-validation-flake-2026-05-04`).
+    /// The polling loop returns immediately on `pending.isEmpty && running == 0`,
+    /// so green-path latency is unchanged — only the slow path uses the
+    /// wider window.
+    public func drainForTesting(timeoutMs: Int = 15_000) async {
         let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000.0)
         while Date() < deadline {
             if pending.isEmpty && running == 0 {

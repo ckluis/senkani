@@ -9,6 +9,37 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — AutoValidateQueue cleanValidation parallel-runner flake closed (drainForTesting widened + suite serialized)
+
+- `Sources/Core/AutoValidateQueue.swift` —
+  `drainForTesting`'s default `timeoutMs` widened from 5 s → 15 s.
+  The test seam crosses the cooperative pool four times per call
+  (debounce `Task.sleep`, two actor hops, and a
+  `Task.detached(priority: .utility)` whose body blocks on
+  `Process.run` + `waitUntilExit`). Under full-suite parallel-runner
+  load the `.utility` task can be deprioritized for several seconds;
+  the original 5 s budget lost the dice roll often enough to flake.
+  The polling loop returns immediately on `pending.isEmpty && running == 0`,
+  so green-path latency is unchanged — only the slow path uses the
+  wider window.
+- `Tests/SenkaniTests/AutoValidateTests.swift` —
+  `@Suite("AutoValidateQueue — Enqueue Logic")` now carries
+  `.serialized` to contain within-suite ordering effects
+  (`cleanValidationPersistsOutcomeAndCounters` is the only spawning
+  test today; the trait is defensive against future tests in the
+  same suite that spawn).
+- Closes `autovalidatequeue-clean-validation-flake-2026-05-04`:
+  filtered runs all green at ~0.16 s; three full-suite verification
+  runs each saw `cleanValidationPersistsOutcomeAndCounters` pass
+  cleanly inside the wider drain window.
+- Defects-outside-criteria filed during this round:
+  `knowledgetool-entityobserver-shared-global-race-2026-05-04`
+  (runner-killing fatal nil unwrap from
+  `HookRouter.entityObserver` `nonisolated(unsafe)` race) and
+  `chainrepairer-pane-refresh-state-database-locked-2026-05-04`
+  (sqlite "database is locked" on chain-repair tamper test under
+  parallel runner).
+
 ### May 4 — Logger sink suites cross-suite serialized via process-wide gate trait (LoggerRouting flake closed)
 
 - `Tests/SenkaniTests/LoggerSinkGate.swift` introduces a

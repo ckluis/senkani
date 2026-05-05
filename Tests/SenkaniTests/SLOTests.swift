@@ -218,18 +218,36 @@ struct SLOPerfGateTests {
         // (the actual binary launch is governed by the OS, not our
         // code). The synthetic floor catches algorithmic regressions
         // in the relay's cold path.
-        let path = makeTempStorePath()
-        defer { try? FileManager.default.removeItem(atPath: path) }
-        let store = SLOSampleStore(customPath: path)
-        for _ in 0..<200 {
-            let start = Date()
-            _ = ProcessInfo.processInfo.environment["SENKANI_INTERCEPT"] ?? "off"
-            _ = "{}".data(using: .utf8)
-            let ms = Date().timeIntervalSince(start) * 1000
-            store.recordForced(.hookPassthrough, ms: ms)
+        //
+        // Median-of-3 evaluations — under full-suite parallel-runner CPU
+        // contention, scheduler preemption can push p99 (or >1 % of
+        // samples) over the 1 ms ceiling, flipping a single evaluation
+        // to .burn even when the cold-path code is healthy. Three
+        // independent 200-sample distributions; fail only if the
+        // majority (≥ 2 of 3) reports .burn. A real regression burns
+        // every run; one transient peer-CPU spike does not. See
+        // DependencyGraphPerfGateTests for the canonical pattern.
+        var evaluations: [SLOEvaluation] = []
+        for _ in 0..<3 {
+            let path = makeTempStorePath()
+            defer { try? FileManager.default.removeItem(atPath: path) }
+            let store = SLOSampleStore(customPath: path)
+            for _ in 0..<200 {
+                let start = Date()
+                _ = ProcessInfo.processInfo.environment["SENKANI_INTERCEPT"] ?? "off"
+                _ = "{}".data(using: .utf8)
+                let ms = Date().timeIntervalSince(start) * 1000
+                store.recordForced(.hookPassthrough, ms: ms)
+            }
+            evaluations.append(store.evaluate(.hookPassthrough))
         }
-        let e = store.evaluate(.hookPassthrough)
-        #expect(e.state != .burn,
-                "hook.passthrough p99 \(e.p99Ms)ms exceeded 1ms threshold")
+        let burnCount = evaluations.filter { $0.state == .burn }.count
+        let summary = evaluations
+            .map { "p99=\(String(format: "%.3f", $0.p99Ms))ms over=\(String(format: "%.1f", $0.overBudgetPct))%" }
+            .joined(separator: " | ")
+        #expect(
+            burnCount < 2,
+            "majority of 3 hook.passthrough evaluations burned (\(burnCount)/3): \(summary)"
+        )
     }
 }

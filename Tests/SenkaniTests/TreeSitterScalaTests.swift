@@ -363,12 +363,27 @@ struct ScalaPerformanceTests {
             source += "  def factory\(i)(): String = \"\(i)\"\n"
             source += "}\n\n"
         }
+        // Median-of-3 — see DependencyGraphPerfGateTests for the canonical
+        // pattern. `.serialized` only serializes within-suite, so peer-suite
+        // CPU contention can spike a single sample under parallel runner;
+        // a single transient spike on one of three runs cannot fail the
+        // test, but a real regression (every run blows budget) still does.
+        // Threshold widened 10 ms → 20 ms because in-isolation typical is
+        // 5–7 ms — only ~30 % headroom above 10 ms even without contention.
         let clock = ContinuousClock()
-        let elapsed = clock.measure {
-            let entries = indexScala(source)
-            #expect(entries.count > 0)
+        var samples: [Duration] = []
+        for _ in 0..<3 {
+            let elapsed = clock.measure {
+                let entries = indexScala(source)
+                #expect(entries.count > 0)
+            }
+            samples.append(elapsed)
         }
-        #expect(elapsed < .milliseconds(10))
+        let median = samples.sorted()[1]
+        #expect(
+            median < .milliseconds(20),
+            "median of 3 Scala parses: \(samples) → median \(median)"
+        )
     }
 
     @Test("Scala coexists with other languages")

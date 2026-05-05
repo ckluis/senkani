@@ -354,12 +354,23 @@ struct RubyPerformanceTests {
         for i in 0..<2 {
             source += "end\n"
         }
+        // Median-of-3 — see DependencyGraphPerfGateTests for canonical
+        // pattern. Threshold widened 10 ms → 20 ms because typical in-
+        // isolation is ~7 ms — too tight for parallel-runner contention.
         let clock = ContinuousClock()
-        let elapsed = clock.measure {
-            let entries = indexRuby(source)
-            #expect(entries.count > 0)
+        var samples: [Duration] = []
+        for _ in 0..<3 {
+            let elapsed = clock.measure {
+                let entries = indexRuby(source)
+                #expect(entries.count > 0)
+            }
+            samples.append(elapsed)
         }
-        #expect(elapsed < .milliseconds(10))
+        let median = samples.sorted()[1]
+        #expect(
+            median < .milliseconds(20),
+            "median of 3 Ruby parses: \(samples) → median \(median)"
+        )
     }
 
     @Test("Ruby coexists with other languages")

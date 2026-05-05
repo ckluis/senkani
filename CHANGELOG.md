@@ -9,6 +9,38 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 5 — Median-of-3 perf-budget pattern across 5 sites (`parallel-runner-flake-perf-budget-families-2026-05-04`)
+
+- Five wall-clock perf-budget guards observed flaking under full-
+  suite parallel-runner load but green in isolation:
+  `TreeSitterScalaTests` Scala parses, `TreeSitterRubyTests` Ruby
+  parses, `TreeSitterHaskellTests` Haskell parses (in-isolation
+  typical was already at the 10 ms ceiling), `SLOTests`
+  `hookPassthroughP99UnderThreshold`, and `SkillScannerAsyncTests`
+  `scanAsync finishes promptly on a fixture with many files`. Same
+  family as the DependencyGraph perf-gate flake (closed earlier on
+  May 5) — wall-clock budgets squeezed by peer-suite CPU contention
+  the parallel runner can't avoid.
+- Inline median-of-3 at each site, matching the canonical pattern
+  from `DependencyGraphPerfGateTests`. Sync sites (Scala/Ruby/
+  Haskell) take three `clock.measure { ... }` samples and assert
+  `samples.sorted()[1] < threshold`; async site (SkillScanner)
+  takes three wall-clock samples; distributional site (SLO p99)
+  runs three independent 200-sample evaluations and fails only if
+  the majority (≥ 2/3) reports `.state == .burn`. Thresholds
+  widened where in-isolation headroom was thin: Scala 10 → 20 ms,
+  Ruby 10 → 20 ms, Haskell 10 → 50 ms (matches Kotlin/Elixir
+  convention). SkillScanner (5 s) and SLO (1 ms product contract)
+  budgets unchanged.
+- Considered a shared `TestPerfBudget` helper; rejected because the
+  three measurement primitives (sync `clock.measure` → `Duration`,
+  async wall-clock → `TimeInterval`, distributional p99 → `Double`)
+  would force a lowest-common-denominator API at five usage sites.
+  Revisit if a sixth perf-budget test joins the family.
+- Verification: 5/5 filter-only green in 0.234 s; three consecutive
+  full `swift test` runs all 2416/2416 (12.058 s / 10.823 s /
+  11.739 s). No defects-outside-criteria observed.
+
 ### May 5 — KBVaultV7 env-var leak under parallel runner closed (`.serialized`); parallel-runner-flake-additional-families parent item closed
 
 - `Tests/SenkaniTests/KBVaultV7Tests.swift` — `@Suite("KBVaultConfig — V.7")`

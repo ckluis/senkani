@@ -9,6 +9,30 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — Logger sink suites cross-suite serialized via process-wide gate trait (LoggerRouting flake closed)
+
+- `Tests/SenkaniTests/LoggerSinkGate.swift` introduces a
+  `.loggerSinkGate` `CustomExecutionTrait` mirroring the May 4
+  URLProtocol gate: a `actor`-backed continuation-queued async
+  semaphore that fires once per suite (`isRecursive == false`).
+  Suites that call `Logger._setTestSink` — `LoggerRouting` and
+  `StoreExec — shared sqlite3_exec wrapper` — now carry both
+  `.serialized` and `.loggerSinkGate` so concurrent sink-using
+  suites can't tear each other's sinks down.
+- Closes `loggerrouting-migrations-applied-flake-2026-05-04`:
+  `LoggerRouting → migrationsAppliedFiresOnFreshDB` (and the
+  related `openFailedTagsDefaultModeFromSingletonInit` /
+  `migrationsAppliedDoesNotFireOnAlreadyMigratedDB` failures from
+  the same family) all green across three consecutive full-suite
+  runs (default parallel workers, ~2,416 tests).
+- `Logger._testSink` is a `nonisolated(unsafe) static var` —
+  `.serialized` orders tests *within* a suite but does nothing
+  across suites, so two parallel sink-using suites racing the
+  process-global pointer can drop each other's events on the floor.
+  Doc-comment in `Sources/Core/Logger.swift` now points future
+  authors at the trait. Same Swift Testing 6.0 migration note
+  applies as for `MockURLProtocolGate.swift`.
+
 ### May 4 — URLProtocol-stub suites cross-suite serialized via process-wide gate trait (parallel-runner flake closed)
 
 - `Tests/SenkaniTests/MockURLProtocolGate.swift` introduces an

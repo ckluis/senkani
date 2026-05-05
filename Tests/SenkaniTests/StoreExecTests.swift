@@ -8,7 +8,7 @@ import Foundation
 /// contract directly so a future structured-field addition has a
 /// single place to land — and a regression that swaps the scope token
 /// surfaces here instead of through three callers.
-@Suite("StoreExec — shared sqlite3_exec wrapper", .serialized)
+@Suite("StoreExec — shared sqlite3_exec wrapper", .serialized, .loggerSinkGate)
 struct StoreExecTests {
 
     final class Sink: @unchecked Sendable {

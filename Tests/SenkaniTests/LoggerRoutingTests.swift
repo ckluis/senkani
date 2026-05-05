@@ -12,7 +12,7 @@ import Foundation
 /// Tests use `Logger._setTestSink` to observe events in-process; the sink
 /// is a tee that runs alongside the normal stderr emit, so tests don't
 /// dup2 fd 2.
-@Suite("LoggerRouting", .serialized)
+@Suite("LoggerRouting", .serialized, .loggerSinkGate)
 struct LoggerRoutingTests {
 
     // MARK: - Sink helpers

@@ -9,6 +9,21 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 5 — Test resilience: `ScheduleWorktree.create` retries the git commondir race (`scheduleworktreetests-flake-under-parallel-suite-run`)
+
+- `Sources/Core/ScheduleWorktree.swift::create` now wraps `git worktree add`
+  in a 3-attempt retry with 50/150 ms backoff. The retry fires only when
+  stderr matches the specific `commondir` + `Undefined error: 0`
+  fingerprint — git's own internal-bookkeeping race when concurrent
+  `worktree add` invocations against the same repo run under FS load.
+  Any other failure path (notGitRepo, disk full, permissions) breaks
+  immediately and propagates the original stderr. Each retry re-rolls
+  `runId` and best-effort cleans the partial path + `git worktree prune`s
+  the parent repo so a half-registered worktree can't shadow the next
+  attempt. `ScheduleWorktreeTests.concurrentCreatesProduceDistinctWorktrees`
+  now passes deterministically across three consecutive whole-suite
+  `swift test` runs.
+
 ### May 5 — Internal: `KBReader` async migration + multi-project session model close (`mcpsession-actor-isolation-phase-b-iii` + parent close)
 
 - `Sources/MCP/KBReader.swift` migrates the four SenkaniApp-facing

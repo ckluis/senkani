@@ -8,10 +8,18 @@ public enum KBObserver {
 
     /// Record entity mentions from a hook event's tool input.
     /// Extracts all string-valued fields and feeds them to the default session's
-    /// EntityTracker. Safe to call from any thread (EntityTracker is NSLock-backed).
+    /// EntityTracker.
+    ///
+    /// Fire-and-forget by design: hook callbacks must not block, so the
+    /// registry lookup runs inside a detached Task. The actor cascade (Phase
+    /// B-iii) enforces the contract — no synchronous read of the registry's
+    /// session from outside the actor's executor.
     public static func observeHookEvent(toolName: String, toolInput: [String: Any]) {
         let texts = toolInput.values.compactMap { $0 as? String }.joined(separator: " ")
         guard !texts.isEmpty else { return }
-        MCPSessionRegistry.shared.ensureDefaultSession().entityTracker.observe(text: texts, source: "hook:\(toolName)")
+        Task.detached(priority: .utility) {
+            let tracker = await KBReader.tracker
+            tracker.observe(text: texts, source: "hook:\(toolName)")
+        }
     }
 }

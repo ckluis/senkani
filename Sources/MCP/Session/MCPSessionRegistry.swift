@@ -10,10 +10,11 @@ import Core
 ///
 /// Thread safety: `MCPSessionRegistry` is `Sendable` via an internal NSLock-
 /// guarded dictionary. The lock guards a small dictionary of references; the
-/// `MCPSession` actor itself is the unit of mutable-state isolation. This
-/// split keeps `KBReader`'s synchronous SenkaniApp contract intact (it reads
-/// `nonisolated let` fields on the actor) while still letting socket-server
-/// connections that target different project roots receive distinct sessions.
+/// `MCPSession` actor itself is the unit of mutable-state isolation. The
+/// async `KBReader` bridge is the public crossing point for SenkaniApp;
+/// internal `Sources/MCP/Tools` consumers reach the session's immutable
+/// Sendable fields directly (`nonisolated let`) from inside the actor's
+/// executor.
 public final class MCPSessionRegistry: @unchecked Sendable {
     public static let shared = MCPSessionRegistry()
 

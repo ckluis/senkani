@@ -8,13 +8,8 @@ import Indexer
 ///
 /// Sessions live in `MCPSessionRegistry`, keyed by project root. The socket
 /// daemon acquires a session per connection; the stdio MCP server uses one
-/// session for its lifetime. SenkaniApp reads via `KBReader`, which routes
-/// through the registry's default-session entry.
-///
-/// **Phase B-iii follow-up** — `KBReader` is still synchronous via
-/// `nonisolated let` reads; full async migration of `KBReader` and the
-/// SenkaniApp `await` cascade lives under
-/// `mcpsession-actor-isolation-phase-b-iii`.
+/// session for its lifetime. SenkaniApp reads via the async `KBReader`
+/// bridge, which routes through the registry's default-session entry.
 actor MCPSession {
     /// Phase B-i: per-tool-call connection identity. `ToolRouter.dispatchTool`
     /// wraps the handler in `withValue(context.connectionId)` so handlers and
@@ -87,12 +82,15 @@ actor MCPSession {
         MCPSession.currentToggleOverrides?.injectionGuard ?? injectionGuardEnabled
     }
 
-    /// Immutable Sendable references exposed via `KBReader` to SenkaniApp.
-    /// Marked `nonisolated let` so the existing synchronous `KBReader` contract
-    /// continues to compile; the underlying types (`KnowledgeStore`,
-    /// `EntityTracker`, `KnowledgeFileLayer`) are `final class @unchecked
-    /// Sendable` and manage their own thread safety, so isolating reads of
-    /// the immutable reference itself would add no value.
+    /// Immutable Sendable references exposed via the async `KBReader` bridge
+    /// to SenkaniApp and consumed sync by `Sources/MCP/Tools` from inside the
+    /// actor's executor. `nonisolated let` is correct here — the references
+    /// themselves are immutable Sendable, and the underlying types
+    /// (`KnowledgeStore`, `EntityTracker`, `KnowledgeFileLayer`) are
+    /// `final class @unchecked Sendable` that manage their own thread
+    /// safety. Isolating reads of an immutable Sendable reference would
+    /// add no value while forcing every internal `Tools/` accessor through
+    /// an extra actor hop.
     nonisolated let projectRoot: String
     nonisolated let knowledgeStore: KnowledgeStore
     nonisolated let entityTracker: EntityTracker

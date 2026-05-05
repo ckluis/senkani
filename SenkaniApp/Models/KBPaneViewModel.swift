@@ -58,11 +58,12 @@ final class KBPaneViewModel {
     /// Load entity list from store. Dispatches DB read to background, posts to main.
     /// Also refreshes enrichmentBadge via non-destructive tracker.state() peek.
     func loadEntities() {
-        let store = KBReader.store
         let sort = sortMode
         Task.detached(priority: .userInitiated) { [weak self] in
+            let store = await KBReader.store
+            let tracker = await KBReader.tracker
             let all = store.allEntities(sortedBy: sort)
-            let badge = KBReader.tracker.state().enrichmentCandidates.count
+            let badge = tracker.state().enrichmentCandidates.count
             await MainActor.run {
                 self?.entities = all
                 self?.enrichmentBadge = badge
@@ -73,8 +74,8 @@ final class KBPaneViewModel {
     /// Load last-session activity for brief display. No-op if already loaded.
     func loadSessionBrief() {
         guard sessionBriefActivity == nil else { return }
-        let root = KBReader.projectRoot
         Task.detached(priority: .utility) { [weak self] in
+            let root = await KBReader.projectRoot
             let activity = SessionDatabase.shared.lastSessionActivity(projectRoot: root)
             await MainActor.run { self?.sessionBriefActivity = activity }
         }
@@ -94,13 +95,13 @@ final class KBPaneViewModel {
         graphEdges = []
         completionCandidates = []
 
-        let store = KBReader.store
-        let layer = KBReader.layer
         let entityId = entity.id
         let name = entity.name
         let fallback = entity.compiledUnderstanding
 
         Task.detached(priority: .userInitiated) { [weak self] in
+            let store = await KBReader.store
+            let layer = await KBReader.layer
             let links = store.links(fromEntityId: entityId)
             let decisions = store.decisions(forEntityName: name)
             let couplings = store.couplings(forEntityName: name)
@@ -184,10 +185,10 @@ final class KBPaneViewModel {
         isSaving = true
         let understanding = understandingText
         let original = detailContent
-        let store = KBReader.store
-        let layer = KBReader.layer
 
         Task.detached(priority: .userInitiated) { [weak self] in
+            let store = await KBReader.store
+            let layer = await KBReader.layer
             // 1. Sync to DB — preserve all other fields exactly
             let updated = KnowledgeEntity(
                 id: entity.id,
@@ -233,11 +234,12 @@ final class KBPaneViewModel {
 
     /// Accept the staged proposal: commit it, record evidence, reload detail.
     func acceptProposal() {
-        guard let entity = selectedEntity, let layer = KBReader.layer else { return }
-        let store = KBReader.store
+        guard let entity = selectedEntity else { return }
         let entityId = entity.id
         let name = entity.name
         Task.detached(priority: .userInitiated) { [weak self] in
+            guard let layer = await KBReader.layer else { return }
+            let store = await KBReader.store
             do {
                 try layer.commitProposal(for: name)
                 _ = store.appendEvidence(EvidenceEntry(
@@ -271,9 +273,10 @@ final class KBPaneViewModel {
 
     /// Discard the staged proposal without touching the live file.
     func discardProposal() {
-        guard let entity = selectedEntity, let layer = KBReader.layer else { return }
+        guard let entity = selectedEntity else { return }
         let name = entity.name
         Task.detached(priority: .userInitiated) { [weak self] in
+            guard let layer = await KBReader.layer else { return }
             try? layer.discardStagedProposal(for: name)
             await MainActor.run { self?.stagedProposal = nil }
         }
@@ -301,12 +304,12 @@ final class KBPaneViewModel {
         isLoadingGraph = true
         graphNodes = []
         graphEdges = []
-        let store = KBReader.store
         let entityId = entity.id
         let entityName = entity.name
         let entityType = entity.entityType
 
         Task.detached(priority: .userInitiated) { [weak self] in
+            let store = await KBReader.store
             let outLinks = store.links(fromEntityId: entityId)
             let backLinks = store.backlinks(toEntityName: entityName)
 

@@ -9,6 +9,44 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 5 — Internal: `KBReader` async migration + multi-project session model close (`mcpsession-actor-isolation-phase-b-iii` + parent close)
+
+- `Sources/MCP/KBReader.swift` migrates the four SenkaniApp-facing
+  getters (`store`, `tracker`, `layer`, `projectRoot`) to `get async`.
+  The actor isolation IS the SenkaniApp contract — no synchronous
+  escape hatch. The four `nonisolated let` KB-bridge fields on
+  `MCPSession` remain (immutable Sendable refs to thread-safe types
+  do not benefit from actor isolation; isolating them would force
+  every internal `Sources/MCP/Tools/` accessor through an extra hop).
+- `Sources/MCP/KBObserver.swift::observeHookEvent` runs its registry
+  lookup inside a `Task.detached` — fire-and-forget for hook
+  callbacks, with no synchronous read of the registry's session.
+- SenkaniApp's 14+ KBReader call sites cascade `await`:
+  `KBPaneViewModel.swift` (8 sites: `loadEntities`, `loadSessionBrief`,
+  `select`, `commitSave`, `acceptProposal`, `discardProposal`,
+  `loadGraph` — every one moves the `KBReader.*` read inside its
+  detached Task). `Views/SidebarView.swift` swaps `.onAppear` for
+  `.task` and wraps the 5-second timer body in a Task. The trickiest
+  call site, `Views/KnowledgeBaseView.swift`'s body-time enrichment-
+  candidate check, refactors to `@State private var enrichmentSet`
+  loaded via `.task(id: vm.enrichmentBadge)` — keyed on the badge so
+  the candidate set stays in sync without an extra timer.
+- The "Phase B-iii follow-up" doc-comment block at the top of
+  `MCPSession.swift` is removed; the `nonisolated let` rationale on
+  the four KB-bridge fields is updated to reflect the post-cascade
+  shape. The Phase 5 TODO block on `MCPSession.shared` was removed
+  in Phase B-i; this round closes the trailing pointer.
+- Existing 11-test `KBPaneViewModelTests` suite passes unchanged
+  (data layer reads `session.knowledgeStore` directly, which is still
+  `nonisolated let`-accessible from the test executor). Whole-suite
+  build clean; the parent
+  [`mcpsession-actor-isolation`](spec/autonomous/completed/2026/2026-05-05-mcpsession-actor-isolation-and-multi-project-keying.md)
+  umbrella closes — every operator-chosen acceptance bullet (actor
+  conversion, registry, dynamic projectRoot, KBReader async,
+  SenkaniApp cascade, per-connection metrics, per-connection toggle
+  overrides, two concurrent-connection isolation tests, Phase 5 TODO
+  removal) is satisfied across A + B-i + B-ii + B-iii.
+
 ### May 5 — Internal: per-connection toggle overrides + `connection_id` DB columns (`mcpsession-actor-isolation-phase-b-ii`)
 
 - `MCPSession.ToggleOverrides` (six optional `Bool`s — filter, secrets,

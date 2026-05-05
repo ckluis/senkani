@@ -8,6 +8,11 @@ import MCPServer
 /// Auto-saves understanding on deselect/back.
 struct KnowledgeBaseView: View {
     @State private var vm = KBPaneViewModel()
+    /// Snapshot of the tracker's enrichment-candidate names. Refreshed
+    /// whenever `vm.enrichmentBadge` changes — the badge count and this
+    /// set are both produced by the same `tracker.state()` peek, so they
+    /// stay in sync without an extra timer.
+    @State private var enrichmentSet: Set<String> = []
 
     var body: some View {
         Group {
@@ -21,6 +26,10 @@ struct KnowledgeBaseView: View {
         .onAppear { vm.loadEntities(); vm.loadSessionBrief() }
         .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
             if !vm.isDirty { vm.loadEntities() }
+        }
+        .task(id: vm.enrichmentBadge) {
+            let candidates = await KBReader.tracker.state().enrichmentCandidates
+            enrichmentSet = Set(candidates)
         }
         // V.5b — surfaces the AuthorshipTag prompt when a save is
         // queued but the row's prior tag is `.unset` or `nil`. Sheet
@@ -196,7 +205,7 @@ struct KnowledgeBaseView: View {
                     .frame(minWidth: 18, alignment: .trailing)
 
                 if vm.enrichmentBadge > 0,
-                   KBReader.tracker.state().enrichmentCandidates.contains(entity.name) {
+                   enrichmentSet.contains(entity.name) {
                     Image(systemName: "sparkle")
                         .font(.system(size: 8))
                         .foregroundStyle(.orange)
@@ -319,8 +328,11 @@ struct KnowledgeBaseView: View {
                             edges: vm.graphEdges,
                             selectedEntityName: entity.name
                         ) { targetName in
-                            if let target = KBReader.store.entity(named: targetName) {
-                                withAnimation(.easeInOut(duration: 0.12)) { vm.select(target) }
+                            Task { @MainActor in
+                                let store = await KBReader.store
+                                if let target = store.entity(named: targetName) {
+                                    withAnimation(.easeInOut(duration: 0.12)) { vm.select(target) }
+                                }
                             }
                         }
                     }

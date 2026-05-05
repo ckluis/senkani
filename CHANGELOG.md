@@ -9,6 +9,31 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 5 — `no-running-senkani` pre-condition standard for all uninstall test plans (`uninstall-test-plan-prerunning-process-precondition`)
+
+- Process change driven by 2026-05-03 v2 walk Finding #3, third
+  bullet: a still-running SenkaniApp instance silently re-seeded
+  `~/.senkani/workspace.json` immediately after Step 2's wipe. The
+  strict-moment post-Step-2 check passed at 13:13:09 EDT, but any
+  later inspection would have shown a contaminated state.
+- `spec/autonomous/backlog/uninstall-rewalk-step8-modelmetadatacache.md`
+  grew a `## Pre-grooming notes` section with the verbatim
+  inheritance contract: `## Pre-conditions` row, `## Setup` shell
+  probe, and `## Failure modes` row that any future groom round
+  must copy into the polished plan body. The probe halts the test
+  at preconditions before any state mutation if `pgrep -f
+  "SenkaniApp"` returns a PID.
+- `tools/soak/manual-log.md` top-of-section process standard binds
+  ALL future uninstall test plans (v3 amendment, v0.4.0 release
+  pass, future variants) to include the `no-running-senkani` probe.
+- `spec/testing.md` documents the standard so it is discoverable
+  alongside other long-lived test policies.
+- Failure-mode recovery covers both registered installs
+  (`osascript -e 'tell application "SenkaniApp" to quit'`) and
+  unregistered dev/runner-bundled builds (`pkill -f SenkaniApp`).
+- No code shipped — pure process/test-plan documentation. Tests
+  unchanged.
+
 ### May 5 — Typed `ToolDefinition` registry collapses the MCP dispatch + catalog drift hazard (`toolrouter-typed-registry`)
 
 - `Sources/MCP/ToolRegistry.swift` (new) — `ToolDefinition` (name +

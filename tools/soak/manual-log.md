@@ -19,6 +19,19 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 > linked file, and lets the next `/senkani-autonomous` close-mode
 > sweep finalize.
 
+> **Process standard for uninstall test plans (added 2026-05-05).**
+> Every groomed uninstall test plan (v3 amendment, v0.4.0 release
+> pass, or any future variant) MUST include a
+> `no-running-senkani` pre-condition probe in its `## Pre-conditions`,
+> `## Setup`, and `## Failure modes` sections. Skeleton lives in
+> `spec/autonomous/completed/2026/<YYYY-MM-DD>-uninstall-test-plan-prerunning-process-precondition-…`
+> (closed 2026-05-05) and is mirrored in
+> `spec/autonomous/backlog/uninstall-rewalk-step8-modelmetadatacache.md`'s
+> `## Pre-grooming notes`. Reason: 2026-05-03 v2 walk surfaced a
+> still-running SenkaniApp re-seeding `~/.senkani/workspace.json`
+> mid-test, contaminating the audit trail. The probe halts the test
+> at preconditions before any state mutation.
+
 - **uninstall-rewalk-step8-modelmetadatacache — confirm `~/Library/Caches/dev.senkani/` no longer survives `senkani uninstall --yes` after the 9th-category ship** ([groomable plan](../../spec/autonomous/backlog/uninstall-rewalk-step8-modelmetadatacache.md)). Exec mode: **either** (a Step-8 broad-sweep diff; Cowork-runnable, no GUI hands needed beyond the wrapping uninstall walk's pre-existing GUI steps). Time estimate: **~3-5 min standalone, free if folded into the next full uninstall walk**. Pre-condition: a real install with at least one ModelManager model registered (so `dev.senkani/models/models.json` actually exists pre-uninstall). Recommended: bundle into the next overall uninstall walk (likely `release-v0-3-0-uninstall-pass` v3 or v0.4.0's release pass) rather than a dedicated re-run. Filed 2026-05-03 by close of `uninstall-scanner-audit-claude-hook-and-library-caches`; awaits groom-mode → status: manual_ready → operator/Cowork execution → close.
 
 - **release-v0-3-0-uninstall-pass-v2-plan-amendments — `senkani uninstall` real-install validation, v2 (8 steps incl. split 3a/3b, 6 acceptance bullets)** ([archived plan](../../spec/autonomous/completed/2026/2026-05-03-release-v0-3-0-uninstall-pass-v2-plan-amendments-fix-three-defects-from-2026-05-02-walk.md)). Exec mode: **either** (Cowork-runnable for Steps 1, 2, 3b, 4, 5, 7, 8; Steps 3a + 6 SenkaniApp launch need operator hands on first Gatekeeper prompt — bundle is ad-hoc signed). Time: **~12-18 min operator-supervised** (down from 65 min on v1's walk; v2 removes the runner defects that caused retries). Pre-condition: PR #14 landed, a registered SenkaniApp install, AND `tools/soak/runner/SenkaniApp.app` bundle present + fresh (mtime ≥ newest `SenkaniApp/*.swift`). Three v1 defects fixed: A1 sweep race (split into `sweep_targets`/`sweep_broad`), A3 Step-3 pre-seed (foreground `open -a` of bundled `.app`), A5 Step-7 hardcoded target (now ANY workspace project + mtime ≥ TEST_START_EPOCH). Operator decides whether to re-walk on v0.3.0 or hold for v0.4.0 (recommended) BEFORE running. Groomed 2026-05-02 by `senkani-autonomous`. **Status note 2026-05-03: walked + closed strict-literal green on all six A-bullets; per-item file archived to `completed/2026/`. Three optional follow-up findings (runner-bundle launch defect, 4 BROAD scanner-extension candidates, `! pgrep SenkaniApp` pre-condition) are pending operator decision on whether to file as new backlog items. See CHANGELOG `## v0.3.0 — unreleased` → `### May 3` for the full closure record.**

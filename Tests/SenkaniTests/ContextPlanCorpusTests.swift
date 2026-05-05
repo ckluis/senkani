@@ -45,7 +45,7 @@ private func makeTempDB() -> (SessionDatabase, String) {
 private func makeTrace(idempotencyKey: String, costCents: Int) -> AgentTraceEvent {
     AgentTraceEvent(
         idempotencyKey: idempotencyKey,
-        result: "success",
+        result: .success,
         startedAt: Date(timeIntervalSince1970: 1_750_000_000),
         completedAt: Date(timeIntervalSince1970: 1_750_000_001),
         costCents: costCents

@@ -59,8 +59,8 @@ struct ReplayScopeByProjectTests {
             db.recordAgentTraceEvent(AgentTraceEvent(
                 idempotencyKey: "a-\(i)",
                 project: projectA,
-                feature: "read",
-                result: "success",
+                feature: .read,
+                result: .success,
                 startedAt: baseTime.addingTimeInterval(Double(i)),
                 completedAt: baseTime.addingTimeInterval(Double(i) + 0.1),
                 tokensIn: 100,
@@ -71,8 +71,8 @@ struct ReplayScopeByProjectTests {
             db.recordAgentTraceEvent(AgentTraceEvent(
                 idempotencyKey: "b-\(i)",
                 project: projectB,
-                feature: "read",
-                result: "success",
+                feature: .read,
+                result: .success,
                 startedAt: baseTime.addingTimeInterval(Double(i)),
                 completedAt: baseTime.addingTimeInterval(Double(i) + 0.1),
                 tokensIn: 100,

@@ -26,7 +26,7 @@ struct CombinatorPipelineTests {
     ) -> AgentTraceEvent {
         AgentTraceEvent(
             idempotencyKey: idempotencyKey,
-            result: "success",
+            result: .success,
             startedAt: startedAt,
             completedAt: completedAt,
             costCents: costCents
@@ -292,8 +292,8 @@ struct CombinatorPipelineTests {
             model: "haiku",
             tier: "standard",
             ladderPosition: 0,
-            feature: "explore",
-            result: "success",
+            feature: .explore,
+            result: .success,
             startedAt: Date(timeIntervalSince1970: 1_750_000_200),
             completedAt: Date(timeIntervalSince1970: 1_750_000_201),
             latencyMs: 17,

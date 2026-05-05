@@ -43,7 +43,7 @@ private func makeAgentTraceEvent(
 ) -> AgentTraceEvent {
     AgentTraceEvent(
         idempotencyKey: key,
-        result: "success",
+        result: .success,
         startedAt: Date(timeIntervalSince1970: 1_700_000_000),
         completedAt: Date(timeIntervalSince1970: 1_700_000_001),
         costLedgerVersion: costLedgerVersion

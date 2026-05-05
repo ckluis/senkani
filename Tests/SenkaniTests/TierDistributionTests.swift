@@ -16,8 +16,8 @@ private func makeRow(
     AgentTraceEvent(
         idempotencyKey: key,
         pane: "kb", project: "/tmp/p", model: "claude-haiku-4-5",
-        tier: tier, ladderPosition: ladderPosition, feature: "search",
-        result: "success",
+        tier: tier, ladderPosition: ladderPosition, feature: .search,
+        result: .success,
         startedAt: startedAt, completedAt: startedAt.addingTimeInterval(0.1),
         latencyMs: 25, tokensIn: 80, tokensOut: 30, costCents: 1
     )

@@ -62,8 +62,8 @@ public enum CounterfactualReplay {
         var notes: [String] = []
 
         for row in rows {
-            let isFullRead = (row.feature == "read" || row.feature == "fetch")
-                && row.result != "cached"
+            let isFullRead = (row.feature == .read || row.feature == .fetch)
+                && row.result != .cached
                 && row.tokensOut > 0
             if isFullRead {
                 let reducedOut = Int(Double(row.tokensOut) * 0.10)

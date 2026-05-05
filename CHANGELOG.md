@@ -9,6 +9,41 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 5 — Typed `ToolIntent` + `CallResult` enums replace primitive strings on `AgentTraceEvent` (`tool-intent-result-enums`)
+
+- `Sources/Core/Stores/ToolIntent.swift` (new) — `ToolIntent`
+  (read/fetch/search/outline/bundle/exec/validate/explore/knowledge/
+  embed/parse/repo/session/version/vision/watch/web/deps/pane) and
+  `CallResult` (success/error/timeout/denied/cached + `unknown`
+  sentinel for legacy data). Both `String`-backed, `Codable`,
+  `CaseIterable`, `Sendable`, `Hashable`.
+- `AgentTraceEvent.feature: ToolIntent?` and `result: CallResult`
+  (was `String?` / `String`). Compile-time-typo'd write sites
+  (`"Read"` vs `"read"`, `"file_read"` vs `"read"`) now fail to
+  compile rather than silently disabling
+  `CounterfactualReplay.outlineFirstStrict` and similar string-
+  matched filters. The `agent_trace_event` column type stays TEXT —
+  no migration; encode/decode at the store boundary preserves wire
+  compatibility for existing JSON-mode logs and handoff cards.
+- Read-path observability for legacy DB rows: unknown `feature`
+  strings decode to `nil`, unknown `result` strings to
+  `CallResult.unknown`. Each fires `Logger.log("agent_trace.
+  unknown_intent" / "agent_trace.unknown_result")` and increments
+  the matching `event_counters` row, so vocabulary drift surfaces
+  via `senkani stats` rather than going silent.
+- `CounterfactualReplay.outlineFirstStrict` matches against
+  `.read`/`.fetch`/`.cached` enum cases. `SessionDatabase
+  +RepriceAPI.repriceTierRow` retains the SQL-projection
+  `String?`/`String` shape on `AgentTraceTierRow` and converts
+  at the synthetic-`AgentTraceEvent` boundary.
+- Test count: 2416 → 2417 (+1) — new
+  `AgentTraceEventStoreUnknownVocabTests` suite covers a direct-SQL
+  legacy row with `"Read"` / `"oh_no"` and asserts the typed read
+  surfaces nil / `.unknown`, the warn events route to the test
+  sink, and `event_counters` increment exactly once. Suite carries
+  `.serialized, .loggerSinkGate` per the existing logger-sink
+  discipline. All 2417 tests green.
+
 ### May 5 — Median-of-3 perf-budget pattern across 5 sites (`parallel-runner-flake-perf-budget-families-2026-05-04`)
 
 - Five wall-clock perf-budget guards observed flaking under full-

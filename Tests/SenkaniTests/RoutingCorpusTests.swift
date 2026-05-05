@@ -199,7 +199,7 @@ struct LadderPositionMigrationTests {
             idempotencyKey: "u1b-rt-1",
             tier: "complex",
             ladderPosition: 1,
-            result: "success",
+            result: .success,
             startedAt: Date(timeIntervalSince1970: 1_700_000_000),
             completedAt: Date(timeIntervalSince1970: 1_700_000_001)
         )
@@ -232,7 +232,7 @@ struct LadderPositionMigrationTests {
 
         let row = AgentTraceEvent(
             idempotencyKey: "u1b-null-1",
-            result: "success",
+            result: .success,
             startedAt: Date(timeIntervalSince1970: 1_700_000_000),
             completedAt: Date(timeIntervalSince1970: 1_700_000_001)
         )

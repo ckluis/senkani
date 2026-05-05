@@ -169,7 +169,7 @@ struct ContextPlanStoreTests {
 
         let row = AgentTraceEvent(
             idempotencyKey: "u6a-rt-\(UUID().uuidString)",
-            result: "success",
+            result: .success,
             startedAt: Date(timeIntervalSince1970: 1_750_000_010),
             completedAt: Date(timeIntervalSince1970: 1_750_000_011),
             planId: plan.id
@@ -188,7 +188,7 @@ struct ContextPlanStoreTests {
 
         let row = AgentTraceEvent(
             idempotencyKey: "u6a-nil-\(UUID().uuidString)",
-            result: "success",
+            result: .success,
             startedAt: Date(timeIntervalSince1970: 1_750_000_020),
             completedAt: Date(timeIntervalSince1970: 1_750_000_021)
         )

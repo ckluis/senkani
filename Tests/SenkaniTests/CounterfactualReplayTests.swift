@@ -5,8 +5,8 @@ import Bench
 
 private func makeTrace(
     key: String = UUID().uuidString,
-    feature: String? = "read",
-    result: String = "success",
+    feature: ToolIntent? = .read,
+    result: CallResult = .success,
     tokensIn: Int = 100,
     tokensOut: Int = 1000,
     costCents: Int = 5,
@@ -38,9 +38,9 @@ struct OutlineFirstStrictTests {
 
     @Test func reducesReadAndFetchOutputBy90Percent() {
         let rows = [
-            makeTrace(feature: "read", tokensOut: 1000, costCents: 10),
-            makeTrace(feature: "fetch", tokensOut: 500, costCents: 5),
-            makeTrace(feature: "search", tokensOut: 200, costCents: 2),
+            makeTrace(feature: .read, tokensOut: 1000, costCents: 10),
+            makeTrace(feature: .fetch, tokensOut: 500, costCents: 5),
+            makeTrace(feature: .search, tokensOut: 200, costCents: 2),
         ]
         let report = CounterfactualReplay.evaluate(
             sessionId: "s1", rows: rows, preset: .outlineFirstStrict
@@ -55,8 +55,8 @@ struct OutlineFirstStrictTests {
 
     @Test func skipsCachedRows() {
         let rows = [
-            makeTrace(feature: "read", result: "cached", tokensOut: 1000),
-            makeTrace(feature: "read", result: "success", tokensOut: 1000),
+            makeTrace(feature: .read, result: .cached, tokensOut: 1000),
+            makeTrace(feature: .read, result: .success, tokensOut: 1000),
         ]
         let report = CounterfactualReplay.evaluate(
             sessionId: "s1", rows: rows, preset: .outlineFirstStrict
@@ -69,8 +69,8 @@ struct OutlineFirstStrictTests {
 
     @Test func deterministicOnRepeatedRuns() {
         let rows = [
-            makeTrace(feature: "read", tokensOut: 500),
-            makeTrace(feature: "fetch", tokensOut: 300),
+            makeTrace(feature: .read, tokensOut: 500),
+            makeTrace(feature: .fetch, tokensOut: 300),
         ]
         let r1 = CounterfactualReplay.evaluate(
             sessionId: "s1", rows: rows, preset: .outlineFirstStrict,
@@ -197,7 +197,7 @@ struct BudgetTightTests {
 struct ReplayReportJSONTests {
 
     @Test func encodesAndDecodesRoundTrip() throws {
-        let rows = [makeTrace(feature: "read", tokensOut: 500)]
+        let rows = [makeTrace(feature: .read, tokensOut: 500)]
         let original = CounterfactualReplay.evaluate(
             sessionId: "s1", rows: rows, preset: .outlineFirstStrict,
             now: Date(timeIntervalSince1970: 1_700_000_000)

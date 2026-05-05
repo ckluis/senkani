@@ -13,7 +13,7 @@ struct RepriceTraceRowTests {
         AgentTraceEvent(
             idempotencyKey: UUID().uuidString,
             model: model,
-            result: "success",
+            result: .success,
             startedAt: Date(timeIntervalSince1970: 1_700_000_000),
             completedAt: Date(timeIntervalSince1970: 1_700_000_001),
             costCents: costCents,
@@ -70,7 +70,7 @@ struct RepriceTraceRowTests {
         let tierRow = AgentTraceTierRow(
             idempotencyKey: "k", pane: nil, project: nil,
             model: "claude-sonnet-4", tier: "balanced", ladderPosition: 0,
-            feature: "x", result: "success",
+            feature: "read", result: "success",
             startedAt: Date(timeIntervalSince1970: 1_700_000_000),
             latencyMs: 0, tokensIn: 0, tokensOut: 0,
             costCents: 250, costLedgerVersion: CostLedger.currentVersion

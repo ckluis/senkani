@@ -77,25 +77,25 @@ struct ContextSaturationGateTests {
         let now = Date()
         db.recordAgentTraceEvent(.init(
             idempotencyKey: "k1", pane: "kb", project: "/p", model: "m",
-            tier: nil, feature: "f", result: "success",
+            tier: nil, feature: .read, result: .success,
             startedAt: now, completedAt: now,
             latencyMs: 1, tokensIn: 100, tokensOut: 50
         ))
         db.recordAgentTraceEvent(.init(
             idempotencyKey: "k2", pane: "kb", project: "/p", model: "m",
-            tier: nil, feature: "f", result: "success",
+            tier: nil, feature: .read, result: .success,
             startedAt: now, completedAt: now,
             latencyMs: 1, tokensIn: 200, tokensOut: 100
         ))
         db.recordAgentTraceEvent(.init(
             idempotencyKey: "k3", pane: "kb", project: "/p", model: "m",
-            tier: nil, feature: "f", result: "success",
+            tier: nil, feature: .read, result: .success,
             startedAt: now, completedAt: now,
             latencyMs: 1, tokensIn: 50, tokensOut: 25
         ))
         db.recordAgentTraceEvent(.init(
             idempotencyKey: "k4", pane: "shell", project: "/p", model: "m",
-            tier: nil, feature: "f", result: "success",
+            tier: nil, feature: .read, result: .success,
             startedAt: now, completedAt: now,
             latencyMs: 1, tokensIn: 9_999, tokensOut: 9_999
         ))

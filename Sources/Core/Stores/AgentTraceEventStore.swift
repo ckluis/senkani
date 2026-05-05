@@ -55,8 +55,8 @@ final class AgentTraceEventStore: @unchecked Sendable {
             Self.bindOptionalText(stmt, 4, row.model)
             Self.bindOptionalText(stmt, 5, row.tier)
             Self.bindOptionalInt(stmt, 6, row.ladderPosition)
-            Self.bindOptionalText(stmt, 7, row.feature)
-            sqlite3_bind_text(stmt, 8, (row.result as NSString).utf8String, -1, nil)
+            Self.bindOptionalText(stmt, 7, row.feature?.rawValue)
+            sqlite3_bind_text(stmt, 8, (row.result.rawValue as NSString).utf8String, -1, nil)
             sqlite3_bind_double(stmt, 9, row.startedAt.timeIntervalSince1970)
             sqlite3_bind_double(stmt, 10, row.completedAt.timeIntervalSince1970)
             sqlite3_bind_int64(stmt, 11, Int64(row.latencyMs))
@@ -122,15 +122,16 @@ final class AgentTraceEventStore: @unchecked Sendable {
                     ? nil
                     : Int(sqlite3_column_int64(stmt, i))
             }
+            let key = String(cString: sqlite3_column_text(stmt, 0))
             return AgentTraceEvent(
-                idempotencyKey: String(cString: sqlite3_column_text(stmt, 0)),
+                idempotencyKey: key,
                 pane: text(1),
                 project: text(2),
                 model: text(3),
                 tier: text(4),
                 ladderPosition: int(5),
-                feature: text(6),
-                result: String(cString: sqlite3_column_text(stmt, 7)),
+                feature: self.decodeFeature(text(6), idempotencyKey: key),
+                result: self.decodeResult(String(cString: sqlite3_column_text(stmt, 7)), idempotencyKey: key),
                 startedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 8)),
                 completedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 9)),
                 latencyMs: Int(sqlite3_column_int64(stmt, 10)),
@@ -349,15 +350,16 @@ final class AgentTraceEventStore: @unchecked Sendable {
 
             var out: [AgentTraceEvent] = []
             while sqlite3_step(stmt) == SQLITE_ROW {
+                let key = String(cString: sqlite3_column_text(stmt, 0))
                 out.append(AgentTraceEvent(
-                    idempotencyKey: String(cString: sqlite3_column_text(stmt, 0)),
+                    idempotencyKey: key,
                     pane: text(1),
                     project: text(2),
                     model: text(3),
                     tier: text(4),
                     ladderPosition: intOpt(5),
-                    feature: text(6),
-                    result: String(cString: sqlite3_column_text(stmt, 7)),
+                    feature: self.decodeFeature(text(6), idempotencyKey: key),
+                    result: self.decodeResult(String(cString: sqlite3_column_text(stmt, 7)), idempotencyKey: key),
                     startedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 8)),
                     completedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 9)),
                     latencyMs: Int(sqlite3_column_int64(stmt, 10)),
@@ -496,6 +498,39 @@ final class AgentTraceEventStore: @unchecked Sendable {
 
     // MARK: - Helpers
 
+    /// Decode a stored `feature` text column into the typed
+    /// ``ToolIntent``. Absent columns return `nil` cleanly. Present
+    /// columns whose value isn't a known case ALSO return `nil`, but
+    /// log a warning and bump
+    /// `event_counters("agent_trace.unknown_intent")` so legacy
+    /// vocabulary drift is observable from `senkani stats` rather than
+    /// silently absorbed.
+    fileprivate func decodeFeature(_ raw: String?, idempotencyKey: String) -> ToolIntent? {
+        guard let raw else { return nil }
+        if let intent = ToolIntent(rawValue: raw) { return intent }
+        Logger.log("agent_trace.unknown_intent", fields: [
+            "raw": .string(raw),
+            "idempotency_key": .string(idempotencyKey),
+        ])
+        parent.recordEvent(type: "agent_trace.unknown_intent")
+        return nil
+    }
+
+    /// Decode a stored `result` text column into the typed
+    /// ``CallResult``. Unknown values return ``CallResult/unknown``
+    /// (the column is NOT NULL on disk, so we cannot return nil) and
+    /// emit the same warning + counter bump as
+    /// ``decodeFeature(_:idempotencyKey:)``.
+    fileprivate func decodeResult(_ raw: String, idempotencyKey: String) -> CallResult {
+        if let result = CallResult(rawValue: raw) { return result }
+        Logger.log("agent_trace.unknown_result", fields: [
+            "raw": .string(raw),
+            "idempotency_key": .string(idempotencyKey),
+        ])
+        parent.recordEvent(type: "agent_trace.unknown_result")
+        return .unknown
+    }
+
     private static func bindOptionalText(_ stmt: OpaquePointer?, _ index: Int32, _ value: String?) {
         if let val = value {
             sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, nil)
@@ -546,10 +581,17 @@ public struct AgentTraceEvent: Sendable, Equatable {
     /// non-routed paths. Phase U.1b — paired with `tier` so the
     /// analytics chart can split "primary used" from "fell back".
     public let ladderPosition: Int?
-    public let feature: String?
-    /// One of: `success`, `error`, `timeout`, `denied`, `cached`. The store
-    /// does not validate the vocabulary — pivots count distinct values.
-    public let result: String
+    /// Typed tool intent — see ``ToolIntent``. Optional because pre-V.2
+    /// rows and tier-only routing paths legitimately have no feature
+    /// classification, AND because legacy DB rows whose stored string
+    /// isn't a known case decode to `nil` (with a warning + counter
+    /// bump on the read path).
+    public let feature: ToolIntent?
+    /// Typed call outcome — see ``CallResult``. Required (the column is
+    /// NOT NULL on disk). Legacy rows whose stored string isn't a known
+    /// case decode to `.unknown` (with a warning + counter bump on the
+    /// read path).
+    public let result: CallResult
 
     public let startedAt: Date
     public let completedAt: Date
@@ -582,8 +624,8 @@ public struct AgentTraceEvent: Sendable, Equatable {
         model: String? = nil,
         tier: String? = nil,
         ladderPosition: Int? = nil,
-        feature: String? = nil,
-        result: String,
+        feature: ToolIntent? = nil,
+        result: CallResult,
         startedAt: Date,
         completedAt: Date,
         latencyMs: Int = 0,

@@ -111,14 +111,14 @@ struct PreCompactHandoffWriterTests {
         // Seed two trace rows for pane=kb (newest first ordering).
         db.recordAgentTraceEvent(.init(
             idempotencyKey: "old", pane: "kb", project: "/p", model: "m",
-            tier: nil, feature: "f", result: "success",
+            tier: nil, feature: .read, result: .success,
             startedAt: Date(timeIntervalSince1970: 1_700_000_000),
             completedAt: Date(timeIntervalSince1970: 1_700_000_001),
             latencyMs: 1, tokensIn: 10, tokensOut: 10
         ))
         db.recordAgentTraceEvent(.init(
             idempotencyKey: "new", pane: "kb", project: "/p", model: "m",
-            tier: nil, feature: "f", result: "success",
+            tier: nil, feature: .read, result: .success,
             startedAt: Date(timeIntervalSince1970: 1_700_001_000),
             completedAt: Date(timeIntervalSince1970: 1_700_001_001),
             latencyMs: 1, tokensIn: 10, tokensOut: 10

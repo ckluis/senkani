@@ -17,8 +17,8 @@ private func makeRow(
     project: String? = "/tmp/proj",
     model: String? = "claude-haiku-4-5",
     tier: String? = nil,
-    feature: String? = "search",
-    result: String = "success",
+    feature: ToolIntent? = .search,
+    result: CallResult = .success,
     startedAt: Date = Date(timeIntervalSince1970: 1_700_000_000),
     completedAt: Date = Date(timeIntervalSince1970: 1_700_000_001),
     latencyMs: Int = 42,
@@ -155,8 +155,8 @@ struct AgentTraceEventStoreTests {
 
         let row = makeRow(
             key: "rtdim-1", pane: "timeline", project: "/tmp/p1",
-            model: "gemma-4-nano", tier: "simple", feature: "outline",
-            result: "success",
+            model: "gemma-4-nano", tier: "simple", feature: .outline,
+            result: .success,
             latencyMs: 17, tokensIn: 80, tokensOut: 25, costCents: 1,
             redactionCount: 2, validationStatus: "warn",
             confirmationRequired: true, egressDecisions: 3
@@ -260,10 +260,10 @@ struct AgentTraceEventStoreTests {
         let (db, path) = makeTempDB()
         defer { TempSessionDatabase.cleanup(path: path) }
 
-        db.recordAgentTraceEvent(makeRow(key: "pf-1", feature: "search", result: "success", tokensIn: 100, tokensOut: 30))
-        db.recordAgentTraceEvent(makeRow(key: "pf-2", feature: "search", result: "success", tokensIn: 100, tokensOut: 30))
-        db.recordAgentTraceEvent(makeRow(key: "pf-3", feature: "search", result: "error",   tokensIn: 100, tokensOut: 0))
-        db.recordAgentTraceEvent(makeRow(key: "pf-4", feature: "fetch",  result: "timeout", tokensIn: 50,  tokensOut: 0))
+        db.recordAgentTraceEvent(makeRow(key: "pf-1", feature: .search, result: .success, tokensIn: 100, tokensOut: 30))
+        db.recordAgentTraceEvent(makeRow(key: "pf-2", feature: .search, result: .success, tokensIn: 100, tokensOut: 30))
+        db.recordAgentTraceEvent(makeRow(key: "pf-3", feature: .search, result: .error,   tokensIn: 100, tokensOut: 0))
+        db.recordAgentTraceEvent(makeRow(key: "pf-4", feature: .fetch,  result: .timeout, tokensIn: 50,  tokensOut: 0))
 
         let rollups = db.agentTracePivotByFeature()
         #expect(rollups.count == 2)
@@ -287,9 +287,9 @@ struct AgentTraceEventStoreTests {
         let (db, path) = makeTempDB()
         defer { TempSessionDatabase.cleanup(path: path) }
 
-        for i in 0..<5 { db.recordAgentTraceEvent(makeRow(key: "ok-\(i)", result: "success", latencyMs: 10, costCents: 1)) }
-        for i in 0..<3 { db.recordAgentTraceEvent(makeRow(key: "err-\(i)", result: "error", latencyMs: 50, costCents: 0)) }
-        db.recordAgentTraceEvent(makeRow(key: "to-1", result: "timeout", latencyMs: 100, costCents: 0))
+        for i in 0..<5 { db.recordAgentTraceEvent(makeRow(key: "ok-\(i)", result: .success, latencyMs: 10, costCents: 1)) }
+        for i in 0..<3 { db.recordAgentTraceEvent(makeRow(key: "err-\(i)", result: .error, latencyMs: 50, costCents: 0)) }
+        db.recordAgentTraceEvent(makeRow(key: "to-1", result: .timeout, latencyMs: 100, costCents: 0))
 
         let rollups = db.agentTracePivotByResult()
         #expect(rollups.count == 3)
@@ -391,5 +391,92 @@ struct AgentTraceEventStoreTests {
             plan.contains("idx_agent_trace_project_started"),
             "expected query plan to use idx_agent_trace_project_started; got:\n\(plan)"
         )
+    }
+}
+
+/// Sendable scratchpad for `Logger._setTestSink` callers — the sink
+/// closure is `@Sendable`, so plain `var [String]` capture trips
+/// strict concurrency. A class with an `NSLock` keeps the test
+/// straightforward.
+private final class ObservedLogEvents: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [String] = []
+    func append(_ event: String) {
+        lock.lock(); defer { lock.unlock() }
+        events.append(event)
+    }
+    func snapshot() -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return events
+    }
+}
+
+/// Isolated suite for the unknown-vocabulary read path. Carries
+/// `.loggerSinkGate` because it installs a `Logger._setTestSink` to
+/// observe the warn+counter routing — running it under the larger
+/// store suite would force every test there onto the gate.
+@Suite("AgentTraceEventStore — unknown-vocabulary decode path",
+       .serialized, .loggerSinkGate)
+struct AgentTraceEventStoreUnknownVocabTests {
+
+    /// Direct-SQL insert of a legacy `feature` / `result` value that the
+    /// typed enum vocabulary doesn't recognize → typed read returns
+    /// nil / `.unknown`, with a logged warning + `event_counters`
+    /// increment, never a crash. Models the rollout case where an old
+    /// session DB carries pre-V.2 strings the loop would otherwise have
+    /// silently absorbed.
+    @Test("Unknown vocabulary in legacy rows decodes safely with warn + counter")
+    func unknownVocabularyDecodesAsWarnAndCounter() {
+        let (db, path) = makeTempDB()
+        defer { TempSessionDatabase.cleanup(path: path) }
+
+        // Insert a legacy row directly via SQL — bypass the typed write
+        // path so we can stage values the enum doesn't know.
+        let inserted = db.queue.sync { () -> Bool in
+            guard let h = db.db else { return false }
+            let sql = """
+                INSERT INTO agent_trace_event
+                    (idempotency_key, pane, project, model, tier, ladder_position,
+                     feature, result, started_at, completed_at, latency_ms,
+                     tokens_in, tokens_out, cost_cents, redaction_count,
+                     validation_status, confirmation_required, egress_decisions,
+                     plan_id, cost_ledger_version)
+                VALUES (?, NULL, NULL, NULL, NULL, NULL,
+                        ?, ?, 1.0, 2.0, 1, 0, 0, 0, 0, NULL, 0, 0, NULL, NULL);
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(h, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, ("legacy-unknown" as NSString).utf8String, -1, nil)
+            // Capital-R "Read" is the canonical typo case-study from
+            // the backlog item — typed enum is lowercase; rawValue init
+            // returns nil for "Read".
+            sqlite3_bind_text(stmt, 2, ("Read" as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, ("oh_no" as NSString).utf8String, -1, nil)
+            return sqlite3_step(stmt) == SQLITE_DONE
+        }
+        #expect(inserted)
+
+        let observed = ObservedLogEvents()
+        Logger._setTestSink { event, _ in observed.append(event) }
+        defer { Logger._setTestSink(nil) }
+
+        let row = db.agentTraceEvent(idempotencyKey: "legacy-unknown")
+        #expect(row != nil)
+        #expect(row?.feature == nil, "unknown feature decodes to nil")
+        #expect(row?.result == .unknown, "unknown result decodes to .unknown sentinel")
+
+        // Drain the async recordEvent writes before reading counters.
+        db.queue.sync { }
+
+        let snapshot = observed.snapshot()
+        #expect(snapshot.contains("agent_trace.unknown_intent"))
+        #expect(snapshot.contains("agent_trace.unknown_result"))
+
+        let counters = db.eventCounts(prefix: "agent_trace.")
+        let intent = counters.first { $0.eventType == "agent_trace.unknown_intent" }
+        let result = counters.first { $0.eventType == "agent_trace.unknown_result" }
+        #expect(intent?.count == 1)
+        #expect(result?.count == 1)
     }
 }

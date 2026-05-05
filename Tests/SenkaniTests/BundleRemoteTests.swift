@@ -97,7 +97,7 @@ struct BundleComposerParseTreeTests {
 // wipes the sibling's stubs — the same bear-trap RepoNetworkPathTests
 // already documented above (see RemoteRepoClientTests.swift).
 
-@Suite("Bundle remote — URLProtocol paths", .serialized)
+@Suite("Bundle remote — URLProtocol paths", .serialized, .urlProtocolGate)
 struct BundleRemoteURLProtocolTests {
 
     @Test func fetchesTreeAndReadme() async throws {

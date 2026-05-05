@@ -203,7 +203,7 @@ struct RepoSanitizeTests {
 // tests that use it serialize into ONE suite — cross-suite
 // parallelism would race on stub registrations.
 
-@Suite("RemoteRepoClient — network paths (URLProtocol stub)", .serialized)
+@Suite("RemoteRepoClient — network paths (URLProtocol stub)", .serialized, .urlProtocolGate)
 struct RepoNetworkPathTests {
 
     @Test func treeAction() async throws {

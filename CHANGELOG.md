@@ -9,6 +9,31 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 4 — URLProtocol-stub suites cross-suite serialized via process-wide gate trait (parallel-runner flake closed)
+
+- `Tests/SenkaniTests/MockURLProtocolGate.swift` introduces an
+  `actor`-backed continuation-queued async semaphore wrapped in a
+  `CustomExecutionTrait` (`.urlProtocolGate`). Suites that touch
+  `MockURLProtocol.stubs` — `RemoteRepoClient — network paths
+  (URLProtocol stub)` and `Bundle remote — URLProtocol paths` — now
+  carry both `.serialized` and `.urlProtocolGate` so they serialize
+  *across* the suite boundary instead of only within each suite.
+- Closes the flake family named in
+  `swift-testing-parallel-runner-env-var-isolation`:
+  `authHeaderPresentOnApiHostWhenTokenSet`,
+  `authHeaderAbsentOnRawHostEvenWithToken`,
+  `fetchThenComposeYieldsUsableBundle`,
+  `secretsInReadmeAreRedactedViaClient`, and
+  `authHeaderAbsentWhenNoTokenSet` — all green on three consecutive
+  full-suite parallel runs.
+- `MockURLProtocol.stubs` is process-global; `.serialized` only
+  enforces intra-suite ordering, so concurrent suites racing on the
+  shared dict could `reset()` mid-`register()` and starve a sibling.
+  The gate acquires a single permit per suite invocation, releases
+  on success or throw, and (per the file's migration note) is the
+  one thing to rewrite when swift-testing's pin moves past 6.0
+  (`CustomExecutionTrait` → `TestScoping.provideScope`).
+
 ### May 4 — Session-DB schema authority collapsed onto migrations
 
 - `MigrationRegistry.all` is now the single canonical authority for

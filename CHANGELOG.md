@@ -9,6 +9,37 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 5 — KnowledgeTool `entityObserver` process-global race kills the runner (closed)
+
+- `Tests/SenkaniTests/KnowledgeToolTests.swift` — `@Suite("KnowledgeTool")`
+  → `@Suite("KnowledgeTool", .serialized)`. Two tests in this suite save
+  + install + restore `HookRouter.entityObserver`, a
+  `nonisolated(unsafe) public static var` closure global. Without
+  `.serialized`, the parallel runner could race save/install/teardown
+  across the two tests, leaving the observer pointed at closure A
+  while closure B was asserting against B's session — B's
+  `state.sessionTotal["ObservedEntity"]` then nil. The follow-on
+  force-unwrap at line 249 escalated the soft `#expect` failure into
+  a `Fatal error: Unexpectedly found nil while unwrapping an
+  Optional value` that aborted the entire test process and abandoned
+  every concurrently-running suite's verdicts.
+- Force-unwrap at line 249 replaced with a single read into a local
+  + nil-coalesced operand, so a soft `#expect` failure stays soft
+  and doesn't escalate into a runner-killing fatal.
+- `entityObserver` was the missed seam from the URLProtocol /
+  Logger-sink / FSEvents remediation rounds: the other three
+  `nonisolated(unsafe)` `HookRouter` statics (`validationDatabase`,
+  `annotationFeed`, `trustFlagSink`) were already serialized in
+  their respective suites. Suite doc comment now cross-references
+  the gated suites so a future test adding entityObserver writes
+  can't silently regress.
+- Closes `knowledgetool-entityobserver-shared-global-race-2026-05-04`:
+  filter-only `swift test --filter "KnowledgeTool"` ran 10/10 green
+  on three consecutive runs (0.43/0.40/0.38 s); three consecutive
+  full `swift test` runs (default parallel workers, 2,416 tests)
+  all 2416/2416 green (10.3/11.8/12.7 s) with no fatal nil unwrap
+  from this test on any run.
+
 ### May 5 — HookAnnotationFeed `Deny response JSON unchanged` byte-equality flake closed (parsed-JSON comparison)
 
 - `Tests/SenkaniTests/HookAnnotationFeedTests.swift` —

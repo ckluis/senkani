@@ -9,6 +9,29 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 5 — HookAnnotationFeed `Deny response JSON unchanged` byte-equality flake closed (parsed-JSON comparison)
+
+- `Tests/SenkaniTests/HookAnnotationFeedTests.swift` —
+  `denyResponseUnaffectedByRateCap` swaps its `#expect(admitted ==
+  suppressed)` byte-equality check for parsed-JSON dictionary
+  equality (`JSONSerialization.jsonObject(...) as? NSDictionary`
+  on both sides, then `==`). The deny response inner dict has
+  three keys (`hookEventName`, `permissionDecision`,
+  `permissionDecisionReason`) and `JSONSerialization.data(withJSON
+  Object:)` does not promise deterministic key ordering, so two
+  sequential calls with semantically-identical content can
+  serialize to different byte sequences (158 == 158 bytes but not
+  byte-for-byte equal) under parallel-runner CPU pressure. Test-
+  only change — `HookRouter.blockResponse` keeps emitting the
+  current JSON; the agent doesn't care about key order, and the
+  parsed-equality test is what the test was always trying to
+  assert.
+- Closes `hookannotationfeed-deny-json-byte-equality-flake-2026-05-04`:
+  filter-only run all green 4/4 in 0.014 s; full `swift test`
+  green at 2416/2416 on three consecutive runs (11.8 s, 10.8 s,
+  10.7 s).
+- Defects-outside-criteria filed during this round: none.
+
 ### May 5 — FileWatcher + KnowledgeFileLayer FSEvents flake closed (cross-suite gate + iter reduction + widened wait)
 
 - `Tests/SenkaniTests/FSEventsGate.swift` — new

@@ -9,7 +9,14 @@ import SQLite3
 /// silently lies. These tests exercise migration v17's schema shape +
 /// PolicyStore's chain wiring + ChainVerifier's policy_snapshots
 /// walker.
-@Suite("PolicySnapshotsChain — migration v17 schema + tamper-evidence")
+///
+/// `.serialized` belt-and-suspenders alongside the busy_timeout fix in
+/// `TempSessionDatabase.openSecondaryHandle`: helpers below tamper /
+/// peek on-disk sqlite rows via a second handle, and parallel-runner
+/// CPU/IO pressure was masking writer lock contention as `tamper code 2
+/// "database is locked"` in the sibling ChainRepairTests suite. See
+/// `chainverifier-policysnapshots-secondary-handle-busy-timeout-2026-05-04`.
+@Suite("PolicySnapshotsChain — migration v17 schema + tamper-evidence", .serialized)
 struct PolicySnapshotsChainTests {
 
     // MARK: - Helpers
@@ -41,8 +48,7 @@ struct PolicySnapshotsChainTests {
     /// Tamper one column of one row directly via raw sqlite — chain
     /// columns left intact. Mirrors `ChainVerifierTests.tamper`.
     private static func tamper(_ path: String, rowid: Int64, column: String, value: String) throws {
-        var db: OpaquePointer?
-        guard sqlite3_open(path, &db) == SQLITE_OK else {
+        guard let db = TempSessionDatabase.openSecondaryHandle(path) else {
             throw NSError(domain: "tamper", code: 1)
         }
         defer { sqlite3_close(db) }
@@ -60,8 +66,7 @@ struct PolicySnapshotsChainTests {
     }
 
     private static func selectAllRowids(path: String) throws -> [Int64] {
-        var db: OpaquePointer?
-        guard sqlite3_open(path, &db) == SQLITE_OK else {
+        guard let db = TempSessionDatabase.openSecondaryHandle(path) else {
             throw NSError(domain: "select", code: 1)
         }
         defer { sqlite3_close(db) }
@@ -80,13 +85,12 @@ struct PolicySnapshotsChainTests {
     // MARK: - 1. Schema shape
 
     @Test("v17 schema: policy_snapshots carries the three chain columns")
-    func schemaShape() {
+    func schemaShape() throws {
         let (db, path) = Self.makeDB()
         defer { TempSessionDatabase.close(db, path: path) }
 
         // PRAGMA table_info — direct read over the raw handle.
-        var raw: OpaquePointer?
-        #expect(sqlite3_open(path, &raw) == SQLITE_OK)
+        let raw = try #require(TempSessionDatabase.openSecondaryHandle(path))
         defer { sqlite3_close(raw) }
         var stmt: OpaquePointer?
         #expect(sqlite3_prepare_v2(raw, "PRAGMA table_info(policy_snapshots);", -1, &stmt, nil) == SQLITE_OK)
@@ -104,12 +108,11 @@ struct PolicySnapshotsChainTests {
     }
 
     @Test("schema: policy_snapshots.session_id declares REFERENCES sessions(id)")
-    func sessionIdForeignKey() {
+    func sessionIdForeignKey() throws {
         let (db, path) = Self.makeDB()
         defer { TempSessionDatabase.close(db, path: path) }
 
-        var raw: OpaquePointer?
-        #expect(sqlite3_open(path, &raw) == SQLITE_OK)
+        let raw = try #require(TempSessionDatabase.openSecondaryHandle(path))
         defer { sqlite3_close(raw) }
         var stmt: OpaquePointer?
         #expect(sqlite3_prepare_v2(raw, "PRAGMA foreign_key_list(policy_snapshots);", -1, &stmt, nil) == SQLITE_OK)

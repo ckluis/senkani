@@ -3,7 +3,13 @@ import Foundation
 import SQLite3
 @testable import Core
 
-@Suite("ChainVerifier — token_events tamper-evidence (T.5 round 2)")
+// `.serialized` belt-and-suspenders alongside the busy_timeout fix in
+// `TempSessionDatabase.openSecondaryHandle`: helpers below mutate /
+// peek on-disk sqlite rows via a second handle, and parallel-runner
+// CPU/IO pressure was masking writer lock contention as `tamper code 2
+// "database is locked"` in the sibling ChainRepairTests suite. See
+// `chainverifier-policysnapshots-secondary-handle-busy-timeout-2026-05-04`.
+@Suite("ChainVerifier — token_events tamper-evidence (T.5 round 2)", .serialized)
 struct ChainVerifierTests {
 
     // MARK: - Helpers
@@ -36,8 +42,7 @@ struct ChainVerifierTests {
     /// Mirrors what an attacker (or a bug) would have to do — flip a byte in
     /// the data, leave the chain columns untouched.
     private static func tamper(_ path: String, rowid: Int64) throws {
-        var db: OpaquePointer?
-        guard sqlite3_open(path, &db) == SQLITE_OK else {
+        guard let db = TempSessionDatabase.openSecondaryHandle(path) else {
             throw NSError(domain: "tamper", code: 1)
         }
         defer { sqlite3_close(db) }
@@ -211,8 +216,7 @@ struct ChainVerifierTests {
     // MARK: - Direct SQL helpers
 
     private static func selectAllRowids(path: String) throws -> [Int64] {
-        var db: OpaquePointer?
-        guard sqlite3_open(path, &db) == SQLITE_OK else {
+        guard let db = TempSessionDatabase.openSecondaryHandle(path) else {
             throw NSError(domain: "select", code: 1)
         }
         defer { sqlite3_close(db) }
@@ -243,8 +247,7 @@ struct ChainVerifierTests {
     }
 
     private static func selectFirstRow(path: String) throws -> FirstRow {
-        var db: OpaquePointer?
-        guard sqlite3_open(path, &db) == SQLITE_OK else {
+        guard let db = TempSessionDatabase.openSecondaryHandle(path) else {
             throw NSError(domain: "select", code: 1)
         }
         defer { sqlite3_close(db) }
@@ -278,8 +281,7 @@ struct ChainVerifierTests {
     }
 
     private static func runSQL(path: String, _ sql: String) throws {
-        var db: OpaquePointer?
-        guard sqlite3_open(path, &db) == SQLITE_OK else {
+        guard let db = TempSessionDatabase.openSecondaryHandle(path) else {
             throw NSError(domain: "exec", code: 1)
         }
         defer { sqlite3_close(db) }

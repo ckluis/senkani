@@ -9,6 +9,28 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 5 — ChainVerifierTests + PolicySnapshotsChainTests adopt openSecondaryHandle (proactive multi-handle busy_timeout migration)
+
+- `Tests/SenkaniTests/ChainVerifierTests.swift` — every secondary
+  `sqlite3_open` site (the `tamper(_:rowid:)` writer plus the three
+  peek helpers `selectAllRowids`, `selectFirstRow`, `runSQL`)
+  migrates from bare `sqlite3_open` to
+  `TempSessionDatabase.openSecondaryHandle(_:)`. Suite gains
+  `.serialized`.
+- `Tests/SenkaniTests/PolicySnapshotsChainTests.swift` — same
+  migration: `tamper(_:rowid:column:value:)` writer + `selectAllRowids`
+  peek + the two PRAGMA peeks inside `schemaShape` /
+  `sessionIdForeignKey`. The two PRAGMA-using tests become `throws`
+  + `try #require(...)` to consume the optional return cleanly.
+  Suite gains `.serialized`.
+- Closes `chainverifier-policysnapshots-secondary-handle-busy-timeout-2026-05-04`:
+  filtered runs all green 3/3 per suite (~0.06 s — 0.12 s); full
+  `swift test` green at 2416/2416.
+- Defects-outside-criteria filed during this round: none — the
+  pre-audit grep confirmed both target files are exhaustively
+  migrated and no other `sqlite3_open` sites remain in either
+  suite.
+
 ### May 4 — ChainRepairer paneRefreshStateRepair sqlite "database is locked" flake closed (test fixture busy_timeout + suite serialized)
 
 - `Tests/SenkaniTests/Helpers/TempSessionDatabase.swift` —

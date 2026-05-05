@@ -24,7 +24,10 @@ public struct MCPServerRunner {
             exit(0)
         }
 
-        let session = MCPSession.resolve()
+        // Phase B-i: stdio MCP server is single-connection; acquire its
+        // session via the registry (env-derived project root) so KBReader /
+        // KBObserver can find it as the default session.
+        let session = MCPSessionRegistry.shared.ensureDefaultSession()
 
         // Start watching for macOS memory-pressure warnings. Registered
         // MLX engines will drop their ModelContainers when a warning fires.

@@ -5,14 +5,19 @@ import Core
 private struct ToolTimeoutError: Error {}
 
 enum ToolRouter {
-    static func register(on server: Server, session: MCPSession) async {
+    /// Phase B-i: register handlers with an explicit `ConnectionContext` so
+    /// per-connection identity (and Phase B-ii toggle overrides) flow into
+    /// dispatch. Existing call sites (single-connection stdio + tests) can
+    /// pass a synthesized stdio context via `ConnectionContext.stdio(session:)`.
+    static func register(on server: Server, session: MCPSession, context: ConnectionContext? = nil) async {
         let initialEffective = await session.effectiveSet
         await server.withMethodHandler(ListTools.self) { _ in
             .init(tools: advertisedTools(for: initialEffective))
         }
 
+        let resolvedContext = context ?? ConnectionContext.stdio(session: session)
         await server.withMethodHandler(CallTool.self) { params in
-            await route(params, session: session)
+            await route(params, session: session, context: resolvedContext)
         }
     }
 
@@ -27,8 +32,9 @@ enum ToolRouter {
         return catalog.filter { effectiveSet.isToolEnabled($0.name) }
     }
 
-    static func route(_ params: CallTool.Parameters, session: MCPSession) async -> CallTool.Result {
+    static func route(_ params: CallTool.Parameters, session: MCPSession, context: ConnectionContext? = nil) async -> CallTool.Result {
         FileHandle.standardError.write(Data("🟡 TOOL CALL: \(params.name)\n".utf8))
+        let ctx = context ?? ConnectionContext.stdio(session: session)
         // Re-read feature toggles from pane config file (GUI may have changed them)
         await session.refreshConfig()
         // Phase S.1 — manifest gating. If a manifest is present and does
@@ -66,7 +72,7 @@ enum ToolRouter {
                     decision: "warned"
                 )
             }
-            let result = await executeRoute(params, session: session)
+            let result = await executeRoute(params, session: session, context: ctx)
             var content = result.content
             content.insert(.text(text: "[Budget Warning] \(warning)", annotations: nil, _meta: nil), at: 0)
             return await prependSessionContext(.init(content: content, isError: result.isError), session: session)
@@ -80,7 +86,7 @@ enum ToolRouter {
                     decision: "allowed"
                 )
             }
-            let result = await executeRoute(params, session: session)
+            let result = await executeRoute(params, session: session, context: ctx)
             return await prependSessionContext(result, session: session)
         }
     }
@@ -92,7 +98,7 @@ enum ToolRouter {
 
     /// Detached task wrapper for async tool handlers. Inherits actor
     /// isolation rules: handlers can `await` MCPSession actor calls directly.
-    private static func executeRoute(_ params: CallTool.Parameters, session: MCPSession) async -> CallTool.Result {
+    private static func executeRoute(_ params: CallTool.Parameters, session: MCPSession, context: ConnectionContext) async -> CallTool.Result {
         let start = Date()
         FileHandle.standardError.write(Data("🟡 [TOOL-START] \(params.name) at \(start)\n".utf8))
 
@@ -100,7 +106,7 @@ enum ToolRouter {
         do {
             result = try await withThrowingTaskGroup(of: CallTool.Result.self) { group in
                 group.addTask {
-                    await dispatchTool(params, session: session)
+                    await dispatchTool(params, session: session, context: context)
                 }
                 group.addTask {
                     try await Task.sleep(nanoseconds: toolTimeoutSeconds * 1_000_000_000)
@@ -148,7 +154,16 @@ enum ToolRouter {
         attributes: .concurrent
     )
 
-    private static func dispatchTool(_ params: CallTool.Parameters, session: MCPSession) async -> CallTool.Result {
+    private static func dispatchTool(_ params: CallTool.Parameters, session: MCPSession, context: ConnectionContext) async -> CallTool.Result {
+        // Phase B-i: surface the connection_id to handlers via a TaskLocal so
+        // tool implementations don't need a signature change to tag JSONL
+        // metric rows. `recordMetrics(connectionId:)` reads the local value.
+        return await MCPSession.$currentConnectionId.withValue(context.connectionId) {
+            await dispatchToolBody(params, session: session, context: context)
+        }
+    }
+
+    private static func dispatchToolBody(_ params: CallTool.Parameters, session: MCPSession, context: ConnectionContext) async -> CallTool.Result {
         // P2-10: canonicalize deprecated argument names before handing to the tool.
         // ArgumentShim returns normalized args + any deprecation warnings. We filter
         // those warnings through `session.noteDeprecation` so only the first sighting

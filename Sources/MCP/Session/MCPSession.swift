@@ -3,27 +3,29 @@ import Core
 import Filter
 import Indexer
 
-/// Shared session state for the MCP server.
+/// Per-project session state for the MCP server.
 /// Holds read cache, symbol index, feature config, and running metrics.
 ///
-/// In socket-server (daemon) mode, ``MCPSession/shared`` is the process-global
-/// singleton so all connections share one cache, index, and metrics store.
+/// Sessions live in `MCPSessionRegistry`, keyed by project root. The socket
+/// daemon acquires a session per connection; the stdio MCP server uses one
+/// session for its lifetime. SenkaniApp reads via `KBReader`, which routes
+/// through the registry's default-session entry.
 ///
-/// TODO: Phase 5 — For socket server, this session must be shareable across
-/// multiple client connections. Key changes needed:
-/// - Per-connection metrics vs. aggregate metrics (add connection ID tracking)
-/// - ReadCache is already thread-safe (NSLock), but consider per-connection
-///   cache partitioning for isolation if connections serve different projects
-/// - The `projectRoot` is currently fixed at init — for multi-project socket
-///   server, either create one MCPSession per project root or make it dynamic
-/// - Feature toggles (filterEnabled etc.) are session-wide — decide whether
-///   per-connection overrides are needed
+/// **Phase B-ii follow-up** — per-connection feature-toggle overrides
+/// (filterEnabled / secretsEnabled / etc.) are tracked under
+/// `mcpsession-actor-isolation-phase-b-ii`. Until then, toggles are session-
+/// wide.
+///
+/// **Phase B-iii follow-up** — `KBReader` is still synchronous via
+/// `nonisolated let` reads; full async migration of `KBReader` and the
+/// SenkaniApp `await` cascade lives under
+/// `mcpsession-actor-isolation-phase-b-iii`.
 actor MCPSession {
-    /// Process-global shared session for daemon / socket-server mode.
-    /// Lazily initialized on first access.
-    // TODO: Phase 5 — Consider a session registry (keyed by project root)
-    // instead of a single global singleton for multi-project socket server.
-    static let shared: MCPSession = MCPSession.resolve()
+    /// Phase B-i: per-tool-call connection identity. `ToolRouter.dispatchTool`
+    /// wraps the handler in `withValue(context.connectionId)` so handlers and
+    /// the metrics recorder can read the current connection's ID without a
+    /// signature change. `nil` for stdio-mode or untracked test calls.
+    @TaskLocal public static var currentConnectionId: String?
 
     /// Immutable Sendable references exposed via `KBReader` to SenkaniApp.
     /// Marked `nonisolated let` so the existing synchronous `KBReader` contract
@@ -887,8 +889,14 @@ actor MCPSession {
 
     /// Record metrics for a tool call.
     /// Writes to in-memory counters, JSONL file (for MetricsWatcher), and SessionDatabase.
+    /// Phase B-i: when `ToolRouter.dispatchTool` is the caller, the active
+    /// `MCPSession.currentConnectionId` TaskLocal supplies the connection ID,
+    /// which is tagged on the JSONL row. Direct test callers can override via
+    /// the `connectionId` parameter. DB-column threading lands in Phase B-ii.
     func recordMetrics(rawBytes: Int, compressedBytes: Int, feature: String,
-                       command: String? = nil, outputPreview: String? = nil, secretsFound: Int = 0) {
+                       command: String? = nil, outputPreview: String? = nil, secretsFound: Int = 0,
+                       connectionId: String? = nil) {
+        let resolvedConnectionId = connectionId ?? MCPSession.currentConnectionId
         totalRawBytes += rawBytes
         totalCompressedBytes += compressedBytes
         toolCallCount += 1
@@ -907,7 +915,8 @@ actor MCPSession {
                 savedBytes: savedBytes,
                 savingsPercent: savingsPercent,
                 secretsFound: secretsFound,
-                timestamp: Date()
+                timestamp: Date(),
+                connectionId: resolvedConnectionId
             )
             if let data = try? JSONEncoder().encode(entry),
                let json = String(data: data, encoding: .utf8) {
@@ -1197,6 +1206,11 @@ actor MCPSession {
 /// JSONL entry format matching MetricEntry in MetricsWatcher.swift.
 /// Uses default JSONEncoder Date encoding (Double, secondsSinceReferenceDate)
 /// which matches the default JSONDecoder in MetricsWatcher.
+///
+/// Phase B-i: optional `connectionId` tags the row when the dispatch layer
+/// supplies a `ConnectionContext`. Older rows without it decode cleanly via
+/// the optional. MetricsWatcher ignores the field if its decoder doesn't
+/// know it (default JSONDecoder behavior).
 private struct JSONLMetricEntry: Codable {
     let command: String
     let feature: String
@@ -1206,4 +1220,5 @@ private struct JSONLMetricEntry: Codable {
     let savingsPercent: Double
     let secretsFound: Int
     let timestamp: Date
+    let connectionId: String?
 }

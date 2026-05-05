@@ -9,6 +9,38 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 5 — Internal: `MCPSession` per-project registry + per-connection identity (`mcpsession-actor-isolation-phase-b-i`)
+
+- `Sources/MCP/Session/MCPSessionRegistry.swift` introduces a process-
+  global `@unchecked Sendable` registry (NSLock-protected dictionary)
+  keyed by project root. Sessions are created lazily on first acquire
+  and reused across subsequent acquires of the same root. The legacy
+  `MCPSession.shared` static singleton is removed; `KBReader` /
+  `KBObserver` / `SocketServer` / `MCPMain` now route through
+  `MCPSessionRegistry.shared.ensureDefaultSession()`.
+- `Sources/MCP/ConnectionContext.swift` adds a per-connection identity
+  value (UUID `connectionId` + `projectRoot`) threaded through
+  `ToolRouter.register(on:session:context:)` and
+  `ToolRouter.route(_:session:context:)`. Each socket-server
+  connection mints its UUID on `accept()`; the daemon stderr now logs
+  both fd and `connection_id` for correlation.
+- `MCPSession.recordMetrics` accepts an optional `connectionId:`
+  parameter; the dispatch layer surfaces the active connection's ID
+  via the new `MCPSession.currentConnectionId` `@TaskLocal`, which the
+  recorder reads when no explicit override is supplied. The JSONL
+  metrics row gains an optional `connectionId` field — older readers
+  ignore unknown fields, no consumer change required.
+- Two new isolation tests in
+  `Tests/SenkaniTests/MCPSessionRegistryIsolationTests.swift`:
+  registry-isolation (different project roots → distinct sessions; no
+  metric leakage under concurrent `recordMetrics`); task-local
+  connection-ID propagation (JSONL row carries the active TaskLocal
+  value).
+- The Phase 5 `TODO` block at the top of `MCPSession.swift` is
+  replaced with explicit pointers to Phase B-ii (per-connection
+  toggle overrides + DB-column threading) and Phase B-iii (`KBReader`
+  async cascade + parent close).
+
 ### May 5 — Internal: `MCPSession` migrated to Swift `actor` (`mcpsession-actor-isolation-phase-a`)
 
 - `Sources/MCP/Session/MCPSession.swift` converts from `final class

@@ -3,12 +3,12 @@ import MCP
 import Indexer
 
 enum OutlineTool {
-    static func handle(arguments: [String: Value]?, session: MCPSession) -> CallTool.Result {
+    static func handle(arguments: [String: Value]?, session: MCPSession) async -> CallTool.Result {
         guard let file = arguments?["file"]?.stringValue else {
             return .init(content: [.text(text: "Error: 'file' is required", annotations: nil, _meta: nil)], isError: true)
         }
 
-        guard let index = session.indexIfReady() else {
+        guard let index = await session.indexIfReady() else {
             return .init(content: [.text(text: "Symbol index is building (first run). Try again in a few seconds.", annotations: nil, _meta: nil)])
         }
 
@@ -18,7 +18,7 @@ enum OutlineTool {
 
         // Track queried file for staleness detection
         if let firstFile = symbols.first?.file {
-            session.trackQueriedSymbol(file: firstFile)
+            await session.trackQueriedSymbol(file: firstFile)
         }
 
         guard !symbols.isEmpty else {
@@ -69,8 +69,8 @@ enum OutlineTool {
         // Estimate whole-file bytes from file size without reading content
         let fullPath = session.projectRoot + "/" + fileName
         let rawBytes = (try? FileManager.default.attributesOfItem(atPath: fullPath)[.size] as? Int) ?? (symbols.count * 300)
-        session.recordMetrics(rawBytes: rawBytes, compressedBytes: output.utf8.count, feature: "outline",
-                              command: file, outputPreview: String(output.prefix(200)))
+        await session.recordMetrics(rawBytes: rawBytes, compressedBytes: output.utf8.count, feature: "outline",
+                                    command: file, outputPreview: String(output.prefix(200)))
 
         return .init(content: [.text(text: output, annotations: nil, _meta: nil)])
     }

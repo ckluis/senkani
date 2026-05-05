@@ -5,7 +5,7 @@ import MCP
 /// Query file changes detected by FSEvents. Returns changed files since a cursor timestamp.
 /// Eliminates re-read polling — one call instead of re-reading the file tree.
 enum WatchTool {
-    static func handle(arguments: [String: Value]?, session: MCPSession) -> CallTool.Result {
+    static func handle(arguments: [String: Value]?, session: MCPSession) async -> CallTool.Result {
         let sinceStr = arguments?["since"]?.stringValue
         let glob = arguments?["glob"]?.stringValue
 
@@ -23,7 +23,7 @@ enum WatchTool {
             }
         }
 
-        let events = session.changesSince(sinceDate, glob: glob)
+        let events = await session.changesSince(sinceDate, glob: glob)
 
         if events.isEmpty {
             let msg = sinceStr != nil

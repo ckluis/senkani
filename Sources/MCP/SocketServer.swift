@@ -311,7 +311,7 @@ public final class SocketServerManager: @unchecked Sendable {
             """
 
         // P1-7: bounded instructions payload across the socket path too.
-        let instructions = session.instructionsPayload(base: baseInstructions)
+        let instructions = await session.instructionsPayload(base: baseInstructions)
 
         let server = Server(
             name: "senkani",

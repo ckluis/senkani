@@ -53,7 +53,7 @@ enum ToolRegistry {
                     ]),
                     annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
                 ),
-                handler: .syncHandler { args, session in ReadTool.handle(arguments: args, session: session) }
+                handler: .asyncHandler { args, session in await ReadTool.handle(arguments: args, session: session) }
             ),
             ToolDefinition(
                 name: "exec",
@@ -72,7 +72,7 @@ enum ToolRegistry {
                     ]),
                     annotations: .init(readOnlyHint: false, destructiveHint: true, openWorldHint: false)
                 ),
-                handler: .syncHandler { args, session in ExecTool.handle(arguments: args, session: session) }
+                handler: .asyncHandler { args, session in await ExecTool.handle(arguments: args, session: session) }
             ),
             ToolDefinition(
                 name: "search",
@@ -107,7 +107,7 @@ enum ToolRegistry {
                     ]),
                     annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
                 ),
-                handler: .syncHandler { args, session in FetchTool.handle(arguments: args, session: session) }
+                handler: .asyncHandler { args, session in await FetchTool.handle(arguments: args, session: session) }
             ),
             ToolDefinition(
                 name: "web",
@@ -161,7 +161,7 @@ enum ToolRegistry {
                     ]),
                     annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
                 ),
-                handler: .syncHandler { args, session in ExploreTool.handle(arguments: args, session: session) }
+                handler: .asyncHandler { args, session in await ExploreTool.handle(arguments: args, session: session) }
             ),
             ToolDefinition(
                 name: "outline",
@@ -177,7 +177,7 @@ enum ToolRegistry {
                     ]),
                     annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
                 ),
-                handler: .syncHandler { args, session in OutlineTool.handle(arguments: args, session: session) }
+                handler: .asyncHandler { args, session in await OutlineTool.handle(arguments: args, session: session) }
             ),
             ToolDefinition(
                 name: "session",
@@ -197,7 +197,7 @@ enum ToolRegistry {
                     ]),
                     annotations: .init(readOnlyHint: false, idempotentHint: true, openWorldHint: false)
                 ),
-                handler: .syncHandler { args, session in SessionTool.handle(arguments: args, session: session) }
+                handler: .asyncHandler { args, session in await SessionTool.handle(arguments: args, session: session) }
             ),
             ToolDefinition(
                 name: "validate",
@@ -216,7 +216,7 @@ enum ToolRegistry {
                     ]),
                     annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
                 ),
-                handler: .syncHandler { args, session in ValidateTool.handle(arguments: args, session: session) }
+                handler: .asyncHandler { args, session in await ValidateTool.handle(arguments: args, session: session) }
             ),
             ToolDefinition(
                 name: "parse",
@@ -233,7 +233,7 @@ enum ToolRegistry {
                     ]),
                     annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
                 ),
-                handler: .syncHandler { args, session in ParseTool.handle(arguments: args, session: session) }
+                handler: .asyncHandler { args, session in await ParseTool.handle(arguments: args, session: session) }
             ),
             ToolDefinition(
                 name: "embed",
@@ -285,7 +285,7 @@ enum ToolRegistry {
                     ]),
                     annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
                 ),
-                handler: .syncHandler { args, session in DepsTool.handle(arguments: args, session: session) }
+                handler: .asyncHandler { args, session in await DepsTool.handle(arguments: args, session: session) }
             ),
             ToolDefinition(
                 name: "pane",
@@ -306,7 +306,7 @@ enum ToolRegistry {
                     ]),
                     annotations: .init(readOnlyHint: false, idempotentHint: false, openWorldHint: false)
                 ),
-                handler: .syncHandler { args, session in PaneControlTool.handle(arguments: args, session: session) }
+                handler: .asyncHandler { args, session in await PaneControlTool.handle(arguments: args, session: session) }
             ),
             ToolDefinition(
                 name: "watch",
@@ -322,7 +322,7 @@ enum ToolRegistry {
                     ]),
                     annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
                 ),
-                handler: .syncHandler { args, session in WatchTool.handle(arguments: args, session: session) }
+                handler: .asyncHandler { args, session in await WatchTool.handle(arguments: args, session: session) }
             ),
             ToolDefinition(
                 name: "version",
@@ -335,7 +335,7 @@ enum ToolRegistry {
                     ]),
                     annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
                 ),
-                handler: .syncHandler { args, session in VersionTool.handle(arguments: args, session: session) }
+                handler: .asyncHandler { args, session in await VersionTool.handle(arguments: args, session: session) }
             ),
             ToolDefinition(
                 name: "repo",
@@ -398,7 +398,7 @@ enum ToolRegistry {
                     ]),
                     annotations: .init(readOnlyHint: false, idempotentHint: false, openWorldHint: false)
                 ),
-                handler: .syncHandler { args, session in KnowledgeTool.handle(arguments: args, session: session) }
+                handler: .asyncHandler { args, session in await KnowledgeTool.handle(arguments: args, session: session) }
             ),
         ]
     }

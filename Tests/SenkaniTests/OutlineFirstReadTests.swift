@@ -21,11 +21,11 @@ private func makeSession(projectRoot: String, indexerEnabled: Bool = true) -> MC
 /// bypass disk I/O and the file walker — both of which resolve `/tmp`
 /// to `/private/tmp` differently across macOS versions, leaving the
 /// injected symbols invisible to outline lookup on some CI runners.
-private func injectIndex(_ session: MCPSession, symbols: [IndexEntry]) {
+private func injectIndex(_ session: MCPSession, symbols: [IndexEntry]) async {
     var idx = SymbolIndex()
     idx.projectRoot = session.projectRoot
     idx.symbols = symbols
-    session._setIndexForTesting(idx)
+    await session._setIndexForTesting(idx)
 }
 
 private func makeTempDir() -> String {
@@ -41,7 +41,7 @@ private func cleanup(_ path: String) {
 @Suite("ReadTool — Outline-First Read")
 struct OutlineFirstReadTests {
 
-    @Test func defaultReadReturnsOutlineWhenIndexAvailable() throws {
+    @Test func defaultReadReturnsOutlineWhenIndexAvailable() async throws {
         let dir = makeTempDir()
         defer { cleanup(dir) }
 
@@ -55,13 +55,13 @@ struct OutlineFirstReadTests {
         try code.write(toFile: dir + "/Foo.swift", atomically: true, encoding: .utf8)
 
         let session = makeSession(projectRoot: dir)
-        injectIndex(session, symbols: [
+        await injectIndex(session, symbols: [
             IndexEntry(name: "Foo", kind: .struct, file: "Foo.swift", startLine: 1, endLine: 4, engine: "regex"),
             IndexEntry(name: "bar", kind: .method, file: "Foo.swift", startLine: 2, endLine: 2, container: "Foo", engine: "regex"),
             IndexEntry(name: "baz", kind: .method, file: "Foo.swift", startLine: 3, endLine: 3, container: "Foo", engine: "regex"),
         ])
 
-        let result = ReadTool.handle(
+        let result = await ReadTool.handle(
             arguments: ["path": .string("Foo.swift")],
             session: session
         )
@@ -79,7 +79,7 @@ struct OutlineFirstReadTests {
         #expect(text.contains("full: true"), "Outline should hint about full read opt-in")
     }
 
-    @Test func fullTrueReturnsFull() throws {
+    @Test func fullTrueReturnsFull() async throws {
         let dir = makeTempDir()
         defer { cleanup(dir) }
 
@@ -87,11 +87,11 @@ struct OutlineFirstReadTests {
         try code.write(toFile: dir + "/Foo.swift", atomically: true, encoding: .utf8)
 
         let session = makeSession(projectRoot: dir)
-        injectIndex(session, symbols: [
+        await injectIndex(session, symbols: [
             IndexEntry(name: "Foo", kind: .struct, file: "Foo.swift", startLine: 1, endLine: 3, engine: "regex"),
         ])
 
-        let result = ReadTool.handle(
+        let result = await ReadTool.handle(
             arguments: ["path": .string("Foo.swift"), "full": .bool(true)],
             session: session
         )
@@ -105,7 +105,7 @@ struct OutlineFirstReadTests {
         #expect(!text.contains("outline"), "full: true should not say 'outline'")
     }
 
-    @Test func offsetLimitImpliesFullRead() throws {
+    @Test func offsetLimitImpliesFullRead() async throws {
         let dir = makeTempDir()
         defer { cleanup(dir) }
 
@@ -114,11 +114,11 @@ struct OutlineFirstReadTests {
 
         let session = makeSession(projectRoot: dir)
         // Even with index symbols, offset/limit should force full read
-        injectIndex(session, symbols: [
+        await injectIndex(session, symbols: [
             IndexEntry(name: "something", kind: .function, file: "test.txt", startLine: 1, engine: "regex"),
         ])
 
-        let result = ReadTool.handle(
+        let result = await ReadTool.handle(
             arguments: [
                 "path": .string("test.txt"),
                 "offset": .int(2),
@@ -136,7 +136,7 @@ struct OutlineFirstReadTests {
         #expect(!text.contains("outline"), "offset/limit should not return outline")
     }
 
-    @Test func fallsBackToFullReadWhenNoIndex() throws {
+    @Test func fallsBackToFullReadWhenNoIndex() async throws {
         let dir = makeTempDir()
         defer { cleanup(dir) }
 
@@ -154,7 +154,7 @@ struct OutlineFirstReadTests {
         )
         // Don't inject any index — indexIfReady() will return nil
 
-        let result = ReadTool.handle(
+        let result = await ReadTool.handle(
             arguments: ["path": .string("simple.swift")],
             session: session
         )
@@ -167,7 +167,7 @@ struct OutlineFirstReadTests {
         #expect(text.contains("let x = 42"), "Without index, should fall back to full read")
     }
 
-    @Test func fallsBackToFullReadWhenIndexerDisabled() throws {
+    @Test func fallsBackToFullReadWhenIndexerDisabled() async throws {
         let dir = makeTempDir()
         defer { cleanup(dir) }
 
@@ -176,7 +176,7 @@ struct OutlineFirstReadTests {
 
         let session = makeSession(projectRoot: dir, indexerEnabled: false)
 
-        let result = ReadTool.handle(
+        let result = await ReadTool.handle(
             arguments: ["path": .string("disabled.swift")],
             session: session
         )

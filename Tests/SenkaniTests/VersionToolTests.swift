@@ -41,7 +41,7 @@ struct VersionToolTests {
     // MARK: - Handler output shape (the client contract)
 
     /// Helper — call handle() with an ad-hoc session and parse its JSON.
-    private func decodePayload() throws -> [String: Any] {
+    private func decodePayload() async throws -> [String: Any] {
         let root = NSTemporaryDirectory() + "senkani-version-test-" + UUID().uuidString
         try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: root) }
@@ -53,7 +53,7 @@ struct VersionToolTests {
             indexerEnabled: false,
             cacheEnabled: false
         )
-        let result = VersionTool.handle(arguments: nil, session: session)
+        let result = await VersionTool.handle(arguments: nil, session: session)
 
         guard case .text(let body, _, _) = result.content.first else {
             Issue.record("handle() must return a text content block")
@@ -67,16 +67,16 @@ struct VersionToolTests {
         return obj
     }
 
-    @Test func handlerReturnsAllRequiredKeys() throws {
-        let payload = try decodePayload()
+    @Test func handlerReturnsAllRequiredKeys() async throws {
+        let payload = try await decodePayload()
         #expect(payload["server_version"] as? String == VersionTool.serverVersion)
         #expect(payload["tool_schemas_version"] as? Int == VersionTool.toolSchemasVersion)
         #expect(payload["schema_db_version"] is Int, "schema_db_version must be numeric")
         #expect(payload["tools"] is [Any], "tools must be a JSON array")
     }
 
-    @Test func handlerToolsArrayMatchesRouter() throws {
-        let payload = try decodePayload()
+    @Test func handlerToolsArrayMatchesRouter() async throws {
+        let payload = try await decodePayload()
         guard let tools = payload["tools"] as? [String] else {
             Issue.record("tools array must be [String]")
             return
@@ -85,8 +85,8 @@ struct VersionToolTests {
         #expect(tools == expected, "handler's tools list must match ToolRouter.allTools() exactly (sorted)")
     }
 
-    @Test func handlerToolsArrayIsSorted() throws {
-        let payload = try decodePayload()
+    @Test func handlerToolsArrayIsSorted() async throws {
+        let payload = try await decodePayload()
         guard let tools = payload["tools"] as? [String] else {
             Issue.record("tools array must be [String]")
             return
@@ -94,7 +94,7 @@ struct VersionToolTests {
         #expect(tools == tools.sorted(), "tools must be returned sorted for client cache stability")
     }
 
-    @Test func handlerOutputIsNotMarkedAsError() throws {
+    @Test func handlerOutputIsNotMarkedAsError() async throws {
         let root = NSTemporaryDirectory() + "senkani-version-test-" + UUID().uuidString
         try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: root) }
@@ -106,7 +106,7 @@ struct VersionToolTests {
             indexerEnabled: false,
             cacheEnabled: false
         )
-        let result = VersionTool.handle(arguments: nil, session: session)
+        let result = await VersionTool.handle(arguments: nil, session: session)
         #expect(result.isError != true, "version tool must never return isError=true")
     }
 }

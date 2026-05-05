@@ -3,7 +3,7 @@ import MCP
 import Core
 
 enum SessionTool {
-    static func handle(arguments: [String: Value]?, session: MCPSession) -> CallTool.Result {
+    static func handle(arguments: [String: Value]?, session: MCPSession) async -> CallTool.Result {
         let action = arguments?["action"]?.stringValue ?? "stats"
 
         switch action {
@@ -12,7 +12,7 @@ enum SessionTool {
             // wave). Counters are per-project where the site knows it
             // (SSRF blocks, command redactions), process-global otherwise
             // (socket handshake rejections, schema migrations).
-            var body = session.statsString()
+            var body = await session.statsString()
             let securitySection = formatSecurityEvents(projectRoot: session.projectRoot)
             if !securitySection.isEmpty {
                 body += "\n\n" + securitySection
@@ -38,15 +38,15 @@ enum SessionTool {
                     let budgetCents = dict["budget_session_cents"]?.intValue
 
                     if let all = dict["all"]?.boolValue {
-                        session.updateConfig(filter: all, secrets: all, indexer: all, cache: all, terse: all)
+                        await session.updateConfig(filter: all, secrets: all, indexer: all, cache: all, terse: all)
                     } else {
-                        session.updateConfig(filter: filter, secrets: secrets, indexer: indexer,
-                                             cache: cache, terse: terse, autoPin: autoPin,
-                                             budgetSessionCents: budgetCents)
+                        await session.updateConfig(filter: filter, secrets: secrets, indexer: indexer,
+                                                   cache: cache, terse: terse, autoPin: autoPin,
+                                                   budgetSessionCents: budgetCents)
                     }
                 }
             }
-            return .init(content: [.text(text: "Config updated: \(session.configString())", annotations: nil, _meta: nil)])
+            return .init(content: [.text(text: "Config updated: \(await session.configString())", annotations: nil, _meta: nil)])
 
         case "validators":
             // List all validators and their status
@@ -80,7 +80,7 @@ enum SessionTool {
                 return .init(content: [.text(text: "Error: 'name' is required for action 'pin'.", annotations: nil, _meta: nil)], isError: true)
             }
             let ttl = arguments?["ttl"]?.intValue ?? PinnedContextStore.defaultTTL
-            let msg = session.pinContext(name: name, ttl: ttl)
+            let msg = await session.pinContext(name: name, ttl: ttl)
             return .init(content: [.text(text: msg, annotations: nil, _meta: nil)])
 
         case "unpin":

@@ -151,7 +151,7 @@ struct HotFilesTests {
         #expect(hot.count == 3, "Should return 3 hot files, got \(hot.count)")
     }
 
-    @Test func preCacheGuardedByCacheEnabled() {
+    @Test func preCacheGuardedByCacheEnabled() async {
         // When cacheEnabled is false, preCacheHotFiles should exit immediately
         // We verify by checking the method signature accepts the flag
         let session = MCPSession(
@@ -161,6 +161,7 @@ struct HotFilesTests {
         )
         // The session was created with cache disabled — preCacheHotFiles was called
         // in init but returned immediately due to guard. No crash = success.
-        #expect(!session.cacheEnabled, "Cache should be disabled")
+        let cacheEnabled = await session.cacheEnabled
+        #expect(!cacheEnabled, "Cache should be disabled")
     }
 }

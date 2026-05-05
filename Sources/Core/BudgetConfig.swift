@@ -82,6 +82,31 @@ public struct BudgetConfig: Codable, Sendable {
         return try body()
     }
 
+    /// Async variant for tests that drive actor-isolated code under the
+    /// override. Install / restore via the same sync helper so we never
+    /// hold an NSLock across an `await` boundary (Swift 6 forbids that).
+    /// Concurrent async cases that need true serialization on the override
+    /// slot should run sequentially or wrap with a SerialActor.
+    public static func withTestOverrideAsync<T>(
+        _ config: BudgetConfig,
+        _ body: () async throws -> T
+    ) async rethrows -> T {
+        let prev = swapTestOverride(config)
+        defer { _ = swapTestOverride(prev) }
+        return try await body()
+    }
+
+    /// Atomically install `next` into the override slot, returning the
+    /// prior value. Sync — safe to call from async code without holding a
+    /// lock across `await`.
+    private static func swapTestOverride(_ next: BudgetConfig?) -> BudgetConfig? {
+        testOverrideLock.lock()
+        defer { testOverrideLock.unlock() }
+        let prev = _testOverride
+        _testOverride = next
+        return prev
+    }
+
     // MARK: - Decision Logic
 
     /// Check current spend against configured limits.

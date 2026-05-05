@@ -33,10 +33,16 @@ enum ExecTool {
         "j_" + UUID().uuidString.prefix(8).lowercased()
     }
 
-    static func handle(arguments: [String: Value]?, session: MCPSession) -> CallTool.Result {
+    static func handle(arguments: [String: Value]?, session: MCPSession) async -> CallTool.Result {
+        // Snapshot feature toggles once per call.
+        let filterEnabled = await session.filterEnabled
+        let secretsEnabled = await session.secretsEnabled
+        let terseEnabled = await session.terseEnabled
+        let injectionGuardEnabled = await session.injectionGuardEnabled
+
         // --- Poll or kill an existing background job ---
         if let jobId = arguments?["job_id"]?.stringValue {
-            guard let job = session.backgroundJob(id: jobId) else {
+            guard let job = await session.backgroundJob(id: jobId) else {
                 return .init(content: [.text(text: "Error: unknown job_id '\(jobId)'", annotations: nil, _meta: nil)], isError: true)
             }
             if arguments?["kill"]?.boolValue == true {
@@ -51,8 +57,8 @@ enum ExecTool {
             }
             // Status poll
             var output = job.output
-            if session.filterEnabled || session.secretsEnabled {
-                let config = FeatureConfig(filter: session.filterEnabled, secrets: session.secretsEnabled, indexer: false, terse: false)
+            if filterEnabled || secretsEnabled {
+                let config = FeatureConfig(filter: filterEnabled, secrets: secretsEnabled, indexer: false, terse: false)
                 let pipeline = FilterPipeline(config: config)
                 output = pipeline.process(command: job.command, output: output).output
             }
@@ -113,7 +119,7 @@ enum ExecTool {
                 job.setExitCode(proc.terminationStatus)
             }
 
-            session.registerBackgroundJob(job)
+            await session.registerBackgroundJob(job)
 
             let result = "{\"job_id\": \"\(jobId)\", \"pid\": \(process.processIdentifier), \"command\": \"\(command)\"}"
             return .init(content: [.text(text: result, annotations: nil, _meta: nil)])
@@ -143,7 +149,7 @@ enum ExecTool {
 
         // Read BEFORE waitUntilExit to avoid pipe buffer deadlock on large output.
         // Adaptive truncation: cap scales with budget remaining.
-        let budgetRemaining = session.budgetRemainingPercent()
+        let budgetRemaining = await session.budgetRemainingPercent()
         let maxBytes = AdaptiveTruncation.maxBytes(forBudgetRemaining: budgetRemaining)
         let (outData, outTruncated) = Self.readCapped(from: outPipe.fileHandleForReading, limit: maxBytes)
         let (errData, errTruncated) = Self.readCapped(from: errPipe.fileHandleForReading, limit: maxBytes)
@@ -157,8 +163,8 @@ enum ExecTool {
         let rawBytes = rawOutput.utf8.count
         var output: String
 
-        if session.filterEnabled || session.secretsEnabled || session.terseEnabled {
-            let config = FeatureConfig(filter: session.filterEnabled, secrets: session.secretsEnabled, indexer: false, terse: session.terseEnabled, injectionGuard: session.injectionGuardEnabled)
+        if filterEnabled || secretsEnabled || terseEnabled {
+            let config = FeatureConfig(filter: filterEnabled, secrets: secretsEnabled, indexer: false, terse: terseEnabled, injectionGuard: injectionGuardEnabled)
             let pipeline = FilterPipeline(config: config)
             let result = pipeline.process(command: command, output: rawOutput)
             output = result.output
@@ -167,8 +173,8 @@ enum ExecTool {
         }
 
         let compressedBytes = output.utf8.count
-        session.recordMetrics(rawBytes: rawBytes, compressedBytes: compressedBytes, feature: "exec",
-                              command: command, outputPreview: String(output.prefix(200)))
+        await session.recordMetrics(rawBytes: rawBytes, compressedBytes: compressedBytes, feature: "exec",
+                                    command: command, outputPreview: String(output.prefix(200)))
 
         let exitCode = process.terminationStatus
         let savedPct = rawBytes > 0 ? Int(Double(rawBytes - compressedBytes) / Double(rawBytes) * 100) : 0

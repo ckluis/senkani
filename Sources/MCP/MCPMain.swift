@@ -79,7 +79,7 @@ public struct MCPServerRunner {
 
         // P1-7: bounded instructions payload. instructionsPayload handles repoMap +
         // sessionBrief + skills assembly with a single byte budget (default 2 KB).
-        let payload = session.instructionsPayload(base: baseInstructions)
+        let payload = await session.instructionsPayload(base: baseInstructions)
         let instructions: String
         if TerseMode.isEnabled {
             instructions = TerseMode.systemPrompt + "\n\n" + payload
@@ -101,14 +101,19 @@ public struct MCPServerRunner {
         let retentionConfig = RetentionConfig.load(projectRoot: ProcessInfo.processInfo.environment["SENKANI_PROJECT_ROOT"])
         RetentionScheduler.shared.start(config: retentionConfig)
 
-        // Handle SIGTERM/SIGINT for clean shutdown
+        // Handle SIGTERM/SIGINT for clean shutdown.
+        // Signal handlers run in a synchronous nonisolated context, so the
+        // actor-isolated `session.shutdown()` is dispatched onto a Task.
+        // `exit()` is deferred until shutdown completes so DB writes flush.
         let sigTermSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
         sigTermSource.setEventHandler {
             Logger.log("mcp.signal.received", fields: ["signal": .string("SIGTERM"), "outcome": .string("shutdown")])
             RetentionScheduler.shared.stop()
-            session.shutdown()
-            SessionDatabase.shared.close()
-            exit(0)
+            Task {
+                await session.shutdown()
+                SessionDatabase.shared.close()
+                exit(0)
+            }
         }
         sigTermSource.resume()
         signal(SIGTERM, SIG_IGN) // Let DispatchSource handle it
@@ -117,9 +122,11 @@ public struct MCPServerRunner {
         sigIntSource.setEventHandler {
             Logger.log("mcp.signal.received", fields: ["signal": .string("SIGINT"), "outcome": .string("shutdown")])
             RetentionScheduler.shared.stop()
-            session.shutdown()
-            SessionDatabase.shared.close()
-            exit(0)
+            Task {
+                await session.shutdown()
+                SessionDatabase.shared.close()
+                exit(0)
+            }
         }
         sigIntSource.resume()
         signal(SIGINT, SIG_IGN)
@@ -161,7 +168,7 @@ public struct MCPServerRunner {
 
         // Clean shutdown
         RetentionScheduler.shared.stop()
-        session.shutdown()
+        await session.shutdown()
         SessionDatabase.shared.close()
         Logger.log("mcp.exited", fields: ["outcome": .string("clean")])
 

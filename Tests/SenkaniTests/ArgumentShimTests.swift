@@ -105,18 +105,21 @@ struct ArgumentShimTests {
 
     // MARK: - session-scoped once-per-session
 
-    @Test func noteDeprecationFirstSightTrueThenFalse() {
+    @Test func noteDeprecationFirstSightTrueThenFalse() async {
         let session = MCPSession(
             projectRoot: "/tmp/argument-shim-test-\(UUID().uuidString)",
             filterEnabled: false, secretsEnabled: false, indexerEnabled: false,
             cacheEnabled: false, terseEnabled: false, injectionGuardEnabled: false,
             sessionId: nil, paneId: nil
         )
-        #expect(session.noteDeprecation("knowledge.detail") == true,
+        let first = await session.noteDeprecation("knowledge.detail")
+        #expect(first == true,
                 "first sight must return true so the router appends the warning")
-        #expect(session.noteDeprecation("knowledge.detail") == false,
+        let second = await session.noteDeprecation("knowledge.detail")
+        #expect(second == false,
                 "second sight must return false so the warning is not repeated")
-        #expect(session.noteDeprecation("validate.detail") == true,
+        let independent = await session.noteDeprecation("validate.detail")
+        #expect(independent == true,
                 "different key is independent")
     }
 }

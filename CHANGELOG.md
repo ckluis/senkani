@@ -9,6 +9,42 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 5 — Internal: `MCPSession` migrated to Swift `actor` (`mcpsession-actor-isolation-phase-a`)
+
+- `Sources/MCP/Session/MCPSession.swift` converts from `final class
+  @unchecked Sendable` (with internal `NSLock`) to a Swift `actor`.
+  Compiler-enforced isolation replaces every `lock.lock()` /
+  `lock.unlock()` pair across mutating methods. The `MCPSession.shared`
+  process-global singleton is preserved; resolution semantics
+  (`MCPSession.resolve()`) unchanged.
+- Four immutable Sendable read fields exposed via `KBReader`
+  (`projectRoot`, `knowledgeStore`, `entityTracker`, `knowledgeLayer`)
+  are declared `nonisolated let`, plus the other internally
+  thread-safe Sendable refs (`readCache`, `pipeline`,
+  `validatorRegistry`, `metricsFilePath`, `sessionId`, `paneId`,
+  `agentType`, `treeCache`, `pinnedContextStore`). SenkaniApp's
+  `KBReader.store` / `.tracker` / `.layer` / `.projectRoot` accessors
+  stay synchronous — no `await` cascade into
+  `KBPaneViewModel`/`SidebarView`/`KnowledgeBaseView`.
+- All MCP-side callers cascade `await` where actor isolation requires.
+  Every tool's `handle()` is now `async`; `ToolRegistry` advertises
+  every entry through `.asyncHandler`. `SocketServer` and `MCPMain`
+  await `instructionsPayload(base:)` and `session.shutdown()`.
+- `BudgetConfig.withTestOverrideAsync` joins the existing sync helper
+  to drive actor-isolated code from tests; install/restore swaps the
+  override slot via a lock-free atomic helper so no NSLock crosses an
+  `await` boundary.
+- New `Tests/SenkaniTests/MCPSessionActorIsolationTests.swift` races
+  `recordMetrics` + `updateConfig` + `noteDeprecation` on a single
+  session and asserts published counters land on exact totals; a
+  separate test hammers `noteDeprecation` from 50 tasks and asserts
+  `true` is observed exactly once. Compile-only test pins the
+  `nonisolated let` contract for the four KB-bridge fields.
+- User-facing API unchanged. Multi-project registry + per-connection
+  metrics + per-connection toggle overrides + `KBReader` async
+  migration all follow in Phase B
+  (`mcpsession-actor-isolation-phase-b`).
+
 ### May 5 — `no-running-senkani` pre-condition standard for all uninstall test plans (`uninstall-test-plan-prerunning-process-precondition`)
 
 - Process change driven by 2026-05-03 v2 walk Finding #3, third

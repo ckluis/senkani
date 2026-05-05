@@ -25,7 +25,7 @@ enum PaneControlTool {
         return n == frame.count
     }
 
-    static func handle(arguments: [String: Value]?, session: MCPSession) -> CallTool.Result {
+    static func handle(arguments: [String: Value]?, session: MCPSession) async -> CallTool.Result {
         guard let actionStr = arguments?["action"]?.stringValue,
               let action = PaneIPCAction(rawValue: actionStr) else {
             return .init(

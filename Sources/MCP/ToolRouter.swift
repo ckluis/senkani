@@ -6,8 +6,9 @@ private struct ToolTimeoutError: Error {}
 
 enum ToolRouter {
     static func register(on server: Server, session: MCPSession) async {
+        let initialEffective = await session.effectiveSet
         await server.withMethodHandler(ListTools.self) { _ in
-            .init(tools: advertisedTools(for: session.effectiveSet))
+            .init(tools: advertisedTools(for: initialEffective))
         }
 
         await server.withMethodHandler(CallTool.self) { params in
@@ -29,12 +30,12 @@ enum ToolRouter {
     static func route(_ params: CallTool.Parameters, session: MCPSession) async -> CallTool.Result {
         FileHandle.standardError.write(Data("🟡 TOOL CALL: \(params.name)\n".utf8))
         // Re-read feature toggles from pane config file (GUI may have changed them)
-        session.refreshConfig()
+        await session.refreshConfig()
         // Phase S.1 — manifest gating. If a manifest is present and does
         // not enable this tool, return a structured error pointing the
         // caller at the Skills pane toggle rather than silently dispatching.
         // No manifest present → full surface (today's behavior).
-        let effective = session.effectiveSet
+        let effective = await session.effectiveSet
         if effective.manifestPresent, !effective.isToolEnabled(params.name) {
             return .init(content: [.text(
                 text: "Tool '\(params.name)' is not enabled in this project's manifest. Enable it in the Skills pane (or add it to .senkani/senkani.json).",
@@ -43,7 +44,7 @@ enum ToolRouter {
         }
         // SECURITY: Budget enforcement — non-bypassable gate before any tool execution.
         // This is the only routing path, so all tool calls pass through this check.
-        let budgetDecision = session.checkBudget()
+        let budgetDecision = await session.checkBudget()
         switch budgetDecision {
         case .block(let reason):
             // Log the blocked call
@@ -68,7 +69,7 @@ enum ToolRouter {
             let result = await executeRoute(params, session: session)
             var content = result.content
             content.insert(.text(text: "[Budget Warning] \(warning)", annotations: nil, _meta: nil), at: 0)
-            return prependSessionContext(.init(content: content, isError: result.isError), session: session)
+            return await prependSessionContext(.init(content: content, isError: result.isError), session: session)
 
         case .allow:
             // Log allowed (only if session tracking is active)
@@ -80,7 +81,7 @@ enum ToolRouter {
                 )
             }
             let result = await executeRoute(params, session: session)
-            return prependSessionContext(result, session: session)
+            return await prependSessionContext(result, session: session)
         }
     }
 
@@ -89,6 +90,8 @@ enum ToolRouter {
     /// timeout mechanisms can clean up before the outer timeout fires.
     private static let toolTimeoutSeconds: UInt64 = 60
 
+    /// Detached task wrapper for async tool handlers. Inherits actor
+    /// isolation rules: handlers can `await` MCPSession actor calls directly.
     private static func executeRoute(_ params: CallTool.Parameters, session: MCPSession) async -> CallTool.Result {
         let start = Date()
         FileHandle.standardError.write(Data("🟡 [TOOL-START] \(params.name) at \(start)\n".utf8))
@@ -151,23 +154,28 @@ enum ToolRouter {
         // those warnings through `session.noteDeprecation` so only the first sighting
         // of each key per session produces a visible warning block — chat-spam-free.
         let shimmed = ArgumentShim.normalize(toolName: params.name, arguments: params.arguments)
-        let firstSightWarnings = shimmed.deprecations.filter { session.noteDeprecation($0.key) }
+        var firstSightWarnings: [ArgumentShim.Deprecation] = []
+        for dep in shimmed.deprecations {
+            if await session.noteDeprecation(dep.key) {
+                firstSightWarnings.append(dep)
+            }
+        }
         let normalizedArgs = shimmed.arguments
         let normalizedParams = CallTool.Parameters(name: params.name, arguments: normalizedArgs)
 
-        // Extract arg text before dispatch — covers ALL tools (async and sync).
-        // Previously only ran in the default/sync path, silently skipping embed/vision/search.
+        // Extract arg text before dispatch — covers ALL tools.
         let argText = normalizedArgs?.values.compactMap(\.stringValue).joined(separator: " ") ?? ""
 
         let result: CallTool.Result
         if let def = ToolRegistry.byName[normalizedParams.name] {
             switch def.handler {
             case .asyncHandler(let h):
-                // Async tools — already non-blocking, run directly in cooperative pool
+                // All tool handlers became async after MCPSession's actor
+                // conversion (Phase A) — dispatch directly. Tools that need
+                // to off-load heavy synchronous I/O can opt into
+                // `toolQueue.async` themselves.
                 result = await h(normalizedArgs, session)
             case .syncHandler(let h):
-                // Synchronous tools — wrap on toolQueue so heavy I/O doesn't starve
-                // Swift's cooperative thread pool.
                 result = await withCheckedContinuation { continuation in
                     toolQueue.async {
                         let r = h(normalizedArgs, session)
@@ -181,9 +189,10 @@ enum ToolRouter {
 
         // Entity mention tracking + auto-pin detection (~52μs, all tools).
         if !argText.isEmpty {
+            // entityTracker is `nonisolated let` — sync call is safe.
             session.entityTracker.observe(text: argText, source: "mcp:\(normalizedParams.name)")
-            if session.autoPinEnabled {
-                session.detectAndQueueAutoPins(argText: argText)
+            if await session.autoPinEnabled {
+                await session.detectAndQueueAutoPins(argText: argText)
             }
         }
 
@@ -206,8 +215,8 @@ enum ToolRouter {
     ///   1. Pinned context blocks (--- @Name (N calls remaining) ---)
     ///   2. Pin expiry notices (for entries whose TTL just hit 0)
     ///   3. Symbol staleness notices
-    private static func prependSessionContext(_ result: CallTool.Result, session: MCPSession) -> CallTool.Result {
-        let staleNotices = session.drainStaleNotices()
+    private static func prependSessionContext(_ result: CallTool.Result, session: MCPSession) async -> CallTool.Result {
+        let staleNotices = await session.drainStaleNotices()
         let (pinnedContext, expiryNotices) = session.pinnedContextStore.drain()
 
         var prefixParts: [String] = []

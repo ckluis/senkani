@@ -9,23 +9,23 @@ import Foundation
 @Suite("MCPSession.truncate")
 struct InstructionsPayloadTruncateTests {
 
-    @Test func shortInputPassesThrough() {
+    @Test func shortInputPassesThrough() async {
         let out = MCPSession.truncate("hello", to: 100, marker: "[cut]")
         #expect(out == "hello")
     }
 
-    @Test func emptyInputStaysEmpty() {
+    @Test func emptyInputStaysEmpty() async {
         let out = MCPSession.truncate("", to: 100, marker: "[cut]")
         #expect(out == "")
     }
 
-    @Test func exactBudgetPassesThrough() {
+    @Test func exactBudgetPassesThrough() async {
         let s = String(repeating: "a", count: 50)
         let out = MCPSession.truncate(s, to: 50, marker: "[cut]")
         #expect(out == s)
     }
 
-    @Test func overBudgetAppendsMarker() {
+    @Test func overBudgetAppendsMarker() async {
         let s = String(repeating: "a", count: 200)
         let marker = "[cut]"
         let out = MCPSession.truncate(s, to: 100, marker: marker)
@@ -33,7 +33,7 @@ struct InstructionsPayloadTruncateTests {
         #expect(out.hasSuffix(marker), "Marker must be appended on truncation")
     }
 
-    @Test func utf8MultibyteDoesNotSplitScalar() {
+    @Test func utf8MultibyteDoesNotSplitScalar() async {
         // Each 🦀 is 4 UTF-8 bytes. 50 × 4 = 200 bytes.
         let s = String(repeating: "🦀", count: 50)
         let marker = "[…]"
@@ -46,7 +46,7 @@ struct InstructionsPayloadTruncateTests {
         #expect(body.allSatisfy { $0 == "🦀" }, "Truncation must not split a multi-byte scalar")
     }
 
-    @Test func markerLargerThanBudgetDoesNotCrash() {
+    @Test func markerLargerThanBudgetDoesNotCrash() async {
         // Pathological case: budget smaller than marker. Should not crash; result is
         // allowed to be empty or to contain a partial marker — just don't panic.
         let out = MCPSession.truncate("long text here", to: 2, marker: "[cut-longer-than-budget]")
@@ -64,7 +64,7 @@ struct InstructionsPayloadTruncateTests {
 /// Constructs a real MCPSession pointed at a temp directory — light-weight
 /// (index + skills are empty on a blank dir, brief is a short string), and
 /// avoids the risk of the test depending on the user's real project DB.
-@Suite("MCPSession.instructionsPayload (G9)")
+@Suite("await MCPSession.instructionsPayload (G9)")
 struct InstructionsPayloadIntegrationTests {
 
     private static func makeTempProject() -> String {
@@ -82,13 +82,13 @@ struct InstructionsPayloadIntegrationTests {
         try? FileManager.default.removeItem(atPath: root)
     }
 
-    @Test func budgetCeilingRespectedForSmallBase() {
+    @Test func budgetCeilingRespectedForSmallBase() async {
         let root = Self.makeTempProject()
         defer { Self.cleanup(root) }
 
         let session = MCPSession(projectRoot: root)
         let base = "You are senkani.\n"
-        let out = session.instructionsPayload(base: base, budgetBytes: 256)
+        let out = await session.instructionsPayload(base: base, budgetBytes: 256)
         // Budget is 256 across base + repoMap + brief + skills. The base
         // itself is always included (base == foundation, the budget is for
         // the sections appended after). The assertion is the TOTAL stays
@@ -98,13 +98,13 @@ struct InstructionsPayloadIntegrationTests {
                 "total payload must fit budget + base; got \(out.utf8.count) bytes for budget=256, base=\(base.utf8.count)")
     }
 
-    @Test func budgetCeilingRespectedFor2KBDefault() {
+    @Test func budgetCeilingRespectedFor2KBDefault() async {
         let root = Self.makeTempProject()
         defer { Self.cleanup(root) }
 
         let session = MCPSession(projectRoot: root)
         let base = "You are senkani.\n"
-        let out = session.instructionsPayload(base: base)  // default 2048
+        let out = await session.instructionsPayload(base: base)  // default 2048
         // Implementation sums three sub-budgets (brief=min(700, 2048/3),
         // skills=min(400, 2048/5), repoMap=remainder). Enforce the same
         // ceiling: 2048 + base.
@@ -112,30 +112,30 @@ struct InstructionsPayloadIntegrationTests {
                 "default budget must not be exceeded; got \(out.utf8.count)")
     }
 
-    @Test func basePrefixAlwaysPresent() {
+    @Test func basePrefixAlwaysPresent() async {
         let root = Self.makeTempProject()
         defer { Self.cleanup(root) }
 
         let session = MCPSession(projectRoot: root)
         let base = "YOU-ARE-SENKANI-UNIQUE-MARKER-4b7a\n"
-        let out = session.instructionsPayload(base: base, budgetBytes: 128)
+        let out = await session.instructionsPayload(base: base, budgetBytes: 128)
         #expect(out.hasPrefix(base),
                 "base must always be the prefix so the agent-facing instructions are stable")
     }
 
-    @Test func tighterBudgetProducesNoLargerPayloadThanLooser() {
+    @Test func tighterBudgetProducesNoLargerPayloadThanLooser() async {
         let root = Self.makeTempProject()
         defer { Self.cleanup(root) }
 
         let session = MCPSession(projectRoot: root)
         let base = "base\n"
-        let tight = session.instructionsPayload(base: base, budgetBytes: 256)
-        let loose = session.instructionsPayload(base: base, budgetBytes: 4096)
+        let tight = await session.instructionsPayload(base: base, budgetBytes: 256)
+        let loose = await session.instructionsPayload(base: base, budgetBytes: 4096)
         #expect(tight.utf8.count <= loose.utf8.count,
                 "monotone: smaller budget ≤ larger budget (got tight=\(tight.utf8.count), loose=\(loose.utf8.count))")
     }
 
-    @Test func emptyProjectProducesBaseOnly() {
+    @Test func emptyProjectProducesBaseOnly() async {
         // Blank project (no source files, no prior session): sessionBrief,
         // repoMap, and skillsPrompt are all empty → payload == base.
         let root = NSTemporaryDirectory() + "senkani-g9-empty-\(UUID().uuidString)"
@@ -144,7 +144,7 @@ struct InstructionsPayloadIntegrationTests {
 
         let session = MCPSession(projectRoot: root)
         let base = "BASE-ONLY"
-        let out = session.instructionsPayload(base: base, budgetBytes: 2048)
+        let out = await session.instructionsPayload(base: base, budgetBytes: 2048)
         // Allow minor additions if the background index happens to populate
         // during test runtime — the guarantee is that output is close to
         // base and never smaller than base.

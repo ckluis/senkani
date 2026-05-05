@@ -4,12 +4,12 @@ import Indexer
 import Core
 
 enum FetchTool {
-    static func handle(arguments: [String: Value]?, session: MCPSession) -> CallTool.Result {
+    static func handle(arguments: [String: Value]?, session: MCPSession) async -> CallTool.Result {
         guard let name = arguments?["name"]?.stringValue else {
             return .init(content: [.text(text: "Error: 'name' is required", annotations: nil, _meta: nil)], isError: true)
         }
 
-        guard let index = session.indexIfReady() else {
+        guard let index = await session.indexIfReady() else {
             return .init(content: [.text(text: "Symbol index is building (first run). Try again in a few seconds.", annotations: nil, _meta: nil)])
         }
 
@@ -26,7 +26,7 @@ enum FetchTool {
         }
 
         // Track queried symbol file for staleness detection
-        session.trackQueriedSymbol(file: entry.file)
+        await session.trackQueriedSymbol(file: entry.file)
 
         let fullPath = session.projectRoot + "/" + entry.file
         guard let content = try? String(contentsOfFile: fullPath, encoding: .utf8) else {
@@ -41,7 +41,7 @@ enum FetchTool {
 
         // Apply secret detection
         var output = sliceText
-        if session.secretsEnabled {
+        if await session.secretsEnabled {
             output = SecretDetector.scan(output).redacted
         }
 
@@ -49,8 +49,8 @@ enum FetchTool {
         let sliceBytes = output.utf8.count
         let savedPct = wholeFileBytes > 0 ? Int(Double(wholeFileBytes - sliceBytes) / Double(wholeFileBytes) * 100) : 0
 
-        session.recordMetrics(rawBytes: wholeFileBytes, compressedBytes: sliceBytes, feature: "fetch",
-                              command: name, outputPreview: String(output.prefix(200)))
+        await session.recordMetrics(rawBytes: wholeFileBytes, compressedBytes: sliceBytes, feature: "fetch",
+                                    command: name, outputPreview: String(output.prefix(200)))
 
         var header = "// \(entry.name) (\(entry.kind)) — \(entry.file):\(entry.startLine)-\(end)\n"
         if let sig = entry.signature { header += "// \(sig)\n" }

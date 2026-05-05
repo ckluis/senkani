@@ -31,7 +31,12 @@ private func read(_ path: String) -> String? {
 
 // MARK: - KBVaultConfig
 
-@Suite("KBVaultConfig — V.7")
+// `.serialized`: defaultResolvesToPerProjectDir + envOverrideUsesProjectSlugSubdir
+// race on the process-global SENKANI_KB_VAULT_ROOT env var (one calls
+// unsetenv before reading via getenv; the other calls setenv before
+// reading). Intra-suite serialization eliminates the race; no other
+// suite reads or writes this env var, so a cross-suite gate isn't needed.
+@Suite("KBVaultConfig — V.7", .serialized)
 struct KBVaultConfigTests {
 
     /// 1. Default resolution: no env override, empty config file → per-project dir.

@@ -9,6 +9,31 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 5 — KBVaultV7 env-var leak under parallel runner closed (`.serialized`); parallel-runner-flake-additional-families parent item closed
+
+- `Tests/SenkaniTests/KBVaultV7Tests.swift` — `@Suite("KBVaultConfig — V.7")`
+  gains `.serialized`. Two tests in this suite manipulate the process-
+  global `SENKANI_KB_VAULT_ROOT` env var (`defaultResolvesToPerProjectDir`
+  unsets before reading via `getenv`; `envOverrideUsesProjectSlugSubdir`
+  sets via `setenv` and defers `unsetenv`). Without `.serialized` the
+  parallel runner could interleave one test's read with the other's
+  write — `defaultResolvesToPerProjectDir` would observe the sibling's
+  override and resolve to a different temp root, failing the
+  `resolved == root + "/.senkani/knowledge"` expectation. Intra-suite
+  serialization eliminates the race; grep confirms no other suite reads
+  or writes `SENKANI_KB_VAULT_ROOT`, so a cross-suite gate trait isn't
+  needed.
+- Closes `parallel-runner-flake-additional-families-2026-05-04` (parent
+  item). Three of four sub-families closed via dedicated rounds earlier
+  in May 5: FileWatcher (`filewatcher-fsevents-flake-under-parallel-runner`),
+  HookAnnotationFeed (`hookannotationfeed-deny-json-byte-equality-flake`),
+  DependencyGraph (`dependencygraph-real-project-graph-perf-budget-flake`).
+  This round addresses the residual KBVaultV7 family and verifies the
+  full four-family acceptance: each new failure passes in isolation
+  (KBVaultConfig filter-only 3/3 in 0.012 s); full `swift test` green at
+  2416/2416 on three consecutive runs (12.15 s / 10.91 s / 10.09 s).
+- Defects-outside-criteria filed during this round: none.
+
 ### May 5 — KnowledgeTool `entityObserver` process-global race kills the runner (closed)
 
 - `Tests/SenkaniTests/KnowledgeToolTests.swift` — `@Suite("KnowledgeTool")`

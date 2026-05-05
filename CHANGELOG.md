@@ -9,6 +9,28 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 5 — DependencyGraph "Real project graph builds fast" perf-budget flake closed (median-of-3 sampling)
+
+- `Tests/SenkaniTests/DependencyGraphTests.swift` — extracted
+  `Real project graph builds fast` into its own
+  `@Suite("DependencyGraph — Perf gate")` and replaced the single
+  `clock.measure { ... }` wall-clock assert with a median-of-3
+  measurement. The full builder is run three times; the test
+  asserts the median elapsed against the 5 s budget. The failure
+  message reports all three samples + the median for diagnostic.
+- Why median-of-3: the previous fix considered (`.serialized` on
+  the suite) only serializes within-suite — peer suites still
+  preempt the measured CPU slice during parallel-runner execution.
+  Median-of-3 tolerates a one-of-three peer-CPU spike but still
+  fires on a real O(N²) regression (every measurement would blow
+  budget).
+- Closes `dependencygraph-real-project-graph-perf-budget-flake-2026-05-04`:
+  filtered runs all green 3/3 (perf gate ~7.8 s — 8.2 s wall, three
+  samples each ~2.5 s); full `swift test` green for DependencyGraph
+  in 3/3 runs (perf gate ~10.7 s — 11.8 s wall under full-suite
+  parallel load).
+- Defects-outside-criteria filed during this round: none.
+
 ### May 5 — ChainVerifierTests + PolicySnapshotsChainTests adopt openSecondaryHandle (proactive multi-handle busy_timeout migration)
 
 - `Tests/SenkaniTests/ChainVerifierTests.swift` — every secondary

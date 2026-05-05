@@ -41,7 +41,7 @@ enum FetchTool {
 
         // Apply secret detection
         var output = sliceText
-        if await session.secretsEnabled {
+        if await session.effectiveSecretsEnabled {
             output = SecretDetector.scan(output).redacted
         }
 

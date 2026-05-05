@@ -9,6 +9,45 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 5 — Internal: per-connection toggle overrides + `connection_id` DB columns (`mcpsession-actor-isolation-phase-b-ii`)
+
+- `MCPSession.ToggleOverrides` (six optional `Bool`s — filter, secrets,
+  indexer, cache, terse, injectionGuard) plus `MCPSession.$currentToggleOverrides`
+  `@TaskLocal` thread per-connection feature-toggle overrides through
+  the dispatch layer. `ToolRouter.dispatchTool` now wraps each tool
+  call in nested `withValue(...)` blocks for both the connection ID
+  and the override map. Six new actor-isolated `effective<X>Enabled`
+  computed properties overlay the override on the session-wide default;
+  `ReadTool`, `FetchTool`, `ExecTool`, and `WebFetchTool` switched
+  from `<x>Enabled` to `effective<X>Enabled`. `updateConfig` /
+  `refreshConfig` continue to mutate the session's defaults — overrides
+  ride the `@TaskLocal` and never touch actor storage.
+- New schema migration `v18` adds nullable `connection_id TEXT`
+  columns to `commands` and `token_events` plus per-table indexes.
+  `MCPSession.recordMetrics` plumbs the resolved connection ID into
+  both DB writes alongside the JSONL row Phase B-i shipped, so per-
+  connection vs aggregate views are both reconstructible from the
+  same rows.
+- Audit-chain compatibility: pre-existing `migration-v5` (commands)
+  and `migration-v4` (token_events) anchors continue to verify under
+  their original canonical-column shape. The v18 migration renames
+  pre-v18 `fresh-install` anchors for those tables to
+  `fresh-install-pre-v18` so the writer (and `ChainVerifier`) can
+  switch shapes per anchor: legacy reasons hash without
+  `connection_id`; all other anchors include it. `ChainState` re-reads
+  the anchor reason on each write rather than caching it, so SQL-level
+  anchor renames (test fixtures, future `senkani doctor --repair-chain`
+  reanchors) take effect immediately.
+- New `SessionDatabase` query helpers
+  `commandsForConnection(connectionId:)` and
+  `aggregateForProject(projectRoot:groupByConnection:)` return per-
+  connection rows / per-connection aggregate stats. Unit-tested in
+  `Tests/SenkaniTests/PerConnectionOverrideTests.swift` (7 new tests
+  cover effective-getter fallback, override shadowing, two-task
+  override isolation, partial override fall-through, connection_id
+  round-trip, group-by-connection aggregates, and chain verification
+  with NULL connection_id).
+
 ### May 5 — Internal: `MCPSession` per-project registry + per-connection identity (`mcpsession-actor-isolation-phase-b-i`)
 
 - `Sources/MCP/Session/MCPSessionRegistry.swift` introduces a process-

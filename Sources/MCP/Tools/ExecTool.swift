@@ -34,11 +34,12 @@ enum ExecTool {
     }
 
     static func handle(arguments: [String: Value]?, session: MCPSession) async -> CallTool.Result {
-        // Snapshot feature toggles once per call.
-        let filterEnabled = await session.filterEnabled
-        let secretsEnabled = await session.secretsEnabled
-        let terseEnabled = await session.terseEnabled
-        let injectionGuardEnabled = await session.injectionGuardEnabled
+        // Snapshot feature toggles once per call. Phase B-ii: read effective
+        // toggles so per-connection overrides apply for the call's lifetime.
+        let filterEnabled = await session.effectiveFilterEnabled
+        let secretsEnabled = await session.effectiveSecretsEnabled
+        let terseEnabled = await session.effectiveTerseEnabled
+        let injectionGuardEnabled = await session.effectiveInjectionGuardEnabled
 
         // --- Poll or kill an existing background job ---
         if let jobId = arguments?["job_id"]?.stringValue {

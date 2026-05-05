@@ -11,11 +11,6 @@ import Indexer
 /// session for its lifetime. SenkaniApp reads via `KBReader`, which routes
 /// through the registry's default-session entry.
 ///
-/// **Phase B-ii follow-up** — per-connection feature-toggle overrides
-/// (filterEnabled / secretsEnabled / etc.) are tracked under
-/// `mcpsession-actor-isolation-phase-b-ii`. Until then, toggles are session-
-/// wide.
-///
 /// **Phase B-iii follow-up** — `KBReader` is still synchronous via
 /// `nonisolated let` reads; full async migration of `KBReader` and the
 /// SenkaniApp `await` cascade lives under
@@ -26,6 +21,71 @@ actor MCPSession {
     /// the metrics recorder can read the current connection's ID without a
     /// signature change. `nil` for stdio-mode or untracked test calls.
     @TaskLocal public static var currentConnectionId: String?
+
+    /// Phase B-ii: per-tool-call feature-toggle overrides. The dispatch layer
+    /// wraps each tool call in `withValue(context.toggleOverrides)`. Tools
+    /// read `effective<X>Enabled` (override-or-default) instead of the raw
+    /// `<x>Enabled` storage. `updateConfig` / `refreshConfig` continue to
+    /// mutate the session's defaults — overrides ride this `@TaskLocal` and
+    /// never touch the actor's storage. `nil` (default daemon) reproduces
+    /// the legacy behaviour: every effective getter returns the session-wide
+    /// default.
+    @TaskLocal public static var currentToggleOverrides: ToggleOverrides?
+
+    /// Per-connection feature-toggle override map. Each field is optional —
+    /// nil means "fall back to the session's default toggle"; `.some(true)`
+    /// or `.some(false)` overrides for the lifetime of the wrapped tool call.
+    public struct ToggleOverrides: Sendable {
+        public var filter: Bool?
+        public var secrets: Bool?
+        public var indexer: Bool?
+        public var cache: Bool?
+        public var terse: Bool?
+        public var injectionGuard: Bool?
+
+        public init(
+            filter: Bool? = nil,
+            secrets: Bool? = nil,
+            indexer: Bool? = nil,
+            cache: Bool? = nil,
+            terse: Bool? = nil,
+            injectionGuard: Bool? = nil
+        ) {
+            self.filter = filter
+            self.secrets = secrets
+            self.indexer = indexer
+            self.cache = cache
+            self.terse = terse
+            self.injectionGuard = injectionGuard
+        }
+    }
+
+    // MARK: - Phase B-ii — effective toggle getters
+    //
+    // Each getter overlays the per-connection override (if present) on top
+    // of the session-wide default. `nonisolated` is safe: the getters read
+    // a static `@TaskLocal` (no actor state) and an actor-isolated stored
+    // property accessed via `self`. Tools that previously read
+    // `await session.filterEnabled` now read `await session.effectiveFilterEnabled`.
+
+    var effectiveFilterEnabled: Bool {
+        MCPSession.currentToggleOverrides?.filter ?? filterEnabled
+    }
+    var effectiveSecretsEnabled: Bool {
+        MCPSession.currentToggleOverrides?.secrets ?? secretsEnabled
+    }
+    var effectiveIndexerEnabled: Bool {
+        MCPSession.currentToggleOverrides?.indexer ?? indexerEnabled
+    }
+    var effectiveCacheEnabled: Bool {
+        MCPSession.currentToggleOverrides?.cache ?? cacheEnabled
+    }
+    var effectiveTerseEnabled: Bool {
+        MCPSession.currentToggleOverrides?.terse ?? terseEnabled
+    }
+    var effectiveInjectionGuardEnabled: Bool {
+        MCPSession.currentToggleOverrides?.injectionGuard ?? injectionGuardEnabled
+    }
 
     /// Immutable Sendable references exposed via `KBReader` to SenkaniApp.
     /// Marked `nonisolated let` so the existing synchronous `KBReader` contract
@@ -892,7 +952,9 @@ actor MCPSession {
     /// Phase B-i: when `ToolRouter.dispatchTool` is the caller, the active
     /// `MCPSession.currentConnectionId` TaskLocal supplies the connection ID,
     /// which is tagged on the JSONL row. Direct test callers can override via
-    /// the `connectionId` parameter. DB-column threading lands in Phase B-ii.
+    /// the `connectionId` parameter. Phase B-ii: the resolved ID also lands
+    /// on the `commands.connection_id` and `token_events.connection_id` DB
+    /// columns so per-connection vs aggregate views can both be reconstructed.
     func recordMetrics(rawBytes: Int, compressedBytes: Int, feature: String,
                        command: String? = nil, outputPreview: String? = nil, secretsFound: Int = 0,
                        connectionId: String? = nil) {
@@ -947,7 +1009,8 @@ actor MCPSession {
                 rawBytes: rawBytes,
                 compressedBytes: compressedBytes,
                 feature: feature,
-                outputPreview: outputPreview
+                outputPreview: outputPreview,
+                connectionId: resolvedConnectionId
             )
         }
 
@@ -970,7 +1033,8 @@ actor MCPSession {
             costCents: costCents,
             feature: feature,
             command: command,
-            modelTier: agentType.modelTier
+            modelTier: agentType.modelTier,
+            connectionId: resolvedConnectionId
         )
     }
 

@@ -158,8 +158,14 @@ enum ToolRouter {
         // Phase B-i: surface the connection_id to handlers via a TaskLocal so
         // tool implementations don't need a signature change to tag JSONL
         // metric rows. `recordMetrics(connectionId:)` reads the local value.
+        // Phase B-ii: same pattern for `toggleOverrides`. The effective<X>Enabled
+        // getters on `MCPSession` overlay the per-call override on top of
+        // the session-wide default. Nested `withValue` blocks compose; both
+        // task-locals are visible to the inner body.
         return await MCPSession.$currentConnectionId.withValue(context.connectionId) {
-            await dispatchToolBody(params, session: session, context: context)
+            await MCPSession.$currentToggleOverrides.withValue(context.toggleOverrides) {
+                await dispatchToolBody(params, session: session, context: context)
+            }
         }
     }
 

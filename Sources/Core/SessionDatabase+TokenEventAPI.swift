@@ -103,14 +103,16 @@ extension SessionDatabase {
         costCents: Int,
         feature: String?,
         command: String?,
-        modelTier: String? = nil
+        modelTier: String? = nil,
+        connectionId: String? = nil
     ) {
         tokenEventStore.recordTokenEvent(
             sessionId: sessionId, paneId: paneId, projectRoot: projectRoot,
             source: source, toolName: toolName, model: model,
             inputTokens: inputTokens, outputTokens: outputTokens,
             savedTokens: savedTokens, costCents: costCents,
-            feature: feature, command: command, modelTier: modelTier
+            feature: feature, command: command, modelTier: modelTier,
+            connectionId: connectionId
         )
         OnboardingMilestoneStore.record(.firstTrackedEvent)
         if savedTokens > 0 {

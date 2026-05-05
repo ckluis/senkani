@@ -7,22 +7,31 @@ import Foundation
 /// - `connectionId` — UUID minted on socket accept; tags metrics so per-
 ///   connection vs aggregate views can both be recovered.
 /// - `projectRoot` — the project this connection serves; the registry key.
-///
-/// Phase B-ii will extend this with `toggleOverrides:` for per-connection
-/// feature-toggle overrides without mutating the shared session's defaults.
-public struct ConnectionContext: Sendable {
-    public let connectionId: String
-    public let projectRoot: String
+/// - `toggleOverrides` — Phase B-ii per-connection feature-toggle overrides.
+///   `nil` (default) preserves the session-wide toggle behaviour.
+struct ConnectionContext: Sendable {
+    let connectionId: String
+    let projectRoot: String
+    let toggleOverrides: MCPSession.ToggleOverrides?
 
-    public init(connectionId: String, projectRoot: String) {
+    init(
+        connectionId: String,
+        projectRoot: String,
+        toggleOverrides: MCPSession.ToggleOverrides? = nil
+    ) {
         self.connectionId = connectionId
         self.projectRoot = projectRoot
+        self.toggleOverrides = toggleOverrides
     }
 
     /// Synthesize a stdio-mode context from a session's project root. Used
     /// by `MCPMain` (single-connection stdio path) and existing tests that
     /// don't yet pass a context explicitly.
     static func stdio(session: MCPSession) -> ConnectionContext {
-        ConnectionContext(connectionId: "stdio", projectRoot: session.projectRoot)
+        ConnectionContext(
+            connectionId: "stdio",
+            projectRoot: session.projectRoot,
+            toggleOverrides: nil
+        )
     }
 }

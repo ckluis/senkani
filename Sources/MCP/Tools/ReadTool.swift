@@ -25,12 +25,14 @@ enum ReadTool {
 
         // Snapshot the actor-isolated feature toggles once. Avoids repeated
         // actor hops per read and keeps mode/cache/branch decisions consistent
-        // with respect to a single tool call.
-        let filterEnabled = await session.filterEnabled
-        let secretsEnabled = await session.secretsEnabled
-        let terseEnabled = await session.terseEnabled
-        let cacheEnabled = await session.cacheEnabled
-        let indexerEnabled = await session.indexerEnabled
+        // with respect to a single tool call. Phase B-ii: read the *effective*
+        // toggles so a per-connection override on the dispatch task-local
+        // overrides the session default for this call.
+        let filterEnabled = await session.effectiveFilterEnabled
+        let secretsEnabled = await session.effectiveSecretsEnabled
+        let terseEnabled = await session.effectiveTerseEnabled
+        let cacheEnabled = await session.effectiveCacheEnabled
+        let indexerEnabled = await session.effectiveIndexerEnabled
 
         // Cache key includes the processing mode so a secrets-off first read
         // cannot satisfy a secrets-on re-read (which would leak unredacted

@@ -190,11 +190,17 @@ public enum ChainVerifier {
     /// `entry_hash IS NOT NULL` filter skips both anchor-from-now backfilled
     /// rows (round 1 / round 3 migrations) and round-4 repair-rebound rows
     /// whose hashes were wiped to NULL when the new repair anchor opened.
+    ///
+    /// Phase B-ii: rows under legacy anchors (`migration-v4`,
+    /// `fresh-install-pre-v18`) were hashed without `connection_id`; all
+    /// other anchors include it. Mirrors the writer-side switch in
+    /// `TokenEventStore.recordTokenEvent`.
     private static func verifyAnchorTokenEvents(db: OpaquePointer, anchor: Anchor) -> Result? {
+        let includeConnectionId = !(anchor.reason == "migration-v4" || anchor.reason == "fresh-install-pre-v18")
         let sql = """
             SELECT id, timestamp, session_id, pane_id, project_root, source,
                    tool_name, model, input_tokens, output_tokens, saved_tokens,
-                   cost_cents, feature, command, model_tier,
+                   cost_cents, feature, command, model_tier, connection_id,
                    prev_hash, entry_hash
               FROM token_events
              WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
@@ -202,7 +208,7 @@ public enum ChainVerifier {
         """
         return walkTable(db: db, table: "token_events", anchor: anchor, sql: sql) { stmt in
             let rowid = sqlite3_column_int64(stmt, 0)
-            let columns: [String: ChainHasher.CanonicalValue] = [
+            var columns: [String: ChainHasher.CanonicalValue] = [
                 "timestamp":     .real(sqlite3_column_double(stmt, 1)),
                 "session_id":    textValue(stmt, 2),
                 "pane_id":       textOrNull(stmt, 3),
@@ -218,8 +224,11 @@ public enum ChainVerifier {
                 "command":       textOrNull(stmt, 13),
                 "model_tier":    textOrNull(stmt, 14),
             ]
-            let prev = optionalText(stmt, 15)
-            let stored = sqlite3_column_text(stmt, 16).map { String(cString: $0) } ?? ""
+            if includeConnectionId {
+                columns["connection_id"] = textOrNull(stmt, 15)
+            }
+            let prev = optionalText(stmt, 16)
+            let stored = sqlite3_column_text(stmt, 17).map { String(cString: $0) } ?? ""
             return (rowid, columns, prev, stored)
         }
     }
@@ -316,11 +325,17 @@ public enum ChainVerifier {
 
     /// Walk `commands` rows for one anchor.
     /// `entry_hash IS NOT NULL` filter — see `verifyAnchorTokenEvents` notes.
+    ///
+    /// Phase B-ii: rows under legacy anchors (`migration-v5`,
+    /// `fresh-install-pre-v18`) were hashed without `connection_id`; all
+    /// other anchors include it. Mirrors the writer-side switch in
+    /// `CommandStore.recordCommand` / `recordBudgetDecision`.
     private static func verifyAnchorCommands(db: OpaquePointer, anchor: Anchor) -> Result? {
+        let includeConnectionId = !(anchor.reason == "migration-v5" || anchor.reason == "fresh-install-pre-v18")
         let sql = """
             SELECT id, session_id, timestamp, tool_name, command,
                    raw_bytes, compressed_bytes, feature, output_preview,
-                   budget_decision,
+                   budget_decision, connection_id,
                    prev_hash, entry_hash
               FROM commands
              WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
@@ -328,7 +343,7 @@ public enum ChainVerifier {
         """
         return walkTable(db: db, table: "commands", anchor: anchor, sql: sql) { stmt in
             let rowid = sqlite3_column_int64(stmt, 0)
-            let columns: [String: ChainHasher.CanonicalValue] = [
+            var columns: [String: ChainHasher.CanonicalValue] = [
                 "session_id":       textValue(stmt, 1),
                 "timestamp":        .real(sqlite3_column_double(stmt, 2)),
                 "tool_name":        textValue(stmt, 3),
@@ -339,8 +354,11 @@ public enum ChainVerifier {
                 "output_preview":   textOrNull(stmt, 8),
                 "budget_decision":  textOrNull(stmt, 9),
             ]
-            let prev = optionalText(stmt, 10)
-            let stored = sqlite3_column_text(stmt, 11).map { String(cString: $0) } ?? ""
+            if includeConnectionId {
+                columns["connection_id"] = textOrNull(stmt, 10)
+            }
+            let prev = optionalText(stmt, 11)
+            let stored = sqlite3_column_text(stmt, 12).map { String(cString: $0) } ?? ""
             return (rowid, columns, prev, stored)
         }
     }

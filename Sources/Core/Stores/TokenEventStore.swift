@@ -43,7 +43,13 @@ final class TokenEventStore: @unchecked Sendable {
             execSilent("CREATE INDEX IF NOT EXISTS idx_token_events_project ON token_events(project_root);")
             execSilent("CREATE INDEX IF NOT EXISTS idx_token_events_time ON token_events(timestamp);")
             execSilent("ALTER TABLE token_events ADD COLUMN model_tier TEXT;")
+            // Phase B-ii: connection_id is also covered by `MigrationRegistry.all v18`,
+            // which additionally opens a `migration-v18` chain anchor; this
+            // ALTER is the runtime-residual mirror so a hand-recovered DB
+            // keeps the column even if the operator skipped the v18 step.
+            execSilent("ALTER TABLE token_events ADD COLUMN connection_id TEXT;")
             execSilent("CREATE INDEX IF NOT EXISTS idx_token_events_session ON token_events(session_id);")
+            execSilent("CREATE INDEX IF NOT EXISTS idx_token_events_connection ON token_events(connection_id);")
             exec("""
                 CREATE TABLE IF NOT EXISTS claude_session_cursors (
                     path TEXT PRIMARY KEY,
@@ -77,7 +83,8 @@ final class TokenEventStore: @unchecked Sendable {
         costCents: Int,
         feature: String?,
         command: String?,
-        modelTier: String? = nil
+        modelTier: String? = nil,
+        connectionId: String? = nil
     ) {
         let normalizedRoot = SessionDatabase.normalizePath(projectRoot)
         let now = Date().timeIntervalSince1970
@@ -90,11 +97,21 @@ final class TokenEventStore: @unchecked Sendable {
             // latest entry_hash for prev linkage.
             let anchorId = self.chain.resolveAnchorId(db: db)
             let prevHash = self.chain.latestEntryHash(db: db, anchorId: anchorId)
+            // Phase B-ii: include `connection_id` in the canonical column
+            // map for all anchors EXCEPT the legacy pre-v18 ones whose
+            // existing rows were hashed without it. The legacy set is
+            // `migration-v4` (pre-T.5 backfill anchor) and
+            // `fresh-install-pre-v18` (renamed by the v18 migration so
+            // legacy fresh-install rows keep verifying under the old
+            // shape). Mirrored on the verifier side in
+            // `ChainVerifier.verifyAnchorTokenEvents`.
+            let reason = self.chain.anchorReason(db: db, anchorId: anchorId) ?? ""
+            let useLegacyShape = (reason == "migration-v4" || reason == "fresh-install-pre-v18")
 
             // Build the canonical-byte input from the to-be-bound values. The
             // three chain columns are excluded by `ChainHasher` — they cannot
             // appear in their own input.
-            let columns: [String: ChainHasher.CanonicalValue] = [
+            var columns: [String: ChainHasher.CanonicalValue] = [
                 "timestamp":      .real(now),
                 "session_id":     .text(sessionId),
                 "pane_id":        Self.canonical(paneId),
@@ -110,6 +127,9 @@ final class TokenEventStore: @unchecked Sendable {
                 "command":        Self.canonical(redactedCommand),
                 "model_tier":     Self.canonical(modelTier),
             ]
+            if !useLegacyShape {
+                columns["connection_id"] = Self.canonical(connectionId)
+            }
             let entryHash = ChainHasher.entryHash(
                 table: "token_events", columns: columns, prev: prevHash
             )
@@ -118,8 +138,9 @@ final class TokenEventStore: @unchecked Sendable {
                 INSERT INTO token_events
                 (timestamp, session_id, pane_id, project_root, source, tool_name, model,
                  input_tokens, output_tokens, saved_tokens, cost_cents, feature, command, model_tier,
+                 connection_id,
                  prev_hash, entry_hash, chain_anchor_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -139,9 +160,10 @@ final class TokenEventStore: @unchecked Sendable {
             Self.bindOptionalText(stmt, 12, feature)
             Self.bindOptionalText(stmt, 13, redactedCommand)
             Self.bindOptionalText(stmt, 14, modelTier)
-            Self.bindOptionalText(stmt, 15, prevHash)
-            sqlite3_bind_text(stmt, 16, (entryHash as NSString).utf8String, -1, nil)
-            sqlite3_bind_int64(stmt, 17, anchorId)
+            Self.bindOptionalText(stmt, 15, connectionId)
+            Self.bindOptionalText(stmt, 16, prevHash)
+            sqlite3_bind_text(stmt, 17, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(stmt, 18, anchorId)
 
             if sqlite3_step(stmt) == SQLITE_DONE {
                 // Update cache only on successful insert. parent.queue

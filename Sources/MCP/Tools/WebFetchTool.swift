@@ -646,8 +646,8 @@ enum WebFetchTool {
             }
 
             // tree / text: secrets + injection filter pass
-            let secretsEnabled = await session.secretsEnabled
-            let injectionGuardEnabled = await session.injectionGuardEnabled
+            let secretsEnabled = await session.effectiveSecretsEnabled
+            let injectionGuardEnabled = await session.effectiveInjectionGuardEnabled
             var output = markdown
             if secretsEnabled || injectionGuardEnabled {
                 let cfg = FeatureConfig(

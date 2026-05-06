@@ -19,10 +19,13 @@ struct ModelIDConsistencyTests {
     @Test func allRegisteredIdsAreHandled() {
         let embedId = EmbedEngine.modelId
         let visionIds = Set(ModelManager.visionModelIds)
+        let piiId = PIIClassifierAdapter.modelId
         for model in ModelManager.shared.models {
-            let isHandled = model.id == embedId || visionIds.contains(model.id)
+            let isHandled = model.id == embedId
+                || visionIds.contains(model.id)
+                || model.id == piiId
             #expect(isHandled,
-                    "Model '\(model.id)' must be handled by download handler (embed or vision)")
+                    "Model '\(model.id)' must be handled by download handler (embed, vision, or pii-classifier)")
         }
     }
 

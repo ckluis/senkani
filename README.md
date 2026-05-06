@@ -219,7 +219,7 @@ The full caveat — including the action item, owner, and the `tools/check-multi
 | Filter throughput | > 10 k lines/sec |
 | Symbol search | < 5 ms cold, < 1 ms cached |
 | Secret scan | < 2 ms / KB |
-| Unit tests | **2325 passing** |
+| Unit tests | **2523 passing** |
 | Binary size | ~28 MB universal |
 
 ---
@@ -235,7 +235,7 @@ The full caveat — including the action item, owner, and the `tools/check-multi
 | **MCP** | Core, Filter, Indexer, Bundle, MLX | 20 MCP tools, socket server (mcp + hook + pane), vision + embedding inference, Gemma 4 rationale adapter |
 | **Bundle** | Core, Filter, Indexer | `BundleComposer` — budget-bounded repo-snapshot composition for `senkani_bundle` |
 | **HookRelay** | — | Zero-dep hook relay library shared by senkani-hook binary and app's --hook mode |
-| **CLI** | Core, Filter, Indexer, Bench | 23 commands: exec, search, bench, doctor, grammars, kb, eval, learn, init, authorship, … |
+| **CLI** | Core, Filter, Indexer, Bench | 24 commands: exec, search, bench, doctor, grammars, kb, eval, learn, init, authorship, models, … |
 | **SenkaniApp** | All + SwiftTerm | SwiftUI workspace: 18 pane types, multi-project, ⌘K palette, dashboard, menu bar |
 
 ---

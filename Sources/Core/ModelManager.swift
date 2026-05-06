@@ -200,6 +200,20 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
             expectedSizeBytes: 90_000_000,      // ~90MB
             requiredRAM: 1
         ),
+        // Tertiary: PII classifier (T.2 phase — Layer 3 of SecretDetector).
+        // Registration only in T.2a; Layer 3 wiring lands in T.2b. Pull is
+        // operator-explicit (no auto-pull) — Layer 3 silently no-ops when
+        // the model is absent (Layers 1+2 still run). The MLX-Swift loader
+        // backend is wired in T.2b; T.2a's `senkani models pull` surfaces
+        // a staged-delivery message when invoked against this model.
+        ModelInfo(
+            id: "pii-classifier-int8",
+            name: "PII Classifier (openai/privacy-filter, INT8)",
+            repoId: "openai/privacy-filter",
+            expectedSizeBytes: 1_500_000_000,   // ~1.5GB sparse-MoE
+            requiredRAM: 4,
+            quantMethod: "INT8"
+        ),
     ]
 
     // MARK: - RAM Detection & Auto-Selection

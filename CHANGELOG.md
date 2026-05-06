@@ -9,6 +9,49 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 5 — Layer 3 PII classifier infrastructure: registry + decoder + CLI shell (`phase-t2-pii-classifier`, T.2a)
+
+- `Sources/Core/ModelManager.swift` registers `pii-classifier-int8` →
+  `openai/privacy-filter` (Apache-2.0 sparse-MoE token classifier,
+  ~1.5 GB, INT8 quant). Status boots `.available` — no auto-pull. The
+  registration alone does NOT change `SecretDetector` behavior; Layer 3
+  hot-path wiring is T.2b (`phase-t2-pii-classifier-layer-3-wiring`).
+- `senkani models {list, pull, verify}` CLI subcommand (`Sources/CLI/
+  ModelsCommand.swift`). `list` prints every registered model with
+  status + on-disk size (or `--json`). `pull <id>` and `verify <id>`
+  drive `ModelManager.download(modelId:)` /
+  `ModelManager.verify(modelId:)` and surface human-readable hints on
+  failure.
+- `Sources/Core/PIIClassifier.swift` — pure-Swift `BIOESDecoder` +
+  constrained Viterbi over the 33-way tag space (1 background O + 8
+  PII categories × 4 BIOES tags). 8 PII categories: `account_number`,
+  `private_address`, `private_email`, `private_person`, `private_phone`,
+  `private_url`, `private_date`, `secret`. Constrained transitions
+  (`O → O|B|S`, `B-X → I-X|E-X`, `I-X → I-X|E-X`, `E-X → O|B-*|S-*`,
+  `S-X → O|B-*|S-*`) prevent malformed boundary sequences — a
+  fragmented argmax (B,B,B) collapses under Viterbi.
+- `Sources/Core/PIIClassifierAdapter.swift` — actor singleton mirroring
+  the `EmbedTool.engine` / `VisionTool.engine` pattern.
+  `ensureModel()`, `runVerificationFixture()`, and `forward(_:)`
+  currently throw `BackendNotReadyError(stage:)` — the actual MLX-Swift
+  / GGUF inference path is filed as
+  `phase-t2-pii-classifier-backend-wiring` so the staged delivery is
+  visible to operators (no silent no-op).
+- 8 new unit tests in `Tests/SenkaniTests/PIIClassifierTests.swift`
+  covering registry presence, decoder empty/single-span/Viterbi-collapse
+  cases, S-tag single-token spans, registry-list completeness,
+  verification status transitions, and the adapter's staged-delivery
+  marker. Existing `MLPipelineTests.allRegisteredIdsAreHandled` updated
+  to recognize `PIIClassifierAdapter.modelId`. Total tests: ~2523 (was
+  ~2515 pre-round); zero regression.
+- **Operator-facing message**: `senkani models pull pii-classifier-int8`
+  on a real machine surfaces "PIIClassifier download backend wired in
+  T.2b. T.2a ships registry + decoder + CLI shell only." The follow-up
+  item (`phase-t2-pii-classifier-backend-wiring`) owns the real HF
+  download driver, MLX/GGUF backend choice, real-machine perf
+  validation (cold-start <2s, warm-path p95 <50ms), and verification
+  fixture round-trip.
+
 ### May 5 — Test resilience: `ScheduleWorktree.create` retries the git commondir race (`scheduleworktreetests-flake-under-parallel-suite-run`)
 
 - `Sources/Core/ScheduleWorktree.swift::create` now wraps `git worktree add`

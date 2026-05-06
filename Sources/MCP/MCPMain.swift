@@ -41,6 +41,8 @@ public struct MCPServerRunner {
                 _ = try await EmbedTool.engine.ensureModel()
             case let id where ModelManager.visionModelIds.contains(id):
                 _ = try await VisionTool.engine.ensureModel()
+            case PIIClassifierAdapter.modelId:
+                try await PIIClassifierAdapter.shared.ensureModel()
             default:
                 throw NSError(
                     domain: "dev.senkani.MCPServer",
@@ -62,6 +64,8 @@ public struct MCPServerRunner {
                 _ = try await EmbedTool.engine.ensureModel()
             case let id where ModelManager.visionModelIds.contains(id):
                 _ = try await VisionTool.engine.ensureModel()
+            case PIIClassifierAdapter.modelId:
+                try await PIIClassifierAdapter.shared.runVerificationFixture()
             default:
                 throw NSError(
                     domain: "dev.senkani.MCPServer",

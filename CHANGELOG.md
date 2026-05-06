@@ -9,6 +9,53 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 6 — Credential gateway injection: `MCPToolConfig.credentialGateway` + HookRouter PreToolUse fetch (`phase-t4b-credential-gateway-injection`, T.4b)
+
+- `Sources/Core/CredentialGateway.swift` lands the round-2 surface
+  on top of T.4a's `CredentialVault` actor. The new
+  `CredentialGatewayConfig` (Sendable + Equatable + Codable)
+  carries `enabled`, `scope`, `vaultKeys: [String]`, `dryRun`, and
+  `injectionTarget ∈ {env, args}`. `MCPToolConfig` gains a
+  `credentialGateway: CredentialGatewayConfig?` property; the
+  default catalog ships every entry with `credentialGateway == nil`
+  so production tools see no behavior change yet.
+- `CredentialGateway.evaluate(...)` is the synchronous policy
+  engine: given a config plus an injected `Lookup` closure, it
+  returns `.notConfigured` (no gateway / disabled), `.proceed(Injection)`
+  (every key resolved, audit row written), or `.deny(reason:)`
+  (missing key + `dryRun: false`). The deny reason carries BOTH
+  keyname AND scope so the operator can run
+  `senkani vault add --key <name> --scope <scope>` without
+  guessing.
+- `HookRouter` consults the gateway in `handle()` AFTER the
+  confirmation gate, so a `ConfirmationGate.deny` short-circuits
+  before any vault read (operator's contract: gate decides first,
+  then we inject). On `.deny`, the gateway's reason surfaces in
+  `permissionDecisionReason` exactly like the budget / confirmation
+  paths. Three new seams (`HookRouter.credentialVaultLookup`,
+  `credentialGatewayRecorder`, `credentialGatewayCatalog`) keep the
+  test surface hermetic and the production wiring (T.4c) replaceable.
+- `CredentialGateway.LiveRecorder` writes a `token_events` row with
+  `feature: "credential_gateway"` and a structured `command` payload
+  shaped `credential_gateway keys=<comma-list> scope=<scope> dry_run=<bool>`.
+  The credential value is NEVER serialized — the recorder only sees
+  keynames + scope + flag. Defense-in-depth: the existing
+  `PersistenceRedaction` path already runs `SecretDetector.scan` over
+  every `command` column write.
+- `CredentialVault.shared` lands as a process-wide singleton
+  defaulting to `InMemoryKeychainStore`. T.4c swaps in the macOS
+  Keychain conformance.
+- 6 new unit tests in
+  `Tests/SenkaniTests/CredentialGatewayTests.swift`: Codable round-
+  trip, default-catalog gateway-disabled invariant, success path
+  (proceed + audit row asserts the value never lands in
+  `token_events.command`), missing-key fail-closed (deny carries
+  keyname + scope + the `senkani vault add` hint), missing-key dry-
+  run yields the `FAKE_KEY_<scope>_<key>` sentinel from `CredentialVault`,
+  and the order-of-operations check that `ConfirmationGate.deny`
+  short-circuits before the vault lookup fires. Test count
+  2,489 → 2,495.
+
 ### May 6 — EgressProxy live listener + HTTP/CONNECT pipe (`phase-t1a2-egress-proxy-listener-and-pipe`, T.1a.2)
 
 - `Sources/Core/EgressProxy/EgressListener.swift` lights up the

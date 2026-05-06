@@ -59,6 +59,30 @@ public enum HookRouter {
         _ = SessionDatabase.shared.recordTrustFlag(flag, score: score)
     }
 
+    /// T.4b — synchronous lookup seam for the credential gateway. The
+    /// gateway runs inside `handle()` (sync), but `CredentialVault` is
+    /// an actor — bridging happens here, not inside the gateway, so
+    /// the policy engine stays pure. Default closure returns
+    /// `missingKey` for every read; T.4c installs a closure that
+    /// dispatches into `CredentialVault.shared` via DispatchSemaphore.
+    /// Tests override this directly to exercise the gateway without
+    /// any async surface.
+    nonisolated(unsafe) public static var credentialVaultLookup: CredentialGateway.Lookup = { key, scope, _ in
+        .failure(.missingKey(key: key, scope: scope))
+    }
+
+    /// T.4b — recorder for credential-gateway injection events. Tests
+    /// override with a `DatabaseRecorder` backed by a temp DB so they
+    /// can read the row back and assert keyname + scope are present
+    /// while the value is not.
+    nonisolated(unsafe) public static var credentialGatewayRecorder: any CredentialGateway.Recorder = CredentialGateway.LiveRecorder()
+
+    /// T.4b — catalog seam for credential-gateway lookups inside
+    /// `handle()`. Tests inject a fresh catalog with a single tool
+    /// flipped to `enabled: true` so they don't pollute the shared
+    /// catalog. Production reads from `MCPToolCatalog.shared`.
+    nonisolated(unsafe) public static var credentialGatewayCatalog: MCPToolCatalog = .shared
+
     /// Process a hook event JSON and return a response JSON.
     /// Returns `{}` (passthrough) for unrecognized or unroutable events.
     public static func handle(eventJSON: Data) -> Data {
@@ -165,6 +189,46 @@ public enum HookRouter {
             )
             return appendAndMarkValidationIfSurfaced(
                 blockResponse(body, eventName: eventName),
+                advisory: validationAdvisory,
+                rows: validationRows,
+                projectRoot: projectRoot
+            )
+        }
+
+        // T.4b: CredentialGateway. Runs after the confirmation gate so
+        // a `.deny` short-circuits before any vault read (operator
+        // contract: gate decides first, then we inject). Notes:
+        //   - Order: gateway only fires when ConfirmationGate allows
+        //     (`.approve` or `.auto`). The `.deny` branch above already
+        //     returned by here, so we know the gate passed.
+        //   - On `.deny`, surface the structured error in
+        //     `permissionDecisionReason` carrying both keyname AND
+        //     scope. The agent caller stops; the operator runs
+        //     `senkani vault add`.
+        //   - On `.proceed`, the recorder writes the token_events row
+        //     (keyname + scope only — the value is never serialized).
+        //     The values themselves don't propagate further in this
+        //     round — round T.4c connects them to ExecTool / spawned
+        //     processes. Round T.4b ships the API surface + audit row.
+        let gatewayConfig = credentialGatewayCatalog.config(for: toolName)?.credentialGateway
+        let gatewayDecision = CredentialGateway.evaluate(
+            toolName: toolName,
+            config: gatewayConfig,
+            lookup: credentialVaultLookup,
+            recorder: credentialGatewayRecorder,
+            sessionId: sessionId,
+            projectRoot: projectRoot
+        )
+        if case .deny(let reason) = gatewayDecision {
+            emitDenialAnnotation(
+                severity: .mustFix,
+                body: reason,
+                toolName: toolName,
+                toolInput: toolInput,
+                sessionId: sessionId
+            )
+            return appendAndMarkValidationIfSurfaced(
+                blockResponse(reason, eventName: eventName),
                 advisory: validationAdvisory,
                 rows: validationRows,
                 projectRoot: projectRoot

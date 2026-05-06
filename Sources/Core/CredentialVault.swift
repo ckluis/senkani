@@ -84,6 +84,16 @@ extension CredentialVaultError: LocalizedError {
 public actor CredentialVault {
     public static let defaultScope = "default"
 
+    /// Process-wide singleton consulted by the T.4b credential gateway
+    /// and (T.4c) the `senkani vault` CLI. Defaults to an in-memory
+    /// store; T.4c swaps it for the macOS Keychain conformance at app
+    /// init. Tests reassign for hermetic coverage. The setter is
+    /// `nonisolated(unsafe)` because tests need synchronous override
+    /// from non-async contexts; in production the value is set once
+    /// at startup.
+    nonisolated(unsafe) public static var shared: CredentialVault =
+        CredentialVault(store: InMemoryKeychainStore())
+
     private let store: KeychainStore
 
     public init(store: KeychainStore) {

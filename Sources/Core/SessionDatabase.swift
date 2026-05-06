@@ -83,6 +83,7 @@ public final class SessionDatabase: @unchecked Sendable {
     internal var contextPlanStore: ContextPlanStore!
     internal var policyStore: PolicyStore!
     internal var egressDecisionStore: EgressDecisionStore!
+    public var packAuditStore: PackAuditStore!
 
     // MARK: - Init
 
@@ -131,6 +132,7 @@ public final class SessionDatabase: @unchecked Sendable {
         contextPlanStore = ContextPlanStore(parent: self)
         policyStore = PolicyStore(parent: self)
         egressDecisionStore = EgressDecisionStore(parent: self)
+        packAuditStore = PackAuditStore(parent: self)
     }
 
     /// Testable initializer — opens a DB at a custom path (use a temp file).
@@ -168,6 +170,7 @@ public final class SessionDatabase: @unchecked Sendable {
         contextPlanStore = ContextPlanStore(parent: self)
         policyStore = PolicyStore(parent: self)
         egressDecisionStore = EgressDecisionStore(parent: self)
+        packAuditStore = PackAuditStore(parent: self)
     }
 
     // MARK: - Observability counters (migration v2)

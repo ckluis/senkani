@@ -9,6 +9,35 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 6 — SkillPack bundle format + install/uninstall + collision-diff (`phase-v11a-pack-unit`, V.11a)
+
+- `spec/skill_packs.md` documents pack format v1: directory layout
+  (`pack.json` + `skills/` + `policy/` + `context/`), envelope
+  schema, `senkani pack` CLI surface, three collision kinds, and the
+  `pack_audits` chain table.
+- `senkani pack install <dir>` / `pack uninstall <name>` / `pack
+  list` ship as a new top-level CLI group. `--dry-run` prints the
+  collision diff without mutating the filesystem; `--force` records
+  a `force_override` chain row alongside the `install` row.
+- Migration v20 adds `pack_audits` (chained via the standard
+  `prev_hash` / `entry_hash` / `chain_anchor_id` triple). `senkani
+  doctor verify-chain` extends to `pack_audits`; `ChainVerifier
+  .verifyAll` returns 10 entries.
+- `spec/packs/code-quality/` ships the first in-tree skeleton pack
+  with `pack.json`, one HandManifest skill (lints clean), one
+  HookRouter policy fragment (no-op deny scaffold), and one context
+  doc. V.11b adds the `security` and `devops` packs + an
+  integration test on top of this scaffold.
+- `SkillScanner` gains a sixth scan root —
+  `~/.senkani/packs/<name>/skills/<skill>/manifest.json` — so
+  installed pack skills surface alongside Claude / Cursor /
+  Continue / project skills (priority: project > pack > others).
+- 18 new tests in `Tests/SenkaniTests/PackInstallTests.swift` cover
+  manifest parsing, install/uninstall round-trip (zero residue),
+  collision detection on skill name + policy scope-key, the
+  `--force` audit row, the chain verification, and the scanner's
+  pack discovery. Tests delta: 2499 → 2517 (+18). Full suite green.
+
 ### May 6 — DesignSystemSkill scaffold + HTML Preview A/B toggle (`phase-v10a-skill-scaffold`, V.10a)
 
 - `spec/design-system/manifest.json` lands the project-local

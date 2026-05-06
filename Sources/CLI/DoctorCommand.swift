@@ -256,7 +256,8 @@ struct Doctor: ParsableCommand {
     static let chainAuditOrder: [String] = [
         "token_events", "validation_results", "sandboxed_results",
         "commands", "pane_refresh_state", "policy_snapshots",
-        "confirmations", "trust_audits", "egress_decisions"
+        "confirmations", "trust_audits", "egress_decisions",
+        "pack_audits"
     ]
 
     private static let chainAuditSummaryNames: String =

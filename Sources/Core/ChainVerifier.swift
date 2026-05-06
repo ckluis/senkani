@@ -71,6 +71,7 @@ public enum ChainVerifier {
                 "confirmations":      verifyTable(db: db, table: "confirmations",      verify: verifyAnchorConfirmations),
                 "trust_audits":       verifyTable(db: db, table: "trust_audits",       verify: verifyAnchorTrustAudits),
                 "egress_decisions":   verifyTable(db: db, table: "egress_decisions",   verify: verifyAnchorEgressDecisions),
+                "pack_audits":        verifyTable(db: db, table: "pack_audits",        verify: verifyAnchorPackAudits),
             ]
         }
     }
@@ -79,6 +80,13 @@ public enum ChainVerifier {
         return database.queue.sync {
             guard let db = database.db else { return .noChain }
             return verifyTable(db: db, table: "egress_decisions", verify: verifyAnchorEgressDecisions)
+        }
+    }
+
+    public static func verifyPackAudits(_ database: SessionDatabase) -> Result {
+        return database.queue.sync {
+            guard let db = database.db else { return .noChain }
+            return verifyTable(db: db, table: "pack_audits", verify: verifyAnchorPackAudits)
         }
     }
 
@@ -523,6 +531,34 @@ public enum ChainVerifier {
             ]
             let prev = optionalText(stmt, 9)
             let stored = sqlite3_column_text(stmt, 10).map { String(cString: $0) } ?? ""
+            return (rowid, columns, prev, stored)
+        }
+    }
+
+    /// Walk `pack_audits` rows for one anchor.
+    /// `entry_hash IS NOT NULL` filter — see `verifyAnchorTokenEvents` notes.
+    private static func verifyAnchorPackAudits(db: OpaquePointer, anchor: Anchor) -> Result? {
+        let sql = """
+            SELECT id, pack_name, pack_version, event, at, source_path, sha256,
+                   applied_skills,
+                   prev_hash, entry_hash
+              FROM pack_audits
+             WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
+             ORDER BY id ASC;
+        """
+        return walkTable(db: db, table: "pack_audits", anchor: anchor, sql: sql) { stmt in
+            let rowid = sqlite3_column_int64(stmt, 0)
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "pack_name":      textValue(stmt, 1),
+                "pack_version":   textValue(stmt, 2),
+                "event":          textValue(stmt, 3),
+                "at":             .real(sqlite3_column_double(stmt, 4)),
+                "source_path":    textValue(stmt, 5),
+                "sha256":         textOrNull(stmt, 6),
+                "applied_skills": textValue(stmt, 7),
+            ]
+            let prev = optionalText(stmt, 8)
+            let stored = sqlite3_column_text(stmt, 9).map { String(cString: $0) } ?? ""
             return (rowid, columns, prev, stored)
         }
     }

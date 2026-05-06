@@ -1072,6 +1072,44 @@ public enum MigrationRegistry {
             try exec("CREATE INDEX IF NOT EXISTS idx_egress_decisions_host ON egress_decisions(host);")
             try exec("CREATE INDEX IF NOT EXISTS idx_egress_decisions_time ON egress_decisions(timestamp);")
         },
+        Migration(version: 20, description: "pack_audits chained table (Phase V.11a SkillPack)") { db in
+            // Phase V.11a — SkillPack install/uninstall provenance. Every
+            // `senkani pack install`, `pack uninstall`, and `--force`
+            // override writes a chained row so the operator can replay
+            // the install timeline post-hoc and `senkani doctor
+            // verify-chain` proves no row was redacted.
+            //
+            // Same shape as v19 (egress_decisions): self-contained CREATE,
+            // no migration anchor (table is created empty — first write
+            // opens a 'fresh-install' anchor lazily via ChainState).
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v20", detail: msg)
+            }
+
+            try exec("""
+                CREATE TABLE IF NOT EXISTS pack_audits (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pack_name TEXT NOT NULL,
+                    pack_version TEXT NOT NULL,
+                    event TEXT NOT NULL,
+                    at REAL NOT NULL,
+                    source_path TEXT NOT NULL,
+                    sha256 TEXT,
+                    applied_skills TEXT NOT NULL,
+                    prev_hash TEXT,
+                    entry_hash TEXT,
+                    chain_anchor_id INTEGER
+                );
+            """)
+            try exec("CREATE INDEX IF NOT EXISTS idx_pack_audits_anchor ON pack_audits(chain_anchor_id, id);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_pack_audits_pack ON pack_audits(pack_name, id);")
+        },
     ]
 
     /// Open a 'migration-v18' anchor for a table at MAX(id) so that new

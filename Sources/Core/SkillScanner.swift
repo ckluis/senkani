@@ -85,9 +85,13 @@ public final class SkillScanner: Sendable {
         let senkaniGlobalDir = (homeDir as NSString).appendingPathComponent(".senkani/skills")
         skills.append(contentsOf: scanSenkaniSkillsDir(senkaniGlobalDir, fm: fm))
 
+        // 6. V.11a — Installed SkillPacks: ~/.senkani/packs/<name>/skills/<skill>/manifest.json
+        let senkaniPacksDir = (homeDir as NSString).appendingPathComponent(".senkani/packs")
+        skills.append(contentsOf: scanSenkaniPacksDir(senkaniPacksDir, fm: fm))
+
         // Deduplicate: prefer project-local over global.
         // Key by lowercased name + type to catch the same skill found in multiple locations.
-        let sourcePriority: [String: Int] = ["project": 0, "claude": 1, "cursor": 2, "continue": 3]
+        let sourcePriority: [String: Int] = ["project": 0, "pack": 1, "claude": 2, "cursor": 3, "continue": 4]
         var seen: [String: Int] = [:]  // dedup key -> index in deduped array
         var deduped: [SkillInfo] = []
 
@@ -360,6 +364,52 @@ public final class SkillScanner: Sendable {
         guard let name = obj["name"] as? String, !name.isEmpty else { return nil }
         let description = (obj["description"] as? String) ?? ""
         return (name, description)
+    }
+
+    // MARK: - Senkani Packs (V.11a)
+
+    /// Scan `~/.senkani/packs/<pack>/skills/<skill>/manifest.json` and emit
+    /// one `SkillInfo` per HandManifest. Invalid pack.json or skill manifest
+    /// files are silently skipped — `senkani pack list` and `senkani skill
+    /// lint` are the surfaces that report structural problems.
+    private static func scanSenkaniPacksDir(_ dir: String, fm: FileManager) -> [SkillInfo] {
+        guard fm.fileExists(atPath: dir) else { return [] }
+        guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { return [] }
+        var skills: [SkillInfo] = []
+        for packEntry in entries.sorted() {
+            let packDir = (dir as NSString).appendingPathComponent(packEntry)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: packDir, isDirectory: &isDir),
+                  isDir.boolValue else { continue }
+            let packJsonPath = (packDir as NSString).appendingPathComponent("pack.json")
+            guard fm.fileExists(atPath: packJsonPath) else { continue }
+            // Read declared skill list — fall back to filesystem walk if
+            // pack.json is unreadable.
+            let declared: [String]
+            if let data = try? Data(contentsOf: URL(fileURLWithPath: packJsonPath)),
+               let any = try? JSONSerialization.jsonObject(with: data),
+               let obj = any as? [String: Any],
+               let s = obj["skills"] as? [String] {
+                declared = s
+            } else {
+                declared = []
+            }
+            for skill in declared {
+                let manifestPath = (packDir as NSString)
+                    .appendingPathComponent("skills/\(skill)/manifest.json")
+                guard fm.fileExists(atPath: manifestPath) else { continue }
+                guard let info = parseHandManifest(atPath: manifestPath) else { continue }
+                skills.append(SkillInfo(
+                    id: "pack-\(packEntry)-\(info.name)",
+                    name: info.name,
+                    description: info.description,
+                    source: "pack",
+                    filePath: manifestPath,
+                    type: .skill
+                ))
+            }
+        }
+        return skills
     }
 
     // MARK: - Senkani Skills (WARP.md)

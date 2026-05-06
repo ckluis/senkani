@@ -83,6 +83,22 @@ public enum HookRouter {
     /// catalog. Production reads from `MCPToolCatalog.shared`.
     nonisolated(unsafe) public static var credentialGatewayCatalog: MCPToolCatalog = .shared
 
+    /// V.11b — pack-policy registry seam. Tests can swap in a custom
+    /// registry pointed at a temp install root; production uses the
+    /// shared singleton which loads from `~/.senkani/packs/`. Set
+    /// to nil to disable pack-policy evaluation entirely (useful in
+    /// tests that don't care about the path).
+    nonisolated(unsafe) public static var packPolicyRegistry: PackPolicyRegistry? = .shared
+
+    /// V.11b — force a re-read of installed pack policy fragments.
+    /// Called by `PackInstaller.apply()` / `uninstall()` and at app
+    /// startup (`SenkaniApp.init` and `--socket-server` mode in
+    /// `main.swift`). Cheap (one filesystem walk over a small
+    /// number of pack directories); safe to call repeatedly.
+    public static func refreshInstalledPacks() {
+        packPolicyRegistry?.refresh()
+    }
+
     /// Process a hook event JSON and return a response JSON.
     /// Returns `{}` (passthrough) for unrecognized or unroutable events.
     public static func handle(eventJSON: Data) -> Data {
@@ -233,6 +249,32 @@ public enum HookRouter {
                 rows: validationRows,
                 projectRoot: projectRoot
             )
+        }
+
+        // V.11b — pack-policy evaluation. Cross-process refresh: stat
+        // the install-root mtime and re-read fragments only if it has
+        // moved. Same-process installs already called `refresh()`
+        // through `PackInstaller.apply()` so their snapshot is current
+        // and the staleness check is a single cheap stat.
+        if let registry = packPolicyRegistry {
+            registry.refreshIfStale()
+            if let match = registry.evaluate(toolName: toolName, toolInput: toolInput) {
+                let reason = match.rule.reason
+                    ?? "Denied by pack '\(match.packName)' (scope_key=\(match.scopeKey))."
+                emitDenialAnnotation(
+                    severity: .mustFix,
+                    body: reason,
+                    toolName: toolName,
+                    toolInput: toolInput,
+                    sessionId: sessionId
+                )
+                return appendAndMarkValidationIfSurfaced(
+                    blockResponse(reason, eventName: eventName),
+                    advisory: validationAdvisory,
+                    rows: validationRows,
+                    projectRoot: projectRoot
+                )
+            }
         }
 
         // Route the tool call

@@ -23,6 +23,11 @@ struct SenkaniGUI: App {
 
         // Wire entity tracking: native Claude Code tool args → KB mention counts
         HookRouter.entityObserver = { KBObserver.observeHookEvent(toolName: $0, toolInput: $1) }
+
+        // V.11b — load installed pack policy fragments. Subsequent
+        // CLI installs/uninstalls converge through the on-event
+        // mtime check inside HookRouter.handle().
+        HookRouter.refreshInstalledPacks()
     }
 
     /// Kill stale MCP server processes left over from previous sessions.

@@ -202,6 +202,12 @@ public final class PackInstaller {
             throw InstallError.auditWriteFailed
         }
 
+        // V.11b — same-process live merge: tell the registry to re-
+        // read so the next hook event sees the freshly installed
+        // policy fragment without waiting for the mtime-based
+        // staleness check inside HookRouter.handle().
+        HookRouter.refreshInstalledPacks()
+
         return InstalledPack(manifest: plan.manifest, installDir: plan.targetDir)
     }
 
@@ -251,6 +257,7 @@ public final class PackInstaller {
             ) ?? false else {
                 throw InstallError.auditWriteFailed
             }
+            HookRouter.refreshInstalledPacks()
             return InstalledPack(manifest: synthesized, installDir: dir)
         }
 
@@ -270,6 +277,8 @@ public final class PackInstaller {
         ) ?? false else {
             throw InstallError.auditWriteFailed
         }
+
+        HookRouter.refreshInstalledPacks()
 
         return InstalledPack(manifest: manifest, installDir: dir)
     }

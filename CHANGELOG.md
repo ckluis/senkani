@@ -9,6 +9,48 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 6 — Three SkillPacks + live HookRouter merge (`phase-v11b-three-packs`, V.11b)
+
+- `spec/packs/code-quality/` is rewritten from V.11a's placeholder
+  into a substantive pack: a two-phase HandManifest skill
+  (lint-enforcement + review-heuristics) plus a HookRouter policy
+  fragment that denies the three most common per-line lint-
+  suppression markers (`eslint-disable-next-line`,
+  `swiftlint:disable`, `# noqa`).
+- `spec/packs/security/` ships end-to-end: a two-phase HandManifest
+  (secret-leak vocabulary + dangerous-command guard) plus a policy
+  fragment that denies hard-coded `API_KEY=` assignments,
+  `password = "` literals, and `eval(` invocations. Reuses the
+  SecretDetector named-pattern vocabulary in the skill body.
+- `spec/packs/devops/` ships end-to-end: a two-phase HandManifest
+  (blast-radius containment + prod-namespace guard) plus a policy
+  fragment that denies `kubectl delete`, `terraform destroy`, and
+  any tool argument carrying `--context=prod`. Read-only verbs
+  (`kubectl get`, `terraform plan`, `aws describe`) and non-prod
+  contexts pass through unchanged.
+- New `Sources/Core/PackPolicyRegistry.swift` loads installed pack
+  fragments from `~/.senkani/packs/<name>/policy/hook_router.json`
+  and exposes an `evaluate(toolName:toolInput:)` query. The
+  registry re-reads on `PackInstaller.apply()` / `uninstall()`
+  (same-process live merge) and on every hook event whose
+  install-root mtime has advanced (cross-process live merge —
+  daemon picks up CLI installs without restart).
+- `HookRouter.handle()` consults the registry between the
+  CredentialGateway gate and the per-tool routing switch. Pack
+  rule matches emit a `mustFix` denial annotation through
+  `HookAnnotationFeed` so DiffViewerPane surfaces a badge in the
+  same shape as budget / ConfirmationGate denials.
+- App startup wires `HookRouter.refreshInstalledPacks()` in both
+  `SenkaniApp.init` and `--socket-server` mode so installed packs
+  are loaded before the first hook event fires.
+- 15 new tests in `Tests/SenkaniTests/PackIntegrationTests.swift`
+  cover the cross-pack install/scan/deny/uninstall round-trip,
+  per-pack deny fixtures (Edit / Write / Bash inputs), pass-through
+  on non-matching calls, `pack_audits` chain-verify across the
+  round-trip, and per-pack content lints. The suite is `.serialized`
+  because the `HookRouter.packPolicyRegistry` seam is process-wide
+  static. Tests delta: 2517 → 2532 (+15). Full suite green.
+
 ### May 6 — SkillPack bundle format + install/uninstall + collision-diff (`phase-v11a-pack-unit`, V.11a)
 
 - `spec/skill_packs.md` documents pack format v1: directory layout

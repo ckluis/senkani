@@ -117,6 +117,9 @@ struct Doctor: ParsableCommand {
         // 17. Trust flags — soft-flag FP-rate counter (Phase U.4a)
         checkTrustFlags(&results)
 
+        // 18. Egress proxy — T.1a daemon scaffold + decision audit log
+        checkEgressProxy(&results)
+
         print("")
         var parts: [String] = []
         if results.passed > 0 { parts.append("\(results.passed) passed") }
@@ -253,7 +256,7 @@ struct Doctor: ParsableCommand {
     static let chainAuditOrder: [String] = [
         "token_events", "validation_results", "sandboxed_results",
         "commands", "pane_refresh_state", "policy_snapshots",
-        "confirmations", "trust_audits"
+        "confirmations", "trust_audits", "egress_decisions"
     ]
 
     private static let chainAuditSummaryNames: String =
@@ -1050,6 +1053,30 @@ struct Doctor: ParsableCommand {
             results.skipped += 1
         case .warn:
             printStatus(.skip, "\(name): socket exists but timed out (\((path as NSString).lastPathComponent))")
+            results.skipped += 1
+        }
+    }
+
+    // MARK: - Check 18: Egress proxy (Phase T.1a)
+
+    /// Reports the EgressProxy daemon state. T.1a ships the deterministic
+    /// rule + decision audit core; the live listener and port file land
+    /// in T.1a.2 (`phase-t1a2-egress-proxy-listener-and-pipe`). When the
+    /// port file is absent the proxy is reported as "down" (skip,
+    /// non-fatal) — that's the expected state until T.1a.2 ships. The
+    /// decision count from the audit log is always surfaced so an
+    /// operator can see whether ANY decisions have been emitted (synthetic
+    /// or otherwise).
+    private func checkEgressProxy(_ results: inout Results) {
+        let portPath = NSHomeDirectory() + "/.senkani/egress.port"
+        let count = SessionDatabase.shared.egressDecisionCount()
+        if let data = try? String(contentsOfFile: portPath, encoding: .utf8),
+           let port = Int(data.trimmingCharacters(in: .whitespacesAndNewlines)),
+           port > 0 {
+            printStatus(.pass, "Egress proxy: running on :\(port) (decisions: \(count))")
+            results.passed += 1
+        } else {
+            printStatus(.skip, "Egress proxy: down (decisions: \(count))")
             results.skipped += 1
         }
     }

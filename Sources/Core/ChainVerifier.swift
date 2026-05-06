@@ -70,7 +70,15 @@ public enum ChainVerifier {
                 "policy_snapshots":   verifyTable(db: db, table: "policy_snapshots",   verify: verifyAnchorPolicySnapshots),
                 "confirmations":      verifyTable(db: db, table: "confirmations",      verify: verifyAnchorConfirmations),
                 "trust_audits":       verifyTable(db: db, table: "trust_audits",       verify: verifyAnchorTrustAudits),
+                "egress_decisions":   verifyTable(db: db, table: "egress_decisions",   verify: verifyAnchorEgressDecisions),
             ]
+        }
+    }
+
+    public static func verifyEgressDecisions(_ database: SessionDatabase) -> Result {
+        return database.queue.sync {
+            guard let db = database.db else { return .noChain }
+            return verifyTable(db: db, table: "egress_decisions", verify: verifyAnchorEgressDecisions)
         }
     }
 
@@ -486,6 +494,35 @@ public enum ChainVerifier {
             ]
             let prev = optionalText(stmt, 12)
             let stored = sqlite3_column_text(stmt, 13).map { String(cString: $0) } ?? ""
+            return (rowid, columns, prev, stored)
+        }
+    }
+
+    /// Walk `egress_decisions` rows for one anchor.
+    /// `entry_hash IS NOT NULL` filter — see `verifyAnchorTokenEvents` notes.
+    private static func verifyAnchorEgressDecisions(db: OpaquePointer, anchor: Anchor) -> Result? {
+        let sql = """
+            SELECT id, timestamp, host, method, decision, rule_id, latency_us,
+                   pane_id, project_root,
+                   prev_hash, entry_hash
+              FROM egress_decisions
+             WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
+             ORDER BY id ASC;
+        """
+        return walkTable(db: db, table: "egress_decisions", anchor: anchor, sql: sql) { stmt in
+            let rowid = sqlite3_column_int64(stmt, 0)
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "timestamp":     .real(sqlite3_column_double(stmt, 1)),
+                "host":          textValue(stmt, 2),
+                "method":        textValue(stmt, 3),
+                "decision":      textValue(stmt, 4),
+                "rule_id":       textValue(stmt, 5),
+                "latency_us":    .integer(sqlite3_column_int64(stmt, 6)),
+                "pane_id":       textOrNull(stmt, 7),
+                "project_root":  textOrNull(stmt, 8),
+            ]
+            let prev = optionalText(stmt, 9)
+            let stored = sqlite3_column_text(stmt, 10).map { String(cString: $0) } ?? ""
             return (rowid, columns, prev, stored)
         }
     }

@@ -1017,6 +1017,61 @@ public enum MigrationRegistry {
             try openConnectionIdAnchor(db: db, table: "commands")
             try openConnectionIdAnchor(db: db, table: "token_events")
         },
+        Migration(version: 19, description: "egress_decisions chained table (Phase T.1a EgressProxy)") { db in
+            // Phase T.1a — EgressProxy decision audit. Every allow/deny
+            // emitted by the rule engine writes a chained row here so an
+            // operator can inspect the policy timeline post-hoc and
+            // `senkani doctor --verify-chain` proves no row was redacted.
+            //
+            // Design notes:
+            //   - Self-contained CREATE so the migration runs against any
+            //     legal historical state (matches v3/v4/v5/v17/v18).
+            //   - `host` is the post-normalization host string the rule
+            //     engine evaluated (not the raw CONNECT bytes), so the
+            //     audit log is independently meaningful.
+            //   - `decision` is one of `'allow' | 'deny'`. `rule_id` is
+            //     stable string the rule producer guarantees; for the
+            //     deny-on-miss default the writer emits `'default-deny'`.
+            //   - `latency_us` is total time from the first byte the
+            //     daemon read on this connection to the decision being
+            //     emitted (the listener round T.1a.2 is what populates
+            //     it; T.1a writes 0 for synthetic decisions emitted by
+            //     unit tests, which is honest).
+            //   - Chain columns mirror token_events (round 2): nullable
+            //     prev_hash, entry_hash, chain_anchor_id; first write
+            //     opens a 'fresh-install' anchor (no migration anchor
+            //     here because the table is created empty by this
+            //     migration — there is no history to anchor).
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v19", detail: msg)
+            }
+
+            try exec("""
+                CREATE TABLE IF NOT EXISTS egress_decisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp REAL NOT NULL,
+                    host TEXT NOT NULL,
+                    method TEXT NOT NULL,
+                    decision TEXT NOT NULL,
+                    rule_id TEXT NOT NULL,
+                    latency_us INTEGER NOT NULL DEFAULT 0,
+                    pane_id TEXT,
+                    project_root TEXT,
+                    prev_hash TEXT,
+                    entry_hash TEXT,
+                    chain_anchor_id INTEGER
+                );
+            """)
+            try exec("CREATE INDEX IF NOT EXISTS idx_egress_decisions_anchor ON egress_decisions(chain_anchor_id, id);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_egress_decisions_host ON egress_decisions(host);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_egress_decisions_time ON egress_decisions(timestamp);")
+        },
     ]
 
     /// Open a 'migration-v18' anchor for a table at MAX(id) so that new

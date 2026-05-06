@@ -9,6 +9,65 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 6 — EgressProxy deterministic core: rule engine + chained decision audit (`phase-t1-egress-proxy`, T.1a)
+
+- Migration v19 introduces the `egress_decisions` chained SQLite
+  table — `host`, `method`, `decision`, `rule_id`, `latency_us`,
+  optional `pane_id` / `project_root`, plus the standard chain
+  triplet (`prev_hash`, `entry_hash`, `chain_anchor_id`). The
+  table is the load-bearing audit log for every allow/deny the
+  EgressProxy emits, and `ChainVerifier.verifyAll` walks it
+  alongside the eight prior chain participants. Tampering with a
+  decision row breaks `--verify-chain` at exactly that row,
+  proven by a dedicated tamper test.
+- `Sources/Core/EgressProxy/` ships the rule + decision core as
+  five orthogonal pieces: `EgressHostNormalizer` (case-fold,
+  strip default port `:80`/`:443`, strip trailing dot, strip
+  trailing slash — order chosen so combined inputs like
+  `Example.COM:80.` normalize correctly); `EgressRuleEngine`
+  (exact / prefix / suffix / single-`*` glob, deny-wins,
+  default-deny-on-miss as the load-bearing policy default);
+  `EgressDecisionStore` (chained writes via the shared
+  `ChainState` primitive, exposed through
+  `SessionDatabase+EgressAPI` as `recordEgressDecision`,
+  `recentEgressDecisions`, `egressDecisionCount`);
+  `HTTPRequestLine` parser (absolute-URL HTTP_PROXY form +
+  CONNECT form, with origin-form rejected so the proxy can't
+  accidentally accept misrouted requests); and
+  `TLSClientHelloSNI` extractor (parses the `server_name`
+  extension out of a ClientHello so the future tunnel can
+  validate the SNI host against the CONNECT-line host).
+- `senkani egress status` reports the listener state and
+  decision count; `senkani egress start|stop` print a clear
+  pointer to the `phase-t1a2-egress-proxy-listener-and-pipe`
+  follow-up that wires the live TCP socket. `senkani doctor`
+  gains check #18 ("Egress proxy: running on :PORT
+  (decisions: N)" / "down"), and `chainAuditOrder` adds
+  `egress_decisions` so `--verify-chain` walks it.
+- 22 new unit tests under
+  `Tests/SenkaniTests/EgressProxyTests.swift` pin the contract:
+  normalizer canonical forms (case + default-port + trailing
+  dot + trailing slash), non-default ports preserved,
+  `splitHostPort` accept/reject; rule engine exact / suffix
+  label-boundary / single-`*` glob / deny-wins / default-deny /
+  pre-normalization on the host; deny-latency p95 <1 ms across
+  100 hosts; HTTP request-line parses absolute-URL GET +
+  CONNECT, rejects origin-form + empty input;
+  `TLSClientHelloSNI` extracts SNI from a synthesized
+  ClientHello, raises `truncated` on cut bytes, raises
+  `notHandshake` on wrong record type; `EgressDecisionStore`
+  records and reads back, chains across successive writes,
+  verifier detects single-row tamper, count tracks rows,
+  migration v19 creates the table. Test count 2453 → 2475.
+- Live TCP listener + HTTP plain-proxy + CONNECT tunnel + SNI
+  vs CONNECT-host mismatch detection deferred to
+  `phase-t1a2-egress-proxy-listener-and-pipe` per the round's
+  Allspaw audit clash — shipping the deterministic core in
+  isolation gave crisp unit tests and avoided the round
+  duration overflow that bundling the I/O layer would have
+  caused. The follow-up has 8 tests targeted and inherits
+  every symbol from this round.
+
 ### May 6 — CredentialVault foundation: actor + KeychainStore protocol seam (`phase-t4-credential-vault`, T.4a)
 
 - `Sources/Core/CredentialVault.swift` ships the credential-vault

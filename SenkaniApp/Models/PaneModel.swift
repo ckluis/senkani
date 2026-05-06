@@ -105,6 +105,9 @@ final class PaneModel: Identifiable {
     var claudeSessionWatcher: ClaudeSessionWatcher?
     /// File path for markdown/HTML preview panes.
     var previewFilePath: String
+    /// HTML Preview render mode (V.10a A/B toggle). Default `.original`;
+    /// V.10b populates the `.designSystem` rendering path.
+    var htmlPreviewMode: HTMLPreviewMode = .original
     /// User-resizable column width.
     var columnWidth: CGFloat = 300
     /// User-resizable height. nil = fill available height (default).

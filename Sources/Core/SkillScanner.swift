@@ -320,7 +320,46 @@ public final class SkillScanner: Sendable {
             }
         }
 
+        // V.10a — Project-local HandManifest skills under spec/<dir>/manifest.json.
+        // Each immediate child of spec/ is checked for manifest.json; a valid
+        // HandManifest JSON file becomes a project-source skill entry. Invalid
+        // or missing files are silently skipped — the lint command surfaces
+        // structural errors when the operator runs `senkani skill lint`.
+        let specDir = (dir as NSString).appendingPathComponent("spec")
+        if let entries = try? fm.contentsOfDirectory(atPath: specDir) {
+            for entry in entries.sorted() {
+                let subdir = (specDir as NSString).appendingPathComponent(entry)
+                var isDir: ObjCBool = false
+                guard fm.fileExists(atPath: subdir, isDirectory: &isDir),
+                      isDir.boolValue else { continue }
+                let manifestPath = (subdir as NSString).appendingPathComponent("manifest.json")
+                guard fm.fileExists(atPath: manifestPath) else { continue }
+                guard let info = parseHandManifest(atPath: manifestPath) else { continue }
+                skills.append(SkillInfo(
+                    id: "project-handmanifest-\(info.name)",
+                    name: info.name,
+                    description: info.description,
+                    source: "project",
+                    filePath: manifestPath,
+                    type: .skill
+                ))
+            }
+        }
+
         return skills
+    }
+
+    /// Decode a HandManifest JSON file's identity fields without pulling in
+    /// the full Codable decode (keeps Core dependency-free at this layer).
+    /// Returns nil when the file does not look like a HandManifest v1.
+    private static func parseHandManifest(atPath path: String) -> (name: String, description: String)? {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let any = try? JSONSerialization.jsonObject(with: data),
+              let obj = any as? [String: Any] else { return nil }
+        guard let schema = obj["schema_version"] as? Int, schema == 1 else { return nil }
+        guard let name = obj["name"] as? String, !name.isEmpty else { return nil }
+        let description = (obj["description"] as? String) ?? ""
+        return (name, description)
     }
 
     // MARK: - Senkani Skills (WARP.md)

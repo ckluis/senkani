@@ -1,7 +1,13 @@
 import SwiftUI
 import WebKit
+import Core
 
 /// Renders a raw HTML file in a WKWebView with live auto-reload.
+///
+/// V.10a — adds an A/B segmented toolbar over the render area. The
+/// `Original` and `Design-system` modes both pass the same file path
+/// to the WebView in this round; V.10b wires pattern application to
+/// `.designSystem` without touching the surface.
 struct HTMLPreviewView: View {
     @Bindable var pane: PaneModel
 
@@ -13,9 +19,33 @@ struct HTMLPreviewView: View {
         if pane.previewFilePath.isEmpty {
             filePickerPrompt
         } else {
-            WebViewRepresentable(filePath: pane.previewFilePath, mode: .html)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 0) {
+                renderModeToolbar
+                Divider()
+                WebViewRepresentable(filePath: HTMLPreviewModeResolver.resolve(
+                                        for: pane.previewFilePath,
+                                        mode: pane.htmlPreviewMode),
+                                     mode: .html)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
+    }
+
+    /// Toolbar segmented control for V.10a's A/B render toggle.
+    private var renderModeToolbar: some View {
+        HStack {
+            Picker("Render mode", selection: $pane.htmlPreviewMode) {
+                Text("Original").tag(HTMLPreviewMode.original)
+                Text("Design-system").tag(HTMLPreviewMode.designSystem)
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 280)
+            .labelsHidden()
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.ultraThinMaterial)
     }
 
     private var filePickerPrompt: some View {
@@ -98,3 +128,4 @@ struct HTMLPreviewView: View {
         return true
     }
 }
+

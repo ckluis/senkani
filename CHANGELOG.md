@@ -9,6 +9,47 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 6 — DesignSystemSkill scaffold + HTML Preview A/B toggle (`phase-v10a-skill-scaffold`, V.10a)
+
+- `spec/design-system/manifest.json` lands the project-local
+  HandManifest v1 skill that V.10b will populate with rule bodies.
+  The manifest declares `name: design-system`, `schema_version: 1`,
+  no tools, an empty guardrails block, and a single preamble phase
+  pointing readers at `spec/design_system_patterns.md`. Lints clean
+  via `senkani skill lint spec/design-system/manifest.json`.
+- `Sources/Core/SkillScanner.swift` gains a project-local
+  HandManifest scan path: any `<projectRoot>/spec/<dir>/manifest.json`
+  whose JSON declares `schema_version: 1` and a non-empty `name` is
+  emitted as a `source: "project"`, `type: .skill` entry. Malformed
+  files are silently skipped (the lint command is the surface that
+  flags structural errors). The new scan path uses
+  `JSONSerialization` to avoid pulling the full Codable surface into
+  every scan call.
+- `Sources/Core/HTMLPreviewMode.swift` introduces `HTMLPreviewMode`
+  (`.original` / `.designSystem`), `HTMLPreviewModeResolver.resolve`
+  (V.10a identity map; V.10b will branch), and a thread-safe
+  `HTMLPreviewRenderCounter` probe. Living in Core means the rule is
+  unit-testable without instantiating the SwiftUI view.
+- `SenkaniApp/Models/PaneModel.swift` carries `htmlPreviewMode:
+  HTMLPreviewMode = .original` per pane.
+  `SenkaniApp/Views/HTMLPreviewView.swift` renders a top-of-pane
+  segmented control over the WKWebView; both modes pass the same
+  resolved file path to the WebView in V.10a, so output is
+  byte-identical (the toggle is a surface-only proof V.10b can wire
+  pattern injection without touching the surface again).
+- Starter `spec/design_system_patterns.md` ships with the four
+  canonical section headings (Spacing, Contrast, Hierarchy, Type
+  scale) and a one-line V.10b placeholder under each, so V.10b
+  inherits a working spec on day one.
+- 10 new tests under `Tests/SenkaniTests/DesignSystemSkillScaffoldTests.swift`:
+  manifest decode + lint of the in-repo `spec/design-system/manifest.json`,
+  patterns directory existence, pattern-spec stub four-section presence,
+  scanner discovers project-local HandManifest, scanner ignores random
+  non-manifest JSON under `spec/`, scanner skips malformed manifests
+  silently, resolver identity for both modes, per-mode counter bumps
+  exactly once per call without mutating the input path. Full safe
+  suite green: 2,567 → 2,577 (+10).
+
 ### May 6 — Credential gateway injection: `MCPToolConfig.credentialGateway` + HookRouter PreToolUse fetch (`phase-t4b-credential-gateway-injection`, T.4b)
 
 - `Sources/Core/CredentialGateway.swift` lands the round-2 surface

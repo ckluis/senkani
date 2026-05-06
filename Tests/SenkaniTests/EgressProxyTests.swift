@@ -3,6 +3,10 @@ import Foundation
 import SQLite3
 @testable import Core
 
+#if canImport(Darwin)
+import Darwin
+#endif
+
 /// T.1a — EgressProxy daemon scaffold tests. Covers:
 ///   - host normalization (case, default port, trailing dot, slash)
 ///   - rule engine (exact / prefix / suffix / glob, deny-wins,
@@ -335,4 +339,513 @@ private extension UInt16 {
     var bigEndianBytes: Data {
         Data([UInt8((self >> 8) & 0xff), UInt8(self & 0xff)])
     }
+}
+
+/// Build a minimal valid TLS 1.2 ClientHello carrying one server_name
+/// extension with the given hostname. File-level so multiple suites
+/// can share it.
+private func makeClientHello(sni: String) -> Data {
+    var ext = Data()
+    let nameBytes = Data(sni.utf8)
+    let listInner = Data([0x00]) + UInt16(nameBytes.count).bigEndianBytes + nameBytes
+    let listFraming = UInt16(listInner.count).bigEndianBytes + listInner
+    ext.append(UInt16(0x0000).bigEndianBytes)
+    ext.append(UInt16(listFraming.count).bigEndianBytes)
+    ext.append(listFraming)
+
+    var hello = Data()
+    hello.append(UInt16(0x0303).bigEndianBytes)
+    hello.append(Data(repeating: 0, count: 32))
+    hello.append(0x00)
+    hello.append(UInt16(2).bigEndianBytes)
+    hello.append(Data([0x00, 0x35]))
+    hello.append(0x01)
+    hello.append(0x00)
+    hello.append(UInt16(ext.count).bigEndianBytes)
+    hello.append(ext)
+
+    var handshake = Data()
+    handshake.append(0x01)
+    let lenU24 = UInt32(hello.count)
+    handshake.append(UInt8((lenU24 >> 16) & 0xff))
+    handshake.append(UInt8((lenU24 >> 8) & 0xff))
+    handshake.append(UInt8(lenU24 & 0xff))
+    handshake.append(hello)
+
+    var record = Data()
+    record.append(0x16)
+    record.append(UInt16(0x0301).bigEndianBytes)
+    record.append(UInt16(handshake.count).bigEndianBytes)
+    record.append(handshake)
+    return record
+}
+
+#if canImport(Darwin)
+/// Minimal raw-TCP fixture server: binds 127.0.0.1:0, accepts a single
+/// connection, runs the supplied handler with the connected fd, then
+/// closes the fd and the listener.
+final class FixtureTCPServer: @unchecked Sendable {
+    private var listenFD: Int32 = -1
+    private(set) var port: Int = 0
+    private let queue = DispatchQueue(label: "fixture-tcp", qos: .userInitiated)
+    private var ready: DispatchSemaphore?
+
+    enum FixtureError: Error { case bindFailed, listenFailed, getsocknameFailed }
+
+    init() throws {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        var reuse: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = 0
+        addr.sin_addr.s_addr = UInt32(0x7F00_0001).bigEndian
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        let br = withUnsafePointer(to: &addr) { ptr -> Int32 in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                bind(fd, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        if br != 0 { close(fd); throw FixtureError.bindFailed }
+        if listen(fd, 8) != 0 { close(fd); throw FixtureError.listenFailed }
+        var bound = sockaddr_in()
+        var blen = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let nr = withUnsafeMutablePointer(to: &bound) { ptr -> Int32 in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                getsockname(fd, sa, &blen)
+            }
+        }
+        if nr != 0 { close(fd); throw FixtureError.getsocknameFailed }
+        self.port = Int(UInt16(bigEndian: bound.sin_port))
+        self.listenFD = fd
+    }
+
+    /// Accept one connection asynchronously and run handler with the fd.
+    /// Closes the fd after handler returns.
+    func acceptOnce(handler: @Sendable @escaping (Int32) -> Void) {
+        let fd = listenFD
+        queue.async {
+            var cli = sockaddr_in()
+            var clen = socklen_t(MemoryLayout<sockaddr_in>.size)
+            let cfd = withUnsafeMutablePointer(to: &cli) { ptr -> Int32 in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                    accept(fd, sa, &clen)
+                }
+            }
+            guard cfd >= 0 else { return }
+            handler(cfd)
+            close(cfd)
+        }
+    }
+
+    func shutdown() {
+        if listenFD >= 0 { close(listenFD); listenFD = -1 }
+    }
+
+    deinit { shutdown() }
+}
+
+/// Connect to 127.0.0.1:port and return the fd, or nil on failure.
+func connectToLocalhost(port: Int) -> Int32? {
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    guard fd >= 0 else { return nil }
+    var addr = sockaddr_in()
+    addr.sin_family = sa_family_t(AF_INET)
+    addr.sin_port = UInt16(port).bigEndian
+    addr.sin_addr.s_addr = UInt32(0x7F00_0001).bigEndian
+    addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    var tv = timeval(tv_sec: 5, tv_usec: 0)
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+    let cr = withUnsafePointer(to: &addr) { ptr -> Int32 in
+        ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+            Darwin.connect(fd, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
+        }
+    }
+    if cr != 0 { close(fd); return nil }
+    return fd
+}
+
+func writeAllToFD(_ fd: Int32, _ data: Data) -> Bool {
+    var written = 0
+    let total = data.count
+    while written < total {
+        let n = data.withUnsafeBytes { (rb: UnsafeRawBufferPointer) -> Int in
+            guard let base = rb.baseAddress else { return -1 }
+            return Darwin.write(fd, base.advanced(by: written), total - written)
+        }
+        if n <= 0 { return false }
+        written += n
+    }
+    return true
+}
+
+func readAllUntilEOF(_ fd: Int32, max: Int = 64 * 1024) -> Data {
+    var out = Data()
+    var buf = [UInt8](repeating: 0, count: 4096)
+    while out.count < max {
+        let n = buf.withUnsafeMutableBufferPointer { ptr -> Int in
+            Darwin.read(fd, ptr.baseAddress, ptr.count)
+        }
+        if n <= 0 { break }
+        out.append(contentsOf: buf[0..<n])
+    }
+    return out
+}
+
+func readBytes(_ fd: Int32, count: Int) -> Data {
+    var out = Data()
+    var buf = [UInt8](repeating: 0, count: count)
+    while out.count < count {
+        let want = count - out.count
+        let n = buf.withUnsafeMutableBufferPointer { ptr -> Int in
+            Darwin.read(fd, ptr.baseAddress, want)
+        }
+        if n <= 0 { break }
+        out.append(contentsOf: buf[0..<n])
+    }
+    return out
+}
+
+/// Read until the HTTP head terminator `\r\n\r\n` or EOF. Returns the
+/// full bytes read INCLUDING the terminator.
+func readHTTPHead(_ fd: Int32, max: Int = 16 * 1024) -> Data {
+    var out = Data()
+    var buf = [UInt8](repeating: 0, count: 1024)
+    let term = Data([0x0d, 0x0a, 0x0d, 0x0a])
+    while out.count < max {
+        let n = buf.withUnsafeMutableBufferPointer { ptr -> Int in
+            Darwin.read(fd, ptr.baseAddress, ptr.count)
+        }
+        if n <= 0 { break }
+        out.append(contentsOf: buf[0..<n])
+        if out.range(of: term) != nil { break }
+    }
+    return out
+}
+
+private func tempDB() -> SessionDatabase {
+    let dir = NSTemporaryDirectory() + "senkani-egress-listener-tests-\(UUID().uuidString)/"
+    try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    return SessionDatabase(path: dir + "senkani.db")
+}
+
+private func waitForRow(db: SessionDatabase, timeoutSeconds: Double = 3.0) -> EgressDecisionStore.Row? {
+    let deadline = Date().addingTimeInterval(timeoutSeconds)
+    while Date() < deadline {
+        let rows = db.recentEgressDecisions(limit: 1)
+        if let row = rows.first { return row }
+        usleep(20_000)
+    }
+    return nil
+}
+
+@Suite("EgressProxy — live listener (T.1a.2)")
+struct EgressListenerLiveTests {
+
+    @Test("Listener binds, writes port file, status reports running")
+    func listenerWritesPortFile() throws {
+        let db = tempDB()
+        let portPath = NSTemporaryDirectory() + "egress-port-\(UUID().uuidString).txt"
+        defer { unlink(portPath) }
+        let listener = EgressListener(
+            rules: EgressRuleEngine(rules: []),
+            database: db,
+            config: .init(port: 0, writePortFile: true, portFilePath: portPath)
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        #expect(listener.port > 0)
+        #expect(listener.isRunning)
+
+        // Port file should be readable and contain the same port.
+        let raw = try String(contentsOfFile: portPath, encoding: .utf8)
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(Int(trimmed) == listener.port)
+    }
+
+    @Test("Plain HTTP allow: rewrites + pipes upstream and writes one allow row")
+    func plainHTTPAllowPipes() throws {
+        let db = tempDB()
+        let fixture = try FixtureTCPServer()
+        defer { fixture.shutdown() }
+
+        // Fixture echoes a canned 200 response after reading the request head.
+        let body = "hello-world"
+        fixture.acceptOnce { fd in
+            // Drain request head until \r\n\r\n.
+            var head = Data()
+            var buf = [UInt8](repeating: 0, count: 1024)
+            while head.range(of: Data([0x0d, 0x0a, 0x0d, 0x0a])) == nil {
+                let n = buf.withUnsafeMutableBufferPointer { ptr -> Int in
+                    Darwin.read(fd, ptr.baseAddress, ptr.count)
+                }
+                if n <= 0 { return }
+                head.append(contentsOf: buf[0..<n])
+            }
+            let resp = "HTTP/1.1 200 OK\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n\(body)"
+            _ = writeAllToFD(fd, Data(resp.utf8))
+        }
+
+        let listener = EgressListener(
+            rules: EgressRuleEngine(rules: [
+                EgressRule(id: "test-allow", pattern: "127.0.0.1", mode: .exact, decision: .allow)
+            ]),
+            database: db,
+            config: .init(port: 0, writePortFile: false, portFilePath: "")
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        let cfd = connectToLocalhost(port: listener.port)
+        try #require(cfd != nil)
+        let cli = cfd!
+        defer { close(cli) }
+
+        let req = "GET http://127.0.0.1:\(fixture.port)/ HTTP/1.1\r\nHost: 127.0.0.1:\(fixture.port)\r\nConnection: close\r\n\r\n"
+        #expect(writeAllToFD(cli, Data(req.utf8)))
+
+        let resp = readAllUntilEOF(cli)
+        let respStr = String(data: resp, encoding: .utf8) ?? ""
+        #expect(respStr.contains("200 OK"))
+        #expect(respStr.contains(body))
+
+        let row = waitForRow(db: db)
+        try #require(row != nil)
+        #expect(row!.decision == .allow)
+        #expect(row!.host == "127.0.0.1")
+        #expect(row!.method == "GET")
+        #expect(row!.ruleId == "test-allow")
+        #expect(row!.latencyUs > 0)
+    }
+
+    @Test("Plain HTTP deny: returns 403 and writes deny row")
+    func plainHTTPDenyReturns403() throws {
+        let db = tempDB()
+        let listener = EgressListener(
+            rules: EgressRuleEngine(rules: [
+                EgressRule(id: "blockit", pattern: "blocked.example.com", mode: .exact, decision: .deny)
+            ]),
+            database: db,
+            config: .init(port: 0, writePortFile: false, portFilePath: "")
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        let cfd = connectToLocalhost(port: listener.port)
+        try #require(cfd != nil)
+        let cli = cfd!
+        defer { close(cli) }
+
+        let req = "GET http://blocked.example.com/ HTTP/1.1\r\nHost: blocked.example.com\r\nConnection: close\r\n\r\n"
+        #expect(writeAllToFD(cli, Data(req.utf8)))
+
+        let resp = readAllUntilEOF(cli)
+        let respStr = String(data: resp, encoding: .utf8) ?? ""
+        #expect(respStr.contains("403 Forbidden"))
+
+        let row = waitForRow(db: db)
+        try #require(row != nil)
+        #expect(row!.decision == .deny)
+        #expect(row!.host == "blocked.example.com")
+        #expect(row!.ruleId == "blockit")
+    }
+
+    @Test("CONNECT denied host: 403 + deny row, no upstream connect")
+    func connectDeniedHost() throws {
+        let db = tempDB()
+        let listener = EgressListener(
+            rules: EgressRuleEngine(rules: []),  // empty → default-deny
+            database: db,
+            config: .init(port: 0, writePortFile: false, portFilePath: "")
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        let cfd = connectToLocalhost(port: listener.port)
+        try #require(cfd != nil)
+        let cli = cfd!
+        defer { close(cli) }
+
+        let req = "CONNECT denied.example.com:443 HTTP/1.1\r\nHost: denied.example.com:443\r\n\r\n"
+        #expect(writeAllToFD(cli, Data(req.utf8)))
+
+        let resp = readAllUntilEOF(cli)
+        let respStr = String(data: resp, encoding: .utf8) ?? ""
+        #expect(respStr.contains("403 Forbidden"))
+
+        let row = waitForRow(db: db)
+        try #require(row != nil)
+        #expect(row!.decision == .deny)
+        #expect(row!.method == "CONNECT")
+        #expect(row!.ruleId == "default-deny")
+    }
+
+    @Test("CONNECT SNI mismatch: writes sni_mismatch deny and tears down")
+    func connectSNIMismatchTearsDown() throws {
+        let db = tempDB()
+        let listener = EgressListener(
+            rules: EgressRuleEngine(rules: [
+                EgressRule(id: "allow-loopback", pattern: "127.0.0.1", mode: .exact, decision: .allow)
+            ]),
+            database: db,
+            config: .init(port: 0, writePortFile: false, portFilePath: "")
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        let cfd = connectToLocalhost(port: listener.port)
+        try #require(cfd != nil)
+        let cli = cfd!
+        defer { close(cli) }
+
+        // Use a port where no fixture is listening; SNI mismatch means
+        // the proxy never connects upstream, so the port is irrelevant.
+        let req = "CONNECT 127.0.0.1:9 HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\r\n"
+        #expect(writeAllToFD(cli, Data(req.utf8)))
+
+        // Drain the 200 reply head fully so leftover bytes don't leak
+        // into the post-handshake read.
+        let okResp = readHTTPHead(cli)
+        let okStr = String(data: okResp, encoding: .utf8) ?? ""
+        #expect(okStr.contains("200 Connection Established"))
+
+        // Now send a ClientHello with a MISMATCHING SNI.
+        let hello = makeClientHello(sni: "evil.example.com")
+        #expect(writeAllToFD(cli, hello))
+
+        // Read until EOF — proxy tears down without piping.
+        let tail = readAllUntilEOF(cli)
+        // Tail should be empty (no upstream bytes piped back).
+        #expect(tail.isEmpty)
+
+        let row = waitForRow(db: db)
+        try #require(row != nil)
+        #expect(row!.decision == .deny)
+        #expect(row!.ruleId == "sni_mismatch")
+        #expect(row!.method == "CONNECT")
+        // Host as recorded is the post-normalization parsed host
+        // (port stored separately in the parsed struct, not concatenated
+        // into the audit row).
+        #expect(row!.host == "127.0.0.1")
+    }
+
+    @Test("CONNECT allow + matching SNI: pipes bytes both directions to upstream")
+    func connectMatchingSNIPipes() throws {
+        let db = tempDB()
+        let fixture = try FixtureTCPServer()
+        defer { fixture.shutdown() }
+
+        // Fixture echoes whatever bytes it receives, then closes.
+        fixture.acceptOnce { fd in
+            var buf = [UInt8](repeating: 0, count: 4096)
+            while true {
+                let n = buf.withUnsafeMutableBufferPointer { ptr -> Int in
+                    Darwin.read(fd, ptr.baseAddress, ptr.count)
+                }
+                if n <= 0 { return }
+                _ = buf.withUnsafeBufferPointer { ptr -> Int in
+                    Darwin.write(fd, ptr.baseAddress, n)
+                }
+            }
+        }
+
+        let listener = EgressListener(
+            rules: EgressRuleEngine(rules: [
+                EgressRule(id: "allow-loopback", pattern: "127.0.0.1", mode: .exact, decision: .allow)
+            ]),
+            database: db,
+            config: .init(port: 0, writePortFile: false, portFilePath: "")
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        let cfd = connectToLocalhost(port: listener.port)
+        try #require(cfd != nil)
+        let cli = cfd!
+        defer { close(cli) }
+
+        let req = "CONNECT 127.0.0.1:\(fixture.port) HTTP/1.1\r\nHost: 127.0.0.1:\(fixture.port)\r\n\r\n"
+        #expect(writeAllToFD(cli, Data(req.utf8)))
+
+        // Drain the 200 reply head before sending the ClientHello, so
+        // leftover header bytes don't pollute the echo read below.
+        let okResp = readHTTPHead(cli)
+        let okStr = String(data: okResp, encoding: .utf8) ?? ""
+        #expect(okStr.contains("200 Connection Established"))
+
+        // Send a ClientHello with matching SNI. Fixture will echo it.
+        // The CONNECT host is "127.0.0.1" (port stripped during normalization).
+        let hello = makeClientHello(sni: "127.0.0.1")
+        let helloChecksum = sha256Prefix(hello)
+        #expect(writeAllToFD(cli, hello))
+
+        // Read echo back.
+        let echoed = readBytes(cli, count: hello.count)
+        #expect(echoed.count == hello.count)
+        #expect(sha256Prefix(echoed) == helloChecksum)
+
+        let row = waitForRow(db: db)
+        try #require(row != nil)
+        #expect(row!.decision == .allow)
+        #expect(row!.method == "CONNECT")
+    }
+
+    @Test("Stop unlinks the port file and clears the bound port")
+    func stopClearsPortFile() throws {
+        let db = tempDB()
+        let portPath = NSTemporaryDirectory() + "egress-stop-\(UUID().uuidString).txt"
+        let listener = EgressListener(
+            rules: EgressRuleEngine(rules: []),
+            database: db,
+            config: .init(port: 0, writePortFile: true, portFilePath: portPath)
+        )
+        try listener.start()
+        let port = listener.port
+        #expect(port > 0)
+        #expect(FileManager.default.fileExists(atPath: portPath))
+
+        listener.stop()
+
+        #expect(listener.port == 0)
+        #expect(!listener.isRunning)
+        #expect(!FileManager.default.fileExists(atPath: portPath))
+    }
+
+    @Test("Chain integrity holds across 1k decision write-storm")
+    func chainIntegrityAfter1kWrites() throws {
+        let db = tempDB()
+        for i in 0..<1_000 {
+            let ok = db.recordEgressDecision(
+                host: "host\(i % 32).example.com",
+                method: i % 2 == 0 ? "GET" : "CONNECT",
+                decision: i % 5 == 0 ? .deny : .allow,
+                ruleId: i % 5 == 0 ? "deny-rule" : "allow-rule",
+                latencyUs: Int64(i)
+            )
+            #expect(ok)
+        }
+        #expect(db.egressDecisionCount() == 1_000)
+
+        let result = ChainVerifier.verifyEgressDecisions(db)
+        switch result {
+        case .ok:
+            break
+        default:
+            Issue.record("expected .ok across 1k writes, got \(result)")
+        }
+    }
+}
+#endif
+
+/// 64-bit FNV-1a — cheap fingerprint used to compare two Data blobs
+/// for equality without having to import CryptoKit in the test target.
+private func sha256Prefix(_ d: Data) -> UInt64 {
+    var hash: UInt64 = 0xcbf29ce484222325
+    for byte in d {
+        hash ^= UInt64(byte)
+        hash &*= 0x100000001b3
+    }
+    return hash
 }

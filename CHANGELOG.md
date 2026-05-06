@@ -9,6 +9,70 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 6 — EgressProxy live listener + HTTP/CONNECT pipe (`phase-t1a2-egress-proxy-listener-and-pipe`, T.1a.2)
+
+- `Sources/Core/EgressProxy/EgressListener.swift` lights up the
+  T.1a deterministic core with a real POSIX TCP listener bound to
+  `127.0.0.1:<port>`. Port 0 (the default) takes a kernel-
+  assigned port; the bound port reads back via `getsockname` and
+  is persisted to `~/.senkani/egress.port` via
+  write-tmp-then-`rename` so a doctor running concurrently never
+  observes a half-written file. The accept loop is a
+  `DispatchSourceRead` mirror of the SocketServer pattern; each
+  accepted client drops onto a concurrent connection queue and
+  runs to completion or to EOF on either side.
+- `Sources/Core/EgressProxy/EgressConnectionHandler.swift` owns
+  per-connection logic. Reads request head up to `\r\n\r\n` (16 KB
+  cap), parses the first line via `HTTPRequestLine`, evaluates
+  the host through `EgressRuleEngine`, and branches: deny → 403
+  Forbidden + chained deny row; allow + plain-HTTP → rewrite
+  absolute URL to origin form, open upstream via
+  `EgressUpstreamConnector`, write rewritten head, pipe
+  bidirectionally via two `read`/`write` loops with
+  half-close-on-EOF; allow + CONNECT → 200 Connection
+  Established, peek up to 4 KB for the TLS ClientHello, extract
+  SNI via `TLSClientHelloSNI`, and only open the upstream tunnel
+  when `EgressHostNormalizer.normalize(SNI) ==
+  EgressHostNormalizer.normalize(CONNECT-host)`. SNI mismatch
+  writes a deny row with sentinel `rule_id="sni_mismatch"` and
+  closes without piping a single byte upstream; an unparseable
+  ClientHello writes `rule_id="sni_unparseable"`; a resolver /
+  connect failure writes `rule_id="upstream_unreachable"`. Per
+  the Schneier audit, none of these sentinels collides with a
+  rule-defined id because the rules loader rejects matching
+  patterns from operator config.
+- `Sources/Core/EgressProxy/EgressUpstreamConnector.swift` does
+  the resolver work in pure POSIX `getaddrinfo` + `connect` so
+  the path is testable without Foundation `URLSession` background
+  queues. Walks every returned `addrinfo` until one connects.
+- `senkani egress start` and `senkani egress stop` flip from
+  scaffold-stubs to real lifecycle. `start` instantiates an
+  `EgressListener` from the rules at `~/.senkani/egress-rules.json`
+  (missing or malformed → empty rule set → deny-by-default for
+  every host, intentional), writes its own pid to
+  `~/.senkani/egress.pid`, installs a `DispatchSource` SIGTERM
+  handler that calls `listener.stop()` (which unlinks the port
+  file and closes the listening fd), and parks on `dispatchMain`.
+  `stop` reads the pid file and sends SIGTERM. The doctor check
+  reading `~/.senkani/egress.port` from T.1a now flips to "egress
+  proxy: running on :PORT (decisions: N)" without any change.
+- 8 new integration / smoke tests under
+  `Tests/SenkaniTests/EgressProxyTests.swift` (`EgressListenerLiveTests`):
+  listener binds + writes port file, plain-HTTP allow rewrites &
+  pipes a fixture response, plain-HTTP deny returns 403, CONNECT
+  to a denied host returns 403, CONNECT with matching SNI pipes
+  bytes both ways through a fixture echoer (FNV-1a checksum
+  round-trip), CONNECT with SNI ≠ CONNECT-host writes a
+  `sni_mismatch` deny and tears down without piping, lifecycle
+  stop unlinks the port file and clears the bound port, and a
+  1 000-decision write-storm asserts `ChainVerifier.verifyEgressDecisions`
+  returns `.ok`. Each test holds its own `tempDB`-backed
+  `SessionDatabase` so the suite parallelizes safely. Test count
+  2475 → 2483.
+- Out of scope (filed for follow-ups): Qwen3 4B judge fallback
+  (T.1b), HTTPS body MITM + CA install (T.1d), 20-scenario
+  adversarial corpus + `--check-egress` doctor flag (T.1c).
+
 ### May 6 — EgressProxy deterministic core: rule engine + chained decision audit (`phase-t1-egress-proxy`, T.1a)
 
 - Migration v19 introduces the `egress_decisions` chained SQLite

@@ -9,6 +9,42 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 6 — CredentialVault foundation: actor + KeychainStore protocol seam (`phase-t4-credential-vault`, T.4a)
+
+- `Sources/Core/CredentialVault.swift` ships the credential-vault
+  foundation as three orthogonal pieces: `KeychainStore` protocol
+  (Sendable, `async throws` on every method, no `Security`
+  framework leak — only Swift-stdlib types in the surface);
+  `InMemoryKeychainStore` actor (map-backed, no disk I/O, used by
+  every test in this round and by T.4b's `HookRouter` injection
+  point until T.4c lands the real `MacOSKeychainStore`); and the
+  `CredentialVault` actor itself with a forward-compat
+  `scope: String = CredentialVault.defaultScope` ("default")
+  parameter on every read/write so T.2c can slot in
+  `engagement-<id>` scopes without an ABI break.
+- `CredentialVault.read(key:scope:dryRun:)` is fail-closed by
+  default — a missing key throws `CredentialVaultError.missingKey
+  (key:, scope:)`. The error's `localizedDescription` carries
+  BOTH key and scope plus the actionable hint
+  `senkani vault add --key <key> --scope <scope>` (CLI lands in
+  T.4c). `dryRun: true` substitutes
+  `Data("FAKE_KEY_<scope>_<key>".utf8)` for absent keys —
+  per-tool opt-in only via T.4b's `MCPToolConfig.dry_run` flag,
+  never an env var. The FAKE_KEY-never-aliases-real contract is
+  pinned by a dedicated test: when the key actually exists in
+  the store, dryRun surfaces the real value, not the sentinel.
+- 8 new unit tests under `Tests/SenkaniTests/CredentialVaultTests
+  .swift` pin the contract: defaultScope constant, binary-safe
+  round-trip (NUL + high-bit + non-UTF8 bytes), structured-error
+  key+scope+CLI-hint, FAKE_KEY sentinel for absent keys,
+  FAKE_KEY-never-aliases-real, scope isolation across writes,
+  scope-aware list/delete. Suite total 2,523 → 2,531 (+8).
+- T.4b (`MCPToolConfig.credential_gateway` schema + HookRouter
+  PreToolUse injection + `token_events` redaction) is unblocked
+  next; T.4c (real macOS Keychain conformance + CLI + adversarial
+  corpus eval) ships in a future cowork-runnable round once the
+  groomed test plan lands.
+
 ### May 5 — Layer 3 PII classifier infrastructure: registry + decoder + CLI shell (`phase-t2-pii-classifier`, T.2a)
 
 - `Sources/Core/ModelManager.swift` registers `pii-classifier-int8` →

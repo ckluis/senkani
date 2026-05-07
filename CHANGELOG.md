@@ -9,6 +9,40 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 7 — `StoreExecTests.nilDBIsNoop` filters by StoreExec event-vocabulary (`storeexec-niltest-loggersink-leak-from-peer-suite-migration`)
+
+- `Tests/SenkaniTests/StoreExecTests.swift:55-72` — `nilDBIsNoop`
+  no longer asserts `sink.events.isEmpty`. The assertion now filters
+  to the StoreExec event-vocabulary (`db.command.sql_error`,
+  `db.sandbox.sql_error`, `db.validation.sql_error`) and asserts
+  that filtered list is empty. Mirrors the pattern the three sibling
+  StoreExec tests + LoggerRoutingTests' path-filter use.
+- `Tests/SenkaniTests/LoggerSinkGate.swift` — head-comment updated.
+  Three sink-using suites today (was "two" — `AgentTraceEventStoreUnknownVocabTests`
+  carries `.loggerSinkGate` since the Phase V.2 vocabulary work).
+  Documented the gate's contract limitation: it serializes
+  sink-using suites against EACH OTHER but does NOT block
+  production `Logger.log` emissions from peer suites' GCD queues.
+  Tests that observe sink contents must filter by event-name or
+  field-value, never raw `.isEmpty`.
+- Why: `Logger._testSink` is process-global. Under default-parallel
+  `swift test`, a peer suite's `SessionDatabase.init` runs
+  `MigrationRunner.runMigrations` on its own `db.queue` and emits
+  `schema.migration.applied` into whichever sink is currently
+  installed — including the StoreExec test sink mid-`nilDBIsNoop`.
+  Soak run 9 of 10 (2026-05-06, parent finding
+  `htmlpreviewmoderesolver-invocation-counter-cross-suite-race`)
+  caught the leak. The three structural fixes (correlation-id
+  plumbing through StoreExec; `@TaskLocal` rewrite — rejected by
+  the gate's existing comment because GCD closures don't inherit
+  task-locals; process-wide write-lock during gated suites) all
+  touch production for a test-only concern. Filter-at-the-test
+  matches the convention every other site already follows.
+- **Verification.** Filter-only `swift test --filter
+  "StoreExecTests/nilDBIsNoop"`: 20 / 20 green consecutive. Full
+  parallel `swift test`: 10 / 10 green consecutive (~12 s each,
+  2540 / 2540 tests).
+
 ### May 7 — SLO `hookPassthroughP99UnderThreshold` median-of-3 → supermajority-of-5 (`slo-hookpassthrough-p99-majority-burn-still-flakes`)
 
 - `Tests/SenkaniTests/SLOTests.swift:214-252` —

@@ -11,10 +11,28 @@ import Foundation
 /// floor. The path-filter the LoggerRouting tests apply to `sink.events`
 /// only helps for events whose payload includes the test's own path; it
 /// can't recover events that never reached the sink because it was
-/// already torn down. Pre-audit confirmed only two suites read/write the
-/// sink (`LoggerRoutingTests`, `StoreExecTests`), but production
-/// `Logger.log` callers fire from arbitrary GCD queues, ruling out a
-/// `@TaskLocal` rewrite (GCD closures don't inherit task-locals).
+/// already torn down. Three suites read/write the sink today
+/// (`LoggerRoutingTests`, `StoreExecTests`, `AgentTraceEventStoreUnknownVocabTests`);
+/// production `Logger.log` callers fire from arbitrary GCD queues, ruling
+/// out a `@TaskLocal` rewrite (GCD closures don't inherit task-locals).
+///
+/// **Contract limitation (parent_finding 2026-05-06,
+/// `storeexec-niltest-loggersink-leak-from-peer-suite-migration`):** the
+/// gate serializes sink-using suites against EACH OTHER. It does NOT
+/// block production `Logger.log` emissions from peer suites running in
+/// parallel — those land in whichever sink is currently installed,
+/// regardless of the calling suite's traits. A peer
+/// `SessionDatabase.init` running concurrently can drop
+/// `schema.migration.applied` (or any other production event) into a
+/// sink-using suite's bag mid-test. Tests that assert sink contents
+/// MUST filter `sink.events` by event-name vocabulary (the StoreExec
+/// `db.<scope>.sql_error` family) or by a unique field value (the
+/// `pathField(...)` filter LoggerRoutingTests uses) — never raw
+/// `sink.events.isEmpty`. The three rejected isolation strategies
+/// (test-side correlation-id plumbing, `@TaskLocal` rewrite, process-
+/// wide write-lock during gated suites) all touch production for a
+/// test-only concern; filtering matches the convention the other
+/// sibling sites already use.
 ///
 /// Same shape as `URLProtocolGateTrait` (see `MockURLProtocolGate.swift`)
 /// — a continuation-queued async semaphore that ensures the body runs

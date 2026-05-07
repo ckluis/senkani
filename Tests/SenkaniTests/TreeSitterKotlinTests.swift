@@ -401,17 +401,34 @@ struct KotlinPerformanceTests {
             }
             source += "}\n\n"
         }
+        // Median-of-3 — see DependencyGraphPerfGateTests for the canonical
+        // pattern. `.serialized` only serializes within-suite, so peer-suite
+        // CPU contention can spike a single sample under parallel runner;
+        // a single transient spike on one of three runs cannot fail the
+        // test, but a real regression (every run blows budget) still does.
+        // Threshold preserved at 50 ms — widened 10ms → 50ms 2026-04-21
+        // because the original 10ms bound flakes on loaded machines (see
+        // spec/testing.md "Harness hang"); 50 ms still catches a real
+        // regression (a reverted tree-sitter parse costs ~500ms) without
+        // false-firing when a sibling @Test hogs the cooperative pool.
+        // The median-of-3 layer (added 2026-05-06) is independent of the
+        // threshold widen — it strengthens the gate against single-sample
+        // peer-suite spikes (mirrors the 10-parser 2026-05-06 sweep
+        // precedent of preserve-don't-widen).
         let clock = ContinuousClock()
-        let elapsed = clock.measure {
-            let entries = indexKotlin(source)
-            #expect(entries.count > 0)
+        var samples: [Duration] = []
+        for _ in 0..<3 {
+            let elapsed = clock.measure {
+                let entries = indexKotlin(source)
+                #expect(entries.count > 0)
+            }
+            samples.append(elapsed)
         }
-        // Widened 10ms → 50ms 2026-04-21: original 10ms bound flakes on
-        // loaded machines (see spec/testing.md "Harness hang"). 50ms still
-        // catches a real regression — a reverted tree-sitter parse costs
-        // ~500ms — without false-firing when a sibling @Test hogs the
-        // cooperative pool.
-        #expect(elapsed < .milliseconds(50))
+        let median = samples.sorted()[1]
+        #expect(
+            median < .milliseconds(50),
+            "median of 3 Kotlin parses: \(samples) → median \(median)"
+        )
     }
 }
 

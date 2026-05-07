@@ -9,6 +9,43 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 6 — Median-of-3 perf-budget pattern extended to last 3 single-sample parser sites: Elixir/Kotlin/Python (`parallel-runner-flake-perf-budget-elixir-kotlin-python`)
+
+- 3 remaining single-sample parser perf gates migrated to median-of-3:
+  `TreeSitterElixirTests.swift:299-323` (50 ms, Duration shape),
+  `TreeSitterKotlinTests.swift:381-415` (50 ms, Duration shape — keeps
+  the 2026-04-21 10 ms → 50 ms widen rationale), and
+  `TreeSitterPythonTests.swift:175-208` (5 ms, Double-ms shape mirroring
+  the Rust precedent). Thresholds preserved per site — the median
+  strengthens the gate on its own, mirroring the 10-parser 2026-05-06
+  sweep precedent of preserve-don't-widen.
+- Inline rationale comment per site cross-referencing
+  `DependencyGraphPerfGateTests` as the canonical pattern, identical
+  wording to the Scala/Ruby/Haskell/PHP/Rust/10-parser precedents
+  for grep-traceability. The Kotlin site keeps the original 10 ms → 50 ms
+  widen comment unchanged — the median-of-3 layer is independent of
+  the threshold widen.
+- **Verification.** Filter-only `swift test --filter
+  "elixirFileParsesUnder10ms|kotlinFileParsesUnder10ms|pythonFileParsesUnder5ms"`:
+  3/3 green × 20 consecutive runs. Full parallel-suite `swift test`
+  3 consecutive runs: 2539/2539 green on runs 2 and 3 (run 1 hit a
+  Zig flake, see below — none of the 3 sites in this round regressed).
+  `tools/test-safe.sh --chunk parsers`: 290/290 green.
+- **Defects-outside-criteria filed.** Run 1 of the full parallel
+  suite produced `median → 0.011024458 seconds < .milliseconds(10)`
+  failure at `TreeSitterZigTests.swift:407` — the prior round's
+  preserve-don't-widen approach left insufficient headroom for Zig
+  under contention (median itself crossed the bound by 10 %). Runs 2
+  and 3 were clean. Filed as
+  `parallel-runner-flake-perf-budget-zig-threshold-widen` for a
+  follow-up round to widen the Zig bound from 10 ms to ~20 ms,
+  mirroring the Scala precedent (in-isolation typical < 50 % below
+  bound → widen).
+- Closes the post-PHP/post-10-parser-sweep single-sample family
+  completely — zero single-sample parser perf gates remain. Future
+  flakes in this family resolve via threshold-widen (e.g. the filed
+  Zig follow-up), not via pattern migration.
+
 ### May 6 — Median-of-3 perf-budget pattern extended to 10 remaining parser sites (`parallel-runner-flake-perf-budget-remaining-parsers`)
 
 - 10 single-sample `clock.measure { … } < .milliseconds(10)` parser

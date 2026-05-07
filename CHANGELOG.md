@@ -9,6 +9,41 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 7 — `PinnedContextStore.all()` ordering race fixed: monotonic insertion counter replaces sub-µs `Date()` sort key (`pinnedcontextstore-pinsactiondatamatchesdrain-order-flake`)
+
+- `Sources/Core/PinnedContextStore.swift` — `PinnedEntry` gains
+  `pinSequence: UInt64` (public, internal-set), stamped by the store
+  on `pin()` under the existing `NSLock` from a private `nextSequence`
+  counter. All three sort sites (eviction L65-69, `all()` L88, `drain()`
+  L114-116) migrated from `pinnedAt: Date` to `pinSequence`. `pinnedAt`
+  retained on the struct for future display use; no longer the sort
+  key. Re-pin upsert correctly re-stamps the sequence (preserves
+  `tokenCapEvictsOldestWhenFull` semantics).
+- Why: under default-parallel `swift test`, two back-to-back `pin()`
+  calls captured `Date()` timestamps within the same nanosecond
+  bucket. With timestamp ties, `Array.sorted` in Swift is not stable
+  and `Dictionary.values` enumerates in arbitrary order — so
+  `all()` could return Beta-then-Alpha after pinning Alpha-then-Beta.
+  A monotonic UInt64 counter mutated only under the store's lock
+  removes the tie possibility entirely (counter wraparound at
+  18 quintillion pins is not a concern).
+- `Tests/SenkaniTests/PinnedContextTests.swift` — added
+  `pinOrderIsMonotonicAcrossManyFreshStores` (200 fresh stores
+  back-to-back, asserts insertion order on every snapshot) as a
+  regression lock against future `pinnedAt`-based sort regressions.
+- **Verification.** Filter-only `swift test --filter
+  "PinnedContextStore"`: 20/20 green consecutive. Full parallel
+  suite `swift test`: 10 runs total, `pinsActionDataMatchesDrain`
+  10/10 green and `pinOrderIsMonotonicAcrossManyFreshStores` 10/10
+  green. The 6 of 10 full-suite runs that failed all failed on
+  `SLOTests.swift:248 hookPassthroughP99UnderThreshold` — already
+  tracked as the open `slo-hookpassthrough-p99-majority-burn-still-flakes`
+  item; not a regression introduced here.
+- **Defects-outside-criteria filed.** None new. The SLO burn flake
+  observed during the 10× full-parallel verification is the
+  pre-existing open backlog item (`burnCount → 2 < 2`); no duplicate
+  filing.
+
 ### May 7 — Zig parser perf-gate threshold widened 10 ms → 50 ms (`parallel-runner-flake-perf-budget-zig-threshold-widen`)
 
 - `Tests/SenkaniTests/TreeSitterZigTests.swift:407` — `.milliseconds(10)`

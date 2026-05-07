@@ -102,6 +102,21 @@ struct PinnedContextStoreTests {
         #expect(all[1].callsRemaining == 5)
     }
 
+    @Test func pinOrderIsMonotonicAcrossManyFreshStores() {
+        // Regression for sub-µs `Date()` tie + non-stable `Array.sorted`. Hammer
+        // 200 fresh stores with back-to-back pins; every snapshot must see
+        // insertion order, never the reversed order.
+        for _ in 0..<200 {
+            let store = PinnedContextStore()
+            store.pin(PinnedEntry(name: "First",  outline: "func first()",  ttl: 10))
+            store.pin(PinnedEntry(name: "Second", outline: "func second()", ttl: 5))
+            let snapshot = store.all()
+            #expect(snapshot[0].name == "First")
+            #expect(snapshot[1].name == "Second")
+            #expect(snapshot[0].pinSequence < snapshot[1].pinSequence)
+        }
+    }
+
     @Test func autoPinDisabledByDefault() {
         // When auto-pin is off, the store should stay empty after a hypothetical @-mention.
         // Verified by confirming a fresh PinnedContextStore is empty at construction,

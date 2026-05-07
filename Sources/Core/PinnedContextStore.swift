@@ -11,6 +11,11 @@ public struct PinnedEntry: Sendable {
     public internal(set) var callsRemaining: Int
     /// TTL at pin time (for display in the status block).
     public let maxCalls: Int
+    /// Monotonic insertion sequence stamped by the store on `pin()`. Default 0
+    /// for entries not yet inserted. Why: `pinnedAt: Date` ties under sub-µs
+    /// contention and `Array.sorted` is not stable, flipping order
+    /// non-deterministically; sequence is the canonical sort key.
+    public internal(set) var pinSequence: UInt64
 
     public init(name: String, outline: String, ttl: Int = PinnedContextStore.defaultTTL) {
         let clampedTTL = max(PinnedContextStore.minTTL, min(PinnedContextStore.maxTTL, ttl))
@@ -19,6 +24,7 @@ public struct PinnedEntry: Sendable {
         self.pinnedAt = Date()
         self.callsRemaining = clampedTTL
         self.maxCalls = clampedTTL
+        self.pinSequence = 0
     }
 }
 
@@ -40,6 +46,7 @@ public final class PinnedContextStore: @unchecked Sendable {
     public static let minTTL        = 1
 
     private var entries: [String: PinnedEntry] = [:]   // name → entry, upsert semantics
+    private var nextSequence: UInt64 = 0               // monotonic, mutated only under lock
     private let lock = NSLock()
 
     public init() {}
@@ -50,15 +57,18 @@ public final class PinnedContextStore: @unchecked Sendable {
     public func pin(_ entry: PinnedEntry) -> PinnedEntry {
         lock.lock()
         defer { lock.unlock() }
-        entries[entry.name] = entry
+        var stamped = entry
+        stamped.pinSequence = nextSequence
+        nextSequence += 1
+        entries[stamped.name] = stamped
         if entries.count > Self.maxEntries {
             let evictCount = entries.count - Self.maxEntries
             let oldest = entries.values
-                .sorted { $0.pinnedAt < $1.pinnedAt }
+                .sorted { $0.pinSequence < $1.pinSequence }
                 .prefix(evictCount)
             for e in oldest { entries.removeValue(forKey: e.name) }
         }
-        return entries[entry.name]!
+        return entries[stamped.name]!
     }
 
     /// Remove a pinned entry by name (case-insensitive).
@@ -75,7 +85,7 @@ public final class PinnedContextStore: @unchecked Sendable {
     public func all() -> [PinnedEntry] {
         lock.lock()
         defer { lock.unlock() }
-        return entries.values.sorted { $0.pinnedAt < $1.pinnedAt }
+        return entries.values.sorted { $0.pinSequence < $1.pinSequence }
     }
 
     /// True when no entries are pinned.
@@ -102,7 +112,7 @@ public final class PinnedContextStore: @unchecked Sendable {
 
         // Process in pin order (oldest first) for stable output
         let sortedKeys = entries.keys.sorted {
-            entries[$0]!.pinnedAt < entries[$1]!.pinnedAt
+            entries[$0]!.pinSequence < entries[$1]!.pinSequence
         }
         for name in sortedKeys {
             guard var entry = entries[name] else { continue }

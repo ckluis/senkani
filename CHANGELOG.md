@@ -9,6 +9,35 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 6 — KnowledgeStore parallel-suite SQL flake: `sqlite3_busy_timeout` on the primary connection (`knowledgestore-database-is-locked-rapid-fire-under-full-parallel-suite`)
+
+- `Sources/Core/KnowledgeStore.swift`: `enableWAL()` now calls
+  `sqlite3_busy_timeout(db, 5000)` after enabling WAL and
+  `foreign_keys=ON`. Closes the rapid-fire
+  `[KnowledgeStore] SQL error: database is locked` burst (11-19 lines
+  per affected run, 2-of-10 baseline) the
+  `batchIncrementMentions` defer-rollback hardening above had
+  unmasked. The default `busy_timeout = 0` returned `SQLITE_BUSY`
+  immediately on any writer contention; setting 5 s makes transient
+  ms-scale contention auto-retry inside SQLite. The constant
+  `KnowledgeStore.busyTimeoutMs = 5000` matches the
+  `TempSessionDatabase.secondaryHandleBusyTimeoutMs` precedent.
+- New regression suite
+  `KnowledgeStoreContentionTests` (Tests/SenkaniTests/KnowledgeStoreTests.swift):
+  `parallelOpenAgainstSamePathStaysSilent` opens 8 KnowledgeStores in
+  parallel via `withTaskGroup` on the same UUID-rooted vault path,
+  each performing a setup-and-write, then asserts every probe row
+  landed. Verified deterministic failure (5/5 runs, 8/8 entities
+  missing) without `busy_timeout`; deterministic pass (5/5 runs, 8/8
+  present) with it. `busyTimeoutMatchesPrecedent` pins the constant
+  to the SessionDatabase secondary-handle precedent.
+- Verification: 10/10 consecutive raw `swift test` runs clean of
+  `[KnowledgeStore] SQL error: database is locked`. The sibling
+  `disk I/O error` flake (separate, filed as
+  `knowledgestore-disk-io-error-on-begin-or-commit-under-full-parallel-suite`)
+  is not affected by this change. `tools/test-safe.sh` 8/8 chunks
+  green.
+
 ### May 6 — KnowledgeStore parallel-suite SQL flake: defer-rollback hardening on `batchIncrementMentions` (`knowledgestore-sql-flake-under-full-parallel-suite`)
 
 - `Sources/Core/KnowledgeStore/EntityStore.swift`:

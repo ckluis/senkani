@@ -449,3 +449,79 @@ struct KnowledgeStoreCouplingTests {
         #expect(filtered.first?.entityB == "Strong.swift")
     }
 }
+
+// MARK: - Suite 7: Concurrent open contention (regression)
+
+@Suite("KnowledgeStore — Concurrent open contention")
+struct KnowledgeStoreContentionTests {
+
+    /// Regression for the rapid-fire `[KnowledgeStore] SQL error: database
+    /// is locked` burst observed under raw `swift test` (full parallel),
+    /// 2-in-10 runs at 11-19 lines per burst. Cause: two
+    /// `KnowledgeStore` instances opened concurrently on the same file
+    /// path each run `setupSchema` (CREATE TABLE/INDEX/TRIGGER), and with
+    /// the default `sqlite3_busy_timeout` of 0, the second writer hits
+    /// `SQLITE_BUSY` immediately and prints once per failed step.
+    ///
+    /// `enableWAL` now sets a 5s busy timeout so transient ms-scale
+    /// writer contention auto-retries. This test forces the contention
+    /// path: 8 KnowledgeStores opened in parallel on one path, each
+    /// performing a setup-and-write. Without the timeout, this surfaces
+    /// the burst reliably; with it, the run is silent.
+    @Test(.timeLimit(.minutes(1)))
+    func parallelOpenAgainstSamePathStaysSilent() async {
+        let path = "/tmp/senkani-kb-contention-\(UUID().uuidString).sqlite"
+        defer { TempSessionDatabase.cleanup(path: path) }
+
+        // Pre-create the parent directory so each parallel
+        // `KnowledgeStore(path:)` skips its mkdir and goes straight
+        // to `sqlite3_open` — tightening the open window.
+        let parent = (path as NSString).deletingLastPathComponent
+        if !parent.isEmpty {
+            try? FileManager.default.createDirectory(
+                atPath: parent, withIntermediateDirectories: true
+            )
+        }
+
+        await withTaskGroup(of: Void.self) { group in
+            for i in 0..<8 {
+                group.addTask {
+                    let store = KnowledgeStore(path: path)
+                    let entity = KnowledgeEntity(
+                        name: "ContentionProbe\(i)",
+                        entityType: "class",
+                        sourcePath: nil,
+                        markdownPath: ".senkani/knowledge/probe\(i).md",
+                        contentHash: "probe\(i)",
+                        compiledUnderstanding: "",
+                        mentionCount: 0
+                    )
+                    _ = store.upsertEntity(entity)
+                    store.close()
+                }
+            }
+        }
+
+        // Reopen and confirm every probe row landed — proves the writes
+        // actually committed (busy_timeout retried, did not lose data).
+        let verify = KnowledgeStore(path: path)
+        defer { verify.close() }
+        for i in 0..<8 {
+            #expect(
+                verify.entity(named: "ContentionProbe\(i)") != nil,
+                "Probe \(i) should be present after parallel open contention"
+            )
+        }
+    }
+
+    /// Documents the busy-timeout constant. If this changes, the
+    /// commentary in `enableWAL` and the `TempSessionDatabase`
+    /// secondary-handle precedent should be re-aligned.
+    @Test func busyTimeoutMatchesPrecedent() {
+        #expect(
+            KnowledgeStore.busyTimeoutMs
+                == Int(TempSessionDatabase.secondaryHandleBusyTimeoutMs),
+            "KnowledgeStore primary busy timeout should match the SessionDatabase secondary-handle precedent"
+        )
+    }
+}

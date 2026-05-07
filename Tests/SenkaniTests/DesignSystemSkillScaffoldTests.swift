@@ -181,23 +181,21 @@ struct HTMLPreviewModeResolverTests {
 
     // 10. Toggle persistence + render-once probe: switching modes
     // increments the per-mode counter exactly once, and the input
-    // path is unchanged after the resolution.
+    // path is unchanged after the resolution. Counter is owned by
+    // this test (not a global) so peer suites/tests resolving in
+    // parallel can't bump it.
     @Test("toggle bumps per-mode counter once per call without mutating input")
     func toggleBumpsPerModeCounterOnce() {
-        HTMLPreviewModeResolver.invocationCounter.reset()
+        let counter = HTMLPreviewRenderCounter()
         let path = "/tmp/persistent.html"
-        let beforeOriginal = HTMLPreviewModeResolver.invocationCounter.count(for: .original)
-        let beforeDesign = HTMLPreviewModeResolver.invocationCounter.count(for: .designSystem)
 
-        let r1 = HTMLPreviewModeResolver.resolve(for: path, mode: .original)
-        let r2 = HTMLPreviewModeResolver.resolve(for: path, mode: .designSystem)
+        let r1 = HTMLPreviewModeResolver.resolve(for: path, mode: .original, counter: counter)
+        let r2 = HTMLPreviewModeResolver.resolve(for: path, mode: .designSystem, counter: counter)
 
         #expect(r1 == path)
         #expect(r2 == path)
-        #expect(HTMLPreviewModeResolver.invocationCounter.count(for: .original)
-                == beforeOriginal + 1)
-        #expect(HTMLPreviewModeResolver.invocationCounter.count(for: .designSystem)
-                == beforeDesign + 1)
+        #expect(counter.count(for: .original) == 1)
+        #expect(counter.count(for: .designSystem) == 1)
 
         // Mode default is `.original` — verifying the case ordering
         // exposed by `allCases` (drives the segmented control's tag

@@ -17,15 +17,19 @@ public enum HTMLPreviewMode: String, CaseIterable, Equatable, Sendable, Codable 
 /// unit-testable from Core without instantiating the SwiftUI view.
 public enum HTMLPreviewModeResolver {
 
-    /// Shared probe exposing how many times `resolve(for:mode:)` was
-    /// invoked per mode. Tests use this to assert the resolution
-    /// path runs once per selection change without mutating the file
-    /// argument.
-    public static let invocationCounter = HTMLPreviewRenderCounter()
-
     /// Resolve the file path passed to the WebView for `mode`.
-    public static func resolve(for filePath: String, mode: HTMLPreviewMode) -> String {
-        invocationCounter.bump(mode: mode)
+    ///
+    /// `counter` is an optional per-test probe used to assert the
+    /// resolution path runs once per selection change. Production
+    /// passes `nil` (default) — no shared mutable state, no parallel-
+    /// suite race surface. A static-shared probe used to live here;
+    /// it was retired because tests must own probes they assert on.
+    public static func resolve(
+        for filePath: String,
+        mode: HTMLPreviewMode,
+        counter: HTMLPreviewRenderCounter? = nil
+    ) -> String {
+        counter?.bump(mode: mode)
         // V.10a: identity map. V.10b branches here.
         return filePath
     }

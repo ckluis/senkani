@@ -9,6 +9,44 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 6 — HTMLPreviewModeResolver invocation counter cross-suite race: per-test counter injection (`htmlpreviewmoderesolver-invocation-counter-cross-suite-race`)
+
+- `Sources/Core/HTMLPreviewMode.swift` — `HTMLPreviewModeResolver.resolve(for:mode:)`
+  gains an optional `counter: HTMLPreviewRenderCounter? = nil` parameter; the
+  static-shared `invocationCounter` probe is removed. Production passes nil
+  (default) and incurs zero overhead; tests instantiate a per-test counter and
+  pass it in. No shared mutable state means no parallel-suite race surface.
+- `Tests/SenkaniTests/DesignSystemSkillScaffoldTests.swift:185-206` —
+  `toggleBumpsPerModeCounterOnce` rewritten to own its counter; `reset()`
+  removed (no-op on a fresh instance); `before*` snapshots removed (counter
+  is always zero at start). Sibling test `resolveIsIdentityForBothModes`
+  unchanged at the call site (no counter passed → no bump → no race).
+- **Why option (b)** instead of a HookSeamLock-style cross-suite gate: the
+  counter has no production reader. Removing the shared static eliminates
+  the race at the source rather than papering over it with a lock — same
+  spirit as the URLProtocol gate but cleaner because no isolation primitive
+  is needed.
+- **Verification.** Filter-only `swift test --filter "HTMLPreviewModeResolverTests"`:
+  20/20 green. Full parallel-suite `swift test` on 10 consecutive runs:
+  `toggleBumpsPerModeCounterOnce` passed 10/10 (the original failure mode
+  is closed). `swift build`: green.
+- **Defects-outside-criteria filed as new backlog items.**
+  (1) `parallel-runner-flake-injectionguard-normalize-1mb-perf-budget` —
+  full-suite run 4 of 10 surfaced `InjectionGuardTests.swift:260
+  normalizeIsLinearOnLargeBenignInput` failing with `elapsed → 0.5144 < 0.5`;
+  same single-sample perf-budget shape as the parser flake family.
+  (2) `pinnedcontextstore-pinsactiondatamatchesdrain-order-flake` —
+  full-suite run 3 of 10 surfaced `PinnedContextTests.swift:99
+  pinsActionDataMatchesDrain` with pin order reversed (Beta-then-Alpha
+  instead of Alpha-then-Beta); insertion-order tie-break race in
+  `PinnedContextStore.all()`.
+  (3) `storeexec-niltest-loggersink-leak-from-peer-suite-migration` —
+  full-suite run 9 of 10 surfaced `StoreExecTests.swift:58 nilDBIsNoop`
+  failing with a leaked `schema.migration.applied` event from a peer
+  suite's `SessionDatabase.init()`; `.loggerSinkGate` only serializes
+  sink-using suites against each other, not against production
+  `Logger.log` callers in unrelated GCD queues.
+
 ### May 6 — TreeSitter PHP perf-gate flake under parallel runner: median-of-3 + 20 ms threshold (`parallel-runner-flake-perf-budget-php`)
 
 - `Tests/SenkaniTests/TreeSitterPhpTests.swift:368-401` —

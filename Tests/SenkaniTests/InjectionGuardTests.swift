@@ -251,13 +251,28 @@ struct InjectionPerformanceTests {
             input += chunk
         }
 
-        let start = Date()
-        let result = InjectionGuard.scan(input)
-        let elapsed = Date().timeIntervalSince(start)
+        // Median-of-3 — see DependencyGraphPerfGateTests for the canonical
+        // pattern. `.serialized` only serializes within-suite, so peer-suite
+        // CPU contention can spike a single sample under parallel runner;
+        // a single transient spike on one of three runs cannot fail the
+        // test, but a real regression (every run blows budget) still does.
+        // Threshold preserved at 500 ms — the prior O(n²) pass took seconds,
+        // so the regression bar sits well above the median bound.
+        var samples: [TimeInterval] = []
+        var lastDetections: [String] = []
+        for _ in 0..<3 {
+            let start = Date()
+            let result = InjectionGuard.scan(input)
+            samples.append(Date().timeIntervalSince(start))
+            lastDetections = result.detections
+        }
+        let median = samples.sorted()[1]
 
-        #expect(result.detections.isEmpty, "Benign input must not trigger detections")
-        // Generous bound for CI variance — prior O(n²) pass took seconds, linear is milliseconds.
-        #expect(elapsed < 0.5, "normalize+scan on 1 MB benign input should complete in <500ms, took \(elapsed)s")
+        #expect(lastDetections.isEmpty, "Benign input must not trigger detections, got \(lastDetections)")
+        #expect(
+            median < 0.5,
+            "median of 3 normalize+scan on 1 MB benign input: \(samples) → median \(median)s"
+        )
     }
 }
 

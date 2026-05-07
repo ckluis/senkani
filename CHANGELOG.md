@@ -9,6 +9,31 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 6 — InjectionGuard 1 MB normalize perf gate flake under parallel runner: median-of-3 (`parallel-runner-flake-injectionguard-normalize-1mb-perf-budget`)
+
+- `Tests/SenkaniTests/InjectionGuardTests.swift:244-272` —
+  `normalizeIsLinearOnLargeBenignInput` rewritten with three `Date()`-
+  delta samples; assert `samples.sorted()[1] < 0.5` (was single-sample
+  `elapsed < 0.5`). Mirrors the `SkillScannerAsyncTests.swift:87`
+  TimeInterval pattern (closer fit than `Duration` because the test
+  was already on `Date()` deltas). Threshold preserved at 500 ms — the
+  prior O(n²) homoglyph pass took seconds, so the regression bar
+  sits well above the median bound. Closes the
+  `elapsed → 0.5144450664520264 < 0.5` failure observed in run 4 of 10
+  during the prior round's full-suite soak.
+- **Verification.** Filter-only `swift test
+  --filter "normalizeIsLinearOnLargeBenignInput"`: 20/20 green. Full
+  parallel-suite `swift test` on 10 consecutive runs:
+  `normalizeIsLinearOnLargeBenignInput` passed 10/10. The original
+  single-sample failure mode is closed.
+- **Defects-outside-criteria observed.** Soak runs 2 and 3 of 10
+  surfaced `Bash file parses under 10ms` (run 2),
+  `C# file parses under 10ms` (run 3), and `C++ file parses under
+  10ms` (run 3) — all single-sample 10 ms parser perf gates already
+  in scope of the open `parallel-runner-flake-perf-budget-remaining-
+  parsers` backlog item. No new filing — empirical confirmation of
+  the proactive item's premise.
+
 ### May 6 — HTMLPreviewModeResolver invocation counter cross-suite race: per-test counter injection (`htmlpreviewmoderesolver-invocation-counter-cross-suite-race`)
 
 - `Sources/Core/HTMLPreviewMode.swift` — `HTMLPreviewModeResolver.resolve(for:mode:)`

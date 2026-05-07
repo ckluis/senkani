@@ -9,6 +9,40 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 6 — TreeSitter PHP perf-gate flake under parallel runner: median-of-3 + 20 ms threshold (`parallel-runner-flake-perf-budget-php`)
+
+- `Tests/SenkaniTests/TreeSitterPhpTests.swift:368-401` —
+  `phpFileParsesUnder10ms` rewritten with three `clock.measure { ... }`
+  samples; assert `samples.sorted()[1] < .milliseconds(20)` (was
+  single-sample `.milliseconds(10)`). Mirrors the canonical
+  Scala/Ruby pattern shipped 2026-05-05 in
+  `parallel-runner-flake-perf-budget-families-2026-05-04`. Closes the
+  `elapsed → 0.022554416 seconds < 0.01 seconds` failure observed
+  in 1 of 10 raw `swift test` runs during the prior round's
+  verification window.
+- **Verification.** Filter-only `swift test --filter
+  "phpFileParsesUnder10ms"`: 20/20 green (~12 ms each). Full
+  parallel-suite `swift test` on 13 consecutive runs: zero PHP perf
+  failures observed (the gate passed 13/13). `tools/test-safe.sh
+  --chunk parsers`: 290/290 green.
+- **Defects-outside-criteria filed as new backlog items.**
+  (1) `parallel-runner-flake-perf-budget-remaining-parsers` —
+  pre-audit grep surfaced 10 sibling parser perf gates (Bash, C#,
+  C++, Go, Java, JavaScript, Lua, Rust, TypeScript, Zig) that
+  retain the same single-sample 10 ms shape and are structurally
+  identical to the four already migrated; filed proactively.
+  (2) `htmlpreviewmoderesolver-invocation-counter-cross-suite-race` —
+  full-suite soak run 1 of 10 surfaced
+  `DesignSystemSkillScaffoldTests.swift:197 toggleBumpsPerModeCounterOnce`
+  failing with `count → 2 == before+1 → 1`; cross-suite race on
+  global `HTMLPreviewModeResolver.invocationCounter`.
+  (3) `slo-hookpassthrough-p99-majority-burn-still-flakes` —
+  reverify run 1 of 3 surfaced `SLOTests.swift:248
+  hookPassthroughP99UnderThreshold` failing with
+  `(burnCount → 2) < 2`; the 2026-05-05 median-of-3 majority-burn
+  migration is still tight enough to flip 2-of-3 distributions
+  under heavy parallel-suite contention.
+
 ### May 6 — KnowledgeStore "disk I/O error" on BEGIN/COMMIT under full parallel suite: close-before-unlink test helper (`knowledgestore-disk-io-error-on-begin-or-commit-under-full-parallel-suite`)
 
 - `Tests/SenkaniTests/Helpers/TempKnowledgeStore.swift` (new): mirrors

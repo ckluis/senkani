@@ -9,6 +9,37 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 7 — Zig parser perf-gate threshold widened 10 ms → 50 ms (`parallel-runner-flake-perf-budget-zig-threshold-widen`)
+
+- `Tests/SenkaniTests/TreeSitterZigTests.swift:407` — `.milliseconds(10)`
+  → `.milliseconds(50)`, `@Test` annotation updated `under 10ms` →
+  `under 50ms` (function name kept as `zigFileParsesUnder10ms`,
+  mirroring the Kotlin precedent's identical rename pattern).
+- Inline rationale comment expanded to record the 2026-05-06 observed
+  flake (`median → 0.011024458 seconds < .milliseconds(10)` under the
+  parallel runner — two of three samples crossed the 10 ms bound,
+  which median-of-3 alone cannot damp), the 2026-05-07 in-isolation
+  measurement (1.2-1.8 ms typical median across 20 consecutive
+  filter-only runs), and the Kotlin-precedent classification (actual-
+  observed-flake widen, not Scala's preemptive bound-close-to-typical
+  widen). 50 ms = ~30× in-isolation typical, still catches a real
+  regression (a reverted tree-sitter parse costs hundreds of ms)
+  without false-firing under cooperative-pool contention.
+- The median-of-3 layer (preserved from the 2026-05-06 sweep) is
+  independent of the threshold widen: it strengthens the gate against
+  single-sample peer-suite spikes; the widen handles the two-sample
+  case median-of-3 cannot.
+- **Verification.** Filter-only `swift test --filter
+  "zigFileParsesUnder10ms"`: 20/20 green consecutive. Full parallel
+  suite `swift test --parallel`: 7 runs total, Zig site 7/7 green;
+  3 consecutive fully-green runs (runs 2-4 of the second batch).
+  `tools/test-safe.sh --chunk parsers`: 290/290 green.
+- **Defects-outside-criteria filed.** None new. The full-parallel
+  runs surfaced one `SLOTests.swift:248` `hookPassthroughP99UnderThreshold`
+  flake (`burnCount → 2 < 2`, observed once each in two separate batches)
+  — already filed as `slo-hookpassthrough-p99-majority-burn-still-flakes`
+  on 2026-05-06; same symptom, no duplicate filing.
+
 ### May 6 — Median-of-3 perf-budget pattern extended to last 3 single-sample parser sites: Elixir/Kotlin/Python (`parallel-runner-flake-perf-budget-elixir-kotlin-python`)
 
 - 3 remaining single-sample parser perf gates migrated to median-of-3:

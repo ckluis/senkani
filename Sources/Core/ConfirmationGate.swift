@@ -86,6 +86,24 @@ public enum ConfirmationGate {
         catalog = .shared
     }
 
+    /// Run `body` with `resolver` swapped for a test stub, restoring the
+    /// prior value before returning. Holds `HookSeamLock.shared` for the
+    /// duration so peer suites (including read-side consumers like
+    /// `HookRouter.handle`) cannot observe the override. See
+    /// `HookSeamLock` for the cross-suite race this closes.
+    @discardableResult
+    public static func withResolver<T>(
+        _ resolver: @escaping PolicyResolver,
+        perform body: () throws -> T
+    ) rethrows -> T {
+        try HookSeamLock.withLock {
+            let prior = self.resolver
+            self.resolver = resolver
+            defer { self.resolver = prior }
+            return try body()
+        }
+    }
+
     /// Evaluate whether this tool call should be confirmed, run the
     /// resolver if so, and persist the outcome. Returns the decision
     /// the caller should act on.

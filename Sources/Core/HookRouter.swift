@@ -102,6 +102,15 @@ public enum HookRouter {
     /// Process a hook event JSON and return a response JSON.
     /// Returns `{}` (passthrough) for unrecognized or unroutable events.
     public static func handle(eventJSON: Data) -> Data {
+        // Acquire HookSeamLock for the duration so test overrides
+        // (ConfirmationGate.resolver, annotationFeed, packPolicyRegistry,
+        // …) don't bleed across parallel @Suite boundaries. Writers wrap
+        // their override-and-defer in HookSeamLock.withLock; the lock is
+        // recursive so this call doesn't self-deadlock when handle() is
+        // invoked from inside a writer's body. See HookSeamLock.swift.
+        HookSeamLock.shared.lock()
+        defer { HookSeamLock.shared.unlock() }
+
         guard let event = try? JSONSerialization.jsonObject(with: eventJSON) as? [String: Any],
               let toolName = event["tool_name"] as? String else {
             return passthroughResponse

@@ -46,6 +46,7 @@ struct ConfirmationGateTests {
 
     @Test("Confirmation rows participate in the T.5 audit chain")
     func chainsViaT5() {
+        HookSeamLock.withLock {
         let (db, path) = makeTempDB()
         defer { TempSessionDatabase.cleanup(path: path) }
         ConfirmationGate.database = db
@@ -84,6 +85,7 @@ struct ConfirmationGateTests {
         // Both rows share an anchor id > 0 (lazy-create on first write).
         #expect(rows[0].anchor > 0)
         #expect(rows[0].anchor == rows[1].anchor)
+        }
     }
 
     // MARK: - Tool tagging (acceptance #2)
@@ -115,98 +117,106 @@ struct ConfirmationGateTests {
 
     @Test("Every write/exec-tagged call writes a chained confirmation row")
     func writeExecAlwaysAudits() {
-        let (db, path) = makeTempDB()
-        defer { TempSessionDatabase.cleanup(path: path) }
-        ConfirmationGate.database = db
-        defer { ConfirmationGate.resetToDefaults() }
+        HookSeamLock.withLock {
+            let (db, path) = makeTempDB()
+            defer { TempSessionDatabase.cleanup(path: path) }
+            ConfirmationGate.database = db
+            defer { ConfirmationGate.resetToDefaults() }
 
-        for tool in ["Edit", "Write", "Bash", "senkani_exec"] {
-            _ = ConfirmationGate.evaluate(toolName: tool)
-        }
-        #expect(db.confirmationCount() == 4)
+            for tool in ["Edit", "Write", "Bash", "senkani_exec"] {
+                _ = ConfirmationGate.evaluate(toolName: tool)
+            }
+            #expect(db.confirmationCount() == 4)
 
-        // Read-tagged + unknown tools do NOT write rows — chain stays
-        // dense with rows that represent actual confirmation decisions.
-        for tool in ["Read", "senkani_read", "Grep", "made_up_tool"] {
-            let outcome = ConfirmationGate.evaluate(toolName: tool)
-            #expect(outcome.rowid == -1)
-            #expect(outcome.allows)
+            // Read-tagged + unknown tools do NOT write rows — chain stays
+            // dense with rows that represent actual confirmation decisions.
+            for tool in ["Read", "senkani_read", "Grep", "made_up_tool"] {
+                let outcome = ConfirmationGate.evaluate(toolName: tool)
+                #expect(outcome.rowid == -1)
+                #expect(outcome.allows)
+            }
+            #expect(db.confirmationCount() == 4)
         }
-        #expect(db.confirmationCount() == 4)
     }
 
     // MARK: - Deny path (acceptance #3 — structured error)
 
     @Test("Operator-deny path returns a structured error reason")
     func denyPathStructuredError() {
-        let (db, path) = makeTempDB()
-        defer { TempSessionDatabase.cleanup(path: path) }
-        ConfirmationGate.database = db
-        ConfirmationGate.resolver = { _, _ in
-            (.deny, .operator, "operator says no")
+        HookSeamLock.withLock {
+            let (db, path) = makeTempDB()
+            defer { TempSessionDatabase.cleanup(path: path) }
+            ConfirmationGate.database = db
+            ConfirmationGate.resolver = { _, _ in
+                (.deny, .operator, "operator says no")
+            }
+            defer { ConfirmationGate.resetToDefaults() }
+
+            let outcome = ConfirmationGate.evaluate(toolName: "Edit")
+            #expect(outcome.decision == .deny)
+            #expect(outcome.decidedBy == .operator)
+            #expect(outcome.allows == false)
+            #expect(outcome.rowid > 0)
+
+            let reason = ConfirmationGate.denyReason(toolName: "Edit", reason: outcome.reason)
+            #expect(reason.contains("Edit"))
+            #expect(reason.contains("operator says no"))
+
+            // Empty reason still produces a non-empty deny string.
+            let fallback = ConfirmationGate.denyReason(toolName: "Bash", reason: nil)
+            #expect(fallback.contains("Bash"))
+            #expect(fallback.lowercased().contains("denied"))
         }
-        defer { ConfirmationGate.resetToDefaults() }
-
-        let outcome = ConfirmationGate.evaluate(toolName: "Edit")
-        #expect(outcome.decision == .deny)
-        #expect(outcome.decidedBy == .operator)
-        #expect(outcome.allows == false)
-        #expect(outcome.rowid > 0)
-
-        let reason = ConfirmationGate.denyReason(toolName: "Edit", reason: outcome.reason)
-        #expect(reason.contains("Edit"))
-        #expect(reason.contains("operator says no"))
-
-        // Empty reason still produces a non-empty deny string.
-        let fallback = ConfirmationGate.denyReason(toolName: "Bash", reason: nil)
-        #expect(fallback.contains("Bash"))
-        #expect(fallback.lowercased().contains("denied"))
     }
 
     @Test("Default policy auto-approves but still writes an audit row")
     func defaultPolicyAuditsAutoApprove() {
-        let (db, path) = makeTempDB()
-        defer { TempSessionDatabase.cleanup(path: path) }
-        ConfirmationGate.database = db
-        defer { ConfirmationGate.resetToDefaults() }
+        HookSeamLock.withLock {
+            let (db, path) = makeTempDB()
+            defer { TempSessionDatabase.cleanup(path: path) }
+            ConfirmationGate.database = db
+            defer { ConfirmationGate.resetToDefaults() }
 
-        let outcome = ConfirmationGate.evaluate(toolName: "Edit")
-        #expect(outcome.decision == .auto)
-        #expect(outcome.decidedBy == .auto)
-        #expect(outcome.allows)
-        #expect(outcome.rowid > 0)
+            let outcome = ConfirmationGate.evaluate(toolName: "Edit")
+            #expect(outcome.decision == .auto)
+            #expect(outcome.decidedBy == .auto)
+            #expect(outcome.allows)
+            #expect(outcome.rowid > 0)
 
-        // The audit row is recoverable.
-        let rows = db.recentConfirmations(limit: 10)
-        #expect(rows.count == 1)
-        #expect(rows[0].toolName == "Edit")
-        #expect(rows[0].decision == .auto)
-        #expect(rows[0].decidedBy == .auto)
+            // The audit row is recoverable.
+            let rows = db.recentConfirmations(limit: 10)
+            #expect(rows.count == 1)
+            #expect(rows[0].toolName == "Edit")
+            #expect(rows[0].decision == .auto)
+            #expect(rows[0].decidedBy == .auto)
+        }
     }
 
     // MARK: - HookRouter integration (acceptance #2 + #3)
 
     @Test("HookRouter PreToolUse on a denied Edit returns a structured deny")
     func hookRouterDeniesEdit() {
-        let (db, path) = makeTempDB()
-        defer { TempSessionDatabase.cleanup(path: path) }
-        ConfirmationGate.database = db
-        ConfirmationGate.resolver = { _, _ in (.deny, .policy, "policy disallows Edit") }
-        defer { ConfirmationGate.resetToDefaults() }
+        HookSeamLock.withLock {
+            let (db, path) = makeTempDB()
+            defer { TempSessionDatabase.cleanup(path: path) }
+            ConfirmationGate.database = db
+            ConfirmationGate.resolver = { _, _ in (.deny, .policy, "policy disallows Edit") }
+            defer { ConfirmationGate.resetToDefaults() }
 
-        let event: [String: Any] = [
-            "tool_name": "Edit",
-            "hook_event_name": "PreToolUse",
-            "tool_input": ["file_path": "/tmp/example.swift"],
-        ]
-        let json = try! JSONSerialization.data(withJSONObject: event)
-        let response = HookRouter.handle(eventJSON: json)
-        let parsed = try! JSONSerialization.jsonObject(with: response) as! [String: Any]
-        let hookOutput = parsed["hookSpecificOutput"] as! [String: Any]
-        #expect(hookOutput["permissionDecision"] as? String == "deny")
-        let reason = hookOutput["permissionDecisionReason"] as! String
-        #expect(reason.contains("Edit"))
-        #expect(reason.contains("policy disallows Edit"))
+            let event: [String: Any] = [
+                "tool_name": "Edit",
+                "hook_event_name": "PreToolUse",
+                "tool_input": ["file_path": "/tmp/example.swift"],
+            ]
+            let json = try! JSONSerialization.data(withJSONObject: event)
+            let response = HookRouter.handle(eventJSON: json)
+            let parsed = try! JSONSerialization.jsonObject(with: response) as! [String: Any]
+            let hookOutput = parsed["hookSpecificOutput"] as! [String: Any]
+            #expect(hookOutput["permissionDecision"] as? String == "deny")
+            let reason = hookOutput["permissionDecisionReason"] as! String
+            #expect(reason.contains("Edit"))
+            #expect(reason.contains("policy disallows Edit"))
+        }
     }
 
     // MARK: - NotificationSink (acceptance #4)

@@ -40,22 +40,26 @@ struct HookAnnotationFeedTests {
 
     /// Run a closure with `HookRouter.annotationFeed` swapped out for
     /// a fresh feed (short window, no DB sink). Restores defaults on
-    /// exit so other tests aren't poisoned.
+    /// exit so other tests aren't poisoned. Holds `HookSeamLock` so
+    /// peer suites running through `HookRouter.handle` cannot read
+    /// the test's private feed (cross-suite race fix).
     private static func withTestFeed(
         windowSeconds: TimeInterval = 0.5,
         mustFixThreshold: Int = 2,
         captured: @escaping (AnnotationRateCapLogRow) -> Void = { _ in },
         body: (HookAnnotationFeed) -> Void
     ) {
-        let feed = HookAnnotationFeed(
-            windowSeconds: windowSeconds,
-            mustFixThreshold: mustFixThreshold,
-            rateCapSink: captured
-        )
-        let priorFeed = HookRouter.annotationFeed
-        HookRouter.annotationFeed = feed
-        defer { HookRouter.annotationFeed = priorFeed }
-        body(feed)
+        HookSeamLock.withLock {
+            let feed = HookAnnotationFeed(
+                windowSeconds: windowSeconds,
+                mustFixThreshold: mustFixThreshold,
+                rateCapSink: captured
+            )
+            let priorFeed = HookRouter.annotationFeed
+            HookRouter.annotationFeed = feed
+            defer { HookRouter.annotationFeed = priorFeed }
+            body(feed)
+        }
     }
 
     // MARK: - Acceptance #1 — denial emits [must-fix]
@@ -65,6 +69,11 @@ struct HookAnnotationFeedTests {
         // Stand up a deny resolver. ConfirmationGate writes a chained
         // row, then HookRouter wraps the deny in JSON and emits the
         // annotation. We only care about the annotation here.
+        // HookSeamLock held by the inner withTestFeed; this outer
+        // withLock pairs the resolver swap with the same lock so peer
+        // suites can't observe the deny resolver mid-test.
+        HookSeamLock.shared.lock()
+        defer { HookSeamLock.shared.unlock() }
         let priorResolver = ConfirmationGate.resolver
         ConfirmationGate.resolver = Self.denyResolver(reason: "fixture")
         defer { ConfirmationGate.resolver = priorResolver }
@@ -119,6 +128,8 @@ struct HookAnnotationFeedTests {
 
     @Test("Deny response JSON is unchanged whether the annotation is admitted or suppressed")
     func denyResponseUnaffectedByRateCap() {
+        HookSeamLock.shared.lock()
+        defer { HookSeamLock.shared.unlock() }
         let priorResolver = ConfirmationGate.resolver
         ConfirmationGate.resolver = Self.denyResolver(reason: "fixture-noblock")
         defer { ConfirmationGate.resolver = priorResolver }

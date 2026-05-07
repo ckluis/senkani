@@ -287,6 +287,8 @@ struct FragmentationDetectorTests {
 
     @Test("HookRouter detector is wired and never produces a deny response")
     func hookRouterNonBlocking() {
+        HookSeamLock.shared.lock()
+        defer { HookSeamLock.shared.unlock() }
         let (db, path) = makeTempDB()
         defer { TempSessionDatabase.cleanup(path: path) }
         // Use the test seam so the hook path persists into our temp DB.

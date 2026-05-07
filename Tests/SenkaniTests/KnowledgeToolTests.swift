@@ -206,6 +206,8 @@ struct KnowledgeToolTests {
 
     // 9. HookRouter.entityObserver fires on PostToolUse events
     @Test func testHookObserverFires() {
+        HookSeamLock.shared.lock()
+        defer { HookSeamLock.shared.unlock() }
         // Save and restore observer after test
         let saved = HookRouter.entityObserver
         defer { HookRouter.entityObserver = saved }
@@ -226,6 +228,8 @@ struct KnowledgeToolTests {
 
     // 10. entityObserver feeds text into EntityTracker
     @Test func testEntityObserverFeedsTracker() {
+        HookSeamLock.shared.lock()
+        defer { HookSeamLock.shared.unlock() }
         let (session, root) = makeTestSession()
         defer { cleanup(root) }
 

@@ -261,6 +261,8 @@ struct HookRouterAutoValidateTests {
     }
 
     @Test func pendingAdvisorySurvivesPassthroughPreToolUse() {
+        HookSeamLock.shared.lock()
+        defer { HookSeamLock.shared.unlock() }
         let (db, dbPath) = makeTempDB()
         defer { TempSessionDatabase.cleanup(path: dbPath) }
         defer { HookRouter.validationDatabase = .shared }
@@ -291,6 +293,8 @@ struct HookRouterAutoValidateTests {
     }
 
     @Test func pendingAdvisoryAppendsOnceToDenyResponse() {
+        HookSeamLock.shared.lock()
+        defer { HookSeamLock.shared.unlock() }
         let (db, dbPath) = makeTempDB()
         defer { TempSessionDatabase.cleanup(path: dbPath) }
         defer { HookRouter.validationDatabase = .shared }
@@ -328,6 +332,8 @@ struct HookRouterAutoValidateTests {
     }
 
     @Test func advisoryScopeDoesNotCrossSessions() {
+        HookSeamLock.shared.lock()
+        defer { HookSeamLock.shared.unlock() }
         let (db, dbPath) = makeTempDB()
         defer { TempSessionDatabase.cleanup(path: dbPath) }
         defer { HookRouter.validationDatabase = .shared }

@@ -84,15 +84,18 @@ struct PackIntegrationTests {
 
     /// Wrap `HookRouter.handle()` with the per-test registry seam so
     /// the shared `~/.senkani/packs/` install root is never read.
-    /// Restores the previous registry on teardown.
+    /// Restores the previous registry on teardown. Holds `HookSeamLock`
+    /// so peer suites cannot observe the test registry mid-run.
     private static func withTestRegistry<T>(
         _ registry: PackPolicyRegistry,
         body: () throws -> T
     ) rethrows -> T {
-        let prev = HookRouter.packPolicyRegistry
-        HookRouter.packPolicyRegistry = registry
-        defer { HookRouter.packPolicyRegistry = prev }
-        return try body()
+        try HookSeamLock.withLock {
+            let prev = HookRouter.packPolicyRegistry
+            HookRouter.packPolicyRegistry = registry
+            defer { HookRouter.packPolicyRegistry = prev }
+            return try body()
+        }
     }
 
     // MARK: - Tests

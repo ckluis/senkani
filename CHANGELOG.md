@@ -9,6 +9,29 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 6 — Test isolation: `HookSeamLock` cross-suite gate for ConfirmationGate + HookRouter seams (`phase-test-isolation-confirmation-gate-resolver-leak`)
+
+- New `Sources/Core/HookSeamLock.swift`: process-wide
+  `NSRecursiveLock` + `withLock` helper. `HookRouter.handle()`
+  acquires it at entry; test fixtures wrap every override of
+  `ConfirmationGate.resolver|database|catalog` and the HookRouter
+  seam family in `HookSeamLock.withLock { … }`. `ConfirmationGate.withResolver(_:perform:)` is the
+  scoped helper for the most commonly overridden seam.
+- Closes the cross-suite race that surfaced under raw
+  `swift test --filter "HookRouter|ConfirmationGate|CredentialGateway|HookAnnotationFeed"` (5/5
+  runs failed pre-fix with `denyResolver` leak from one suite into
+  peer-suite reads). `tools/test-safe.sh` masked it via
+  `SWT_NO_PARALLEL=1`; the canonical chunked path stays
+  green. Verification: 8/8 consecutive targeted-filter runs +
+  test-safe full chunked run all green.
+- Production cost: one uncontended `NSRecursiveLock.lock()/unlock()`
+  per `HookRouter.handle()` call (sub-microsecond, well below the
+  5 ms hook performance budget).
+- Discipline added to `spec/testing.md` so future tests authoring a
+  new ConfirmationGate / HookRouter seam wrap the override site in
+  `HookSeamLock.withLock`. Any new seam added to those types must
+  appear in the `HookSeamLock` doc-comment enumeration.
+
 ### May 6 — Three SkillPacks + live HookRouter merge (`phase-v11b-three-packs`, V.11b)
 
 - `spec/packs/code-quality/` is rewritten from V.11a's placeholder

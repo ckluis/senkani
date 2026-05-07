@@ -272,77 +272,79 @@ struct CredentialGatewayTests {
 
     @Test("ConfirmationGate.deny short-circuits HookRouter before the gateway lookup fires")
     func confirmationGateDenyShortCircuitsVaultRead() {
-        let (db, path) = makeTempDB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        HookSeamLock.withLock {
+            let (db, path) = makeTempDB()
+            defer { TempSessionDatabase.cleanup(path: path) }
 
-        // Catalog: a single tool that has BOTH (a) confirmation
-        // required (so the gate fires) AND (b) credential gateway
-        // enabled (so the gateway would also fire if reached).
-        let catalog = MCPToolCatalog(entries: [
-            MCPToolConfig(
-                name: "Bash",
-                tags: [.exec],
-                credentialGateway: CredentialGatewayConfig(
-                    enabled: true,
-                    vaultKeys: ["WOULD_BE_FETCHED"]
+            // Catalog: a single tool that has BOTH (a) confirmation
+            // required (so the gate fires) AND (b) credential gateway
+            // enabled (so the gateway would also fire if reached).
+            let catalog = MCPToolCatalog(entries: [
+                MCPToolConfig(
+                    name: "Bash",
+                    tags: [.exec],
+                    credentialGateway: CredentialGatewayConfig(
+                        enabled: true,
+                        vaultKeys: ["WOULD_BE_FETCHED"]
+                    )
                 )
-            )
-        ])
+            ])
 
-        // Resolver that always denies.
-        ConfirmationGate.database = db
-        ConfirmationGate.catalog = catalog
-        ConfirmationGate.resolver = { _, _ in
-            (.deny, .operator, "denied for test")
+            // Resolver that always denies.
+            ConfirmationGate.database = db
+            ConfirmationGate.catalog = catalog
+            ConfirmationGate.resolver = { _, _ in
+                (.deny, .operator, "denied for test")
+            }
+            defer { ConfirmationGate.resetToDefaults() }
+
+            // Track whether the lookup was called.
+            final class CallTracker: @unchecked Sendable {
+                var called = false
+            }
+            let tracker = CallTracker()
+
+            // Save and restore the HookRouter seams.
+            let savedLookup = HookRouter.credentialVaultLookup
+            let savedRecorder = HookRouter.credentialGatewayRecorder
+            let savedCatalog = HookRouter.credentialGatewayCatalog
+            defer {
+                HookRouter.credentialVaultLookup = savedLookup
+                HookRouter.credentialGatewayRecorder = savedRecorder
+                HookRouter.credentialGatewayCatalog = savedCatalog
+            }
+            HookRouter.credentialVaultLookup = { key, scope, _ in
+                tracker.called = true
+                return .failure(.missingKey(key: key, scope: scope))
+            }
+            HookRouter.credentialGatewayRecorder = CredentialGateway.DatabaseRecorder(database: db)
+            HookRouter.credentialGatewayCatalog = catalog
+
+            // Drive a Bash event through HookRouter. The confirmation gate
+            // denies; the gateway must NEVER call the lookup.
+            let response = HookRouter.handle(eventJSON: makeEvent(
+                toolName: "Bash",
+                toolInput: ["command": "git status"]
+            ))
+
+            // Response is a deny carrying the gate's reason.
+            guard let json = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
+                  let hookOutput = json["hookSpecificOutput"] as? [String: Any]
+            else {
+                Issue.record("expected hookSpecificOutput in response")
+                return
+            }
+            #expect(hookOutput["permissionDecision"] as? String == "deny")
+            let reason = hookOutput["permissionDecisionReason"] as? String ?? ""
+            #expect(reason.contains("Confirmation denied"), "must surface the gate's reason, not the gateway's")
+
+            // The lookup must not have been called — gateway short-
+            // circuits before any vault read.
+            #expect(tracker.called == false, "vault lookup fired despite ConfirmationGate.deny")
+
+            // No credential_gateway row in the audit chain.
+            let rows = db.recentTokenEventsAllProjects(limit: 50)
+            #expect(rows.allSatisfy { $0.feature != "credential_gateway" })
         }
-        defer { ConfirmationGate.resetToDefaults() }
-
-        // Track whether the lookup was called.
-        final class CallTracker: @unchecked Sendable {
-            var called = false
-        }
-        let tracker = CallTracker()
-
-        // Save and restore the HookRouter seams.
-        let savedLookup = HookRouter.credentialVaultLookup
-        let savedRecorder = HookRouter.credentialGatewayRecorder
-        let savedCatalog = HookRouter.credentialGatewayCatalog
-        defer {
-            HookRouter.credentialVaultLookup = savedLookup
-            HookRouter.credentialGatewayRecorder = savedRecorder
-            HookRouter.credentialGatewayCatalog = savedCatalog
-        }
-        HookRouter.credentialVaultLookup = { key, scope, _ in
-            tracker.called = true
-            return .failure(.missingKey(key: key, scope: scope))
-        }
-        HookRouter.credentialGatewayRecorder = CredentialGateway.DatabaseRecorder(database: db)
-        HookRouter.credentialGatewayCatalog = catalog
-
-        // Drive a Bash event through HookRouter. The confirmation gate
-        // denies; the gateway must NEVER call the lookup.
-        let response = HookRouter.handle(eventJSON: makeEvent(
-            toolName: "Bash",
-            toolInput: ["command": "git status"]
-        ))
-
-        // Response is a deny carrying the gate's reason.
-        guard let json = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
-              let hookOutput = json["hookSpecificOutput"] as? [String: Any]
-        else {
-            Issue.record("expected hookSpecificOutput in response")
-            return
-        }
-        #expect(hookOutput["permissionDecision"] as? String == "deny")
-        let reason = hookOutput["permissionDecisionReason"] as? String ?? ""
-        #expect(reason.contains("Confirmation denied"), "must surface the gate's reason, not the gateway's")
-
-        // The lookup must not have been called — gateway short-
-        // circuits before any vault read.
-        #expect(tracker.called == false, "vault lookup fired despite ConfirmationGate.deny")
-
-        // No credential_gateway row in the audit chain.
-        let rows = db.recentTokenEventsAllProjects(limit: 50)
-        #expect(rows.allSatisfy { $0.feature != "credential_gateway" })
     }
 }

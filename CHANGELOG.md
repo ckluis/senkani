@@ -9,6 +9,41 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 6 — KnowledgeStore parallel-suite SQL flake: defer-rollback hardening on `batchIncrementMentions` (`knowledgestore-sql-flake-under-full-parallel-suite`)
+
+- `Sources/Core/KnowledgeStore/EntityStore.swift`:
+  `batchIncrementMentions` was the contention site for the
+  transient `[KnowledgeStore] SQL error: cannot commit - no
+  transaction is active` the operator's
+  `phase-test-isolation-confirmation-gate-resolver-leak` close-round
+  surfaced (1 of 8 raw `swift test` runs). The function called
+  `rawExec(db, "BEGIN;")` and `rawExec(db, "COMMIT;")` without
+  checking return codes and ignored `sqlite3_step` failures — so
+  any BEGIN failure or step-induced auto-rollback (IOERR /
+  CONSTRAINT) left COMMIT facing no active transaction, which
+  printed the headline error.
+- The fix swaps that body for the proven defer-rollback pattern
+  used by `backfillNullAuthorship` 100 lines below: `BEGIN
+  IMMEDIATE` with checked return, `var committed = false` + a
+  defer that ROLLBACKs only when `sqlite3_get_autocommit(db) == 0`
+  (so we don't double-roll a txn auto-aborted by IOERR), step
+  return-code check that returns early on non-`SQLITE_DONE`/`SQLITE_ROW`,
+  and a checked COMMIT that flips `committed = true` on success.
+  Each failure mode emits a scoped diagnostic (`BEGIN failed: …`,
+  `prepare failed: …`, `step failed (rc=N): …`,
+  `COMMIT failed: …`) so future investigations don't have to
+  re-derive the contention site.
+- Verification: 10/10 consecutive raw `swift test` runs clean of
+  `cannot commit - no transaction is active`. The hardening also
+  unmasked two previously-silent issues — rapid-fire SQLITE_BUSY
+  bursts and SQLITE_IOERR on BEGIN/COMMIT — which the
+  no-return-check flow had been absorbing. Both are filed as new
+  backlog items under
+  `knowledgestore-database-is-locked-rapid-fire-under-full-parallel-suite`
+  and
+  `knowledgestore-disk-io-error-on-begin-or-commit-under-full-parallel-suite`
+  for separate investigation.
+
 ### May 6 — Test isolation: `HookSeamLock` cross-suite gate for ConfirmationGate + HookRouter seams (`phase-test-isolation-confirmation-gate-resolver-leak`)
 
 - New `Sources/Core/HookSeamLock.swift`: process-wide

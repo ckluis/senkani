@@ -9,6 +9,35 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 6 — Median-of-3 perf-budget pattern extended to 10 remaining parser sites (`parallel-runner-flake-perf-budget-remaining-parsers`)
+
+- 10 single-sample `clock.measure { … } < .milliseconds(10)` parser
+  perf gates migrated to median-of-3 across `TreeSitterBashTests`,
+  `TreeSitterCSharpTests`, `TreeSitterCppTests`, `TreeSitterGoTests`,
+  `TreeSitterJavaTests`, `TreeSitterJavaScriptTests`,
+  `TreeSitterLuaTests`, `TreeSitterRustTests`,
+  `TreeSitterTypeScriptTests` (×2 sites — typescript + tsx; via the
+  private `measureIndex` helper made median-of-3 internally), and
+  `TreeSitterZigTests`. Threshold preserved at 10 ms — the median
+  strengthens the gate on its own, mirroring the InjectionGuard
+  2026-05-06 precedent.
+- Inline rationale comment per site cross-referencing
+  `DependencyGraphPerfGateTests` as the canonical pattern, identical
+  wording to the Scala/Ruby/Haskell/PHP/InjectionGuard precedents
+  for grep-traceability.
+- **Verification.** Filter-only `swift test --filter "ParsesUnder10ms"`:
+  17/17 green × 20 consecutive runs. Full parallel-suite `swift test`
+  3 consecutive runs: 2539/2539 green each.
+  `tools/test-safe.sh --chunk parsers`: 290/290 green.
+- **Defects-outside-criteria filed.** Pre-audit during the migration
+  surfaced 3 additional single-sample parser perf gates not in the
+  10-site scope (Elixir 50 ms, Kotlin 50 ms, Python 5 ms — same
+  shape, different thresholds). Filed as
+  `parallel-runner-flake-perf-budget-elixir-kotlin-python` for a
+  follow-up round; Python at 5 ms is highest-risk because the
+  threshold is tighter than the family that has already produced
+  4 documented flakes.
+
 ### May 6 — InjectionGuard 1 MB normalize perf gate flake under parallel runner: median-of-3 (`parallel-runner-flake-injectionguard-normalize-1mb-perf-budget`)
 
 - `Tests/SenkaniTests/InjectionGuardTests.swift:244-272` —

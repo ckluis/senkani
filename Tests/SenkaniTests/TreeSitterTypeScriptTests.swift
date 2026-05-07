@@ -249,10 +249,10 @@ struct TreeSitterTypeScriptPerformanceTests {
             source += "function fn\(i)(x: number): number { return x; }\n"
         }
 
-        let (entries, ms) = measureIndex(source, language: "typescript")
+        let (entries, median, samples) = measureIndex(source, language: "typescript")
         // 5 interfaces + 5 classes + 30 methods + 30 functions = 70
         #expect(entries.count >= 65, "Should find >= 65 symbols, got \(entries.count)")
-        #expect(ms < 10.0, "Parse should be under 10ms, was \(String(format: "%.2f", ms))ms")
+        #expect(median < 10.0, "median of 3 TypeScript parses: \(samples) → median \(String(format: "%.2f", median))ms")
     }
 
     @Test func tsxFileParsesUnder10ms() {
@@ -267,10 +267,10 @@ struct TreeSitterTypeScriptPerformanceTests {
             """
         }
 
-        let (entries, ms) = measureIndex(source, language: "tsx")
+        let (entries, median, samples) = measureIndex(source, language: "tsx")
         // 10 interfaces + 10 functions = 20
         #expect(entries.count >= 20, "Should find >= 20 symbols, got \(entries.count)")
-        #expect(ms < 10.0, "Parse should be under 10ms, was \(String(format: "%.2f", ms))ms")
+        #expect(median < 10.0, "median of 3 TSX parses: \(samples) → median \(String(format: "%.2f", median))ms")
     }
 
     @Test func tsxAndTsCoexist() {
@@ -332,7 +332,17 @@ private func indexLanguage(_ code: String, language: String, ext: String) -> [In
     return (try? TreeSitterBackend.index(files: [filePath], language: language, projectRoot: tmpDir)) ?? []
 }
 
-private func measureIndex(_ code: String, language: String) -> ([IndexEntry], Double) {
+/// Returns (entries-from-the-last-sample, median-ms over 3 samples, all 3 samples).
+///
+/// Median-of-3 — see DependencyGraphPerfGateTests for the canonical
+/// pattern. `.serialized` only serializes within-suite, so peer-suite
+/// CPU contention can spike a single sample under parallel runner;
+/// a single transient spike on one of three runs cannot fail the
+/// test, but a real regression (every run blows budget) still does.
+/// Threshold preserved at 10 ms in callers — the median strengthens
+/// the gate on its own (mirrors the Scala/Ruby/Haskell/PHP siblings,
+/// with the InjectionGuard 2026-05-06 precedent of preserve-don't-widen).
+private func measureIndex(_ code: String, language: String) -> ([IndexEntry], Double, [Double]) {
     let ext = language == "tsx" ? "tsx" : "ts"
     let tmpDir = NSTemporaryDirectory() + "senkani-\(language)-perf-\(UUID().uuidString)"
     let filePath = "perf_test.\(ext)"
@@ -344,10 +354,13 @@ private func measureIndex(_ code: String, language: String) -> ([IndexEntry], Do
 
     let clock = ContinuousClock()
     var entries: [IndexEntry] = []
-    let elapsed = clock.measure {
-        entries = (try? TreeSitterBackend.index(files: [filePath], language: language, projectRoot: tmpDir)) ?? []
+    var samples: [Double] = []
+    for _ in 0..<3 {
+        let elapsed = clock.measure {
+            entries = (try? TreeSitterBackend.index(files: [filePath], language: language, projectRoot: tmpDir)) ?? []
+        }
+        samples.append(Double(elapsed.components.attoseconds) / 1e15)
     }
-
-    let ms = Double(elapsed.components.attoseconds) / 1e15
-    return (entries, ms)
+    let median = samples.sorted()[1]
+    return (entries, median, samples)
 }

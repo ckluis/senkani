@@ -35,7 +35,7 @@ struct KnowledgeStoreCRUDTests {
 
     @Test func upsertAndFetch() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let e = makeEntity(
             name: "SessionDatabase",
@@ -59,7 +59,7 @@ struct KnowledgeStoreCRUDTests {
 
     @Test func upsertUpdatesExisting() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let first = makeEntity(name: "HookRouter", understanding: "Routes hooks v1")
         let id1 = store.upsertEntity(first)
@@ -78,7 +78,7 @@ struct KnowledgeStoreCRUDTests {
 
     @Test func deleteEntityCascades() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let sourceId = store.upsertEntity(makeEntity(name: "Alpha"))
         let targetId = store.upsertEntity(makeEntity(name: "Beta"))
@@ -112,7 +112,7 @@ struct KnowledgeStoreCRUDTests {
 
     @Test func allEntitiesSortedByMentionCount() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         store.upsertEntity(makeEntity(name: "Rarely", mentionCount: 1))
         store.upsertEntity(makeEntity(name: "Often", mentionCount: 99))
@@ -131,7 +131,7 @@ struct KnowledgeStoreFTSTests {
 
     @Test func searchExactName() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         store.upsertEntity(makeEntity(name: "AutoValidateWorker", understanding: "Runs validators on save"))
         store.upsertEntity(makeEntity(name: "UnrelatedThing", understanding: "Nothing here"))
@@ -143,7 +143,7 @@ struct KnowledgeStoreFTSTests {
 
     @Test func searchPartialContent() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         store.upsertEntity(makeEntity(
             name: "DiagnosticRewriter",
@@ -157,7 +157,7 @@ struct KnowledgeStoreFTSTests {
 
     @Test func searchSanitizesFTS5Operators() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         store.upsertEntity(makeEntity(name: "SafetyCheck", understanding: "checks safety rules"))
 
@@ -172,7 +172,7 @@ struct KnowledgeStoreFTSTests {
 
     @Test func searchEmptyQueryReturnsEmpty() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         store.upsertEntity(makeEntity(name: "Anything", understanding: "content"))
 
@@ -182,7 +182,7 @@ struct KnowledgeStoreFTSTests {
 
     @Test func searchSnippetContainsMarkers() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         store.upsertEntity(makeEntity(
             name: "KnowledgeStore",
@@ -206,7 +206,7 @@ struct KnowledgeStoreLinksTests {
 
     @Test func insertLinkAndFetch() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let srcId = store.upsertEntity(makeEntity(name: "Controller"))
         _ = store.upsertEntity(makeEntity(name: "Model"))
@@ -225,7 +225,7 @@ struct KnowledgeStoreLinksTests {
 
     @Test func resolveLinksPopulatesTargetId() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let srcId = store.upsertEntity(makeEntity(name: "View"))
         let tgtId = store.upsertEntity(makeEntity(name: "ViewModel"))
@@ -239,7 +239,7 @@ struct KnowledgeStoreLinksTests {
 
     @Test func backlinksReturnsReverseLinks() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let aId = store.upsertEntity(makeEntity(name: "Parser"))
         let bId = store.upsertEntity(makeEntity(name: "Lexer"))
@@ -259,7 +259,7 @@ struct KnowledgeStoreLinksTests {
 
     @Test func duplicateLinksIgnored() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let srcId = store.upsertEntity(makeEntity(name: "Foo"))
         store.upsertEntity(makeEntity(name: "Bar"))
@@ -279,7 +279,7 @@ struct KnowledgeStoreDecisionsTests {
 
     @Test func insertAndFetchDecision() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let eid = store.upsertEntity(makeEntity(name: "AuthMiddleware"))
         store.insertDecision(DecisionRecord(
@@ -299,7 +299,7 @@ struct KnowledgeStoreDecisionsTests {
 
     @Test func gitCommitDecisionDeduped() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let eid = store.upsertEntity(makeEntity(name: "RateLimiter"))
         let rec = DecisionRecord(
@@ -324,7 +324,7 @@ struct KnowledgeStoreEvidenceTests {
 
     @Test func appendAndFetchTimeline() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let eid = store.upsertEntity(makeEntity(name: "Scheduler"))
 
@@ -349,7 +349,7 @@ struct KnowledgeStoreEvidenceTests {
 
     @Test func timelineIsAppendOnly() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let eid = store.upsertEntity(makeEntity(name: "EventBus"))
         for i in 1...5 {
@@ -376,7 +376,7 @@ struct KnowledgeStoreCouplingTests {
 
     @Test func upsertCouplingAndFetch() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         store.upsertCoupling(CouplingEntry(
             entityA: "Schema.swift", entityB: "Migration.swift",
@@ -392,7 +392,7 @@ struct KnowledgeStoreCouplingTests {
 
     @Test func upsertCouplingUpdatesNotDuplicates() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         store.upsertCoupling(CouplingEntry(
             entityA: "A.swift", entityB: "B.swift",
@@ -412,7 +412,7 @@ struct KnowledgeStoreCouplingTests {
 
     @Test func couplingOrderCanonicalized() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         // Insert with reversed order — should canonical to (A, B)
         store.upsertCoupling(CouplingEntry(
@@ -432,7 +432,7 @@ struct KnowledgeStoreCouplingTests {
 
     @Test func minScoreFiltersResults() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         store.upsertCoupling(CouplingEntry(
             entityA: "Core.swift", entityB: "Weak.swift",

@@ -84,7 +84,7 @@ struct AuthorshipBackfillSQLTests {
     @Test("Counts and updates only NULL rows whose created_at >= since")
     func backfillRespectsSinceCutoffAndNullPredicate() {
         let (store, path) = makeKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let cutoff = Date(timeIntervalSince1970: 1_700_000_000)
         let before = cutoff.addingTimeInterval(-86_400)
@@ -109,7 +109,7 @@ struct AuthorshipBackfillSQLTests {
     @Test("Second pass with same args writes 0 rows (idempotent)")
     func backfillIsIdempotent() {
         let (store, path) = makeKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let cutoff = Date(timeIntervalSince1970: 1_700_000_000)
         seedLegacyNullRow(store, name: "Once", createdAt: cutoff.addingTimeInterval(60))
@@ -131,7 +131,7 @@ struct AuthorshipBackfillSQLTests {
         // legacy NULL state. Backfill must leave it alone so the prompt
         // path (V.5b) gets to heal it on the next save.
         let (store, path) = makeKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let cutoff = Date(timeIntervalSince1970: 1_700_000_000)
         let after = cutoff.addingTimeInterval(60)
@@ -157,7 +157,7 @@ struct AuthorshipBackfillSQLTests {
     @Test("Does NOT overwrite already-tagged rows")
     func backfillPreservesExplicitTags() {
         let (store, path) = makeKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let cutoff = Date(timeIntervalSince1970: 1_700_000_000)
         let after = cutoff.addingTimeInterval(60)
@@ -189,7 +189,7 @@ struct AuthorshipBackfillSQLTests {
     func backfillWritesAllThreeExplicitTags() {
         for tag in [AuthorshipTag.aiAuthored, .humanAuthored, .mixed] {
             let (store, path) = makeKB()
-            defer { TempSessionDatabase.cleanup(path: path) }
+            defer { TempKnowledgeStore.close(store, path: path) }
 
             let cutoff = Date(timeIntervalSince1970: 1_700_000_000)
             seedLegacyNullRow(store, name: "Row", createdAt: cutoff.addingTimeInterval(1))
@@ -247,9 +247,8 @@ struct AuthorshipBackfillRunnerTests {
         let (kb, kbPath) = makeKB()
         let (audit, auditPath) = makeAuditDB()
         defer {
-            TempSessionDatabase.cleanup(path: kbPath)
-            audit.close()
-            TempSessionDatabase.cleanup(path: auditPath)
+            TempKnowledgeStore.close(kb, path: kbPath)
+            TempSessionDatabase.close(audit, path: auditPath)
         }
 
         let cutoff = Date(timeIntervalSince1970: 1_700_000_000)
@@ -282,9 +281,8 @@ struct AuthorshipBackfillRunnerTests {
         let (kb, kbPath) = makeKB()
         let (audit, auditPath) = makeAuditDB()
         defer {
-            TempSessionDatabase.cleanup(path: kbPath)
-            audit.close()
-            TempSessionDatabase.cleanup(path: auditPath)
+            TempKnowledgeStore.close(kb, path: kbPath)
+            TempSessionDatabase.close(audit, path: auditPath)
         }
 
         let cutoff = Date(timeIntervalSince1970: 1_700_000_000)

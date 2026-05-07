@@ -11,8 +11,8 @@ private func makeTempProject() throws -> (KnowledgeFileLayer, KnowledgeStore, St
     return (layer, store, root)
 }
 
-private func cleanup(_ root: String) {
-    try? FileManager.default.removeItem(atPath: root)
+private func cleanup(_ store: KnowledgeStore, _ root: String) {
+    TempKnowledgeStore.close(store, projectRoot: root)
 }
 
 /// Build a fully-populated KBContent for round-trip testing.
@@ -59,8 +59,8 @@ private func richContent(name: String) -> KBContent {
 struct KnowledgeFileLayerDirectoryTests {
 
     @Test func testDirectoryCreation() throws {
-        let (layer, _, root) = try makeTempProject()
-        defer { cleanup(root) }
+        let (layer, store, root) = try makeTempProject()
+        defer { cleanup(store, root) }
 
         let fm = FileManager.default
         var isDir: ObjCBool = false
@@ -252,8 +252,8 @@ struct KnowledgeParserTests {
 struct KnowledgeFileLayerRoundTripTests {
 
     @Test func testRoundTrip() throws {
-        let (layer, _, root) = try makeTempProject()
-        defer { cleanup(root) }
+        let (layer, store, root) = try makeTempProject()
+        defer { cleanup(store, root) }
 
         let original = richContent(name: "RoundTripEntity")
 
@@ -275,8 +275,8 @@ struct KnowledgeFileLayerRoundTripTests {
 struct KnowledgeFileLayerStagingTests {
 
     @Test func testStageAndCommit() throws {
-        let (layer, _, root) = try makeTempProject()
-        defer { cleanup(root) }
+        let (layer, store, root) = try makeTempProject()
+        defer { cleanup(store, root) }
 
         let content = richContent(name: "StagedEntity")
         let markdown = KnowledgeParser.serialize(content, entityName: "StagedEntity")
@@ -298,8 +298,8 @@ struct KnowledgeFileLayerStagingTests {
     }
 
     @Test func testCommitCreatesHistoryEntry() throws {
-        let (layer, _, root) = try makeTempProject()
-        defer { cleanup(root) }
+        let (layer, store, root) = try makeTempProject()
+        defer { cleanup(store, root) }
 
         let v1 = KnowledgeParser.serialize(richContent(name: "HistEntity"), entityName: "HistEntity")
 
@@ -318,8 +318,8 @@ struct KnowledgeFileLayerStagingTests {
     }
 
     @Test func testRollback() throws {
-        let (layer, _, root) = try makeTempProject()
-        defer { cleanup(root) }
+        let (layer, store, root) = try makeTempProject()
+        defer { cleanup(store, root) }
 
         let v1Body = "Version 1 content."
         let v2Body = "Version 2 content."
@@ -356,8 +356,8 @@ struct KnowledgeFileLayerStagingTests {
     }
 
     @Test func testHistoryPruning() throws {
-        let (layer, _, root) = try makeTempProject()
-        defer { cleanup(root) }
+        let (layer, store, root) = try makeTempProject()
+        defer { cleanup(store, root) }
 
         func makeMarkdown(_ n: Int) -> String {
             KnowledgeParser.serialize(
@@ -423,8 +423,8 @@ struct KnowledgeFileLayerLifetimeTests {
     @Test("Implicit teardown survives churn")
     func implicitTeardownSurvivesChurn() throws {
         let root = "/tmp/senkani-kbfl-lifetime-\(UUID().uuidString)"
-        defer { try? FileManager.default.removeItem(atPath: root) }
         let store = KnowledgeStore(path: root + "/vault.db")
+        defer { cleanup(store, root) }
 
         for _ in 0..<20 {
             let layer = try KnowledgeFileLayer(projectRoot: root, store: store)
@@ -446,8 +446,8 @@ struct KnowledgeFileLayerLifetimeTests {
     @Test("Explicit stopWatching drains in-flight callbacks")
     func explicitStopWatchingDrainsInFlight() async throws {
         let root = "/tmp/senkani-kbfl-stop-\(UUID().uuidString)"
-        defer { try? FileManager.default.removeItem(atPath: root) }
         let store = KnowledgeStore(path: root + "/vault.db")
+        defer { cleanup(store, root) }
 
         for _ in 0..<20 {
             let layer = try KnowledgeFileLayer(projectRoot: root, store: store)
@@ -471,8 +471,8 @@ struct KnowledgeFileLayerLifetimeTests {
     @Test("stopWatching is idempotent")
     func stopWatchingIsIdempotent() throws {
         let root = "/tmp/senkani-kbfl-idem-\(UUID().uuidString)"
-        defer { try? FileManager.default.removeItem(atPath: root) }
         let store = KnowledgeStore(path: root + "/vault.db")
+        defer { cleanup(store, root) }
 
         // Never-started layer.
         let cold = try KnowledgeFileLayer(projectRoot: root, store: store)

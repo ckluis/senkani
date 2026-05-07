@@ -9,6 +9,35 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 6 — KnowledgeStore "disk I/O error" on BEGIN/COMMIT under full parallel suite: close-before-unlink test helper (`knowledgestore-disk-io-error-on-begin-or-commit-under-full-parallel-suite`)
+
+- `Tests/SenkaniTests/Helpers/TempKnowledgeStore.swift` (new): mirrors
+  `TempSessionDatabase.close(_:path:)` for KnowledgeStore. Exposes two
+  shapes — `close(_:path:)` for `KnowledgeStore(path:)` tests and
+  `close(_:projectRoot:)` for `KnowledgeStore(projectRoot:)` tests —
+  each draining the queue + `sqlite3_close(db)` via `store.close()`
+  **before** unlinking the on-disk file/dir. Closes the
+  `[KnowledgeStore] SQL error: BEGIN failed: disk I/O error` /
+  `COMMIT failed: disk I/O error` flake the
+  `batchIncrementMentions` defer-rollback hardening had unmasked
+  (5-of-10 baseline observed during that round's verification).
+- Migrated the candidate suites called out in the parent finding —
+  `KBCompoundBridgeTests`, `KBCLITests`, `KBEvalTests`,
+  `ChangeSetMinerTests`, `EntityTrackerTelemetryTests` — plus every
+  other KnowledgeStore-using test that relied on the same defer-vs-
+  deinit ordering pattern: `AuthorshipBackfillTests`,
+  `AuthorshipTrackerTests`, `AuthorshipPromptResolverTests`,
+  `EntityTrackerTests`, `KBVaultV7Tests`, `KnowledgeFileLayerTests`,
+  `KnowledgeStoreTests`, `KnowledgeEntityStoreTests`,
+  `KnowledgeLinkStoreTests`, `KnowledgeDecisionStoreTests`,
+  `KnowledgeEnrichmentStoreTests`. The SessionDatabase precedent
+  (`Tests/SenkaniTests/Helpers/TempSessionDatabase.swift`) is now
+  fully mirrored on the KnowledgeStore side.
+- Verified under 10 consecutive raw `swift test` runs: zero
+  `disk I/O error` lines (was 3-of-5 reproducible under the same
+  workload before the fix). `tools/test-safe.sh` all-chunks green
+  unchanged.
+
 ### May 6 — KnowledgeStore parallel-suite SQL flake: `sqlite3_busy_timeout` on the primary connection (`knowledgestore-database-is-locked-rapid-fire-under-full-parallel-suite`)
 
 - `Sources/Core/KnowledgeStore.swift`: `enableWAL()` now calls

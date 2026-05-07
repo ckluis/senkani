@@ -21,8 +21,8 @@ private func insertEntity(_ name: String, into store: KnowledgeStore) -> Int64 {
     ))
 }
 
-private func cleanup(_ root: String) {
-    try? FileManager.default.removeItem(atPath: root)
+private func cleanup(_ store: KnowledgeStore, _ root: String) {
+    TempKnowledgeStore.close(store, projectRoot: root)
 }
 
 // MARK: - Suite
@@ -33,7 +33,7 @@ struct EntityTrackerTests {
     // 1. Basic detection
     @Test func testObserveDetectsEntityName() throws {
         let (tracker, store, root) = try makeTempTracker()
-        defer { cleanup(root) }
+        defer { cleanup(store, root) }
 
         insertEntity("Scheduler", into: store)
         tracker.reloadEntities()
@@ -46,7 +46,7 @@ struct EntityTrackerTests {
     // 2. Flush persists to store
     @Test func testFlushWritesToStore() throws {
         let (tracker, store, root) = try makeTempTracker()
-        defer { cleanup(root) }
+        defer { cleanup(store, root) }
 
         insertEntity("Parser", into: store)
         tracker.reloadEntities()
@@ -65,7 +65,7 @@ struct EntityTrackerTests {
     @Test func testThresholdTriggerAndIdempotency() throws {
         let cfg = EntityTrackerConfig(flushIntervalCalls: 200, mentionThreshold: 3)
         let (tracker, store, root) = try makeTempTracker(config: cfg)
-        defer { cleanup(root) }
+        defer { cleanup(store, root) }
 
         insertEntity("Widget", into: store)
         tracker.reloadEntities()
@@ -89,7 +89,7 @@ struct EntityTrackerTests {
     @Test func testAutoFlushAtInterval() throws {
         let cfg = EntityTrackerConfig(flushIntervalCalls: 5, mentionThreshold: 50)
         let (tracker, store, root) = try makeTempTracker(config: cfg)
-        defer { cleanup(root) }
+        defer { cleanup(store, root) }
 
         insertEntity("Router", into: store)
         tracker.reloadEntities()
@@ -107,7 +107,7 @@ struct EntityTrackerTests {
     // 5. Session reset clears all in-memory state
     @Test func testSessionReset() throws {
         let (tracker, store, root) = try makeTempTracker()
-        defer { cleanup(root) }
+        defer { cleanup(store, root) }
 
         insertEntity("Store", into: store)
         tracker.reloadEntities()
@@ -128,7 +128,7 @@ struct EntityTrackerTests {
     // 6. Multiple entities detected in single observation
     @Test func testMultiEntityInSingleObservation() throws {
         let (tracker, store, root) = try makeTempTracker()
-        defer { cleanup(root) }
+        defer { cleanup(store, root) }
 
         insertEntity("Alpha", into: store)
         insertEntity("Beta", into: store)
@@ -147,7 +147,7 @@ struct EntityTrackerTests {
     // 7. Entity registry update via reloadEntities
     @Test func testEntityRegistryUpdate() throws {
         let (tracker, store, root) = try makeTempTracker()
-        defer { cleanup(root) }
+        defer { cleanup(store, root) }
 
         // No entities loaded yet
         let before = tracker.observe(text: "KnowledgeStore text")
@@ -165,7 +165,7 @@ struct EntityTrackerTests {
     @Test func testConcurrentObservations() throws {
         let cfg = EntityTrackerConfig(flushIntervalCalls: 200, mentionThreshold: 50)
         let (tracker, store, root) = try makeTempTracker(config: cfg)
-        defer { cleanup(root) }
+        defer { cleanup(store, root) }
 
         insertEntity("ConcurrentEntity", into: store)
         tracker.reloadEntities()

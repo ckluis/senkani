@@ -65,7 +65,6 @@ struct ChangeSetMinerTests {
     // 5. Integration: mine() on a real git repo produces coupling
     @Test func testMineOnRealGitRepo() {
         let root = "/tmp/senkani-miner-\(UUID().uuidString)"
-        defer { try? FileManager.default.removeItem(atPath: root) }
 
         func sh(_ cmd: String) {
             let p = Process()
@@ -97,6 +96,7 @@ struct ChangeSetMinerTests {
 
         // Insert entities with matching sourcePaths
         let store = KnowledgeStore(projectRoot: root)
+        defer { TempKnowledgeStore.close(store, projectRoot: root) }
         _ = store.upsertEntity(KnowledgeEntity(
             name: "EntityA", entityType: "class",
             sourcePath: "Sources/EntityA.swift",
@@ -125,8 +125,8 @@ struct ChangeSetMinerTests {
     @Test func testMineNonGitDirReturnsZero() {
         let root = "/tmp/senkani-nongit-\(UUID().uuidString)"
         try? FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(atPath: root) }
         let store = KnowledgeStore(projectRoot: root)
+        defer { TempKnowledgeStore.close(store, projectRoot: root) }
         let (pairs, commits) = ChangeSetMiner.mine(projectRoot: root, store: store)
         #expect(pairs == 0 && commits == 0)
     }

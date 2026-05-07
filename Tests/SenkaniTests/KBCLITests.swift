@@ -10,14 +10,16 @@ private func makeKBRoot() -> (KnowledgeStore, String) {
     return (KnowledgeStore(projectRoot: root), root)
 }
 
-private func cleanup(_ root: String) { try? FileManager.default.removeItem(atPath: root) }
+private func cleanup(_ store: KnowledgeStore, _ root: String) {
+    TempKnowledgeStore.close(store, projectRoot: root)
+}
 
 @Suite("KBCLIData")
 struct KBCLITests {
 
     // 1. list: allEntities returns correct count and name-sort order
     @Test func testListReturnsAllEntities() {
-        let (store, root) = makeKBRoot(); defer { cleanup(root) }
+        let (store, root) = makeKBRoot(); defer { cleanup(store, root) }
         store.upsertEntity(KnowledgeEntity(name: "Alpha", entityType: "class",  markdownPath: "a.md"))
         store.upsertEntity(KnowledgeEntity(name: "Beta",  entityType: "struct", markdownPath: "b.md"))
         store.upsertEntity(KnowledgeEntity(name: "Gamma", entityType: "func",   markdownPath: "c.md"))
@@ -28,7 +30,7 @@ struct KBCLITests {
 
     // 2. list --type: type filter works correctly
     @Test func testListTypeFilter() {
-        let (store, root) = makeKBRoot(); defer { cleanup(root) }
+        let (store, root) = makeKBRoot(); defer { cleanup(store, root) }
         store.upsertEntity(KnowledgeEntity(name: "A", entityType: "class",  markdownPath: "a.md"))
         store.upsertEntity(KnowledgeEntity(name: "B", entityType: "struct", markdownPath: "b.md"))
         store.upsertEntity(KnowledgeEntity(name: "C", entityType: "class",  markdownPath: "c.md"))
@@ -39,7 +41,7 @@ struct KBCLITests {
 
     // 3. get: entity(named:) returns correct entity with understanding
     @Test func testGetEntityByName() {
-        let (store, root) = makeKBRoot(); defer { cleanup(root) }
+        let (store, root) = makeKBRoot(); defer { cleanup(store, root) }
         store.upsertEntity(KnowledgeEntity(name: "AuthManager", entityType: "class",
                                             markdownPath: "auth.md",
                                             compiledUnderstanding: "Handles auth tokens."))
@@ -51,13 +53,13 @@ struct KBCLITests {
 
     // 4. get: unknown entity returns nil (CLI exit 1 path)
     @Test func testGetUnknownEntityIsNil() {
-        let (store, root) = makeKBRoot(); defer { cleanup(root) }
+        let (store, root) = makeKBRoot(); defer { cleanup(store, root) }
         #expect(store.entity(named: "Ghost") == nil)
     }
 
     // 5. get: links and decisions accessible together for full detail output
     @Test func testGetEntityWithLinksAndDecisions() {
-        let (store, root) = makeKBRoot(); defer { cleanup(root) }
+        let (store, root) = makeKBRoot(); defer { cleanup(store, root) }
         let id = store.upsertEntity(KnowledgeEntity(name: "Router", entityType: "class",
                                                      markdownPath: "r.md"))
         store.upsertEntity(KnowledgeEntity(name: "DB", entityType: "class", markdownPath: "d.md"))
@@ -76,7 +78,7 @@ struct KBCLITests {
 
     // 6. search: FTS returns matching results for keyword
     @Test func testSearchReturnsFTSResults() {
-        let (store, root) = makeKBRoot(); defer { cleanup(root) }
+        let (store, root) = makeKBRoot(); defer { cleanup(store, root) }
         store.upsertEntity(KnowledgeEntity(name: "TokenManager", entityType: "class",
                                             markdownPath: "tm.md",
                                             compiledUnderstanding: "Manages JWT bearer tokens for API auth."))

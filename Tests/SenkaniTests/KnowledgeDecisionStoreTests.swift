@@ -57,7 +57,7 @@ struct DecisionStoreInvariantTests {
     /// only fires for git_commit rows.
     @Test func nonGitCommitSourcesCanRepeat() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         for _ in 0..<3 {
             _ = store.insertDecision(makeDecision(
@@ -72,7 +72,7 @@ struct DecisionStoreInvariantTests {
     /// even when the entity_name matches an existing one.
     @Test func gitCommitDifferentHashAllowed() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         _ = store.insertDecision(makeDecision(
             entityName: "Same", source: "git_commit", commitHash: "aaa"
@@ -86,7 +86,7 @@ struct DecisionStoreInvariantTests {
     /// `decisions(forEntityName:)` orders DESC by `created_at` (latest first).
     @Test func decisionsOrderedByCreatedAtDesc() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let earlier = makeDecision(entityName: "T", decision: "old",
                                    at: Date(timeIntervalSince1970: 1_000))
@@ -103,7 +103,7 @@ struct DecisionStoreInvariantTests {
     /// where the entity hasn't been auto-discovered yet.
     @Test func decisionWithNilEntityIdSupported() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let id = store.insertDecision(makeDecision(
             entityId: nil, entityName: "Phantom",
@@ -120,7 +120,7 @@ struct DecisionStoreInvariantTests {
     /// Decisions with NULL entity_id (annotation mode) survive.
     @Test func cascadeDeleteOnEntityRemoval() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let id = store.upsertEntity(makeEntity("Tied"))
         _ = store.insertDecision(makeDecision(

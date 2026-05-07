@@ -114,7 +114,7 @@ struct AuthorshipPersistenceTests {
 
     @Test func columnExistsAfterFreshInstall() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         // Fresh-install path goes through `EntityStore.setupSchema`
         // which lands the column via the idempotent ALTER guard.
@@ -126,7 +126,7 @@ struct AuthorshipPersistenceTests {
 
     @Test func explicitTagRoundTripsForEachCase() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let cases: [(String, AuthorshipTag)] = [
             ("AlphaAI", .aiAuthored),
@@ -148,7 +148,7 @@ struct AuthorshipPersistenceTests {
         // form must NEVER silently land as `.humanAuthored`. It
         // must land as `.unset` so the prompt path resolves it.
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         _ = store.upsertEntity(makeEntity("DefaultBehavior"))
         let entity = store.entity(named: "DefaultBehavior")
@@ -162,7 +162,7 @@ struct AuthorshipPersistenceTests {
         // The UPSERT path must let an operator change their mind.
         // First write `.unset`, then update to `.humanAuthored`.
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         _ = store.upsertEntity(makeEntity("Mutable"), authorship: .unset)
         #expect(store.entity(named: "Mutable")?.authorship == .unset)
@@ -180,7 +180,7 @@ struct AuthorshipPersistenceTests {
         // text). If the column indices drifted, rank would either
         // be 0 / NaN / a coerced string-to-double mess.
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         _ = store.upsertEntity(
             KnowledgeEntity(

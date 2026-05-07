@@ -217,10 +217,6 @@ struct KnowledgeFileLayerVaultIntegrationTests {
     @Test func layerRoundTripsThroughExplicitVaultDir() throws {
         let vaultRoot = tmpDir("layer-vault-root")
         let project   = tmpDir("layer-project")
-        defer {
-            try? FileManager.default.removeItem(atPath: vaultRoot)
-            try? FileManager.default.removeItem(atPath: project)
-        }
 
         // Resolve the same path the env/config code path would yield, but
         // pass it explicitly to keep the test hermetic.
@@ -228,6 +224,11 @@ struct KnowledgeFileLayerVaultIntegrationTests {
         let expectedDir = vaultRoot + "/" + projectSlug
 
         let store = KnowledgeStore(path: project + "/vault.db")
+        defer {
+            store.close()
+            try? FileManager.default.removeItem(atPath: vaultRoot)
+            try? FileManager.default.removeItem(atPath: project)
+        }
         let layer = try KnowledgeFileLayer(vaultDir: expectedDir, store: store)
         #expect(layer.knowledgeDir == expectedDir)
 

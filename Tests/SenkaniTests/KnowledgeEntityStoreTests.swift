@@ -47,7 +47,7 @@ struct EntityStoreInvariantTests {
     /// no row inserted via the façade should be missing from the virtual table.
     @Test func ftsSyncRemainsConsistentUnderBackToBackWrites() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         for i in 0..<20 {
             _ = store.upsertEntity(makeEntity("Entity\(i)", understanding: "marker_\(i)"))
@@ -63,7 +63,7 @@ struct EntityStoreInvariantTests {
     /// every named row must have its counters bumped exactly once.
     @Test func batchIncrementAppliesAllDeltasOnce() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         for i in 0..<5 { _ = store.upsertEntity(makeEntity("E\(i)")) }
         store.batchIncrementMentions(["E0": 1, "E1": 2, "E2": 3, "E3": 4, "E4": 5])
@@ -79,7 +79,7 @@ struct EntityStoreInvariantTests {
     /// touching lifetime `mention_count`.
     @Test func resetSessionMentionsClearsAllRows() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         for i in 0..<3 { _ = store.upsertEntity(makeEntity("R\(i)")) }
         store.batchIncrementMentions(["R0": 2, "R1": 2, "R2": 2])
@@ -99,7 +99,7 @@ struct EntityStoreInvariantTests {
     /// regardless of the caller passing a negative or super-unit value.
     @Test func updateStalenessClampedToValidRange() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
         _ = store.upsertEntity(makeEntity("Clampy"))
 
         store.updateStaleness(name: "Clampy", score: -5.0)
@@ -116,7 +116,7 @@ struct EntityStoreInvariantTests {
     /// In between, the score ramps linearly over a 7-day window.
     @Test func computeStalenessRampsOverSevenDays() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         // Never-enriched entity → fully stale.
         _ = store.upsertEntity(makeEntity("Never"))

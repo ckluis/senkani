@@ -25,7 +25,8 @@ struct EntityTrackerTelemetryTests {
         let (store, storeRoot) = try makeStore()
         let (db, dbPath) = makeDB()
         defer {
-            try? FileManager.default.removeItem(atPath: storeRoot)
+            TempKnowledgeStore.close(store, projectRoot: storeRoot)
+            TempSessionDatabase.close(db, path: dbPath)
             try? FileManager.default.removeItem(atPath: (dbPath as NSString).deletingLastPathComponent)
         }
         _ = store.upsertEntity(KnowledgeEntity(
@@ -45,7 +46,8 @@ struct EntityTrackerTelemetryTests {
         let (store, storeRoot) = try makeStore()
         let (db, dbPath) = makeDB()
         defer {
-            try? FileManager.default.removeItem(atPath: storeRoot)
+            TempKnowledgeStore.close(store, projectRoot: storeRoot)
+            TempSessionDatabase.close(db, path: dbPath)
             try? FileManager.default.removeItem(atPath: (dbPath as NSString).deletingLastPathComponent)
         }
         _ = store.upsertEntity(KnowledgeEntity(
@@ -67,7 +69,8 @@ struct EntityTrackerTelemetryTests {
         let (store, storeRoot) = try makeStore()
         let (db, dbPath) = makeDB()
         defer {
-            try? FileManager.default.removeItem(atPath: storeRoot)
+            TempKnowledgeStore.close(store, projectRoot: storeRoot)
+            TempSessionDatabase.close(db, path: dbPath)
             try? FileManager.default.removeItem(atPath: (dbPath as NSString).deletingLastPathComponent)
         }
         let tracker = EntityTracker(store: store)

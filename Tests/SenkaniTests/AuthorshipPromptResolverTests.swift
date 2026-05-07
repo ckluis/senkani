@@ -97,10 +97,8 @@ struct AuthorshipPromptResolverBypassTests {
     // the resulting row.
     @Test func explicitTagBypassesPromptOnRoundTrip() {
         let path = "/tmp/senkani-v5b-bypass-\(UUID().uuidString).sqlite"
-        defer {
-            TempSessionDatabase.cleanup(path: path)
-        }
         let store = KnowledgeStore(path: path)
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let entity = KnowledgeEntity(
             name: "BypassProbe",

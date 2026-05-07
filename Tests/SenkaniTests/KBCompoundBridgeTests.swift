@@ -48,7 +48,7 @@ struct KBBridgeLifecycleTests {
 
     @Test func seedCreatesEntityWhenAbsent() {
         let (store, root) = makeStore()
-        defer { try? FileManager.default.removeItem(atPath: root) }
+        defer { TempKnowledgeStore.close(store, projectRoot: root) }
         let doc = LearnedContextDoc(
             id: "d1", title: "sources-core-filterpipeline-swift",
             body: "x", sources: [], confidence: 0.9,
@@ -62,7 +62,7 @@ struct KBBridgeLifecycleTests {
 
     @Test func seedIsIdempotent() {
         let (store, root) = makeStore()
-        defer { try? FileManager.default.removeItem(atPath: root) }
+        defer { TempKnowledgeStore.close(store, projectRoot: root) }
         let doc = LearnedContextDoc(
             id: "d2", title: "sources-core-filterpipeline-swift",
             body: "x", sources: [], confidence: 0.9,

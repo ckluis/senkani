@@ -41,7 +41,7 @@ struct LinkStoreInvariantTests {
     /// entity must remove all of its outgoing links.
     @Test func cascadeDeleteOnSourceEntityRemoval() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let aId = store.upsertEntity(makeEntity("A"))
         _ = store.upsertEntity(makeEntity("B"))
@@ -59,7 +59,7 @@ struct LinkStoreInvariantTests {
     /// the link rows themselves (target_name is preserved).
     @Test func targetIdSetNullOnTargetEntityDelete() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let aId = store.upsertEntity(makeEntity("A"))
         _ = store.upsertEntity(makeEntity("B"))
@@ -81,7 +81,7 @@ struct LinkStoreInvariantTests {
     /// order users expect. Insert two links, the older one comes first.
     @Test func linksOrderedByCreatedAtAsc() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let aId = store.upsertEntity(makeEntity("A"))
         let earlier = EntityLink(sourceId: aId, targetName: "Old",
@@ -101,7 +101,7 @@ struct LinkStoreInvariantTests {
     /// source entity — other entities' links are untouched.
     @Test func deleteLinksScopesToSourceId() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let aId = store.upsertEntity(makeEntity("A"))
         let bId = store.upsertEntity(makeEntity("B"))
@@ -117,7 +117,7 @@ struct LinkStoreInvariantTests {
     /// links keep the id they were inserted with.
     @Test func resolveLinksOnlyTouchesUnresolved() {
         let (store, path) = makeTempKB()
-        defer { TempSessionDatabase.cleanup(path: path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let aId = store.upsertEntity(makeEntity("A"))
         let cId = store.upsertEntity(makeEntity("C"))

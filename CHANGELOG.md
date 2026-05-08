@@ -9,6 +9,23 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 7 — CI gate: `swift build -c release` now runs on every PR
+- New workflow `.github/workflows/release-build-smoke.yml` runs
+  `swift package resolve` + `swift build -c release` + a binary-
+  existence check (`senkani`, `senkani-mcp`, `senkani-hook`,
+  `senkani-mig-helper`) on PR open/sync and push to `main`. Job
+  is independent of the existing `tests` job — a release-mode
+  linker / package-graph regression now fails CI even when debug-
+  mode tests pass.
+- Cache key hashes both `Package.resolved` and `Package.swift`,
+  so a hand-bumped pin SHA invalidates the cache (the prior
+  Package.resolved-only key would have masked a re-occurrence of
+  the May 7 mlx-swift-lm regression on a warm runner).
+- CONTRIBUTING.md gains one line stating the gate so contributors
+  can replicate locally before pushing.
+- Closes follow-up filed by the May 7 build-fix item
+  (`release-v0-3-0-build-broken` acceptance criterion #3).
+
 ### May 7 — Build fix: pin `mlx-swift-lm` to a known-good revision (was tracking `main`, which moved past the SHA that vended `Tokenizers`)
 - Symptom: `swift build -c release` on `main` failed with
   `no such module 'Tokenizers'` from

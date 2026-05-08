@@ -9,6 +9,11 @@ keep tests green, and we'll be fine.
 swift build -c release
 ```
 
+`swift build -c release` runs as a CI gate on every PR (see
+`.github/workflows/release-build-smoke.yml`) — replicate locally
+before pushing so dependency-pin / package-graph regressions don't
+make it to review.
+
 ## Test
 
 Use `tools/test-safe.sh`, not `swift test`:

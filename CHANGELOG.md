@@ -9,6 +9,38 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 7 — Build fix: pin `mlx-swift-lm` to a known-good revision (was tracking `main`, which moved past the SHA that vended `Tokenizers`)
+- Symptom: `swift build -c release` on `main` failed with
+  `no such module 'Tokenizers'` from
+  `Sources/MCP/Tools/EmbedTool.swift`. Surfaced during the v0.3.0
+  release-cut validation run on 2026-05-07; broke release-blocker
+  items `release-v0-3-0-onboarding-pass` and
+  `release-v0-3-0-surface-pass`.
+- Root cause: `Package.swift` tracked `mlx-swift-lm` on `branch:
+  "main"`. The moving ref advanced from `2a296f14` (last-known-good,
+  May 2 prebuilt) to `38fff582` (current HEAD), and somewhere in
+  that span dropped the transitive `swift-transformers@1.2.1`
+  dependency that vends the `Tokenizers` module. `EmbedTool.swift`
+  imports `Tokenizers` directly (used in `EmbedEngine.embed*` for
+  text → token-id encoding), so the build broke at compile time.
+- Fix: pinned `mlx-swift-lm` to `revision:
+  "2a296f145c3129fea4290bb6e4a0a5fb458efa06"` in `Package.swift`.
+  Restores the May 2 working state exactly, including
+  swift-transformers@1.2.1, swift-huggingface@0.9.0,
+  swift-jinja@2.3.5, swift-crypto, swift-asn1, yyjson — all
+  re-resolved into `Package.resolved`.
+- Net: `swift build -c release` produces `.build/release/senkani`
+  (48 MB arm64 Mach-O) cleanly, no Tokenizers errors. Filed
+  `release-v0-3-0-ci-smoke-release-build` to add a CI gate that
+  catches this regression class going forward; filed
+  `test-suite-flake-reverification-2026-05-07` for the 7 unrelated
+  test-infra issues (URLProtocol + FSEvents) surfaced during the
+  full-suite verification run.
+- Operator note: don't track `main` for any release-critical
+  dependency. The same regression can re-occur on any upstream
+  movement; future `mlx-swift-lm` bumps go through
+  `release-v0-4-0-mlx-pin-bump-pass`.
+
 ### May 4 — `CostLedger` is now the sole source of truth for per-model rates; `ModelPricing` collapsed to a facade + new `SessionDatabase.repriceTraceRow(_:asOf:)`
 - Prior state: per-model rates were duplicated between
   `ModelPricing.swift` (eight `static let` constants, used by every

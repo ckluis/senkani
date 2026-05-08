@@ -22,9 +22,18 @@ let package = Package(
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.9.0"),
         // # Pin rationale — mlx-swift-lm
         //
-        // HOLD on revision "2a296f1…". This SHA is the verified-working
-        // starting point: the full test suite (2445 tests) was green
-        // against it when the pin was introduced (2026-05-04).
+        // HOLD on revision "2a296f1…". This SHA is the last-known-good
+        // revision that vends the `Tokenizers` module transitively (via
+        // swift-transformers 1.2.1). Upstream mlx-swift-lm@main moved
+        // past this point on 2026-05-{02..07} and dropped the
+        // swift-transformers chain, breaking `import Tokenizers` in
+        // MCP/Tools/EmbedTool.swift. See
+        // spec/autonomous/completed/2026/2026-05-07-release-v0-3-0-build-broken-*.md.
+        // Don't track `main` for any release-critical dependency.
+        //
+        // The full test suite (2445 tests) was green against this SHA
+        // when the pin was introduced (2026-05-04); the v0.2.0 → v0.3.0
+        // ship is byte-identical to it.
         //
         // Upstream publishes tagged releases (latest seen: 3.31.3) and
         // `main` is past this SHA, so the pin is destined to go stale.
@@ -51,7 +60,7 @@ let package = Package(
         //     blocked the bump and the next trigger.
         //
         // The release-cut checklist owns enforcement; a follow-up
-        // backlog item (`release-checklist-mlx-pin-bump-row`) wires the
+        // backlog item (`release-v0-4-0-mlx-pin-bump-pass`) wires the
         // row into the v0.4.0 cut.
         //
         // Release-cut gate was chosen over (a) calendar cadence (silently

@@ -1,5 +1,5 @@
 {
-  "originHash" : "d159b9a520a020e89fbdcf994a2a0836beacaa512e10c2efa0e22f692ac3c218",
+  "originHash" : "3e95abf82bd5093c9099ca7e82e742138de85588d87030ffde084e7942be865c",
   "pins" : [
     {
       "identity" : "eventsource",
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ml-explore/mlx-swift",
       "state" : {
-        "revision" : "2512c5bebfd801c817b5d07828cbfdc44c76fab4",
-        "version" : "0.31.2"
+        "revision" : "61b9e011e09a62b489f6bd647958f1555bdf2896",
+        "version" : "0.31.3"
       }
     },
     {
@@ -41,8 +41,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-asn1.git",
       "state" : {
-        "revision" : "9f542610331815e29cc3821d3b6f488db8715517",
-        "version" : "1.6.0"
+        "revision" : "eb50cbd14606a9161cbc5d452f18797c90ef0bab",
+        "version" : "1.7.0"
       }
     },
     {
@@ -68,8 +68,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-crypto.git",
       "state" : {
-        "revision" : "fa308c07a6fa04a727212d793e761460e41049c3",
-        "version" : "4.3.0"
+        "revision" : "1b6b2e274e85105bfa155183145a1dcfd63331f1",
+        "version" : "4.5.0"
       }
     },
     {

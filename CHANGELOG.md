@@ -9,6 +9,54 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 7 — CI gate: `swift build -c release` now runs on every PR
+- New workflow `.github/workflows/release-build-smoke.yml` runs
+  `swift package resolve` + `swift build -c release` + a binary-
+  existence check (`senkani`, `senkani-mcp`, `senkani-hook`,
+  `senkani-mig-helper`) on PR open/sync and push to `main`. Job
+  is independent of the existing `tests` job — a release-mode
+  linker / package-graph regression now fails CI even when debug-
+  mode tests pass.
+- Cache key hashes both `Package.resolved` and `Package.swift`,
+  so a hand-bumped pin SHA invalidates the cache (the prior
+  Package.resolved-only key would have masked a re-occurrence of
+  the May 7 mlx-swift-lm regression on a warm runner).
+- CONTRIBUTING.md gains one line stating the gate so contributors
+  can replicate locally before pushing.
+- Closes follow-up filed by the May 7 build-fix item
+  (`release-v0-3-0-build-broken` acceptance criterion #3).
+
+### May 7 — Build fix: pin `mlx-swift-lm` to a known-good revision (was tracking `main`, which moved past the SHA that vended `Tokenizers`)
+- Symptom: `swift build -c release` on `main` failed with
+  `no such module 'Tokenizers'` from
+  `Sources/MCP/Tools/EmbedTool.swift`. Surfaced during the v0.3.0
+  release-cut validation run on 2026-05-07; broke release-blocker
+  items `release-v0-3-0-onboarding-pass` and
+  `release-v0-3-0-surface-pass`.
+- Root cause: `Package.swift` tracked `mlx-swift-lm` on `branch:
+  "main"`. The moving ref advanced from `2a296f14` (last-known-good,
+  May 2 prebuilt) to `38fff582` (current HEAD), and somewhere in
+  that span dropped the transitive `swift-transformers@1.2.1`
+  dependency that vends the `Tokenizers` module. `EmbedTool.swift`
+  imports `Tokenizers` directly (used in `EmbedEngine.embed*` for
+  text → token-id encoding), so the build broke at compile time.
+- Fix: pinned `mlx-swift-lm` to `revision:
+  "2a296f145c3129fea4290bb6e4a0a5fb458efa06"` in `Package.swift`.
+  Restores the May 2 working state exactly, including
+  swift-transformers@1.2.1, swift-huggingface@0.9.0,
+  swift-jinja@2.3.5, swift-crypto, swift-asn1, yyjson — all
+  re-resolved into `Package.resolved`.
+- Net: `swift build -c release` produces `.build/release/senkani`
+  (48 MB arm64 Mach-O) cleanly, no Tokenizers errors. Filed
+  `release-v0-3-0-ci-smoke-release-build` to add a CI gate that
+  catches this regression class going forward; filed
+  `test-suite-flake-reverification-2026-05-07` for the 7 unrelated
+  test-infra issues (URLProtocol + FSEvents) surfaced during the
+  full-suite verification run.
+- Operator note: don't track `main` for any release-critical
+  dependency. The same regression can re-occur on any upstream
+  movement; future `mlx-swift-lm` bumps go through
+  `release-v0-4-0-mlx-pin-bump-pass`.
 ### May 7 — `StoreExecTests.nilDBIsNoop` filters by StoreExec event-vocabulary (`storeexec-niltest-loggersink-leak-from-peer-suite-migration`)
 
 - `Tests/SenkaniTests/StoreExecTests.swift:55-72` — `nilDBIsNoop`

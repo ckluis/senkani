@@ -10,12 +10,6 @@ struct ContextSaturationGateTests {
         return (SessionDatabase(path: path), path)
     }
 
-    private func cleanup(_ path: String) {
-        try? FileManager.default.removeItem(atPath: path)
-        try? FileManager.default.removeItem(atPath: path + "-wal")
-        try? FileManager.default.removeItem(atPath: path + "-shm")
-    }
-
     @Test("ok decision below warn threshold")
     func okBelowWarn() {
         let d = ContextSaturationGate.evaluate(
@@ -76,32 +70,32 @@ struct ContextSaturationGateTests {
     @Test("DB-backed evaluate sums tokens_in + tokens_out for the pane window")
     func dbBackedDerivation() {
         let (db, path) = tempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // Three rows in pane "kb" — total tokens 100+50 + 200+100 + 50+25 = 525.
         // One row in pane "shell" should NOT be summed.
         let now = Date()
         db.recordAgentTraceEvent(.init(
             idempotencyKey: "k1", pane: "kb", project: "/p", model: "m",
-            tier: nil, feature: "f", result: "success",
+            tier: nil, feature: .read, result: .success,
             startedAt: now, completedAt: now,
             latencyMs: 1, tokensIn: 100, tokensOut: 50
         ))
         db.recordAgentTraceEvent(.init(
             idempotencyKey: "k2", pane: "kb", project: "/p", model: "m",
-            tier: nil, feature: "f", result: "success",
+            tier: nil, feature: .read, result: .success,
             startedAt: now, completedAt: now,
             latencyMs: 1, tokensIn: 200, tokensOut: 100
         ))
         db.recordAgentTraceEvent(.init(
             idempotencyKey: "k3", pane: "kb", project: "/p", model: "m",
-            tier: nil, feature: "f", result: "success",
+            tier: nil, feature: .read, result: .success,
             startedAt: now, completedAt: now,
             latencyMs: 1, tokensIn: 50, tokensOut: 25
         ))
         db.recordAgentTraceEvent(.init(
             idempotencyKey: "k4", pane: "shell", project: "/p", model: "m",
-            tier: nil, feature: "f", result: "success",
+            tier: nil, feature: .read, result: .success,
             startedAt: now, completedAt: now,
             latencyMs: 1, tokensIn: 9_999, tokensOut: 9_999
         ))

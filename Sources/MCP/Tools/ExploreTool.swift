@@ -3,14 +3,14 @@ import MCP
 import Indexer
 
 enum ExploreTool {
-    static func handle(arguments: [String: Value]?, session: MCPSession) -> CallTool.Result {
+    static func handle(arguments: [String: Value]?, session: MCPSession) async -> CallTool.Result {
         let path = arguments?["path"]?.stringValue
         let limit = arguments?["limit"]?.intValue ?? 30
         let kindsFilter: Set<String>? = arguments?["kinds"]?.stringValue.map { raw in
             Set(raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() })
         }
 
-        guard let index = session.indexIfReady() else {
+        guard let index = await session.indexIfReady() else {
             return .init(content: [.text(text: "Symbol index is building (first run). Try again in a few seconds.", annotations: nil, _meta: nil)])
         }
         let grouped = index.groupedByFile(under: path)
@@ -54,8 +54,8 @@ enum ExploreTool {
         }
 
         let output = lines.joined(separator: "\n")
-        session.recordMetrics(rawBytes: totalSymbols * 300, compressedBytes: output.utf8.count, feature: "explore",
-                              command: path ?? session.projectRoot, outputPreview: String(output.prefix(200)))
+        await session.recordMetrics(rawBytes: totalSymbols * 300, compressedBytes: output.utf8.count, feature: "explore",
+                                    command: path ?? session.projectRoot, outputPreview: String(output.prefix(200)))
 
         return .init(content: [.text(text: output, annotations: nil, _meta: nil)])
     }

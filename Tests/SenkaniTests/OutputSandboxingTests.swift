@@ -11,13 +11,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanup(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-}
-
 /// Generate a multi-line test output string.
 private func makeOutput(lines: Int) -> String {
     (0..<lines).map { "line \($0): output content here" }.joined(separator: "\n")
@@ -31,7 +24,7 @@ struct SandboxDatabaseStorageTests {
     @Test("Store and retrieve sandboxed result")
     func storeAndRetrieve() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sessionId = db.createSession()
         let output = makeOutput(lines: 50)
@@ -51,7 +44,7 @@ struct SandboxDatabaseStorageTests {
     @Test("Retrieve returns nil for unknown ID")
     func retrieveUnknown() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let result = db.retrieveSandboxedResult(resultId: "r_nonexistent0")
         #expect(result == nil)
@@ -60,7 +53,7 @@ struct SandboxDatabaseStorageTests {
     @Test("Prune removes old results")
     func pruneOldResults() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sessionId = db.createSession()
         let id1 = db.storeSandboxedResult(sessionId: sessionId, command: "cmd1", output: "old output")
@@ -76,7 +69,7 @@ struct SandboxDatabaseStorageTests {
     @Test("Prune preserves recent results")
     func pruneKeepsRecent() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sessionId = db.createSession()
         let id1 = db.storeSandboxedResult(sessionId: sessionId, command: "recent", output: "recent output")
@@ -93,7 +86,7 @@ struct SandboxDatabaseStorageTests {
     @Test("Multiple results stored independently")
     func multipleResults() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sessionId = db.createSession()
         let id1 = db.storeSandboxedResult(sessionId: sessionId, command: "cmd1", output: "output one")
@@ -195,7 +188,7 @@ struct SandboxModeLogicTests {
     @Test("Result ID format is correct")
     func resultIdFormat() {
         let (db, path) = makeTempDB()
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sessionId = db.createSession()
         let resultId = db.storeSandboxedResult(sessionId: sessionId, command: "test", output: "test output")

@@ -14,13 +14,6 @@ private func makeValidationTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanupValidationDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-}
-
 private func insertAdvisory(
     _ db: SessionDatabase,
     sessionId: String,
@@ -45,7 +38,7 @@ struct ValidationStoreTests {
     @Test("pendingValidationAdvisories reads without consuming")
     func pendingReadDoesNotMarkSurfaced() {
         let (db, path) = makeValidationTempDB()
-        defer { cleanupValidationDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         let sid = db.createSession(projectRoot: "/tmp/project")
 
         insertAdvisory(db, sessionId: sid)
@@ -63,7 +56,7 @@ struct ValidationStoreTests {
     @Test("markValidationAdvisoriesSurfaced consumes pending rows and records surfaced_at")
     func markSurfacedConsumesPending() {
         let (db, path) = makeValidationTempDB()
-        defer { cleanupValidationDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         let sid = db.createSession(projectRoot: "/tmp/project")
 
         insertAdvisory(db, sessionId: sid)
@@ -82,7 +75,7 @@ struct ValidationStoreTests {
     @Test("clean and dropped attempts are inspectable but never pending")
     func cleanAndDroppedAreNotPending() {
         let (db, path) = makeValidationTempDB()
-        defer { cleanupValidationDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         let sid = db.createSession(projectRoot: "/tmp/project")
 
         db.insertValidationResult(
@@ -119,7 +112,7 @@ struct ValidationStoreTests {
     @Test("pending query is session-scoped and limited to ten newest advisories")
     func pendingQueryIsScopedAndLimited() {
         let (db, path) = makeValidationTempDB()
-        defer { cleanupValidationDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         let sid = db.createSession(projectRoot: "/tmp/project")
         let other = db.createSession(projectRoot: "/tmp/project")
 
@@ -143,7 +136,7 @@ struct ValidationStoreTests {
     @Test("pruneValidationResults removes only rows older than the cutoff")
     func pruneRemovesOnlyOldRows() {
         let (db, path) = makeValidationTempDB()
-        defer { cleanupValidationDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         let sid = db.createSession(projectRoot: "/tmp/project")
 
         insertAdvisory(db, sessionId: sid, filePath: "/tmp/project/Old.swift", advisory: "old")
@@ -166,7 +159,7 @@ struct ValidationStoreTests {
     @Test("fetchAndMarkDelivered preserves legacy destructive-read behavior")
     func legacyFetchAndMarkDeliveredConsumes() {
         let (db, path) = makeValidationTempDB()
-        defer { cleanupValidationDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         let sid = db.createSession(projectRoot: "/tmp/project")
 
         insertAdvisory(db, sessionId: sid)

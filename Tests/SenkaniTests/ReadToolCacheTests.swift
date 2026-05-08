@@ -38,7 +38,7 @@ struct ReadToolCacheTests {
         } ?? ""
     }
 
-    @Test func secondFullReadReturnsCachedContent() throws {
+    @Test func secondFullReadReturnsCachedContent() async throws {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
@@ -48,7 +48,7 @@ struct ReadToolCacheTests {
         let session = makeSession(projectRoot: dir)
 
         // First read: populates the cache with the processed output.
-        let first = ReadTool.handle(
+        let first = await ReadTool.handle(
             arguments: ["path": .string("Greet.swift"), "full": .bool(true)],
             session: session
         )
@@ -57,7 +57,7 @@ struct ReadToolCacheTests {
 
         // Second read: must return the same content from cache. The header
         // changes (cached hint), but the file body must be present.
-        let second = ReadTool.handle(
+        let second = await ReadTool.handle(
             arguments: ["path": .string("Greet.swift"), "full": .bool(true)],
             session: session
         )
@@ -68,7 +68,7 @@ struct ReadToolCacheTests {
                 "old placeholder header must not leak into cached output: \(secondText.prefix(200))")
     }
 
-    @Test func rangeReadIsNotServedFromFullCache() throws {
+    @Test func rangeReadIsNotServedFromFullCache() async throws {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
@@ -78,14 +78,14 @@ struct ReadToolCacheTests {
         let session = makeSession(projectRoot: dir)
 
         // Prime the cache with a full read.
-        _ = ReadTool.handle(
+        _ = await ReadTool.handle(
             arguments: ["path": .string("lines.txt"), "full": .bool(true)],
             session: session
         )
 
         // Range read must re-slice from source, not reuse the full cached entry
         // (which would ignore the offset/limit window).
-        let ranged = ReadTool.handle(
+        let ranged = await ReadTool.handle(
             arguments: [
                 "path": .string("lines.txt"),
                 "offset": .int(3),
@@ -101,7 +101,7 @@ struct ReadToolCacheTests {
                 "range read must not be served from the full-content cache, got: \(text.prefix(200))")
     }
 
-    @Test func cacheInvalidatedOnMtimeChange() throws {
+    @Test func cacheInvalidatedOnMtimeChange() async throws {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
@@ -110,7 +110,7 @@ struct ReadToolCacheTests {
 
         let session = makeSession(projectRoot: dir)
 
-        _ = ReadTool.handle(
+        _ = await ReadTool.handle(
             arguments: ["path": .string("volatile.swift"), "full": .bool(true)],
             session: session
         )
@@ -121,7 +121,7 @@ struct ReadToolCacheTests {
         try "let v = 2\n".write(toFile: filePath, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.modificationDate: future], ofItemAtPath: filePath)
 
-        let second = ReadTool.handle(
+        let second = await ReadTool.handle(
             arguments: ["path": .string("volatile.swift"), "full": .bool(true)],
             session: session
         )
@@ -130,13 +130,13 @@ struct ReadToolCacheTests {
         #expect(!text.contains("cached"), "changed file must not report a cache hit")
     }
 
-    @Test func outOfRootAbsolutePathRejected() throws {
+    @Test func outOfRootAbsolutePathRejected() async throws {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
         let session = makeSession(projectRoot: dir)
 
-        let result = ReadTool.handle(
+        let result = await ReadTool.handle(
             arguments: ["path": .string("/etc/hosts"), "full": .bool(true)],
             session: session
         )
@@ -150,7 +150,7 @@ struct ReadToolCacheTests {
     /// session operator toggles secrets ON. A second read must NOT serve
     /// the unredacted cached content back. Before the mode-aware cache,
     /// the cache key ignored processing flags and this was a real leak.
-    @Test func secretsOffFirstReadDoesNotPoisonSecretsOnRead() throws {
+    @Test func secretsOffFirstReadDoesNotPoisonSecretsOnRead() async throws {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
@@ -162,7 +162,7 @@ struct ReadToolCacheTests {
             filterEnabled: false, secretsEnabled: false, indexerEnabled: false,
             cacheEnabled: true, terseEnabled: false
         )
-        let unsafe = ReadTool.handle(arguments: ["path": .string("app.env"), "full": .bool(true)], session: unsafeSession)
+        let unsafe = await ReadTool.handle(arguments: ["path": .string("app.env"), "full": .bool(true)], session: unsafeSession)
         #expect(textOf(unsafe).contains("sk-ant-api03-abcdefghijklmnopqrstuvwxyz"),
                 "baseline: secrets OFF read returns raw content")
 
@@ -174,7 +174,7 @@ struct ReadToolCacheTests {
             cacheEnabled: true, terseEnabled: false,
             readCache: unsafeSession.readCache
         )
-        let safe = ReadTool.handle(arguments: ["path": .string("app.env"), "full": .bool(true)], session: safeSession)
+        let safe = await ReadTool.handle(arguments: ["path": .string("app.env"), "full": .bool(true)], session: safeSession)
         let text = textOf(safe)
         #expect(!text.contains("sk-ant-api03-abcdefghijklmnopqrstuvwxyz"),
                 "secrets-on read must not serve unredacted cached bytes, got: \(text.prefix(200))")
@@ -182,7 +182,7 @@ struct ReadToolCacheTests {
                 "secrets-on read must actually redact, got: \(text.prefix(200))")
     }
 
-    @Test func sameModeStillHitsCache() throws {
+    @Test func sameModeStillHitsCache() async throws {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
@@ -192,12 +192,12 @@ struct ReadToolCacheTests {
             filterEnabled: true, secretsEnabled: true, indexerEnabled: false,
             cacheEnabled: true, terseEnabled: false
         )
-        _ = ReadTool.handle(arguments: ["path": .string("a.txt"), "full": .bool(true)], session: session)
-        let second = ReadTool.handle(arguments: ["path": .string("a.txt"), "full": .bool(true)], session: session)
+        _ = await ReadTool.handle(arguments: ["path": .string("a.txt"), "full": .bool(true)], session: session)
+        let second = await ReadTool.handle(arguments: ["path": .string("a.txt"), "full": .bool(true)], session: session)
         #expect(textOf(second).contains("cached"), "same-mode re-read must hit cache")
     }
 
-    @Test func terseToggleDoesNotReuseIncompatibleCache() throws {
+    @Test func terseToggleDoesNotReuseIncompatibleCache() async throws {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
@@ -209,7 +209,7 @@ struct ReadToolCacheTests {
             filterEnabled: false, secretsEnabled: false, indexerEnabled: false,
             cacheEnabled: true, terseEnabled: false
         )
-        _ = ReadTool.handle(arguments: ["path": .string("a.txt"), "full": .bool(true)], session: terseOff)
+        _ = await ReadTool.handle(arguments: ["path": .string("a.txt"), "full": .bool(true)], session: terseOff)
 
         let terseOn = MCPSession(
             projectRoot: dir,
@@ -217,13 +217,13 @@ struct ReadToolCacheTests {
             cacheEnabled: true, terseEnabled: true,
             readCache: terseOff.readCache
         )
-        let result = ReadTool.handle(arguments: ["path": .string("a.txt"), "full": .bool(true)], session: terseOn)
+        let result = await ReadTool.handle(arguments: ["path": .string("a.txt"), "full": .bool(true)], session: terseOn)
         // Terse path takes the fresh branch — no "cached" marker.
         #expect(!textOf(result).contains("cached"),
                 "terse-on read must not reuse terse-off cached output, got: \(textOf(result).prefix(200))")
     }
 
-    @Test func mtimeStillInvalidatesAllModes() throws {
+    @Test func mtimeStillInvalidatesAllModes() async throws {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
@@ -235,24 +235,24 @@ struct ReadToolCacheTests {
             filterEnabled: false, secretsEnabled: false, indexerEnabled: false,
             cacheEnabled: true, terseEnabled: false
         )
-        _ = ReadTool.handle(arguments: ["path": .string("v.txt"), "full": .bool(true)], session: session)
+        _ = await ReadTool.handle(arguments: ["path": .string("v.txt"), "full": .bool(true)], session: session)
 
         let future = Date().addingTimeInterval(30)
         try "v2\n".write(toFile: file, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.modificationDate: future], ofItemAtPath: file)
 
-        let result = ReadTool.handle(arguments: ["path": .string("v.txt"), "full": .bool(true)], session: session)
+        let result = await ReadTool.handle(arguments: ["path": .string("v.txt"), "full": .bool(true)], session: session)
         #expect(textOf(result).contains("v2"), "mtime change must force re-read across modes")
         #expect(!textOf(result).contains("cached"), "mtime change must invalidate the cache entry")
     }
 
-    @Test func dotDotEscapeRejected() throws {
+    @Test func dotDotEscapeRejected() async throws {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
         let session = makeSession(projectRoot: dir)
 
-        let result = ReadTool.handle(
+        let result = await ReadTool.handle(
             arguments: ["path": .string("../etc/hosts"), "full": .bool(true)],
             session: session
         )

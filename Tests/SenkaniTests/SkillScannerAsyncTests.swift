@@ -96,17 +96,26 @@ struct SkillScannerAsyncTests {
         for i in 0..<60 { try seedClaudeCommand(home: home, name: "cmd\(i)") }
         for i in 0..<20 { try seedCursorRule(home: home, name: "rule\(i)") }
 
-        let start = Date()
-        let skills = await SkillScanner.scanAsync(homeDir: home, cwd: cwd)
-        let elapsed = Date().timeIntervalSince(start)
-
-        #expect(skills.count >= 80)
-        // Widened 2s → 5s 2026-04-21: machine-load-dependent flake (see
-        // spec/testing.md "Harness hang"). 5s still rules out deadlock /
-        // infinite-recursion regressions — the true failure mode this
-        // guard exists for — without flaking under cooperative-pool
-        // contention.
-        #expect(elapsed < 5.0)
+        // Median-of-3 — see DependencyGraphPerfGateTests for canonical
+        // pattern. 5 s budget already widened 2 s → 5 s on 2026-04-21
+        // (cooperative-pool contention); under full-suite parallel-runner
+        // load a single sample was observed at 5.155 s. Median-of-3
+        // tolerates one transient peer-CPU spike out of three runs while
+        // still failing on a true regression that blows budget every run.
+        var samples: [TimeInterval] = []
+        var lastSkillCount = 0
+        for _ in 0..<3 {
+            let start = Date()
+            let skills = await SkillScanner.scanAsync(homeDir: home, cwd: cwd)
+            samples.append(Date().timeIntervalSince(start))
+            lastSkillCount = skills.count
+        }
+        let median = samples.sorted()[1]
+        #expect(lastSkillCount >= 80)
+        #expect(
+            median < 5.0,
+            "median of 3 scanAsync wall-clock: \(samples) → median \(median)s"
+        )
     }
 
     @Test("scanAsync does not stall concurrent main-actor work")

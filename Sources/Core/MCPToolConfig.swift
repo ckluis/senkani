@@ -34,15 +34,26 @@ public struct MCPToolConfig: Sendable, Equatable {
     /// ships the auto-derived value; round T.6b's Settings UI lets the
     /// operator override per tool.
     public let requiresConfirmationOverride: Bool?
+    /// T.4b — optional credential-gateway policy. When non-nil and
+    /// `enabled == true`, `HookRouter`'s PreToolUse path fetches the
+    /// declared `vaultKeys` from the credential vault at `scope` and
+    /// makes them available to the spawned tool (env preferred, args
+    /// when env injection isn't possible). Round T.4b ships the API
+    /// surface — no production catalog row sets `enabled: true` yet;
+    /// T.4c flips real catalog entries on top of the macOS Keychain
+    /// store.
+    public let credentialGateway: CredentialGatewayConfig?
 
     public init(
         name: String,
         tags: Set<MCPToolTag>,
-        requiresConfirmationOverride: Bool? = nil
+        requiresConfirmationOverride: Bool? = nil,
+        credentialGateway: CredentialGatewayConfig? = nil
     ) {
         self.name = name
         self.tags = tags
         self.requiresConfirmationOverride = requiresConfirmationOverride
+        self.credentialGateway = credentialGateway
     }
 
     /// Effective `requires_confirmation` for this tool. Override wins if
@@ -93,7 +104,25 @@ public final class MCPToolCatalog: @unchecked Sendable {
             entries[toolName] = MCPToolConfig(
                 name: existing.name,
                 tags: existing.tags,
-                requiresConfirmationOverride: requiresConfirmation
+                requiresConfirmationOverride: requiresConfirmation,
+                credentialGateway: existing.credentialGateway
+            )
+        }
+    }
+
+    /// T.4b — set the credential gateway config for a known tool.
+    /// Tests use this to flip a tool's gateway on without rebuilding
+    /// the catalog. Production wiring (T.4c) will set this at app
+    /// init from on-disk MCP config, not at runtime.
+    public func setCredentialGateway(toolName: String, config: CredentialGatewayConfig?) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let existing = entries[toolName] {
+            entries[toolName] = MCPToolConfig(
+                name: existing.name,
+                tags: existing.tags,
+                requiresConfirmationOverride: existing.requiresConfirmationOverride,
+                credentialGateway: config
             )
         }
     }

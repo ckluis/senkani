@@ -6,13 +6,27 @@ import Foundation
 extension SessionDatabase {
     /// Capture the live policy and persist it against `sessionId`.
     /// Returns `true` if a new snapshot row landed, `false` when an
-    /// identical-hash row already exists (the dedup case — no error).
+    /// identical-hash row already exists (the dedup case — no error)
+    /// **or** when capturing the live state failed because the
+    /// learned-rules file is present but unreadable / unencodable. In
+    /// the failure case the call bumps
+    /// `event_counters("security.policy.learned_rules_hash_failed")`
+    /// so the breach surfaces in `senkani stats --security`.
     @discardableResult
     public func capturePolicySnapshot(
         sessionId: String,
         projectRoot: String? = nil
     ) -> Bool {
-        let config = PolicyConfig.capture(projectRoot: projectRoot)
+        let config: PolicyConfig
+        do {
+            config = try PolicyConfig.capture(projectRoot: projectRoot)
+        } catch {
+            recordEvent(
+                type: "security.policy.learned_rules_hash_failed",
+                projectRoot: projectRoot
+            )
+            return false
+        }
         return policyStore.capture(sessionId: sessionId, config: config)
     }
 

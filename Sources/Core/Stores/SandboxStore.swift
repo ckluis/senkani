@@ -30,21 +30,13 @@ final class SandboxStore: @unchecked Sendable {
 
     // MARK: - Schema
 
-    /// Create the `sandboxed_results` table + its two indexes. Idempotent —
-    /// safe to call on every open.
+    /// Residual DDL that has not yet been folded into a numbered migration.
+    /// MigrationRegistry.all v5 owns `sandboxed_results`; this method covers
+    /// the two store-private query indexes (`idx_sandboxed_results_session`,
+    /// `idx_sandboxed_results_time`). Called AFTER `runMigrations` so the
+    /// underlying table already exists.
     func setupSchema() {
         parent.queue.sync {
-            self.exec("""
-                CREATE TABLE IF NOT EXISTS sandboxed_results (
-                    id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    created_at REAL NOT NULL,
-                    command TEXT NOT NULL,
-                    full_output TEXT NOT NULL,
-                    line_count INTEGER NOT NULL,
-                    byte_count INTEGER NOT NULL
-                );
-            """)
             self.execSilent("CREATE INDEX IF NOT EXISTS idx_sandboxed_results_session ON sandboxed_results(session_id);")
             self.execSilent("CREATE INDEX IF NOT EXISTS idx_sandboxed_results_time ON sandboxed_results(created_at);")
         }
@@ -161,10 +153,12 @@ final class SandboxStore: @unchecked Sendable {
     // MARK: - Helpers
 
     private func exec(_ sql: String) {
+        dispatchPrecondition(condition: .onQueue(parent.queue))
         StoreExec.run(db: parent.db, sql: sql, scope: "sandbox")
     }
 
     private func execSilent(_ sql: String) {
+        dispatchPrecondition(condition: .onQueue(parent.queue))
         guard let db = parent.db else { return }
         var err: UnsafeMutablePointer<CChar>?
         sqlite3_exec(db, sql, nil, nil, &err)

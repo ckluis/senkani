@@ -72,6 +72,12 @@ public enum Logger {
     /// stderr. Production callers never set this; tests register a sink
     /// to assert routing without dup2-ing fd 2. The stderr write still
     /// happens — the sink is a tee, not a replacement.
+    ///
+    /// Process-global. Suites that call `_setTestSink` MUST carry the
+    /// `.loggerSinkGate` trait (see `Tests/SenkaniTests/LoggerSinkGate.swift`)
+    /// so concurrent sink-using suites under Swift Testing's parallel
+    /// runner don't tear each other's sinks down mid-test. `.serialized`
+    /// alone is insufficient — it only orders tests within a suite.
     nonisolated(unsafe) private static var _testSink: (@Sendable (String, [String: LogValue]) -> Void)?
     nonisolated(unsafe) private static let testSinkLock = NSLock()
 

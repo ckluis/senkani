@@ -13,45 +13,67 @@ import SQLite3
 final class PolicyStore: @unchecked Sendable {
     private unowned let parent: SessionDatabase
 
+    // T.5 chain state for this table — wired the same way
+    // ConfirmationStore wires it. Migration v17 added the columns +
+    // a 'migration-v17' anchor for any pre-existing rows.
+    private let chain = ChainState(table: "policy_snapshots")
+
     init(parent: SessionDatabase) {
         self.parent = parent
     }
 
-    // MARK: - Schema
-
-    /// Idempotent. Migration v15 owns the canonical schema; this method
-    /// stays so the store init pattern matches every other store
-    /// (each calls `setupSchema()` after construction).
-    func setupSchema() {
-        parent.queue.sync {
-            execSilent("""
-                CREATE TABLE IF NOT EXISTS policy_snapshots (
-                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id   TEXT NOT NULL,
-                    captured_at  REAL NOT NULL,
-                    policy_hash  TEXT NOT NULL,
-                    policy_json  TEXT NOT NULL,
-                    UNIQUE(session_id, policy_hash)
-                );
-            """)
-            execSilent("CREATE INDEX IF NOT EXISTS idx_policy_snapshots_session ON policy_snapshots(session_id, captured_at DESC);")
-        }
-    }
+    /// Drop the chain cache after a `--repair-chain` motion. Caller
+    /// must be on `parent.queue`. Mirrors ConfirmationStore.
+    func invalidateChainCache() { chain.invalidate() }
 
     // MARK: - Writes
 
     /// Persist `config` against `sessionId`. Returns `true` if a new
     /// row was inserted, `false` if the (session_id, policy_hash) pair
-    /// already existed (no-op via `ON CONFLICT DO NOTHING`).
+    /// already existed (no-op via `ON CONFLICT DO NOTHING`) **or** if
+    /// hash computation / JSON serialization failed — in the failure
+    /// case the call also bumps `event_counters("security.policy.hash_failed")`
+    /// so the breach surfaces in `senkani stats --security` rather than
+    /// silently colliding on `policy_hash = ""`.
     @discardableResult
     func capture(sessionId: String, config: PolicyConfig) -> Bool {
-        let hash = config.policyHash()
-        guard let json = try? config.prettyJSON() else { return false }
+        let hash: String
+        do {
+            hash = try config.policyHash()
+        } catch {
+            parent.recordEvent(type: "security.policy.hash_failed")
+            return false
+        }
+        guard let json = try? config.prettyJSON() else {
+            parent.recordEvent(type: "security.policy.hash_failed")
+            return false
+        }
         return parent.queue.sync {
             guard let db = parent.db else { return false }
+
+            // Resolve the current chain segment + prior tip BEFORE
+            // computing the entry hash. The prior tip becomes this
+            // row's prev_hash; the entry hash is computed over the
+            // four data columns (the chain columns are excluded by
+            // ChainHasher.excludedColumns contract).
+            let anchorId = chain.resolveAnchorId(db: db)
+            let prevHash = chain.latestEntryHash(db: db, anchorId: anchorId)
+
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "session_id":  .text(sessionId),
+                "captured_at": .real(config.capturedAt.timeIntervalSince1970),
+                "policy_hash": .text(hash),
+                "policy_json": .text(json),
+            ]
+            let entryHash = ChainHasher.entryHash(
+                table: "policy_snapshots", columns: columns, prev: prevHash
+            )
+
             let sql = """
-                INSERT INTO policy_snapshots (session_id, captured_at, policy_hash, policy_json)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO policy_snapshots
+                    (session_id, captured_at, policy_hash, policy_json,
+                     prev_hash, entry_hash, chain_anchor_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id, policy_hash) DO NOTHING;
             """
             var stmt: OpaquePointer?
@@ -61,8 +83,25 @@ final class PolicyStore: @unchecked Sendable {
             sqlite3_bind_double(stmt, 2, config.capturedAt.timeIntervalSince1970)
             sqlite3_bind_text(stmt, 3, (hash as NSString).utf8String, -1, nil)
             sqlite3_bind_text(stmt, 4, (json as NSString).utf8String, -1, nil)
+            if let prevHash {
+                sqlite3_bind_text(stmt, 5, (prevHash as NSString).utf8String, -1, nil)
+            } else {
+                sqlite3_bind_null(stmt, 5)
+            }
+            sqlite3_bind_text(stmt, 6, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(stmt, 7, anchorId)
+
             let rc = sqlite3_step(stmt)
-            return rc == SQLITE_DONE && sqlite3_changes(db) > 0
+            // Dedup-no-advance: ON CONFLICT DO NOTHING returns DONE
+            // with `sqlite3_changes(db) == 0`. The cache MUST NOT
+            // advance in that case — a subsequent genuinely-new row
+            // still chains off the previous tip, and verification
+            // stays consistent.
+            let inserted = rc == SQLITE_DONE && sqlite3_changes(db) > 0
+            if inserted {
+                chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
+            }
+            return inserted
         }
     }
 
@@ -127,6 +166,7 @@ final class PolicyStore: @unchecked Sendable {
     // MARK: - Helpers
 
     private func execSilent(_ sql: String) {
+        dispatchPrecondition(condition: .onQueue(parent.queue))
         guard let db = parent.db else { return }
         sqlite3_exec(db, sql, nil, nil, nil)
     }

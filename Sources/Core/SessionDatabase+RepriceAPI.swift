@@ -81,12 +81,22 @@ extension SessionDatabase {
     }
 
     public static func repriceTierRow(_ row: AgentTraceTierRow, asOf: Date = Date()) -> RepricedTrace {
+        // AgentTraceTierRow carries raw text from the analytics drill-
+        // down SQL projection; map to typed enums for the synthetic
+        // AgentTraceEvent. Reprice is a pure cost computation that
+        // doesn't read feature/result, so unknown strings collapse to
+        // nil/`.unknown` here without logging — the warn/counter
+        // routing lives on the canonical typed-row read path
+        // (fetchByIdempotencyKey / rowsInWindow), not on this
+        // projection.
+        let syntheticFeature: ToolIntent? = row.feature.flatMap(ToolIntent.init(rawValue:))
+        let syntheticResult: CallResult = CallResult(rawValue: row.result) ?? .unknown
         let synthetic = AgentTraceEvent(
             idempotencyKey: row.idempotencyKey,
             pane: row.pane, project: row.project, model: row.model,
             tier: row.tier, ladderPosition: row.ladderPosition,
-            feature: row.feature,
-            result: row.result,
+            feature: syntheticFeature,
+            result: syntheticResult,
             startedAt: row.startedAt, completedAt: row.startedAt,
             latencyMs: row.latencyMs,
             tokensIn: row.tokensIn, tokensOut: row.tokensOut,

@@ -186,10 +186,23 @@ struct GraphConstructionTests {
         #expect(coreDependents.contains("fileA.swift"))
         #expect(!coreDependents.contains("fileB.swift"))
     }
+}
+
+// MARK: - Perf Gate
+//
+// Wall-clock budget assert against the real project source tree. The
+// regression this rules out (accidentally O(N²) re-parse) costs minutes,
+// not seconds. Under parallel-runner load a single peer-suite CPU spike
+// can push one measurement over a 5s ceiling even when the builder is
+// healthy — `.serialized` only serializes within-suite, not against
+// peer suites. So we take three measurements and assert the median: a
+// transient peer-CPU spike on one of three runs cannot fail the test,
+// but a real regression (every measurement blows budget) still does.
+@Suite("DependencyGraph — Perf gate")
+struct DependencyGraphPerfGateTests {
 
     @Test("Real project graph builds fast")
     func buildGraphFromRealProject() {
-        // Build dep graph from senkani's own source tree
         let projectRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()  // SenkaniTests/
             .deletingLastPathComponent()  // Tests/
@@ -199,14 +212,20 @@ struct GraphConstructionTests {
 
         let clock = ContinuousClock()
         var graph: DependencyGraph?
-        let elapsed = clock.measure {
-            graph = IndexEngine.buildDependencyGraph(projectRoot: projectRoot)
+        var samples: [Duration] = []
+        for _ in 0..<3 {
+            let elapsed = clock.measure {
+                graph = IndexEngine.buildDependencyGraph(projectRoot: projectRoot)
+            }
+            samples.append(elapsed)
         }
+        let sorted = samples.sorted()
+        let median = sorted[1]
 
-        // Machine-load-dependent timing guard. The regression this rules out
-        // (accidentally O(N²) re-parse) costs minutes, not seconds — widen
-        // to 5s for parallel-test-run headroom without losing signal.
-        #expect(elapsed < .seconds(5))
+        #expect(
+            median < .seconds(5),
+            "median of 3 graph builds: \(samples) → median \(median)"
+        )
 
         // Sanity: Core should be imported by multiple files
         let coreDependents = graph!.dependents(of: "Core")

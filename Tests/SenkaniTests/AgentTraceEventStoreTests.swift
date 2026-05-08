@@ -11,21 +11,14 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanupTempDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-}
-
 private func makeRow(
     key: String = UUID().uuidString,
     pane: String? = "kb",
     project: String? = "/tmp/proj",
     model: String? = "claude-haiku-4-5",
     tier: String? = nil,
-    feature: String? = "search",
-    result: String = "success",
+    feature: ToolIntent? = .search,
+    result: CallResult = .success,
     startedAt: Date = Date(timeIntervalSince1970: 1_700_000_000),
     completedAt: Date = Date(timeIntervalSince1970: 1_700_000_001),
     latencyMs: Int = 42,
@@ -57,7 +50,7 @@ struct AgentTraceEventStoreTests {
     @Test("Migration v8 creates agent_trace_event with the expected columns")
     func schemaShape() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // schema_migrations should be at v8 or later.
         #expect(db.currentSchemaVersion() >= 8)
@@ -87,7 +80,7 @@ struct AgentTraceEventStoreTests {
     @Test("idempotency_key has a UNIQUE constraint at the DB layer")
     func uniqueConstraintEnforced() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // Bypass the store's ON CONFLICT DO NOTHING and try a raw INSERT
         // that should hit a UNIQUE constraint failure.
@@ -117,7 +110,7 @@ struct AgentTraceEventStoreTests {
     @Test("100 retries of the same idempotency_key land exactly 1 row")
     func idempotencyDedup100() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let key = "fixture-tool-call-7f3a"
         for _ in 0..<100 {
@@ -130,7 +123,7 @@ struct AgentTraceEventStoreTests {
     @Test("First insert returns true; subsequent retries return false")
     func recordReturnsInsertedFlag() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let key = "first-vs-retry"
         let firstInserted = db.recordAgentTraceEvent(makeRow(key: key))
@@ -145,7 +138,7 @@ struct AgentTraceEventStoreTests {
     @Test("Different idempotency_keys land separate rows")
     func differentKeysLandSeparateRows() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         for i in 0..<25 {
             db.recordAgentTraceEvent(makeRow(key: "call-\(i)"))
@@ -158,12 +151,12 @@ struct AgentTraceEventStoreTests {
     @Test("Roundtrip preserves all conformed dimensions and measures")
     func roundtripDimensions() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let row = makeRow(
             key: "rtdim-1", pane: "timeline", project: "/tmp/p1",
-            model: "gemma-4-nano", tier: "simple", feature: "outline",
-            result: "success",
+            model: "gemma-4-nano", tier: "simple", feature: .outline,
+            result: .success,
             latencyMs: 17, tokensIn: 80, tokensOut: 25, costCents: 1,
             redactionCount: 2, validationStatus: "warn",
             confirmationRequired: true, egressDecisions: 3
@@ -219,7 +212,7 @@ struct AgentTraceEventStoreTests {
     @Test("tier column is NULL until U.1 lands the TierScorer")
     func tierIsNullByDefault() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         db.recordAgentTraceEvent(makeRow(key: "no-tier", tier: nil))
 
@@ -239,7 +232,7 @@ struct AgentTraceEventStoreTests {
     @Test("Pivot by project rolls up cost + tokens + mean latency")
     func pivotByProject() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         db.recordAgentTraceEvent(makeRow(key: "pp-1", project: "/proj/a", latencyMs: 10, tokensIn: 100, tokensOut: 30, costCents: 2))
         db.recordAgentTraceEvent(makeRow(key: "pp-2", project: "/proj/a", latencyMs: 30, tokensIn: 200, tokensOut: 70, costCents: 4))
@@ -265,12 +258,12 @@ struct AgentTraceEventStoreTests {
     @Test("Pivot by feature splits success from failure")
     func pivotByFeatureSuccessSplit() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
-        db.recordAgentTraceEvent(makeRow(key: "pf-1", feature: "search", result: "success", tokensIn: 100, tokensOut: 30))
-        db.recordAgentTraceEvent(makeRow(key: "pf-2", feature: "search", result: "success", tokensIn: 100, tokensOut: 30))
-        db.recordAgentTraceEvent(makeRow(key: "pf-3", feature: "search", result: "error",   tokensIn: 100, tokensOut: 0))
-        db.recordAgentTraceEvent(makeRow(key: "pf-4", feature: "fetch",  result: "timeout", tokensIn: 50,  tokensOut: 0))
+        db.recordAgentTraceEvent(makeRow(key: "pf-1", feature: .search, result: .success, tokensIn: 100, tokensOut: 30))
+        db.recordAgentTraceEvent(makeRow(key: "pf-2", feature: .search, result: .success, tokensIn: 100, tokensOut: 30))
+        db.recordAgentTraceEvent(makeRow(key: "pf-3", feature: .search, result: .error,   tokensIn: 100, tokensOut: 0))
+        db.recordAgentTraceEvent(makeRow(key: "pf-4", feature: .fetch,  result: .timeout, tokensIn: 50,  tokensOut: 0))
 
         let rollups = db.agentTracePivotByFeature()
         #expect(rollups.count == 2)
@@ -292,11 +285,11 @@ struct AgentTraceEventStoreTests {
     @Test("Pivot by result distribution buckets each outcome")
     func pivotByResult() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
-        for i in 0..<5 { db.recordAgentTraceEvent(makeRow(key: "ok-\(i)", result: "success", latencyMs: 10, costCents: 1)) }
-        for i in 0..<3 { db.recordAgentTraceEvent(makeRow(key: "err-\(i)", result: "error", latencyMs: 50, costCents: 0)) }
-        db.recordAgentTraceEvent(makeRow(key: "to-1", result: "timeout", latencyMs: 100, costCents: 0))
+        for i in 0..<5 { db.recordAgentTraceEvent(makeRow(key: "ok-\(i)", result: .success, latencyMs: 10, costCents: 1)) }
+        for i in 0..<3 { db.recordAgentTraceEvent(makeRow(key: "err-\(i)", result: .error, latencyMs: 50, costCents: 0)) }
+        db.recordAgentTraceEvent(makeRow(key: "to-1", result: .timeout, latencyMs: 100, costCents: 0))
 
         let rollups = db.agentTracePivotByResult()
         #expect(rollups.count == 3)
@@ -319,7 +312,7 @@ struct AgentTraceEventStoreTests {
     @Test("Pivots respect the `since` filter")
     func sinceFilter() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let oldDate = Date(timeIntervalSince1970: 1_000_000)
         let newDate = Date(timeIntervalSince1970: 2_000_000)
@@ -338,7 +331,7 @@ struct AgentTraceEventStoreTests {
     @Test("Existing token_events analytics still work alongside agent_trace_event")
     func existingAnalyticsRegression() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // Write to BOTH stores — confirm they coexist without contention.
         db.recordTokenEvent(
@@ -363,7 +356,7 @@ struct AgentTraceEventStoreTests {
     @Test("Pivot rolls NULL project under empty-string bucket without dropping rows")
     func pivotByProjectHandlesNull() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         db.recordAgentTraceEvent(makeRow(key: "np-1", project: nil))
         db.recordAgentTraceEvent(makeRow(key: "np-2", project: nil))
@@ -378,7 +371,7 @@ struct AgentTraceEventStoreTests {
     @Test("Pivot query plans use the (project, started_at) index")
     func pivotQueryUsesProjectIndex() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         db.recordAgentTraceEvent(makeRow(key: "ix-1", project: "/p"))
 
@@ -398,5 +391,92 @@ struct AgentTraceEventStoreTests {
             plan.contains("idx_agent_trace_project_started"),
             "expected query plan to use idx_agent_trace_project_started; got:\n\(plan)"
         )
+    }
+}
+
+/// Sendable scratchpad for `Logger._setTestSink` callers — the sink
+/// closure is `@Sendable`, so plain `var [String]` capture trips
+/// strict concurrency. A class with an `NSLock` keeps the test
+/// straightforward.
+private final class ObservedLogEvents: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [String] = []
+    func append(_ event: String) {
+        lock.lock(); defer { lock.unlock() }
+        events.append(event)
+    }
+    func snapshot() -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return events
+    }
+}
+
+/// Isolated suite for the unknown-vocabulary read path. Carries
+/// `.loggerSinkGate` because it installs a `Logger._setTestSink` to
+/// observe the warn+counter routing — running it under the larger
+/// store suite would force every test there onto the gate.
+@Suite("AgentTraceEventStore — unknown-vocabulary decode path",
+       .serialized, .loggerSinkGate)
+struct AgentTraceEventStoreUnknownVocabTests {
+
+    /// Direct-SQL insert of a legacy `feature` / `result` value that the
+    /// typed enum vocabulary doesn't recognize → typed read returns
+    /// nil / `.unknown`, with a logged warning + `event_counters`
+    /// increment, never a crash. Models the rollout case where an old
+    /// session DB carries pre-V.2 strings the loop would otherwise have
+    /// silently absorbed.
+    @Test("Unknown vocabulary in legacy rows decodes safely with warn + counter")
+    func unknownVocabularyDecodesAsWarnAndCounter() {
+        let (db, path) = makeTempDB()
+        defer { TempSessionDatabase.cleanup(path: path) }
+
+        // Insert a legacy row directly via SQL — bypass the typed write
+        // path so we can stage values the enum doesn't know.
+        let inserted = db.queue.sync { () -> Bool in
+            guard let h = db.db else { return false }
+            let sql = """
+                INSERT INTO agent_trace_event
+                    (idempotency_key, pane, project, model, tier, ladder_position,
+                     feature, result, started_at, completed_at, latency_ms,
+                     tokens_in, tokens_out, cost_cents, redaction_count,
+                     validation_status, confirmation_required, egress_decisions,
+                     plan_id, cost_ledger_version)
+                VALUES (?, NULL, NULL, NULL, NULL, NULL,
+                        ?, ?, 1.0, 2.0, 1, 0, 0, 0, 0, NULL, 0, 0, NULL, NULL);
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(h, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, ("legacy-unknown" as NSString).utf8String, -1, nil)
+            // Capital-R "Read" is the canonical typo case-study from
+            // the backlog item — typed enum is lowercase; rawValue init
+            // returns nil for "Read".
+            sqlite3_bind_text(stmt, 2, ("Read" as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, ("oh_no" as NSString).utf8String, -1, nil)
+            return sqlite3_step(stmt) == SQLITE_DONE
+        }
+        #expect(inserted)
+
+        let observed = ObservedLogEvents()
+        Logger._setTestSink { event, _ in observed.append(event) }
+        defer { Logger._setTestSink(nil) }
+
+        let row = db.agentTraceEvent(idempotencyKey: "legacy-unknown")
+        #expect(row != nil)
+        #expect(row?.feature == nil, "unknown feature decodes to nil")
+        #expect(row?.result == .unknown, "unknown result decodes to .unknown sentinel")
+
+        // Drain the async recordEvent writes before reading counters.
+        db.queue.sync { }
+
+        let snapshot = observed.snapshot()
+        #expect(snapshot.contains("agent_trace.unknown_intent"))
+        #expect(snapshot.contains("agent_trace.unknown_result"))
+
+        let counters = db.eventCounts(prefix: "agent_trace.")
+        let intent = counters.first { $0.eventType == "agent_trace.unknown_intent" }
+        let result = counters.first { $0.eventType == "agent_trace.unknown_result" }
+        #expect(intent?.count == 1)
+        #expect(result?.count == 1)
     }
 }

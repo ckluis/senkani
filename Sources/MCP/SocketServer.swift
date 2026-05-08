@@ -258,11 +258,14 @@ public final class SocketServerManager: @unchecked Sendable {
         }
         lock.unlock()
 
+        // Phase B-i: mint a per-connection UUID for metrics correlation; logged
+        // alongside the fd so daemon stderr correlates fd ↔ connection_id.
+        let connectionId = UUID().uuidString
         FileHandle.standardError.write(
-            Data("[senkani] Socket client connected (fd=\(clientFD))\n".utf8))
+            Data("[senkani] Socket client connected (fd=\(clientFD), connection_id=\(connectionId))\n".utf8))
 
         let task = Task {
-            await handleConnection(fd: clientFD)
+            await handleConnection(fd: clientFD, connectionId: connectionId)
         }
 
         lock.lock()
@@ -287,7 +290,7 @@ public final class SocketServerManager: @unchecked Sendable {
         return SocketAuthToken.readAndValidate(fd: fd, expectedToken: expected)
     }
 
-    private func handleConnection(fd: Int32) async {
+    private func handleConnection(fd: Int32, connectionId: String) async {
         // P2-12: handshake gate before we wire up the MCP server.
         guard validateHandshakeIfRequired(fd: fd) else {
             Logger.log("socket.handshake.rejected", fields: [
@@ -299,8 +302,16 @@ public final class SocketServerManager: @unchecked Sendable {
             return
         }
 
-        // Each connection uses the shared session (shared cache, index, etc.)
-        let session = MCPSession.shared
+        // Phase B-i: acquire the session via the registry. The connection
+        // serves the daemon's env-derived project root for now; per-
+        // connection multi-project routing (handshake-supplied projectRoot)
+        // is a Phase B-iii concern. The registry creates the session lazily
+        // on first acquire and reuses it for every subsequent connection.
+        let session = MCPSessionRegistry.shared.ensureDefaultSession()
+        let context = ConnectionContext(
+            connectionId: connectionId,
+            projectRoot: session.projectRoot
+        )
 
         let baseInstructions = """
             Senkani is a token compression layer. Use senkani_read instead of reading files directly \
@@ -311,7 +322,7 @@ public final class SocketServerManager: @unchecked Sendable {
             """
 
         // P1-7: bounded instructions payload across the socket path too.
-        let instructions = session.instructionsPayload(base: baseInstructions)
+        let instructions = await session.instructionsPayload(base: baseInstructions)
 
         let server = Server(
             name: "senkani",
@@ -320,7 +331,7 @@ public final class SocketServerManager: @unchecked Sendable {
             capabilities: .init(tools: .init(listChanged: false))
         )
 
-        await ToolRouter.register(on: server, session: session)
+        await ToolRouter.register(on: server, session: session, context: context)
 
         let transport = SocketTransport(fd: fd)
         do {

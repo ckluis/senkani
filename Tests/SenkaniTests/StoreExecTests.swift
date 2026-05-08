@@ -8,7 +8,7 @@ import Foundation
 /// contract directly so a future structured-field addition has a
 /// single place to land — and a regression that swaps the scope token
 /// surfaces here instead of through three callers.
-@Suite("StoreExec — shared sqlite3_exec wrapper", .serialized)
+@Suite("StoreExec — shared sqlite3_exec wrapper", .serialized, .loggerSinkGate)
 struct StoreExecTests {
 
     final class Sink: @unchecked Sendable {
@@ -52,26 +52,30 @@ struct StoreExecTests {
     // deinit otherwise lands on already-deleted -wal/-shm and SIGSEGVs the
     // swiftpm-testing-helper. The .migrating sidecar is the flock lockfile
     // from MigrationRunner; unlink it too so /tmp doesn't accumulate.
-    private func cleanup(_ db: SessionDatabase, _ path: String) {
-        db.close()
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-wal")
-        try? fm.removeItem(atPath: path + "-shm")
-        try? fm.removeItem(atPath: path + ".migrating")
-    }
-
     @Test func nilDBIsNoop() {
+        // `Logger._testSink` is process-global. `.loggerSinkGate` serializes
+        // sink-using suites against each other but does NOT block production
+        // `Logger.log` callers in peer suites' GCD queues — a concurrent
+        // `SessionDatabase.init` elsewhere can land `schema.migration.applied`
+        // in our sink mid-test (parent_finding 2026-05-06). Filter to the
+        // StoreExec event-vocabulary instead of asserting `.isEmpty` on the
+        // raw bag, mirroring the sibling tests below + LoggerRoutingTests'
+        // path-filter convention.
         withSink { sink in
             StoreExec.run(db: nil, sql: "SELECT 1;", scope: "command")
-            #expect(sink.events.isEmpty,
-                    "nil db must not emit; got \(sink.events.map(\.0))")
+            let storeExecEvents = sink.events.filter { ev in
+                ev.0 == "db.command.sql_error"
+                    || ev.0 == "db.sandbox.sql_error"
+                    || ev.0 == "db.validation.sql_error"
+            }
+            #expect(storeExecEvents.isEmpty,
+                    "nil db must not emit any StoreExec sql_error; got \(storeExecEvents.map(\.0))")
         }
     }
 
     @Test func successfulStatementEmitsNothing() {
         let (db, path) = openTempDB()
-        defer { cleanup(db, path) }
+        defer { TempSessionDatabase.close(db, path: path) }
         // Drain the init-time recordEvent burst — those blocks INSERT
         // into event_counters on `db.queue`. Touching `db.db` from the
         // test thread without draining races sqlite3 across threads
@@ -87,7 +91,7 @@ struct StoreExecTests {
 
     @Test func failedStatementEmitsScopedSqlError() {
         let (db, path) = openTempDB()
-        defer { cleanup(db, path) }
+        defer { TempSessionDatabase.close(db, path: path) }
         db.queue.sync {}
         withSink { sink in
             db.queue.sync {
@@ -102,7 +106,7 @@ struct StoreExecTests {
 
     @Test func scopeTokenIsParameterized() {
         let (db, path) = openTempDB()
-        defer { cleanup(db, path) }
+        defer { TempSessionDatabase.close(db, path: path) }
         db.queue.sync {}
         withSink { sink in
             db.queue.sync {

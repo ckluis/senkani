@@ -15,12 +15,6 @@ struct PreCompactHandoffWriterTests {
         return (SessionDatabase(path: path), path)
     }
 
-    private func cleanup(db path: String) {
-        try? FileManager.default.removeItem(atPath: path)
-        try? FileManager.default.removeItem(atPath: path + "-wal")
-        try? FileManager.default.removeItem(atPath: path + "-shm")
-    }
-
     private func cleanup(root: URL) {
         try? FileManager.default.removeItem(at: root)
     }
@@ -112,19 +106,19 @@ struct PreCompactHandoffWriterTests {
     @Test("compose pulls recent trace keys + last validation from SessionDatabase")
     func composeReadsFromDB() {
         let (db, path) = tempDB()
-        defer { cleanup(db: path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // Seed two trace rows for pane=kb (newest first ordering).
         db.recordAgentTraceEvent(.init(
             idempotencyKey: "old", pane: "kb", project: "/p", model: "m",
-            tier: nil, feature: "f", result: "success",
+            tier: nil, feature: .read, result: .success,
             startedAt: Date(timeIntervalSince1970: 1_700_000_000),
             completedAt: Date(timeIntervalSince1970: 1_700_000_001),
             latencyMs: 1, tokensIn: 10, tokensOut: 10
         ))
         db.recordAgentTraceEvent(.init(
             idempotencyKey: "new", pane: "kb", project: "/p", model: "m",
-            tier: nil, feature: "f", result: "success",
+            tier: nil, feature: .read, result: .success,
             startedAt: Date(timeIntervalSince1970: 1_700_001_000),
             completedAt: Date(timeIntervalSince1970: 1_700_001_001),
             latencyMs: 1, tokensIn: 10, tokensOut: 10

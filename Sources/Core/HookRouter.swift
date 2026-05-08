@@ -59,9 +59,58 @@ public enum HookRouter {
         _ = SessionDatabase.shared.recordTrustFlag(flag, score: score)
     }
 
+    /// T.4b — synchronous lookup seam for the credential gateway. The
+    /// gateway runs inside `handle()` (sync), but `CredentialVault` is
+    /// an actor — bridging happens here, not inside the gateway, so
+    /// the policy engine stays pure. Default closure returns
+    /// `missingKey` for every read; T.4c installs a closure that
+    /// dispatches into `CredentialVault.shared` via DispatchSemaphore.
+    /// Tests override this directly to exercise the gateway without
+    /// any async surface.
+    nonisolated(unsafe) public static var credentialVaultLookup: CredentialGateway.Lookup = { key, scope, _ in
+        .failure(.missingKey(key: key, scope: scope))
+    }
+
+    /// T.4b — recorder for credential-gateway injection events. Tests
+    /// override with a `DatabaseRecorder` backed by a temp DB so they
+    /// can read the row back and assert keyname + scope are present
+    /// while the value is not.
+    nonisolated(unsafe) public static var credentialGatewayRecorder: any CredentialGateway.Recorder = CredentialGateway.LiveRecorder()
+
+    /// T.4b — catalog seam for credential-gateway lookups inside
+    /// `handle()`. Tests inject a fresh catalog with a single tool
+    /// flipped to `enabled: true` so they don't pollute the shared
+    /// catalog. Production reads from `MCPToolCatalog.shared`.
+    nonisolated(unsafe) public static var credentialGatewayCatalog: MCPToolCatalog = .shared
+
+    /// V.11b — pack-policy registry seam. Tests can swap in a custom
+    /// registry pointed at a temp install root; production uses the
+    /// shared singleton which loads from `~/.senkani/packs/`. Set
+    /// to nil to disable pack-policy evaluation entirely (useful in
+    /// tests that don't care about the path).
+    nonisolated(unsafe) public static var packPolicyRegistry: PackPolicyRegistry? = .shared
+
+    /// V.11b — force a re-read of installed pack policy fragments.
+    /// Called by `PackInstaller.apply()` / `uninstall()` and at app
+    /// startup (`SenkaniApp.init` and `--socket-server` mode in
+    /// `main.swift`). Cheap (one filesystem walk over a small
+    /// number of pack directories); safe to call repeatedly.
+    public static func refreshInstalledPacks() {
+        packPolicyRegistry?.refresh()
+    }
+
     /// Process a hook event JSON and return a response JSON.
     /// Returns `{}` (passthrough) for unrecognized or unroutable events.
     public static func handle(eventJSON: Data) -> Data {
+        // Acquire HookSeamLock for the duration so test overrides
+        // (ConfirmationGate.resolver, annotationFeed, packPolicyRegistry,
+        // …) don't bleed across parallel @Suite boundaries. Writers wrap
+        // their override-and-defer in HookSeamLock.withLock; the lock is
+        // recursive so this call doesn't self-deadlock when handle() is
+        // invoked from inside a writer's body. See HookSeamLock.swift.
+        HookSeamLock.shared.lock()
+        defer { HookSeamLock.shared.unlock() }
+
         guard let event = try? JSONSerialization.jsonObject(with: eventJSON) as? [String: Any],
               let toolName = event["tool_name"] as? String else {
             return passthroughResponse
@@ -169,6 +218,72 @@ public enum HookRouter {
                 rows: validationRows,
                 projectRoot: projectRoot
             )
+        }
+
+        // T.4b: CredentialGateway. Runs after the confirmation gate so
+        // a `.deny` short-circuits before any vault read (operator
+        // contract: gate decides first, then we inject). Notes:
+        //   - Order: gateway only fires when ConfirmationGate allows
+        //     (`.approve` or `.auto`). The `.deny` branch above already
+        //     returned by here, so we know the gate passed.
+        //   - On `.deny`, surface the structured error in
+        //     `permissionDecisionReason` carrying both keyname AND
+        //     scope. The agent caller stops; the operator runs
+        //     `senkani vault add`.
+        //   - On `.proceed`, the recorder writes the token_events row
+        //     (keyname + scope only — the value is never serialized).
+        //     The values themselves don't propagate further in this
+        //     round — round T.4c connects them to ExecTool / spawned
+        //     processes. Round T.4b ships the API surface + audit row.
+        let gatewayConfig = credentialGatewayCatalog.config(for: toolName)?.credentialGateway
+        let gatewayDecision = CredentialGateway.evaluate(
+            toolName: toolName,
+            config: gatewayConfig,
+            lookup: credentialVaultLookup,
+            recorder: credentialGatewayRecorder,
+            sessionId: sessionId,
+            projectRoot: projectRoot
+        )
+        if case .deny(let reason) = gatewayDecision {
+            emitDenialAnnotation(
+                severity: .mustFix,
+                body: reason,
+                toolName: toolName,
+                toolInput: toolInput,
+                sessionId: sessionId
+            )
+            return appendAndMarkValidationIfSurfaced(
+                blockResponse(reason, eventName: eventName),
+                advisory: validationAdvisory,
+                rows: validationRows,
+                projectRoot: projectRoot
+            )
+        }
+
+        // V.11b — pack-policy evaluation. Cross-process refresh: stat
+        // the install-root mtime and re-read fragments only if it has
+        // moved. Same-process installs already called `refresh()`
+        // through `PackInstaller.apply()` so their snapshot is current
+        // and the staleness check is a single cheap stat.
+        if let registry = packPolicyRegistry {
+            registry.refreshIfStale()
+            if let match = registry.evaluate(toolName: toolName, toolInput: toolInput) {
+                let reason = match.rule.reason
+                    ?? "Denied by pack '\(match.packName)' (scope_key=\(match.scopeKey))."
+                emitDenialAnnotation(
+                    severity: .mustFix,
+                    body: reason,
+                    toolName: toolName,
+                    toolInput: toolInput,
+                    sessionId: sessionId
+                )
+                return appendAndMarkValidationIfSurfaced(
+                    blockResponse(reason, eventName: eventName),
+                    advisory: validationAdvisory,
+                    rows: validationRows,
+                    projectRoot: projectRoot
+                )
+            }
         }
 
         // Route the tool call

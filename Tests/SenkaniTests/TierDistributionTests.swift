@@ -7,13 +7,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (SessionDatabase(path: path), path)
 }
 
-private func cleanupTempDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-}
-
 private func makeRow(
     key: String = UUID().uuidString,
     tier: String? = nil,
@@ -23,8 +16,8 @@ private func makeRow(
     AgentTraceEvent(
         idempotencyKey: key,
         pane: "kb", project: "/tmp/p", model: "claude-haiku-4-5",
-        tier: tier, ladderPosition: ladderPosition, feature: "search",
-        result: "success",
+        tier: tier, ladderPosition: ladderPosition, feature: .search,
+        result: .success,
         startedAt: startedAt, completedAt: startedAt.addingTimeInterval(0.1),
         latencyMs: 25, tokensIn: 80, tokensOut: 30, costCents: 1
     )
@@ -36,7 +29,7 @@ struct TierDistributionTests {
     @Test("Distribution counts rows per tier within window")
     func distributionByTier() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         let now = Date()
 
         db.recordAgentTraceEvent(makeRow(key: "a1", tier: "simple", ladderPosition: 0, startedAt: now))
@@ -56,7 +49,7 @@ struct TierDistributionTests {
     @Test("Distribution splits buckets by ladder position when present")
     func distributionByLadderPosition() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         let now = Date()
 
         db.recordAgentTraceEvent(makeRow(key: "b1", tier: "standard", ladderPosition: 0, startedAt: now))
@@ -77,7 +70,7 @@ struct TierDistributionTests {
     @Test("Distribution excludes rows whose tier is NULL")
     func distributionExcludesNullTier() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         let now = Date()
 
         db.recordAgentTraceEvent(makeRow(key: "n1", tier: nil, startedAt: now))
@@ -92,7 +85,7 @@ struct TierDistributionTests {
     @Test("Empty state — no rows in window returns empty bucket list")
     func emptyWindow() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         let now = Date()
 
         // A row well outside the window should not appear.
@@ -108,7 +101,7 @@ struct TierDistributionTests {
     @Test("Distribution honors `since` cutoff")
     func sinceCutoff() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         let now = Date()
 
         db.recordAgentTraceEvent(makeRow(
@@ -131,7 +124,7 @@ struct TierDistributionTests {
     @Test("Drill-down returns the matching tier rows in DESC order, capped by limit")
     func drillDownLimit() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         let base = Date()
 
         for i in 0..<5 {

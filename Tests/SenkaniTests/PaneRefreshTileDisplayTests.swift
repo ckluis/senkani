@@ -11,13 +11,6 @@ struct PaneRefreshTileDisplayTests {
         return (db, path)
     }
 
-    private static func cleanup(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-wal")
-        try? fm.removeItem(atPath: path + "-shm")
-    }
-
     @Test("Normal state — no notice strip, no error strip, tile reads value text via a11y")
     func normalStateNoStrips() {
         let state = PaneRefreshState(
@@ -123,7 +116,7 @@ struct PaneRefreshTileDisplayTests {
     @Test("Fixture fetch — fails twice, then yields partial(notice:) on the third call (round-trip through coordinator + worker pool)")
     func fixtureFailureYieldsNoticeOnThirdCall() async {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         let fixtureFetch = paneRefreshFixtureFetch(
             failuresBeforePartial: 2,

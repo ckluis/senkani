@@ -130,9 +130,7 @@ struct HookRouterMetricsTests {
         let dbPath = "/tmp/senkani-test-hookrouter-\(UUID().uuidString).sqlite"
         let db = SessionDatabase(path: dbPath)
         defer {
-            try? FileManager.default.removeItem(atPath: dbPath)
-            try? FileManager.default.removeItem(atPath: dbPath + "-wal")
-            try? FileManager.default.removeItem(atPath: dbPath + "-shm")
+            TempSessionDatabase.cleanup(path: dbPath)
         }
 
         // Record a hook event directly (same call HookRouter makes)

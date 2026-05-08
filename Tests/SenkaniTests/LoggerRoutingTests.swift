@@ -12,7 +12,7 @@ import Foundation
 /// Tests use `Logger._setTestSink` to observe events in-process; the sink
 /// is a tee that runs alongside the normal stderr emit, so tests don't
 /// dup2 fd 2.
-@Suite("LoggerRouting", .serialized)
+@Suite("LoggerRouting", .serialized, .loggerSinkGate)
 struct LoggerRoutingTests {
 
     // MARK: - Sink helpers
@@ -99,7 +99,7 @@ struct LoggerRoutingTests {
 
     @Test func migrationsAppliedFiresOnFreshDB() {
         let path = "/tmp/senkani-routing-\(UUID().uuidString).sqlite"
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         withSink { sink in
             _ = SessionDatabase(path: path)
             // Fresh DB applies all known migrations (>=1 version). Filter
@@ -123,7 +123,7 @@ struct LoggerRoutingTests {
 
     @Test func migrationsAppliedDoesNotFireOnAlreadyMigratedDB() {
         let path = "/tmp/senkani-routing-\(UUID().uuidString).sqlite"
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         // Pre-migrate.
         _ = SessionDatabase(path: path)
         // Re-open: no migrations applied this round for THIS path. Filter
@@ -196,7 +196,7 @@ struct LoggerRoutingTests {
         // "[CommandStore] SQL error", "[SandboxStore] SQL error",
         // "[ValidationStore] SQL error" strings on stderr/stdout.
         let path = "/tmp/senkani-routing-\(UUID().uuidString).sqlite"
-        defer { cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
         withSink { sink in
             _ = SessionDatabase(path: path)
             // No SQL errors expected on a clean init.
@@ -273,10 +273,4 @@ struct LoggerRoutingTests {
 
     // MARK: - Helpers
 
-    private func cleanup(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-wal")
-        try? fm.removeItem(atPath: path + "-shm")
-    }
 }

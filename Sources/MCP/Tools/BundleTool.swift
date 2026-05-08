@@ -90,12 +90,12 @@ enum BundleTool {
         // 4. Gather inputs. Index must be ready (Kleppmann P1 — no
         //    partial bundles). Graph / KB / README are optional —
         //    empty sections are OK.
-        guard let index = session.indexIfReady() else {
+        guard let index = await session.indexIfReady() else {
             return .init(content: [.text(
                 text: "Symbol index is still warming. Try again in a few seconds (senkani_bundle requires a ready index).",
                 annotations: nil, _meta: nil)])
         }
-        let graph = session.ensureDependencyGraph()
+        let graph = await session.ensureDependencyGraph()
         let entities = session.knowledgeStore.allEntities(sortedBy: .mentionCountDesc)
         let readme = BundleComposer.readme(at: root)
 
@@ -118,7 +118,7 @@ enum BundleTool {
         // of source file sizes under `root` — capped so we don't
         // stat the entire filesystem on pathological projects.
         let rawBytes = approximateRepoBytes(root: root, cap: 16_777_216)
-        session.recordMetrics(
+        await session.recordMetrics(
             rawBytes: rawBytes,
             compressedBytes: output.utf8.count,
             feature: "bundle",
@@ -194,7 +194,7 @@ enum BundleTool {
         // uses; keeps the savings pane's math consistent.
         let compressedBytes = output.utf8.count
         let notionalRaw = max(compressedBytes * 20, inputs.files.count * 100)
-        session.recordMetrics(
+        await session.recordMetrics(
             rawBytes: notionalRaw,
             compressedBytes: compressedBytes,
             feature: "bundle",

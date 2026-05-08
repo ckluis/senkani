@@ -33,13 +33,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanupDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-}
-
 // MARK: - Suite 1: Generator (Pure Function)
 
 @Suite("SessionBriefGenerator")
@@ -142,7 +135,7 @@ struct LastSessionActivityDBTests {
 
     @Test func returnsCompletedSession() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // Create and end a session
         let sid1 = db.createSession(projectRoot: "/tmp/test")
@@ -166,7 +159,7 @@ struct LastSessionActivityDBTests {
 
     @Test func nilWhenNoCompletedSessions() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // Create session but don't end it
         _ = db.createSession(projectRoot: "/tmp/test")
@@ -177,7 +170,7 @@ struct LastSessionActivityDBTests {
 
     @Test func extractsSearchQueries() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession(projectRoot: "/tmp/test")
         db.recordTokenEvent(

@@ -3,7 +3,13 @@ import Foundation
 import SQLite3
 @testable import Core
 
-@Suite("ChainVerifier — token_events tamper-evidence (T.5 round 2)")
+// `.serialized` belt-and-suspenders alongside the busy_timeout fix in
+// `TempSessionDatabase.openSecondaryHandle`: helpers below mutate /
+// peek on-disk sqlite rows via a second handle, and parallel-runner
+// CPU/IO pressure was masking writer lock contention as `tamper code 2
+// "database is locked"` in the sibling ChainRepairTests suite. See
+// `chainverifier-policysnapshots-secondary-handle-busy-timeout-2026-05-04`.
+@Suite("ChainVerifier — token_events tamper-evidence (T.5 round 2)", .serialized)
 struct ChainVerifierTests {
 
     // MARK: - Helpers
@@ -12,13 +18,6 @@ struct ChainVerifierTests {
         let path = "/tmp/senkani-chainverifier-\(UUID().uuidString).sqlite"
         let db = SessionDatabase(path: path)
         return (db, path)
-    }
-
-    private static func cleanup(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-wal")
-        try? fm.removeItem(atPath: path + "-shm")
     }
 
     private static func record(_ db: SessionDatabase, _ tag: String, tokens: Int = 100) {
@@ -43,8 +42,7 @@ struct ChainVerifierTests {
     /// Mirrors what an attacker (or a bug) would have to do — flip a byte in
     /// the data, leave the chain columns untouched.
     private static func tamper(_ path: String, rowid: Int64) throws {
-        var db: OpaquePointer?
-        guard sqlite3_open(path, &db) == SQLITE_OK else {
+        guard let db = TempSessionDatabase.openSecondaryHandle(path) else {
             throw NSError(domain: "tamper", code: 1)
         }
         defer { sqlite3_close(db) }
@@ -65,7 +63,7 @@ struct ChainVerifierTests {
     @Test("Fresh DB with no rows reports noChain")
     func freshDBNoChain() {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         let result = ChainVerifier.verifyTokenEvents(db)
         #expect(result == .noChain)
@@ -74,7 +72,7 @@ struct ChainVerifierTests {
     @Test("Single insert opens fresh-install anchor and verifies OK")
     func singleInsertOK() {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         Self.record(db, "first")
 
@@ -89,7 +87,7 @@ struct ChainVerifierTests {
     @Test("Multiple inserts chain cleanly and verify OK")
     func chainOfFiveVerifies() {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         for i in 0..<5 { Self.record(db, "t-\(i)", tokens: 100 + i) }
 
@@ -103,7 +101,7 @@ struct ChainVerifierTests {
     @Test("Single-byte tamper at row K is caught at row K (not earlier, not later)")
     func tamperAtRowKCaught() throws {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         for i in 0..<5 { Self.record(db, "t-\(i)") }
         // Get the rowid of the third inserted row.
@@ -129,7 +127,7 @@ struct ChainVerifierTests {
         db1.close()
 
         let db2 = SessionDatabase(path: path)
-        defer { db2.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db2, path: path) }
 
         Self.record(db2, "after-restart-1")
         Self.record(db2, "after-restart-2")
@@ -148,7 +146,7 @@ struct ChainVerifierTests {
         // anchor, NULL prev_hash + entry_hash. The verifier should NOT
         // walk those rows — they predate the chain by design.
         let path = "/tmp/senkani-chainverifier-pret5-\(UUID().uuidString).sqlite"
-        defer { Self.cleanup(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let db = SessionDatabase(path: path)
         // First, write rows under the fresh-install anchor that v4 would have
@@ -185,7 +183,7 @@ struct ChainVerifierTests {
     @Test("Independent computation of expected hash matches the stored entry_hash for row 1")
     func firstRowHashMatchesIndependentComputation() throws {
         let (db, path) = Self.makeDB()
-        defer { db.close(); Self.cleanup(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         Self.record(db, "exact")
 
@@ -193,6 +191,10 @@ struct ChainVerifierTests {
         let row = try Self.selectFirstRow(path: path)
         #expect(row.prevHash == nil) // first row in a fresh-install anchor
 
+        // Phase B-ii: post-v18 fresh-install anchors include
+        // `connection_id` (NULL when no override) in the canonical column
+        // map. Mirrors `TokenEventStore.recordTokenEvent` and
+        // `ChainVerifier.verifyAnchorTokenEvents`.
         let columns: [String: ChainHasher.CanonicalValue] = [
             "timestamp":     .real(row.timestamp),
             "session_id":    .text(row.sessionId),
@@ -208,6 +210,7 @@ struct ChainVerifierTests {
             "feature":       .null,
             "command":       .null,
             "model_tier":    .null,
+            "connection_id": .null,
         ]
         let expected = ChainHasher.entryHash(
             table: "token_events", columns: columns, prev: nil
@@ -218,8 +221,7 @@ struct ChainVerifierTests {
     // MARK: - Direct SQL helpers
 
     private static func selectAllRowids(path: String) throws -> [Int64] {
-        var db: OpaquePointer?
-        guard sqlite3_open(path, &db) == SQLITE_OK else {
+        guard let db = TempSessionDatabase.openSecondaryHandle(path) else {
             throw NSError(domain: "select", code: 1)
         }
         defer { sqlite3_close(db) }
@@ -250,8 +252,7 @@ struct ChainVerifierTests {
     }
 
     private static func selectFirstRow(path: String) throws -> FirstRow {
-        var db: OpaquePointer?
-        guard sqlite3_open(path, &db) == SQLITE_OK else {
+        guard let db = TempSessionDatabase.openSecondaryHandle(path) else {
             throw NSError(domain: "select", code: 1)
         }
         defer { sqlite3_close(db) }
@@ -285,8 +286,7 @@ struct ChainVerifierTests {
     }
 
     private static func runSQL(path: String, _ sql: String) throws {
-        var db: OpaquePointer?
-        guard sqlite3_open(path, &db) == SQLITE_OK else {
+        guard let db = TempSessionDatabase.openSecondaryHandle(path) else {
             throw NSError(domain: "exec", code: 1)
         }
         defer { sqlite3_close(db) }

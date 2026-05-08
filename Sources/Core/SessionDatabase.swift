@@ -37,6 +37,20 @@ public final class SessionDatabase: @unchecked Sendable {
     // `Sources/Core/Stores/` can share the connection + queue without opening
     // a second handle. External callers still go through the public API —
     // Core is not a place to reach into the raw SQLite pointer.
+    //
+    // Queue-affinity invariant (audit 2026-05-04, item
+    // `harness-test-safe-other-sigtrap-rootcause-sessiondb-raw-db-pointer-bypass`):
+    // every `sqlite3_*` call against this handle MUST happen on `queue`.
+    // libsqlite3 is built with SQLITE_THREADSAFE=1 (multi-thread, not
+    // serialized) on macOS — concurrent calls on the same connection from
+    // two threads SIGSEGV inside libsqlite3, not at the Swift boundary.
+    // The 2026-05-03 round bisected one such race in StoreExecTests; this
+    // round audits and locks in the contract at the leaves. Store-private
+    // `exec(_:)` / `execSilent(_:)` helpers (Sources/Core/Stores/*.swift,
+    // Sources/Core/KnowledgeStore/*.swift) all carry a
+    // `dispatchPrecondition(condition: .onQueue(parent.queue))` so a
+    // future caller that forgets the `queue.sync { ... }` wrapper fails
+    // loud in debug builds instead of silently racing libsqlite3.
     internal var db: OpaquePointer?
     internal let queue = DispatchQueue(label: "com.senkani.sessiondb", qos: .utility)
 
@@ -68,6 +82,8 @@ public final class SessionDatabase: @unchecked Sendable {
     internal var annotationRateCapStore: AnnotationRateCapStore!
     internal var contextPlanStore: ContextPlanStore!
     internal var policyStore: PolicyStore!
+    internal var egressDecisionStore: EgressDecisionStore!
+    public var packAuditStore: PackAuditStore!
 
     // MARK: - Init
 
@@ -92,6 +108,13 @@ public final class SessionDatabase: @unchecked Sendable {
             db = nil
         }
         enableWAL()
+        // Migrations run BEFORE store construction. MigrationRegistry.all is
+        // canonical for every session-DB table; setupSchema (where it still
+        // exists) covers the residual DDL that has not yet been folded into
+        // a numbered migration (e.g. CommandStore's `sessions`, FTS5 virtual
+        // table, and triggers; TokenEventStore's `claude_session_cursors`
+        // and the ALTER for `model_tier`).
+        runMigrations(path: dbPath)
         commandStore = CommandStore(parent: self)
         commandStore.setupSchema()
         tokenEventStore = TokenEventStore(parent: self)
@@ -101,22 +124,15 @@ public final class SessionDatabase: @unchecked Sendable {
         validationStore = ValidationStore(parent: self)
         validationStore.setupSchema()
         paneRefreshStateStore = PaneRefreshStateStore(parent: self)
-        paneRefreshStateStore.setupSchema()
         agentTraceEventStore = AgentTraceEventStore(parent: self)
-        agentTraceEventStore.setupSchema()
         annotationStore = AnnotationStore(parent: self)
-        annotationStore.setupSchema()
         confirmationStore = ConfirmationStore(parent: self)
-        confirmationStore.setupSchema()
         trustAuditStore = TrustAuditStore(parent: self)
-        trustAuditStore.setupSchema()
         annotationRateCapStore = AnnotationRateCapStore(parent: self)
-        annotationRateCapStore.setupSchema()
         contextPlanStore = ContextPlanStore(parent: self)
-        contextPlanStore.setupSchema()
         policyStore = PolicyStore(parent: self)
-        policyStore.setupSchema()
-        runMigrations(path:dbPath)
+        egressDecisionStore = EgressDecisionStore(parent: self)
+        packAuditStore = PackAuditStore(parent: self)
     }
 
     /// Testable initializer — opens a DB at a custom path (use a temp file).
@@ -136,6 +152,7 @@ public final class SessionDatabase: @unchecked Sendable {
             db = nil
         }
         enableWAL()
+        runMigrations(path: path)
         commandStore = CommandStore(parent: self)
         commandStore.setupSchema()
         tokenEventStore = TokenEventStore(parent: self)
@@ -145,22 +162,15 @@ public final class SessionDatabase: @unchecked Sendable {
         validationStore = ValidationStore(parent: self)
         validationStore.setupSchema()
         paneRefreshStateStore = PaneRefreshStateStore(parent: self)
-        paneRefreshStateStore.setupSchema()
         agentTraceEventStore = AgentTraceEventStore(parent: self)
-        agentTraceEventStore.setupSchema()
         annotationStore = AnnotationStore(parent: self)
-        annotationStore.setupSchema()
         confirmationStore = ConfirmationStore(parent: self)
-        confirmationStore.setupSchema()
         trustAuditStore = TrustAuditStore(parent: self)
-        trustAuditStore.setupSchema()
         annotationRateCapStore = AnnotationRateCapStore(parent: self)
-        annotationRateCapStore.setupSchema()
         contextPlanStore = ContextPlanStore(parent: self)
-        contextPlanStore.setupSchema()
         policyStore = PolicyStore(parent: self)
-        policyStore.setupSchema()
-        runMigrations(path:path)
+        egressDecisionStore = EgressDecisionStore(parent: self)
+        packAuditStore = PackAuditStore(parent: self)
     }
 
     // MARK: - Observability counters (migration v2)

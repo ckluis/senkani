@@ -11,13 +11,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanupTempDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-}
-
 private func makeAnnotation(
     targetKind: AnnotationTargetKind = .skill,
     targetId: String = "skill-fixture-1",
@@ -50,7 +43,7 @@ struct AnnotationStoreTests {
     @Test("Migration v9 creates annotations table with all expected columns")
     func schemaShape() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         #expect(db.currentSchemaVersion() >= 9)
 
@@ -78,7 +71,7 @@ struct AnnotationStoreTests {
     @Test("record() returns a positive rowid and count() bumps")
     func recordReturnsRowid() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         #expect(db.annotationCount() == 0)
         let rowid = db.recordAnnotation(makeAnnotation())
@@ -89,7 +82,7 @@ struct AnnotationStoreTests {
     @Test("Roundtrip preserves verdict, range, notes, authorship, authoredBy")
     func roundtrip() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         db.recordAnnotation(makeAnnotation(
             targetKind: .kbEntity,
@@ -119,7 +112,7 @@ struct AnnotationStoreTests {
     @Test("byTarget filters to the requested target only")
     func byTargetFilters() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         db.recordAnnotation(makeAnnotation(targetId: "a"))
         db.recordAnnotation(makeAnnotation(targetId: "a", verdict: .fails))
@@ -137,7 +130,7 @@ struct AnnotationStoreTests {
     @Test("recent() orders newest-first and respects limit")
     func recentOrderAndLimit() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         for i in 0..<10 {
             db.recordAnnotation(makeAnnotation(
@@ -156,7 +149,7 @@ struct AnnotationStoreTests {
     @Test("renameAnnotationTarget rewrites target_id and preserves all rows")
     func renameSurvival() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         for v in [AnnotationVerdict.works, .fails, .note] {
             db.recordAnnotation(makeAnnotation(targetId: "old-skill", verdict: v))
@@ -177,7 +170,7 @@ struct AnnotationStoreTests {
     @Test("renameAnnotationTarget does not cross target_kind boundaries")
     func renameRespectsKind() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         db.recordAnnotation(makeAnnotation(targetKind: .skill, targetId: "shared-id"))
         db.recordAnnotation(makeAnnotation(targetKind: .kbEntity, targetId: "shared-id"))
@@ -193,7 +186,7 @@ struct AnnotationStoreTests {
     @Test("verdictRollup buckets works/fails/note per (kind, id)")
     func verdictRollupBuckets() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         for _ in 0..<3 { db.recordAnnotation(makeAnnotation(targetId: "a", verdict: .works)) }
         for _ in 0..<5 { db.recordAnnotation(makeAnnotation(targetId: "a", verdict: .fails)) }
@@ -214,7 +207,7 @@ struct AnnotationStoreTests {
     @Test("verdictRollup filters by targetKind when provided")
     func verdictRollupFiltersByKind() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         db.recordAnnotation(makeAnnotation(targetKind: .skill, targetId: "s"))
         db.recordAnnotation(makeAnnotation(targetKind: .kbEntity, targetId: "k"))
@@ -231,7 +224,7 @@ struct AnnotationStoreTests {
     @Test("Authorship .unset round-trips — never silently rewritten")
     func authorshipUnsetRoundtrips() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         db.recordAnnotation(makeAnnotation(authorship: .unset))
         let rows = db.recentAnnotations(limit: 1)
@@ -243,7 +236,7 @@ struct AnnotationStoreTests {
     @Test("100 fixture annotations roll up into AnnotationSignalGenerator.analyze evidence")
     func hundredAnnotationsFlowIntoAnalyze() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // 100 annotations spread across 5 targets:
         //   skill-A: 30 fails  → failing
@@ -291,7 +284,7 @@ struct AnnotationStoreTests {
     @Test("runAnnotationSignalDetection bumps observed + signalKind counters")
     func runAnnotationSignalDetectionBumpsCounters() {
         let (db, path) = makeTempDB()
-        defer { cleanupTempDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         db.recordAnnotation(makeAnnotation(targetId: "fail-skill", verdict: .fails))
         db.recordAnnotation(makeAnnotation(targetId: "fail-skill", verdict: .fails))

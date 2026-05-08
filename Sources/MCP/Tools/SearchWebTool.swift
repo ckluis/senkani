@@ -440,7 +440,7 @@ enum SearchWebTool {
         }
 
         let output = SearchWebFormatter.format(query: query, results: redacted)
-        session.recordMetrics(
+        await session.recordMetrics(
             rawBytes: html.utf8.count,
             compressedBytes: output.utf8.count,
             feature: "search_web",

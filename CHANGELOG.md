@@ -9,6 +9,2009 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 7 — CI gate: `swift build -c release` now runs on every PR
+- New workflow `.github/workflows/release-build-smoke.yml` runs
+  `swift package resolve` + `swift build -c release` + a binary-
+  existence check (`senkani`, `senkani-mcp`, `senkani-hook`,
+  `senkani-mig-helper`) on PR open/sync and push to `main`. Job
+  is independent of the existing `tests` job — a release-mode
+  linker / package-graph regression now fails CI even when debug-
+  mode tests pass.
+- Cache key hashes both `Package.resolved` and `Package.swift`,
+  so a hand-bumped pin SHA invalidates the cache (the prior
+  Package.resolved-only key would have masked a re-occurrence of
+  the May 7 mlx-swift-lm regression on a warm runner).
+- CONTRIBUTING.md gains one line stating the gate so contributors
+  can replicate locally before pushing.
+- Closes follow-up filed by the May 7 build-fix item
+  (`release-v0-3-0-build-broken` acceptance criterion #3).
+
+### May 7 — Build fix: pin `mlx-swift-lm` to a known-good revision (was tracking `main`, which moved past the SHA that vended `Tokenizers`)
+- Symptom: `swift build -c release` on `main` failed with
+  `no such module 'Tokenizers'` from
+  `Sources/MCP/Tools/EmbedTool.swift`. Surfaced during the v0.3.0
+  release-cut validation run on 2026-05-07; broke release-blocker
+  items `release-v0-3-0-onboarding-pass` and
+  `release-v0-3-0-surface-pass`.
+- Root cause: `Package.swift` tracked `mlx-swift-lm` on `branch:
+  "main"`. The moving ref advanced from `2a296f14` (last-known-good,
+  May 2 prebuilt) to `38fff582` (current HEAD), and somewhere in
+  that span dropped the transitive `swift-transformers@1.2.1`
+  dependency that vends the `Tokenizers` module. `EmbedTool.swift`
+  imports `Tokenizers` directly (used in `EmbedEngine.embed*` for
+  text → token-id encoding), so the build broke at compile time.
+- Fix: pinned `mlx-swift-lm` to `revision:
+  "2a296f145c3129fea4290bb6e4a0a5fb458efa06"` in `Package.swift`.
+  Restores the May 2 working state exactly, including
+  swift-transformers@1.2.1, swift-huggingface@0.9.0,
+  swift-jinja@2.3.5, swift-crypto, swift-asn1, yyjson — all
+  re-resolved into `Package.resolved`.
+- Net: `swift build -c release` produces `.build/release/senkani`
+  (48 MB arm64 Mach-O) cleanly, no Tokenizers errors. Filed
+  `release-v0-3-0-ci-smoke-release-build` to add a CI gate that
+  catches this regression class going forward; filed
+  `test-suite-flake-reverification-2026-05-07` for the 7 unrelated
+  test-infra issues (URLProtocol + FSEvents) surfaced during the
+  full-suite verification run.
+- Operator note: don't track `main` for any release-critical
+  dependency. The same regression can re-occur on any upstream
+  movement; future `mlx-swift-lm` bumps go through
+  `release-v0-4-0-mlx-pin-bump-pass`.
+### May 7 — `StoreExecTests.nilDBIsNoop` filters by StoreExec event-vocabulary (`storeexec-niltest-loggersink-leak-from-peer-suite-migration`)
+
+- `Tests/SenkaniTests/StoreExecTests.swift:55-72` — `nilDBIsNoop`
+  no longer asserts `sink.events.isEmpty`. The assertion now filters
+  to the StoreExec event-vocabulary (`db.command.sql_error`,
+  `db.sandbox.sql_error`, `db.validation.sql_error`) and asserts
+  that filtered list is empty. Mirrors the pattern the three sibling
+  StoreExec tests + LoggerRoutingTests' path-filter use.
+- `Tests/SenkaniTests/LoggerSinkGate.swift` — head-comment updated.
+  Three sink-using suites today (was "two" — `AgentTraceEventStoreUnknownVocabTests`
+  carries `.loggerSinkGate` since the Phase V.2 vocabulary work).
+  Documented the gate's contract limitation: it serializes
+  sink-using suites against EACH OTHER but does NOT block
+  production `Logger.log` emissions from peer suites' GCD queues.
+  Tests that observe sink contents must filter by event-name or
+  field-value, never raw `.isEmpty`.
+- Why: `Logger._testSink` is process-global. Under default-parallel
+  `swift test`, a peer suite's `SessionDatabase.init` runs
+  `MigrationRunner.runMigrations` on its own `db.queue` and emits
+  `schema.migration.applied` into whichever sink is currently
+  installed — including the StoreExec test sink mid-`nilDBIsNoop`.
+  Soak run 9 of 10 (2026-05-06, parent finding
+  `htmlpreviewmoderesolver-invocation-counter-cross-suite-race`)
+  caught the leak. The three structural fixes (correlation-id
+  plumbing through StoreExec; `@TaskLocal` rewrite — rejected by
+  the gate's existing comment because GCD closures don't inherit
+  task-locals; process-wide write-lock during gated suites) all
+  touch production for a test-only concern. Filter-at-the-test
+  matches the convention every other site already follows.
+- **Verification.** Filter-only `swift test --filter
+  "StoreExecTests/nilDBIsNoop"`: 20 / 20 green consecutive. Full
+  parallel `swift test`: 10 / 10 green consecutive (~12 s each,
+  2540 / 2540 tests).
+
+### May 7 — SLO `hookPassthroughP99UnderThreshold` median-of-3 → supermajority-of-5 (`slo-hookpassthrough-p99-majority-burn-still-flakes`)
+
+- `Tests/SenkaniTests/SLOTests.swift:214-252` —
+  `hookPassthroughP99UnderThreshold` migrated from three independent
+  200-sample distributions / `burnCount < 2` (≥ 2 of 3 burn fails) to
+  five independent 200-sample distributions / `burnCount < 4` (≥ 4 of
+  5 burn fails). 1 ms threshold preserved (product contract; see
+  `spec/slos.md`). Failure message now reports `(\(burnCount)/5)` and
+  five evaluations' p99 + over-budget %.
+- Why: the 2026-05-05 median-of-3 migration
+  (`parallel-runner-flake-perf-budget-families-2026-05-04`) reduced
+  but did not eliminate the flake — the 2026-05-06 PHP-fix
+  verification soak (13 full-suite runs) caught 1 spurious 2/3 burn,
+  and the 2026-05-07 `PinnedContextStore` ordering-fix verification
+  hit it 6 / 10. `.serialized` is already on the suite and only
+  serializes within-suite (peer-suite CPU contention still preempts);
+  the canonical fix is widening the statistical envelope, matching
+  the supermajority shape the codebase converges on whenever
+  median-of-3 still flakes. With single-distribution P(burn) ≈ 0.18
+  fitted from the PHP soak, the supermajority-of-5 gate predicts ~17×
+  flake-rate reduction (~7.7 % → ~0.5 %), and the `PinnedContextStore`
+  empirical rate (~60 %) puts it at ~33 %, well below the
+  10-consecutive bar.
+- **Verification.** Filter-only `swift test --filter
+  "hookPassthroughP99UnderThreshold"`: 20 / 20 green consecutive
+  (~0.39 s each). Full parallel `swift test`: 10 / 10 green
+  consecutive (~12 s each, 2540 / 2540 tests).
+
+### May 7 — `PinnedContextStore.all()` ordering race fixed: monotonic insertion counter replaces sub-µs `Date()` sort key (`pinnedcontextstore-pinsactiondatamatchesdrain-order-flake`)
+
+- `Sources/Core/PinnedContextStore.swift` — `PinnedEntry` gains
+  `pinSequence: UInt64` (public, internal-set), stamped by the store
+  on `pin()` under the existing `NSLock` from a private `nextSequence`
+  counter. All three sort sites (eviction L65-69, `all()` L88, `drain()`
+  L114-116) migrated from `pinnedAt: Date` to `pinSequence`. `pinnedAt`
+  retained on the struct for future display use; no longer the sort
+  key. Re-pin upsert correctly re-stamps the sequence (preserves
+  `tokenCapEvictsOldestWhenFull` semantics).
+- Why: under default-parallel `swift test`, two back-to-back `pin()`
+  calls captured `Date()` timestamps within the same nanosecond
+  bucket. With timestamp ties, `Array.sorted` in Swift is not stable
+  and `Dictionary.values` enumerates in arbitrary order — so
+  `all()` could return Beta-then-Alpha after pinning Alpha-then-Beta.
+  A monotonic UInt64 counter mutated only under the store's lock
+  removes the tie possibility entirely (counter wraparound at
+  18 quintillion pins is not a concern).
+- `Tests/SenkaniTests/PinnedContextTests.swift` — added
+  `pinOrderIsMonotonicAcrossManyFreshStores` (200 fresh stores
+  back-to-back, asserts insertion order on every snapshot) as a
+  regression lock against future `pinnedAt`-based sort regressions.
+- **Verification.** Filter-only `swift test --filter
+  "PinnedContextStore"`: 20/20 green consecutive. Full parallel
+  suite `swift test`: 10 runs total, `pinsActionDataMatchesDrain`
+  10/10 green and `pinOrderIsMonotonicAcrossManyFreshStores` 10/10
+  green. The 6 of 10 full-suite runs that failed all failed on
+  `SLOTests.swift:248 hookPassthroughP99UnderThreshold` — already
+  tracked as the open `slo-hookpassthrough-p99-majority-burn-still-flakes`
+  item; not a regression introduced here.
+- **Defects-outside-criteria filed.** None new. The SLO burn flake
+  observed during the 10× full-parallel verification is the
+  pre-existing open backlog item (`burnCount → 2 < 2`); no duplicate
+  filing.
+
+### May 7 — Zig parser perf-gate threshold widened 10 ms → 50 ms (`parallel-runner-flake-perf-budget-zig-threshold-widen`)
+
+- `Tests/SenkaniTests/TreeSitterZigTests.swift:407` — `.milliseconds(10)`
+  → `.milliseconds(50)`, `@Test` annotation updated `under 10ms` →
+  `under 50ms` (function name kept as `zigFileParsesUnder10ms`,
+  mirroring the Kotlin precedent's identical rename pattern).
+- Inline rationale comment expanded to record the 2026-05-06 observed
+  flake (`median → 0.011024458 seconds < .milliseconds(10)` under the
+  parallel runner — two of three samples crossed the 10 ms bound,
+  which median-of-3 alone cannot damp), the 2026-05-07 in-isolation
+  measurement (1.2-1.8 ms typical median across 20 consecutive
+  filter-only runs), and the Kotlin-precedent classification (actual-
+  observed-flake widen, not Scala's preemptive bound-close-to-typical
+  widen). 50 ms = ~30× in-isolation typical, still catches a real
+  regression (a reverted tree-sitter parse costs hundreds of ms)
+  without false-firing under cooperative-pool contention.
+- The median-of-3 layer (preserved from the 2026-05-06 sweep) is
+  independent of the threshold widen: it strengthens the gate against
+  single-sample peer-suite spikes; the widen handles the two-sample
+  case median-of-3 cannot.
+- **Verification.** Filter-only `swift test --filter
+  "zigFileParsesUnder10ms"`: 20/20 green consecutive. Full parallel
+  suite `swift test --parallel`: 7 runs total, Zig site 7/7 green;
+  3 consecutive fully-green runs (runs 2-4 of the second batch).
+  `tools/test-safe.sh --chunk parsers`: 290/290 green.
+- **Defects-outside-criteria filed.** None new. The full-parallel
+  runs surfaced one `SLOTests.swift:248` `hookPassthroughP99UnderThreshold`
+  flake (`burnCount → 2 < 2`, observed once each in two separate batches)
+  — already filed as `slo-hookpassthrough-p99-majority-burn-still-flakes`
+  on 2026-05-06; same symptom, no duplicate filing.
+
+### May 6 — Median-of-3 perf-budget pattern extended to last 3 single-sample parser sites: Elixir/Kotlin/Python (`parallel-runner-flake-perf-budget-elixir-kotlin-python`)
+
+- 3 remaining single-sample parser perf gates migrated to median-of-3:
+  `TreeSitterElixirTests.swift:299-323` (50 ms, Duration shape),
+  `TreeSitterKotlinTests.swift:381-415` (50 ms, Duration shape — keeps
+  the 2026-04-21 10 ms → 50 ms widen rationale), and
+  `TreeSitterPythonTests.swift:175-208` (5 ms, Double-ms shape mirroring
+  the Rust precedent). Thresholds preserved per site — the median
+  strengthens the gate on its own, mirroring the 10-parser 2026-05-06
+  sweep precedent of preserve-don't-widen.
+- Inline rationale comment per site cross-referencing
+  `DependencyGraphPerfGateTests` as the canonical pattern, identical
+  wording to the Scala/Ruby/Haskell/PHP/Rust/10-parser precedents
+  for grep-traceability. The Kotlin site keeps the original 10 ms → 50 ms
+  widen comment unchanged — the median-of-3 layer is independent of
+  the threshold widen.
+- **Verification.** Filter-only `swift test --filter
+  "elixirFileParsesUnder10ms|kotlinFileParsesUnder10ms|pythonFileParsesUnder5ms"`:
+  3/3 green × 20 consecutive runs. Full parallel-suite `swift test`
+  3 consecutive runs: 2539/2539 green on runs 2 and 3 (run 1 hit a
+  Zig flake, see below — none of the 3 sites in this round regressed).
+  `tools/test-safe.sh --chunk parsers`: 290/290 green.
+- **Defects-outside-criteria filed.** Run 1 of the full parallel
+  suite produced `median → 0.011024458 seconds < .milliseconds(10)`
+  failure at `TreeSitterZigTests.swift:407` — the prior round's
+  preserve-don't-widen approach left insufficient headroom for Zig
+  under contention (median itself crossed the bound by 10 %). Runs 2
+  and 3 were clean. Filed as
+  `parallel-runner-flake-perf-budget-zig-threshold-widen` for a
+  follow-up round to widen the Zig bound from 10 ms to ~20 ms,
+  mirroring the Scala precedent (in-isolation typical < 50 % below
+  bound → widen).
+- Closes the post-PHP/post-10-parser-sweep single-sample family
+  completely — zero single-sample parser perf gates remain. Future
+  flakes in this family resolve via threshold-widen (e.g. the filed
+  Zig follow-up), not via pattern migration.
+
+### May 6 — Median-of-3 perf-budget pattern extended to 10 remaining parser sites (`parallel-runner-flake-perf-budget-remaining-parsers`)
+
+- 10 single-sample `clock.measure { … } < .milliseconds(10)` parser
+  perf gates migrated to median-of-3 across `TreeSitterBashTests`,
+  `TreeSitterCSharpTests`, `TreeSitterCppTests`, `TreeSitterGoTests`,
+  `TreeSitterJavaTests`, `TreeSitterJavaScriptTests`,
+  `TreeSitterLuaTests`, `TreeSitterRustTests`,
+  `TreeSitterTypeScriptTests` (×2 sites — typescript + tsx; via the
+  private `measureIndex` helper made median-of-3 internally), and
+  `TreeSitterZigTests`. Threshold preserved at 10 ms — the median
+  strengthens the gate on its own, mirroring the InjectionGuard
+  2026-05-06 precedent.
+- Inline rationale comment per site cross-referencing
+  `DependencyGraphPerfGateTests` as the canonical pattern, identical
+  wording to the Scala/Ruby/Haskell/PHP/InjectionGuard precedents
+  for grep-traceability.
+- **Verification.** Filter-only `swift test --filter "ParsesUnder10ms"`:
+  17/17 green × 20 consecutive runs. Full parallel-suite `swift test`
+  3 consecutive runs: 2539/2539 green each.
+  `tools/test-safe.sh --chunk parsers`: 290/290 green.
+- **Defects-outside-criteria filed.** Pre-audit during the migration
+  surfaced 3 additional single-sample parser perf gates not in the
+  10-site scope (Elixir 50 ms, Kotlin 50 ms, Python 5 ms — same
+  shape, different thresholds). Filed as
+  `parallel-runner-flake-perf-budget-elixir-kotlin-python` for a
+  follow-up round; Python at 5 ms is highest-risk because the
+  threshold is tighter than the family that has already produced
+  4 documented flakes.
+
+### May 6 — InjectionGuard 1 MB normalize perf gate flake under parallel runner: median-of-3 (`parallel-runner-flake-injectionguard-normalize-1mb-perf-budget`)
+
+- `Tests/SenkaniTests/InjectionGuardTests.swift:244-272` —
+  `normalizeIsLinearOnLargeBenignInput` rewritten with three `Date()`-
+  delta samples; assert `samples.sorted()[1] < 0.5` (was single-sample
+  `elapsed < 0.5`). Mirrors the `SkillScannerAsyncTests.swift:87`
+  TimeInterval pattern (closer fit than `Duration` because the test
+  was already on `Date()` deltas). Threshold preserved at 500 ms — the
+  prior O(n²) homoglyph pass took seconds, so the regression bar
+  sits well above the median bound. Closes the
+  `elapsed → 0.5144450664520264 < 0.5` failure observed in run 4 of 10
+  during the prior round's full-suite soak.
+- **Verification.** Filter-only `swift test
+  --filter "normalizeIsLinearOnLargeBenignInput"`: 20/20 green. Full
+  parallel-suite `swift test` on 10 consecutive runs:
+  `normalizeIsLinearOnLargeBenignInput` passed 10/10. The original
+  single-sample failure mode is closed.
+- **Defects-outside-criteria observed.** Soak runs 2 and 3 of 10
+  surfaced `Bash file parses under 10ms` (run 2),
+  `C# file parses under 10ms` (run 3), and `C++ file parses under
+  10ms` (run 3) — all single-sample 10 ms parser perf gates already
+  in scope of the open `parallel-runner-flake-perf-budget-remaining-
+  parsers` backlog item. No new filing — empirical confirmation of
+  the proactive item's premise.
+
+### May 6 — HTMLPreviewModeResolver invocation counter cross-suite race: per-test counter injection (`htmlpreviewmoderesolver-invocation-counter-cross-suite-race`)
+
+- `Sources/Core/HTMLPreviewMode.swift` — `HTMLPreviewModeResolver.resolve(for:mode:)`
+  gains an optional `counter: HTMLPreviewRenderCounter? = nil` parameter; the
+  static-shared `invocationCounter` probe is removed. Production passes nil
+  (default) and incurs zero overhead; tests instantiate a per-test counter and
+  pass it in. No shared mutable state means no parallel-suite race surface.
+- `Tests/SenkaniTests/DesignSystemSkillScaffoldTests.swift:185-206` —
+  `toggleBumpsPerModeCounterOnce` rewritten to own its counter; `reset()`
+  removed (no-op on a fresh instance); `before*` snapshots removed (counter
+  is always zero at start). Sibling test `resolveIsIdentityForBothModes`
+  unchanged at the call site (no counter passed → no bump → no race).
+- **Why option (b)** instead of a HookSeamLock-style cross-suite gate: the
+  counter has no production reader. Removing the shared static eliminates
+  the race at the source rather than papering over it with a lock — same
+  spirit as the URLProtocol gate but cleaner because no isolation primitive
+  is needed.
+- **Verification.** Filter-only `swift test --filter "HTMLPreviewModeResolverTests"`:
+  20/20 green. Full parallel-suite `swift test` on 10 consecutive runs:
+  `toggleBumpsPerModeCounterOnce` passed 10/10 (the original failure mode
+  is closed). `swift build`: green.
+- **Defects-outside-criteria filed as new backlog items.**
+  (1) `parallel-runner-flake-injectionguard-normalize-1mb-perf-budget` —
+  full-suite run 4 of 10 surfaced `InjectionGuardTests.swift:260
+  normalizeIsLinearOnLargeBenignInput` failing with `elapsed → 0.5144 < 0.5`;
+  same single-sample perf-budget shape as the parser flake family.
+  (2) `pinnedcontextstore-pinsactiondatamatchesdrain-order-flake` —
+  full-suite run 3 of 10 surfaced `PinnedContextTests.swift:99
+  pinsActionDataMatchesDrain` with pin order reversed (Beta-then-Alpha
+  instead of Alpha-then-Beta); insertion-order tie-break race in
+  `PinnedContextStore.all()`.
+  (3) `storeexec-niltest-loggersink-leak-from-peer-suite-migration` —
+  full-suite run 9 of 10 surfaced `StoreExecTests.swift:58 nilDBIsNoop`
+  failing with a leaked `schema.migration.applied` event from a peer
+  suite's `SessionDatabase.init()`; `.loggerSinkGate` only serializes
+  sink-using suites against each other, not against production
+  `Logger.log` callers in unrelated GCD queues.
+
+### May 6 — TreeSitter PHP perf-gate flake under parallel runner: median-of-3 + 20 ms threshold (`parallel-runner-flake-perf-budget-php`)
+
+- `Tests/SenkaniTests/TreeSitterPhpTests.swift:368-401` —
+  `phpFileParsesUnder10ms` rewritten with three `clock.measure { ... }`
+  samples; assert `samples.sorted()[1] < .milliseconds(20)` (was
+  single-sample `.milliseconds(10)`). Mirrors the canonical
+  Scala/Ruby pattern shipped 2026-05-05 in
+  `parallel-runner-flake-perf-budget-families-2026-05-04`. Closes the
+  `elapsed → 0.022554416 seconds < 0.01 seconds` failure observed
+  in 1 of 10 raw `swift test` runs during the prior round's
+  verification window.
+- **Verification.** Filter-only `swift test --filter
+  "phpFileParsesUnder10ms"`: 20/20 green (~12 ms each). Full
+  parallel-suite `swift test` on 13 consecutive runs: zero PHP perf
+  failures observed (the gate passed 13/13). `tools/test-safe.sh
+  --chunk parsers`: 290/290 green.
+- **Defects-outside-criteria filed as new backlog items.**
+  (1) `parallel-runner-flake-perf-budget-remaining-parsers` —
+  pre-audit grep surfaced 10 sibling parser perf gates (Bash, C#,
+  C++, Go, Java, JavaScript, Lua, Rust, TypeScript, Zig) that
+  retain the same single-sample 10 ms shape and are structurally
+  identical to the four already migrated; filed proactively.
+  (2) `htmlpreviewmoderesolver-invocation-counter-cross-suite-race` —
+  full-suite soak run 1 of 10 surfaced
+  `DesignSystemSkillScaffoldTests.swift:197 toggleBumpsPerModeCounterOnce`
+  failing with `count → 2 == before+1 → 1`; cross-suite race on
+  global `HTMLPreviewModeResolver.invocationCounter`.
+  (3) `slo-hookpassthrough-p99-majority-burn-still-flakes` —
+  reverify run 1 of 3 surfaced `SLOTests.swift:248
+  hookPassthroughP99UnderThreshold` failing with
+  `(burnCount → 2) < 2`; the 2026-05-05 median-of-3 majority-burn
+  migration is still tight enough to flip 2-of-3 distributions
+  under heavy parallel-suite contention.
+
+### May 6 — KnowledgeStore "disk I/O error" on BEGIN/COMMIT under full parallel suite: close-before-unlink test helper (`knowledgestore-disk-io-error-on-begin-or-commit-under-full-parallel-suite`)
+
+- `Tests/SenkaniTests/Helpers/TempKnowledgeStore.swift` (new): mirrors
+  `TempSessionDatabase.close(_:path:)` for KnowledgeStore. Exposes two
+  shapes — `close(_:path:)` for `KnowledgeStore(path:)` tests and
+  `close(_:projectRoot:)` for `KnowledgeStore(projectRoot:)` tests —
+  each draining the queue + `sqlite3_close(db)` via `store.close()`
+  **before** unlinking the on-disk file/dir. Closes the
+  `[KnowledgeStore] SQL error: BEGIN failed: disk I/O error` /
+  `COMMIT failed: disk I/O error` flake the
+  `batchIncrementMentions` defer-rollback hardening had unmasked
+  (5-of-10 baseline observed during that round's verification).
+- Migrated the candidate suites called out in the parent finding —
+  `KBCompoundBridgeTests`, `KBCLITests`, `KBEvalTests`,
+  `ChangeSetMinerTests`, `EntityTrackerTelemetryTests` — plus every
+  other KnowledgeStore-using test that relied on the same defer-vs-
+  deinit ordering pattern: `AuthorshipBackfillTests`,
+  `AuthorshipTrackerTests`, `AuthorshipPromptResolverTests`,
+  `EntityTrackerTests`, `KBVaultV7Tests`, `KnowledgeFileLayerTests`,
+  `KnowledgeStoreTests`, `KnowledgeEntityStoreTests`,
+  `KnowledgeLinkStoreTests`, `KnowledgeDecisionStoreTests`,
+  `KnowledgeEnrichmentStoreTests`. The SessionDatabase precedent
+  (`Tests/SenkaniTests/Helpers/TempSessionDatabase.swift`) is now
+  fully mirrored on the KnowledgeStore side.
+- Verified under 10 consecutive raw `swift test` runs: zero
+  `disk I/O error` lines (was 3-of-5 reproducible under the same
+  workload before the fix). `tools/test-safe.sh` all-chunks green
+  unchanged.
+
+### May 6 — KnowledgeStore parallel-suite SQL flake: `sqlite3_busy_timeout` on the primary connection (`knowledgestore-database-is-locked-rapid-fire-under-full-parallel-suite`)
+
+- `Sources/Core/KnowledgeStore.swift`: `enableWAL()` now calls
+  `sqlite3_busy_timeout(db, 5000)` after enabling WAL and
+  `foreign_keys=ON`. Closes the rapid-fire
+  `[KnowledgeStore] SQL error: database is locked` burst (11-19 lines
+  per affected run, 2-of-10 baseline) the
+  `batchIncrementMentions` defer-rollback hardening above had
+  unmasked. The default `busy_timeout = 0` returned `SQLITE_BUSY`
+  immediately on any writer contention; setting 5 s makes transient
+  ms-scale contention auto-retry inside SQLite. The constant
+  `KnowledgeStore.busyTimeoutMs = 5000` matches the
+  `TempSessionDatabase.secondaryHandleBusyTimeoutMs` precedent.
+- New regression suite
+  `KnowledgeStoreContentionTests` (Tests/SenkaniTests/KnowledgeStoreTests.swift):
+  `parallelOpenAgainstSamePathStaysSilent` opens 8 KnowledgeStores in
+  parallel via `withTaskGroup` on the same UUID-rooted vault path,
+  each performing a setup-and-write, then asserts every probe row
+  landed. Verified deterministic failure (5/5 runs, 8/8 entities
+  missing) without `busy_timeout`; deterministic pass (5/5 runs, 8/8
+  present) with it. `busyTimeoutMatchesPrecedent` pins the constant
+  to the SessionDatabase secondary-handle precedent.
+- Verification: 10/10 consecutive raw `swift test` runs clean of
+  `[KnowledgeStore] SQL error: database is locked`. The sibling
+  `disk I/O error` flake (separate, filed as
+  `knowledgestore-disk-io-error-on-begin-or-commit-under-full-parallel-suite`)
+  is not affected by this change. `tools/test-safe.sh` 8/8 chunks
+  green.
+
+### May 6 — KnowledgeStore parallel-suite SQL flake: defer-rollback hardening on `batchIncrementMentions` (`knowledgestore-sql-flake-under-full-parallel-suite`)
+
+- `Sources/Core/KnowledgeStore/EntityStore.swift`:
+  `batchIncrementMentions` was the contention site for the
+  transient `[KnowledgeStore] SQL error: cannot commit - no
+  transaction is active` the operator's
+  `phase-test-isolation-confirmation-gate-resolver-leak` close-round
+  surfaced (1 of 8 raw `swift test` runs). The function called
+  `rawExec(db, "BEGIN;")` and `rawExec(db, "COMMIT;")` without
+  checking return codes and ignored `sqlite3_step` failures — so
+  any BEGIN failure or step-induced auto-rollback (IOERR /
+  CONSTRAINT) left COMMIT facing no active transaction, which
+  printed the headline error.
+- The fix swaps that body for the proven defer-rollback pattern
+  used by `backfillNullAuthorship` 100 lines below: `BEGIN
+  IMMEDIATE` with checked return, `var committed = false` + a
+  defer that ROLLBACKs only when `sqlite3_get_autocommit(db) == 0`
+  (so we don't double-roll a txn auto-aborted by IOERR), step
+  return-code check that returns early on non-`SQLITE_DONE`/`SQLITE_ROW`,
+  and a checked COMMIT that flips `committed = true` on success.
+  Each failure mode emits a scoped diagnostic (`BEGIN failed: …`,
+  `prepare failed: …`, `step failed (rc=N): …`,
+  `COMMIT failed: …`) so future investigations don't have to
+  re-derive the contention site.
+- Verification: 10/10 consecutive raw `swift test` runs clean of
+  `cannot commit - no transaction is active`. The hardening also
+  unmasked two previously-silent issues — rapid-fire SQLITE_BUSY
+  bursts and SQLITE_IOERR on BEGIN/COMMIT — which the
+  no-return-check flow had been absorbing. Both are filed as new
+  backlog items under
+  `knowledgestore-database-is-locked-rapid-fire-under-full-parallel-suite`
+  and
+  `knowledgestore-disk-io-error-on-begin-or-commit-under-full-parallel-suite`
+  for separate investigation.
+
+### May 6 — Test isolation: `HookSeamLock` cross-suite gate for ConfirmationGate + HookRouter seams (`phase-test-isolation-confirmation-gate-resolver-leak`)
+
+- New `Sources/Core/HookSeamLock.swift`: process-wide
+  `NSRecursiveLock` + `withLock` helper. `HookRouter.handle()`
+  acquires it at entry; test fixtures wrap every override of
+  `ConfirmationGate.resolver|database|catalog` and the HookRouter
+  seam family in `HookSeamLock.withLock { … }`. `ConfirmationGate.withResolver(_:perform:)` is the
+  scoped helper for the most commonly overridden seam.
+- Closes the cross-suite race that surfaced under raw
+  `swift test --filter "HookRouter|ConfirmationGate|CredentialGateway|HookAnnotationFeed"` (5/5
+  runs failed pre-fix with `denyResolver` leak from one suite into
+  peer-suite reads). `tools/test-safe.sh` masked it via
+  `SWT_NO_PARALLEL=1`; the canonical chunked path stays
+  green. Verification: 8/8 consecutive targeted-filter runs +
+  test-safe full chunked run all green.
+- Production cost: one uncontended `NSRecursiveLock.lock()/unlock()`
+  per `HookRouter.handle()` call (sub-microsecond, well below the
+  5 ms hook performance budget).
+- Discipline added to `spec/testing.md` so future tests authoring a
+  new ConfirmationGate / HookRouter seam wrap the override site in
+  `HookSeamLock.withLock`. Any new seam added to those types must
+  appear in the `HookSeamLock` doc-comment enumeration.
+
+### May 6 — Three SkillPacks + live HookRouter merge (`phase-v11b-three-packs`, V.11b)
+
+- `spec/packs/code-quality/` is rewritten from V.11a's placeholder
+  into a substantive pack: a two-phase HandManifest skill
+  (lint-enforcement + review-heuristics) plus a HookRouter policy
+  fragment that denies the three most common per-line lint-
+  suppression markers (`eslint-disable-next-line`,
+  `swiftlint:disable`, `# noqa`).
+- `spec/packs/security/` ships end-to-end: a two-phase HandManifest
+  (secret-leak vocabulary + dangerous-command guard) plus a policy
+  fragment that denies hard-coded `API_KEY=` assignments,
+  `password = "` literals, and `eval(` invocations. Reuses the
+  SecretDetector named-pattern vocabulary in the skill body.
+- `spec/packs/devops/` ships end-to-end: a two-phase HandManifest
+  (blast-radius containment + prod-namespace guard) plus a policy
+  fragment that denies `kubectl delete`, `terraform destroy`, and
+  any tool argument carrying `--context=prod`. Read-only verbs
+  (`kubectl get`, `terraform plan`, `aws describe`) and non-prod
+  contexts pass through unchanged.
+- New `Sources/Core/PackPolicyRegistry.swift` loads installed pack
+  fragments from `~/.senkani/packs/<name>/policy/hook_router.json`
+  and exposes an `evaluate(toolName:toolInput:)` query. The
+  registry re-reads on `PackInstaller.apply()` / `uninstall()`
+  (same-process live merge) and on every hook event whose
+  install-root mtime has advanced (cross-process live merge —
+  daemon picks up CLI installs without restart).
+- `HookRouter.handle()` consults the registry between the
+  CredentialGateway gate and the per-tool routing switch. Pack
+  rule matches emit a `mustFix` denial annotation through
+  `HookAnnotationFeed` so DiffViewerPane surfaces a badge in the
+  same shape as budget / ConfirmationGate denials.
+- App startup wires `HookRouter.refreshInstalledPacks()` in both
+  `SenkaniApp.init` and `--socket-server` mode so installed packs
+  are loaded before the first hook event fires.
+- 15 new tests in `Tests/SenkaniTests/PackIntegrationTests.swift`
+  cover the cross-pack install/scan/deny/uninstall round-trip,
+  per-pack deny fixtures (Edit / Write / Bash inputs), pass-through
+  on non-matching calls, `pack_audits` chain-verify across the
+  round-trip, and per-pack content lints. The suite is `.serialized`
+  because the `HookRouter.packPolicyRegistry` seam is process-wide
+  static. Tests delta: 2517 → 2532 (+15). Full suite green.
+
+### May 6 — SkillPack bundle format + install/uninstall + collision-diff (`phase-v11a-pack-unit`, V.11a)
+
+- `spec/skill_packs.md` documents pack format v1: directory layout
+  (`pack.json` + `skills/` + `policy/` + `context/`), envelope
+  schema, `senkani pack` CLI surface, three collision kinds, and the
+  `pack_audits` chain table.
+- `senkani pack install <dir>` / `pack uninstall <name>` / `pack
+  list` ship as a new top-level CLI group. `--dry-run` prints the
+  collision diff without mutating the filesystem; `--force` records
+  a `force_override` chain row alongside the `install` row.
+- Migration v20 adds `pack_audits` (chained via the standard
+  `prev_hash` / `entry_hash` / `chain_anchor_id` triple). `senkani
+  doctor verify-chain` extends to `pack_audits`; `ChainVerifier
+  .verifyAll` returns 10 entries.
+- `spec/packs/code-quality/` ships the first in-tree skeleton pack
+  with `pack.json`, one HandManifest skill (lints clean), one
+  HookRouter policy fragment (no-op deny scaffold), and one context
+  doc. V.11b adds the `security` and `devops` packs + an
+  integration test on top of this scaffold.
+- `SkillScanner` gains a sixth scan root —
+  `~/.senkani/packs/<name>/skills/<skill>/manifest.json` — so
+  installed pack skills surface alongside Claude / Cursor /
+  Continue / project skills (priority: project > pack > others).
+- 18 new tests in `Tests/SenkaniTests/PackInstallTests.swift` cover
+  manifest parsing, install/uninstall round-trip (zero residue),
+  collision detection on skill name + policy scope-key, the
+  `--force` audit row, the chain verification, and the scanner's
+  pack discovery. Tests delta: 2499 → 2517 (+18). Full suite green.
+
+### May 6 — DesignSystemSkill scaffold + HTML Preview A/B toggle (`phase-v10a-skill-scaffold`, V.10a)
+
+- `spec/design-system/manifest.json` lands the project-local
+  HandManifest v1 skill that V.10b will populate with rule bodies.
+  The manifest declares `name: design-system`, `schema_version: 1`,
+  no tools, an empty guardrails block, and a single preamble phase
+  pointing readers at `spec/design_system_patterns.md`. Lints clean
+  via `senkani skill lint spec/design-system/manifest.json`.
+- `Sources/Core/SkillScanner.swift` gains a project-local
+  HandManifest scan path: any `<projectRoot>/spec/<dir>/manifest.json`
+  whose JSON declares `schema_version: 1` and a non-empty `name` is
+  emitted as a `source: "project"`, `type: .skill` entry. Malformed
+  files are silently skipped (the lint command is the surface that
+  flags structural errors). The new scan path uses
+  `JSONSerialization` to avoid pulling the full Codable surface into
+  every scan call.
+- `Sources/Core/HTMLPreviewMode.swift` introduces `HTMLPreviewMode`
+  (`.original` / `.designSystem`), `HTMLPreviewModeResolver.resolve`
+  (V.10a identity map; V.10b will branch), and a thread-safe
+  `HTMLPreviewRenderCounter` probe. Living in Core means the rule is
+  unit-testable without instantiating the SwiftUI view.
+- `SenkaniApp/Models/PaneModel.swift` carries `htmlPreviewMode:
+  HTMLPreviewMode = .original` per pane.
+  `SenkaniApp/Views/HTMLPreviewView.swift` renders a top-of-pane
+  segmented control over the WKWebView; both modes pass the same
+  resolved file path to the WebView in V.10a, so output is
+  byte-identical (the toggle is a surface-only proof V.10b can wire
+  pattern injection without touching the surface again).
+- Starter `spec/design_system_patterns.md` ships with the four
+  canonical section headings (Spacing, Contrast, Hierarchy, Type
+  scale) and a one-line V.10b placeholder under each, so V.10b
+  inherits a working spec on day one.
+- 10 new tests under `Tests/SenkaniTests/DesignSystemSkillScaffoldTests.swift`:
+  manifest decode + lint of the in-repo `spec/design-system/manifest.json`,
+  patterns directory existence, pattern-spec stub four-section presence,
+  scanner discovers project-local HandManifest, scanner ignores random
+  non-manifest JSON under `spec/`, scanner skips malformed manifests
+  silently, resolver identity for both modes, per-mode counter bumps
+  exactly once per call without mutating the input path. Full safe
+  suite green: 2,567 → 2,577 (+10).
+
+### May 6 — Credential gateway injection: `MCPToolConfig.credentialGateway` + HookRouter PreToolUse fetch (`phase-t4b-credential-gateway-injection`, T.4b)
+
+- `Sources/Core/CredentialGateway.swift` lands the round-2 surface
+  on top of T.4a's `CredentialVault` actor. The new
+  `CredentialGatewayConfig` (Sendable + Equatable + Codable)
+  carries `enabled`, `scope`, `vaultKeys: [String]`, `dryRun`, and
+  `injectionTarget ∈ {env, args}`. `MCPToolConfig` gains a
+  `credentialGateway: CredentialGatewayConfig?` property; the
+  default catalog ships every entry with `credentialGateway == nil`
+  so production tools see no behavior change yet.
+- `CredentialGateway.evaluate(...)` is the synchronous policy
+  engine: given a config plus an injected `Lookup` closure, it
+  returns `.notConfigured` (no gateway / disabled), `.proceed(Injection)`
+  (every key resolved, audit row written), or `.deny(reason:)`
+  (missing key + `dryRun: false`). The deny reason carries BOTH
+  keyname AND scope so the operator can run
+  `senkani vault add --key <name> --scope <scope>` without
+  guessing.
+- `HookRouter` consults the gateway in `handle()` AFTER the
+  confirmation gate, so a `ConfirmationGate.deny` short-circuits
+  before any vault read (operator's contract: gate decides first,
+  then we inject). On `.deny`, the gateway's reason surfaces in
+  `permissionDecisionReason` exactly like the budget / confirmation
+  paths. Three new seams (`HookRouter.credentialVaultLookup`,
+  `credentialGatewayRecorder`, `credentialGatewayCatalog`) keep the
+  test surface hermetic and the production wiring (T.4c) replaceable.
+- `CredentialGateway.LiveRecorder` writes a `token_events` row with
+  `feature: "credential_gateway"` and a structured `command` payload
+  shaped `credential_gateway keys=<comma-list> scope=<scope> dry_run=<bool>`.
+  The credential value is NEVER serialized — the recorder only sees
+  keynames + scope + flag. Defense-in-depth: the existing
+  `PersistenceRedaction` path already runs `SecretDetector.scan` over
+  every `command` column write.
+- `CredentialVault.shared` lands as a process-wide singleton
+  defaulting to `InMemoryKeychainStore`. T.4c swaps in the macOS
+  Keychain conformance.
+- 6 new unit tests in
+  `Tests/SenkaniTests/CredentialGatewayTests.swift`: Codable round-
+  trip, default-catalog gateway-disabled invariant, success path
+  (proceed + audit row asserts the value never lands in
+  `token_events.command`), missing-key fail-closed (deny carries
+  keyname + scope + the `senkani vault add` hint), missing-key dry-
+  run yields the `FAKE_KEY_<scope>_<key>` sentinel from `CredentialVault`,
+  and the order-of-operations check that `ConfirmationGate.deny`
+  short-circuits before the vault lookup fires. Test count
+  2,489 → 2,495.
+
+### May 6 — EgressProxy live listener + HTTP/CONNECT pipe (`phase-t1a2-egress-proxy-listener-and-pipe`, T.1a.2)
+
+- `Sources/Core/EgressProxy/EgressListener.swift` lights up the
+  T.1a deterministic core with a real POSIX TCP listener bound to
+  `127.0.0.1:<port>`. Port 0 (the default) takes a kernel-
+  assigned port; the bound port reads back via `getsockname` and
+  is persisted to `~/.senkani/egress.port` via
+  write-tmp-then-`rename` so a doctor running concurrently never
+  observes a half-written file. The accept loop is a
+  `DispatchSourceRead` mirror of the SocketServer pattern; each
+  accepted client drops onto a concurrent connection queue and
+  runs to completion or to EOF on either side.
+- `Sources/Core/EgressProxy/EgressConnectionHandler.swift` owns
+  per-connection logic. Reads request head up to `\r\n\r\n` (16 KB
+  cap), parses the first line via `HTTPRequestLine`, evaluates
+  the host through `EgressRuleEngine`, and branches: deny → 403
+  Forbidden + chained deny row; allow + plain-HTTP → rewrite
+  absolute URL to origin form, open upstream via
+  `EgressUpstreamConnector`, write rewritten head, pipe
+  bidirectionally via two `read`/`write` loops with
+  half-close-on-EOF; allow + CONNECT → 200 Connection
+  Established, peek up to 4 KB for the TLS ClientHello, extract
+  SNI via `TLSClientHelloSNI`, and only open the upstream tunnel
+  when `EgressHostNormalizer.normalize(SNI) ==
+  EgressHostNormalizer.normalize(CONNECT-host)`. SNI mismatch
+  writes a deny row with sentinel `rule_id="sni_mismatch"` and
+  closes without piping a single byte upstream; an unparseable
+  ClientHello writes `rule_id="sni_unparseable"`; a resolver /
+  connect failure writes `rule_id="upstream_unreachable"`. Per
+  the Schneier audit, none of these sentinels collides with a
+  rule-defined id because the rules loader rejects matching
+  patterns from operator config.
+- `Sources/Core/EgressProxy/EgressUpstreamConnector.swift` does
+  the resolver work in pure POSIX `getaddrinfo` + `connect` so
+  the path is testable without Foundation `URLSession` background
+  queues. Walks every returned `addrinfo` until one connects.
+- `senkani egress start` and `senkani egress stop` flip from
+  scaffold-stubs to real lifecycle. `start` instantiates an
+  `EgressListener` from the rules at `~/.senkani/egress-rules.json`
+  (missing or malformed → empty rule set → deny-by-default for
+  every host, intentional), writes its own pid to
+  `~/.senkani/egress.pid`, installs a `DispatchSource` SIGTERM
+  handler that calls `listener.stop()` (which unlinks the port
+  file and closes the listening fd), and parks on `dispatchMain`.
+  `stop` reads the pid file and sends SIGTERM. The doctor check
+  reading `~/.senkani/egress.port` from T.1a now flips to "egress
+  proxy: running on :PORT (decisions: N)" without any change.
+- 8 new integration / smoke tests under
+  `Tests/SenkaniTests/EgressProxyTests.swift` (`EgressListenerLiveTests`):
+  listener binds + writes port file, plain-HTTP allow rewrites &
+  pipes a fixture response, plain-HTTP deny returns 403, CONNECT
+  to a denied host returns 403, CONNECT with matching SNI pipes
+  bytes both ways through a fixture echoer (FNV-1a checksum
+  round-trip), CONNECT with SNI ≠ CONNECT-host writes a
+  `sni_mismatch` deny and tears down without piping, lifecycle
+  stop unlinks the port file and clears the bound port, and a
+  1 000-decision write-storm asserts `ChainVerifier.verifyEgressDecisions`
+  returns `.ok`. Each test holds its own `tempDB`-backed
+  `SessionDatabase` so the suite parallelizes safely. Test count
+  2475 → 2483.
+- Out of scope (filed for follow-ups): Qwen3 4B judge fallback
+  (T.1b), HTTPS body MITM + CA install (T.1d), 20-scenario
+  adversarial corpus + `--check-egress` doctor flag (T.1c).
+
+### May 6 — EgressProxy deterministic core: rule engine + chained decision audit (`phase-t1-egress-proxy`, T.1a)
+
+- Migration v19 introduces the `egress_decisions` chained SQLite
+  table — `host`, `method`, `decision`, `rule_id`, `latency_us`,
+  optional `pane_id` / `project_root`, plus the standard chain
+  triplet (`prev_hash`, `entry_hash`, `chain_anchor_id`). The
+  table is the load-bearing audit log for every allow/deny the
+  EgressProxy emits, and `ChainVerifier.verifyAll` walks it
+  alongside the eight prior chain participants. Tampering with a
+  decision row breaks `--verify-chain` at exactly that row,
+  proven by a dedicated tamper test.
+- `Sources/Core/EgressProxy/` ships the rule + decision core as
+  five orthogonal pieces: `EgressHostNormalizer` (case-fold,
+  strip default port `:80`/`:443`, strip trailing dot, strip
+  trailing slash — order chosen so combined inputs like
+  `Example.COM:80.` normalize correctly); `EgressRuleEngine`
+  (exact / prefix / suffix / single-`*` glob, deny-wins,
+  default-deny-on-miss as the load-bearing policy default);
+  `EgressDecisionStore` (chained writes via the shared
+  `ChainState` primitive, exposed through
+  `SessionDatabase+EgressAPI` as `recordEgressDecision`,
+  `recentEgressDecisions`, `egressDecisionCount`);
+  `HTTPRequestLine` parser (absolute-URL HTTP_PROXY form +
+  CONNECT form, with origin-form rejected so the proxy can't
+  accidentally accept misrouted requests); and
+  `TLSClientHelloSNI` extractor (parses the `server_name`
+  extension out of a ClientHello so the future tunnel can
+  validate the SNI host against the CONNECT-line host).
+- `senkani egress status` reports the listener state and
+  decision count; `senkani egress start|stop` print a clear
+  pointer to the `phase-t1a2-egress-proxy-listener-and-pipe`
+  follow-up that wires the live TCP socket. `senkani doctor`
+  gains check #18 ("Egress proxy: running on :PORT
+  (decisions: N)" / "down"), and `chainAuditOrder` adds
+  `egress_decisions` so `--verify-chain` walks it.
+- 22 new unit tests under
+  `Tests/SenkaniTests/EgressProxyTests.swift` pin the contract:
+  normalizer canonical forms (case + default-port + trailing
+  dot + trailing slash), non-default ports preserved,
+  `splitHostPort` accept/reject; rule engine exact / suffix
+  label-boundary / single-`*` glob / deny-wins / default-deny /
+  pre-normalization on the host; deny-latency p95 <1 ms across
+  100 hosts; HTTP request-line parses absolute-URL GET +
+  CONNECT, rejects origin-form + empty input;
+  `TLSClientHelloSNI` extracts SNI from a synthesized
+  ClientHello, raises `truncated` on cut bytes, raises
+  `notHandshake` on wrong record type; `EgressDecisionStore`
+  records and reads back, chains across successive writes,
+  verifier detects single-row tamper, count tracks rows,
+  migration v19 creates the table. Test count 2453 → 2475.
+- Live TCP listener + HTTP plain-proxy + CONNECT tunnel + SNI
+  vs CONNECT-host mismatch detection deferred to
+  `phase-t1a2-egress-proxy-listener-and-pipe` per the round's
+  Allspaw audit clash — shipping the deterministic core in
+  isolation gave crisp unit tests and avoided the round
+  duration overflow that bundling the I/O layer would have
+  caused. The follow-up has 8 tests targeted and inherits
+  every symbol from this round.
+
+### May 6 — CredentialVault foundation: actor + KeychainStore protocol seam (`phase-t4-credential-vault`, T.4a)
+
+- `Sources/Core/CredentialVault.swift` ships the credential-vault
+  foundation as three orthogonal pieces: `KeychainStore` protocol
+  (Sendable, `async throws` on every method, no `Security`
+  framework leak — only Swift-stdlib types in the surface);
+  `InMemoryKeychainStore` actor (map-backed, no disk I/O, used by
+  every test in this round and by T.4b's `HookRouter` injection
+  point until T.4c lands the real `MacOSKeychainStore`); and the
+  `CredentialVault` actor itself with a forward-compat
+  `scope: String = CredentialVault.defaultScope` ("default")
+  parameter on every read/write so T.2c can slot in
+  `engagement-<id>` scopes without an ABI break.
+- `CredentialVault.read(key:scope:dryRun:)` is fail-closed by
+  default — a missing key throws `CredentialVaultError.missingKey
+  (key:, scope:)`. The error's `localizedDescription` carries
+  BOTH key and scope plus the actionable hint
+  `senkani vault add --key <key> --scope <scope>` (CLI lands in
+  T.4c). `dryRun: true` substitutes
+  `Data("FAKE_KEY_<scope>_<key>".utf8)` for absent keys —
+  per-tool opt-in only via T.4b's `MCPToolConfig.dry_run` flag,
+  never an env var. The FAKE_KEY-never-aliases-real contract is
+  pinned by a dedicated test: when the key actually exists in
+  the store, dryRun surfaces the real value, not the sentinel.
+- 8 new unit tests under `Tests/SenkaniTests/CredentialVaultTests
+  .swift` pin the contract: defaultScope constant, binary-safe
+  round-trip (NUL + high-bit + non-UTF8 bytes), structured-error
+  key+scope+CLI-hint, FAKE_KEY sentinel for absent keys,
+  FAKE_KEY-never-aliases-real, scope isolation across writes,
+  scope-aware list/delete. Suite total 2,523 → 2,531 (+8).
+- T.4b (`MCPToolConfig.credential_gateway` schema + HookRouter
+  PreToolUse injection + `token_events` redaction) is unblocked
+  next; T.4c (real macOS Keychain conformance + CLI + adversarial
+  corpus eval) ships in a future cowork-runnable round once the
+  groomed test plan lands.
+
+### May 5 — Layer 3 PII classifier infrastructure: registry + decoder + CLI shell (`phase-t2-pii-classifier`, T.2a)
+
+- `Sources/Core/ModelManager.swift` registers `pii-classifier-int8` →
+  `openai/privacy-filter` (Apache-2.0 sparse-MoE token classifier,
+  ~1.5 GB, INT8 quant). Status boots `.available` — no auto-pull. The
+  registration alone does NOT change `SecretDetector` behavior; Layer 3
+  hot-path wiring is T.2b (`phase-t2-pii-classifier-layer-3-wiring`).
+- `senkani models {list, pull, verify}` CLI subcommand (`Sources/CLI/
+  ModelsCommand.swift`). `list` prints every registered model with
+  status + on-disk size (or `--json`). `pull <id>` and `verify <id>`
+  drive `ModelManager.download(modelId:)` /
+  `ModelManager.verify(modelId:)` and surface human-readable hints on
+  failure.
+- `Sources/Core/PIIClassifier.swift` — pure-Swift `BIOESDecoder` +
+  constrained Viterbi over the 33-way tag space (1 background O + 8
+  PII categories × 4 BIOES tags). 8 PII categories: `account_number`,
+  `private_address`, `private_email`, `private_person`, `private_phone`,
+  `private_url`, `private_date`, `secret`. Constrained transitions
+  (`O → O|B|S`, `B-X → I-X|E-X`, `I-X → I-X|E-X`, `E-X → O|B-*|S-*`,
+  `S-X → O|B-*|S-*`) prevent malformed boundary sequences — a
+  fragmented argmax (B,B,B) collapses under Viterbi.
+- `Sources/Core/PIIClassifierAdapter.swift` — actor singleton mirroring
+  the `EmbedTool.engine` / `VisionTool.engine` pattern.
+  `ensureModel()`, `runVerificationFixture()`, and `forward(_:)`
+  currently throw `BackendNotReadyError(stage:)` — the actual MLX-Swift
+  / GGUF inference path is filed as
+  `phase-t2-pii-classifier-backend-wiring` so the staged delivery is
+  visible to operators (no silent no-op).
+- 8 new unit tests in `Tests/SenkaniTests/PIIClassifierTests.swift`
+  covering registry presence, decoder empty/single-span/Viterbi-collapse
+  cases, S-tag single-token spans, registry-list completeness,
+  verification status transitions, and the adapter's staged-delivery
+  marker. Existing `MLPipelineTests.allRegisteredIdsAreHandled` updated
+  to recognize `PIIClassifierAdapter.modelId`. Total tests: ~2523 (was
+  ~2515 pre-round); zero regression.
+- **Operator-facing message**: `senkani models pull pii-classifier-int8`
+  on a real machine surfaces "PIIClassifier download backend wired in
+  T.2b. T.2a ships registry + decoder + CLI shell only." The follow-up
+  item (`phase-t2-pii-classifier-backend-wiring`) owns the real HF
+  download driver, MLX/GGUF backend choice, real-machine perf
+  validation (cold-start <2s, warm-path p95 <50ms), and verification
+  fixture round-trip.
+
+### May 5 — Test resilience: `ScheduleWorktree.create` retries the git commondir race (`scheduleworktreetests-flake-under-parallel-suite-run`)
+
+- `Sources/Core/ScheduleWorktree.swift::create` now wraps `git worktree add`
+  in a 3-attempt retry with 50/150 ms backoff. The retry fires only when
+  stderr matches the specific `commondir` + `Undefined error: 0`
+  fingerprint — git's own internal-bookkeeping race when concurrent
+  `worktree add` invocations against the same repo run under FS load.
+  Any other failure path (notGitRepo, disk full, permissions) breaks
+  immediately and propagates the original stderr. Each retry re-rolls
+  `runId` and best-effort cleans the partial path + `git worktree prune`s
+  the parent repo so a half-registered worktree can't shadow the next
+  attempt. `ScheduleWorktreeTests.concurrentCreatesProduceDistinctWorktrees`
+  now passes deterministically across three consecutive whole-suite
+  `swift test` runs.
+
+### May 5 — Internal: `KBReader` async migration + multi-project session model close (`mcpsession-actor-isolation-phase-b-iii` + parent close)
+
+- `Sources/MCP/KBReader.swift` migrates the four SenkaniApp-facing
+  getters (`store`, `tracker`, `layer`, `projectRoot`) to `get async`.
+  The actor isolation IS the SenkaniApp contract — no synchronous
+  escape hatch. The four `nonisolated let` KB-bridge fields on
+  `MCPSession` remain (immutable Sendable refs to thread-safe types
+  do not benefit from actor isolation; isolating them would force
+  every internal `Sources/MCP/Tools/` accessor through an extra hop).
+- `Sources/MCP/KBObserver.swift::observeHookEvent` runs its registry
+  lookup inside a `Task.detached` — fire-and-forget for hook
+  callbacks, with no synchronous read of the registry's session.
+- SenkaniApp's 14+ KBReader call sites cascade `await`:
+  `KBPaneViewModel.swift` (8 sites: `loadEntities`, `loadSessionBrief`,
+  `select`, `commitSave`, `acceptProposal`, `discardProposal`,
+  `loadGraph` — every one moves the `KBReader.*` read inside its
+  detached Task). `Views/SidebarView.swift` swaps `.onAppear` for
+  `.task` and wraps the 5-second timer body in a Task. The trickiest
+  call site, `Views/KnowledgeBaseView.swift`'s body-time enrichment-
+  candidate check, refactors to `@State private var enrichmentSet`
+  loaded via `.task(id: vm.enrichmentBadge)` — keyed on the badge so
+  the candidate set stays in sync without an extra timer.
+- The "Phase B-iii follow-up" doc-comment block at the top of
+  `MCPSession.swift` is removed; the `nonisolated let` rationale on
+  the four KB-bridge fields is updated to reflect the post-cascade
+  shape. The Phase 5 TODO block on `MCPSession.shared` was removed
+  in Phase B-i; this round closes the trailing pointer.
+- Existing 11-test `KBPaneViewModelTests` suite passes unchanged
+  (data layer reads `session.knowledgeStore` directly, which is still
+  `nonisolated let`-accessible from the test executor). Whole-suite
+  build clean; the parent
+  [`mcpsession-actor-isolation`](spec/autonomous/completed/2026/2026-05-05-mcpsession-actor-isolation-and-multi-project-keying.md)
+  umbrella closes — every operator-chosen acceptance bullet (actor
+  conversion, registry, dynamic projectRoot, KBReader async,
+  SenkaniApp cascade, per-connection metrics, per-connection toggle
+  overrides, two concurrent-connection isolation tests, Phase 5 TODO
+  removal) is satisfied across A + B-i + B-ii + B-iii.
+
+### May 5 — Internal: per-connection toggle overrides + `connection_id` DB columns (`mcpsession-actor-isolation-phase-b-ii`)
+
+- `MCPSession.ToggleOverrides` (six optional `Bool`s — filter, secrets,
+  indexer, cache, terse, injectionGuard) plus `MCPSession.$currentToggleOverrides`
+  `@TaskLocal` thread per-connection feature-toggle overrides through
+  the dispatch layer. `ToolRouter.dispatchTool` now wraps each tool
+  call in nested `withValue(...)` blocks for both the connection ID
+  and the override map. Six new actor-isolated `effective<X>Enabled`
+  computed properties overlay the override on the session-wide default;
+  `ReadTool`, `FetchTool`, `ExecTool`, and `WebFetchTool` switched
+  from `<x>Enabled` to `effective<X>Enabled`. `updateConfig` /
+  `refreshConfig` continue to mutate the session's defaults — overrides
+  ride the `@TaskLocal` and never touch actor storage.
+- New schema migration `v18` adds nullable `connection_id TEXT`
+  columns to `commands` and `token_events` plus per-table indexes.
+  `MCPSession.recordMetrics` plumbs the resolved connection ID into
+  both DB writes alongside the JSONL row Phase B-i shipped, so per-
+  connection vs aggregate views are both reconstructible from the
+  same rows.
+- Audit-chain compatibility: pre-existing `migration-v5` (commands)
+  and `migration-v4` (token_events) anchors continue to verify under
+  their original canonical-column shape. The v18 migration renames
+  pre-v18 `fresh-install` anchors for those tables to
+  `fresh-install-pre-v18` so the writer (and `ChainVerifier`) can
+  switch shapes per anchor: legacy reasons hash without
+  `connection_id`; all other anchors include it. `ChainState` re-reads
+  the anchor reason on each write rather than caching it, so SQL-level
+  anchor renames (test fixtures, future `senkani doctor --repair-chain`
+  reanchors) take effect immediately.
+- New `SessionDatabase` query helpers
+  `commandsForConnection(connectionId:)` and
+  `aggregateForProject(projectRoot:groupByConnection:)` return per-
+  connection rows / per-connection aggregate stats. Unit-tested in
+  `Tests/SenkaniTests/PerConnectionOverrideTests.swift` (7 new tests
+  cover effective-getter fallback, override shadowing, two-task
+  override isolation, partial override fall-through, connection_id
+  round-trip, group-by-connection aggregates, and chain verification
+  with NULL connection_id).
+
+### May 5 — Internal: `MCPSession` per-project registry + per-connection identity (`mcpsession-actor-isolation-phase-b-i`)
+
+- `Sources/MCP/Session/MCPSessionRegistry.swift` introduces a process-
+  global `@unchecked Sendable` registry (NSLock-protected dictionary)
+  keyed by project root. Sessions are created lazily on first acquire
+  and reused across subsequent acquires of the same root. The legacy
+  `MCPSession.shared` static singleton is removed; `KBReader` /
+  `KBObserver` / `SocketServer` / `MCPMain` now route through
+  `MCPSessionRegistry.shared.ensureDefaultSession()`.
+- `Sources/MCP/ConnectionContext.swift` adds a per-connection identity
+  value (UUID `connectionId` + `projectRoot`) threaded through
+  `ToolRouter.register(on:session:context:)` and
+  `ToolRouter.route(_:session:context:)`. Each socket-server
+  connection mints its UUID on `accept()`; the daemon stderr now logs
+  both fd and `connection_id` for correlation.
+- `MCPSession.recordMetrics` accepts an optional `connectionId:`
+  parameter; the dispatch layer surfaces the active connection's ID
+  via the new `MCPSession.currentConnectionId` `@TaskLocal`, which the
+  recorder reads when no explicit override is supplied. The JSONL
+  metrics row gains an optional `connectionId` field — older readers
+  ignore unknown fields, no consumer change required.
+- Two new isolation tests in
+  `Tests/SenkaniTests/MCPSessionRegistryIsolationTests.swift`:
+  registry-isolation (different project roots → distinct sessions; no
+  metric leakage under concurrent `recordMetrics`); task-local
+  connection-ID propagation (JSONL row carries the active TaskLocal
+  value).
+- The Phase 5 `TODO` block at the top of `MCPSession.swift` is
+  replaced with explicit pointers to Phase B-ii (per-connection
+  toggle overrides + DB-column threading) and Phase B-iii (`KBReader`
+  async cascade + parent close).
+
+### May 5 — Internal: `MCPSession` migrated to Swift `actor` (`mcpsession-actor-isolation-phase-a`)
+
+- `Sources/MCP/Session/MCPSession.swift` converts from `final class
+  @unchecked Sendable` (with internal `NSLock`) to a Swift `actor`.
+  Compiler-enforced isolation replaces every `lock.lock()` /
+  `lock.unlock()` pair across mutating methods. The `MCPSession.shared`
+  process-global singleton is preserved; resolution semantics
+  (`MCPSession.resolve()`) unchanged.
+- Four immutable Sendable read fields exposed via `KBReader`
+  (`projectRoot`, `knowledgeStore`, `entityTracker`, `knowledgeLayer`)
+  are declared `nonisolated let`, plus the other internally
+  thread-safe Sendable refs (`readCache`, `pipeline`,
+  `validatorRegistry`, `metricsFilePath`, `sessionId`, `paneId`,
+  `agentType`, `treeCache`, `pinnedContextStore`). SenkaniApp's
+  `KBReader.store` / `.tracker` / `.layer` / `.projectRoot` accessors
+  stay synchronous — no `await` cascade into
+  `KBPaneViewModel`/`SidebarView`/`KnowledgeBaseView`.
+- All MCP-side callers cascade `await` where actor isolation requires.
+  Every tool's `handle()` is now `async`; `ToolRegistry` advertises
+  every entry through `.asyncHandler`. `SocketServer` and `MCPMain`
+  await `instructionsPayload(base:)` and `session.shutdown()`.
+- `BudgetConfig.withTestOverrideAsync` joins the existing sync helper
+  to drive actor-isolated code from tests; install/restore swaps the
+  override slot via a lock-free atomic helper so no NSLock crosses an
+  `await` boundary.
+- New `Tests/SenkaniTests/MCPSessionActorIsolationTests.swift` races
+  `recordMetrics` + `updateConfig` + `noteDeprecation` on a single
+  session and asserts published counters land on exact totals; a
+  separate test hammers `noteDeprecation` from 50 tasks and asserts
+  `true` is observed exactly once. Compile-only test pins the
+  `nonisolated let` contract for the four KB-bridge fields.
+- User-facing API unchanged. Multi-project registry + per-connection
+  metrics + per-connection toggle overrides + `KBReader` async
+  migration all follow in Phase B
+  (`mcpsession-actor-isolation-phase-b`).
+
+### May 5 — `no-running-senkani` pre-condition standard for all uninstall test plans (`uninstall-test-plan-prerunning-process-precondition`)
+
+- Process change driven by 2026-05-03 v2 walk Finding #3, third
+  bullet: a still-running SenkaniApp instance silently re-seeded
+  `~/.senkani/workspace.json` immediately after Step 2's wipe. The
+  strict-moment post-Step-2 check passed at 13:13:09 EDT, but any
+  later inspection would have shown a contaminated state.
+- `spec/autonomous/backlog/uninstall-rewalk-step8-modelmetadatacache.md`
+  grew a `## Pre-grooming notes` section with the verbatim
+  inheritance contract: `## Pre-conditions` row, `## Setup` shell
+  probe, and `## Failure modes` row that any future groom round
+  must copy into the polished plan body. The probe halts the test
+  at preconditions before any state mutation if `pgrep -f
+  "SenkaniApp"` returns a PID.
+- `tools/soak/manual-log.md` top-of-section process standard binds
+  ALL future uninstall test plans (v3 amendment, v0.4.0 release
+  pass, future variants) to include the `no-running-senkani` probe.
+- `spec/testing.md` documents the standard so it is discoverable
+  alongside other long-lived test policies.
+- Failure-mode recovery covers both registered installs
+  (`osascript -e 'tell application "SenkaniApp" to quit'`) and
+  unregistered dev/runner-bundled builds (`pkill -f SenkaniApp`).
+- No code shipped — pure process/test-plan documentation. Tests
+  unchanged.
+
+### May 5 — Typed `ToolDefinition` registry collapses the MCP dispatch + catalog drift hazard (`toolrouter-typed-registry`)
+
+- `Sources/MCP/ToolRegistry.swift` (new) — `ToolDefinition` (name +
+  `Tool` schema + `ToolHandler`) and `ToolRegistry.definitions` /
+  `ToolRegistry.byName` make one record per tool the single source of
+  truth for the MCP surface. `ToolHandler` is a `Sendable` enum with
+  `.asyncHandler` (cooperative-pool dispatch) and `.syncHandler`
+  (wrapped on `ToolRouter.toolQueue`) — preserving identical async/
+  sync routing semantics so heavy synchronous I/O still runs off the
+  cooperative pool.
+- `Sources/MCP/ToolRouter.swift` — the parallel `switch
+  normalizedParams.name` dispatch table and the hand-maintained
+  `static func allTools() -> [Tool]` array literal both delete out.
+  Dispatch is now `ToolRegistry.byName[name]` lookup; `allTools()` is
+  `ToolRegistry.definitions.map(\.schema)`. File drops from 556 lines
+  to 232.
+- `Tests/SenkaniTests/ToolRouterRegistryTests.swift` (new) — pins the
+  historical 20-tool surface, asserts `Set(allTools().names) ==
+  Set(byName.keys)`, asserts `ToolDefinition.name` equals
+  `schema.name`, and confirms uniqueness. The test makes drift-by-
+  forgetting impossible to ship — silent regressions in either
+  surface fail at test time, not at MCP-client probe time.
+- Adding a new MCP tool now means appending one `ToolDefinition` and
+  bumping the historical-surface guard. The existing requirement to
+  also register the tool in `MCPToolCatalog.defaults` (tag set) and
+  add a `ToolIntent` case (canonical trace row) is unchanged — see
+  `spec/mcp_tools.md` → "Typed `ToolDefinition` registry".
+
+### May 5 — Typed `ToolIntent` + `CallResult` enums replace primitive strings on `AgentTraceEvent` (`tool-intent-result-enums`)
+
+- `Sources/Core/Stores/ToolIntent.swift` (new) — `ToolIntent`
+  (read/fetch/search/outline/bundle/exec/validate/explore/knowledge/
+  embed/parse/repo/session/version/vision/watch/web/deps/pane) and
+  `CallResult` (success/error/timeout/denied/cached + `unknown`
+  sentinel for legacy data). Both `String`-backed, `Codable`,
+  `CaseIterable`, `Sendable`, `Hashable`.
+- `AgentTraceEvent.feature: ToolIntent?` and `result: CallResult`
+  (was `String?` / `String`). Compile-time-typo'd write sites
+  (`"Read"` vs `"read"`, `"file_read"` vs `"read"`) now fail to
+  compile rather than silently disabling
+  `CounterfactualReplay.outlineFirstStrict` and similar string-
+  matched filters. The `agent_trace_event` column type stays TEXT —
+  no migration; encode/decode at the store boundary preserves wire
+  compatibility for existing JSON-mode logs and handoff cards.
+- Read-path observability for legacy DB rows: unknown `feature`
+  strings decode to `nil`, unknown `result` strings to
+  `CallResult.unknown`. Each fires `Logger.log("agent_trace.
+  unknown_intent" / "agent_trace.unknown_result")` and increments
+  the matching `event_counters` row, so vocabulary drift surfaces
+  via `senkani stats` rather than going silent.
+- `CounterfactualReplay.outlineFirstStrict` matches against
+  `.read`/`.fetch`/`.cached` enum cases. `SessionDatabase
+  +RepriceAPI.repriceTierRow` retains the SQL-projection
+  `String?`/`String` shape on `AgentTraceTierRow` and converts
+  at the synthetic-`AgentTraceEvent` boundary.
+- Test count: 2416 → 2417 (+1) — new
+  `AgentTraceEventStoreUnknownVocabTests` suite covers a direct-SQL
+  legacy row with `"Read"` / `"oh_no"` and asserts the typed read
+  surfaces nil / `.unknown`, the warn events route to the test
+  sink, and `event_counters` increment exactly once. Suite carries
+  `.serialized, .loggerSinkGate` per the existing logger-sink
+  discipline. All 2417 tests green.
+
+### May 5 — Median-of-3 perf-budget pattern across 5 sites (`parallel-runner-flake-perf-budget-families-2026-05-04`)
+
+- Five wall-clock perf-budget guards observed flaking under full-
+  suite parallel-runner load but green in isolation:
+  `TreeSitterScalaTests` Scala parses, `TreeSitterRubyTests` Ruby
+  parses, `TreeSitterHaskellTests` Haskell parses (in-isolation
+  typical was already at the 10 ms ceiling), `SLOTests`
+  `hookPassthroughP99UnderThreshold`, and `SkillScannerAsyncTests`
+  `scanAsync finishes promptly on a fixture with many files`. Same
+  family as the DependencyGraph perf-gate flake (closed earlier on
+  May 5) — wall-clock budgets squeezed by peer-suite CPU contention
+  the parallel runner can't avoid.
+- Inline median-of-3 at each site, matching the canonical pattern
+  from `DependencyGraphPerfGateTests`. Sync sites (Scala/Ruby/
+  Haskell) take three `clock.measure { ... }` samples and assert
+  `samples.sorted()[1] < threshold`; async site (SkillScanner)
+  takes three wall-clock samples; distributional site (SLO p99)
+  runs three independent 200-sample evaluations and fails only if
+  the majority (≥ 2/3) reports `.state == .burn`. Thresholds
+  widened where in-isolation headroom was thin: Scala 10 → 20 ms,
+  Ruby 10 → 20 ms, Haskell 10 → 50 ms (matches Kotlin/Elixir
+  convention). SkillScanner (5 s) and SLO (1 ms product contract)
+  budgets unchanged.
+- Considered a shared `TestPerfBudget` helper; rejected because the
+  three measurement primitives (sync `clock.measure` → `Duration`,
+  async wall-clock → `TimeInterval`, distributional p99 → `Double`)
+  would force a lowest-common-denominator API at five usage sites.
+  Revisit if a sixth perf-budget test joins the family.
+- Verification: 5/5 filter-only green in 0.234 s; three consecutive
+  full `swift test` runs all 2416/2416 (12.058 s / 10.823 s /
+  11.739 s). No defects-outside-criteria observed.
+
+### May 5 — KBVaultV7 env-var leak under parallel runner closed (`.serialized`); parallel-runner-flake-additional-families parent item closed
+
+- `Tests/SenkaniTests/KBVaultV7Tests.swift` — `@Suite("KBVaultConfig — V.7")`
+  gains `.serialized`. Two tests in this suite manipulate the process-
+  global `SENKANI_KB_VAULT_ROOT` env var (`defaultResolvesToPerProjectDir`
+  unsets before reading via `getenv`; `envOverrideUsesProjectSlugSubdir`
+  sets via `setenv` and defers `unsetenv`). Without `.serialized` the
+  parallel runner could interleave one test's read with the other's
+  write — `defaultResolvesToPerProjectDir` would observe the sibling's
+  override and resolve to a different temp root, failing the
+  `resolved == root + "/.senkani/knowledge"` expectation. Intra-suite
+  serialization eliminates the race; grep confirms no other suite reads
+  or writes `SENKANI_KB_VAULT_ROOT`, so a cross-suite gate trait isn't
+  needed.
+- Closes `parallel-runner-flake-additional-families-2026-05-04` (parent
+  item). Three of four sub-families closed via dedicated rounds earlier
+  in May 5: FileWatcher (`filewatcher-fsevents-flake-under-parallel-runner`),
+  HookAnnotationFeed (`hookannotationfeed-deny-json-byte-equality-flake`),
+  DependencyGraph (`dependencygraph-real-project-graph-perf-budget-flake`).
+  This round addresses the residual KBVaultV7 family and verifies the
+  full four-family acceptance: each new failure passes in isolation
+  (KBVaultConfig filter-only 3/3 in 0.012 s); full `swift test` green at
+  2416/2416 on three consecutive runs (12.15 s / 10.91 s / 10.09 s).
+- Defects-outside-criteria filed during this round: none.
+
+### May 5 — KnowledgeTool `entityObserver` process-global race kills the runner (closed)
+
+- `Tests/SenkaniTests/KnowledgeToolTests.swift` — `@Suite("KnowledgeTool")`
+  → `@Suite("KnowledgeTool", .serialized)`. Two tests in this suite save
+  + install + restore `HookRouter.entityObserver`, a
+  `nonisolated(unsafe) public static var` closure global. Without
+  `.serialized`, the parallel runner could race save/install/teardown
+  across the two tests, leaving the observer pointed at closure A
+  while closure B was asserting against B's session — B's
+  `state.sessionTotal["ObservedEntity"]` then nil. The follow-on
+  force-unwrap at line 249 escalated the soft `#expect` failure into
+  a `Fatal error: Unexpectedly found nil while unwrapping an
+  Optional value` that aborted the entire test process and abandoned
+  every concurrently-running suite's verdicts.
+- Force-unwrap at line 249 replaced with a single read into a local
+  + nil-coalesced operand, so a soft `#expect` failure stays soft
+  and doesn't escalate into a runner-killing fatal.
+- `entityObserver` was the missed seam from the URLProtocol /
+  Logger-sink / FSEvents remediation rounds: the other three
+  `nonisolated(unsafe)` `HookRouter` statics (`validationDatabase`,
+  `annotationFeed`, `trustFlagSink`) were already serialized in
+  their respective suites. Suite doc comment now cross-references
+  the gated suites so a future test adding entityObserver writes
+  can't silently regress.
+- Closes `knowledgetool-entityobserver-shared-global-race-2026-05-04`:
+  filter-only `swift test --filter "KnowledgeTool"` ran 10/10 green
+  on three consecutive runs (0.43/0.40/0.38 s); three consecutive
+  full `swift test` runs (default parallel workers, 2,416 tests)
+  all 2416/2416 green (10.3/11.8/12.7 s) with no fatal nil unwrap
+  from this test on any run.
+
+### May 5 — HookAnnotationFeed `Deny response JSON unchanged` byte-equality flake closed (parsed-JSON comparison)
+
+- `Tests/SenkaniTests/HookAnnotationFeedTests.swift` —
+  `denyResponseUnaffectedByRateCap` swaps its `#expect(admitted ==
+  suppressed)` byte-equality check for parsed-JSON dictionary
+  equality (`JSONSerialization.jsonObject(...) as? NSDictionary`
+  on both sides, then `==`). The deny response inner dict has
+  three keys (`hookEventName`, `permissionDecision`,
+  `permissionDecisionReason`) and `JSONSerialization.data(withJSON
+  Object:)` does not promise deterministic key ordering, so two
+  sequential calls with semantically-identical content can
+  serialize to different byte sequences (158 == 158 bytes but not
+  byte-for-byte equal) under parallel-runner CPU pressure. Test-
+  only change — `HookRouter.blockResponse` keeps emitting the
+  current JSON; the agent doesn't care about key order, and the
+  parsed-equality test is what the test was always trying to
+  assert.
+- Closes `hookannotationfeed-deny-json-byte-equality-flake-2026-05-04`:
+  filter-only run all green 4/4 in 0.014 s; full `swift test`
+  green at 2416/2416 on three consecutive runs (11.8 s, 10.8 s,
+  10.7 s).
+- Defects-outside-criteria filed during this round: none.
+
+### May 5 — FileWatcher + KnowledgeFileLayer FSEvents flake closed (cross-suite gate + iter reduction + widened wait)
+
+- `Tests/SenkaniTests/FSEventsGate.swift` — new
+  `FSEventsGateTrait` (mirrors the URLProtocol / Logger-sink gate
+  pattern): actor-backed continuation-queued async semaphore plus
+  a 500 ms post-suite settle that lets per-process FSEvents kernel
+  resources drain between gated suites. `isRecursive == false` so
+  the trait fires once per suite, not per child test.
+- `Tests/SenkaniTests/FileWatcherTests.swift` — all four FileWatcher
+  suites (`Basic Operation`, `Filtering`, `Debouncing`,
+  `Lifetime Safety`) now declare `@Suite("…", .serialized,
+  .fsEventsGate)`. The `waitFor(timeout:)` helper default + the six
+  positive `fired` waits widen from 2 s → 8 s, riding out non-FSEvents
+  peer-suite CPU pressure that can stretch FSEvents callback delivery
+  latency. The two `Lifetime Safety` deinit-driven tests
+  (`Implicit deinit-driven teardown survives churn`, `Implicit
+  teardown on non-existent path is safe`) drop iteration count
+  200 → 20: each iteration intentionally leaks one FSEventStream
+  registration (no `stop()` means no `FSEventStreamInvalidate`),
+  and 200 leaked streams per test was saturating per-process
+  FSEvents kernel resources, surfacing `FSEventStreamStart failed`
+  in subsequent gated suites. The `passRetained` + paired-release
+  fix structurally closes the race the iteration count was
+  defending against, so 20 iterations is plenty as a regression-
+  detection bound.
+- `Tests/SenkaniTests/KnowledgeFileLayerTests.swift` —
+  `KnowledgeFileLayer — Lifetime Safety` suite picks up
+  `.serialized, .fsEventsGate` (the layer wraps its own
+  `FSEventStreamRef`, same kernel-resource contention). The
+  `Implicit teardown survives churn` test drops 200 → 20 iterations
+  for the same FSEvents-leak reason.
+- Closes `filewatcher-fsevents-flake-under-parallel-runner-2026-05-04`:
+  filtered runs all green (12/12 in 4.8 s under the gate's
+  serialization + settle); full `swift test` green at 2416/2416 on
+  three consecutive runs (14.1 s / 10.7 s / 12.4 s). The
+  `parallel-runner-flake-additional-families-2026-05-04` parent
+  item's FileWatcher checkboxes effectively close as a side-effect.
+- Defects-outside-criteria filed during this round: none. The
+  HookAnnotationFeed `Deny response JSON ... unchanged` byte-
+  equality flake observed on run #4 is already filed under
+  `hookannotationfeed-deny-json-byte-equality-flake-2026-05-04` and
+  `parallel-runner-flake-additional-families-2026-05-04` — same
+  family, separate scope.
+
+### May 5 — DependencyGraph "Real project graph builds fast" perf-budget flake closed (median-of-3 sampling)
+
+- `Tests/SenkaniTests/DependencyGraphTests.swift` — extracted
+  `Real project graph builds fast` into its own
+  `@Suite("DependencyGraph — Perf gate")` and replaced the single
+  `clock.measure { ... }` wall-clock assert with a median-of-3
+  measurement. The full builder is run three times; the test
+  asserts the median elapsed against the 5 s budget. The failure
+  message reports all three samples + the median for diagnostic.
+- Why median-of-3: the previous fix considered (`.serialized` on
+  the suite) only serializes within-suite — peer suites still
+  preempt the measured CPU slice during parallel-runner execution.
+  Median-of-3 tolerates a one-of-three peer-CPU spike but still
+  fires on a real O(N²) regression (every measurement would blow
+  budget).
+- Closes `dependencygraph-real-project-graph-perf-budget-flake-2026-05-04`:
+  filtered runs all green 3/3 (perf gate ~7.8 s — 8.2 s wall, three
+  samples each ~2.5 s); full `swift test` green for DependencyGraph
+  in 3/3 runs (perf gate ~10.7 s — 11.8 s wall under full-suite
+  parallel load).
+- Defects-outside-criteria filed during this round: none.
+
+### May 5 — ChainVerifierTests + PolicySnapshotsChainTests adopt openSecondaryHandle (proactive multi-handle busy_timeout migration)
+
+- `Tests/SenkaniTests/ChainVerifierTests.swift` — every secondary
+  `sqlite3_open` site (the `tamper(_:rowid:)` writer plus the three
+  peek helpers `selectAllRowids`, `selectFirstRow`, `runSQL`)
+  migrates from bare `sqlite3_open` to
+  `TempSessionDatabase.openSecondaryHandle(_:)`. Suite gains
+  `.serialized`.
+- `Tests/SenkaniTests/PolicySnapshotsChainTests.swift` — same
+  migration: `tamper(_:rowid:column:value:)` writer + `selectAllRowids`
+  peek + the two PRAGMA peeks inside `schemaShape` /
+  `sessionIdForeignKey`. The two PRAGMA-using tests become `throws`
+  + `try #require(...)` to consume the optional return cleanly.
+  Suite gains `.serialized`.
+- Closes `chainverifier-policysnapshots-secondary-handle-busy-timeout-2026-05-04`:
+  filtered runs all green 3/3 per suite (~0.06 s — 0.12 s); full
+  `swift test` green at 2416/2416.
+- Defects-outside-criteria filed during this round: none — the
+  pre-audit grep confirmed both target files are exhaustively
+  migrated and no other `sqlite3_open` sites remain in either
+  suite.
+
+### May 4 — ChainRepairer paneRefreshStateRepair sqlite "database is locked" flake closed (test fixture busy_timeout + suite serialized)
+
+- `Tests/SenkaniTests/Helpers/TempSessionDatabase.swift` —
+  new `openSecondaryHandle(_:)` returns a second sqlite handle on
+  the primary `SessionDatabase`'s file with `sqlite3_busy_timeout`
+  set to 5 s. `SessionDatabase` enables WAL but does not set a busy
+  timeout, so a second handle that races a primary writer or WAL
+  checkpoint sees `SQLITE_BUSY` immediately — wrapped by the test's
+  `tamper` helper as `tamper code 2 "database is locked"`. 5 s is
+  well above any plausible test-side write window.
+- `Tests/SenkaniTests/ChainRepairTests.swift` — `tamper(_:table:where_:set:)`
+  and the three peek-handle sites (lines previously at 206, 479, 533)
+  migrate from bare `sqlite3_open` to `TempSessionDatabase.openSecondaryHandle`.
+  `@Suite("ChainRepairer — T.5 round 4")` gains `.serialized` as
+  belt-and-suspenders alongside the busy_timeout fix; the suite
+  mutates on-disk sqlite rows via a second handle, and parallel-runner
+  CPU/IO pressure was the proximate trigger for the lock contention.
+- Closes `chainrepairer-pane-refresh-state-database-locked-2026-05-04`:
+  filter-only runs green 5/5 at ~0.15 s; ChainRepairer suite passes
+  cleanly under full-suite parallel load (run C of three).
+- Defects-outside-criteria filed during this round:
+  `chainverifier-policysnapshots-secondary-handle-busy-timeout-2026-05-04`
+  (same multi-handle pattern in `ChainVerifierTests` and
+  `PolicySnapshotsChainTests` — proactive migration to the shared
+  opener);
+  `filewatcher-fsevents-flake-under-parallel-runner-2026-05-04`
+  (FSEventStream callback misses under full-suite parallel load —
+  `Starts and stops cleanly`, `Tracks source files at top level`,
+  `Fires handler on file create/modify/delete`, `Debounces rapid
+  changes into one batch`, `Resets debounce on new changes`);
+  `dependencygraph-real-project-graph-perf-budget-flake-2026-05-04`
+  (`DependencyGraph "Real project graph builds fast"` 5 s wall-clock
+  budget exceeded under parallel-runner CPU contention);
+  `hookannotationfeed-deny-json-byte-equality-flake-2026-05-04`
+  (`HookAnnotationFeed "Deny response JSON unchanged"` byte-equality
+  fails with both sides at 158 bytes — same length, different bytes).
+
+### May 4 — AutoValidateQueue cleanValidation parallel-runner flake closed (drainForTesting widened + suite serialized)
+
+- `Sources/Core/AutoValidateQueue.swift` —
+  `drainForTesting`'s default `timeoutMs` widened from 5 s → 15 s.
+  The test seam crosses the cooperative pool four times per call
+  (debounce `Task.sleep`, two actor hops, and a
+  `Task.detached(priority: .utility)` whose body blocks on
+  `Process.run` + `waitUntilExit`). Under full-suite parallel-runner
+  load the `.utility` task can be deprioritized for several seconds;
+  the original 5 s budget lost the dice roll often enough to flake.
+  The polling loop returns immediately on `pending.isEmpty && running == 0`,
+  so green-path latency is unchanged — only the slow path uses the
+  wider window.
+- `Tests/SenkaniTests/AutoValidateTests.swift` —
+  `@Suite("AutoValidateQueue — Enqueue Logic")` now carries
+  `.serialized` to contain within-suite ordering effects
+  (`cleanValidationPersistsOutcomeAndCounters` is the only spawning
+  test today; the trait is defensive against future tests in the
+  same suite that spawn).
+- Closes `autovalidatequeue-clean-validation-flake-2026-05-04`:
+  filtered runs all green at ~0.16 s; three full-suite verification
+  runs each saw `cleanValidationPersistsOutcomeAndCounters` pass
+  cleanly inside the wider drain window.
+- Defects-outside-criteria filed during this round:
+  `knowledgetool-entityobserver-shared-global-race-2026-05-04`
+  (runner-killing fatal nil unwrap from
+  `HookRouter.entityObserver` `nonisolated(unsafe)` race) and
+  `chainrepairer-pane-refresh-state-database-locked-2026-05-04`
+  (sqlite "database is locked" on chain-repair tamper test under
+  parallel runner).
+
+### May 4 — Logger sink suites cross-suite serialized via process-wide gate trait (LoggerRouting flake closed)
+
+- `Tests/SenkaniTests/LoggerSinkGate.swift` introduces a
+  `.loggerSinkGate` `CustomExecutionTrait` mirroring the May 4
+  URLProtocol gate: a `actor`-backed continuation-queued async
+  semaphore that fires once per suite (`isRecursive == false`).
+  Suites that call `Logger._setTestSink` — `LoggerRouting` and
+  `StoreExec — shared sqlite3_exec wrapper` — now carry both
+  `.serialized` and `.loggerSinkGate` so concurrent sink-using
+  suites can't tear each other's sinks down.
+- Closes `loggerrouting-migrations-applied-flake-2026-05-04`:
+  `LoggerRouting → migrationsAppliedFiresOnFreshDB` (and the
+  related `openFailedTagsDefaultModeFromSingletonInit` /
+  `migrationsAppliedDoesNotFireOnAlreadyMigratedDB` failures from
+  the same family) all green across three consecutive full-suite
+  runs (default parallel workers, ~2,416 tests).
+- `Logger._testSink` is a `nonisolated(unsafe) static var` —
+  `.serialized` orders tests *within* a suite but does nothing
+  across suites, so two parallel sink-using suites racing the
+  process-global pointer can drop each other's events on the floor.
+  Doc-comment in `Sources/Core/Logger.swift` now points future
+  authors at the trait. Same Swift Testing 6.0 migration note
+  applies as for `MockURLProtocolGate.swift`.
+
+### May 4 — URLProtocol-stub suites cross-suite serialized via process-wide gate trait (parallel-runner flake closed)
+
+- `Tests/SenkaniTests/MockURLProtocolGate.swift` introduces an
+  `actor`-backed continuation-queued async semaphore wrapped in a
+  `CustomExecutionTrait` (`.urlProtocolGate`). Suites that touch
+  `MockURLProtocol.stubs` — `RemoteRepoClient — network paths
+  (URLProtocol stub)` and `Bundle remote — URLProtocol paths` — now
+  carry both `.serialized` and `.urlProtocolGate` so they serialize
+  *across* the suite boundary instead of only within each suite.
+- Closes the flake family named in
+  `swift-testing-parallel-runner-env-var-isolation`:
+  `authHeaderPresentOnApiHostWhenTokenSet`,
+  `authHeaderAbsentOnRawHostEvenWithToken`,
+  `fetchThenComposeYieldsUsableBundle`,
+  `secretsInReadmeAreRedactedViaClient`, and
+  `authHeaderAbsentWhenNoTokenSet` — all green on three consecutive
+  full-suite parallel runs.
+- `MockURLProtocol.stubs` is process-global; `.serialized` only
+  enforces intra-suite ordering, so concurrent suites racing on the
+  shared dict could `reset()` mid-`register()` and starve a sibling.
+  The gate acquires a single permit per suite invocation, releases
+  on success or throw, and (per the file's migration note) is the
+  one thing to rewrite when swift-testing's pin moves past 6.0
+  (`CustomExecutionTrait` → `TestScoping.provideScope`).
+
+### May 4 — Session-DB schema authority collapsed onto migrations
+
+- `MigrationRegistry.all` is now the single canonical authority for
+  every session-DB table. `SessionDatabase` invokes
+  `MigrationRunner.run` BEFORE constructing any store, so on every
+  open path — fresh DB or pre-existing — schema lands through one
+  code path and the `PRAGMA user_version` stamp matches the schema
+  shape.
+- Eight stores lose `setupSchema()` entirely because their tables
+  and indexes are fully owned by migrations: `PaneRefreshStateStore`
+  (v6), `AgentTraceEventStore` (v8/v10/v14/v16),
+  `AnnotationStore` (v9), `ConfirmationStore` (v11),
+  `TrustAuditStore` (v12), `AnnotationRateCapStore` (v13),
+  `ContextPlanStore` (v14), `PolicyStore` (v15/v17). The
+  `PolicyStore.schemaSQL` static, exposed only for the parity
+  guardrail, is removed in the same pass.
+- Four stores keep a slimmed `setupSchema()` for the residual DDL
+  that has not yet been folded into a numbered migration —
+  `CommandStore` (`sessions`, `commands_fts`, FTS triggers, three
+  ALTERs, two `sessions` indexes), `TokenEventStore`
+  (`claude_session_cursors`, the `model_tier` ALTER, five
+  `token_events` indexes), `SandboxStore` (two store-private
+  indexes), `ValidationStore` (two store-private indexes). Each
+  carries a comment naming the residual surface and pointing at the
+  migration that already owns the table.
+- `Tests/SenkaniTests/PolicySchemaParityTests.swift` is retired in
+  the same round — the duality it guarded no longer exists.
+- `Sources/Core/Stores/INVARIANTS.md` I9 is updated: every schema
+  change to a session-DB table now lands as a numbered migration,
+  full stop. `spec/architecture.md` → "Schema authority" is
+  updated to reflect the cleanup shipped.
+- Vault DB (`<projectRoot>/.senkani/vault.db`) is unchanged —
+  there is no `MigrationRunner` for the vault, so its
+  `setupSchema()` calls remain the single authority.
+- Closes `session-db-schema-authority-collapse-to-migrations`,
+  filed by the parent finding in
+  `policy-store-setupschema-dedup`.
+
+### May 4 — `senkani replay run --session ID` now scopes by the session's project_root
+
+- `Sources/CLI/ReplayCommand.swift`'s `sessionProjectRoot(db:sessionId:)`
+  previously returned `nil` for every session (self-flagged in the
+  source: "A future round can plumb project_root through"). The
+  downstream `agentTraceRowsInWindow(project: nil, since:)` call
+  then pulled every project's trace rows since `sessionStart`. On
+  any host with concurrent multi-project work the replay's baseline
+  was over-inflated and the deltas were wrong.
+- Surface the session's `project_root` on `SessionSummaryRow`
+  (`Sources/Core/SessionDatabase+CommandAPI.swift`) and add it to
+  the `loadSessions` SELECT in `CommandStore` so callers can join a
+  session id back to its project. The CLI helper now reads
+  `recent.first(where: { $0.id == sessionId })?.projectRoot` and
+  passes that to the trace-window query.
+- `--session` lookup limit bumped to 500 (the public cap on
+  `loadSessions`) so a `--session` flag for a not-most-recent
+  session resolves reliably.
+- Surfaced 2026-05-03 in luminary review (Torvalds + Bach lenses).
+- Two new tests in `Tests/SenkaniTests/ReplayScopeByProjectTests.swift`:
+  `loadSessionsSurfacesProjectRoot` (regression guard against the
+  CommandStore SELECT dropping the column) and
+  `replayWindowScopesToSessionProjectRoot` (end-to-end
+  two-project fixture asserting only A's rows land in A's window).
+
+### May 4 — Counterfactual replay `budget-tight` edges pinned: boundary `>` vs `>=`, single-row-exceeds-cap, empty-rows-with-cap
+
+- `Sources/Bench/CounterfactualReplay.swift`'s `budgetTight` had
+  three undocumented edge behaviors that no test pinned: cumulative
+  cost exactly equal to the cap, a single first row whose cost
+  alone exceeds the cap, and empty `rows` with a cap supplied.
+  Surfaced 2026-05-03 by Bach in luminary review.
+- Behavior change: empty `rows` + cap supplied now returns
+  `confidence: .unsupported` (previously `.exact`). Aligns with
+  `outline-first-strict`'s empty-trace behavior — an empty trace
+  cannot demonstrate cap behavior. No CLI/JSON callers branch on
+  this distinction (`Sources/CLI/ReplayCommand.swift` just renders
+  `confidence.rawValue`), so the fix is safe.
+- Boundary rule made explicit: the cutoff comparison is strictly
+  `>`, not `>=`. A row that brings cumulative *to* the cap is
+  preserved; only a row that pushes cumulative *past* the cap is
+  blocked. Documented in the function doc comment AND surfaced in
+  every cap-supplied report's `notes` field so consumers reading
+  reports learn the rule from the report itself.
+- Single-row-exceeds-cap behavior pinned: `affectedRowCount == 1`,
+  `counterfactual.rowCount == 0`, `confidence == .needsValidation`.
+  No code change — the existing cap-walk already produced this
+  shape; the test now keeps it stable across refactors.
+- Three new tests in `Tests/SenkaniTests/CounterfactualReplayTests.swift`
+  → `BudgetTightTests`: `cumulativeExactlyEqualsCapPreservesBoundaryRow`,
+  `singleRowExceedingCapBlocksItself`, `emptyTraceWithCapReportsUnsupported`.
+
+### May 4 — Release-cut gate consumer filed: `release-v0-4-0-mlx-pin-bump-pass` wires the trigger chosen for `mlx-swift-lm`'s revision pin
+
+- The 2026-05-04 freshness-revisit round chose RELEASE-CUT GATE as
+  the next-revisit trigger for `mlx-swift-lm`'s revision pin and
+  recorded it in `Package.swift`'s `## Pin rationale` block plus a
+  CHANGELOG bullet — but did not wire a concrete consumer. Without
+  a row that someone is required to tick on each cut, the trigger
+  is advisory.
+- This round files the consumer:
+  `spec/autonomous/backlog/release-v0-4-0-mlx-pin-bump-pass.md`.
+  Naming follows the `release-v0-X-Y-*` per-cluster pattern already
+  in use for the v0.3.0 cut (uninstall-pass, onboarding-pass,
+  surface-pass, promote-changelog-heading). The whoever-files-v0.4.0
+  promote-changelog-heading item is required to add this row to its
+  `blocked_by:` list.
+- The new row's `## Acceptance` is dual-path mirroring the Pin
+  rationale block: (a) bump applied → `Package.swift` +
+  `Package.resolved` updated, `./tools/test-safe.sh` + on-real-
+  machine MLX inference smoke green, Pin rationale block refreshed,
+  CHANGELOG bullet recorded; OR (b) bump rejected → regression
+  named in Execution evidence, Pin rationale block refreshed with
+  the regression and the next trigger, CHANGELOG bullet records
+  the held-pin decision.
+- Filed `status: manual` + `groomable: true` because real-machine
+  MLX inference smoke tests require Apple Silicon hardware that
+  the autonomous loop cannot drive. A future round can groom a
+  Cowork-runnable test plan with the specific senkani entry points
+  to exercise.
+- Audit chain preserved via `parent_finding`: this row →
+  `release-checklist-mlx-pin-bump-row` (filed today) →
+  `mlx-swift-lm-pin-freshness-revisit` (chose the trigger) →
+  `mlx-swift-lm-pin` (introduced the revision pin).
+
+### May 4 — Session-DB schema authority decided: migrations canonical, `setupSchema` is a transitional shim
+
+- The session DB had two paths creating each table:
+  `MigrationRegistry.all` and every store's `setupSchema()`. With
+  `CREATE TABLE IF NOT EXISTS` on both sides, a future schema edit
+  in only one path could silently produce "works on fresh DBs,
+  breaks on migrated ones" or vice versa. `policy_snapshots` was
+  the most recent example (v15 + v17 + `PolicyStore.setupSchema`
+  all carry the same DDL).
+- `spec/architecture.md` → "Schema authority (decided 2026-05-04)"
+  records the principle: migrations are the canonical authority for
+  the session DB; `setupSchema()` is a transitional shim. The
+  knowledge vault (`<projectRoot>/.senkani/vault.db`) is unaffected
+  — `setupSchema()` is its only authority because it has no
+  `MigrationRunner`.
+- Until the project-wide cleanup ships
+  (`session-db-schema-authority-collapse-to-migrations` filed as
+  follow-up), each dual-authority store carries a parity
+  regression test asserting `PRAGMA table_info` /
+  `index_list` + `index_info` / `foreign_key_list` produce
+  byte-identical results from the two paths. The first such test
+  ships now: `Tests/SenkaniTests/PolicySchemaParityTests.swift`.
+  `PolicyStore.schemaSQL` was extracted as a `static let [String]`
+  so the test and `setupSchema()` consume the same DDL — the test
+  catches divergence between that constant and migrations'
+  separate copy.
+
+### May 4 — `policy_snapshots.session_id` declares `REFERENCES sessions(id)` (documentation parity with `commands.session_id`)
+
+- Prior state: Migration v15 (`policy_snapshots` table) + Migration
+  v17 (chain-anchoring extension)'s self-contained `CREATE TABLE`
+  statements, plus `PolicyStore.setupSchema`'s mirror, all declared
+  `session_id TEXT NOT NULL` without the `REFERENCES sessions(id)`
+  marker that `commands.session_id` (Migration v5 baseline) carries.
+  The relational intent ("every snapshot belongs to a session") was
+  implicit in every reader path but invisible in the schema.
+- All three CREATE statements now declare the FK in lockstep
+  (`Sources/Core/Migrations.swift` v15 + v17,
+  `Sources/Core/Stores/PolicyStore.swift` `setupSchema`). Effect is
+  fresh-install only — SQLite cannot retrofit FKs via
+  `ALTER TABLE`, and the project default of `PRAGMA foreign_keys =
+  OFF` means the declaration is durable documentation rather than
+  runtime enforcement. Existing databases migrate forward unchanged.
+- New `PolicySnapshotsChainTests.sessionIdForeignKey` asserts the FK
+  is present on fresh installs via
+  `PRAGMA foreign_key_list(policy_snapshots)`, preventing future
+  drift across the three CREATE statements.
+- Surfaced 2026-05-03 by Celko-lens luminary review of
+  `policy-snapshots-chain-anchor`.
+
+### May 4 — `senkani doctor` chain-audit display now surfaces `pane_refresh_state` (verifier covered it; doctor was silently dropping it)
+
+- Prior state: `ChainVerifier.verifyAll` returned a result for
+  `pane_refresh_state` (V.1 round 2), but `DoctorCommand.checkAuditChain`'s
+  per-table display loop walked a hardcoded `order` array that omitted
+  it — and the green-path summary line (`chain integrity: OK across …`)
+  named seven participants, not eight. A tampered `pane_refresh_state`
+  row would not produce a per-table `BROKEN at row …` line on the
+  operator-facing surface, even though `--verify-chain` would still
+  exit non-zero. Silent failure of the display surface for one of
+  eight chain participants.
+- `Doctor.chainAuditOrder` is now a single-source-of-truth `static let`
+  with all eight participants (`token_events`, `validation_results`,
+  `sandboxed_results`, `commands`, `pane_refresh_state`,
+  `policy_snapshots`, `confirmations`, `trust_audits`); the summary line
+  derives its participant list from the same constant. Adding a new
+  chain participant in the future requires extending one array, not
+  two.
+- `formatChainAuditLines` extracted as a pure helper returning
+  `[(Status, String)]` — the doctor surface is now unit-testable
+  without dup2-capturing stdout. New `DoctorAuditChainSurfaceTests`
+  asserts (a) `chainAuditOrder` includes `pane_refresh_state`,
+  (b) the order array is byte-for-byte aligned with
+  `ChainVerifier.verifyAll`'s table set, (c) the OK summary line
+  names `pane_refresh_state`, and (d) a tampered `pane_refresh_state`
+  row produces a `chain integrity (pane_refresh_state): BROKEN at row N`
+  line in the doctor output (mirrors the existing
+  `PaneRefreshStateStoreTests.tamperFailsVerification` fixture).
+- Filed off the `policy-snapshots-chain-anchor` round's pre-audit
+  inventory finding #3 — `policy-snapshots-chain-anchor` widened the
+  array to add `policy_snapshots` and named `pane_refresh_state` as
+  the single remaining display gap; this round closes it.
+
+### May 4 — `ChainVerifier` covers `confirmations` + `trust_audits` (audit-log tamper-evidence promise now whole)
+
+- Prior state: `confirmations` (T.6a) and `trust_audits` (U.4a) wrote
+  through the T.5 audit chain at insert time — `prev_hash`,
+  `entry_hash`, and `chain_anchor_id` columns populated on every row —
+  but `ChainVerifier.verifyAll` walked only six tables and silently
+  skipped these two. A motivated bad actor with DB write access could
+  rewrite a `confirmations` row to make a denied tool call look
+  auto-approved, or flip a `trust_audits` label from FP to TP, and
+  `senkani doctor --verify-chain` would silently pass despite the
+  schema carrying tamper-evidence columns the operator was promised
+  would catch them. The chain was built but not verified — the worst-
+  of-both posture.
+- `ChainVerifier` gains `verifyAnchorConfirmations`,
+  `verifyAnchorTrustAudits`, and the matching `verifyConfirmations` /
+  `verifyTrustAudits` public entries. `verifyAll` now returns eight
+  tables (was six). `DoctorCommand.checkAuditChain` widens its `order`
+  array + summary line to surface both new participants.
+- `annotation_rate_cap_log` is intentionally NOT covered — the table
+  has no chain columns by design (per `AnnotationRateCapStore`'s
+  source comment: "Not chain-hashed: the row is a derived flood
+  marker. The source denials are already recorded via `hook_events`,
+  `token_events`, and `commands`; tampering with the rate-cap log is
+  detectable by re-deriving from those.").
+- Tamper tests cover both attack vectors named in the round: flipping
+  `confirmations.decision` from `deny` to `auto`, and flipping
+  `trust_audits.label` from `fp` to `tp`. Plus a third tamper on
+  `trust_audits.reason` (flag rows) for shape coverage.
+- Filed for the same reason `policy_snapshots` chain-anchoring shipped
+  on the same day: every audit-surface row whose schema carries
+  tamper-evidence columns must be walked by `verifyAll`, or the
+  operator's promised "I can detect tampering" capability is a lie.
+
+### May 4 — `ChainRepairer.supportedTables` widened to every integer-keyed chain participant (operator now has an auto-repair path on every audited table)
+
+- Prior state: after the May 4 `policy_snapshots` chain-anchor round,
+  `senkani doctor --verify-chain` could detect tamper on every
+  integer-keyed chain participant — but `senkani doctor --repair-chain`
+  refused everything except `token_events`, `validation_results`,
+  and `commands`. An operator who saw a verified breach in
+  `policy_snapshots`, `pane_refresh_state`, `confirmations`, or
+  `trust_audits` had no clean recovery path; the second half of the
+  "auto-detect tamper, auto-bind a repair anchor" promise was
+  missing.
+- `ChainRepairer.supportedTables` now includes `policy_snapshots`,
+  `pane_refresh_state`, `confirmations`, and `trust_audits` alongside
+  the original three. `sandboxed_results` (TEXT primary keys) stays
+  out — it needs an `--from-created-at` flag, deferred until concrete
+  operator demand. `annotation_rate_cap_log` is intentionally NOT a
+  chain participant per `AnnotationRateCapStore`'s design note (the
+  rate-cap log is a derived flood marker; tampering is detectable by
+  re-deriving from `hook_events` / `token_events` / `commands`) and
+  stays out of the set.
+- `SessionDatabase.repairChain` now switches on the repaired table
+  and invalidates only that store's chain cache (the prior round
+  invalidated the four original stores unconditionally — wrong shape
+  for the widened set). An `assertionFailure` in the default arm
+  guards the invariant "the cache list can never lag
+  `supportedTables`."
+- `RepairError.unsupportedTable`'s description string now derives the
+  supported-list dynamically from `supportedTables` instead of
+  hardcoding three names.
+- `senkani doctor --repair-chain` error messages also derive the
+  supported-list dynamically — operators who pass `--table foo` see
+  the current set, not a stale enumeration.
+- Tests: seven new tests under
+  `Tests/SenkaniTests/ChainRepairTests.swift`. Two are shape guards
+  (`supportedTables` covers exactly the integer-keyed participants;
+  `unsupportedTable` description names every entry). Two are full
+  verify-roundtrip integration tests on `policy_snapshots` and
+  `pane_refresh_state` — write three rows, tamper row 2,
+  `ChainVerifier.verify*` reports the breach, `repairChain` opens a
+  repair anchor with the right `rowsRebound` count, fresh write under
+  the new anchor, post-repair verify is `.ok` with `repairs >= 1`.
+  Two are smoke tests on `confirmations` and `trust_audits` —
+  `ChainVerifier` doesn't yet cover those tables (tracked separately
+  under `chainverifier-coverage-confirmations-trust-audits`), so the
+  tests assert outcome shape + repair anchor presence + prior-tip
+  linkage in `chain_anchors.operator_note` directly. Test count
+  2393 → 2400 (+7).
+- Filed as a defect-outside-criteria during this round:
+  `chainverifier-coverage-strip-annotation-rate-cap-premise` —
+  corrects the sibling `chainverifier-coverage-...` item's stale
+  premise that `AnnotationRateCapStore` participates in the chain
+  (it doesn't, by design).
+
+### May 4 — `policy_snapshots` chain-anchored (counterfactual replay baseline now tamper-evident)
+
+- Prior state: `policy_snapshots` (the load-bearing record cited by
+  counterfactual replay reports as "what configuration was active
+  when this session ran") had no `prev_hash` / `entry_hash` /
+  `chain_anchor_id` columns. Every comparable audit-relevant table
+  — `confirmations`, `trust_audits`, `pane_refresh_state`, the
+  original Phase T.5 four — was already chain-anchored. A motivated
+  bad actor with DB write access could rewrite a snapshot row
+  post-hoc and replay reports would silently lie about the
+  baseline. The "agent_trace_event tampering is detectable by
+  re-deriving from chain-anchored sources" risk-acceptance from
+  `architecture.md` did NOT apply to `policy_snapshots` itself —
+  the snapshot IS the source, not a derivation.
+- Migration v17 adds the three chain columns + an
+  `idx_policy_snapshots_anchor` index; existing rows are folded
+  under a `migration-v17` anchor with anchor-from-now NULL hashes
+  (matching the v4 / v5 backfill convention).
+- `PolicyStore.capture` routes through `ChainHasher` / `ChainState`
+  the same way `ConfirmationStore` does — entry hash computed over
+  the four data columns (`session_id`, `captured_at`,
+  `policy_hash`, `policy_json`), prev_hash chained from the
+  segment's tip, dedup-no-advance discipline preserved (the
+  `ON CONFLICT(session_id, policy_hash) DO NOTHING` path no longer
+  poisons the chain cache).
+- `ChainVerifier.verifyAll` widened to include `policy_snapshots`;
+  new `verifyPolicySnapshots(_:)` public entry point.
+- `senkani doctor --verify-chain` now covers `policy_snapshots` —
+  the per-table walk + summary line both name it.
+- Tests: six new tests under
+  `Tests/SenkaniTests/PolicySnapshotsChainTests.swift` covering
+  schema shape (PRAGMA verifies the three chain columns), happy-
+  path chain-of-three, `verifyAll` membership, dedup-no-advance,
+  and tamper coordinates on `policy_json` + `policy_hash`. Test
+  count 2387 → 2393 (+6).
+- `ChainRound3Tests.verifyAll returns one entry per table`
+  expectation widened from 5 → 6 to reflect the new participant.
+
+### May 4 — `PolicyConfig` splits conflated `modelTier` into `modelId` + `modelTier` (audit clarity)
+
+- Prior state: `Sources/Core/PolicyConfig.swift` resolved
+  `modelTier = env["CLAUDE_MODEL"] ?? env["SENKANI_MODEL_TIER"]` —
+  two distinct vocabularies (concrete model ids like
+  `claude-sonnet-4` vs. operator-named tiers like `standard` /
+  `reasoning`) collapsed into one `modelTier: String?` field.
+  Replay diffs across two sessions reported spurious differences
+  if one session set `CLAUDE_MODEL` and the other set
+  `SENKANI_MODEL_TIER`; `senkani policy show` could not tell which
+  vocabulary it was inspecting.
+- Split: `PolicyConfig.modelId` (from `CLAUDE_MODEL`) and
+  `PolicyConfig.modelTier` (from `SENKANI_MODEL_TIER`, future
+  first-class router presets). Each field carries one vocabulary;
+  no fallback chain. `policyHash()` now includes both fields, so
+  changes in either produce a new audit row.
+- Backward-compat decode: existing `policy_snapshots.policy_json`
+  rows captured under the conflated single-field shape continue to
+  decode without error. The new decoder detects pre-split rows by
+  the absence of the `modelId` key and routes the legacy
+  `modelTier` value via `LegacyModelTierClassifier` — a value
+  matching the U.1 tier vocabulary (`simple` / `standard` /
+  `complex` / `reasoning`) routes to the new `modelTier` field;
+  any other value (the typical case: a Claude model id) routes to
+  `modelId`. New writes always emit both keys (null when nil) so
+  the discriminator the decoder relies on is durable across
+  re-encode round-trips.
+- Tests added for: legacy decode (model-id value), legacy decode
+  (tier vocabulary), legacy decode (null + missing), new-shape
+  round-trip, new-shape both-nil discriminator preservation,
+  hash-difference between modelId-only vs. modelTier-only configs,
+  classifier truth table (empty / known tier / unrecognized).
+- Glossary entry for `policy` (`spec/glossary.md`) and the
+  Policy-Snapshots section of `spec/architecture.md` updated to
+  enumerate both fields and reference the legacy classifier.
+
+### May 4 — workspace hygiene: 95 macOS Finder-duplicate `" 2.swift"` files quarantined; `.gitignore` recurrence-guarded (build unblock)
+
+- Prior state: the working tree on `fix/pane-refresh-worker-pool-test-flake`
+  carried 95 untracked `*\ 2.swift` files (plus 3 duplicate
+  resource/fixture directories) that macOS Finder had produced as
+  drag-and-drop or "save in" duplicates. Because `swift build`
+  pulls every `.swift` file in a target's `Sources/` tree, every
+  `Foo 2.swift` produced an in-module redeclaration of the type
+  defined in `Foo.swift`, collapsing `swift test` to ambiguous-symbol
+  errors across `Sources/Core`, `Sources/CLI`, `Sources/MCP`,
+  `Sources/Indexer`, `Sources/Bench`, `SenkaniApp`, and
+  `Tests/SenkaniTests`. The earlier `policy-modeltier-split-fields`
+  build round hit this on 2026-05-04 and aborted.
+- Sweep: 65 byte-identical (`cmp -s`) twins bulk-deleted; 30
+  divergent twins triaged via 4 representative diffs (smallest
+  1-line, largest 1163-line, largest test 301-line) — every
+  divergence had the same shape (canonical newer than `" 2"`
+  snapshot, newer features in canonical, no work missing) so the
+  blanket delete-`" 2"` decision was operator-approved and
+  applied. 3 stragglers (`INVARIANTS 2.md`, `check-multiplier-
+  claims 2.sh`, `render-ml-eval-fixtures 2.py`) caught the same
+  way.
+- Recurrence guard: `.gitignore` widened with `* 2.swift`,
+  `* 2.md`, `* 2.sh`, `* 2.py`, and `* 2/` patterns so a future
+  Finder slip stays out of `git status` and out of the build target.
+- Validation: `swift build` clean (12.70 s, no ambiguous-symbol /
+  redeclaration errors). Filtered `swift test` for chain + policy
+  + ConfirmationGate surfaces ran 57/57 — no regression in the
+  surfaces touched by the aborted `policy-snapshots-chain-anchor`
+  round. Pre-existing parallel-runner flake families remain
+  tracked under `swift-testing-parallel-runner-env-var-isolation`
+  and `parallel-runner-flake-additional-families-2026-05-04`.
+- Downstream unblock: `policy-snapshots-chain-anchor` (P0
+  security), `policy-modeltier-split-fields` (P2 cleanup), and
+  every other build-mode item previously hidden behind the
+  ambiguous-symbol blocker are now resolvable.
+
+### May 4 — `policy_snapshots` audit baseline now refuses silent-empty hashes (data integrity)
+
+- Prior state: `PolicyConfig.policyHash()` and
+  `LearnedRulesHasher.currentHash()` both returned `""` when their
+  `JSONEncoder` step threw, and `LearnedRulesHasher` further
+  collapsed "no rules file on disk" with "rules file present but
+  unparseable" — both became `""`. Combined with
+  `UNIQUE(session_id, policy_hash) ON CONFLICT DO NOTHING` on
+  `policy_snapshots`, two distinct corrupt configs would silently
+  collide on `policy_hash = ""` and the second insert was dropped.
+  The exact case where you most want an audible failure was the
+  case the code muted; audit surfaces could not distinguish "no
+  rules" from "broken rules."
+- `policyHash()` now throws `PolicyHashError.encodeFailed` on
+  encoder failure rather than returning `""`. The insert path
+  (`PolicyStore.capture`) catches the throw, refuses the write, and
+  bumps `event_counters("security.policy.hash_failed")`.
+- `LearnedRulesHasher.currentHash()` now throws
+  `LearnedRulesHashError.fileUnreadable` / `.encodeFailed` for the
+  failure cases and returns the stable sentinel
+  `LearnedRulesHasher.absentSentinel` (`"none"`) when no rules file
+  exists. The `"none"` sentinel cannot collide with a SHA-256 hex
+  digest. The boundary
+  (`SessionDatabase.capturePolicySnapshot`) catches the throw,
+  refuses the write, and bumps
+  `event_counters("security.policy.learned_rules_hash_failed")`.
+- Both new counter keys surface automatically through
+  `senkani stats --security` (existing `security.*` prefix scan).
+- Tests added for: (a) NaN-budget triggers `policyHash` throw;
+  (b) capture refuses insert + counter bumps; (c) two broken
+  configs no longer collide on empty hash; (d) missing rules file
+  → `"none"` sentinel; (e) corrupt rules file → throw +
+  counter bump + insert refusal.
+
+### May 4 — `mlx-swift-lm` dependency pinned to a specific revision (build reproducibility)
+
+- Prior state: `Package.swift:23` declared
+  `.package(url: "https://github.com/ml-explore/mlx-swift-lm.git", branch: "main")`.
+  Every other dependency in the manifest used a SemVer floor; this
+  one followed a moving branch. `swift package update` (or any cold
+  resolve on a fresh checkout) silently pulled whatever was on
+  `main` that moment, so model-loading behavior could change between
+  checkouts without anyone touching `Package.swift`. The pinned
+  `Package.resolved` SHA was already drifting behind upstream main
+  on 2026-05-04 (`2a296f1…` vs `7e2b710…`) without anyone noticing.
+- Pin replaced with
+  `revision: "2a296f145c3129fea4290bb6e4a0a5fb458efa06"` — the SHA
+  `Package.resolved` had already verified through the test suite
+  (2445 tests green pre-pin, same suite green post-pin). Behavior
+  is byte-identical to what was already shipping; the only thing
+  that changed is `swift package update` can no longer move it
+  silently. `Package.resolved` regenerated; the `mlx-swift-lm` pin
+  no longer carries a `"branch": "main"` field.
+- Choice of revision over a SemVer floor: upstream does publish
+  tagged releases (latest seen was `3.31.3` on 2026-05-04) but the
+  resolved SHA does not correspond to any tag, so a tag bump would
+  have introduced behavioral risk inside a build-config-only round.
+  Revisit cadence is filed as
+  `spec/autonomous/backlog/mlx-swift-lm-pin-freshness-revisit.md` so
+  the pin doesn't rot indefinitely.
+
+### May 4 — `mlx-swift-lm` revision-pin freshness trigger chosen: release-cut gate
+
+- Follow-up to the pin-introduction round earlier today. The
+  freshness-revisit item asked: now that the pin is fixed at a
+  verified-working SHA, what stops the pin from going silently stale?
+  Three triggers were weighed — calendar cadence (silently
+  skippable), release-cut gate (bakes into existing ceremony),
+  upstream-tag-watch automation (highest signal but highest setup
+  cost).
+- Decision: HOLD the current SHA, choose RELEASE-CUT GATE as the
+  next-revisit trigger. The next senkani release ceremony (v0.4.0
+  cut and onward) is now the bind point: the cut author runs an
+  mlx-swift-lm pin-bump pass — compare the current revision to
+  upstream's latest release tag, attempt the bump, run
+  `./tools/test-safe.sh` AND on-real-machine MLX inference smoke
+  tests, ship the bump if green or refresh the rationale block if
+  blocked.
+- A `## Pin rationale` comment block lives directly above the
+  `mlx-swift-lm` line in `Package.swift` so the trigger is in the
+  developer's path of vision rather than buried in this changelog.
+  The rationale block names the trigger, the alternatives weighed,
+  and the conditions under which the trigger choice itself should
+  be revisited (two consecutive misfires of the gate).
+- Calendar cadence rejected because senkani's release ceremony is
+  already the natural attention point for "is this version of the
+  world good enough to ship?" — splitting the question across a
+  separate calendar adds a parallel reminder that nobody owns.
+  Upstream-tag-watch automation rejected because the setup cost
+  (script + scheduled fire + escalation path) exceeds the round's
+  budget at the project's current scale; revisit if the gate
+  misfires.
+- Follow-up filed: `spec/autonomous/backlog/release-checklist-mlx-pin-bump-row.md`
+  wires the gate row into the v0.4.0 release-cut checklist so the
+  trigger has a concrete consumer. Without that row the trigger is
+  advisory; with it, it's enforced.
+
+### May 4 — Live-mode multiplier badge corrected to `.estimated` (per `Confidence.loosened(by:)` discipline)
+
+- Prior state: `SavingsTestView.swift:239` rendered
+  `confidenceBadge(.exact)` next to the live session multiplier. The
+  multiplier composite mixes exact tokens with cost-saved cents; the
+  cost figure is priced via `ModelPricing.active`, a runtime-mutable
+  UserDefaults read. `spec/testing.md` → "Confidence Tiers for
+  Reported Savings" makes the discipline non-negotiable: an
+  `estimated` number must never be presented as `exact`.
+- New `Sources/Bench/SurfaceConfidence.swift` exposes
+  `Confidence.defaultForSurface(_:)` for `SavingsSurface.fixtureBench`
+  / `.liveSessionReplay` / `.scenarioSimulator`. Live and scenarios
+  return `.estimated`; fixture returns `.exact`. `SavingsTestView`
+  call sites at lines 239 (live) and 479 (scenarios) now read this
+  helper, eliminating the hard-coded tier strings.
+- `spec/testing.md` surface-mapping table flipped Live Session Replay
+  to `estimated` with a note explaining the loosened-rollup
+  rationale; the `exact` example row no longer cites Live Replay.
+- Regression test: `Tests/SenkaniTests/SurfaceConfidenceTests.swift`
+  pins all three surface tiers. If a future round wires
+  `cost_ledger_version`-backed display so live cost is exact-by-row,
+  reconsider promoting back (see `cost-ledger-single-source` work).
+
+### May 4 — Test-side cleanup callers route through `TempSessionDatabase.cleanup(path:)` / `.close(_:path:)` (single source of truth)
+
+- Prior state: the 2026-05-04 round shipped
+  `Tests/SenkaniTests/Helpers/TempSessionDatabase.swift` with the
+  canonical 5-suffix cleanup, but the 49 callers it was meant to serve
+  still ran their own per-suffix `removeItem(atPath:)` dance — the
+  helper's `sidecarSuffixes` constant only had one reader (the helper
+  itself). Adding a 6th sidecar (e.g., `.snapshot`, `.journal`) would
+  have required editing 49 files instead of one.
+- This round migrates every callsite. 51 test files (parent round's
+  49 + 2 added since) now route through the helper: 46 had a local
+  `cleanup*(path:)` helper (deleted, callers rewritten to
+  `TempSessionDatabase.cleanup(path: path)`), 5 had inline 5-line
+  defer blocks (replaced in-place), and 8 used the split close-then-
+  cleanup pattern (`db.close(); Self.cleanup(path)` → single
+  `TempSessionDatabase.close(db, path: path)`). `StoreExecTests`'s
+  combined `cleanup(_:db, _:path)` collapsed to the same single call.
+- `sidecarSuffixes` is now the single edit point for any future
+  sidecar. Acceptance: zero `removeItem(atPath:.*\.migrating)` and
+  zero `removeItem(atPath:.*"-wal")` matches outside the helper;
+  `tools/test-safe.sh` 8/8 green; `ls /tmp/senkani-*` = 0 post-run.
+
+### May 4 — Queue-affinity contract on `SessionDatabase` raw-pointer leaves
+
+- Prior state: `SessionDatabase.db: OpaquePointer?` is `internal` so
+  extracted stores can share the connection without opening a second
+  handle, but the surface lets `@testable import Core` consumers reach
+  the raw pointer too. The 2026-05-03 round caught one such bypass in
+  `StoreExecTests` (test-thread `sqlite3_*` racing the init-time
+  recordEvent burst on `db.queue` = SIGSEGV in libsqlite3). The
+  surgical fix wrapped that test; the wider audit was deferred.
+- This round closed the audit. All 21 `db.db` references in tests
+  (across 8 files) are queue-internal — wrapped in
+  `db.queue.sync { ... }`. All 127 production `parent.db` references
+  (across 16 store files) are queue-internal too — inside
+  `parent.queue.sync { ... }` or `parent.queue.async { ... }`.
+- The regression-catcher: every store-private leaf (`exec(_:)`,
+  `execSilent(_:)` — 16 files, ~25 sites, both in `Sources/Core/Stores/`
+  and `Sources/Core/KnowledgeStore/`) now opens with
+  `dispatchPrecondition(condition: .onQueue(parent.queue))`. A future
+  caller that forgets the `queue.sync` wrapper trips
+  `__DISPATCH_ASSERTION_FAILURE__` SIGTRAP loud in debug builds
+  instead of silently racing libsqlite3.
+- The queue-affinity invariant + audit reference now lives in a doc
+  comment next to `internal var db` in `SessionDatabase.swift`, so
+  future auditors land on it before reaching the field.
+- The deferred-by-design moves stay deferred per the item's own
+  guidance: `internal var db` → `private var db` + `_testOnly_withDb`
+  helper (would touch 21 test sites — kept until a future round
+  consolidates), and the actor-based concurrency rewrite (different
+  question entirely). Tests: 2442 → 2442 (no change; hygiene round).
+
+### May 4 — Centralized `.migrating`/`.schema.lock` cleanup across all `SessionDatabase(path:)` test callers
+
+- Prior state: `MigrationRunner` writes a `<dbPath>.migrating` flock
+  sidecar (and on failure a `<dbPath>.schema.lock` kill-switch) that's
+  never unlinked — production-safe, but every test that did
+  `SessionDatabase(path: "/tmp/...")` leaked a fresh `.migrating` per
+  call. The 2026-05-03 round caught 189 leftovers from `StoreExecTests`
+  alone; the follow-up filing
+  (`harness-sessiondb-test-cleanup-leaks-migrating-flock-sidecars`)
+  fixed StoreExecTests only.
+- This round generalizes. Every test file that creates
+  `SessionDatabase(path:)` now removes the full sidecar set —
+  `<path>`, `<path>-wal`, `<path>-shm`, `<path>.migrating`,
+  `<path>.schema.lock` — at teardown. New
+  `Tests/SenkaniTests/Helpers/TempSessionDatabase.swift` is the
+  canonical cleanup source-of-truth for new tests; its
+  `sidecarSuffixes` constant mirrors `Sources/CLI/WipeCommand.swift`
+  so test-side and prod-side stay in lockstep when a future sidecar
+  is added.
+- `tools/test-safe.sh` gained a /tmp staleness alarm (pre-flight +
+  post-flight): warns when `/tmp/senkani-*` accumulation crosses 50
+  leftover files in a single run, surfacing future regressions
+  locally instead of after months of buildup.
+  `SKIP_TMP_STALENESS_CHECK=1` opts out.
+- Verified: pre-clean `rm /tmp/senkani-*` → `./tools/test-safe.sh`
+  passes 8/8 chunks (1600+ tests, ~14 s warm) → `ls /tmp/senkani-*`
+  returns 0. Acceptance met without exception.
+
+### May 4 — `CostLedger` version-boundary resolution gets test coverage before the first dated v2 entry lands
+
+- Prior state: every shipped `CostLedgerEntry` used
+  `effectiveFrom: epoch, effectiveTo: nil`, so `rate(model:at:)`'s
+  date-bound logic was exercised by zero tests — when v2 ships a real
+  Anthropic price change, latent off-by-one bugs at the boundary
+  would surface in production.
+- New internal overload `CostLedger.rate(model:at:in entries:)` lets
+  tests inject a synthetic two-version ledger fixture without
+  touching production data; the public `rate(model:at:)` delegates to
+  it so both paths exercise the same algorithm. Doc comment on
+  `CostLedgerEntry` now states the half-open `[from, to)` semantics
+  explicitly: the boundary instant belongs to the *next* version.
+- New `CostLedgerVersionBoundaryTests` suite (9 tests) locks in:
+  boundary-instant ownership, ±1s and sub-second-before-boundary
+  resolution, far-past / far-future bounds, substring routing across
+  the boundary, nil return for `at` past a closed final interval, and
+  a three-version chain with no overlap and no gap. Tests:
+  2358 → 2367 (+9).
+
 ### May 4 — `CostLedger` is now the sole source of truth for per-model rates; `ModelPricing` collapsed to a facade + new `SessionDatabase.repriceTraceRow(_:asOf:)`
 - Prior state: per-model rates were duplicated between
   `ModelPricing.swift` (eight `static let` constants, used by every

@@ -24,7 +24,7 @@ public enum VersionTool {
     /// `Server(name:, version:)` in MCPMain + SocketServer.
     public static let serverVersion = "0.2.0"
 
-    static func handle(arguments _: [String: Value]?, session _: MCPSession) -> CallTool.Result {
+    static func handle(arguments _: [String: Value]?, session _: MCPSession) async -> CallTool.Result {
         let dbVersion = SessionDatabase.shared.currentSchemaVersion()
         let toolNames = ToolRouter.allTools().map { $0.name }.sorted()
 

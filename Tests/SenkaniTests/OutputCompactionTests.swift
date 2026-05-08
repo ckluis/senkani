@@ -28,7 +28,7 @@ private func cleanupOC(_ root: String) {
 @Suite("OutputCompaction — knowledge get")
 struct KnowledgeGetCompactionTests {
 
-    @Test func compactContainsEntityHeader() {
+    @Test func compactContainsEntityHeader() async {
         let (session, root) = makeOCSession()
         defer { cleanupOC(root) }
 
@@ -43,7 +43,7 @@ struct KnowledgeGetCompactionTests {
             entityId: id, sessionId: "s1", whatWasLearned: "initial evidence", source: "test"
         ))
 
-        let result = KnowledgeTool.handle(
+        let result = await KnowledgeTool.handle(
             arguments: ["action": .string("get"), "entity": .string("CompactEntity")],
             session: session
         )
@@ -61,7 +61,7 @@ struct KnowledgeGetCompactionTests {
         #expect(understandingLines.count <= 1, "At most one inline Understanding line in summary")
     }
 
-    @Test func fullModeContainsCompleteUnderstanding() {
+    @Test func fullModeContainsCompleteUnderstanding() async {
         let (session, root) = makeOCSession()
         defer { cleanupOC(root) }
 
@@ -74,7 +74,7 @@ struct KnowledgeGetCompactionTests {
             compiledUnderstanding: longUnderstanding
         ))
 
-        let result = KnowledgeTool.handle(
+        let result = await KnowledgeTool.handle(
             arguments: [
                 "action": .string("get"),
                 "entity": .string("FullEntity"),
@@ -90,7 +90,7 @@ struct KnowledgeGetCompactionTests {
         #expect(text.contains(longUnderstanding))
     }
 
-    @Test func decisionsCapAppliedInFullMode() {
+    @Test func decisionsCapAppliedInFullMode() async {
         let (session, root) = makeOCSession()
         defer { cleanupOC(root) }
 
@@ -112,7 +112,7 @@ struct KnowledgeGetCompactionTests {
             ))
         }
 
-        let result = KnowledgeTool.handle(
+        let result = await KnowledgeTool.handle(
             arguments: [
                 "action": .string("get"),
                 "entity": .string("DecisionHeavy"),
@@ -137,7 +137,7 @@ struct KnowledgeGetCompactionTests {
 @Suite("OutputCompaction — validate")
 struct ValidateCompactionTests {
 
-    @Test func summaryHeaderFormat() {
+    @Test func summaryHeaderFormat() async {
         // Verify the aggregate header format used by ValidateTool summary mode
         let validatorCount = 5
         let passCount = 3
@@ -148,7 +148,7 @@ struct ValidateCompactionTests {
         #expect(header.contains("2 failed"))
     }
 
-    @Test func passingValidatorsCollapsedToOneLiner() {
+    @Test func passingValidatorsCollapsedToOneLiner() async {
         // In summary mode: all passing validators appear on a single "✓ N passed: ..." line
         let passLine = "✓ 3 passed: SwiftSyntax (syntax), SecretScan (security), SwiftFormat (format)"
         #expect(passLine.hasPrefix("✓"))
@@ -157,7 +157,7 @@ struct ValidateCompactionTests {
         #expect(!passLine.contains("\n"))
     }
 
-    @Test func summaryModeHintPresent() {
+    @Test func summaryModeHintPresent() async {
         let (session, root) = makeOCSession()
         defer { cleanupOC(root) }
 
@@ -192,7 +192,7 @@ struct ExploreCompactionTests {
         try? IndexStore.save(idx, projectRoot: root)
     }
 
-    @Test func limitTruncatesFilesWithTrailer() {
+    @Test func limitTruncatesFilesWithTrailer() async {
         let (session, root) = makeOCSession()
         defer { cleanupOC(root) }
 
@@ -201,9 +201,9 @@ struct ExploreCompactionTests {
             IndexEntry(name: "Sym\(i)", kind: classKind, file: "File\(i).swift", startLine: 1, engine: "test")
         }
         buildAndSaveIndex(root: root, symbols: symbols)
-        _ = session.ensureIndex()
+        _ = await session.ensureIndex()
 
-        let result = ExploreTool.handle(
+        let result = await ExploreTool.handle(
             arguments: ["limit": .int(2)],
             session: session
         )
@@ -213,7 +213,7 @@ struct ExploreCompactionTests {
         #expect(text.contains("more files"), "Expected trailer in: \(text)")
     }
 
-    @Test func kindsFilterShowsOnlyMatchingSymbols() {
+    @Test func kindsFilterShowsOnlyMatchingSymbols() async {
         let (session, root) = makeOCSession()
         defer { cleanupOC(root) }
 
@@ -226,9 +226,9 @@ struct ExploreCompactionTests {
             IndexEntry(name: "MyExploreStruct", kind: structK, file: "Mixed.swift", startLine: 10, engine: "test"),
         ]
         buildAndSaveIndex(root: root, symbols: symbols)
-        _ = session.ensureIndex()
+        _ = await session.ensureIndex()
 
-        let result = ExploreTool.handle(
+        let result = await ExploreTool.handle(
             arguments: ["kinds": .string("class")],
             session: session
         )

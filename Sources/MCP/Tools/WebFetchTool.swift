@@ -639,25 +639,27 @@ enum WebFetchTool {
                     sessionId: sid, command: urlStr, output: markdown)
                 let summary = Core.buildSandboxSummary(
                     output: markdown, lineCount: lc, byteCount: markdown.utf8.count, resultId: resultId)
-                session.recordMetrics(
+                await session.recordMetrics(
                     rawBytes: markdown.utf8.count, compressedBytes: summary.utf8.count,
                     feature: "web_fetch", command: urlStr, outputPreview: String(markdown.prefix(200)))
                 return .init(content: [.text(text: summary, annotations: nil, _meta: nil)])
             }
 
             // tree / text: secrets + injection filter pass
+            let secretsEnabled = await session.effectiveSecretsEnabled
+            let injectionGuardEnabled = await session.effectiveInjectionGuardEnabled
             var output = markdown
-            if session.secretsEnabled || session.injectionGuardEnabled {
+            if secretsEnabled || injectionGuardEnabled {
                 let cfg = FeatureConfig(
-                    filter: false, secrets: session.secretsEnabled, indexer: false,
-                    terse: false, injectionGuard: session.injectionGuardEnabled)
+                    filter: false, secrets: secretsEnabled, indexer: false,
+                    terse: false, injectionGuard: injectionGuardEnabled)
                 let result = FilterPipeline(config: cfg).process(command: urlStr, output: markdown)
                 output = result.output
-                session.recordMetrics(
+                await session.recordMetrics(
                     rawBytes: result.rawBytes, compressedBytes: result.filteredBytes,
                     feature: "web_fetch", command: urlStr, outputPreview: String(output.prefix(200)))
             } else {
-                session.recordMetrics(
+                await session.recordMetrics(
                     rawBytes: output.utf8.count, compressedBytes: output.utf8.count,
                     feature: "web_fetch", command: urlStr, outputPreview: String(output.prefix(200)))
             }

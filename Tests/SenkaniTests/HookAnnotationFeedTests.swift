@@ -40,22 +40,26 @@ struct HookAnnotationFeedTests {
 
     /// Run a closure with `HookRouter.annotationFeed` swapped out for
     /// a fresh feed (short window, no DB sink). Restores defaults on
-    /// exit so other tests aren't poisoned.
+    /// exit so other tests aren't poisoned. Holds `HookSeamLock` so
+    /// peer suites running through `HookRouter.handle` cannot read
+    /// the test's private feed (cross-suite race fix).
     private static func withTestFeed(
         windowSeconds: TimeInterval = 0.5,
         mustFixThreshold: Int = 2,
         captured: @escaping (AnnotationRateCapLogRow) -> Void = { _ in },
         body: (HookAnnotationFeed) -> Void
     ) {
-        let feed = HookAnnotationFeed(
-            windowSeconds: windowSeconds,
-            mustFixThreshold: mustFixThreshold,
-            rateCapSink: captured
-        )
-        let priorFeed = HookRouter.annotationFeed
-        HookRouter.annotationFeed = feed
-        defer { HookRouter.annotationFeed = priorFeed }
-        body(feed)
+        HookSeamLock.withLock {
+            let feed = HookAnnotationFeed(
+                windowSeconds: windowSeconds,
+                mustFixThreshold: mustFixThreshold,
+                rateCapSink: captured
+            )
+            let priorFeed = HookRouter.annotationFeed
+            HookRouter.annotationFeed = feed
+            defer { HookRouter.annotationFeed = priorFeed }
+            body(feed)
+        }
     }
 
     // MARK: - Acceptance #1 — denial emits [must-fix]
@@ -65,6 +69,11 @@ struct HookAnnotationFeedTests {
         // Stand up a deny resolver. ConfirmationGate writes a chained
         // row, then HookRouter wraps the deny in JSON and emits the
         // annotation. We only care about the annotation here.
+        // HookSeamLock held by the inner withTestFeed; this outer
+        // withLock pairs the resolver swap with the same lock so peer
+        // suites can't observe the deny resolver mid-test.
+        HookSeamLock.shared.lock()
+        defer { HookSeamLock.shared.unlock() }
         let priorResolver = ConfirmationGate.resolver
         ConfirmationGate.resolver = Self.denyResolver(reason: "fixture")
         defer { ConfirmationGate.resolver = priorResolver }
@@ -119,6 +128,8 @@ struct HookAnnotationFeedTests {
 
     @Test("Deny response JSON is unchanged whether the annotation is admitted or suppressed")
     func denyResponseUnaffectedByRateCap() {
+        HookSeamLock.shared.lock()
+        defer { HookSeamLock.shared.unlock() }
         let priorResolver = ConfirmationGate.resolver
         ConfirmationGate.resolver = Self.denyResolver(reason: "fixture-noblock")
         defer { ConfirmationGate.resolver = priorResolver }
@@ -135,10 +146,22 @@ struct HookAnnotationFeedTests {
             let admitted = HookRouter.handle(eventJSON: event)
             let suppressed = HookRouter.handle(eventJSON: event)
 
-            // Both are deny responses with the same body. The deny
-            // payload is what the agent sees — it MUST be identical.
-            #expect(admitted == suppressed,
-                    "Suppressing the annotation must not change the deny response")
+            // Both are deny responses with the same semantic body. The
+            // deny payload is what the agent sees — it MUST be
+            // equivalent, but compare PARSED JSON, not raw bytes:
+            // `JSONSerialization.data(withJSONObject:)` doesn't promise
+            // deterministic key order, and the deny response inner dict
+            // has 3 keys (6 possible orderings). Two sequential calls
+            // can serialize them differently under parallel-runner CPU
+            // pressure even when the semantic content is identical
+            // (158 == 158 bytes but not byte-for-byte equal). See
+            // `hookannotationfeed-deny-json-byte-equality-flake-2026-05-04`.
+            let admittedJSON = try? JSONSerialization.jsonObject(with: admitted) as? NSDictionary
+            let suppressedJSON = try? JSONSerialization.jsonObject(with: suppressed) as? NSDictionary
+            #expect(admittedJSON != nil, "admitted response must be valid JSON")
+            #expect(suppressedJSON != nil, "suppressed response must be valid JSON")
+            #expect(admittedJSON == suppressedJSON,
+                    "Suppressing the annotation must not change the deny response (parsed-JSON equality)")
             // Sanity: both are denies, not passthroughs.
             #expect(admitted != HookRouter.passthroughResponse)
         }

@@ -7,13 +7,6 @@ private func makeTempKB() -> (KnowledgeStore, String) {
     return (KnowledgeStore(path: path), path)
 }
 
-private func cleanupKB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-}
-
 private func makeEntity(_ name: String) -> KnowledgeEntity {
     KnowledgeEntity(name: name, markdownPath: ".senkani/knowledge/\(name).md")
 }
@@ -23,7 +16,7 @@ struct EnrichmentStoreInvariantTests {
 
     @Test func schemaSurvivesReopen() {
         let path = "/tmp/senkani-enrichmentstore-reopen-\(UUID().uuidString).sqlite"
-        defer { cleanupKB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         do {
             let store = KnowledgeStore(path: path)
@@ -50,7 +43,7 @@ struct EnrichmentStoreInvariantTests {
     /// (`entity_id REFERENCES knowledge_entities(id) ON DELETE CASCADE`).
     @Test func evidenceCascadeDeleteOnEntityRemoval() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let id = store.upsertEntity(makeEntity("Cascade"))
         for i in 0..<3 {
@@ -71,7 +64,7 @@ struct EnrichmentStoreInvariantTests {
     /// — that's what the timeline pane and the prompt-context generator depend on.
     @Test func evidenceTimelineOrderedByCreatedAtAsc() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let id = store.upsertEntity(makeEntity("Ordered"))
         let later = EvidenceEntry(entityId: id, sessionId: "s",
@@ -91,7 +84,7 @@ struct EnrichmentStoreInvariantTests {
     /// `entity_a < entity_b` even when the caller flips them.
     @Test func couplingPairCanonicalizedOnInsert() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         // Insert with reversed order.
         store.upsertCoupling(CouplingEntry(
@@ -110,7 +103,7 @@ struct EnrichmentStoreInvariantTests {
     /// whose values reflect the latest write — not multiple stacked rows.
     @Test func couplingUpsertIdempotentUnderBurst() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         for score in [0.1, 0.4, 0.9] {
             store.upsertCoupling(CouplingEntry(
@@ -133,7 +126,7 @@ struct EnrichmentStoreInvariantTests {
     /// return the same single row.
     @Test func couplingMatchesEitherEndpoint() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         store.upsertCoupling(CouplingEntry(
             entityA: "Left", entityB: "Right",

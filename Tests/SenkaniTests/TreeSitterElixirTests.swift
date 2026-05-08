@@ -313,13 +313,29 @@ struct ElixirPerformanceTests {
             source += "  end\n"
         }
         source += "end\n"
+        // Median-of-3 — see DependencyGraphPerfGateTests for the canonical
+        // pattern. `.serialized` only serializes within-suite, so peer-suite
+        // CPU contention can spike a single sample under parallel runner;
+        // a single transient spike on one of three runs cannot fail the
+        // test, but a real regression (every run blows budget) still does.
+        // Threshold preserved at 50 ms — see TreeSitterKotlinTests for the
+        // 10 ms → 50 ms widen rationale; the median strengthens the gate on
+        // its own (mirrors the 10-parser 2026-05-06 sweep precedent of
+        // preserve-don't-widen).
         let clock = ContinuousClock()
-        let elapsed = clock.measure {
-            let entries = indexElixir(source)
-            #expect(entries.count > 0)
+        var samples: [Duration] = []
+        for _ in 0..<3 {
+            let elapsed = clock.measure {
+                let entries = indexElixir(source)
+                #expect(entries.count > 0)
+            }
+            samples.append(elapsed)
         }
-        // See TreeSitterKotlinTests for the 10ms → 50ms widen rationale.
-        #expect(elapsed < .milliseconds(50))
+        let median = samples.sorted()[1]
+        #expect(
+            median < .milliseconds(50),
+            "median of 3 Elixir parses: \(samples) → median \(median)"
+        )
     }
 
     @Test("Elixir coexists with other languages")

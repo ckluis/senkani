@@ -240,5 +240,18 @@ public final class KnowledgeStore: @unchecked Sendable {
             sqlite3_step(fkStmt)
         }
         sqlite3_finalize(fkStmt)
+        // Auto-retry transient `SQLITE_BUSY` for up to 5s. WAL mode lets
+        // readers and writers proceed concurrently, but a writer racing
+        // another writer (or a checkpointer, or a parallel test opening a
+        // second KnowledgeStore on the same path during `setupSchema`)
+        // returns `SQLITE_BUSY` immediately when the busy timeout is the
+        // default 0. 5s matches `TempSessionDatabase.secondaryHandleBusyTimeoutMs`.
+        sqlite3_busy_timeout(db, Int32(KnowledgeStore.busyTimeoutMs))
     }
+
+    /// Default busy timeout for the primary connection. 5s is well above
+    /// any plausible writer-contention window even under full-parallel
+    /// `swift test`. Exposed as a constant so the regression test can
+    /// reference the same value when sanity-checking the auto-retry path.
+    static let busyTimeoutMs: Int = 5000
 }

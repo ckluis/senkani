@@ -4,7 +4,7 @@ import Core
 
 /// Runs local validators from the registry. Config-driven, auto-detected.
 enum ValidateTool {
-    static func handle(arguments: [String: Value]?, session: MCPSession) -> CallTool.Result {
+    static func handle(arguments: [String: Value]?, session: MCPSession) async -> CallTool.Result {
         guard let filePath = arguments?["file"]?.stringValue else {
             return .init(content: [.text(text: "Error: 'file' is required", annotations: nil, _meta: nil)], isError: true)
         }
@@ -113,7 +113,7 @@ enum ValidateTool {
         let output = lines.joined(separator: "\n")
         let rawBytes = validatorResults.map(\.output).joined().utf8.count + 200
 
-        session.recordMetrics(
+        await session.recordMetrics(
             rawBytes: rawBytes,
             compressedBytes: output.utf8.count,
             feature: "validate",

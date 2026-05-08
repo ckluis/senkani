@@ -5,7 +5,7 @@ import Core
 import Indexer
 
 enum ReadTool {
-    static func handle(arguments: [String: Value]?, session: MCPSession) -> CallTool.Result {
+    static func handle(arguments: [String: Value]?, session: MCPSession) async -> CallTool.Result {
         guard let path = arguments?["path"]?.stringValue else {
             return .init(content: [.text(text: "Error: 'path' is required", annotations: nil, _meta: nil)], isError: true)
         }
@@ -23,24 +23,35 @@ enum ReadTool {
         let wantsFull = arguments?["full"]?.boolValue == true
         let hasRange = arguments?["offset"]?.intValue != nil || arguments?["limit"]?.intValue != nil
 
+        // Snapshot the actor-isolated feature toggles once. Avoids repeated
+        // actor hops per read and keeps mode/cache/branch decisions consistent
+        // with respect to a single tool call. Phase B-ii: read the *effective*
+        // toggles so a per-connection override on the dispatch task-local
+        // overrides the session default for this call.
+        let filterEnabled = await session.effectiveFilterEnabled
+        let secretsEnabled = await session.effectiveSecretsEnabled
+        let terseEnabled = await session.effectiveTerseEnabled
+        let cacheEnabled = await session.effectiveCacheEnabled
+        let indexerEnabled = await session.effectiveIndexerEnabled
+
         // Cache key includes the processing mode so a secrets-off first read
         // cannot satisfy a secrets-on re-read (which would leak unredacted
         // content). Only full reads can be served from cache — range reads
         // re-slice from source to honor the requested window.
         let mode = ReadProcessingMode(
-            filter: session.filterEnabled,
-            secrets: session.secretsEnabled,
-            terse: session.terseEnabled
+            filter: filterEnabled,
+            secrets: secretsEnabled,
+            terse: terseEnabled
         )
-        if wantsFull, session.cacheEnabled, let cached = session.readCache.lookup(path: absPath, mode: mode) {
-            session.recordCacheSaving(bytes: cached.rawBytes)
+        if wantsFull, cacheEnabled, let cached = session.readCache.lookup(path: absPath, mode: mode) {
+            await session.recordCacheSaving(bytes: cached.rawBytes)
             let header = "// senkani: cached \(cached.rawBytes) bytes saved (unchanged since last read)\n"
             return .init(content: [.text(text: header + cached.content, annotations: nil, _meta: nil)])
         }
 
         // Outline-first: if not full and no range, try returning outline from index
-        if !wantsFull && !hasRange && session.indexerEnabled,
-           let outline = buildOutline(absPath: absPath, session: session) {
+        if !wantsFull && !hasRange && indexerEnabled,
+           let outline = await buildOutline(absPath: absPath, session: session) {
             return outline
         }
 
@@ -63,18 +74,18 @@ enum ReadTool {
         }
 
         // Compress
-        if session.filterEnabled {
+        if filterEnabled {
             output = ANSIStripper.strip(output)
             output = LineOperations.stripBlankRuns(output, max: 1)
         }
 
         // Secrets
-        if session.secretsEnabled {
+        if secretsEnabled {
             output = SecretDetector.scan(output).redacted
         }
 
         // Terse compression
-        if session.terseEnabled {
+        if terseEnabled {
             output = TerseCompressor.compress(output)
         }
 
@@ -83,13 +94,13 @@ enum ReadTool {
 
         // Cache — only stored for full reads. Range reads skip the cache so
         // a windowed output never gets reused for a full-read request.
-        if session.cacheEnabled && !hasRange {
+        if cacheEnabled && !hasRange {
             let mtime = (try? FileManager.default.attributesOfItem(atPath: absPath))?[.modificationDate] as? Date ?? Date()
             session.readCache.store(path: absPath, mtime: mtime, mode: mode, content: output, rawBytes: rawBytes)
         }
 
-        session.recordMetrics(rawBytes: rawBytes, compressedBytes: compressedBytes, feature: "read",
-                              command: absPath, outputPreview: String(output.prefix(200)))
+        await session.recordMetrics(rawBytes: rawBytes, compressedBytes: compressedBytes, feature: "read",
+                                    command: absPath, outputPreview: String(output.prefix(200)))
 
         let header = "// senkani: \(rawBytes) -> \(compressedBytes) bytes (\(savedPct)% saved)\n"
         return .init(content: [.text(text: header + output, annotations: nil, _meta: nil)])
@@ -97,8 +108,8 @@ enum ReadTool {
 
     /// Build an outline from the symbol index for the given file path.
     /// Returns nil if the index isn't ready or has no symbols for this file.
-    private static func buildOutline(absPath: String, session: MCPSession) -> CallTool.Result? {
-        guard let index = session.indexIfReady() else { return nil }
+    private static func buildOutline(absPath: String, session: MCPSession) async -> CallTool.Result? {
+        guard let index = await session.indexIfReady() else { return nil }
 
         // Match by relative path within project root, or by filename
         let relativePath: String
@@ -158,8 +169,8 @@ enum ReadTool {
         let compressedBytes = output.utf8.count
         let savedPct = rawBytes > 0 ? Int(Double(rawBytes - compressedBytes) / Double(rawBytes) * 100) : 0
 
-        session.recordMetrics(rawBytes: rawBytes, compressedBytes: compressedBytes, feature: "outline_read",
-                              command: absPath, outputPreview: String(output.prefix(200)))
+        await session.recordMetrics(rawBytes: rawBytes, compressedBytes: compressedBytes, feature: "outline_read",
+                                    command: absPath, outputPreview: String(output.prefix(200)))
 
         let header = "// senkani: outline \(rawBytes) -> \(compressedBytes) bytes (\(savedPct)% saved)\n"
         return .init(content: [.text(text: header + output, annotations: nil, _meta: nil)])

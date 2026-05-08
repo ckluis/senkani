@@ -167,9 +167,7 @@ struct LadderPositionMigrationTests {
     func schemaHasLadderPosition() {
         let path = "/tmp/senkani-u1b-schema-\(UUID().uuidString).sqlite"
         defer {
-            try? FileManager.default.removeItem(atPath: path)
-            try? FileManager.default.removeItem(atPath: path + "-wal")
-            try? FileManager.default.removeItem(atPath: path + "-shm")
+            TempSessionDatabase.cleanup(path: path)
         }
         let db = SessionDatabase(path: path)
         #expect(db.currentSchemaVersion() >= 10)
@@ -193,9 +191,7 @@ struct LadderPositionMigrationTests {
     func ladderPositionRoundTrip() {
         let path = "/tmp/senkani-u1b-rt-\(UUID().uuidString).sqlite"
         defer {
-            try? FileManager.default.removeItem(atPath: path)
-            try? FileManager.default.removeItem(atPath: path + "-wal")
-            try? FileManager.default.removeItem(atPath: path + "-shm")
+            TempSessionDatabase.cleanup(path: path)
         }
         let db = SessionDatabase(path: path)
 
@@ -203,7 +199,7 @@ struct LadderPositionMigrationTests {
             idempotencyKey: "u1b-rt-1",
             tier: "complex",
             ladderPosition: 1,
-            result: "success",
+            result: .success,
             startedAt: Date(timeIntervalSince1970: 1_700_000_000),
             completedAt: Date(timeIntervalSince1970: 1_700_000_001)
         )
@@ -230,15 +226,13 @@ struct LadderPositionMigrationTests {
     func ladderPositionNullByDefault() {
         let path = "/tmp/senkani-u1b-null-\(UUID().uuidString).sqlite"
         defer {
-            try? FileManager.default.removeItem(atPath: path)
-            try? FileManager.default.removeItem(atPath: path + "-wal")
-            try? FileManager.default.removeItem(atPath: path + "-shm")
+            TempSessionDatabase.cleanup(path: path)
         }
         let db = SessionDatabase(path: path)
 
         let row = AgentTraceEvent(
             idempotencyKey: "u1b-null-1",
-            result: "success",
+            result: .success,
             startedAt: Date(timeIntervalSince1970: 1_700_000_000),
             completedAt: Date(timeIntervalSince1970: 1_700_000_001)
         )

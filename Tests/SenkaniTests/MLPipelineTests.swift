@@ -19,10 +19,13 @@ struct ModelIDConsistencyTests {
     @Test func allRegisteredIdsAreHandled() {
         let embedId = EmbedEngine.modelId
         let visionIds = Set(ModelManager.visionModelIds)
+        let piiId = PIIClassifierAdapter.modelId
         for model in ModelManager.shared.models {
-            let isHandled = model.id == embedId || visionIds.contains(model.id)
+            let isHandled = model.id == embedId
+                || visionIds.contains(model.id)
+                || model.id == piiId
             #expect(isHandled,
-                    "Model '\(model.id)' must be handled by download handler (embed or vision)")
+                    "Model '\(model.id)' must be handled by download handler (embed, vision, or pii-classifier)")
         }
     }
 
@@ -130,15 +133,9 @@ struct HotFilesTests {
         return (db, path)
     }
 
-    private func cleanupDB(_ path: String) {
-        try? FileManager.default.removeItem(atPath: path)
-        try? FileManager.default.removeItem(atPath: path + "-wal")
-        try? FileManager.default.removeItem(atPath: path + "-shm")
-    }
-
     @Test func hotFilesReturnsAccessedFiles() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let projectRoot = "/tmp/hotfiles-test"
         let sid = db.createSession(projectRoot: projectRoot)
@@ -157,7 +154,7 @@ struct HotFilesTests {
         #expect(hot.count == 3, "Should return 3 hot files, got \(hot.count)")
     }
 
-    @Test func preCacheGuardedByCacheEnabled() {
+    @Test func preCacheGuardedByCacheEnabled() async {
         // When cacheEnabled is false, preCacheHotFiles should exit immediately
         // We verify by checking the method signature accepts the flag
         let session = MCPSession(
@@ -167,6 +164,7 @@ struct HotFilesTests {
         )
         // The session was created with cache disabled — preCacheHotFiles was called
         // in init but returned immediately due to guard. No crash = success.
-        #expect(!session.cacheEnabled, "Cache should be disabled")
+        let cacheEnabled = await session.cacheEnabled
+        #expect(!cacheEnabled, "Cache should be disabled")
     }
 }

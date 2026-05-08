@@ -11,13 +11,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanupDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-}
-
 // MARK: - Suite 1: ReadCache — Pinning
 
 @Suite("ReadCache — Pinning")
@@ -122,7 +115,7 @@ struct SessionDatabaseHotFilesTests {
 
     @Test func hotFilesExcludesExecToolEvents() {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         let root = "/tmp/hotfiles-exc-\(UUID().uuidString)"
         let fakeFile = "/fake/exec/script.sh"
 
@@ -137,7 +130,7 @@ struct SessionDatabaseHotFilesTests {
 
     @Test func hotFilesIncludesOutlineReadEvents() {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         let root = "/tmp/hotfiles-inc-\(UUID().uuidString)"
         let fakeFile = "/fake/outline/Module.swift"
 
@@ -150,7 +143,7 @@ struct SessionDatabaseHotFilesTests {
 
     @Test func hotFilesRankedByFrequency() {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         let root = "/tmp/hotfiles-rank-\(UUID().uuidString)"
         let pathA = "/fake/frequent/A.swift"
         let pathB = "/fake/less/B.swift"

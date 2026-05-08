@@ -10,13 +10,6 @@ private func makeTempKB() -> (KnowledgeStore, String) {
     return (store, path)
 }
 
-private func cleanupKB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-}
-
 private func makeEntity(
     name: String,
     entityType: String = "class",
@@ -42,7 +35,7 @@ struct KnowledgeStoreCRUDTests {
 
     @Test func upsertAndFetch() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let e = makeEntity(
             name: "SessionDatabase",
@@ -66,7 +59,7 @@ struct KnowledgeStoreCRUDTests {
 
     @Test func upsertUpdatesExisting() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let first = makeEntity(name: "HookRouter", understanding: "Routes hooks v1")
         let id1 = store.upsertEntity(first)
@@ -85,7 +78,7 @@ struct KnowledgeStoreCRUDTests {
 
     @Test func deleteEntityCascades() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let sourceId = store.upsertEntity(makeEntity(name: "Alpha"))
         let targetId = store.upsertEntity(makeEntity(name: "Beta"))
@@ -119,7 +112,7 @@ struct KnowledgeStoreCRUDTests {
 
     @Test func allEntitiesSortedByMentionCount() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         store.upsertEntity(makeEntity(name: "Rarely", mentionCount: 1))
         store.upsertEntity(makeEntity(name: "Often", mentionCount: 99))
@@ -138,7 +131,7 @@ struct KnowledgeStoreFTSTests {
 
     @Test func searchExactName() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         store.upsertEntity(makeEntity(name: "AutoValidateWorker", understanding: "Runs validators on save"))
         store.upsertEntity(makeEntity(name: "UnrelatedThing", understanding: "Nothing here"))
@@ -150,7 +143,7 @@ struct KnowledgeStoreFTSTests {
 
     @Test func searchPartialContent() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         store.upsertEntity(makeEntity(
             name: "DiagnosticRewriter",
@@ -164,7 +157,7 @@ struct KnowledgeStoreFTSTests {
 
     @Test func searchSanitizesFTS5Operators() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         store.upsertEntity(makeEntity(name: "SafetyCheck", understanding: "checks safety rules"))
 
@@ -179,7 +172,7 @@ struct KnowledgeStoreFTSTests {
 
     @Test func searchEmptyQueryReturnsEmpty() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         store.upsertEntity(makeEntity(name: "Anything", understanding: "content"))
 
@@ -189,7 +182,7 @@ struct KnowledgeStoreFTSTests {
 
     @Test func searchSnippetContainsMarkers() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         store.upsertEntity(makeEntity(
             name: "KnowledgeStore",
@@ -213,7 +206,7 @@ struct KnowledgeStoreLinksTests {
 
     @Test func insertLinkAndFetch() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let srcId = store.upsertEntity(makeEntity(name: "Controller"))
         _ = store.upsertEntity(makeEntity(name: "Model"))
@@ -232,7 +225,7 @@ struct KnowledgeStoreLinksTests {
 
     @Test func resolveLinksPopulatesTargetId() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let srcId = store.upsertEntity(makeEntity(name: "View"))
         let tgtId = store.upsertEntity(makeEntity(name: "ViewModel"))
@@ -246,7 +239,7 @@ struct KnowledgeStoreLinksTests {
 
     @Test func backlinksReturnsReverseLinks() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let aId = store.upsertEntity(makeEntity(name: "Parser"))
         let bId = store.upsertEntity(makeEntity(name: "Lexer"))
@@ -266,7 +259,7 @@ struct KnowledgeStoreLinksTests {
 
     @Test func duplicateLinksIgnored() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let srcId = store.upsertEntity(makeEntity(name: "Foo"))
         store.upsertEntity(makeEntity(name: "Bar"))
@@ -286,7 +279,7 @@ struct KnowledgeStoreDecisionsTests {
 
     @Test func insertAndFetchDecision() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let eid = store.upsertEntity(makeEntity(name: "AuthMiddleware"))
         store.insertDecision(DecisionRecord(
@@ -306,7 +299,7 @@ struct KnowledgeStoreDecisionsTests {
 
     @Test func gitCommitDecisionDeduped() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let eid = store.upsertEntity(makeEntity(name: "RateLimiter"))
         let rec = DecisionRecord(
@@ -331,7 +324,7 @@ struct KnowledgeStoreEvidenceTests {
 
     @Test func appendAndFetchTimeline() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let eid = store.upsertEntity(makeEntity(name: "Scheduler"))
 
@@ -356,7 +349,7 @@ struct KnowledgeStoreEvidenceTests {
 
     @Test func timelineIsAppendOnly() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         let eid = store.upsertEntity(makeEntity(name: "EventBus"))
         for i in 1...5 {
@@ -383,7 +376,7 @@ struct KnowledgeStoreCouplingTests {
 
     @Test func upsertCouplingAndFetch() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         store.upsertCoupling(CouplingEntry(
             entityA: "Schema.swift", entityB: "Migration.swift",
@@ -399,7 +392,7 @@ struct KnowledgeStoreCouplingTests {
 
     @Test func upsertCouplingUpdatesNotDuplicates() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         store.upsertCoupling(CouplingEntry(
             entityA: "A.swift", entityB: "B.swift",
@@ -419,7 +412,7 @@ struct KnowledgeStoreCouplingTests {
 
     @Test func couplingOrderCanonicalized() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         // Insert with reversed order — should canonical to (A, B)
         store.upsertCoupling(CouplingEntry(
@@ -439,7 +432,7 @@ struct KnowledgeStoreCouplingTests {
 
     @Test func minScoreFiltersResults() {
         let (store, path) = makeTempKB()
-        defer { cleanupKB(path) }
+        defer { TempKnowledgeStore.close(store, path: path) }
 
         store.upsertCoupling(CouplingEntry(
             entityA: "Core.swift", entityB: "Weak.swift",
@@ -454,5 +447,81 @@ struct KnowledgeStoreCouplingTests {
         let filtered = store.couplings(forEntityName: "Core.swift", minScore: 0.3)
         #expect(filtered.count == 1, "Should filter out coupling below minScore")
         #expect(filtered.first?.entityB == "Strong.swift")
+    }
+}
+
+// MARK: - Suite 7: Concurrent open contention (regression)
+
+@Suite("KnowledgeStore — Concurrent open contention")
+struct KnowledgeStoreContentionTests {
+
+    /// Regression for the rapid-fire `[KnowledgeStore] SQL error: database
+    /// is locked` burst observed under raw `swift test` (full parallel),
+    /// 2-in-10 runs at 11-19 lines per burst. Cause: two
+    /// `KnowledgeStore` instances opened concurrently on the same file
+    /// path each run `setupSchema` (CREATE TABLE/INDEX/TRIGGER), and with
+    /// the default `sqlite3_busy_timeout` of 0, the second writer hits
+    /// `SQLITE_BUSY` immediately and prints once per failed step.
+    ///
+    /// `enableWAL` now sets a 5s busy timeout so transient ms-scale
+    /// writer contention auto-retries. This test forces the contention
+    /// path: 8 KnowledgeStores opened in parallel on one path, each
+    /// performing a setup-and-write. Without the timeout, this surfaces
+    /// the burst reliably; with it, the run is silent.
+    @Test(.timeLimit(.minutes(1)))
+    func parallelOpenAgainstSamePathStaysSilent() async {
+        let path = "/tmp/senkani-kb-contention-\(UUID().uuidString).sqlite"
+        defer { TempSessionDatabase.cleanup(path: path) }
+
+        // Pre-create the parent directory so each parallel
+        // `KnowledgeStore(path:)` skips its mkdir and goes straight
+        // to `sqlite3_open` — tightening the open window.
+        let parent = (path as NSString).deletingLastPathComponent
+        if !parent.isEmpty {
+            try? FileManager.default.createDirectory(
+                atPath: parent, withIntermediateDirectories: true
+            )
+        }
+
+        await withTaskGroup(of: Void.self) { group in
+            for i in 0..<8 {
+                group.addTask {
+                    let store = KnowledgeStore(path: path)
+                    let entity = KnowledgeEntity(
+                        name: "ContentionProbe\(i)",
+                        entityType: "class",
+                        sourcePath: nil,
+                        markdownPath: ".senkani/knowledge/probe\(i).md",
+                        contentHash: "probe\(i)",
+                        compiledUnderstanding: "",
+                        mentionCount: 0
+                    )
+                    _ = store.upsertEntity(entity)
+                    store.close()
+                }
+            }
+        }
+
+        // Reopen and confirm every probe row landed — proves the writes
+        // actually committed (busy_timeout retried, did not lose data).
+        let verify = KnowledgeStore(path: path)
+        defer { verify.close() }
+        for i in 0..<8 {
+            #expect(
+                verify.entity(named: "ContentionProbe\(i)") != nil,
+                "Probe \(i) should be present after parallel open contention"
+            )
+        }
+    }
+
+    /// Documents the busy-timeout constant. If this changes, the
+    /// commentary in `enableWAL` and the `TempSessionDatabase`
+    /// secondary-handle precedent should be re-aligned.
+    @Test func busyTimeoutMatchesPrecedent() {
+        #expect(
+            KnowledgeStore.busyTimeoutMs
+                == Int(TempSessionDatabase.secondaryHandleBusyTimeoutMs),
+            "KnowledgeStore primary busy timeout should match the SessionDatabase secondary-handle precedent"
+        )
     }
 }

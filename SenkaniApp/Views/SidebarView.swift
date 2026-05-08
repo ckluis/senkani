@@ -104,11 +104,13 @@ struct SidebarView: View {
         }
         .frame(width: SenkaniTheme.sidebarWidth)
         .background(SenkaniTheme.sidebarBackground)
-        .onAppear {
-            enrichmentBadge = KBReader.tracker.state().enrichmentCandidates.count
+        .task {
+            enrichmentBadge = await KBReader.tracker.state().enrichmentCandidates.count
         }
         .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
-            enrichmentBadge = KBReader.tracker.state().enrichmentCandidates.count
+            Task { @MainActor in
+                enrichmentBadge = await KBReader.tracker.state().enrichmentCandidates.count
+            }
         }
         .onChange(of: workspace.activePaneID) { _, newValue in
             if newValue != nil {

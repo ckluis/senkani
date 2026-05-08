@@ -10,13 +10,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanupDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-}
-
 private func insertEvent(
     db: SessionDatabase,
     projectRoot: String,
@@ -42,7 +35,7 @@ struct DashboardDataTests {
 
     @Test func portfolioStatsAggregateAllProjects() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         insertEvent(db: db, projectRoot: "/tmp/A", feature: "filter", inputTokens: 1000, savedTokens: 300, costCents: 5)
         insertEvent(db: db, projectRoot: "/tmp/B", feature: "cache", inputTokens: 2000, savedTokens: 600, costCents: 10)
@@ -55,7 +48,7 @@ struct DashboardDataTests {
 
     @Test func featureBreakdownAcrossAllProjects() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         insertEvent(db: db, projectRoot: "/tmp/A", feature: "filter", savedTokens: 200)
         insertEvent(db: db, projectRoot: "/tmp/A", feature: "cache", savedTokens: 100)
@@ -69,7 +62,7 @@ struct DashboardDataTests {
 
     @Test func monthFilterUsesCalendarBoundary() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // Insert current event
         insertEvent(db: db, projectRoot: "/tmp/A", feature: "cache", savedTokens: 200)
@@ -87,7 +80,7 @@ struct DashboardDataTests {
 
     @Test func topOptimizationPicksHighest() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         insertEvent(db: db, projectRoot: "/tmp/A", feature: "filter", savedTokens: 300)
         insertEvent(db: db, projectRoot: "/tmp/A", feature: "cache", savedTokens: 400)
@@ -98,7 +91,7 @@ struct DashboardDataTests {
 
     @Test func emptyDatabaseProducesZeroStats() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let all = db.tokenStatsAllProjects()
         #expect(all == .zero)
@@ -112,7 +105,7 @@ struct DashboardDataTests {
 
     @Test func timeSeriesAllProjectsReturnsSorted() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         insertEvent(db: db, projectRoot: "/tmp/A", feature: "filter", savedTokens: 100)
         Thread.sleep(forTimeInterval: 0.05)

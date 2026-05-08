@@ -9,16 +9,27 @@ import Foundation
 ///   - `features` — the resolved `FeatureConfig` toggle set
 ///   - `budget`   — the resolved `BudgetConfig` thresholds
 ///   - `learnedRulesHash` — stable hash of the active learned-rules file
-///   - `modelTier` — the session's default model tier (env-resolved)
+///   - `modelId` — concrete model id from `CLAUDE_MODEL` (e.g.
+///     `claude-sonnet-4`)
+///   - `modelTier` — operator-named tier from `SENKANI_MODEL_TIER` (e.g.
+///     `standard`, `reasoning`); future first-class router presets
 ///   - `agentType` — the detected agent harness (claude_code, etc.)
 ///   - `capturedAt` — wall clock at capture
 ///
+/// Pre-2026-05-04 the two env vars (`CLAUDE_MODEL` and
+/// `SENKANI_MODEL_TIER`) collapsed into a single `modelTier` field —
+/// downstream replay diffs and `senkani policy show` could not tell
+/// which vocabulary they were inspecting. Splitting fixes that.
+/// Backward-compat decoding migrates legacy single-field rows via
+/// `LegacyModelTierClassifier`; see `init(from:)` below.
+///
 /// Stable serialization: encodes deterministically with sorted keys so the
 /// `policyHash()` is byte-identical across processes given the same input.
-public struct PolicyConfig: Codable, Sendable, Hashable {
+public struct PolicyConfig: Sendable, Hashable {
     public let features: PolicyFeatures
     public let budget: PolicyBudget
     public let learnedRulesHash: String
+    public let modelId: String?
     public let modelTier: String?
     public let agentType: String?
     public let capturedAt: Date
@@ -27,6 +38,7 @@ public struct PolicyConfig: Codable, Sendable, Hashable {
         features: PolicyFeatures,
         budget: PolicyBudget,
         learnedRulesHash: String,
+        modelId: String?,
         modelTier: String?,
         agentType: String?,
         capturedAt: Date = Date()
@@ -34,6 +46,7 @@ public struct PolicyConfig: Codable, Sendable, Hashable {
         self.features = features
         self.budget = budget
         self.learnedRulesHash = learnedRulesHash
+        self.modelId = modelId
         self.modelTier = modelTier
         self.agentType = agentType
         self.capturedAt = capturedAt
@@ -42,17 +55,26 @@ public struct PolicyConfig: Codable, Sendable, Hashable {
     /// Capture the live policy state at this moment. Reads from
     /// `FeatureConfig.resolve(...)`, `BudgetConfig.load()`,
     /// `LearnedRulesStore.load()`, and `ProcessInfo.processInfo.environment`.
-    public static func capture(projectRoot: String? = nil) -> PolicyConfig {
+    ///
+    /// Throws `LearnedRulesHashError` when the rules file is present but
+    /// unreadable / unencodable — silent fall-through to an empty hash
+    /// would let two distinct broken states collapse to the same audit
+    /// row via `UNIQUE(session_id, policy_hash)`. The insert path
+    /// (`SessionDatabase.capturePolicySnapshot`) catches and turns the
+    /// failure into a refused write + an `event_counters` bump.
+    public static func capture(projectRoot: String? = nil) throws -> PolicyConfig {
         let features = FeatureConfig.resolve(projectRoot: projectRoot)
         let budget = BudgetConfig.load()
         let env = ProcessInfo.processInfo.environment
-        let modelTier = env["CLAUDE_MODEL"] ?? env["SENKANI_MODEL_TIER"]
+        let modelId = env["CLAUDE_MODEL"]
+        let modelTier = env["SENKANI_MODEL_TIER"]
         let agentType = env["SENKANI_AGENT"]
 
         return PolicyConfig(
             features: PolicyFeatures(from: features),
             budget: PolicyBudget(from: budget),
-            learnedRulesHash: LearnedRulesHasher.currentHash(),
+            learnedRulesHash: try LearnedRulesHasher.currentHash(),
+            modelId: modelId,
             modelTier: modelTier,
             agentType: agentType
         )
@@ -62,18 +84,29 @@ public struct PolicyConfig: Codable, Sendable, Hashable {
     /// produce the same string regardless of process or wall-clock —
     /// `capturedAt` is excluded from the hash so two snapshots of the
     /// same configuration deduplicate via `policy_hash` UNIQUE.
-    public func policyHash() -> String {
+    ///
+    /// Throws `PolicyHashError.encodeFailed` rather than returning `""`
+    /// on encoder failure — collapsing two distinct broken configs to
+    /// the same empty hash would silently drop the second insert via
+    /// `ON CONFLICT(session_id, policy_hash) DO NOTHING`, hiding the
+    /// integrity breach the snapshot table is supposed to expose.
+    public func policyHash() throws -> String {
         let view = HashableView(
             features: features,
             budget: budget,
             learnedRulesHash: learnedRulesHash,
+            modelId: modelId,
             modelTier: modelTier,
             agentType: agentType
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(view) else { return "" }
-        return SHA256Hasher.hex(of: data)
+        do {
+            let data = try encoder.encode(view)
+            return SHA256Hasher.hex(of: data)
+        } catch {
+            throw PolicyHashError.encodeFailed(underlying: String(describing: error))
+        }
     }
 
     /// Encode to indented sorted-keys JSON for human-readable CLI output.
@@ -85,12 +118,134 @@ public struct PolicyConfig: Codable, Sendable, Hashable {
         return String(data: data, encoding: .utf8) ?? "{}"
     }
 
-    private struct HashableView: Codable {
+    private struct HashableView: Encodable {
         let features: PolicyFeatures
         let budget: PolicyBudget
         let learnedRulesHash: String
+        let modelId: String?
         let modelTier: String?
         let agentType: String?
+
+        enum CodingKeys: String, CodingKey {
+            case features, budget, learnedRulesHash
+            case modelId, modelTier, agentType
+        }
+
+        // Always emit `modelId` and `modelTier` keys (null when nil) so
+        // the wire-format discriminator the decoder relies on is durable
+        // across encode/decode round-trips. See
+        // `PolicyConfig.init(from:)` for the matching legacy-shape
+        // detection.
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(features, forKey: .features)
+            try c.encode(budget, forKey: .budget)
+            try c.encode(learnedRulesHash, forKey: .learnedRulesHash)
+            try c.encode(modelId, forKey: .modelId)
+            try c.encode(modelTier, forKey: .modelTier)
+            try c.encodeIfPresent(agentType, forKey: .agentType)
+        }
+    }
+}
+
+extension PolicyConfig: Codable {
+    enum CodingKeys: String, CodingKey {
+        case features, budget, learnedRulesHash
+        case modelId, modelTier, agentType, capturedAt
+    }
+
+    /// Decode supporting two wire formats:
+    ///
+    /// **New shape (post 2026-05-04 split)** — `modelId` key is present
+    /// (possibly with a `null` value). `modelTier` carries operator-tier
+    /// vocabulary only.
+    ///
+    /// **Legacy shape (pre-split)** — `modelId` key absent. The
+    /// `modelTier` value is the conflated single field; route it via
+    /// `LegacyModelTierClassifier` so a recognized tier name ends up in
+    /// `modelTier` and anything else (typically a Claude model id from
+    /// `CLAUDE_MODEL`) ends up in `modelId`.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.features = try c.decode(PolicyFeatures.self, forKey: .features)
+        self.budget = try c.decode(PolicyBudget.self, forKey: .budget)
+        self.learnedRulesHash = try c.decode(String.self, forKey: .learnedRulesHash)
+        self.agentType = try c.decodeIfPresent(String.self, forKey: .agentType)
+        self.capturedAt = try c.decode(Date.self, forKey: .capturedAt)
+
+        if c.contains(.modelId) {
+            self.modelId = try c.decodeIfPresent(String.self, forKey: .modelId)
+            self.modelTier = try c.decodeIfPresent(String.self, forKey: .modelTier)
+        } else {
+            let legacy = try c.decodeIfPresent(String.self, forKey: .modelTier)
+            switch LegacyModelTierClassifier.classify(legacy) {
+            case .empty:
+                self.modelId = nil
+                self.modelTier = nil
+            case .modelId(let id):
+                self.modelId = id
+                self.modelTier = nil
+            case .modelTier(let tier):
+                self.modelId = nil
+                self.modelTier = tier
+            }
+        }
+    }
+
+    /// Encode in the new (post-split) shape. Both `modelId` and
+    /// `modelTier` are always written (null when nil) so the
+    /// discriminator the decoder uses to tell new from legacy is
+    /// durable. `agentType` keeps its `encodeIfPresent` semantics —
+    /// it predates the split and its absence is already meaningful.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(features, forKey: .features)
+        try c.encode(budget, forKey: .budget)
+        try c.encode(learnedRulesHash, forKey: .learnedRulesHash)
+        try c.encode(modelId, forKey: .modelId)
+        try c.encode(modelTier, forKey: .modelTier)
+        try c.encodeIfPresent(agentType, forKey: .agentType)
+        try c.encode(capturedAt, forKey: .capturedAt)
+    }
+}
+
+/// Classifies a legacy single `modelTier` value so policy snapshots
+/// captured before the 2026-05-04 split decode into the right post-split
+/// field.
+///
+/// The pre-split code resolved `modelTier = env["CLAUDE_MODEL"] ??
+/// env["SENKANI_MODEL_TIER"]`. `CLAUDE_MODEL` is a model id like
+/// `claude-sonnet-4`; `SENKANI_MODEL_TIER` is one of a small fixed tier
+/// vocabulary. The classifier inspects the value:
+///
+/// - matches a known tier name → routed to `modelTier` (new
+///   semantics)
+/// - everything else (typical case: a Claude model id) → routed to
+///   `modelId`
+///
+/// The known-tier set is the U.1 TierScorer / `AgentType.swift`
+/// vocabulary. Adding a tier here is a wire-format change — if a future
+/// tier name happens to also be a substring of a model id, the
+/// classifier needs a sharper signal (e.g. an explicit `policyVersion`
+/// field).
+public enum LegacyModelTierClassifier: Sendable {
+    /// The names that historically appeared in `SENKANI_MODEL_TIER`. A
+    /// value matching one of these is a tier name; anything else is
+    /// treated as a model id.
+    public static let knownTiers: Set<String> = [
+        "simple", "standard", "complex", "reasoning",
+    ]
+
+    public enum Routed: Sendable, Equatable {
+        case empty
+        case modelId(String)
+        case modelTier(String)
+    }
+
+    public static func classify(_ value: String?) -> Routed {
+        guard let v = value, !v.isEmpty else { return .empty }
+        if knownTiers.contains(v) { return .modelTier(v) }
+        return .modelId(v)
     }
 }
 
@@ -149,17 +304,59 @@ public struct PolicyBudget: Codable, Sendable, Hashable {
     }
 }
 
-/// Hashes the live learned-rules file. Returns `""` (treated as "no
-/// rules loaded") when the file is missing or unreadable so a fresh DB
-/// without learned state still gets a deterministic, comparable hash.
+/// Hashes the live learned-rules file.
+///
+/// Three outcomes — never the same empty string for two of them:
+///   - **No rules file on disk** → returns `absentSentinel` (`"none"`).
+///     Distinguishable from every real hash and from the failure paths.
+///   - **Rules file present but unreadable / undecodable** → throws
+///     `LearnedRulesHashError.fileUnreadable`. The caller MUST treat
+///     this as fatal-for-this-write; silently substituting a sentinel
+///     would hide a corrupt audit baseline.
+///   - **Rules file present and decodes, but JSON re-encoding throws**
+///     → throws `LearnedRulesHashError.encodeFailed`. Same caller
+///     contract.
 public enum LearnedRulesHasher {
-    public static func currentHash() -> String {
-        guard let file = LearnedRulesStore.load() else { return "" }
+    /// Stable sentinel returned when no learned-rules file exists on
+    /// disk. Matches `^[a-z]+$` so it can never collide with a SHA-256
+    /// hex digest. Stored alongside real hashes in
+    /// `policy_snapshots.policy_hash` and re-derivable on read.
+    public static let absentSentinel: String = "none"
+
+    public static func currentHash() throws -> String {
+        let filePath = LearnedRulesStore.path
+        guard FileManager.default.fileExists(atPath: filePath) else {
+            return absentSentinel
+        }
+        guard let file = LearnedRulesStore.load() else {
+            throw LearnedRulesHashError.fileUnreadable(path: filePath)
+        }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(file) else { return "" }
-        return SHA256Hasher.hex(of: data)
+        do {
+            let data = try encoder.encode(file)
+            return SHA256Hasher.hex(of: data)
+        } catch {
+            throw LearnedRulesHashError.encodeFailed(underlying: String(describing: error))
+        }
     }
+}
+
+/// Errors thrown by `PolicyConfig.policyHash()`. Stable, Sendable, and
+/// String-wrapped so the failure can be attached to the
+/// `event_counters` row without leaking a concrete EncodingError graph
+/// across module boundaries.
+public enum PolicyHashError: Error, Sendable, Equatable {
+    case encodeFailed(underlying: String)
+}
+
+/// Errors thrown by `LearnedRulesHasher.currentHash()`. The caller
+/// (`PolicyStore.capture` / `SessionDatabase.capturePolicySnapshot`)
+/// converts each variant into a refused insert + an
+/// `event_counters` bump.
+public enum LearnedRulesHashError: Error, Sendable, Equatable {
+    case fileUnreadable(path: String)
+    case encodeFailed(underlying: String)
 }
 
 /// Tiny SHA-256 hex shim. Centralized so the policy and audit-chain

@@ -367,12 +367,28 @@ struct CSharpPerformanceTests {
             source += "}\n"
             source += "} // namespace\n\n"
         }
+        // Median-of-3 — see DependencyGraphPerfGateTests for the canonical
+        // pattern. `.serialized` only serializes within-suite, so peer-suite
+        // CPU contention can spike a single sample under parallel runner;
+        // a single transient spike on one of three runs cannot fail the
+        // test, but a real regression (every run blows budget) still does.
+        // Threshold preserved at 10 ms — the median strengthens the gate
+        // on its own (mirrors the Scala/Ruby/Haskell/PHP siblings, with
+        // the InjectionGuard 2026-05-06 precedent of preserve-don't-widen).
         let clock = ContinuousClock()
-        let elapsed = clock.measure {
-            let entries = indexCSharp(source)
-            #expect(entries.count > 0)
+        var samples: [Duration] = []
+        for _ in 0..<3 {
+            let elapsed = clock.measure {
+                let entries = indexCSharp(source)
+                #expect(entries.count > 0)
+            }
+            samples.append(elapsed)
         }
-        #expect(elapsed < .milliseconds(10))
+        let median = samples.sorted()[1]
+        #expect(
+            median < .milliseconds(10),
+            "median of 3 C# parses: \(samples) → median \(median)"
+        )
     }
 }
 

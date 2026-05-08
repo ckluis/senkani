@@ -10,13 +10,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanupDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-}
-
 private func makeTempDir() -> String {
     let path = "/tmp/senkani-replay-dir-\(UUID().uuidString)"
     try! FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
@@ -89,7 +82,7 @@ struct CommandReplayTests {
     @Test func replayableCommandWithNoChangesReturnsDeny() {
         let (db, dbPath) = makeTempDB()
         let dir = makeTempDir()
-        defer { cleanupDB(dbPath); try? FileManager.default.removeItem(atPath: dir) }
+        defer { TempSessionDatabase.cleanup(path: dbPath); try? FileManager.default.removeItem(atPath: dir) }
 
         let execTime = Date().addingTimeInterval(-30)  // 30s ago
         insertExecEvent(db: db, command: "swift test", projectRoot: dir, outputPreview: "148 passed, 2 failed")
@@ -117,7 +110,7 @@ struct CommandReplayTests {
     @Test func replayableCommandWithChangesReturnsNil() {
         let (db, dbPath) = makeTempDB()
         let dir = makeTempDir()
-        defer { cleanupDB(dbPath); try? FileManager.default.removeItem(atPath: dir) }
+        defer { TempSessionDatabase.cleanup(path: dbPath); try? FileManager.default.removeItem(atPath: dir) }
 
         insertExecEvent(db: db, command: "swift test", projectRoot: dir)
 
@@ -138,7 +131,7 @@ struct CommandReplayTests {
     @Test func nonReplayableCommandNeverReplays() {
         let (db, dbPath) = makeTempDB()
         let dir = makeTempDir()
-        defer { cleanupDB(dbPath); try? FileManager.default.removeItem(atPath: dir) }
+        defer { TempSessionDatabase.cleanup(path: dbPath); try? FileManager.default.removeItem(atPath: dir) }
 
         insertExecEvent(db: db, command: "curl https://example.com", projectRoot: dir)
         setDirMtime(dir, to: Date().addingTimeInterval(-60))
@@ -159,7 +152,7 @@ struct CommandReplayTests {
         // Replay should fire FIRST (before passthrough check).
         let (db, dbPath) = makeTempDB()
         let dir = makeTempDir()
-        defer { cleanupDB(dbPath); try? FileManager.default.removeItem(atPath: dir) }
+        defer { TempSessionDatabase.cleanup(path: dbPath); try? FileManager.default.removeItem(atPath: dir) }
 
         insertExecEvent(db: db, command: "swift test", projectRoot: dir)
         setDirMtime(dir, to: Date().addingTimeInterval(-60))
@@ -180,7 +173,7 @@ struct CommandReplayTests {
     @Test func oldExecNotReplayed() {
         let (db, dbPath) = makeTempDB()
         let dir = makeTempDir()
-        defer { cleanupDB(dbPath); try? FileManager.default.removeItem(atPath: dir) }
+        defer { TempSessionDatabase.cleanup(path: dbPath); try? FileManager.default.removeItem(atPath: dir) }
 
         // Insert exec event, then backdate it to 10 minutes ago via raw SQL.
         // recordTokenEvent always uses Date() internally, so we must update after insert.
@@ -206,7 +199,7 @@ struct CommandReplayTests {
     @Test func replayRecordsInterceptEvent() {
         let (db, dbPath) = makeTempDB()
         let dir = makeTempDir()
-        defer { cleanupDB(dbPath); try? FileManager.default.removeItem(atPath: dir) }
+        defer { TempSessionDatabase.cleanup(path: dbPath); try? FileManager.default.removeItem(atPath: dir) }
 
         let sid = db.createSession(projectRoot: dir)
         insertExecEvent(db: db, command: "swift test", projectRoot: dir)
@@ -235,7 +228,7 @@ struct CommandReplayTests {
     @Test func replayDenyMessageContainsOutputPreview() {
         let (db, dbPath) = makeTempDB()
         let dir = makeTempDir()
-        defer { cleanupDB(dbPath); try? FileManager.default.removeItem(atPath: dir) }
+        defer { TempSessionDatabase.cleanup(path: dbPath); try? FileManager.default.removeItem(atPath: dir) }
 
         insertExecEvent(db: db, command: "cargo test", projectRoot: dir,
                         outputPreview: "All 42 tests passed in 3.2s")
@@ -260,7 +253,7 @@ struct CommandReplayTests {
     @Test func nestedFileModificationInvalidatesReplay() throws {
         let (db, dbPath) = makeTempDB()
         let dir = makeTempDir()
-        defer { cleanupDB(dbPath); try? FileManager.default.removeItem(atPath: dir) }
+        defer { TempSessionDatabase.cleanup(path: dbPath); try? FileManager.default.removeItem(atPath: dir) }
 
         // Create a nested source file BEFORE the exec.
         let nested = dir + "/src"
@@ -292,7 +285,7 @@ struct CommandReplayTests {
     @Test func nestedFileCreationInvalidatesReplay() throws {
         let (db, dbPath) = makeTempDB()
         let dir = makeTempDir()
-        defer { cleanupDB(dbPath); try? FileManager.default.removeItem(atPath: dir) }
+        defer { TempSessionDatabase.cleanup(path: dbPath); try? FileManager.default.removeItem(atPath: dir) }
 
         try FileManager.default.createDirectory(atPath: dir + "/src", withIntermediateDirectories: true)
         insertExecEvent(db: db, command: "swift test", projectRoot: dir)
@@ -313,7 +306,7 @@ struct CommandReplayTests {
     @Test func ignoredDirectoryChangesDoNotInvalidateReplay() throws {
         let (db, dbPath) = makeTempDB()
         let dir = makeTempDir()
-        defer { cleanupDB(dbPath); try? FileManager.default.removeItem(atPath: dir) }
+        defer { TempSessionDatabase.cleanup(path: dbPath); try? FileManager.default.removeItem(atPath: dir) }
 
         // Tracked file, frozen well before the exec.
         let src = dir + "/app.swift"
@@ -343,7 +336,7 @@ struct CommandReplayTests {
     @Test func noSourceChangesReplaysWithFreshFingerprint() throws {
         let (db, dbPath) = makeTempDB()
         let dir = makeTempDir()
-        defer { cleanupDB(dbPath); try? FileManager.default.removeItem(atPath: dir) }
+        defer { TempSessionDatabase.cleanup(path: dbPath); try? FileManager.default.removeItem(atPath: dir) }
 
         // A tracked source file frozen BEFORE the exec — fingerprint is old.
         let src = dir + "/app.swift"

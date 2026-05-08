@@ -26,7 +26,7 @@ enum SearchTool {
             ranked = RRFRanker.fuse(bm25Results: bm25Results, fileScores: fileScores)
         } else {
             // 3. Fallback: substring match when FTS not yet populated
-            guard let index = session.indexIfReady() else {
+            guard let index = await session.indexIfReady() else {
                 return .init(content: [.text(text: "Symbol index is building (first run). Try again in a few seconds.", annotations: nil, _meta: nil)])
             }
             let fallback = index.search(name: query, kind: kind, file: file, container: container)
@@ -35,7 +35,7 @@ enum SearchTool {
 
         // Track queried files for staleness detection
         for r in ranked.prefix(30) {
-            session.trackQueriedSymbol(file: r.entry.file)
+            await session.trackQueriedSymbol(file: r.entry.file)
         }
 
         guard !ranked.isEmpty else {
@@ -55,9 +55,9 @@ enum SearchTool {
         if ranked.count > 30 { lines.append("  ... and \(ranked.count - 30) more") }
         lines.append("\nUse senkani_fetch to read a symbol's source.")
 
-        session.recordMetrics(rawBytes: ranked.count * 500, compressedBytes: lines.joined().utf8.count,
-                              feature: "search", command: query,
-                              outputPreview: String(lines.joined(separator: "\n").prefix(200)))
+        await session.recordMetrics(rawBytes: ranked.count * 500, compressedBytes: lines.joined().utf8.count,
+                                    feature: "search", command: query,
+                                    outputPreview: String(lines.joined(separator: "\n").prefix(200)))
 
         return .init(content: [.text(text: lines.joined(separator: "\n"), annotations: nil, _meta: nil)])
     }

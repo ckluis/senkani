@@ -774,7 +774,7 @@ public enum MigrationRegistry {
             try exec("""
                 CREATE TABLE IF NOT EXISTS policy_snapshots (
                     id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id   TEXT NOT NULL,
+                    session_id   TEXT NOT NULL REFERENCES sessions(id),
                     captured_at  REAL NOT NULL,
                     policy_hash  TEXT NOT NULL,
                     policy_json  TEXT NOT NULL,
@@ -833,7 +833,329 @@ public enum MigrationRegistry {
             try exec("ALTER TABLE agent_trace_event ADD COLUMN cost_ledger_version INTEGER;",
                      allowDuplicateColumn: true)
         },
+        Migration(version: 17, description: "policy_snapshots chain-anchoring (Phase T.5 extension)") { db in
+            // policy_snapshots is the load-bearing record of "what
+            // configuration was active when this session ran."
+            // Counterfactual replay reports cite it as the audit
+            // baseline. Without chain anchoring, a write-capable
+            // attacker can rewrite a snapshot row post-hoc and the
+            // replay surface silently lies about the baseline.
+            //
+            // v17 adds the same three chain columns the rest of the
+            // chain participants carry (`prev_hash`, `entry_hash`,
+            // `chain_anchor_id`), opens a `migration-v17` anchor
+            // covering existing rows (anchor-from-now — predecessor
+            // rows keep NULL hashes), and indexes the anchor. New
+            // writes go through ChainHasher / ChainState in the same
+            // shape as ConfirmationStore.
+            //
+            // Idempotency: ALTER guards on duplicate column the same
+            // way as v3/v4/v5/v7/v8/v9/v10/v14/v16. CREATE is guarded.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v17", detail: msg)
+            }
+
+            // Self-contained CREATE matches the v3/v4/v5/v15 convention
+            // so v17 can run against a DB dropped in at any later state.
+            try exec("""
+                CREATE TABLE IF NOT EXISTS policy_snapshots (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id   TEXT NOT NULL REFERENCES sessions(id),
+                    captured_at  REAL NOT NULL,
+                    policy_hash  TEXT NOT NULL,
+                    policy_json  TEXT NOT NULL,
+                    UNIQUE(session_id, policy_hash)
+                );
+            """)
+            try exec("ALTER TABLE policy_snapshots ADD COLUMN prev_hash TEXT;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE policy_snapshots ADD COLUMN entry_hash TEXT;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE policy_snapshots ADD COLUMN chain_anchor_id INTEGER;", allowDuplicateColumn: true)
+            try exec("CREATE INDEX IF NOT EXISTS idx_policy_snapshots_anchor ON policy_snapshots(chain_anchor_id, id);")
+
+            // Anchor existing rows under a 'migration-v17' anchor so
+            // post-migration writes verify cleanly while pre-migration
+            // rows stay anchor-from-now (NULL hashes). Inlined rather
+            // than reusing `anchorBackfill` because that helper hard-
+            // codes `reason='migration-v5'`.
+            var stmt: OpaquePointer?
+            let countSQL = "SELECT COUNT(*), COALESCE(MAX(id), 0) FROM policy_snapshots;"
+            guard sqlite3_prepare_v2(db, countSQL, -1, &stmt, nil) == SQLITE_OK else {
+                throw MigrationError.sqlFailed(stage: "v17 count", detail: String(cString: sqlite3_errmsg(db)))
+            }
+            var rowCount: Int64 = 0
+            var maxRowid: Int64 = 0
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                rowCount = sqlite3_column_int64(stmt, 0)
+                maxRowid = sqlite3_column_int64(stmt, 1)
+            }
+            sqlite3_finalize(stmt)
+
+            if rowCount > 0 {
+                let now = Date().timeIntervalSince1970
+                let insertSQL = """
+                    INSERT INTO chain_anchors
+                        (table_name, started_at, started_at_rowid, reason, operator_note)
+                    VALUES ('policy_snapshots', ?, ?, 'migration-v17', NULL);
+                """
+                guard sqlite3_prepare_v2(db, insertSQL, -1, &stmt, nil) == SQLITE_OK else {
+                    throw MigrationError.sqlFailed(stage: "v17 anchor insert", detail: String(cString: sqlite3_errmsg(db)))
+                }
+                sqlite3_bind_double(stmt, 1, now)
+                sqlite3_bind_int64(stmt, 2, maxRowid)
+                guard sqlite3_step(stmt) == SQLITE_DONE else {
+                    sqlite3_finalize(stmt)
+                    throw MigrationError.sqlFailed(stage: "v17 anchor step", detail: String(cString: sqlite3_errmsg(db)))
+                }
+                sqlite3_finalize(stmt)
+                let anchorId = sqlite3_last_insert_rowid(db)
+
+                let backfillSQL = """
+                    UPDATE policy_snapshots
+                       SET chain_anchor_id = \(anchorId)
+                     WHERE chain_anchor_id IS NULL;
+                """
+                try exec(backfillSQL)
+            }
+        },
+        Migration(version: 18, description: "connection_id on commands + token_events (Phase B-ii multi-project session)") { db in
+            // Phase B-ii — per-connection identity threaded through DB rows.
+            // The MCP daemon mints a UUID at socket accept; that UUID rides
+            // the dispatch path via `MCPSession.currentConnectionId` and now
+            // lands on every `commands` and `token_events` row so per-
+            // connection vs aggregate views are both reconstructible.
+            //
+            // Chain-hash compatibility: chain-era rows under the migration-
+            // v5 (`commands`) and migration-v4 (`token_events`) anchors were
+            // written WITHOUT `connection_id` in their canonical column map.
+            // Adding it to the canonical shape across the board would break
+            // their entry_hash verification. Instead we open a NEW anchor
+            // (`migration-v18`) for each table with `started_at_rowid =
+            // MAX(id)`. New writes register `connection_id` in the canonical
+            // map and chain under the v18 anchor; legacy rows keep their
+            // v5/v4 anchor + old canonical shape. `ChainVerifier` switches
+            // canonical shape per-anchor via the anchor's `reason` field.
+            //
+            // Idempotency: ALTERs guard duplicate column the same way as
+            // v3/v4/v5/v7/v8/v9/v10/v14/v16/v17. Anchor inserts only fire
+            // when there's history to anchor.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v18", detail: msg)
+            }
+
+            // Self-contained CREATEs match the v3/v4/v5/v15 convention so
+            // v18 can run against a DB dropped in at any later state.
+            try exec("""
+                CREATE TABLE IF NOT EXISTS commands (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL REFERENCES sessions(id),
+                    timestamp REAL NOT NULL,
+                    tool_name TEXT NOT NULL,
+                    command TEXT,
+                    raw_bytes INTEGER NOT NULL,
+                    compressed_bytes INTEGER NOT NULL,
+                    feature TEXT,
+                    output_preview TEXT
+                );
+            """)
+            try exec("ALTER TABLE commands ADD COLUMN connection_id TEXT;", allowDuplicateColumn: true)
+            try exec("CREATE INDEX IF NOT EXISTS idx_commands_connection ON commands(connection_id);")
+
+            try exec("""
+                CREATE TABLE IF NOT EXISTS token_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp REAL NOT NULL,
+                    session_id TEXT NOT NULL,
+                    pane_id TEXT,
+                    project_root TEXT,
+                    source TEXT NOT NULL,
+                    tool_name TEXT,
+                    model TEXT,
+                    input_tokens INTEGER DEFAULT 0,
+                    output_tokens INTEGER DEFAULT 0,
+                    saved_tokens INTEGER DEFAULT 0,
+                    cost_cents INTEGER DEFAULT 0,
+                    feature TEXT,
+                    command TEXT
+                );
+            """)
+            try exec("ALTER TABLE token_events ADD COLUMN connection_id TEXT;", allowDuplicateColumn: true)
+            try exec("CREATE INDEX IF NOT EXISTS idx_token_events_connection ON token_events(connection_id);")
+
+            // Existing 'fresh-install' anchors for commands / token_events
+            // were opened on a pre-v18 codebase; their rows were hashed
+            // WITHOUT `connection_id` in the canonical column map. Rename
+            // those to 'fresh-install-pre-v18' so writers and the verifier
+            // can switch shapes per anchor. Post-v18 fresh installs (a
+            // brand-new DB upgraded straight to this migration) get a fresh
+            // 'fresh-install' anchor on first write, which uses the NEW
+            // canonical (with connection_id) — that's the desired forward
+            // behavior.
+            try exec("""
+                UPDATE chain_anchors
+                   SET reason = 'fresh-install-pre-v18'
+                 WHERE table_name IN ('commands', 'token_events')
+                   AND reason = 'fresh-install';
+            """)
+
+            // Open per-table 'migration-v18' anchors so new writes use the
+            // expanded canonical map without invalidating legacy chain-era
+            // rows. The anchor opens only when the table has rows — fresh
+            // DBs continue to lazy-create a 'fresh-install' anchor on first
+            // write under the new canonical shape.
+            try openConnectionIdAnchor(db: db, table: "commands")
+            try openConnectionIdAnchor(db: db, table: "token_events")
+        },
+        Migration(version: 19, description: "egress_decisions chained table (Phase T.1a EgressProxy)") { db in
+            // Phase T.1a — EgressProxy decision audit. Every allow/deny
+            // emitted by the rule engine writes a chained row here so an
+            // operator can inspect the policy timeline post-hoc and
+            // `senkani doctor --verify-chain` proves no row was redacted.
+            //
+            // Design notes:
+            //   - Self-contained CREATE so the migration runs against any
+            //     legal historical state (matches v3/v4/v5/v17/v18).
+            //   - `host` is the post-normalization host string the rule
+            //     engine evaluated (not the raw CONNECT bytes), so the
+            //     audit log is independently meaningful.
+            //   - `decision` is one of `'allow' | 'deny'`. `rule_id` is
+            //     stable string the rule producer guarantees; for the
+            //     deny-on-miss default the writer emits `'default-deny'`.
+            //   - `latency_us` is total time from the first byte the
+            //     daemon read on this connection to the decision being
+            //     emitted (the listener round T.1a.2 is what populates
+            //     it; T.1a writes 0 for synthetic decisions emitted by
+            //     unit tests, which is honest).
+            //   - Chain columns mirror token_events (round 2): nullable
+            //     prev_hash, entry_hash, chain_anchor_id; first write
+            //     opens a 'fresh-install' anchor (no migration anchor
+            //     here because the table is created empty by this
+            //     migration — there is no history to anchor).
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v19", detail: msg)
+            }
+
+            try exec("""
+                CREATE TABLE IF NOT EXISTS egress_decisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp REAL NOT NULL,
+                    host TEXT NOT NULL,
+                    method TEXT NOT NULL,
+                    decision TEXT NOT NULL,
+                    rule_id TEXT NOT NULL,
+                    latency_us INTEGER NOT NULL DEFAULT 0,
+                    pane_id TEXT,
+                    project_root TEXT,
+                    prev_hash TEXT,
+                    entry_hash TEXT,
+                    chain_anchor_id INTEGER
+                );
+            """)
+            try exec("CREATE INDEX IF NOT EXISTS idx_egress_decisions_anchor ON egress_decisions(chain_anchor_id, id);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_egress_decisions_host ON egress_decisions(host);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_egress_decisions_time ON egress_decisions(timestamp);")
+        },
+        Migration(version: 20, description: "pack_audits chained table (Phase V.11a SkillPack)") { db in
+            // Phase V.11a — SkillPack install/uninstall provenance. Every
+            // `senkani pack install`, `pack uninstall`, and `--force`
+            // override writes a chained row so the operator can replay
+            // the install timeline post-hoc and `senkani doctor
+            // verify-chain` proves no row was redacted.
+            //
+            // Same shape as v19 (egress_decisions): self-contained CREATE,
+            // no migration anchor (table is created empty — first write
+            // opens a 'fresh-install' anchor lazily via ChainState).
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v20", detail: msg)
+            }
+
+            try exec("""
+                CREATE TABLE IF NOT EXISTS pack_audits (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pack_name TEXT NOT NULL,
+                    pack_version TEXT NOT NULL,
+                    event TEXT NOT NULL,
+                    at REAL NOT NULL,
+                    source_path TEXT NOT NULL,
+                    sha256 TEXT,
+                    applied_skills TEXT NOT NULL,
+                    prev_hash TEXT,
+                    entry_hash TEXT,
+                    chain_anchor_id INTEGER
+                );
+            """)
+            try exec("CREATE INDEX IF NOT EXISTS idx_pack_audits_anchor ON pack_audits(chain_anchor_id, id);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_pack_audits_pack ON pack_audits(pack_name, id);")
+        },
     ]
+
+    /// Open a 'migration-v18' anchor for a table at MAX(id) so that new
+    /// post-migration writes chain under the new canonical shape (which
+    /// includes `connection_id`) while legacy rows verify under the old
+    /// shape. No-op on an empty table — `ChainState` lazy-creates a
+    /// 'fresh-install' anchor on first write under the new shape.
+    private static func openConnectionIdAnchor(db: OpaquePointer, table: String) throws {
+        var stmt: OpaquePointer?
+        let countSQL = "SELECT COUNT(*), COALESCE(MAX(id), 0) FROM \(table);"
+        guard sqlite3_prepare_v2(db, countSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(
+                stage: "v18 count(\(table))",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        var rowCount: Int64 = 0
+        var maxRowid: Int64 = 0
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            rowCount = sqlite3_column_int64(stmt, 0)
+            maxRowid = sqlite3_column_int64(stmt, 1)
+        }
+        sqlite3_finalize(stmt)
+        guard rowCount > 0 else { return }
+
+        let now = Date().timeIntervalSince1970
+        let insertSQL = """
+            INSERT INTO chain_anchors
+                (table_name, started_at, started_at_rowid, reason, operator_note)
+            VALUES (?, ?, ?, 'migration-v18', NULL);
+        """
+        guard sqlite3_prepare_v2(db, insertSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(
+                stage: "v18 anchor insert(\(table))",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_bind_text(stmt, 1, (table as NSString).utf8String, -1, nil)
+        sqlite3_bind_double(stmt, 2, now)
+        sqlite3_bind_int64(stmt, 3, maxRowid)
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            sqlite3_finalize(stmt)
+            throw MigrationError.sqlFailed(
+                stage: "v18 anchor step(\(table))",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_finalize(stmt)
+    }
 
     // MARK: - v5 helpers
 

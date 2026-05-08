@@ -43,10 +43,7 @@ struct SessionDatabaseDeinitTests {
                     // underlying sqlite3_close) has run before we
                     // unlink the db files.
                     try? await Task.sleep(nanoseconds: 200_000_000)
-                    let fm = FileManager.default
-                    try? fm.removeItem(atPath: path)
-                    try? fm.removeItem(atPath: path + "-wal")
-                    try? fm.removeItem(atPath: path + "-shm")
+                    TempSessionDatabase.cleanup(path: path)
                 }
             }
         }

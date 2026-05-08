@@ -11,8 +11,8 @@ private func makeTempProject() throws -> (KnowledgeFileLayer, KnowledgeStore, St
     return (layer, store, root)
 }
 
-private func cleanup(_ root: String) {
-    try? FileManager.default.removeItem(atPath: root)
+private func cleanup(_ store: KnowledgeStore, _ root: String) {
+    TempKnowledgeStore.close(store, projectRoot: root)
 }
 
 /// Build a fully-populated KBContent for round-trip testing.
@@ -59,8 +59,8 @@ private func richContent(name: String) -> KBContent {
 struct KnowledgeFileLayerDirectoryTests {
 
     @Test func testDirectoryCreation() throws {
-        let (layer, _, root) = try makeTempProject()
-        defer { cleanup(root) }
+        let (layer, store, root) = try makeTempProject()
+        defer { cleanup(store, root) }
 
         let fm = FileManager.default
         var isDir: ObjCBool = false
@@ -252,8 +252,8 @@ struct KnowledgeParserTests {
 struct KnowledgeFileLayerRoundTripTests {
 
     @Test func testRoundTrip() throws {
-        let (layer, _, root) = try makeTempProject()
-        defer { cleanup(root) }
+        let (layer, store, root) = try makeTempProject()
+        defer { cleanup(store, root) }
 
         let original = richContent(name: "RoundTripEntity")
 
@@ -275,8 +275,8 @@ struct KnowledgeFileLayerRoundTripTests {
 struct KnowledgeFileLayerStagingTests {
 
     @Test func testStageAndCommit() throws {
-        let (layer, _, root) = try makeTempProject()
-        defer { cleanup(root) }
+        let (layer, store, root) = try makeTempProject()
+        defer { cleanup(store, root) }
 
         let content = richContent(name: "StagedEntity")
         let markdown = KnowledgeParser.serialize(content, entityName: "StagedEntity")
@@ -298,8 +298,8 @@ struct KnowledgeFileLayerStagingTests {
     }
 
     @Test func testCommitCreatesHistoryEntry() throws {
-        let (layer, _, root) = try makeTempProject()
-        defer { cleanup(root) }
+        let (layer, store, root) = try makeTempProject()
+        defer { cleanup(store, root) }
 
         let v1 = KnowledgeParser.serialize(richContent(name: "HistEntity"), entityName: "HistEntity")
 
@@ -318,8 +318,8 @@ struct KnowledgeFileLayerStagingTests {
     }
 
     @Test func testRollback() throws {
-        let (layer, _, root) = try makeTempProject()
-        defer { cleanup(root) }
+        let (layer, store, root) = try makeTempProject()
+        defer { cleanup(store, root) }
 
         let v1Body = "Version 1 content."
         let v2Body = "Version 2 content."
@@ -356,8 +356,8 @@ struct KnowledgeFileLayerStagingTests {
     }
 
     @Test func testHistoryPruning() throws {
-        let (layer, _, root) = try makeTempProject()
-        defer { cleanup(root) }
+        let (layer, store, root) = try makeTempProject()
+        defer { cleanup(store, root) }
 
         func makeMarkdown(_ n: Int) -> String {
             KnowledgeParser.serialize(
@@ -396,22 +396,37 @@ struct KnowledgeFileLayerStagingTests {
 /// the watcher's queue while the layer was being torn down, producing
 /// a use-after-free (`Object … of class KnowledgeFileLayer deallocated
 /// with non-zero retain count` followed by SIGSEGV at process exit).
-@Suite("KnowledgeFileLayer — Lifetime Safety")
+@Suite("KnowledgeFileLayer — Lifetime Safety", .serialized, .fsEventsGate)
 struct KnowledgeFileLayerLifetimeTests {
 
     /// Reproduction harness for the use-after-free: many short-lived
     /// layers that start watching and are dropped without an explicit
-    /// stopWatching(). 200 iterations on a real existing knowledge dir
+    /// stopWatching(). Iterating on a real existing knowledge dir
     /// exercises the FSEvents dispatch path that races with deinit.
     /// A passing run means the FSEvents +1 keeps `self` alive across
     /// any in-flight callback.
+    ///
+    /// Iteration count: 20. The pre-fix bug produced a SIGSEGV on the
+    /// first iteration that hit a callback-vs-deinit interleaving;
+    /// 200 iterations were retained from the original repro to make
+    /// the race highly likely under arbitrary scheduling. With the
+    /// `passRetained` + paired-release fix the race is structurally
+    /// closed (every iteration is safe), so the iteration count is
+    /// a regression-detection bound rather than a unit of force.
+    /// Lowered from 200 to 20 because each iteration intentionally
+    /// leaks one FSEventStream registration (no `stopWatching()`
+    /// means no `FSEventStreamInvalidate`, so FSEvents holds the +1
+    /// indefinitely). 200 iterations × this test + sibling tests
+    /// saturated per-process FSEvents kernel resources, surfacing
+    /// `FSEventStreamStart failed` in subsequent gated suites — see
+    /// `filewatcher-fsevents-flake-under-parallel-runner-2026-05-04`.
     @Test("Implicit teardown survives churn")
     func implicitTeardownSurvivesChurn() throws {
         let root = "/tmp/senkani-kbfl-lifetime-\(UUID().uuidString)"
-        defer { try? FileManager.default.removeItem(atPath: root) }
         let store = KnowledgeStore(path: root + "/vault.db")
+        defer { cleanup(store, root) }
 
-        for _ in 0..<200 {
+        for _ in 0..<20 {
             let layer = try KnowledgeFileLayer(projectRoot: root, store: store)
             layer.startWatching { _ in }
             // Intentionally drop without calling stopWatching() — the
@@ -431,8 +446,8 @@ struct KnowledgeFileLayerLifetimeTests {
     @Test("Explicit stopWatching drains in-flight callbacks")
     func explicitStopWatchingDrainsInFlight() async throws {
         let root = "/tmp/senkani-kbfl-stop-\(UUID().uuidString)"
-        defer { try? FileManager.default.removeItem(atPath: root) }
         let store = KnowledgeStore(path: root + "/vault.db")
+        defer { cleanup(store, root) }
 
         for _ in 0..<20 {
             let layer = try KnowledgeFileLayer(projectRoot: root, store: store)
@@ -456,8 +471,8 @@ struct KnowledgeFileLayerLifetimeTests {
     @Test("stopWatching is idempotent")
     func stopWatchingIsIdempotent() throws {
         let root = "/tmp/senkani-kbfl-idem-\(UUID().uuidString)"
-        defer { try? FileManager.default.removeItem(atPath: root) }
         let store = KnowledgeStore(path: root + "/vault.db")
+        defer { cleanup(store, root) }
 
         // Never-started layer.
         let cold = try KnowledgeFileLayer(projectRoot: root, store: store)

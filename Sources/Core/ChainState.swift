@@ -117,4 +117,23 @@ final class ChainState: @unchecked Sendable {
         cachedAnchorId = nil
         cachedLastEntryHash = nil
     }
+
+    /// Reason field for an anchor row. Used by stores that switch
+    /// canonical-column shape per anchor (Phase B-ii: pre-v18 anchors
+    /// hashed without `connection_id`; post-v18 anchors include it).
+    /// Re-read per call rather than cached: anchor reasons can be
+    /// rewritten by migrations or by test fixtures that rename anchors,
+    /// and the cost is one indexed lookup on the chain_anchors table.
+    ///
+    /// Caller MUST be on `SessionDatabase.queue`.
+    func anchorReason(db: OpaquePointer, anchorId: Int64) -> String? {
+        let sql = "SELECT reason FROM chain_anchors WHERE id = ? LIMIT 1;"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, anchorId)
+        guard sqlite3_step(stmt) == SQLITE_ROW,
+              let cstr = sqlite3_column_text(stmt, 0) else { return nil }
+        return String(cString: cstr)
+    }
 }

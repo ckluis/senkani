@@ -15,25 +15,6 @@ final class AnnotationRateCapStore: @unchecked Sendable {
         self.parent = parent
     }
 
-    /// Idempotent — Migration v13 owns the canonical schema.
-    func setupSchema() {
-        parent.queue.sync {
-            execSilent("""
-                CREATE TABLE IF NOT EXISTS annotation_rate_cap_log (
-                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-                    window_start     REAL NOT NULL,
-                    window_end       REAL NOT NULL,
-                    severity         TEXT NOT NULL,
-                    suppressed_count INTEGER NOT NULL,
-                    threshold        INTEGER NOT NULL,
-                    created_at       REAL NOT NULL
-                );
-            """)
-            execSilent("CREATE INDEX IF NOT EXISTS idx_annotation_rate_cap_window ON annotation_rate_cap_log(window_start DESC);")
-            execSilent("CREATE INDEX IF NOT EXISTS idx_annotation_rate_cap_severity ON annotation_rate_cap_log(severity, created_at DESC);")
-        }
-    }
-
     /// Insert one rate-cap log row. Returns the rowid or -1 on failure.
     @discardableResult
     func record(_ row: AnnotationRateCapLogRow, now: Date = Date()) -> Int64 {
@@ -90,6 +71,7 @@ final class AnnotationRateCapStore: @unchecked Sendable {
     }
 
     private func execSilent(_ sql: String) {
+        dispatchPrecondition(condition: .onQueue(parent.queue))
         guard let db = parent.db else { return }
         var err: UnsafeMutablePointer<CChar>?
         sqlite3_exec(db, sql, nil, nil, &err)

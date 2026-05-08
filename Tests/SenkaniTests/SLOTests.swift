@@ -218,18 +218,41 @@ struct SLOPerfGateTests {
         // (the actual binary launch is governed by the OS, not our
         // code). The synthetic floor catches algorithmic regressions
         // in the relay's cold path.
-        let path = makeTempStorePath()
-        defer { try? FileManager.default.removeItem(atPath: path) }
-        let store = SLOSampleStore(customPath: path)
-        for _ in 0..<200 {
-            let start = Date()
-            _ = ProcessInfo.processInfo.environment["SENKANI_INTERCEPT"] ?? "off"
-            _ = "{}".data(using: .utf8)
-            let ms = Date().timeIntervalSince(start) * 1000
-            store.recordForced(.hookPassthrough, ms: ms)
+        //
+        // Supermajority-of-5 evaluations — under full-suite parallel-
+        // runner CPU contention, scheduler preemption can push p99 (or
+        // >1 % of samples) over the 1 ms ceiling, flipping individual
+        // evaluations to .burn even when the cold-path code is healthy.
+        // The 2026-05-05 closure migrated this gate from a single
+        // 200-sample evaluation to median-of-3 (≥ 2 of 3 burn fails);
+        // a 2026-05-06 PHP-fix verification soak (13 full-suite runs)
+        // still observed 1 spurious 2/3 burn, so this round widens the
+        // statistical envelope to five independent 200-sample
+        // distributions with a supermajority gate (≥ 4 of 5 burn fails).
+        // 1 ms threshold preserved (product contract; see spec/slos.md).
+        // See DependencyGraphPerfGateTests for the canonical median-of-N
+        // pattern this extends.
+        var evaluations: [SLOEvaluation] = []
+        for _ in 0..<5 {
+            let path = makeTempStorePath()
+            defer { try? FileManager.default.removeItem(atPath: path) }
+            let store = SLOSampleStore(customPath: path)
+            for _ in 0..<200 {
+                let start = Date()
+                _ = ProcessInfo.processInfo.environment["SENKANI_INTERCEPT"] ?? "off"
+                _ = "{}".data(using: .utf8)
+                let ms = Date().timeIntervalSince(start) * 1000
+                store.recordForced(.hookPassthrough, ms: ms)
+            }
+            evaluations.append(store.evaluate(.hookPassthrough))
         }
-        let e = store.evaluate(.hookPassthrough)
-        #expect(e.state != .burn,
-                "hook.passthrough p99 \(e.p99Ms)ms exceeded 1ms threshold")
+        let burnCount = evaluations.filter { $0.state == .burn }.count
+        let summary = evaluations
+            .map { "p99=\(String(format: "%.3f", $0.p99Ms))ms over=\(String(format: "%.1f", $0.overBudgetPct))%" }
+            .joined(separator: " | ")
+        #expect(
+            burnCount < 4,
+            "supermajority of 5 hook.passthrough evaluations burned (\(burnCount)/5): \(summary)"
+        )
     }
 }

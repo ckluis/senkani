@@ -13,6 +13,24 @@ public struct CommandSearchResult: Identifiable, Sendable {
     public let outputPreview: String?
 }
 
+/// Phase B-ii — per-connection aggregate row returned by
+/// `aggregateForProject(projectRoot:groupByConnection:)`. `connectionId`
+/// is nil for the rolled-up "all rows" bucket and for legacy rows that
+/// predate the connection-id column.
+public struct ConnectionAggregateRow: Sendable, Equatable {
+    public let connectionId: String?
+    public let commandCount: Int
+    public let totalRawBytes: Int
+    public let totalCompressedBytes: Int
+
+    public init(connectionId: String?, commandCount: Int, totalRawBytes: Int, totalCompressedBytes: Int) {
+        self.connectionId = connectionId
+        self.commandCount = commandCount
+        self.totalRawBytes = totalRawBytes
+        self.totalCompressedBytes = totalCompressedBytes
+    }
+}
+
 /// Lifetime stats across all sessions.
 public struct LifetimeStats: Sendable {
     public let totalSessions: Int
@@ -51,6 +69,7 @@ public struct SessionSummaryRow: Identifiable, Sendable {
     public let commandCount: Int
     public let paneCount: Int
     public let costSavedCents: Int
+    public let projectRoot: String?
 
     public var savingsPercent: Double {
         guard totalRaw > 0 else { return 0 }
@@ -88,7 +107,8 @@ extension SessionDatabase {
         rawBytes: Int,
         compressedBytes: Int,
         feature: String? = nil,
-        outputPreview: String? = nil
+        outputPreview: String? = nil,
+        connectionId: String? = nil
     ) {
         commandStore.recordCommand(
             sessionId: sessionId,
@@ -97,7 +117,24 @@ extension SessionDatabase {
             rawBytes: rawBytes,
             compressedBytes: compressedBytes,
             feature: feature,
-            outputPreview: outputPreview
+            outputPreview: outputPreview,
+            connectionId: connectionId
+        )
+    }
+
+    /// Phase B-ii — list `commands` rows tagged with the given connection ID.
+    public func commandsForConnection(connectionId: String, limit: Int = 200) -> [CommandSearchResult] {
+        commandStore.commandsForConnection(connectionId: connectionId, limit: limit)
+    }
+
+    /// Phase B-ii — per-connection or rolled-up aggregate stats for a project.
+    public func aggregateForProject(
+        projectRoot: String,
+        groupByConnection: Bool
+    ) -> [String: ConnectionAggregateRow] {
+        commandStore.aggregateForProject(
+            projectRoot: projectRoot,
+            groupByConnection: groupByConnection
         )
     }
 

@@ -12,9 +12,10 @@ import Indexer
 /// Returns nil when nothing is found (caller should report "not found" error).
 enum PinnedContextGenerator {
 
-    /// Generate a compressed outline for `name`. Synchronous — all lookups are
-    /// in-memory or local SQLite (<1ms). Safe to call from any thread.
-    static func generate(name: String, session: MCPSession) -> String? {
+    /// Generate a compressed outline for `name`. All lookups are in-memory
+    /// or local SQLite (<1ms); the only `await` is the actor hop for
+    /// `indexIfReady()`. KB / FTS access stays sync via `nonisolated let`.
+    static func generate(name: String, session: MCPSession) async -> String? {
         // 1. Knowledge Store — richest source if entity has been enriched
         if let entity = session.knowledgeStore.entity(named: name) {
             let summary = formatKBEntity(entity)
@@ -24,7 +25,7 @@ enum PinnedContextGenerator {
         }
 
         // 2. Symbol Index exact match
-        if let index = session.indexIfReady(), let entry = index.find(name: name) {
+        if let index = await session.indexIfReady(), let entry = index.find(name: name) {
             let summary = formatSymbolEntry(entry, index: index)
             if !summary.isEmpty {
                 return String(summary.prefix(PinnedContextStore.maxEntryChars))

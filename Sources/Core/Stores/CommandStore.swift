@@ -27,10 +27,13 @@ final class CommandStore: @unchecked Sendable {
 
     // MARK: - Schema
 
-    /// Create the sessions / commands / commands_fts surface. Idempotent —
-    /// safe to call on every open. The FTS5 triggers keep the virtual table
-    /// in sync with `commands`; the `recordCommand` path wraps those writes
-    /// in a BEGIN IMMEDIATE transaction (see below).
+    /// Residual DDL that has not yet been folded into a numbered migration.
+    /// MigrationRegistry.all v5 owns `commands`; this method covers the
+    /// remaining surface (`sessions`, `commands_fts` virtual table, FTS
+    /// triggers, the three historical ALTERs, and the two `sessions`
+    /// indexes). Called AFTER `runMigrations` so the underlying tables
+    /// already exist; CREATE … IF NOT EXISTS / CREATE TRIGGER IF NOT EXISTS
+    /// keep the call idempotent.
     func setupSchema() {
         let stmts = [
             """
@@ -44,19 +47,6 @@ final class CommandStore: @unchecked Sendable {
                 command_count INTEGER DEFAULT 0,
                 pane_count INTEGER DEFAULT 0,
                 cost_saved_cents INTEGER DEFAULT 0
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS commands (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL REFERENCES sessions(id),
-                timestamp REAL NOT NULL,
-                tool_name TEXT NOT NULL,
-                command TEXT,
-                raw_bytes INTEGER NOT NULL,
-                compressed_bytes INTEGER NOT NULL,
-                feature TEXT,
-                output_preview TEXT
             );
             """,
             """
@@ -89,12 +79,18 @@ final class CommandStore: @unchecked Sendable {
 
         // Column migrations — ALTER TABLE fails silently when a column
         // already exists. Index migrations are IF NOT EXISTS, so also idempotent.
+        // `connection_id` is also covered by `MigrationRegistry.all v18`,
+        // which additionally opens a `migration-v18` chain anchor; this list
+        // is the runtime-residual mirror so a hand-recovered DB keeps the
+        // ALTER guard.
         let migrations = [
             "ALTER TABLE commands ADD COLUMN budget_decision TEXT;",
+            "ALTER TABLE commands ADD COLUMN connection_id TEXT;",
             "ALTER TABLE sessions ADD COLUMN project_root TEXT;",
             "ALTER TABLE sessions ADD COLUMN agent_type TEXT;",
             "CREATE INDEX IF NOT EXISTS idx_sessions_project_ended ON sessions(project_root, ended_at);",
             "CREATE INDEX IF NOT EXISTS idx_sessions_agent_type ON sessions(agent_type);",
+            "CREATE INDEX IF NOT EXISTS idx_commands_connection ON commands(connection_id);",
         ]
 
         parent.queue.sync {
@@ -148,7 +144,8 @@ final class CommandStore: @unchecked Sendable {
         rawBytes: Int,
         compressedBytes: Int,
         feature: String? = nil,
-        outputPreview: String? = nil
+        outputPreview: String? = nil,
+        connectionId: String? = nil
     ) {
         let now = Date().timeIntervalSince1970
         // C1 (Cavoukian privacy pass 2026-04-16): redact secrets from the
@@ -178,7 +175,19 @@ final class CommandStore: @unchecked Sendable {
             // re-derive the hash from a SELECT *.
             let anchorId = self.chain.resolveAnchorId(db: db)
             let prevHash = self.chain.latestEntryHash(db: db, anchorId: anchorId)
-            let columns: [String: ChainHasher.CanonicalValue] = [
+            // Phase B-ii: include `connection_id` in the canonical column
+            // map for all anchors EXCEPT the legacy pre-v18 ones whose
+            // existing rows were hashed without it. The legacy set is
+            // `migration-v5` (pre-T.5 backfill anchor) and
+            // `fresh-install-pre-v18` (renamed by the v18 migration so
+            // legacy fresh-install rows keep verifying under the old
+            // shape). All other anchors — `migration-v18`, post-v18
+            // `fresh-install`, future `repair-*` rebinds — use the new
+            // shape. Mirrored on the verifier side in
+            // `ChainVerifier.verifyAnchorCommands`.
+            let reason = self.chain.anchorReason(db: db, anchorId: anchorId) ?? ""
+            let useLegacyShape = (reason == "migration-v5" || reason == "fresh-install-pre-v18")
+            var columns: [String: ChainHasher.CanonicalValue] = [
                 "session_id":       .text(sessionId),
                 "timestamp":        .real(now),
                 "tool_name":        .text(toolName),
@@ -189,14 +198,18 @@ final class CommandStore: @unchecked Sendable {
                 "output_preview":   preview.map { .text($0) } ?? .null,
                 "budget_decision":  .null,
             ]
+            if !useLegacyShape {
+                columns["connection_id"] = connectionId.map { .text($0) } ?? .null
+            }
             let entryHash = ChainHasher.entryHash(
                 table: "commands", columns: columns, prev: prevHash
             )
 
             let sql = """
                 INSERT INTO commands (session_id, timestamp, tool_name, command, raw_bytes, compressed_bytes, feature, output_preview,
+                                     connection_id,
                                      prev_hash, entry_hash, chain_anchor_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -220,13 +233,18 @@ final class CommandStore: @unchecked Sendable {
             } else {
                 sqlite3_bind_null(stmt, 8)
             }
-            if let prevH = prevHash {
-                sqlite3_bind_text(stmt, 9, (prevH as NSString).utf8String, -1, nil)
+            if let cid = connectionId {
+                sqlite3_bind_text(stmt, 9, (cid as NSString).utf8String, -1, nil)
             } else {
                 sqlite3_bind_null(stmt, 9)
             }
-            sqlite3_bind_text(stmt, 10, (entryHash as NSString).utf8String, -1, nil)
-            sqlite3_bind_int64(stmt, 11, anchorId)
+            if let prevH = prevHash {
+                sqlite3_bind_text(stmt, 10, (prevH as NSString).utf8String, -1, nil)
+            } else {
+                sqlite3_bind_null(stmt, 10)
+            }
+            sqlite3_bind_text(stmt, 11, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(stmt, 12, anchorId)
             let insertRC = sqlite3_step(stmt)
             sqlite3_finalize(stmt)
             guard insertRC == SQLITE_DONE else { return }
@@ -295,7 +313,7 @@ final class CommandStore: @unchecked Sendable {
             guard let db = parent.db else { return [] }
             let sql = """
                 SELECT id, started_at, duration_seconds, total_raw_bytes, total_saved_bytes,
-                       command_count, pane_count, cost_saved_cents
+                       command_count, pane_count, cost_saved_cents, project_root
                 FROM sessions
                 ORDER BY started_at DESC
                 LIMIT ?;
@@ -315,6 +333,9 @@ final class CommandStore: @unchecked Sendable {
                 let cmdCount = Int(sqlite3_column_int(stmt, 5))
                 let paneCount = Int(sqlite3_column_int(stmt, 6))
                 let costCents = Int(sqlite3_column_int(stmt, 7))
+                let projectRoot: String? = sqlite3_column_type(stmt, 8) == SQLITE_NULL
+                    ? nil
+                    : String(cString: sqlite3_column_text(stmt, 8))
 
                 rows.append(SessionSummaryRow(
                     id: id,
@@ -324,7 +345,8 @@ final class CommandStore: @unchecked Sendable {
                     totalSaved: savedBytes,
                     commandCount: cmdCount,
                     paneCount: paneCount,
-                    costSavedCents: costCents
+                    costSavedCents: costCents,
+                    projectRoot: projectRoot
                 ))
             }
             return rows
@@ -625,10 +647,14 @@ final class CommandStore: @unchecked Sendable {
 
             // T.5 round 3: chain-aware budget-decision insert. Canonical
             // bytes match the SELECT-* shape — all eight data columns plus
-            // budget_decision; unbound columns are NULL.
+            // budget_decision; unbound columns are NULL. Phase B-ii adds
+            // connection_id (NULL here — budget rows aren't tagged) for
+            // anchors using the new shape.
             let anchorId = self.chain.resolveAnchorId(db: db)
             let prevHash = self.chain.latestEntryHash(db: db, anchorId: anchorId)
-            let columns: [String: ChainHasher.CanonicalValue] = [
+            let reason = self.chain.anchorReason(db: db, anchorId: anchorId) ?? ""
+            let useLegacyShape = (reason == "migration-v5" || reason == "fresh-install-pre-v18")
+            var columns: [String: ChainHasher.CanonicalValue] = [
                 "session_id":       .text(sessionId),
                 "timestamp":        .real(now),
                 "tool_name":        .text(toolName),
@@ -639,6 +665,9 @@ final class CommandStore: @unchecked Sendable {
                 "output_preview":   .null,
                 "budget_decision":  .text(decision),
             ]
+            if !useLegacyShape {
+                columns["connection_id"] = .null
+            }
             let entryHash = ChainHasher.entryHash(
                 table: "commands", columns: columns, prev: prevHash
             )
@@ -667,6 +696,93 @@ final class CommandStore: @unchecked Sendable {
             if sqlite3_step(stmt) == SQLITE_DONE {
                 self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
             }
+        }
+    }
+
+    /// Phase B-ii — list `commands` rows tagged with the given connection ID,
+    /// newest first. Backed by `idx_commands_connection`.
+    func commandsForConnection(connectionId: String, limit: Int = 200) -> [CommandSearchResult] {
+        return parent.queue.sync {
+            guard let db = parent.db else { return [] }
+            let sql = """
+                SELECT id, session_id, timestamp, tool_name, command,
+                       raw_bytes, compressed_bytes, feature, output_preview
+                  FROM commands
+                 WHERE connection_id = ?
+                 ORDER BY timestamp DESC
+                 LIMIT ?;
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (connectionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_int(stmt, 2, Int32(min(limit, 1000)))
+
+            var rows: [CommandSearchResult] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let rowId = Int(sqlite3_column_int64(stmt, 0))
+                let sessionId = String(cString: sqlite3_column_text(stmt, 1))
+                let ts = sqlite3_column_double(stmt, 2)
+                let toolName = String(cString: sqlite3_column_text(stmt, 3))
+                let cmd = sqlite3_column_type(stmt, 4) == SQLITE_NULL ? nil : String(cString: sqlite3_column_text(stmt, 4))
+                let raw = Int(sqlite3_column_int64(stmt, 5))
+                let compressed = Int(sqlite3_column_int64(stmt, 6))
+                let feat = sqlite3_column_type(stmt, 7) == SQLITE_NULL ? nil : String(cString: sqlite3_column_text(stmt, 7))
+                let preview = sqlite3_column_type(stmt, 8) == SQLITE_NULL ? nil : String(cString: sqlite3_column_text(stmt, 8))
+                rows.append(CommandSearchResult(
+                    id: rowId, sessionId: sessionId,
+                    timestamp: Date(timeIntervalSince1970: ts),
+                    toolName: toolName, command: cmd,
+                    rawBytes: raw, compressedBytes: compressed,
+                    feature: feat, outputPreview: preview
+                ))
+            }
+            return rows
+        }
+    }
+
+    /// Phase B-ii — aggregate per-project stats. When
+    /// `groupByConnection: true` the result keys on `connection_id` (rows
+    /// with a NULL `connection_id` group under the empty string `""`).
+    /// When `false` the entire project rolls up under the same `""` key.
+    /// Single SQL path, two reducers.
+    func aggregateForProject(
+        projectRoot: String,
+        groupByConnection: Bool
+    ) -> [String: ConnectionAggregateRow] {
+        let normalized = SessionDatabase.normalizePath(projectRoot) ?? projectRoot
+        return parent.queue.sync {
+            guard let db = parent.db else { return [:] }
+            let groupClause = groupByConnection ? "COALESCE(c.connection_id, '')" : "''"
+            let sql = """
+                SELECT \(groupClause) AS bucket,
+                       COUNT(*) AS row_count,
+                       COALESCE(SUM(c.raw_bytes), 0) AS raw_total,
+                       COALESCE(SUM(c.compressed_bytes), 0) AS compressed_total
+                  FROM commands c
+                  JOIN sessions s ON s.id = c.session_id
+                 WHERE s.project_root = ?
+                 GROUP BY bucket;
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [:] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+
+            var out: [String: ConnectionAggregateRow] = [:]
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let bucket = sqlite3_column_text(stmt, 0).map { String(cString: $0) } ?? ""
+                let count = Int(sqlite3_column_int64(stmt, 1))
+                let raw = Int(sqlite3_column_int64(stmt, 2))
+                let compressed = Int(sqlite3_column_int64(stmt, 3))
+                out[bucket] = ConnectionAggregateRow(
+                    connectionId: bucket.isEmpty ? nil : bucket,
+                    commandCount: count,
+                    totalRawBytes: raw,
+                    totalCompressedBytes: compressed
+                )
+            }
+            return out
         }
     }
 
@@ -704,10 +820,12 @@ final class CommandStore: @unchecked Sendable {
     // MARK: - Helpers
 
     private func exec(_ sql: String) {
+        dispatchPrecondition(condition: .onQueue(parent.queue))
         StoreExec.run(db: parent.db, sql: sql, scope: "command")
     }
 
     private func execSilent(_ sql: String) {
+        dispatchPrecondition(condition: .onQueue(parent.queue))
         guard let db = parent.db else { return }
         var err: UnsafeMutablePointer<CChar>?
         sqlite3_exec(db, sql, nil, nil, &err)

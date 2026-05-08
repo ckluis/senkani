@@ -22,6 +22,8 @@ if isHookMode {
     SocketServerManager.shared.hookHandler = { HookRouter.handle(eventJSON: $0) }
     SocketServerManager.shared.start()
     HookRouter.entityObserver = { KBObserver.observeHookEvent(toolName: $0, toolInput: $1) }
+    // V.11b — load installed pack policy fragments at socket-server boot.
+    HookRouter.refreshInstalledPacks()
     // Block forever (the socket server runs on GCD)
     dispatchMain()
 } else {

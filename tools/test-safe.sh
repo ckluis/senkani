@@ -111,6 +111,39 @@ preflight() {
   if [ -z "${SKIP_GRAMMAR_HASH_CHECK:-}" ] && [ -x ./tools/verify-grammar-hashes.sh ]; then
     ./tools/verify-grammar-hashes.sh
   fi
+  # /tmp staleness alarm — a future test that creates `SessionDatabase(path:)`
+  # without the canonical sidecar cleanup (see
+  # Tests/SenkaniTests/Helpers/TempSessionDatabase.swift) leaks `.migrating`
+  # and `.schema.lock` flock sidecars to /tmp every run. This warns when
+  # accumulation crosses a stale-state threshold so the regression
+  # surfaces during local dev rather than after months of buildup.
+  if [ -z "${SKIP_TMP_STALENESS_CHECK:-}" ]; then
+    local stale
+    stale="$(/bin/ls -1 /tmp 2>/dev/null | grep -c '^senkani-' || true)"
+    if [ "${stale:-0}" -gt 50 ]; then
+      echo "::warning::/tmp has ${stale} leftover senkani-* files —" \
+           "likely a test creating SessionDatabase(path:) without calling" \
+           "TempSessionDatabase.cleanup(path:) at teardown." \
+           "Clear with: rm /tmp/senkani-*"
+    fi
+  fi
+}
+
+# /tmp staleness post-flight (runs in the all-mode tail). Same idea as the
+# pre-flight but compares pre vs post: if the suite leaves the floor
+# materially dirtier than it found it, name it. Soft warning only — the
+# pre-flight already absolves stale state at startup.
+tmp_staleness_postcheck() {
+  if [ -z "${SKIP_TMP_STALENESS_CHECK:-}" ] && [ -n "${TEST_SAFE_TMP_BASELINE:-}" ]; then
+    local now
+    now="$(/bin/ls -1 /tmp 2>/dev/null | grep -c '^senkani-' || true)"
+    local delta=$(( now - TEST_SAFE_TMP_BASELINE ))
+    if [ "$delta" -gt 50 ]; then
+      echo "::warning::test run leaked ${delta} new senkani-* files to /tmp" \
+           "(baseline ${TEST_SAFE_TMP_BASELINE}, now ${now})." \
+           "Likely a test missing TempSessionDatabase.cleanup(path:)."
+    fi
+  fi
 }
 
 # ---------------------------------------------------------------------
@@ -217,6 +250,9 @@ case "$MODE" in
     ;;
   all)
     preflight
+    # Capture /tmp baseline so the post-flight can name a leak delta.
+    TEST_SAFE_TMP_BASELINE="$(/bin/ls -1 /tmp 2>/dev/null | grep -c '^senkani-' || true)"
+    export TEST_SAFE_TMP_BASELINE
     overall=0
     declare -a SUMMARY=()
     # Run each named chunk, then the catch-all.
@@ -241,6 +277,7 @@ case "$MODE" in
     for line in "${SUMMARY[@]}"; do
       echo "  $line"
     done
+    tmp_staleness_postcheck
     if [ "$overall" -eq 0 ]; then
       echo "test-safe: all chunks green"
     else

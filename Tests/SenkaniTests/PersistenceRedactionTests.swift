@@ -14,13 +14,6 @@ struct PersistenceRedactionTests {
         return (SessionDatabase(path: path), path)
     }
 
-    private func cleanupDB(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-wal")
-        try? fm.removeItem(atPath: path + "-shm")
-    }
-
     // MARK: - Unit: PersistenceRedaction helper
 
     @Test func redactsAnthropicKey() {
@@ -44,7 +37,7 @@ struct PersistenceRedactionTests {
 
     @Test func tokenEventsCommandIsRedacted() throws {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession(projectRoot: "/tmp/proj")
         db.recordTokenEvent(
@@ -72,7 +65,7 @@ struct PersistenceRedactionTests {
 
     @Test func tokenEventsCommandRedactsAWSKey() throws {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession(projectRoot: "/tmp/proj")
         db.recordTokenEvent(
@@ -95,7 +88,7 @@ struct PersistenceRedactionTests {
 
     @Test func sandboxedResultsRedactsFullOutput() throws {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession(projectRoot: "/tmp/proj")
         let bigOutput = """
@@ -122,7 +115,7 @@ struct PersistenceRedactionTests {
 
     @Test func sandboxedResultsRedactsCommand() throws {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession(projectRoot: "/tmp/proj")
         let resultId = db.storeSandboxedResult(
@@ -142,7 +135,7 @@ struct PersistenceRedactionTests {
 
     @Test func commandStoreStillRedactsAfterRefactor() throws {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let sid = db.createSession(projectRoot: "/tmp/proj")
         db.recordCommand(

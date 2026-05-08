@@ -378,12 +378,27 @@ struct PhpPerformanceTests {
             }
             source += "}\n\n"
         }
+        // Median-of-3 — see DependencyGraphPerfGateTests for the canonical
+        // pattern. `.serialized` only serializes within-suite, so peer-suite
+        // CPU contention can spike a single sample under parallel runner;
+        // a single transient spike on one of three runs cannot fail the
+        // test, but a real regression (every run blows budget) still does.
+        // Threshold widened 10 ms → 20 ms to mirror the Scala/Ruby sibling
+        // closure (2026-05-05) — same wall-clock-flake family.
         let clock = ContinuousClock()
-        let elapsed = clock.measure {
-            let entries = indexPhp(source)
-            #expect(entries.count > 0)
+        var samples: [Duration] = []
+        for _ in 0..<3 {
+            let elapsed = clock.measure {
+                let entries = indexPhp(source)
+                #expect(entries.count > 0)
+            }
+            samples.append(elapsed)
         }
-        #expect(elapsed < .milliseconds(10))
+        let median = samples.sorted()[1]
+        #expect(
+            median < .milliseconds(20),
+            "median of 3 PHP parses: \(samples) → median \(median)"
+        )
     }
 
     @Test("PHP coexists with other languages")

@@ -8,13 +8,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanupDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-}
-
 private func insertEvent(
     db: SessionDatabase,
     projectRoot: String = "/tmp/test-project",
@@ -46,7 +39,7 @@ struct FeatureSavingsTests {
 
     @Test func featureSavingsGroupsByFeature() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // 3 filter events with saved_tokens=100 each
         for _ in 0..<3 { insertEvent(db: db, feature: "filter", savedTokens: 100) }
@@ -67,7 +60,7 @@ struct FeatureSavingsTests {
 
     @Test func featureSavingsFiltersZeroSavings() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // Events with saved_tokens=0 (hook-only)
         insertEvent(db: db, feature: "hook", savedTokens: 0)
@@ -83,7 +76,7 @@ struct FeatureSavingsTests {
 
     @Test func featureSavingsScopesToProject() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         insertEvent(db: db, projectRoot: "/tmp/project-a", feature: "filter", savedTokens: 100)
         insertEvent(db: db, projectRoot: "/tmp/project-b", feature: "cache", savedTokens: 200)
@@ -99,7 +92,7 @@ struct FeatureSavingsTests {
 
     @Test func featureSavingsRespectsSinceDate() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         // Insert some events (all at ~now)
         insertEvent(db: db, feature: "filter", savedTokens: 100)
@@ -116,7 +109,7 @@ struct FeatureSavingsTests {
 
     @Test func featureSavingsEmptyReturnsEmpty() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { TempSessionDatabase.cleanup(path: path) }
 
         let results = db.tokenStatsByFeature(projectRoot: "/tmp/nonexistent-project")
         #expect(results.isEmpty)

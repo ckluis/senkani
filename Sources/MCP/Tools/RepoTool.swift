@@ -48,9 +48,9 @@ enum RepoTool {
         if let cached = await cache.get(cacheKey) {
             SessionDatabase.shared.recordEvent(
                 type: "repo_tool.cache.hit", projectRoot: session.projectRoot)
-            return metricsWrap(text: cached, session: session,
-                               rawBytes: cached.utf8.count, action: action,
-                               repo: repo, cached: true)
+            return await metricsWrap(text: cached, session: session,
+                                     rawBytes: cached.utf8.count, action: action,
+                                     repo: repo, cached: true)
         }
         SessionDatabase.shared.recordEvent(
             type: "repo_tool.cache.miss", projectRoot: session.projectRoot)
@@ -82,9 +82,9 @@ enum RepoTool {
             await cache.put(cacheKey, body: response.body)
             SessionDatabase.shared.recordEvent(
                 type: "repo_tool.request.success", projectRoot: session.projectRoot)
-            return metricsWrap(text: response.body, session: session,
-                               rawBytes: response.rawByteCount, action: action,
-                               repo: repo, cached: false)
+            return await metricsWrap(text: response.body, session: session,
+                                     rawBytes: response.rawByteCount, action: action,
+                                     repo: repo, cached: false)
         } catch let e as RemoteRepoError {
             let counterType: String
             if case .rateLimited = e {
@@ -118,13 +118,13 @@ enum RepoTool {
         action: RemoteRepoAction,
         repo: String,
         cached: Bool
-    ) -> CallTool.Result {
+    ) async -> CallTool.Result {
         let returnedBytes = text.utf8.count
         // Notional raw-vs-compressed: a clone would be ~20× bigger than
         // the targeted response. Same heuristic DepsTool uses for
         // import-graph queries.
         let notionalRaw = max(returnedBytes * 20, rawBytes)
-        session.recordMetrics(
+        await session.recordMetrics(
             rawBytes: notionalRaw,
             compressedBytes: returnedBytes,
             feature: "repo",

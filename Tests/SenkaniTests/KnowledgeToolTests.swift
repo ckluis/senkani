@@ -45,7 +45,17 @@ private func postToolUseEvent(toolName: String, toolInput: [String: Any]) -> Dat
 
 // MARK: - Suite
 
-@Suite("KnowledgeTool")
+/// `.serialized` because two tests in this suite save/install/restore the
+/// `nonisolated(unsafe) public static var HookRouter.entityObserver`
+/// process-global. Under the parallel runner, racing save/install/teardown
+/// crosses observer closures between tests, leaving one test's
+/// `state.sessionTotal["ObservedEntity"]` nil and (previously) escalating
+/// to a fatal force-unwrap that aborted the entire test process.
+/// `validationDatabase`, `annotationFeed`, and `trustFlagSink` (the other
+/// `HookRouter` statics) are already serialized in their respective suites
+/// (`AutoValidateTests` HookRouter integration suite, `HookAnnotationFeedTests`,
+/// `FragmentationDetectorTests`); `entityObserver` was the missed seam.
+@Suite("KnowledgeTool", .serialized)
 struct KnowledgeToolTests {
 
     // 1. MCPSession creates KB components on init
@@ -196,6 +206,8 @@ struct KnowledgeToolTests {
 
     // 9. HookRouter.entityObserver fires on PostToolUse events
     @Test func testHookObserverFires() {
+        HookSeamLock.shared.lock()
+        defer { HookSeamLock.shared.unlock() }
         // Save and restore observer after test
         let saved = HookRouter.entityObserver
         defer { HookRouter.entityObserver = saved }
@@ -216,6 +228,8 @@ struct KnowledgeToolTests {
 
     // 10. entityObserver feeds text into EntityTracker
     @Test func testEntityObserverFeedsTracker() {
+        HookSeamLock.shared.lock()
+        defer { HookSeamLock.shared.unlock() }
         let (session, root) = makeTestSession()
         defer { cleanup(root) }
 
@@ -244,8 +258,13 @@ struct KnowledgeToolTests {
         _ = HookRouter.handle(eventJSON: event)
 
         let state = session.entityTracker.state()
-        #expect(state.sessionTotal["ObservedEntity"] != nil,
+        // Read once to avoid double-lookup races and to keep a soft
+        // `#expect` failure from escalating into a fatal force-unwrap
+        // that would kill the entire test process. See suite-level
+        // doc comment for the underlying race rationale.
+        let observed = state.sessionTotal["ObservedEntity"]
+        #expect(observed != nil,
                 "ObservedEntity should appear in session totals after hook observation")
-        #expect(state.sessionTotal["ObservedEntity"]! >= 1)
+        #expect((observed ?? 0) >= 1)
     }
 }

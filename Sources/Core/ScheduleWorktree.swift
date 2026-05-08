@@ -68,17 +68,35 @@ public enum ScheduleWorktree {
             try fm.createDirectory(atPath: parent, withIntermediateDirectories: true)
         }
 
-        let runId = makeRunId()
-        let path = parent + "/\(scheduleName)-\(runId)"
-
-        let (stderr, exit) = runGit(args: [
-            "-C", projectRoot, "worktree", "add", "--detach", path,
-        ])
-        guard exit == 0 else {
-            throw ScheduleWorktreeError.createFailed(stderr)
+        // Concurrent `git worktree add` invocations against the same repo can
+        // race on git's internal `.git/worktrees/<name>/commondir` bookkeeping —
+        // the file is written and re-read within a single git process and the
+        // FS metadata isn't always settled under load, surfacing as
+        // `failed to read .git/worktrees/<name>/commondir: Undefined error: 0`.
+        // Bounded retry with backoff + partial-state cleanup makes the primitive
+        // resilient without changing caller semantics.
+        var runId = makeRunId()
+        var path = parent + "/\(scheduleName)-\(runId)"
+        var lastStderr = ""
+        let backoffMs: [UInt32] = [0, 50_000, 150_000]
+        for attempt in 0..<backoffMs.count {
+            if backoffMs[attempt] > 0 { usleep(backoffMs[attempt]) }
+            let (stderr, exit) = runGit(args: [
+                "-C", projectRoot, "worktree", "add", "--detach", path,
+            ])
+            if exit == 0 {
+                return Handle(path: path, runId: runId, projectRoot: projectRoot)
+            }
+            lastStderr = stderr
+            let isCommondirRace =
+                stderr.contains("commondir") && stderr.contains("Undefined error: 0")
+            if !isCommondirRace { break }
+            try? fm.removeItem(atPath: path)
+            _ = runGit(args: ["-C", projectRoot, "worktree", "prune"])
+            runId = makeRunId()
+            path = parent + "/\(scheduleName)-\(runId)"
         }
-
-        return Handle(path: path, runId: runId, projectRoot: projectRoot)
+        throw ScheduleWorktreeError.createFailed(lastStderr)
     }
 
     /// Remove a worktree via `git worktree remove --force`. On git failure,

@@ -5,8 +5,8 @@ import Bench
 
 private func makeTrace(
     key: String = UUID().uuidString,
-    feature: String? = "read",
-    result: String = "success",
+    feature: ToolIntent? = .read,
+    result: CallResult = .success,
     tokensIn: Int = 100,
     tokensOut: Int = 1000,
     costCents: Int = 5,
@@ -38,9 +38,9 @@ struct OutlineFirstStrictTests {
 
     @Test func reducesReadAndFetchOutputBy90Percent() {
         let rows = [
-            makeTrace(feature: "read", tokensOut: 1000, costCents: 10),
-            makeTrace(feature: "fetch", tokensOut: 500, costCents: 5),
-            makeTrace(feature: "search", tokensOut: 200, costCents: 2),
+            makeTrace(feature: .read, tokensOut: 1000, costCents: 10),
+            makeTrace(feature: .fetch, tokensOut: 500, costCents: 5),
+            makeTrace(feature: .search, tokensOut: 200, costCents: 2),
         ]
         let report = CounterfactualReplay.evaluate(
             sessionId: "s1", rows: rows, preset: .outlineFirstStrict
@@ -55,8 +55,8 @@ struct OutlineFirstStrictTests {
 
     @Test func skipsCachedRows() {
         let rows = [
-            makeTrace(feature: "read", result: "cached", tokensOut: 1000),
-            makeTrace(feature: "read", result: "success", tokensOut: 1000),
+            makeTrace(feature: .read, result: .cached, tokensOut: 1000),
+            makeTrace(feature: .read, result: .success, tokensOut: 1000),
         ]
         let report = CounterfactualReplay.evaluate(
             sessionId: "s1", rows: rows, preset: .outlineFirstStrict
@@ -69,8 +69,8 @@ struct OutlineFirstStrictTests {
 
     @Test func deterministicOnRepeatedRuns() {
         let rows = [
-            makeTrace(feature: "read", tokensOut: 500),
-            makeTrace(feature: "fetch", tokensOut: 300),
+            makeTrace(feature: .read, tokensOut: 500),
+            makeTrace(feature: .fetch, tokensOut: 300),
         ]
         let r1 = CounterfactualReplay.evaluate(
             sessionId: "s1", rows: rows, preset: .outlineFirstStrict,
@@ -139,13 +139,65 @@ struct BudgetTightTests {
         #expect(report.savedCostCents >= 0)
         #expect(report.counterfactual.totalCostCents <= report.baseline.totalCostCents)
     }
+
+    /// Cumulative cost exactly equals cap → boundary row is preserved
+    /// (cutoff is strictly `>`, not `>=`). The notes field documents
+    /// the rule whenever a cap is in effect.
+    @Test func cumulativeExactlyEqualsCapPreservesBoundaryRow() {
+        let rows = [
+            makeTrace(costCents: 30),
+            makeTrace(costCents: 30),
+            makeTrace(costCents: 40),  // cumulative reaches 100, exactly the cap
+        ]
+        let report = CounterfactualReplay.evaluate(
+            sessionId: "s1", rows: rows, preset: .budgetTight,
+            budgetCapCents: 100
+        )
+        #expect(report.affectedRowCount == 0)
+        #expect(report.counterfactual.rowCount == 3)
+        #expect(report.counterfactual.totalCostCents == 100)
+        #expect(report.confidence == .exact)
+        let documentsBoundaryRule = report.notes.contains {
+            $0.contains("strictly `>`") || $0.contains(">=")
+        }
+        #expect(documentsBoundaryRule, "notes must document the `>` (not `>=`) boundary rule")
+    }
+
+    /// Single first row whose cost alone exceeds the cap → that row is
+    /// the cutoff. Preserved prefix is empty; `affected == 1`;
+    /// confidence `.needsValidation`.
+    @Test func singleRowExceedingCapBlocksItself() {
+        let rows = [makeTrace(costCents: 200)]
+        let report = CounterfactualReplay.evaluate(
+            sessionId: "s1", rows: rows, preset: .budgetTight,
+            budgetCapCents: 50
+        )
+        #expect(report.affectedRowCount == 1)
+        #expect(report.counterfactual.rowCount == 0)
+        #expect(report.counterfactual.totalCostCents == 0)
+        #expect(report.confidence == .needsValidation)
+    }
+
+    /// Empty `rows` + cap supplied → `.unsupported`. Aligns with
+    /// `outline-first-strict`'s empty-trace behavior; cap semantics
+    /// cannot be demonstrated against zero rows.
+    @Test func emptyTraceWithCapReportsUnsupported() {
+        let report = CounterfactualReplay.evaluate(
+            sessionId: "s1", rows: [], preset: .budgetTight,
+            budgetCapCents: 100
+        )
+        #expect(report.confidence == .unsupported)
+        #expect(report.affectedRowCount == 0)
+        #expect(report.counterfactual.rowCount == 0)
+        #expect(report.savedCostCents == 0)
+    }
 }
 
 @Suite("ReplayReport — JSON envelope")
 struct ReplayReportJSONTests {
 
     @Test func encodesAndDecodesRoundTrip() throws {
-        let rows = [makeTrace(feature: "read", tokensOut: 500)]
+        let rows = [makeTrace(feature: .read, tokensOut: 500)]
         let original = CounterfactualReplay.evaluate(
             sessionId: "s1", rows: rows, preset: .outlineFirstStrict,
             now: Date(timeIntervalSince1970: 1_700_000_000)

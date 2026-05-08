@@ -3,51 +3,122 @@ import Core
 import Filter
 import Indexer
 
-/// Shared session state for the MCP server.
+/// Per-project session state for the MCP server.
 /// Holds read cache, symbol index, feature config, and running metrics.
 ///
-/// In socket-server (daemon) mode, ``MCPSession/shared`` is the process-global
-/// singleton so all connections share one cache, index, and metrics store.
-///
-/// TODO: Phase 5 — For socket server, this session must be shareable across
-/// multiple client connections. Key changes needed:
-/// - Per-connection metrics vs. aggregate metrics (add connection ID tracking)
-/// - ReadCache is already thread-safe (NSLock), but consider per-connection
-///   cache partitioning for isolation if connections serve different projects
-/// - The `projectRoot` is currently fixed at init — for multi-project socket
-///   server, either create one MCPSession per project root or make it dynamic
-/// - Feature toggles (filterEnabled etc.) are session-wide — decide whether
-///   per-connection overrides are needed
-final class MCPSession: @unchecked Sendable {
-    /// Process-global shared session for daemon / socket-server mode.
-    /// Lazily initialized on first access.
-    // TODO: Phase 5 — Consider a session registry (keyed by project root)
-    // instead of a single global singleton for multi-project socket server.
-    static let shared: MCPSession = MCPSession.resolve()
+/// Sessions live in `MCPSessionRegistry`, keyed by project root. The socket
+/// daemon acquires a session per connection; the stdio MCP server uses one
+/// session for its lifetime. SenkaniApp reads via the async `KBReader`
+/// bridge, which routes through the registry's default-session entry.
+actor MCPSession {
+    /// Phase B-i: per-tool-call connection identity. `ToolRouter.dispatchTool`
+    /// wraps the handler in `withValue(context.connectionId)` so handlers and
+    /// the metrics recorder can read the current connection's ID without a
+    /// signature change. `nil` for stdio-mode or untracked test calls.
+    @TaskLocal public static var currentConnectionId: String?
 
-    let projectRoot: String
-    let readCache: ReadCache
-    let pipeline: FilterPipeline
-    let validatorRegistry: ValidatorRegistry
-    let knowledgeStore: KnowledgeStore
-    let entityTracker: EntityTracker
-    let knowledgeLayer: KnowledgeFileLayer?
-    let metricsFilePath: String?
-    let sessionId: String?
-    let paneId: String?
-    let agentType: AgentType
-    private let lock = NSLock()
+    /// Phase B-ii: per-tool-call feature-toggle overrides. The dispatch layer
+    /// wraps each tool call in `withValue(context.toggleOverrides)`. Tools
+    /// read `effective<X>Enabled` (override-or-default) instead of the raw
+    /// `<x>Enabled` storage. `updateConfig` / `refreshConfig` continue to
+    /// mutate the session's defaults — overrides ride this `@TaskLocal` and
+    /// never touch the actor's storage. `nil` (default daemon) reproduces
+    /// the legacy behaviour: every effective getter returns the session-wide
+    /// default.
+    @TaskLocal public static var currentToggleOverrides: ToggleOverrides?
+
+    /// Per-connection feature-toggle override map. Each field is optional —
+    /// nil means "fall back to the session's default toggle"; `.some(true)`
+    /// or `.some(false)` overrides for the lifetime of the wrapped tool call.
+    public struct ToggleOverrides: Sendable {
+        public var filter: Bool?
+        public var secrets: Bool?
+        public var indexer: Bool?
+        public var cache: Bool?
+        public var terse: Bool?
+        public var injectionGuard: Bool?
+
+        public init(
+            filter: Bool? = nil,
+            secrets: Bool? = nil,
+            indexer: Bool? = nil,
+            cache: Bool? = nil,
+            terse: Bool? = nil,
+            injectionGuard: Bool? = nil
+        ) {
+            self.filter = filter
+            self.secrets = secrets
+            self.indexer = indexer
+            self.cache = cache
+            self.terse = terse
+            self.injectionGuard = injectionGuard
+        }
+    }
+
+    // MARK: - Phase B-ii — effective toggle getters
+    //
+    // Each getter overlays the per-connection override (if present) on top
+    // of the session-wide default. `nonisolated` is safe: the getters read
+    // a static `@TaskLocal` (no actor state) and an actor-isolated stored
+    // property accessed via `self`. Tools that previously read
+    // `await session.filterEnabled` now read `await session.effectiveFilterEnabled`.
+
+    var effectiveFilterEnabled: Bool {
+        MCPSession.currentToggleOverrides?.filter ?? filterEnabled
+    }
+    var effectiveSecretsEnabled: Bool {
+        MCPSession.currentToggleOverrides?.secrets ?? secretsEnabled
+    }
+    var effectiveIndexerEnabled: Bool {
+        MCPSession.currentToggleOverrides?.indexer ?? indexerEnabled
+    }
+    var effectiveCacheEnabled: Bool {
+        MCPSession.currentToggleOverrides?.cache ?? cacheEnabled
+    }
+    var effectiveTerseEnabled: Bool {
+        MCPSession.currentToggleOverrides?.terse ?? terseEnabled
+    }
+    var effectiveInjectionGuardEnabled: Bool {
+        MCPSession.currentToggleOverrides?.injectionGuard ?? injectionGuardEnabled
+    }
+
+    /// Immutable Sendable references exposed via the async `KBReader` bridge
+    /// to SenkaniApp and consumed sync by `Sources/MCP/Tools` from inside the
+    /// actor's executor. `nonisolated let` is correct here — the references
+    /// themselves are immutable Sendable, and the underlying types
+    /// (`KnowledgeStore`, `EntityTracker`, `KnowledgeFileLayer`) are
+    /// `final class @unchecked Sendable` that manage their own thread
+    /// safety. Isolating reads of an immutable Sendable reference would
+    /// add no value while forcing every internal `Tools/` accessor through
+    /// an extra actor hop.
+    nonisolated let projectRoot: String
+    nonisolated let knowledgeStore: KnowledgeStore
+    nonisolated let entityTracker: EntityTracker
+    nonisolated let knowledgeLayer: KnowledgeFileLayer?
+
+    /// Other immutable Sendable refs to internally-thread-safe types. Kept
+    /// `nonisolated let` so call sites inside Sources/MCP/Tools can read them
+    /// without crossing the actor barrier — every read is just a property
+    /// fetch on a Sendable reference.
+    nonisolated let readCache: ReadCache
+    nonisolated let pipeline: FilterPipeline
+    nonisolated let validatorRegistry: ValidatorRegistry
+    nonisolated let metricsFilePath: String?
+    nonisolated let sessionId: String?
+    nonisolated let paneId: String?
+    nonisolated let agentType: AgentType
+    nonisolated let treeCache = TreeCache()
+    nonisolated let pinnedContextStore = PinnedContextStore()
 
     /// P2-10: one-warning-per-session tracking for deprecated argument names.
-    /// Guarded by `lock`. Keys are stable shim-provided identifiers like
-    /// "knowledge.detail". First sight returns true; subsequent sightings return false.
+    /// Keys are stable shim-provided identifiers like "knowledge.detail".
+    /// First sight returns true; subsequent sightings return false.
     private var emittedDeprecations: Set<String> = []
 
     /// Record a deprecation fire for this session. Returns true the FIRST time
     /// `key` is observed per session, false thereafter — so the router can append
     /// a single warning block to the tool result without spamming every call.
     func noteDeprecation(_ key: String) -> Bool {
-        lock.lock(); defer { lock.unlock() }
         return emittedDeprecations.insert(key).inserted
     }
 
@@ -59,9 +130,6 @@ final class MCPSession: @unchecked Sendable {
     private(set) var terseEnabled: Bool
     private(set) var injectionGuardEnabled: Bool
     private let configFilePath: String?
-
-    // Tree cache for incremental re-parsing
-    let treeCache = TreeCache()
 
     // Symbol index (eagerly warmed in background)
     private var _symbolIndex: SymbolIndex?
@@ -76,14 +144,13 @@ final class MCPSession: @unchecked Sendable {
     // Cached session continuity brief (generated once per session)
     private var _sessionBrief: String?
 
-    // Phase S.1 — resolved manifest effective-set (lazy; guarded by `lock`).
+    // Phase S.1 — resolved manifest effective-set (lazy).
     // Resolves team manifest + user overrides on first read; cached for the
     // session. Absence of `.senkani/senkani.json` yields an
     // `EffectiveSet` with `manifestPresent: false`, which signals backwards-
     // compat (all tools enabled) to ToolRouter.
     private var _effectiveSet: EffectiveSet?
     var effectiveSet: EffectiveSet {
-        lock.lock(); defer { lock.unlock() }
         if let cached = _effectiveSet { return cached }
         let set = ManifestLoader.load(projectRoot: projectRoot)
         _effectiveSet = set
@@ -97,8 +164,7 @@ final class MCPSession: @unchecked Sendable {
     private var queriedSymbols: Set<String> = []
     private var staleNotices: [String] = []
 
-    // Pinned context: @-mention entries prepended to subsequent tool results
-    let pinnedContextStore = PinnedContextStore()
+    // Pinned context: auto-pin enabled flag (mutable at runtime).
     private(set) var autoPinEnabled: Bool = false
 
     // Lazy-cached skills prompt (WARP.md injection). Populated on first call to skillsPrompt().
@@ -147,16 +213,25 @@ final class MCPSession: @unchecked Sendable {
         self.entityTracker = EntityTracker(store: ks)
         self.knowledgeLayer = try? KnowledgeFileLayer(projectRoot: projectRoot, store: ks)
 
-        // Start background index warmup so first tool call doesn't block
+        // Start background index warmup so first tool call doesn't block.
+        // Hops onto the actor via Task so init can stay synchronous.
         if indexerEnabled {
-            warmIndex()
+            Task { [weak self] in await self?.warmIndex() }
         }
-        // Pre-cache hot files from prior sessions (non-blocking)
-        preCacheHotFiles()
+        // Pre-cache hot files from prior sessions (non-blocking).
+        // Reads only nonisolated state (cacheEnabled snapshot, projectRoot,
+        // readCache) so it can run as a detached background task without
+        // crossing the actor barrier.
+        let cacheEnabledNow = cacheEnabled
+        Self.preCacheHotFilesDetached(
+            cacheEnabled: cacheEnabledNow,
+            projectRoot: self.projectRoot,
+            readCache: self.readCache
+        )
         // Pre-warm WebFetchEngine: spawns WebKit XPC subprocess once AND compiles
         // the F2 subresource blocklist (~50 ms one-time) before the first
         // senkani_web call so the engine is ready with full SSRF defense.
-        Task {
+        Task.detached {
             await WebFetchEngine.shared.warmUp()
         }
         // Mine co-change coupling in background (idempotent; no-op if not a git repo)
@@ -176,7 +251,12 @@ final class MCPSession: @unchecked Sendable {
     /// count 2" followed by SIGSEGV at process teardown. `stopFileWatcher`
     /// is idempotent and synchronously drains any in-flight callback.
     deinit {
-        stopFileWatcher()
+        // Actor deinit can access isolated stored properties directly
+        // (SE-0327): no other task can hold a reference at this point.
+        // Inlined here so we don't need to call the isolated
+        // `stopFileWatcher()` from a sync nonisolated deinit context.
+        fileWatcher?.stop()
+        fileWatcher = nil
     }
 
     /// Resolve session config from environment.
@@ -289,7 +369,6 @@ final class MCPSession: @unchecked Sendable {
             }
         }
 
-        lock.lock()
         // Map pane env var names (SENKANI_FILTER) to session properties
         if let val = env["SENKANI_FILTER"] { filterEnabled = val == "on" }
         if let val = env["SENKANI_CACHE"] { cacheEnabled = val == "on" }
@@ -301,56 +380,54 @@ final class MCPSession: @unchecked Sendable {
         if let val = env["SENKANI_PANE_BUDGET_SESSION"] {
             paneBudgetSessionLimitCents = Int(val)
         }
-        lock.unlock()
     }
 
     /// Kick off background index build. Non-blocking.
     /// If an index exists on disk, loads it immediately (fast), then refreshes in background.
     /// If no index exists, does a full build in background.
     func warmIndex() {
-        lock.lock()
-        guard _symbolIndex == nil, !_indexBuilding else {
-            lock.unlock()
-            return
-        }
+        guard _symbolIndex == nil, !_indexBuilding else { return }
         // Try fast disk load first (synchronous, <50ms)
         if let cached = IndexStore.load(projectRoot: projectRoot) {
             _symbolIndex = cached
             _repoMap = nil
             _indexBuilding = true
-            lock.unlock()
-            // Incremental update in background (populate tree cache for incremental re-parsing)
-            DispatchQueue.global(qos: .utility).async { [projectRoot, treeCache] in
-                let updated = IndexEngine.incrementalUpdate(existing: cached, projectRoot: projectRoot, treeCache: treeCache)
-                try? IndexStore.save(updated, projectRoot: projectRoot)
-                self.lock.lock()
-                self._symbolIndex = updated
-                self._repoMap = nil
-                self._indexBuilding = false
-                self.lock.unlock()
-                self.startFileWatcher()
+            // Incremental update in background. The heavy CPU work
+            // (`IndexEngine.incrementalUpdate`, `IndexStore.save`) runs off
+            // the actor; the resulting index is handed back via an
+            // actor-isolated apply method.
+            let pr = projectRoot
+            let tc = treeCache
+            Task.detached(priority: .utility) { [weak self] in
+                let updated = IndexEngine.incrementalUpdate(existing: cached, projectRoot: pr, treeCache: tc)
+                try? IndexStore.save(updated, projectRoot: pr)
+                await self?.applyIndexUpdate(updated)
+                await self?.startFileWatcher()
             }
         } else {
             _indexBuilding = true
-            lock.unlock()
             // Full build in background (populate tree cache for incremental re-parsing)
-            DispatchQueue.global(qos: .utility).async { [projectRoot, treeCache] in
-                let idx = IndexEngine.index(projectRoot: projectRoot, treeCache: treeCache)
-                try? IndexStore.save(idx, projectRoot: projectRoot)
-                self.lock.lock()
-                self._symbolIndex = idx
-                self._repoMap = nil
-                self._indexBuilding = false
-                self.lock.unlock()
-                self.startFileWatcher()
+            let pr = projectRoot
+            let tc = treeCache
+            Task.detached(priority: .utility) { [weak self] in
+                let idx = IndexEngine.index(projectRoot: pr, treeCache: tc)
+                try? IndexStore.save(idx, projectRoot: pr)
+                await self?.applyIndexUpdate(idx)
+                await self?.startFileWatcher()
             }
         }
     }
 
-    /// Return the index if available, nil if still building. Thread-safe.
+    /// Apply a freshly-built `SymbolIndex` to actor-isolated state. Called
+    /// from detached tasks that built the index off the actor's executor.
+    private func applyIndexUpdate(_ idx: SymbolIndex) {
+        _symbolIndex = idx
+        _repoMap = nil
+        _indexBuilding = false
+    }
+
+    /// Return the index if available, nil if still building.
     func indexIfReady() -> SymbolIndex? {
-        lock.lock()
-        defer { lock.unlock() }
         return _symbolIndex
     }
 
@@ -362,8 +439,6 @@ final class MCPSession: @unchecked Sendable {
     /// in `instructionsPayload(budgetBytes:)` which truncates with a hint to call
     /// `senkani_explore` for the rest.
     func repoMap(maxTokens: Int = 200) -> String {
-        lock.lock()
-        defer { lock.unlock() }
         if let cached = _repoMap, maxTokens == 200 { return cached }
         guard let index = _symbolIndex else { return "" }
         let map = index.repoMap(maxTokens: maxTokens)
@@ -445,18 +520,11 @@ final class MCPSession: @unchecked Sendable {
     /// Generate the session continuity brief. Cached after first call.
     /// Returns empty string if continuity is disabled or no prior session exists.
     func sessionBrief() -> String {
-        lock.lock()
-        if let cached = _sessionBrief {
-            lock.unlock()
-            return cached
-        }
-        lock.unlock()
+        if let cached = _sessionBrief { return cached }
 
         // Check feature toggle (default: on)
         guard Self.continuityEnabled() else {
-            lock.lock()
             _sessionBrief = ""
-            lock.unlock()
             return ""
         }
 
@@ -484,9 +552,7 @@ final class MCPSession: @unchecked Sendable {
         )
         let section = brief.isEmpty ? "" : "\n\nSession context:\n" + brief
 
-        lock.lock()
         _sessionBrief = section
-        lock.unlock()
         return section
     }
 
@@ -504,12 +570,7 @@ final class MCPSession: @unchecked Sendable {
         let skillsEnv = ProcessInfo.processInfo.environment["SENKANI_SKILLS"]?.lowercased()
         guard skillsEnv != "off" else { return "" }
 
-        lock.lock()
-        if let cached = _skillsContent {
-            lock.unlock()
-            return cached
-        }
-        lock.unlock()
+        if let cached = _skillsContent { return cached }
 
         let prompt = SkillScanner.buildSkillsPrompt(projectRoot: projectRoot)
         let names: [String]
@@ -519,10 +580,8 @@ final class MCPSession: @unchecked Sendable {
             names = SkillScanner.scanSenkaniSkills(projectRoot: projectRoot).map(\.name)
         }
 
-        lock.lock()
         _skillsContent = prompt
         _loadedSkillNames = names
-        lock.unlock()
 
         if names.isEmpty {
             FileHandle.standardError.write(Data("[MCP] WARP skills: none found (add .md files to ~/.senkani/skills/)\n".utf8))
@@ -535,9 +594,13 @@ final class MCPSession: @unchecked Sendable {
     /// Pre-populate ReadCache with hot files from the session database.
     /// L0 (top 5): pinned — never evicted by LRU. L1 (next 15): normal LRU.
     /// Non-blocking (utility queue). Only when cacheEnabled.
-    func preCacheHotFiles() {
+    ///
+    /// Static helper so `init` can launch this work without first hopping
+    /// onto the actor: every input is captured by value and `ReadCache` is a
+    /// thread-safe Sendable reference.
+    static func preCacheHotFilesDetached(cacheEnabled: Bool, projectRoot: String, readCache: ReadCache) {
         guard cacheEnabled else { return }
-        DispatchQueue.global(qos: .utility).async { [projectRoot, readCache] in
+        DispatchQueue.global(qos: .utility).async {
             let hotFiles = SessionDatabase.shared.hotFiles(projectRoot: projectRoot, limit: 50)
             var l0Count = 0, l1Count = 0
             for (index, file) in hotFiles.prefix(20).enumerated() {
@@ -564,20 +627,13 @@ final class MCPSession: @unchecked Sendable {
 
     /// Blocking index build for CLI commands. Checks if background build finished first.
     func ensureIndex() -> SymbolIndex {
-        lock.lock()
-        if let idx = _symbolIndex {
-            lock.unlock()
-            return idx
-        }
-        lock.unlock()
+        if let idx = _symbolIndex { return idx }
         // Background build may be in progress — just do a synchronous build
         let idx = IndexStore.buildOrUpdate(projectRoot: projectRoot)
         try? IndexStore.save(idx, projectRoot: projectRoot)
-        lock.lock()
         _symbolIndex = idx
         _repoMap = nil
         _indexBuilding = false
-        lock.unlock()
         return idx
     }
 
@@ -590,32 +646,21 @@ final class MCPSession: @unchecked Sendable {
     /// brittle on CI. `internal` so production code can't reach it; `@testable`
     /// import in tests can.
     internal func _setIndexForTesting(_ index: SymbolIndex) {
-        lock.lock()
         _symbolIndex = index
         _repoMap = nil
         _indexBuilding = false
-        lock.unlock()
     }
 
     /// Lazily build the dependency graph. Cached after first call.
     func ensureDependencyGraph() -> DependencyGraph {
-        lock.lock()
-        if let graph = _dependencyGraph {
-            lock.unlock()
-            return graph
-        }
-        lock.unlock()
+        if let graph = _dependencyGraph { return graph }
         let graph = IndexEngine.buildDependencyGraph(projectRoot: projectRoot)
-        lock.lock()
         _dependencyGraph = graph
-        lock.unlock()
         return graph
     }
 
     /// Non-blocking access to the dependency graph.
     func dependencyGraphIfReady() -> DependencyGraph? {
-        lock.lock()
-        defer { lock.unlock() }
         return _dependencyGraph
     }
 
@@ -624,13 +669,13 @@ final class MCPSession: @unchecked Sendable {
     /// Start watching the project directory for file changes.
     /// Called after the initial index is built. Idempotent.
     func startFileWatcher() {
-        lock.lock()
-        defer { lock.unlock() }
         guard fileWatcher == nil else { return }
 
         let watcher = FileWatcher(projectRoot: projectRoot) { [weak self] changedFiles in
+            // FSEvents callback fires on a non-isolated dispatch queue;
+            // hop to the actor to mutate the symbol index.
             guard let self else { return }
-            self.handleFileChanges(changedFiles)
+            Task { await self.handleFileChanges(changedFiles) }
         }
         watcher.start()
         fileWatcher = watcher
@@ -638,8 +683,6 @@ final class MCPSession: @unchecked Sendable {
 
     /// Stop watching. Called on session teardown. Idempotent.
     func stopFileWatcher() {
-        lock.lock()
-        defer { lock.unlock() }
         fileWatcher?.stop()
         fileWatcher = nil
     }
@@ -658,8 +701,6 @@ final class MCPSession: @unchecked Sendable {
 
     /// Append change events to the ring buffer. O(1) amortized.
     func appendChangeEvents(_ events: [ChangeEvent]) {
-        lock.lock()
-        defer { lock.unlock() }
         recentChanges.append(contentsOf: events)
         if recentChanges.count > changeBufferCapacity {
             recentChanges.removeFirst(recentChanges.count - changeBufferCapacity)
@@ -669,11 +710,7 @@ final class MCPSession: @unchecked Sendable {
     /// Query changes since a cursor timestamp, optionally filtered by glob.
     /// Non-destructive — the agent manages its own cursor.
     func changesSince(_ since: Date?, glob: String?) -> [ChangeEvent] {
-        lock.lock()
-        let snapshot = recentChanges
-        lock.unlock()
-
-        var result = snapshot
+        var result = recentChanges
         if let since = since {
             result = result.filter { $0.timestamp > since }
         }
@@ -688,30 +725,24 @@ final class MCPSession: @unchecked Sendable {
     /// Track a file path that was queried via search/fetch/outline.
     /// If the file later changes, a staleness notice will be generated.
     func trackQueriedSymbol(file: String) {
-        lock.lock()
         queriedSymbols.insert(file)
-        lock.unlock()
     }
 
     /// Check changed files against queried symbols and generate notices.
     /// Called from handleFileChanges() after re-indexing.
     func checkStaleness(changedFiles: Set<String>) {
-        lock.lock()
         let staleFiles = changedFiles.intersection(queriedSymbols)
         if !staleFiles.isEmpty {
             let notice = "[stale] Symbols may have changed in: \(staleFiles.sorted().joined(separator: ", "))"
             staleNotices.append(notice)
             queriedSymbols.subtract(staleFiles)
         }
-        lock.unlock()
     }
 
-    /// Return and clear pending stale notices. Thread-safe.
+    /// Return and clear pending stale notices.
     func drainStaleNotices() -> [String] {
-        lock.lock()
         let notices = staleNotices
         staleNotices.removeAll()
-        lock.unlock()
         return notices
     }
 
@@ -720,8 +751,8 @@ final class MCPSession: @unchecked Sendable {
     /// Pin a named entity. Generates a compressed outline via the fallback chain
     /// and stores it in `pinnedContextStore` for prepending to subsequent results.
     /// Returns a user-facing confirmation or error string.
-    func pinContext(name: String, ttl: Int = PinnedContextStore.defaultTTL) -> String {
-        guard let outline = PinnedContextGenerator.generate(name: name, session: self) else {
+    func pinContext(name: String, ttl: Int = PinnedContextStore.defaultTTL) async -> String {
+        guard let outline = await PinnedContextGenerator.generate(name: name, session: self) else {
             // Nothing found — suggest nearest BM25 match if available
             if let nearest = PinnedContextGenerator.nearestMatch(name: name, session: self) {
                 return "Symbol '\(name)' not found. Did you mean '\(nearest)'? Use senkani_session action='pin' name='\(nearest)' to pin it."
@@ -737,9 +768,7 @@ final class MCPSession: @unchecked Sendable {
     /// Enable or disable automatic @-mention pin detection from tool arguments.
     /// Off by default (Jobs synthesis: explicit-only pin is the safe default).
     func setAutoPinEnabled(_ enabled: Bool) {
-        lock.lock()
         autoPinEnabled = enabled
-        lock.unlock()
     }
 
     /// Scan tool argument text for `@Name` patterns and queue auto-pins.
@@ -753,12 +782,13 @@ final class MCPSession: @unchecked Sendable {
             return String(argText[r])
         }
         guard !names.isEmpty else { return }
-        let capturedSession = self
-        Task.detached(priority: .background) {
+        // pinnedContextStore is `nonisolated let` (thread-safe internally),
+        // so the existence check stays sync; pinContext hops onto the actor.
+        let store = self.pinnedContextStore
+        Task.detached(priority: .background) { [weak self] in
             for name in names {
-                guard capturedSession.pinnedContextStore.all()
-                    .first(where: { $0.name == name }) == nil else { continue }
-                _ = capturedSession.pinContext(name: name)
+                guard store.all().first(where: { $0.name == name }) == nil else { continue }
+                _ = await self?.pinContext(name: name)
             }
         }
     }
@@ -830,33 +860,33 @@ final class MCPSession: @unchecked Sendable {
     static let autoKillCeiling: TimeInterval = 600  // 10 minutes
 
     func registerBackgroundJob(_ job: BackgroundJob) {
-        lock.lock()
         backgroundJobs[job.id] = job
-        lock.unlock()
         scheduleAutoKill(jobId: job.id)
     }
 
     func backgroundJob(id: String) -> BackgroundJob? {
-        lock.lock()
-        defer { lock.unlock() }
         return backgroundJobs[id]
     }
 
     func removeBackgroundJob(id: String) {
-        lock.lock()
         backgroundJobs.removeValue(forKey: id)
-        lock.unlock()
     }
 
     private func scheduleAutoKill(jobId: String) {
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + Self.autoKillCeiling) { [weak self] in
-            guard let self, let job = self.backgroundJob(id: jobId) else { return }
-            if job.isRunning {
-                job.process.terminate()
-                DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
-                    if job.isRunning { kill(job.pid, SIGKILL) }
+            guard let self else { return }
+            // Hop onto the actor to look up the job; the actual terminate
+            // calls are sync on the captured BackgroundJob.
+            Task { [weak self] in
+                guard let self else { return }
+                guard let job = await self.backgroundJob(id: jobId) else { return }
+                if job.isRunning {
+                    job.process.terminate()
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
+                        if job.isRunning { kill(job.pid, SIGKILL) }
+                    }
+                    job.markKilled()
                 }
-                job.markKilled()
             }
         }
     }
@@ -902,17 +932,12 @@ final class MCPSession: @unchecked Sendable {
             }
         }
 
-        lock.lock()
-        guard var idx = _symbolIndex else {
-            lock.unlock()
-            return
-        }
+        guard var idx = _symbolIndex else { return }
         idx.removeSymbols(forFiles: affectedFiles)
         idx.symbols.append(contentsOf: newEntries)
         idx.generated = Date()
         _symbolIndex = idx
         _repoMap = nil
-        lock.unlock()
 
         // Check for symbol staleness (files the agent previously queried)
         checkStaleness(changedFiles: affectedFiles)
@@ -922,14 +947,20 @@ final class MCPSession: @unchecked Sendable {
 
     /// Record metrics for a tool call.
     /// Writes to in-memory counters, JSONL file (for MetricsWatcher), and SessionDatabase.
+    /// Phase B-i: when `ToolRouter.dispatchTool` is the caller, the active
+    /// `MCPSession.currentConnectionId` TaskLocal supplies the connection ID,
+    /// which is tagged on the JSONL row. Direct test callers can override via
+    /// the `connectionId` parameter. Phase B-ii: the resolved ID also lands
+    /// on the `commands.connection_id` and `token_events.connection_id` DB
+    /// columns so per-connection vs aggregate views can both be reconstructed.
     func recordMetrics(rawBytes: Int, compressedBytes: Int, feature: String,
-                       command: String? = nil, outputPreview: String? = nil, secretsFound: Int = 0) {
-        lock.lock()
+                       command: String? = nil, outputPreview: String? = nil, secretsFound: Int = 0,
+                       connectionId: String? = nil) {
+        let resolvedConnectionId = connectionId ?? MCPSession.currentConnectionId
         totalRawBytes += rawBytes
         totalCompressedBytes += compressedBytes
         toolCallCount += 1
         perFeatureSaved[feature, default: 0] += (rawBytes - compressedBytes)
-        lock.unlock()
 
         let savedBytes = rawBytes - compressedBytes
 
@@ -944,7 +975,8 @@ final class MCPSession: @unchecked Sendable {
                 savedBytes: savedBytes,
                 savingsPercent: savingsPercent,
                 secretsFound: secretsFound,
-                timestamp: Date()
+                timestamp: Date(),
+                connectionId: resolvedConnectionId
             )
             if let data = try? JSONEncoder().encode(entry),
                let json = String(data: data, encoding: .utf8) {
@@ -975,7 +1007,8 @@ final class MCPSession: @unchecked Sendable {
                 rawBytes: rawBytes,
                 compressedBytes: compressedBytes,
                 feature: feature,
-                outputPreview: outputPreview
+                outputPreview: outputPreview,
+                connectionId: resolvedConnectionId
             )
         }
 
@@ -998,7 +1031,8 @@ final class MCPSession: @unchecked Sendable {
             costCents: costCents,
             feature: feature,
             command: command,
-            modelTier: agentType.modelTier
+            modelTier: agentType.modelTier,
+            connectionId: resolvedConnectionId
         )
     }
 
@@ -1008,9 +1042,7 @@ final class MCPSession: @unchecked Sendable {
         entityTracker.flush()
         stopFileWatcher()
         // Kill all background jobs
-        lock.lock()
         let jobs = Array(backgroundJobs.values)
-        lock.unlock()
         for job in jobs where job.isRunning {
             job.process.terminate()
         }
@@ -1046,11 +1078,9 @@ final class MCPSession: @unchecked Sendable {
     func checkBudget() -> BudgetConfig.Decision {
         let config = BudgetConfig.load()
 
-        lock.lock()
         let raw = totalRawBytes
         let compressed = totalCompressedBytes
         let paneBudgetLimit = paneBudgetSessionLimitCents
-        lock.unlock()
         let sessionCents = ModelPricing.costSavedCents(bytes: raw - compressed)
 
         // Per-pane session cap
@@ -1093,11 +1123,9 @@ final class MCPSession: @unchecked Sendable {
     func budgetRemainingPercent() -> Double {
         let config = BudgetConfig.load()
 
-        lock.lock()
         let raw = totalRawBytes
         let compressed = totalCompressedBytes
         let paneBudgetLimit = paneBudgetSessionLimitCents
-        lock.unlock()
 
         let hasAnyLimit = config.perSessionLimitCents != nil
             || config.dailyLimitCents != nil
@@ -1131,10 +1159,8 @@ final class MCPSession: @unchecked Sendable {
         case .warn:  newStatus = "warning"
         case .block: newStatus = "blocked"
         }
-        lock.lock()
         let changed = newStatus != lastBudgetIPCStatus
         if changed { lastBudgetIPCStatus = newStatus }
-        lock.unlock()
         guard changed else { return }
 
         let spent = sessionCents
@@ -1159,11 +1185,9 @@ final class MCPSession: @unchecked Sendable {
     }
 
     func recordCacheSaving(bytes: Int) {
-        lock.lock()
         totalCacheSavedBytes += bytes
         totalCompressedBytes += 0  // cache hit = 0 bytes sent
         perFeatureSaved["cache", default: 0] += bytes
-        lock.unlock()
     }
 
     /// Update feature toggles at runtime.
@@ -1171,7 +1195,6 @@ final class MCPSession: @unchecked Sendable {
     func updateConfig(filter: Bool? = nil, secrets: Bool? = nil, indexer: Bool? = nil,
                       cache: Bool? = nil, terse: Bool? = nil, autoPin: Bool? = nil,
                       budgetSessionCents: Int? = nil) {
-        lock.lock()
         if let f = filter { filterEnabled = f }
         if let s = secrets { secretsEnabled = s }
         if let i = indexer { indexerEnabled = i }
@@ -1179,18 +1202,15 @@ final class MCPSession: @unchecked Sendable {
         if let t = terse { terseEnabled = t }
         if let a = autoPin { autoPinEnabled = a }
         if let b = budgetSessionCents { paneBudgetSessionLimitCents = b > 0 ? b : nil }
-        lock.unlock()
     }
 
     /// Get session stats as a formatted string.
     func statsString() -> String {
-        lock.lock()
         let raw = totalRawBytes
         let compressed = totalCompressedBytes
         let cacheSaved = totalCacheSavedBytes
         let calls = toolCallCount
         let features = perFeatureSaved
-        lock.unlock()
 
         let totalSaved = raw - compressed + cacheSaved
         let pct = raw > 0 ? Double(totalSaved) / Double(raw + cacheSaved) * 100 : 0
@@ -1215,10 +1235,8 @@ final class MCPSession: @unchecked Sendable {
         lines.append("")
         lines.append("  Toggles: filter=\(filterEnabled) secrets=\(secretsEnabled) indexer=\(indexerEnabled) cache=\(cacheEnabled) terse=\(terseEnabled)")
 
-        lock.lock()
         let paneBudget = paneBudgetSessionLimitCents
         let skillNames = _loadedSkillNames
-        lock.unlock()
         if let limit = paneBudget {
             let sessionCents = ModelPricing.costSavedCents(bytes: raw - compressed + cacheSaved)
             lines.append("  Pane budget: $\(String(format: "%.2f", Double(sessionCents) / 100)) / $\(String(format: "%.2f", Double(limit) / 100))")
@@ -1232,9 +1250,7 @@ final class MCPSession: @unchecked Sendable {
     }
 
     func configString() -> String {
-        lock.lock()
         let paneBudget = paneBudgetSessionLimitCents
-        lock.unlock()
         var s = "filter=\(filterEnabled) secrets=\(secretsEnabled) indexer=\(indexerEnabled) cache=\(cacheEnabled) terse=\(terseEnabled)"
         if let limit = paneBudget {
             s += " pane_budget=\(limit)¢"
@@ -1252,6 +1268,11 @@ final class MCPSession: @unchecked Sendable {
 /// JSONL entry format matching MetricEntry in MetricsWatcher.swift.
 /// Uses default JSONEncoder Date encoding (Double, secondsSinceReferenceDate)
 /// which matches the default JSONDecoder in MetricsWatcher.
+///
+/// Phase B-i: optional `connectionId` tags the row when the dispatch layer
+/// supplies a `ConnectionContext`. Older rows without it decode cleanly via
+/// the optional. MetricsWatcher ignores the field if its decoder doesn't
+/// know it (default JSONDecoder behavior).
 private struct JSONLMetricEntry: Codable {
     let command: String
     let feature: String
@@ -1261,4 +1282,5 @@ private struct JSONLMetricEntry: Codable {
     let savingsPercent: Double
     let secretsFound: Int
     let timestamp: Date
+    let connectionId: String?
 }

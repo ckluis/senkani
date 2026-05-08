@@ -27,32 +27,6 @@ final class ConfirmationStore: @unchecked Sendable {
     /// must be on `parent.queue`.
     func invalidateChainCache() { chain.invalidate() }
 
-    // MARK: - Schema
-
-    /// Idempotent — Migration v11 owns the canonical schema. The store
-    /// init pattern matches the other chained stores.
-    func setupSchema() {
-        parent.queue.sync {
-            execSilent("""
-                CREATE TABLE IF NOT EXISTS confirmations (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    tool_name       TEXT NOT NULL,
-                    requested_at    REAL NOT NULL,
-                    decided_at      REAL NOT NULL,
-                    decision        TEXT NOT NULL,
-                    decided_by      TEXT NOT NULL,
-                    reason          TEXT,
-                    prev_hash       TEXT,
-                    entry_hash      TEXT,
-                    chain_anchor_id INTEGER
-                );
-            """)
-            execSilent("CREATE INDEX IF NOT EXISTS idx_confirmations_tool ON confirmations(tool_name, requested_at DESC);")
-            execSilent("CREATE INDEX IF NOT EXISTS idx_confirmations_decision ON confirmations(decision, requested_at DESC);")
-            execSilent("CREATE INDEX IF NOT EXISTS idx_confirmations_anchor ON confirmations(chain_anchor_id, id);")
-        }
-    }
-
     // MARK: - Writes
 
     /// Insert one confirmation row. Returns the new rowid, or -1 on
@@ -170,6 +144,7 @@ final class ConfirmationStore: @unchecked Sendable {
     }
 
     private func execSilent(_ sql: String) {
+        dispatchPrecondition(condition: .onQueue(parent.queue))
         guard let db = parent.db else { return }
         var err: UnsafeMutablePointer<CChar>?
         sqlite3_exec(db, sql, nil, nil, &err)

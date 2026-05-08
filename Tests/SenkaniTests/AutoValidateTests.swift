@@ -10,13 +10,6 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-private func cleanupDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-wal")
-    try? fm.removeItem(atPath: path + "-shm")
-}
-
 private func eventCount(_ db: SessionDatabase, _ type: String, projectRoot: String? = nil) -> Int {
     db.flushWrites()
     return db.eventCounts(projectRoot: projectRoot, prefix: type)
@@ -110,7 +103,7 @@ struct ValidationResultsDBTests {
 
     @Test func insertAndFetch() {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         let sid = db.createSession(projectRoot: "/tmp/test")
 
         db.insertValidationResult(
@@ -130,7 +123,7 @@ struct ValidationResultsDBTests {
 
     @Test func fetchMarksDelivered() {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         let sid = db.createSession(projectRoot: "/tmp/test")
 
         db.insertValidationResult(
@@ -157,7 +150,7 @@ struct ValidationResultsDBTests {
 
     @Test func onlyErrorsReturned() {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         let sid = db.createSession(projectRoot: "/tmp/test")
 
         // Insert a success (exitCode 0) and an error (exitCode 1)
@@ -182,7 +175,7 @@ struct ValidationResultsDBTests {
 
     @Test func cleanAndDroppedOutcomesInspectableButNotPending() {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         let sid = db.createSession(projectRoot: "/tmp/test")
 
         db.insertValidationResult(
@@ -210,7 +203,7 @@ struct ValidationResultsDBTests {
 
     @Test func pruneOldResults() {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         let sid = db.createSession(projectRoot: "/tmp/test")
 
         db.insertValidationResult(
@@ -268,8 +261,10 @@ struct HookRouterAutoValidateTests {
     }
 
     @Test func pendingAdvisorySurvivesPassthroughPreToolUse() {
+        HookSeamLock.shared.lock()
+        defer { HookSeamLock.shared.unlock() }
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         defer { HookRouter.validationDatabase = .shared }
 
         let sid = "advisory-test-session"
@@ -298,8 +293,10 @@ struct HookRouterAutoValidateTests {
     }
 
     @Test func pendingAdvisoryAppendsOnceToDenyResponse() {
+        HookSeamLock.shared.lock()
+        defer { HookSeamLock.shared.unlock() }
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         defer { HookRouter.validationDatabase = .shared }
 
         let sid = "advisory-deny-session"
@@ -335,8 +332,10 @@ struct HookRouterAutoValidateTests {
     }
 
     @Test func advisoryScopeDoesNotCrossSessions() {
+        HookSeamLock.shared.lock()
+        defer { HookSeamLock.shared.unlock() }
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         defer { HookRouter.validationDatabase = .shared }
 
         HookRouter.validationDatabase = db
@@ -453,12 +452,20 @@ struct AutoValidateWorkerTests {
 
 // MARK: - Suite 6: AutoValidateQueue
 
-@Suite("AutoValidateQueue — Enqueue Logic")
+// `.serialized` contains within-suite ordering effects on the three
+// tests below — `cleanValidationPersistsOutcomeAndCounters` spawns
+// `/bin/sh -c 'exit 0'` via `Task.detached(priority: .utility)`, and
+// running it concurrently with future subprocess-spawning tests in the
+// same suite would compound the cooperative-pool starvation already
+// observed under the parallel runner (see
+// `autovalidatequeue-clean-validation-flake-2026-05-04`). Cross-suite
+// contention is absorbed by the widened `drainForTesting` default.
+@Suite("AutoValidateQueue — Enqueue Logic", .serialized)
 struct AutoValidateQueueTests {
 
     @Test func excludedPathSkipped() async {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         let root = "/tmp/project"
         let queue = AutoValidateQueue(
             database: db,
@@ -481,7 +488,7 @@ struct AutoValidateQueueTests {
 
     @Test func unknownExtensionSkipped() async {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         let root = "/tmp/project"
         let queue = AutoValidateQueue(
             database: db,
@@ -503,7 +510,7 @@ struct AutoValidateQueueTests {
 
     @Test func cleanValidationPersistsOutcomeAndCounters() async {
         let (db, dbPath) = makeTempDB()
-        defer { cleanupDB(dbPath) }
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
         let root = "/tmp/senkani-queue-clean-\(UUID().uuidString)"
         try? FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: root) }

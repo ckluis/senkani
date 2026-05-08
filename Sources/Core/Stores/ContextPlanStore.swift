@@ -17,33 +17,6 @@ final class ContextPlanStore: @unchecked Sendable {
         self.parent = parent
     }
 
-    // MARK: - Schema
-
-    /// Idempotent — Migration v14 owns the canonical `context_plans`
-    /// schema; this method matches the per-store init pattern (every
-    /// store calls `setupSchema()` after construction so a fresh DB
-    /// reaches the latest shape even before the migration runner
-    /// applies the v14 row).
-    func setupSchema() {
-        parent.queue.sync {
-            execSilent("""
-                CREATE TABLE IF NOT EXISTS context_plans (
-                    id              TEXT PRIMARY KEY,
-                    session_id      TEXT NOT NULL,
-                    planned_fanout  INTEGER NOT NULL,
-                    leaf_size       INTEGER NOT NULL,
-                    reducer_choice  TEXT NOT NULL,
-                    estimated_cost  INTEGER NOT NULL,
-                    created_at      REAL NOT NULL
-                );
-            """)
-            execSilent("""
-                CREATE INDEX IF NOT EXISTS idx_context_plans_session
-                    ON context_plans(session_id, created_at DESC);
-            """)
-        }
-    }
-
     // MARK: - Writes
 
     /// Insert one plan row. Returns `true` if the row was inserted,
@@ -217,6 +190,7 @@ final class ContextPlanStore: @unchecked Sendable {
     }
 
     private func execSilent(_ sql: String) {
+        dispatchPrecondition(condition: .onQueue(parent.queue))
         guard let db = parent.db else { return }
         var err: UnsafeMutablePointer<CChar>?
         sqlite3_exec(db, sql, nil, nil, &err)

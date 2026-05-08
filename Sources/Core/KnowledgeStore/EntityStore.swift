@@ -228,12 +228,32 @@ final class EntityStore: @unchecked Sendable {
 
     /// Increment session_mentions and mention_count for multiple entities in one transaction.
     /// Prepare-once / step-N pattern: one BEGIN/COMMIT for all rows — same fsync cost as one row.
+    ///
+    /// Mirrors the defer-rollback shape used by `backfillNullAuthorship`
+    /// below. The previous implementation (filed as
+    /// `knowledgestore-sql-flake-under-full-parallel-suite`) called
+    /// `rawExec(db, "BEGIN;")` and `rawExec(db, "COMMIT;")` without
+    /// checking return codes and ignored `sqlite3_step` errors. Either
+    /// of those failure modes left COMMIT facing no active transaction,
+    /// which surfaced as
+    /// `[KnowledgeStore] SQL error: cannot commit - no transaction is active`
+    /// in 1-of-8 raw `swift test` runs.
     func batchIncrementMentions(_ deltas: [String: Int]) {
         guard !deltas.isEmpty else { return }
         let now = Date().timeIntervalSince1970
         parent.queue.async { [weak parent] in
             guard let parent, let db = parent.db else { return }
-            rawExec(db, "BEGIN;")
+            guard sqlite3_exec(db, "BEGIN IMMEDIATE;", nil, nil, nil) == SQLITE_OK else {
+                let msg = String(cString: sqlite3_errmsg(db))
+                fputs("[KnowledgeStore] SQL error: BEGIN failed: \(msg)\n", stderr)
+                return
+            }
+            var committed = false
+            defer {
+                if !committed && sqlite3_get_autocommit(db) == 0 {
+                    _ = sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+                }
+            }
             var stmt: OpaquePointer?
             defer { sqlite3_finalize(stmt) }  // sqlite3_finalize(nil) is a no-op per spec
             let sql = """
@@ -244,7 +264,9 @@ final class EntityStore: @unchecked Sendable {
                 WHERE name = ?;
             """
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-                rawExec(db, "ROLLBACK;"); return
+                let msg = String(cString: sqlite3_errmsg(db))
+                fputs("[KnowledgeStore] SQL error: prepare failed: \(msg)\n", stderr)
+                return
             }
             for (name, delta) in deltas where delta > 0 {
                 sqlite3_reset(stmt)
@@ -253,9 +275,19 @@ final class EntityStore: @unchecked Sendable {
                 sqlite3_bind_int64(stmt, 2, Int64(delta))
                 sqlite3_bind_double(stmt, 3, now)
                 sqlite3_bind_text(stmt, 4, (name as NSString).utf8String, -1, nil)
-                sqlite3_step(stmt)
+                let rc = sqlite3_step(stmt)
+                if rc != SQLITE_DONE && rc != SQLITE_ROW {
+                    let msg = String(cString: sqlite3_errmsg(db))
+                    fputs("[KnowledgeStore] SQL error: step failed (rc=\(rc)): \(msg)\n", stderr)
+                    return
+                }
             }
-            rawExec(db, "COMMIT;")
+            if sqlite3_exec(db, "COMMIT;", nil, nil, nil) == SQLITE_OK {
+                committed = true
+            } else {
+                let msg = String(cString: sqlite3_errmsg(db))
+                fputs("[KnowledgeStore] SQL error: COMMIT failed: \(msg)\n", stderr)
+            }
         }
     }
 
@@ -461,6 +493,7 @@ final class EntityStore: @unchecked Sendable {
     }
 
     private func exec(_ sql: String) {
+        dispatchPrecondition(condition: .onQueue(parent.queue))
         guard let db = parent.db else { return }
         rawExec(db, sql)
     }
@@ -470,6 +503,7 @@ final class EntityStore: @unchecked Sendable {
     /// without breaking when migration v7 already landed the column.
     /// All other errors print to stderr (same channel as `rawExec`).
     private func execSilent(_ sql: String) {
+        dispatchPrecondition(condition: .onQueue(parent.queue))
         guard let db = parent.db else { return }
         var err: UnsafeMutablePointer<CChar>?
         let rc = sqlite3_exec(db, sql, nil, nil, &err)

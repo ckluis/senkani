@@ -4,7 +4,7 @@ import MCP
 /// Extracts structured results from build/test/lint output at $0.
 /// Agent sees "1 failed: testFoo at line 42" instead of 500 lines of raw output.
 enum ParseTool {
-    static func handle(arguments: [String: Value]?, session: MCPSession) -> CallTool.Result {
+    static func handle(arguments: [String: Value]?, session: MCPSession) async -> CallTool.Result {
         guard let output = arguments?["output"]?.stringValue else {
             return .init(content: [.text(text: "Error: 'output' is required", annotations: nil, _meta: nil)], isError: true)
         }
@@ -33,8 +33,8 @@ enum ParseTool {
         let parsedBytes = parsed.utf8.count
         let savedPct = rawBytes > 0 ? Int(Double(rawBytes - parsedBytes) / Double(rawBytes) * 100) : 0
 
-        session.recordMetrics(rawBytes: rawBytes, compressedBytes: parsedBytes, feature: "parse",
-                              command: "parse", outputPreview: String(parsed.prefix(200)))
+        await session.recordMetrics(rawBytes: rawBytes, compressedBytes: parsedBytes, feature: "parse",
+                                    command: "parse", outputPreview: String(parsed.prefix(200)))
 
         let header = "// senkani_parse (\(detectedType)): \(rawBytes) → \(parsedBytes) bytes (\(savedPct)% saved)\n"
         return .init(content: [.text(text: header + parsed, annotations: nil, _meta: nil)])

@@ -117,6 +117,9 @@ struct Doctor: ParsableCommand {
         // 17. Trust flags — soft-flag FP-rate counter (Phase U.4a)
         checkTrustFlags(&results)
 
+        // 18. Egress proxy — T.1a daemon scaffold + decision audit log
+        checkEgressProxy(&results)
+
         print("")
         var parts: [String] = []
         if results.passed > 0 { parts.append("\(results.passed) passed") }
@@ -133,8 +136,9 @@ struct Doctor: ParsableCommand {
     // MARK: - --repair-chain (Phase T.5 round 4)
 
     private func runRepairChain() throws {
+        let supportedList = ChainRepairer.supportedTables.sorted().joined(separator: "|")
         guard let table else {
-            FileHandle.standardError.write(Data("error: --repair-chain requires --table <token_events|validation_results|commands>\n".utf8))
+            FileHandle.standardError.write(Data("error: --repair-chain requires --table <\(supportedList)>\n".utf8))
             throw ExitCode.failure
         }
         guard let fromRowid else {
@@ -142,7 +146,8 @@ struct Doctor: ParsableCommand {
             throw ExitCode.failure
         }
         guard ChainRepairer.supportedTables.contains(table) else {
-            FileHandle.standardError.write(Data("error: --table '\(table)' is not supported. Supported: token_events, validation_results, commands\n".utf8))
+            let listText = ChainRepairer.supportedTables.sorted().joined(separator: ", ")
+            FileHandle.standardError.write(Data("error: --table '\(table)' is not supported. Supported: \(listText)\n".utf8))
             throw ExitCode.failure
         }
 
@@ -244,20 +249,34 @@ struct Doctor: ParsableCommand {
 
     // MARK: - Check 15: Audit chain integrity (Phase T.5)
 
-    private func checkAuditChain(_ results: inout Results) {
-        // T.5 round 3: verify all four tables. Surface a per-table line so
-        // the operator sees where a tamper happened, plus a summary line.
-        // T.5 round 4: total repair count comes from the central
-        // SessionDatabase API so the summary is consistent across CLI
-        // invocations even if a verification produced .noChain (no anchor
-        // start date) but repairs still exist.
-        let database = SessionDatabase.shared
-        let perTable = ChainVerifier.verifyAll(database)
-        let order = ["token_events", "validation_results", "sandboxed_results", "commands"]
+    /// Display order for the chain-audit per-table walk. Single source of
+    /// truth shared with the summary line below and with tests asserting
+    /// on the doctor surface. Adding a chain participant requires
+    /// extending this array AND `ChainVerifier.verifyAll`'s switch.
+    static let chainAuditOrder: [String] = [
+        "token_events", "validation_results", "sandboxed_results",
+        "commands", "pane_refresh_state", "policy_snapshots",
+        "confirmations", "trust_audits", "egress_decisions",
+        "pack_audits"
+    ]
+
+    private static let chainAuditSummaryNames: String =
+        chainAuditOrder.joined(separator: " / ")
+
+    /// Pure formatter for the audit-chain check. Returns the
+    /// `(Status, message)` lines the doctor surface emits, plus
+    /// `anyBroken` so the caller can short-circuit the summary line.
+    /// Lifted out of `checkAuditChain` so tests can assert on doctor
+    /// output without dup2-capturing stdout.
+    static func formatChainAuditLines(
+        perTable: [String: ChainVerifier.Result],
+        totalRepairs: Int
+    ) -> (lines: [(Status, String)], anyBroken: Bool) {
+        var lines: [(Status, String)] = []
         var anyBroken = false
         var earliestStart: Date?
 
-        for table in order {
+        for table in chainAuditOrder {
             guard let result = perTable[table] else { continue }
             switch result {
             case .ok(let startedAt, _):
@@ -269,41 +288,56 @@ struct Doctor: ParsableCommand {
                     }
                 }
             case .brokenAt(_, let rowid, let expected, let actual):
-                printStatus(
+                lines.append((
                     .fail,
                     "chain integrity (\(table)): BROKEN at row \(rowid) — expected \(expected.prefix(16))…, got \(actual.prefix(16))…"
-                )
-                results.failed += 1
+                ))
                 anyBroken = true
             case .noChain:
-                // Per-table noChain is fine — it just means no rows yet.
                 continue
             }
         }
 
-        let totalRepairs = database.totalRepairCount()
+        if anyBroken {
+            return (lines, true)
+        }
 
-        guard !anyBroken else { return }
-
-        // Summary line — the canonical "chain integrity: OK since …" surface
-        // promised in `spec/architecture.md`.
-        let since: String
-        if let earliestStart {
+        if earliestStart == nil {
+            lines.append((.skip, "chain integrity: no chain anchors yet (fresh DB)"))
+        } else {
             let fmt = ISO8601DateFormatter()
             fmt.formatOptions = [.withFullDate]
-            since = " since \(fmt.string(from: earliestStart))"
-        } else {
-            since = ""
-        }
-        if earliestStart == nil {
-            printStatus(.skip, "chain integrity: no chain anchors yet (fresh DB)")
-            results.skipped += 1
-        } else {
-            printStatus(
+            let since = " since \(fmt.string(from: earliestStart!))"
+            lines.append((
                 .pass,
-                "chain integrity: OK across token_events / validation_results / sandboxed_results / commands\(since) / \(totalRepairs) repairs"
-            )
-            results.passed += 1
+                "chain integrity: OK across \(chainAuditSummaryNames)\(since) / \(totalRepairs) repairs"
+            ))
+        }
+        return (lines, false)
+    }
+
+    private func checkAuditChain(_ results: inout Results) {
+        // T.5 round 3: verify all chain-anchored tables. Surface a per-
+        // table line so the operator sees where a tamper happened, plus
+        // a summary line.
+        // T.5 round 4: total repair count comes from the central
+        // SessionDatabase API so the summary is consistent across CLI
+        // invocations even if a verification produced .noChain (no anchor
+        // start date) but repairs still exist.
+        let database = SessionDatabase.shared
+        let perTable = ChainVerifier.verifyAll(database)
+        let totalRepairs = database.totalRepairCount()
+        let (lines, _) = Self.formatChainAuditLines(
+            perTable: perTable, totalRepairs: totalRepairs
+        )
+        for (status, message) in lines {
+            printStatus(status, message)
+            switch status {
+            case .pass: results.passed += 1
+            case .fixed: results.fixed += 1
+            case .fail: results.failed += 1
+            case .skip: results.skipped += 1
+            }
         }
     }
 
@@ -984,7 +1018,7 @@ struct Doctor: ParsableCommand {
 
     // MARK: - Output Helpers
 
-    private enum Status {
+    enum Status {
         case pass, fail, fixed, skip
     }
 
@@ -1020,6 +1054,30 @@ struct Doctor: ParsableCommand {
             results.skipped += 1
         case .warn:
             printStatus(.skip, "\(name): socket exists but timed out (\((path as NSString).lastPathComponent))")
+            results.skipped += 1
+        }
+    }
+
+    // MARK: - Check 18: Egress proxy (Phase T.1a)
+
+    /// Reports the EgressProxy daemon state. T.1a ships the deterministic
+    /// rule + decision audit core; the live listener and port file land
+    /// in T.1a.2 (`phase-t1a2-egress-proxy-listener-and-pipe`). When the
+    /// port file is absent the proxy is reported as "down" (skip,
+    /// non-fatal) — that's the expected state until T.1a.2 ships. The
+    /// decision count from the audit log is always surfaced so an
+    /// operator can see whether ANY decisions have been emitted (synthetic
+    /// or otherwise).
+    private func checkEgressProxy(_ results: inout Results) {
+        let portPath = NSHomeDirectory() + "/.senkani/egress.port"
+        let count = SessionDatabase.shared.egressDecisionCount()
+        if let data = try? String(contentsOfFile: portPath, encoding: .utf8),
+           let port = Int(data.trimmingCharacters(in: .whitespacesAndNewlines)),
+           port > 0 {
+            printStatus(.pass, "Egress proxy: running on :\(port) (decisions: \(count))")
+            results.passed += 1
+        } else {
+            printStatus(.skip, "Egress proxy: down (decisions: \(count))")
             results.skipped += 1
         }
     }

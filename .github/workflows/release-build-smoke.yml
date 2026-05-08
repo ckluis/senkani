@@ -1,0 +1,86 @@
+name: release-build-smoke
+
+# Catches dependency-pin / package-graph regressions before merge.
+# Companion to `tests` (see test.yml) — release-mode build runs in
+# its own job so a debug-mode test failure and a release-mode
+# linker/import failure can be triaged independently. Either job
+# failing blocks merge.
+#
+# Prior incident (2026-05-07): mlx-swift-lm@main advanced past the
+# revision that vended `Tokenizers` transitively. Debug-mode builds
+# happened to resolve, but `swift build -c release` failed with
+# "no such module 'Tokenizers'" on every consumer. The pin SHA
+# fixed the immediate breakage; this gate prevents a re-occurrence.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-build-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-build:
+    name: swift build -c release
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Swift 6.3
+        uses: SwiftyLab/setup-swift@latest
+        with:
+          swift-version: "6.3"
+
+      - name: Show toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+
+      # Cache key includes both Package.resolved and Package.swift.
+      # Package.resolved alone is insufficient: a manually-bumped pin
+      # SHA in Package.swift produces a new resolved file but a
+      # branch-tracking dependency could surface an identical
+      # resolved hash while the consumer code drifts. Hashing both
+      # forces re-resolve on either source of change.
+      - name: Cache SwiftPM build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/Developer/Xcode/DerivedData
+            .swiftpm/configuration/checkouts
+          key: ${{ runner.os }}-spm-release-${{ hashFiles('Package.resolved', 'Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-release-
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: swift build -c release
+        run: swift build -c release
+
+      # Assert every executable target produced a binary that exists
+      # and is executable. A linker-stage failure that emits an exit
+      # code 0 but no binary (rare, but observed historically with
+      # SwiftPM under partial-resolution conditions) would otherwise
+      # slip past the previous step.
+      - name: Verify release binaries
+        run: |
+          set -euo pipefail
+          for bin in senkani senkani-mcp senkani-hook senkani-mig-helper; do
+            path=".build/release/${bin}"
+            if [[ ! -x "${path}" ]]; then
+              echo "::error::release binary missing or not executable: ${path}"
+              ls -la .build/release/ || true
+              exit 1
+            fi
+            echo "ok: ${path} ($(stat -f%z "${path}") bytes)"
+          done

@@ -32,12 +32,18 @@ dated heading at release time._
   phases) are reachable from main post-merge; bulk verification
   enumerated all 65 branch commits as ancestors of main. Zero
   silent revocations of `completed/2026/` items.
-- Local `swift test` runs green 3× on main post-merge (real
-  Terminal, not the Bash-tool sandbox). PR-CI's `release-build-
-  smoke` and `pages` jobs both green; the chunked-harness `tests`
-  job hit two pre-existing flake classes (chunk[other] SIGTRAP
-  retry-exhaust, 81 /tmp leak) — both filed as new backlog items
-  for v0.4.0 follow-up rather than blocking this close.
+- PR-CI on `dd51156`: `release-build-smoke` ✅, `pages build and
+  deployment` ✅, chunked-harness `tests` ❌ (verified via `gh run
+  list --commit dd51156`). The `tests` failure is two pre-existing
+  flake classes (chunk[other] SIGTRAP retry-exhaust, 81 /tmp leak,
+  per the operator's session log in the closing item's `## Execution
+  evidence`) — both filed as new backlog items
+  (`ci-chunk-other-sigtrap-retry-exhaust-2026-05-08`,
+  `ci-tmp-leak-senkani-files-2026-05-08`) for v0.4.0 follow-up
+  rather than blocking this close. Operator-attested local
+  `swift test` ran green 3× on main post-merge from a real
+  Terminal (operator self-attestation; session-bound, not
+  CI-reproducible — see closing item's `## Execution evidence`).
 - Process guard: `~/.claude/skills/senkani-autonomous/SKILL.md`
   gains `## Step 4.5 — Branch-integrity pre-flight (close-mode,
   all modes)`. Each close phase (build / groom / scope-groom)
@@ -53,11 +59,13 @@ dated heading at release time._
   the future repo-level git pre-commit hook escalation tier, and
   the recovery path (file an `integrity-completed-items-vs-
   <branch>-divergence-<date>` item analogous to this one).
-- Self-test of the guard: from a throwaway branch
-  `test/branch-integrity-self-test-2026-05-08`, the abort message
-  emits as designed (`merge_target = main`, current branch
-  mismatched, abort with the recovery hint). State files
-  byte-identical pre/post.
+- Self-test of the guard: operator drove a one-shot exercise from
+  a throwaway branch `test/branch-integrity-self-test-2026-05-08`
+  and observed the abort message firing with the
+  current-branch-vs-`merge_target` recovery hint; transcript
+  preserved in the closing item's `## Execution evidence`. The
+  throwaway branch was deleted after the test, so the run is not
+  reproducible from durable state — operator self-attestation.
 - Findings filed (mandatory follow-up rule, all blocked behind
   v0.3.0 promote so they land in v0.4.0):
   `ci-test-suite-batched-execution-2026-05-08` (matrix-fan-out
@@ -69,6 +77,19 @@ dated heading at release time._
   authorization-mismatch` and `process-gap-build-round-
   categorical-action-vetting-2026-05-07` — both items already
   cover this case; no new filing needed.
+- Provenance note (added 2026-05-08 by close-mode follow-up): this
+  entry was authored by `/senkani-autonomous` close-mode from the
+  closing item's body. Verifiable claims (PR #17 metadata, merge-
+  commit shape, conflict-file list, mlx-pin SHA preservation, 14
+  family-representative SHAs reachable from main, the three CI
+  job conclusions on `dd51156`, SKILL.md / PROCESS.md / manifest
+  edits, three findings filed) were re-checked against `gh pr view
+  17`, `git log`, `gh run list --commit dd51156`, and direct file
+  reads before this provenance bullet was appended. Two bullets
+  above (local `swift test` 3× green, self-test abort transcript)
+  are operator self-attestation from a manual session and are not
+  reproducible from durable state — they are recorded here as
+  testimony, not observation.
 
 ### May 7 — CI gate: `swift build -c release` now runs on every PR
 - New workflow `.github/workflows/release-build-smoke.yml` runs

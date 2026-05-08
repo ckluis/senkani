@@ -9,6 +9,67 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 8 — Branch-integrity reconciliation: 65 commits on `fix/pane-refresh-worker-pool-test-flake` merged to main; close-mode pre-flight guard added (`integrity-completed-items-vs-fix-branch-divergence-2026-05-07`)
+
+- Prior state: ~65 build-mode items in `spec/autonomous/completed/2026/`
+  carried `status: done` and `shipped: <date>` fields, but the
+  underlying commits lived only on `fix/pane-refresh-worker-pool-
+  test-flake`. PR #16 (`b8466ef`) had merged exactly one of them
+  (`e9441c3`, the `saturatedPoolQueuesWaiters` de-flake); the rest
+  was dangling. The autonomous loop's close-mode `git commit` had
+  been firing on the feature branch, not main — silent divergence
+  between project bookkeeping and merge-target reality accumulated
+  for ~3 weeks.
+- PR #17 (`dd51156`, merge-commit not squash) reconciles all 65
+  commits onto main. Conflict resolution by hand on `Package.swift`
+  (mlx-pin SHA preserved at `2a296f1...`), `Package.resolved`
+  (took main's `originHash`), `tools/soak/manual-log.md`
+  (Cowork-pointer entry union — 5 active groomed plans), and
+  `CHANGELOG.md` (entry union under `## v0.3.0 — unreleased`).
+  All 14 cited family-representative SHAs (URLProtocol/FSEvents/
+  Logger gates, phase-t1/t2/t4 EgressProxy + PII + CredentialVault,
+  phase-v10a/v11a/v11b SkillPacks, MCPSession actor isolation
+  phases) are reachable from main post-merge; bulk verification
+  enumerated all 65 branch commits as ancestors of main. Zero
+  silent revocations of `completed/2026/` items.
+- Local `swift test` runs green 3× on main post-merge (real
+  Terminal, not the Bash-tool sandbox). PR-CI's `release-build-
+  smoke` and `pages` jobs both green; the chunked-harness `tests`
+  job hit two pre-existing flake classes (chunk[other] SIGTRAP
+  retry-exhaust, 81 /tmp leak) — both filed as new backlog items
+  for v0.4.0 follow-up rather than blocking this close.
+- Process guard: `~/.claude/skills/senkani-autonomous/SKILL.md`
+  gains `## Step 4.5 — Branch-integrity pre-flight (close-mode,
+  all modes)`. Each close phase (build / groom / scope-groom)
+  calls `git rev-parse --abbrev-ref HEAD`, compares against
+  `manifest.close.merge_target` (default `main`), and aborts
+  close cleanly if mismatched — leaving `_state.yaml` with
+  `in_flight: <id>` set so the round is suspended, not lost.
+- Manifest update: `spec/autonomous-manifest.yaml` declares
+  `close.merge_target: main`. Top-level comment cross-references
+  the new invariant for future operators.
+- PROCESS.md update: new `## Branch-integrity verification`
+  section documents the invariant, the skill-level enforcement,
+  the future repo-level git pre-commit hook escalation tier, and
+  the recovery path (file an `integrity-completed-items-vs-
+  <branch>-divergence-<date>` item analogous to this one).
+- Self-test of the guard: from a throwaway branch
+  `test/branch-integrity-self-test-2026-05-08`, the abort message
+  emits as designed (`merge_target = main`, current branch
+  mismatched, abort with the recovery hint). State files
+  byte-identical pre/post.
+- Findings filed (mandatory follow-up rule, all blocked behind
+  v0.3.0 promote so they land in v0.4.0):
+  `ci-test-suite-batched-execution-2026-05-08` (matrix-fan-out
+  enhancement), `ci-chunk-other-sigtrap-retry-exhaust-2026-05-08`
+  (parent finding from PR #17 CI), `ci-tmp-leak-senkani-files-
+  2026-05-08` (cosmetic /tmp-leak class, P3). The harness-vs-
+  skill self-modification block hit on Acceptance #6 was the
+  live demonstration of `process-gap-harness-vs-item-
+  authorization-mismatch` and `process-gap-build-round-
+  categorical-action-vetting-2026-05-07` — both items already
+  cover this case; no new filing needed.
+
 ### May 7 — CI gate: `swift build -c release` now runs on every PR
 - New workflow `.github/workflows/release-build-smoke.yml` runs
   `swift package resolve` + `swift build -c release` + a binary-

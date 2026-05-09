@@ -9,6 +9,26 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 9 — `tools/autonomous/roundtrip.py` Pass 0: hard-fail on duplicate frontmatter keys (`process-frontmatter-duplicate-blocked-by-keys-2026-05-09`)
+
+- Removed a duplicate `blocked_by:` declaration from
+  `release-v0-3-0-test-build-broken-mlx-swift-lm-mlxlmcommon-2026-05-09`
+  (an empty-list residue was overriding the load-bearing
+  `[build-env-swiftpm-checkout-corruption-icloud-eviction-2026-05-09]`
+  blocker under PyYAML's silent last-key-wins semantics).
+- Added `find_duplicate_frontmatter_keys(text)` + a Pass 0 sweep
+  to `roundtrip.py`: walks every backlog and completed item,
+  reports each `(file, duplicated-key)` pair, refuses exit-zero
+  if any duplicate is found. Fires before Pass 1 / Pass 2 so the
+  check holds even after the legacy-backlog soak ends.
+- New `tools/autonomous/test_roundtrip_duplicate_keys.py` (stdlib-
+  only `unittest`): 10 cases covering pure-helper detection,
+  filesystem-walk integration on a synthesized tree, and
+  subprocess-level exit-code assertion. Runs via
+  `python3 tools/autonomous/test_roundtrip_duplicate_keys.py`.
+- Live verification: `python3 tools/autonomous/roundtrip.py spec/`
+  reports Pass 0 PASS across all 287 backlog + completed items.
+
 ### May 9 — `senkani doctor` detects FileProvider-evicted `.build/` (iCloud Drive Desktop & Documents sync corruption); CONTRIBUTING.md documents the disable-sync remediation (`build-env-swiftpm-checkout-corruption-icloud-eviction-2026-05-09`)
 
 - New doctor check (#19) walks the project root, `.build/checkouts/`,

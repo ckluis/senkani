@@ -30,6 +30,42 @@ import migrate  # type: ignore  # noqa: E402
 # Read the new tree
 # ---------------------------------------------------------------------------
 
+def find_duplicate_frontmatter_keys(text: str) -> list[str]:
+    """Return the list of top-level frontmatter keys that are declared more than
+    once in the `---` … `---` block at the start of `text`. Order preserved
+    by first occurrence; each duplicated key appears in the result once even
+    if it was declared three or more times.
+
+    PyYAML and most YAML libraries silently apply last-key-wins on duplicates,
+    which has bitten the autonomous loop at least once
+    (`process-frontmatter-duplicate-blocked-by-keys-2026-05-09`): a trailing
+    `blocked_by: []` template residue overrode an intended load-bearing
+    `blocked_by: [<id>]` line. This helper drives the Pass 0 check below so
+    `roundtrip.py` exits non-zero if any backlog or completed file ever
+    re-introduces the pattern.
+    """
+    if not text.startswith("---\n"):
+        return []
+    end = text.find("\n---\n", 4)
+    if end < 0:
+        return []
+    fm_text = text[4:end]
+    seen: dict[str, int] = {}
+    dups: list[str] = []
+    for line in fm_text.split("\n"):
+        if not line or line.startswith("#"):
+            continue
+        m = re.match(r"^([a-z_]+):\s*", line)
+        if not m:
+            continue
+        key = m.group(1)
+        seen[key] = seen.get(key, 0) + 1
+    for key, count in seen.items():
+        if count > 1:
+            dups.append(key)
+    return dups
+
+
 def parse_frontmatter_block(text: str) -> tuple[dict, str]:
     """Parse `---\nKEY: VALUE\n---\nbody` style frontmatter.
 
@@ -365,6 +401,45 @@ def heading_coverage(spec_dir: Path) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Pass 0: duplicate frontmatter keys
+# ---------------------------------------------------------------------------
+
+def pass_zero_duplicate_keys(spec_dir: Path) -> list[str]:
+    """Walk every backlog and completed item and return a list of human-
+    readable failure strings — one per (file, duplicated-key) pair. Empty
+    list = pass. Always runs first, before any legacy-tree comparison; the
+    new tree is canonical even after the legacy soak ends, so this check
+    must hold post-migration too."""
+    failures: list[str] = []
+    out_dir = spec_dir / "autonomous"
+    if not out_dir.exists():
+        return failures
+    targets: list[Path] = []
+    backlog_dir = out_dir / "backlog"
+    if backlog_dir.exists():
+        for p in sorted(backlog_dir.glob("*.md")):
+            if p.name == "index.md":
+                continue
+            targets.append(p)
+    completed_root = out_dir / "completed"
+    if completed_root.exists():
+        for p in sorted(completed_root.rglob("*.md")):
+            if p.name == "index.md":
+                continue
+            targets.append(p)
+    for p in targets:
+        try:
+            text = p.read_text()
+        except (OSError, UnicodeDecodeError) as e:
+            failures.append(f"{p}: read failed: {e}")
+            continue
+        dups = find_duplicate_frontmatter_keys(text)
+        for key in dups:
+            failures.append(f"{p}: duplicate frontmatter key {key!r}")
+    return failures
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -374,6 +449,18 @@ def main() -> int:
                     help="Path to the spec/ directory.")
     args = ap.parse_args()
     spec_dir = Path(args.spec_dir).resolve()
+
+    print("[roundtrip] Pass 0: duplicate frontmatter keys across new tree")
+    pass0 = pass_zero_duplicate_keys(spec_dir)
+    if pass0:
+        print(f"[roundtrip]   FAIL — {len(pass0)} duplicate-key violation(s):")
+        for f in pass0:
+            print(f"    - {f}")
+        print("[roundtrip]   YAML last-key-wins silently masks the load-bearing")
+        print("[roundtrip]   declaration. Edit each file to keep exactly one")
+        print("[roundtrip]   copy of the listed key.")
+        return 1
+    print("[roundtrip]   PASS")
 
     legacy_backlog = spec_dir / "autonomous-backlog.yaml"
     if not legacy_backlog.exists():

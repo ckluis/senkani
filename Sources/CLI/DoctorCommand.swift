@@ -120,6 +120,10 @@ struct Doctor: ParsableCommand {
         // 18. Egress proxy — T.1a daemon scaffold + decision audit log
         checkEgressProxy(&results)
 
+        // 19. FileProvider eviction risk on .build/ checkouts
+        //     (build-env-swiftpm-checkout-corruption-icloud-eviction-2026-05-09 Phase A).
+        checkFileProviderEviction(&results)
+
         print("")
         var parts: [String] = []
         if results.passed > 0 { parts.append("\(results.passed) passed") }
@@ -1055,6 +1059,61 @@ struct Doctor: ParsableCommand {
         case .warn:
             printStatus(.skip, "\(name): socket exists but timed out (\((path as NSString).lastPathComponent))")
             results.skipped += 1
+        }
+    }
+
+    // MARK: - Check 19: FileProvider eviction risk
+
+    /// Pure formatter for the FileProvider eviction check. Lifted out
+    /// of `checkFileProviderEviction` so tests can synthesize reports
+    /// (the `SF_DATALESS` flag is FileProvider-only and cannot be set
+    /// from user space) and assert on the operator-facing surface
+    /// without dup2-capturing stdout. Mirror of `formatChainAuditLines`.
+    static func formatFileProviderEvictionLines(
+        _ report: FileProviderEvictionReport
+    ) -> [(Status, String)] {
+        if !report.hasFinding {
+            return [(.pass, "FileProvider: no iCloud-Drive eviction symptoms (root, .build/checkouts/, source tree clean)")]
+        }
+        var lines: [(Status, String)] = []
+        if report.pathUnderFileProvider {
+            lines.append((
+                .fail,
+                "FileProvider eviction risk — \(report.scannedRoot) sits under an iCloud-Drive-managed path. See CONTRIBUTING.md `## macOS / iCloud Drive` for the disable-Desktop-&-Documents-sync remediation."
+            ))
+        }
+        if !report.datalessPaths.isEmpty {
+            let n = report.datalessPaths.count
+            let sample = report.datalessPaths.prefix(3).joined(separator: ", ")
+            let plural = n == 1 ? "" : "s"
+            lines.append((
+                .fail,
+                "FileProvider eviction — \(n) dataless-flagged file\(plural) under \(report.scannedRoot)/.build/ (sample: \(sample)). After disabling iCloud Desktop & Documents sync, run `rm -rf .build`; rebuild from a clean tree."
+            ))
+        }
+        if !report.star2Siblings.isEmpty {
+            let n = report.star2Siblings.count
+            let sample = report.star2Siblings.prefix(3).joined(separator: ", ")
+            let plural = n == 1 ? "" : "s"
+            lines.append((
+                .fail,
+                "FileProvider eviction — \(n) `* 2` Finder-shadow sibling\(plural) detected (sample: \(sample)). Each is an iCloud sync conflict; verify byte-identity with `cmp` before removing the shadows."
+            ))
+        }
+        return lines
+    }
+
+    private func checkFileProviderEviction(_ results: inout Results) {
+        let cwd = FileManager.default.currentDirectoryPath
+        let report = FileProviderEvictionScanner.scan(root: cwd)
+        for (status, message) in Self.formatFileProviderEvictionLines(report) {
+            printStatus(status, message)
+            switch status {
+            case .pass: results.passed += 1
+            case .fixed: results.fixed += 1
+            case .fail: results.failed += 1
+            case .skip: results.skipped += 1
+            }
         }
     }
 

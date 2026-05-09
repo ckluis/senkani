@@ -9,6 +9,35 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 9 — `senkani doctor` detects FileProvider-evicted `.build/` (iCloud Drive Desktop & Documents sync corruption); CONTRIBUTING.md documents the disable-sync remediation (`build-env-swiftpm-checkout-corruption-icloud-eviction-2026-05-09`)
+
+- New doctor check (#19) walks the project root, `.build/checkouts/`,
+  and operator-tracked source roots (`Sources/`, `Tests/`, `docs/`)
+  flagging three iCloud-Drive eviction signals: the project root
+  sitting under a FileProvider-managed path, files carrying the
+  `SF_DATALESS` `st_flag` (APFS sentinel for content evicted to a
+  cloud provider), and `* 2` Finder-shadow siblings (sync-conflict
+  resolution). Surface lives in `Sources/CLI/FileProviderEvictionCheck.swift`
+  + `Doctor.formatFileProviderEvictionLines(_:)` (pure formatter
+  mirrors the audit-chain pattern; tests inject synthetic reports
+  for the privileged `SF_DATALESS` paths and synthesize fixtures
+  for the `* 2` and clean-tree cases).
+- CONTRIBUTING.md gets a new `## macOS / iCloud Drive` section
+  documenting why senkani must NOT live under `~/Desktop/`,
+  `~/Documents/`, or any FileProvider-managed path; the
+  System-Settings disable-Desktop-&-Documents-sync recipe; manual
+  diagnostic recipes (`xattr`, `ls -lO@`, `find ... -name '* 2*'`);
+  and the `rm -rf .build` recovery path.
+- The autonomous round that shipped this also surfaced a precondition
+  defect — 24 byte-identical `* 2` Finder shadows in `Tests/` and
+  `docs/` from prior iCloud sync churn — and removed them after
+  `cmp` byte-identity verification. Filing:
+  `build-env-star2-finder-duplicate-source-tree-cleanup-2026-05-09`.
+- Phase C operator gate (disable iCloud Desktop & Documents sync,
+  `rm -rf .build`, clean-build verification) routes through the
+  manual-log; the build round halts at Phase B per the scope-groomed
+  acceptance.
+
 ### May 8 — Branch-integrity reconciliation: 65 commits on `fix/pane-refresh-worker-pool-test-flake` merged to main; close-mode pre-flight guard added (`integrity-completed-items-vs-fix-branch-divergence-2026-05-07`)
 
 - Prior state: ~65 build-mode items in `spec/autonomous/completed/2026/`

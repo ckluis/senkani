@@ -9,6 +9,44 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 11 — Step 9 re-walk plan: Step 6 retargeted at cleanup-migration contract (`step9-rewalk-plan-step6-references-retired-popover-2026-05-11`)
+
+- **Why:** The same-day `fcsit-pane-toggles-ux-redesign` retirement
+  removed the FCSIT first-use disclosure popover surface that the
+  `uninstall-rewalk-step9-apppreferences-2026-05-11` test plan's
+  Step 6 was asserting against. The 2026-05-11 Mode A re-walk
+  recorded Step 6 as **N/A** (popover surface retired same-day);
+  re-walks would keep hitting the same dead end until the plan was
+  fixed.
+- `spec/autonomous/backlog/uninstall-rewalk-step9-apppreferences-2026-05-11.md`
+  — Step 6 retargeted at the cleanup-migration contract
+  (`SenkaniGUI.init() → cleanupRetiredFCSITFirstUseKey()`,
+  `SenkaniApp/App/SenkaniApp.swift:34-46`). Split into Step 6a
+  (operator-supervised SenkaniApp relaunch via Xcode Play button)
+  and Step 6b (shell-drivable `defaults read` probe verifying the
+  retired key is absent post-launch). New evidence files
+  `40a-senkaniapp-pid.txt`, `41-post-launch-firstuseseen-read.txt`,
+  `42-post-launch-domain-read.txt` replace the retired
+  `40-popover-screenshot.png`. Failure-mode rows, Cowork hints,
+  time estimate, Operator contract defect-filing list all updated
+  to match.
+- `spec/autonomous/backlog/uninstall-rewalk-step9-apppreferences-2026-05-11.md`
+  → `## Pre-grooming notes` — new audit-accepted risks entry
+  "Step 6 surface retired same-day (re-groom 2026-05-11)" with
+  cross-references to `Sources/Core/FCSITDisclosure.swift:115-122`
+  + `SenkaniApp/App/SenkaniApp.swift:34-46` and a documented
+  guardrail proposal (groom-time grep of referenced surfaces
+  against current HEAD before declaring `manual_ready`).
+- `spec/autonomous/backlog/step9-rewalk-cleanup-migration-validation-2026-05-11.md`
+  — NEW per acceptance bullet #4; tracks the audit-trail wrapper
+  for the fresh re-walk that closes the parent on PASS. Operator
+  contract requires concurrent close of the parent re-walk plan
+  on PASS.
+- Plan-bug #2 (Setup probe (3) `Senkani install detected` grep
+  vs. current binary `Senkani Uninstall` header) is **deferred to
+  a separate round** per operator sequencing — not addressed
+  here.
+
 ### May 11 — FCSIT pane header UX redesign: click any letter → settings panel (`fcsit-pane-toggles-ux-redesign-2026-05-11`)
 
 - **Why:** The v0.3.0 onboarding pass surfaced that the five FCSIT

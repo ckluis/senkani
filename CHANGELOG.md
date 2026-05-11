@@ -9,6 +9,50 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 11 — Two-bug fix: SenkaniApp first-launch crash (`mcp-warmindex-treesitter-walk-stack-overflow-2026-05-10`, `app-bundle-launchservices-isatty-fallback-2026-05-10`)
+
+- **Bug 1 — Stack-guard crash in `MCPSession.warmIndex`.** Tree-sitter
+  language backends and `DependencyExtractor` recurse on AST depth.
+  Real Go/TS/Swift files routinely produce ASTs ~200+ levels deep,
+  past Swift Concurrency's cooperative-pool ~544 KB stack. Symptom on
+  fresh install: `EXC_BAD_ACCESS (SIGILL)` 286 frames into
+  `GoBackend.walk`, app dies before the welcome screen.
+- Fixed at the entry points (single-point structural fix, no per-
+  backend rewrite required): new
+  `Sources/Indexer/RunOnLargeStackThread.swift` helper spawns a fresh
+  `Thread` with a 16 MB stack and runs the AST work on it. Applied
+  to all four cooperative-pool call sites in `MCPSession.swift`
+  (`warmIndex` incremental, `warmIndex` full, `ensureIndex`,
+  `handleFileChanges`). The 23 indexer backends + 2
+  `DependencyExtractor` sites remain unchanged; the wrapped entry
+  points are now the only paths AST work reaches them through.
+  Deep-analysis punch list (every site checked + verdict) lives in
+  the backlog item's `## Execution evidence`.
+- **Bug 2 — LaunchServices launches misrouted to MCP mode.**
+  `SenkaniApp/App/main.swift:11` used `isatty(STDIN_FILENO) == 0` as a
+  fallback to detect MCP-server mode. Every `open SenkaniApp.app` /
+  Spotlight / dock launch hands stdin=`/dev/null` to the child, so
+  the heuristic fired and the binary entered `MCPServerRunner.run()`
+  instead of `SenkaniGUI.main()`. The recursion crash masked this:
+  post-fix, LS launches "open and exit cleanly" instead of crashing,
+  because the MCP gate denied on missing `pane_id`.
+- Dropped the `isatty` fallback; MCP mode now requires an explicit
+  `--mcp-server` flag. The dedicated `senkani-mcp` binary (registered
+  by `MCPInstallCommand.swift`) is what Claude Code uses, so the
+  fallback was never needed for production.
+- Process learning: SKILL.md gains a mandatory "similar-issue scan"
+  step in the build-mode close phase. The GoBackend crash was one of
+  23 sibling sites; shipping only the Go fix would have left every
+  other language vulnerable. The new step requires an `Explore`-agent
+  deep scan before doc-sync, with results recorded in the item's
+  evidence.
+- Defects-outside-criteria filed:
+  `fcsit-pane-toggles-ux-redesign-2026-05-11` (UX rethink — operator
+  observation),
+  `uninstall-scanner-userdefaults-preferences-gap-2026-05-11`
+  (10th-category gap: `~/Library/Preferences/dev.senkani.app.plist`
+  not wiped by `senkani uninstall --yes`).
+
 ### May 9 — `tools/autonomous/roundtrip.py` Pass 0: hard-fail on duplicate frontmatter keys (`process-frontmatter-duplicate-blocked-by-keys-2026-05-09`)
 
 - Removed a duplicate `blocked_by:` declaration from

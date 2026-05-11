@@ -6,10 +6,18 @@ import HookRelay
 
 let isSocketMode = CommandLine.arguments.contains("--socket-server")
 let isHookMode = CommandLine.arguments.contains("--hook")
-let isMCPMode = !isSocketMode && !isHookMode && (
-    CommandLine.arguments.contains("--mcp-server")
-    || isatty(STDIN_FILENO) == 0  // stdin is a pipe
-)
+// MCP mode requires an explicit flag. The previous fallback
+// (`isatty(STDIN_FILENO) == 0 → MCP`) silently switched the bundle
+// into MCP-server mode whenever LaunchServices opened the .app
+// (LS hands stdin=/dev/null to GUI launches), bypassing the SwiftUI
+// app entirely. See incident 2026-05-10: `open SenkaniApp.app` ran
+// `MCPServerRunner.run()` instead of the GUI, crashing in
+// `GoBackend.walk` during warm-index. The dedicated `senkani-mcp`
+// binary is what Claude Code / MCP clients register (see
+// `Sources/CLI/MCPInstallCommand.swift`), so SenkaniApp doesn't need
+// the implicit pipe-detect fallback.
+let isMCPMode = !isSocketMode && !isHookMode
+    && CommandLine.arguments.contains("--mcp-server")
 
 if isHookMode {
     // Hook mode: act as the senkani-hook binary.

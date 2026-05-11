@@ -399,7 +399,12 @@ actor MCPSession {
             let pr = projectRoot
             let tc = treeCache
             Task.detached(priority: .utility) { [weak self] in
-                let updated = IndexEngine.incrementalUpdate(existing: cached, projectRoot: pr, treeCache: tc)
+                // AST walks must run on a large-stack thread; cooperative-
+                // pool threads (~512 KB) blow the stack guard on deep Go/TS
+                // ASTs. See RunOnLargeStackThread.swift for the rationale.
+                let updated = await runOnLargeStackThread {
+                    IndexEngine.incrementalUpdate(existing: cached, projectRoot: pr, treeCache: tc)
+                }
                 try? IndexStore.save(updated, projectRoot: pr)
                 await self?.applyIndexUpdate(updated)
                 await self?.startFileWatcher()
@@ -410,7 +415,9 @@ actor MCPSession {
             let pr = projectRoot
             let tc = treeCache
             Task.detached(priority: .utility) { [weak self] in
-                let idx = IndexEngine.index(projectRoot: pr, treeCache: tc)
+                let idx = await runOnLargeStackThread {
+                    IndexEngine.index(projectRoot: pr, treeCache: tc)
+                }
                 try? IndexStore.save(idx, projectRoot: pr)
                 await self?.applyIndexUpdate(idx)
                 await self?.startFileWatcher()
@@ -626,10 +633,13 @@ actor MCPSession {
     }
 
     /// Blocking index build for CLI commands. Checks if background build finished first.
-    func ensureIndex() -> SymbolIndex {
+    /// AST walks run on a large-stack thread (see `RunOnLargeStackThread.swift`).
+    func ensureIndex() async -> SymbolIndex {
         if let idx = _symbolIndex { return idx }
-        // Background build may be in progress — just do a synchronous build
-        let idx = IndexStore.buildOrUpdate(projectRoot: projectRoot)
+        let pr = projectRoot
+        let idx = await runOnLargeStackThread {
+            IndexStore.buildOrUpdate(projectRoot: pr)
+        }
         try? IndexStore.save(idx, projectRoot: projectRoot)
         _symbolIndex = idx
         _repoMap = nil
@@ -895,7 +905,7 @@ actor MCPSession {
 
     /// Handle a batch of changed files from the FileWatcher.
     /// Re-indexes each file incrementally, then updates the in-memory symbol index.
-    private func handleFileChanges(_ changedFiles: [String]) {
+    private func handleFileChanges(_ changedFiles: [String]) async {
         let prefix = projectRoot + "/"
         let relativePaths = changedFiles.compactMap { absPath -> String? in
             guard absPath.hasPrefix(prefix) else { return nil }
@@ -908,28 +918,33 @@ actor MCPSession {
         let events = relativePaths.map { ChangeEvent(path: $0, eventType: "modified", timestamp: now) }
         appendChangeEvents(events)
 
-        var newEntries: [IndexEntry] = []
-        var affectedFiles: Set<String> = []
+        // AST walks must run on a large-stack thread; see RunOnLargeStackThread.swift.
+        let pr = projectRoot
+        let tc = treeCache
+        let (newEntries, affectedFiles): ([IndexEntry], Set<String>) = await runOnLargeStackThread {
+            var entries: [IndexEntry] = []
+            var affected: Set<String> = []
+            for relativePath in relativePaths {
+                let fullPath = pr + "/" + relativePath
+                affected.insert(relativePath)
 
-        for relativePath in relativePaths {
-            let fullPath = projectRoot + "/" + relativePath
-            affectedFiles.insert(relativePath)
+                if !FileManager.default.fileExists(atPath: fullPath) {
+                    tc.remove(file: relativePath)
+                    continue
+                }
 
-            if !FileManager.default.fileExists(atPath: fullPath) {
-                treeCache.remove(file: relativePath)
-                continue
+                do {
+                    let fileEntries = try IndexEngine.indexFileIncremental(
+                        relativePath: relativePath,
+                        projectRoot: pr,
+                        treeCache: tc
+                    )
+                    entries.append(contentsOf: fileEntries)
+                } catch {
+                    fputs("[senkani] indexFileIncremental skipped for \(relativePath): \(error)\n", stderr)
+                }
             }
-
-            do {
-                let entries = try IndexEngine.indexFileIncremental(
-                    relativePath: relativePath,
-                    projectRoot: projectRoot,
-                    treeCache: treeCache
-                )
-                newEntries.append(contentsOf: entries)
-            } catch {
-                fputs("[senkani] indexFileIncremental skipped for \(relativePath): \(error)\n", stderr)
-            }
+            return (entries, affected)
         }
 
         guard var idx = _symbolIndex else { return }

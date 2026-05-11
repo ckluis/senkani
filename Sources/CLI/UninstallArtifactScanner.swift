@@ -45,6 +45,21 @@ import Core
 /// not transient state — matches `sessionDatabase`'s `--keep-data`
 /// treatment.
 ///
+/// Category-11 (`appCacheDirectory`) was added 2026-05-11 after the
+/// `uninstall-rewalk-step9-apppreferences-2026-05-11` Mode A re-walk
+/// Step 5 (broad sweep) surfaced `~/Library/Caches/dev.senkani.app/`
+/// surviving the `--yes` wipe. Distinct from category-9's
+/// `~/Library/Caches/dev.senkani/` (no `.app` suffix), the `.app`
+/// variant is the macOS-conventional cache path SwiftUI / Foundation
+/// auto-create for any process running under the `dev.senkani.app`
+/// bundle ID (SenkaniApp). Even though macOS — not Senkani's own
+/// write paths — populates it, the directory bears the senkani
+/// bundle identity, so a clean `senkani uninstall` must strip it
+/// (parallels category-10's treatment of the bundle-ID-keyed plist).
+/// Honored under `--keep-data`: see the `uninstall-scanner-extension-
+/// candidate-library-caches-dev.senkani.app-2026-05-11` backlog
+/// item's acceptance for the explicit operator decision.
+///
 /// Out-of-scope (by design — verified 2026-05-11):
 /// - `~/Library/Caches/SenkaniApp` — macOS-managed (auto-created per
 ///   bundle name; no Senkani write code path).
@@ -60,7 +75,7 @@ import Core
 ///   or Claude Code itself. Senkani's hook lives at
 ///   `~/.senkani/bin/senkani-hook` (category-3, `hookBinary`).
 struct UninstallArtifactScanner {
-    /// The ten artifact categories `senkani uninstall` can remove. The
+    /// The eleven artifact categories `senkani uninstall` can remove. The
     /// string value is a stable identifier for assertions; user-facing text
     /// lives in `Artifact.description`.
     enum Category: String, CaseIterable, Sendable {
@@ -74,6 +89,7 @@ struct UninstallArtifactScanner {
         case webContentRuleLists
         case modelMetadataCache
         case appPreferences
+        case appCacheDirectory
     }
 
     struct Artifact {
@@ -105,6 +121,7 @@ struct UninstallArtifactScanner {
     var modelMetadataCacheDir: String { homeDir + "/Library/Caches/dev.senkani" }
     var appPreferencesPlist: String { homeDir + "/Library/Preferences/dev.senkani.app.plist" }
     var appPreferencesByHostDir: String { homeDir + "/Library/Preferences/ByHost" }
+    var appCacheDir: String { homeDir + "/Library/Caches/dev.senkani.app" }
     static let appPreferencesBundleID = "dev.senkani.app"
 
     func scan() -> [Artifact] {
@@ -353,6 +370,26 @@ struct UninstallArtifactScanner {
                         CFPreferencesAppSynchronize(bundleID as CFString)
                         if let err = firstError { throw err }
                     }
+                ))
+            }
+        }
+
+        // 11. SenkaniApp bundle-ID cache directory at
+        // ~/Library/Caches/dev.senkani.app/. macOS auto-creates this for
+        // any process running under the `dev.senkani.app` bundle ID
+        // (the SenkaniApp bundle); the directory bears senkani identity
+        // and must go on uninstall. Distinct from category-9's
+        // dev.senkani/ (no .app suffix), which is Senkani's own
+        // ModelManager-written metadata store. Honored under
+        // `--keep-data` per backlog acceptance.
+        if !keepData {
+            let cacheDir = appCacheDir
+            if fm.fileExists(atPath: cacheDir) {
+                items.append(Artifact(
+                    category: .appCacheDirectory,
+                    icon: "\u{1F4BE}",
+                    description: "Cache directory at ~/Library/Caches/dev.senkani.app/",
+                    remove: { try fm.removeItem(atPath: cacheDir) }
                 ))
             }
         }

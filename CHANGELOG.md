@@ -9,6 +9,54 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 11 — `senkani uninstall` scanner: category-11 `appCacheDirectory` (`~/Library/Caches/dev.senkani.app/`) (`uninstall-scanner-extension-candidate-library-caches-dev.senkani.app-2026-05-11`)
+
+- **Why:** The `uninstall-rewalk-step9-apppreferences-2026-05-11`
+  Mode A re-walk Step 5 (broad sweep) found
+  `/Users/clank/Library/Caches/dev.senkani.app` surviving the
+  `--yes` wipe even with cat-10 `appPreferences` shipping. The
+  directory is the macOS-conventional cache path SwiftUI /
+  Foundation auto-create for any process running under the
+  SenkaniApp bundle ID — distinct from cat-9's
+  `~/Library/Caches/dev.senkani/` (no `.app` suffix). Even though
+  macOS — not Senkani's own write paths — populates it, the
+  directory bears the senkani bundle identity, so a clean
+  `senkani uninstall` must strip it.
+- New scanner category `appCacheDirectory` in
+  `Sources/CLI/UninstallArtifactScanner.swift:62` (enum case +
+  `appCacheDir` path property + scan block after cat-10), wiping
+  `~/Library/Caches/dev.senkani.app/` recursively when present.
+- Honors `--keep-data` per operator decision in the backlog
+  acceptance: the directory survives `senkani uninstall --yes
+  --keep-data`. Rationale: aligned with cat-10 `appPreferences`
+  semantics — when a user passes `--keep-data` we err on the side
+  of preserving SenkaniApp bundle-identity-keyed state.
+- Three new fixture tests in
+  `Tests/SenkaniTests/UninstallSmokeTests.swift`:
+  `discoveryFindsAppCacheDirectoryAndIdempotentRemoval` (asserts
+  scan + remove + idempotent re-scan against a seeded
+  `dev.senkani.app/Cache.db` with OS-managed `SenkaniApp` and
+  `senkani-mcp` sibling controls that must NOT flag),
+  `keepDataOmitsAppCacheDirectory` (asserts the `--keep-data`
+  suppression), and `scannerIgnoresAppCacheSiblingsWithoutDevSenkaniApp`
+  (asserts OS-managed siblings alone produce zero artifacts).
+  Existing `keepDataOmitsSessionDatabaseAndAppPreferences` test
+  renamed to `…AndAppCacheDirectory` and updated to assert all
+  three keep-data-honored categories suppress correctly; `seedAll`
+  +  `discoveryFindsAllCategoriesWhenFullySeeded` automatically
+  pick up the new category via `Category.allCases`. Suite delta:
+  13 → 16 (+3).
+- `docs/guides/uninstall.html` updated: "ten categories" → "eleven
+  categories", new `--keep-data`-honored bullet for the cache
+  directory with the operator-decision provenance, summary
+  paragraph rewritten to call out all three keep-data-honored
+  categories.
+- Closes
+  `uninstall-scanner-extension-candidate-library-caches-dev.senkani.app-2026-05-11`
+  — re-walk of Step 9's broad sweep on the operator machine to
+  produce a clean zero-match BROAD output is acceptance bullet #4,
+  handled by a follow-up walk item once this lands.
+
 ### May 11 — Step 9 re-walk plan: Step 6 retargeted at cleanup-migration contract (`step9-rewalk-plan-step6-references-retired-popover-2026-05-11`)
 
 - **Why:** The same-day `fcsit-pane-toggles-ux-redesign` retirement

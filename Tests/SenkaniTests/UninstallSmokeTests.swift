@@ -37,7 +37,7 @@ struct UninstallSmokeTests {
             try? FileManager.default.removeItem(at: root)
         }
 
-        /// Seed every one of the 10 categories that the scanner knows about.
+        /// Seed every one of the 11 categories that the scanner knows about.
         func seedAll() throws {
             try seedGlobalMCPRegistration()
             try seedProjectHooks()
@@ -49,6 +49,7 @@ struct UninstallSmokeTests {
             try seedWebContentRuleLists()
             try seedModelMetadataCache()
             try seedAppPreferences()
+            try seedAppCacheDirectory()
         }
 
         func seedGlobalMCPRegistration() throws {
@@ -264,6 +265,31 @@ struct UninstallSmokeTests {
                 byHost + "/com.other.tool.0123ABCD-1234-5678-90AB-CDEF01234567.plist"))
         }
 
+        /// Seed `~/Library/Caches/dev.senkani.app/` (the macOS-conventional
+        /// cache directory for processes running under the SenkaniApp
+        /// bundle ID). Mirrors the 2026-05-11 Step-9 broad-sweep finding
+        /// that surfaced the directory surviving a `--yes` wipe. Also
+        /// re-seeds the OS-managed `SenkaniApp` and `senkani-mcp`
+        /// sibling caches if they don't already exist — the scanner must
+        /// pick up `dev.senkani.app/` and ignore the others.
+        func seedAppCacheDirectory() throws {
+            let fm = FileManager.default
+            let cacheRoot = home + "/Library/Caches"
+            try fm.createDirectory(atPath: cacheRoot + "/dev.senkani.app",
+                                   withIntermediateDirectories: true)
+            // Seed a stray file inside to ensure removal strips the whole
+            // subtree (mirrors cat-9's models/models.json fixture).
+            try Data().write(to: URL(fileURLWithPath:
+                cacheRoot + "/dev.senkani.app/Cache.db"))
+            // OS-managed siblings — must NOT be flagged. createDirectory
+            // with withIntermediateDirectories=true is idempotent if a
+            // prior seed already created them.
+            try fm.createDirectory(atPath: cacheRoot + "/SenkaniApp",
+                                   withIntermediateDirectories: true)
+            try fm.createDirectory(atPath: cacheRoot + "/senkani-mcp",
+                                   withIntermediateDirectories: true)
+        }
+
         func scanner(keepData: Bool = false) -> UninstallArtifactScanner {
             UninstallArtifactScanner(
                 homeDir: home, appSupportDir: appSupport, keepData: keepData)
@@ -285,7 +311,7 @@ struct UninstallSmokeTests {
                 "one artifact per category when fully seeded")
     }
 
-    @Test func keepDataOmitsSessionDatabaseAndAppPreferences() throws {
+    @Test func keepDataOmitsSessionDatabaseAndAppPreferencesAndAppCacheDirectory() throws {
         let f = try Fixture()
         try f.seedAll()
 
@@ -295,8 +321,10 @@ struct UninstallSmokeTests {
                 "--keep-data must suppress the sessionDatabase artifact")
         #expect(!categories.contains(.appPreferences),
                 "--keep-data must suppress the appPreferences artifact (user customization)")
-        #expect(categories.count == UninstallArtifactScanner.Category.allCases.count - 2,
-                "all categories minus sessionDatabase + appPreferences are still discovered")
+        #expect(!categories.contains(.appCacheDirectory),
+                "--keep-data must suppress the appCacheDirectory artifact (bundle-ID cache)")
+        #expect(categories.count == UninstallArtifactScanner.Category.allCases.count - 3,
+                "all categories minus sessionDatabase + appPreferences + appCacheDirectory are still discovered")
     }
 
     @Test func keepDataFalseIncludesSessionDatabase() throws {
@@ -555,6 +583,78 @@ struct UninstallSmokeTests {
         let categories = Set(f.scanner(keepData: true).scan().map(\.category))
         #expect(!categories.contains(.appPreferences),
                 "--keep-data must suppress the appPreferences artifact")
+    }
+
+    @Test func discoveryFindsAppCacheDirectoryAndIdempotentRemoval() throws {
+        let f = try Fixture()
+        try f.seedAppCacheDirectory()
+
+        // Scan should pick up only dev.senkani.app cache directory; the
+        // OS-managed `SenkaniApp` and `senkani-mcp` siblings (which
+        // seedAppCacheDirectory also seeds as controls) must NOT be
+        // flagged.
+        let artifacts = f.scanner().scan()
+        let categories = Set(artifacts.map(\.category))
+        #expect(categories == [.appCacheDirectory],
+                "only appCacheDirectory should be discovered, got \(categories.map(\.rawValue).sorted())")
+
+        if let item = artifacts.first(where: { $0.category == .appCacheDirectory }) {
+            #expect(item.description.contains("dev.senkani.app"),
+                    "expected description to mention dev.senkani.app path, got: \(item.description)")
+        }
+
+        // Removal strips the whole dev.senkani.app/ subtree — including
+        // the seeded Cache.db file.
+        for item in artifacts where item.category == .appCacheDirectory {
+            try item.remove()
+        }
+
+        let fm = FileManager.default
+        let cacheRoot = f.home + "/Library/Caches"
+        #expect(!fm.fileExists(atPath: cacheRoot + "/dev.senkani.app"),
+                "dev.senkani.app cache dir should be gone after removal")
+        #expect(!fm.fileExists(atPath: cacheRoot + "/dev.senkani.app/Cache.db"),
+                "Cache.db inside dev.senkani.app should be gone after removal")
+
+        // OS-managed siblings must remain untouched.
+        #expect(fm.fileExists(atPath: cacheRoot + "/SenkaniApp"),
+                "SenkaniApp cache (OS-managed) must NOT be removed")
+        #expect(fm.fileExists(atPath: cacheRoot + "/senkani-mcp"),
+                "senkani-mcp cache (OS-managed) must NOT be removed")
+
+        // Re-scan must be empty (idempotent).
+        #expect(f.scanner().scan().isEmpty,
+                "after removal, scanner finds nothing")
+    }
+
+    @Test func keepDataOmitsAppCacheDirectory() throws {
+        let f = try Fixture()
+        try f.seedAppCacheDirectory()
+
+        // With --keep-data, the bundle-ID cache directory must be
+        // preserved (matches appPreferences semantics per the
+        // 2026-05-11 acceptance for category-11).
+        let categories = Set(f.scanner(keepData: true).scan().map(\.category))
+        #expect(!categories.contains(.appCacheDirectory),
+                "--keep-data must suppress the appCacheDirectory artifact")
+    }
+
+    @Test func scannerIgnoresAppCacheSiblingsWithoutDevSenkaniApp() throws {
+        let f = try Fixture()
+        let fm = FileManager.default
+
+        // Seed ONLY the OS-managed Library/Caches siblings — no
+        // dev.senkani.app. Both `SenkaniApp` (binary-name-keyed) and
+        // `senkani-mcp` are macOS-auto-created and out-of-scope.
+        let cacheRoot = f.home + "/Library/Caches"
+        try fm.createDirectory(atPath: cacheRoot + "/SenkaniApp",
+                               withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: cacheRoot + "/senkani-mcp",
+                               withIntermediateDirectories: true)
+
+        let artifacts = f.scanner().scan()
+        #expect(artifacts.isEmpty,
+                "OS-managed sibling caches must not produce artifacts — got \(artifacts.map(\.category.rawValue))")
     }
 
     @Test func scannerIgnoresOSManagedSenkaniCachesWithoutDevSenkani() throws {

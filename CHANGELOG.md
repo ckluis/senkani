@@ -9,6 +9,36 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 11 — `tools/soak/runner/08-make-app-bundle.command` always rebuilds (`soak-bundle-script-stale-binary-rebuild-2026-05-11`)
+
+- **Why:** The bundle script gated its build on `[ ! -x .build/debug/SenkaniApp ]` —
+  so an iterative debug cycle that edited `SenkaniApp/App/*.swift` and re-ran
+  the script silently re-bundled the pre-edit binary. The operator believed
+  they bundled the fix; they actually bundled the bug. The `.app` then
+  "reproduced" the bug they thought they fixed, burning ~20 minutes per
+  ghost-bug debug loop (this was the parent finding from
+  `app-bundle-launchservices-isatty-fallback-2026-05-10`'s fix-verification
+  cycle on 2026-05-11). The redundant-build cost of unconditional rebuild is
+  ~seconds (SwiftPM's incremental build is correct on no-changes); the
+  ghost-bug cost is minutes. Bad trade — gate removed.
+- `tools/soak/runner/08-make-app-bundle.command` now invokes
+  `swift build --product SenkaniApp` unconditionally, aborts with non-zero
+  exit if the build fails to produce `$APP_BIN`, and echoes the bundled
+  binary's mtime (`Bundled binary built at <ISO>`) so the operator can
+  confirm at a glance which version got bundled.
+- Audited companion soak-runner scripts for the same gate-on-existence
+  shape: `06-launch-binary.command` has a similar `if [ ! -x $APP_BIN ]`
+  but its contract is explicitly "launch pre-built binary" — different
+  semantic class (it falls back to release when debug is missing, never
+  rebuilds), so no defect filed. `13-step7-and-tarball.command` only
+  verifies state — no build path.
+- Validation: injected `SENKANI_BUNDLE_REBUILD_MARKER_8c2f4a1e` into
+  `SenkaniApp/App/main.swift`, ran `swift build --product SenkaniApp`,
+  confirmed marker present in `.build/debug/SenkaniApp` (count=1). Reverted
+  the marker, rebuilt, confirmed marker absent (count=0). SwiftPM picks
+  up source edits in both directions.
+- Suite: operator-tooling shell script only — no test-count change.
+
 ### May 11 — Indexer CLI entry points run on a large-stack background Thread (`indexer-cli-entry-points-large-stack-thread-2026-05-11`)
 
 - **Why:** Closes the stack-guard asymmetry filed off the

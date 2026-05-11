@@ -27,20 +27,40 @@ import Core
 /// senkani-using process — making the dir Senkani-managed state, not an
 /// OS cache. Removal strips the whole `dev.senkani/` subtree.
 ///
-/// Out-of-scope (by design — verified 2026-05-03):
+/// Category-10 (`appPreferences`) was added 2026-05-11 after the
+/// `release-v0-3-0-onboarding-pass` Bullet #1 walk surfaced that
+/// `senkani uninstall --yes` left `~/Library/Preferences/dev.senkani.app.plist`
+/// in place — so UserDefaults flags written by SenkaniApp
+/// (`senkani.fcsit.firstUseDisclosureSeen.v1`, milestone progress,
+/// FCSIT toggle defaults) survived a "clean install," breaking the
+/// premise of every first-launch onboarding check. The file is what
+/// the macOS UserDefaults system writes when SenkaniApp calls
+/// `UserDefaults.standard.set(...)` against its bundle ID
+/// (`dev.senkani.app` per `SenkaniApp/Info.plist`); ByHost variants
+/// land under `~/Library/Preferences/ByHost/dev.senkani.app.<host>.plist`
+/// when per-host preferences are used. Removal evicts the cfprefsd
+/// in-memory cache via `CFPreferencesAppSynchronize` so a re-launch
+/// reads from disk (which is gone), not from cfprefsd's snapshot.
+/// Honored under `--keep-data`: preferences are user customization,
+/// not transient state — matches `sessionDatabase`'s `--keep-data`
+/// treatment.
+///
+/// Out-of-scope (by design — verified 2026-05-11):
 /// - `~/Library/Caches/SenkaniApp` — macOS-managed (auto-created per
 ///   bundle name; no Senkani write code path).
 /// - `~/Library/Caches/senkani-mcp` — macOS-managed (auto-created per
 ///   binary name; no Senkani write code path).
 /// - `~/Library/HTTPStorages/{SenkaniApp,senkani-mcp}` — macOS-managed.
-/// - `~/Library/Preferences/SenkaniApp.plist` — NSUserDefaults.
+/// - `~/Library/Preferences/SenkaniApp.plist` — macOS-managed,
+///   auto-created from the binary name `SenkaniApp` (vs the bundle ID
+///   `dev.senkani.app` which is the file we DO own — category-10).
 /// - `~/Library/Application Support/CrashReporter/{senkani-mcp,SenkaniApp}_*.plist` — system-managed.
 /// - `~/.claude/hooks/senkani-hook.sh`, `~/.claude/skills/senkani-autonomous` —
 ///   NOT senkani-written; sourced from operator tooling (e.g. gstack)
 ///   or Claude Code itself. Senkani's hook lives at
 ///   `~/.senkani/bin/senkani-hook` (category-3, `hookBinary`).
 struct UninstallArtifactScanner {
-    /// The nine artifact categories `senkani uninstall` can remove. The
+    /// The ten artifact categories `senkani uninstall` can remove. The
     /// string value is a stable identifier for assertions; user-facing text
     /// lives in `Artifact.description`.
     enum Category: String, CaseIterable, Sendable {
@@ -53,6 +73,7 @@ struct UninstallArtifactScanner {
         case perProjectSenkaniDirs
         case webContentRuleLists
         case modelMetadataCache
+        case appPreferences
     }
 
     struct Artifact {
@@ -82,6 +103,9 @@ struct UninstallArtifactScanner {
     var workspacePath: String { homeDir + "/.senkani/workspace.json" }
     var webKitDir: String { homeDir + "/Library/WebKit" }
     var modelMetadataCacheDir: String { homeDir + "/Library/Caches/dev.senkani" }
+    var appPreferencesPlist: String { homeDir + "/Library/Preferences/dev.senkani.app.plist" }
+    var appPreferencesByHostDir: String { homeDir + "/Library/Preferences/ByHost" }
+    static let appPreferencesBundleID = "dev.senkani.app"
 
     func scan() -> [Artifact] {
         var items: [Artifact] = []
@@ -284,6 +308,53 @@ struct UninstallArtifactScanner {
                 description: "Model metadata cache at ~/Library/Caches/dev.senkani/",
                 remove: { try fm.removeItem(atPath: modelCache) }
             ))
+        }
+
+        // 10. SenkaniApp UserDefaults plist at
+        // ~/Library/Preferences/dev.senkani.app.plist (plus any ByHost
+        // variants matching dev.senkani.app.*.plist). Skipped when
+        // `--keep-data` — preferences are user customization, not
+        // transient state. Removal evicts the cfprefsd in-memory cache
+        // via CFPreferencesAppSynchronize so a re-launch reads from
+        // disk (gone), not from cfprefsd's snapshot.
+        if !keepData {
+            let mainPlist = appPreferencesPlist
+            var plists: [String] = []
+            if fm.fileExists(atPath: mainPlist) {
+                plists.append(mainPlist)
+            }
+            let byHost = appPreferencesByHostDir
+            if let entries = try? fm.contentsOfDirectory(atPath: byHost) {
+                for name in entries where name.hasPrefix("dev.senkani.app.") && name.hasSuffix(".plist") {
+                    plists.append(byHost + "/" + name)
+                }
+            }
+            if !plists.isEmpty {
+                let paths = plists
+                let bundleID = Self.appPreferencesBundleID
+                items.append(Artifact(
+                    category: .appPreferences,
+                    icon: "\u{1F4DD}",
+                    description: "App preferences at ~/Library/Preferences/\(paths.count == 1 ? "dev.senkani.app.plist" : "dev.senkani.app*.plist (\(paths.count) file(s))")",
+                    remove: {
+                        var firstError: Error?
+                        for path in paths {
+                            do {
+                                try fm.removeItem(atPath: path)
+                            } catch {
+                                if firstError == nil { firstError = error }
+                            }
+                        }
+                        // Evict cfprefsd's in-memory snapshot of the
+                        // domain so a future UserDefaults read in any
+                        // process re-reads from disk (which is gone)
+                        // rather than the cached values. No-ops for
+                        // domains cfprefsd doesn't track (test fixtures).
+                        CFPreferencesAppSynchronize(bundleID as CFString)
+                        if let err = firstError { throw err }
+                    }
+                ))
+            }
         }
 
         return items

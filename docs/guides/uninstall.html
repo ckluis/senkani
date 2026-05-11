@@ -76,7 +76,7 @@
       <li>senkani launchd plists (if any <code>senkani schedule</code> jobs exist).</li>
       <li>Per-project <code>.senkani/</code> dirs.</li>
     </ul>
-    <p><code>--keep-data</code> preserves the session database at <code>~/Library/Application Support/Senkani/</code>. Drop the flag if you want everything gone.</p>
+    <p><code>--keep-data</code> preserves the session database at <code>~/Library/Application Support/Senkani/</code> <em>and</em> the SenkaniApp UserDefaults plist at <code>~/Library/Preferences/dev.senkani.app.plist</code> (FCSIT toggles, milestone progress, first-use flags). Drop the flag if you want everything gone — including the first-launch state, so the next launch behaves like a fresh install.</p>
 
     <h2>Full wipe</h2>
     <pre class="code">senkani wipe --yes</pre>

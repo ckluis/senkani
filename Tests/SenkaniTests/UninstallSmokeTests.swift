@@ -37,7 +37,7 @@ struct UninstallSmokeTests {
             try? FileManager.default.removeItem(at: root)
         }
 
-        /// Seed every one of the 9 categories that the scanner knows about.
+        /// Seed every one of the 10 categories that the scanner knows about.
         func seedAll() throws {
             try seedGlobalMCPRegistration()
             try seedProjectHooks()
@@ -48,6 +48,7 @@ struct UninstallSmokeTests {
             try seedPerProjectSenkaniDirs()
             try seedWebContentRuleLists()
             try seedModelMetadataCache()
+            try seedAppPreferences()
         }
 
         func seedGlobalMCPRegistration() throws {
@@ -239,6 +240,30 @@ struct UninstallSmokeTests {
                                    withIntermediateDirectories: true)
         }
 
+        /// Seed `~/Library/Preferences/dev.senkani.app.plist` (the main
+        /// UserDefaults domain SenkaniApp writes) plus one ByHost variant
+        /// and one unrelated plist that must NOT be flagged. Mirrors the
+        /// 2026-05-11 onboarding-pass observation that `senkani uninstall
+        /// --yes` left UserDefaults flags surviving a "clean install."
+        func seedAppPreferences() throws {
+            let fm = FileManager.default
+            let prefs = home + "/Library/Preferences"
+            try fm.createDirectory(atPath: prefs, withIntermediateDirectories: true)
+            // Main domain (the file SenkaniApp's UserDefaults writes).
+            try Data().write(to: URL(fileURLWithPath: prefs + "/dev.senkani.app.plist"))
+            // Per-host variant — exists when SenkaniApp uses per-host
+            // UserDefaults (none today, but future-proofs the scanner).
+            let byHost = prefs + "/ByHost"
+            try fm.createDirectory(atPath: byHost, withIntermediateDirectories: true)
+            try Data().write(to: URL(fileURLWithPath:
+                byHost + "/dev.senkani.app.0123ABCD-1234-5678-90AB-CDEF01234567.plist"))
+            // Unrelated plist — must NOT be flagged by the scanner.
+            try Data().write(to: URL(fileURLWithPath:
+                prefs + "/com.other.tool.plist"))
+            try Data().write(to: URL(fileURLWithPath:
+                byHost + "/com.other.tool.0123ABCD-1234-5678-90AB-CDEF01234567.plist"))
+        }
+
         func scanner(keepData: Bool = false) -> UninstallArtifactScanner {
             UninstallArtifactScanner(
                 homeDir: home, appSupportDir: appSupport, keepData: keepData)
@@ -247,7 +272,7 @@ struct UninstallSmokeTests {
 
     // MARK: - Tests
 
-    @Test func discoveryFindsAllNineCategoriesWhenFullySeeded() throws {
+    @Test func discoveryFindsAllCategoriesWhenFullySeeded() throws {
         let f = try Fixture()
         try f.seedAll()
 
@@ -255,12 +280,12 @@ struct UninstallSmokeTests {
         let categories = Set(artifacts.map(\.category))
 
         #expect(categories == Set(UninstallArtifactScanner.Category.allCases),
-                "expected all 9 categories, got \(categories.map(\.rawValue).sorted())")
+                "expected all categories, got \(categories.map(\.rawValue).sorted())")
         #expect(artifacts.count == UninstallArtifactScanner.Category.allCases.count,
                 "one artifact per category when fully seeded")
     }
 
-    @Test func keepDataOmitsSessionDatabase() throws {
+    @Test func keepDataOmitsSessionDatabaseAndAppPreferences() throws {
         let f = try Fixture()
         try f.seedAll()
 
@@ -268,8 +293,10 @@ struct UninstallSmokeTests {
 
         #expect(!categories.contains(.sessionDatabase),
                 "--keep-data must suppress the sessionDatabase artifact")
-        #expect(categories.count == UninstallArtifactScanner.Category.allCases.count - 1,
-                "all categories minus sessionDatabase are still discovered")
+        #expect(!categories.contains(.appPreferences),
+                "--keep-data must suppress the appPreferences artifact (user customization)")
+        #expect(categories.count == UninstallArtifactScanner.Category.allCases.count - 2,
+                "all categories minus sessionDatabase + appPreferences are still discovered")
     }
 
     @Test func keepDataFalseIncludesSessionDatabase() throws {
@@ -475,6 +502,59 @@ struct UninstallSmokeTests {
         // Re-scan must be empty (idempotent).
         #expect(f.scanner().scan().isEmpty,
                 "after removal, scanner finds nothing")
+    }
+
+    @Test func discoveryFindsAppPreferencesAndIdempotentRemoval() throws {
+        let f = try Fixture()
+        try f.seedAppPreferences()
+
+        // Scan should pick up only dev.senkani.app preferences (main + ByHost),
+        // ignoring the unrelated com.other.tool plists.
+        let artifacts = f.scanner().scan()
+        let categories = Set(artifacts.map(\.category))
+        #expect(categories == [.appPreferences],
+                "only appPreferences should be discovered, got \(categories.map(\.rawValue).sorted())")
+
+        if let item = artifacts.first(where: { $0.category == .appPreferences }) {
+            #expect(item.description.contains("dev.senkani.app"),
+                    "expected description to mention dev.senkani.app path, got: \(item.description)")
+            // Two senkani plists seeded (main + 1 ByHost) — description
+            // should reflect the multi-file shape.
+            #expect(item.description.contains("(2 file(s))"),
+                    "expected count==2 in description, got: \(item.description)")
+        }
+
+        // Removal clears the main plist and ByHost variant; the unrelated
+        // plists must remain untouched.
+        for item in artifacts where item.category == .appPreferences {
+            try item.remove()
+        }
+
+        let fm = FileManager.default
+        let prefs = f.home + "/Library/Preferences"
+        #expect(!fm.fileExists(atPath: prefs + "/dev.senkani.app.plist"),
+                "main domain plist should be gone after removal")
+        #expect(!fm.fileExists(atPath: prefs + "/ByHost/dev.senkani.app.0123ABCD-1234-5678-90AB-CDEF01234567.plist"),
+                "ByHost variant should be gone after removal")
+        #expect(fm.fileExists(atPath: prefs + "/com.other.tool.plist"),
+                "unrelated main-domain plist must NOT be removed")
+        #expect(fm.fileExists(atPath: prefs + "/ByHost/com.other.tool.0123ABCD-1234-5678-90AB-CDEF01234567.plist"),
+                "unrelated ByHost plist must NOT be removed")
+
+        // Re-scan must be empty (idempotent).
+        #expect(f.scanner().scan().isEmpty,
+                "after removal, scanner finds nothing")
+    }
+
+    @Test func keepDataOmitsAppPreferences() throws {
+        let f = try Fixture()
+        try f.seedAppPreferences()
+
+        // With --keep-data, preferences must be preserved (user customization,
+        // not transient state — matches sessionDatabase semantics).
+        let categories = Set(f.scanner(keepData: true).scan().map(\.category))
+        #expect(!categories.contains(.appPreferences),
+                "--keep-data must suppress the appPreferences artifact")
     }
 
     @Test func scannerIgnoresOSManagedSenkaniCachesWithoutDevSenkani() throws {

@@ -9,6 +9,58 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 11 — `senkani uninstall` 10th category: `~/Library/Preferences/dev.senkani.app.plist` (`uninstall-scanner-userdefaults-preferences-gap-2026-05-11`)
+
+- **Why:** Pre-fix, `senkani uninstall --yes` left
+  `~/Library/Preferences/dev.senkani.app.plist` on disk — so
+  UserDefaults flags written by SenkaniApp
+  (`senkani.fcsit.firstUseDisclosureSeen.v1`, milestone progress,
+  FCSIT toggle defaults) survived a "clean install," breaking every
+  first-launch onboarding check. Observed during the
+  `release-v0-3-0-onboarding-pass` bullet-#1 walk: re-launching
+  SenkaniApp after `senkani uninstall --yes` did NOT re-trigger the
+  FCSIT first-use disclosure popover because the stale
+  `firstUseDisclosureSeen.v1=true` default persisted.
+- New scanner category `appPreferences` in
+  `Sources/CLI/UninstallArtifactScanner.swift`: discovers the main
+  `~/Library/Preferences/dev.senkani.app.plist` plus any per-host
+  variants under `~/Library/Preferences/ByHost/dev.senkani.app.*.plist`
+  (future-proofs against per-host UserDefaults usage).
+- Removal evicts the cfprefsd in-memory snapshot of the domain via
+  `CFPreferencesAppSynchronize("dev.senkani.app" as CFString)` after
+  deleting the plist files, so a re-launch reads from disk (gone)
+  rather than from cfprefsd's cache. The sync call is benign in test
+  fixtures (cfprefsd doesn't track non-default home dirs).
+- Honors `--keep-data` like category-5 `sessionDatabase`: preferences
+  are user customization, not transient state.
+- Doc-comment header updated to add the cat-10 narrative and to
+  disambiguate the existing `SenkaniApp.plist` out-of-scope note —
+  that file is macOS-managed (auto-created from the binary name),
+  whereas `dev.senkani.app.plist` (the bundle ID) is Senkani-managed.
+- Test: `Tests/SenkaniTests/UninstallSmokeTests.swift` gains
+  `discoveryFindsAppPreferencesAndIdempotentRemoval` (main + ByHost
+  + unrelated-plist isolation) and `keepDataOmitsAppPreferences`
+  (`--keep-data` honored). Existing
+  `discoveryFindsAllCategoriesWhenFullySeeded` and
+  `keepDataOmitsSessionDatabaseAndAppPreferences` updated to reflect
+  the 10-category world. Suite delta: 11 → 13 (+2).
+- Defects-outside-criteria filed:
+  `uninstall-rewalk-step9-apppreferences-2026-05-11` (live-machine
+  validation pass that operator/Cowork executes — matches the
+  established cat-8 rewalk pattern);
+  `docs-uninstall-guide-stale-categories-list-2026-05-11`
+  (`docs/guides/uninstall.html` bulleted list is missing cats 8, 9,
+  and now 10 — pre-existing doc staleness exposed by the doc-sync
+  walk);
+  `doctor-fileprovider-eviction-star2-path-mismatch-2026-05-11`
+  (`DoctorFileProviderEvictionTests.swift:163` returns absolute paths
+  but test asserts relative — pre-existing regression in commit
+  `a440d29` surfaced by full-suite run);
+  `treesitter-cpp-parse-perf-gate-flake-2026-05-11`
+  (`TreeSitterCppTests.swift:361` C++ parse-time gate at 10ms
+  observes 13.28ms median — possibly real regression from
+  `runOnLargeStackThread` wrap cost OR machine-baseline drift).
+
 ### May 11 — Two-bug fix: SenkaniApp first-launch crash (`mcp-warmindex-treesitter-walk-stack-overflow-2026-05-10`, `app-bundle-launchservices-isatty-fallback-2026-05-10`)
 
 - **Bug 1 — Stack-guard crash in `MCPSession.warmIndex`.** Tree-sitter

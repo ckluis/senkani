@@ -9,6 +9,26 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 11 — Environment finding closed: iCloud Drive Desktop & Documents sync corruption of `.build/checkouts/` (`build-env-swiftpm-checkout-corruption-icloud-eviction-2026-05-09`)
+
+- **What closes:** the May 9 environment finding whose Phase A
+  (FileProvider eviction doctor scanner — `Sources/CLI/FileProviderEvictionCheck.swift`,
+  9 unit tests, `Doctor` check #19) and Phase B (CONTRIBUTING.md
+  `## macOS / iCloud Drive` section, `docs/reference/cli/senkani-doctor.html`
+  extension, May 9 CHANGELOG entry) shipped autonomously; Phase C
+  was the operator-driven verification gate.
+- **Phase C result:** operator disabled iCloud Drive Desktop &
+  Documents sync ("Keep a Copy" path) on 2026-05-11; discriminator
+  pair on the post-remediation clean `.build/` produced `swift
+  build -c debug` exit 0 in 141.42 s and `swift test` exit 0 in
+  228 s with 2559 passes. No `* 2` Finder duplicates, no
+  `dataless`-flagged files in `.build/checkouts/`, `rm -rf .build`
+  completed cleanly without "Directory not empty" stalls.
+- **24h soak bullet → passive watch.** The shipped FileProvider
+  eviction scanner (check #19) catches recurrence at run-time, so
+  the original 24h hand-check folds into the doctor surface; no
+  follow-up backlog item filed for the soak bullet.
+
 ### May 11 — `swift test` build path restored on `main` (`release-v0-3-0-test-build-broken-mlx-swift-lm-mlxlmcommon-2026-05-09`)
 
 - **Root cause:** the 2026-05-09 `swift test` build-break that

@@ -5,38 +5,34 @@ import Foundation
 ///
 /// The pane header trades clarity for density: a first-time user sees
 /// five single uppercase letters with no labels and has to guess that
-/// "F" is Filter and that tapping it does anything at all. This type
+/// "F" is Filter and that clicking it does anything at all. This type
 /// is the single source of truth for the letter → name → effect
 /// mapping the SwiftUI surface layer reads to:
 ///
 ///   1. Render an `accessibilityLabel` (so VoiceOver names the
 ///      control instead of reading the letter glyph).
-///   2. Render the first-use disclosure popover that names every
-///      letter in one place.
-///   3. Stay in sync with `FeatureDetailDrawer` (in
-///      `SavingsCardView.swift`) and `PaneSettingsPanel`'s
-///      Optimization section without duplicating five copy strings
-///      across three views.
+///   2. Render the Optimization rows in `PaneSettingsPanel` — the
+///      canonical surface a user reaches by clicking any FCSIT
+///      letter, where each toggle sits next to its explanation.
 ///
 /// Strings here are intentionally short — the long-form description
-/// + benefits live in `FeatureInfo.lookup(...)` (the SwiftUI view
-/// layer's struct) which can pull in marketing copy. This decider
-/// stays pure-Foundation so SenkaniTests can pin the contract
-/// without linking SwiftUI.
+/// + per-feature explainer copy lives in
+/// `docs/concepts/per-pane-optimizers.html`, linked per-row from the
+/// settings panel via `[Learn more →]`. This decider stays
+/// pure-Foundation so SenkaniTests can pin the contract without
+/// linking SwiftUI.
 public enum FCSITDisclosure {
 
     /// One toggle's metadata. `letter` is what the pane header
     /// renders; `name` is the literal feature name; `effect` is the
     /// one-sentence outcome the toggle delivers — phrased so a user
     /// who has never seen Senkani before can decide whether they
-    /// want it on. `firstUseExplanation` is the line shown in the
-    /// first-use disclosure popover.
+    /// want it on.
     public struct Entry: Sendable, Equatable {
         public let key: String
         public let letter: String
         public let name: String
         public let effect: String
-        public let firstUseExplanation: String
         public let defaultOn: Bool
 
         public init(
@@ -44,14 +40,12 @@ public enum FCSITDisclosure {
             letter: String,
             name: String,
             effect: String,
-            firstUseExplanation: String,
             defaultOn: Bool
         ) {
             self.key = key
             self.letter = letter
             self.name = name
             self.effect = effect
-            self.firstUseExplanation = firstUseExplanation
             self.defaultOn = defaultOn
         }
     }
@@ -65,7 +59,6 @@ public enum FCSITDisclosure {
             letter: "F",
             name: "Filter",
             effect: "Strips ANSI codes and compresses tool output before the agent reads it.",
-            firstUseExplanation: "F — Filter: compresses tool output (60–90% fewer tokens).",
             defaultOn: true
         ),
         Entry(
@@ -73,7 +66,6 @@ public enum FCSITDisclosure {
             letter: "C",
             name: "Cache",
             effect: "Skips re-reading files the agent already read this session.",
-            firstUseExplanation: "C — Cache: returns unchanged files instantly (50–99% fewer tokens).",
             defaultOn: true
         ),
         Entry(
@@ -81,7 +73,6 @@ public enum FCSITDisclosure {
             letter: "S",
             name: "Secrets",
             effect: "Redacts API keys and tokens from tool output before the agent sees them.",
-            firstUseExplanation: "S — Secrets: redacts API keys and tokens before the model sees them.",
             defaultOn: true
         ),
         Entry(
@@ -89,7 +80,6 @@ public enum FCSITDisclosure {
             letter: "I",
             name: "Indexer",
             effect: "Lets the agent navigate by symbol name instead of reading whole files.",
-            firstUseExplanation: "I — Indexer: symbol-level code search (~95% fewer tokens vs full reads).",
             defaultOn: true
         ),
         Entry(
@@ -97,7 +87,6 @@ public enum FCSITDisclosure {
             letter: "T",
             name: "Terse",
             effect: "Tells the agent to minimize output verbosity.",
-            firstUseExplanation: "T — Terse: trims agent output (50–75% fewer output tokens). Off by default.",
             defaultOn: false
         ),
     ]
@@ -123,28 +112,20 @@ public enum FCSITDisclosure {
         return e.effect
     }
 
-    /// Title for the first-use disclosure popover.
-    public static let firstUseTitle = "Five per-pane optimizers"
-
-    /// Body lines for the first-use disclosure popover, in order.
-    public static var firstUseBody: [String] {
-        all.map(\.firstUseExplanation)
-    }
-
-    /// Footer hint shown below the body lines.
-    public static let firstUseFooter =
-        "Tap a letter to toggle it. Double-click for stats and details."
-
-    /// `UserDefaults` key the SwiftUI layer flips after the user
-    /// dismisses the first-use disclosure. Centralized here so tests
-    /// can pin the spelling and so multiple views agree on it.
-    public static let firstUseSeenDefaultsKey =
+    /// Retired UserDefaults key that gated the first-use disclosure
+    /// popover (`FCSITFirstUsePopover`, removed 2026-05-11 alongside
+    /// the chevron / gear / drawer surfaces). The settings panel
+    /// reached by clicking any letter is now the canonical
+    /// explainer. SenkaniGUI removes this key on launch so a single
+    /// upgrade visit clears stale state from disk.
+    public static let retiredFirstUseSeenDefaultsKey =
         "senkani.fcsit.firstUseDisclosureSeen.v1"
 
-    /// Decide whether to show the first-use disclosure to a user
-    /// whose `seen` flag has the given value. Pure logic so tests
-    /// can pin the rule without instantiating UserDefaults.
-    public static func shouldShowFirstUse(seen: Bool) -> Bool {
-        !seen
+    /// Documentation URL for a given toggle. Settings panel rows
+    /// render this as `[Learn more →]` beneath their subtitle.
+    /// Hardcoded to the canonical docs host — matches the existing
+    /// convention of cross-linking to `senkani.app/docs/*`.
+    public static func learnMoreURL(forKey key: String) -> URL? {
+        URL(string: "https://senkani.app/docs/concepts/per-pane-optimizers.html#\(key)")
     }
 }

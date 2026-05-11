@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Per-pane optimizers — concept</title>
+<meta name="description" content="The five FCSIT toggles on every pane in Senkani — Filter, Cache, Secrets, Indexer, Terse. What each one does, when to turn it on or off, and how to decide per pane.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/theme.css">
+</head>
+<body>
+<a href="#main" class="skip-nav">Skip to main content</a>
+<nav class="topnav" aria-label="Primary navigation">
+  <a class="wordmark" href="../../">sen<span class="accent">kani</span><small>compression layer for AI coding agents</small></a>
+  <button class="topnav-hamburger" aria-label="Open navigation menu" aria-expanded="false" aria-controls="topnav-links"><span></span><span></span><span></span></button>
+  <div class="topnav-links" id="topnav-links">
+    <a href="../../docs/what-is-senkani.html">What is it?</a>
+    <a href="../../docs/concepts.html">Concepts</a>
+    <a href="../../docs/reference.html">Reference</a>
+    <a href="../../docs/guides.html">Guides</a>
+    <a href="../../docs/status.html">Status</a>
+    <div class="topnav-search"><input type="search" id="site-search" placeholder="Search · /" aria-label="Search the site"></div>
+    <a href="https://github.com/ckluis/senkani" class="btn-nav">GitHub →</a>
+  </div>
+</nav>
+<main id="main" class="wiki-layout">
+  <aside class="wiki-nav" aria-label="Concepts navigation">
+    <div class="wiki-nav-group">
+      <h4>Overview</h4>
+      <ul>
+        <li><a href="../../docs/what-is-senkani.html">What is senkani?</a></li>
+        <li><a href="../../docs/concepts.html">All concepts</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>Concepts</h4>
+      <ul>
+        <li><a href="../../docs/concepts/compression-layer.html">Compression layer</a></li>
+        <li><a href="../../docs/concepts/hook-relay.html">Hook relay</a></li>
+        <li><a href="../../docs/concepts/mcp-intelligence.html">MCP intelligence</a></li>
+        <li><a href="../../docs/concepts/three-layer-stack.html">Three-layer stack</a></li>
+        <li><a href="../../docs/concepts/compound-learning.html">Compound learning</a></li>
+        <li><a href="../../docs/concepts/knowledge-base.html">Knowledge base</a></li>
+        <li><a href="../../docs/concepts/security-posture.html">Security posture</a></li>
+        <li><a href="../../docs/concepts/per-pane-optimizers.html" class="active">Per-pane optimizers</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>Next</h4>
+      <ul>
+        <li><a href="../../docs/reference/options/fcsit.html">FCSIT reference</a></li>
+        <li><a href="../../docs/guides/install.html">Install</a></li>
+      </ul>
+    </div>
+  </aside>
+  <article class="wiki-main">
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../">Home</a> <span class="sep">›</span>
+      <a href="../../docs/concepts.html">Concepts</a> <span class="sep">›</span>
+      <span class="here">Per-pane optimizers</span>
+    </nav>
+    <span class="quadrant concept">Concept · Explanation</span>
+    <h1 class="page-title">Per-pane optimizers</h1>
+    <p class="lede">Every pane in Senkani carries five feature switches — <strong>F</strong>ilter, <strong>C</strong>ache, <strong>S</strong>ecrets, <strong>I</strong>ndexer, <strong>T</strong>erse — visible as five colored capitals in the pane header. Click any letter to open that pane's settings panel, where each toggle sits next to a one-line explanation and a link back to this page. State is per-pane: a research pane can run in terse mode while the build pane stays full-fidelity.</p>
+
+    <h2>Why per-pane</h2>
+    <p>A global "compression on / off" switch can't tell the difference between a pane where you want every byte (a code-review session) and a pane where you want maximum token savings (an exploratory research thread). Senkani's compression surfaces all run in the same process — the per-pane flags decide which ones actually run for each session, so the same workspace can mix high-fidelity and high-compression contexts side by side without restarting anything. The five switches are deliberately granular: you can keep <a href="../../docs/concepts/security-posture.html">secret redaction</a> on while turning the cache off for a pane that's intentionally re-reading the same file every iteration.</p>
+
+    <h2 id="filter">F — Filter</h2>
+    <p>Filter is the input-compression layer. Every tool output that comes back from <a href="../../docs/reference/mcp/senkani_exec.html"><code>senkani_exec</code></a> runs through 24 command-specific reducers: <code>npm install</code> output collapses from hundreds of progress lines to a 2-line summary, <code>git clone</code> drops its enumeration noise, <code>cargo build</code> deduplicates repeated warnings. ANSI escape codes are stripped, repeated blank-line runs are collapsed, and progress-bar carriage-return spam is squashed before the agent ever sees it. Filter is the cheapest savings in the stack — typical reductions land in the 60-90% range on build and test output, and the agent reading the compressed version generally produces better next-step decisions than one drowning in unprocessed terminal scrollback. Turn it off only when you're debugging the filter itself or auditing what raw tool output actually looked like. See <a href="../../docs/concepts/compression-layer.html">compression layer</a> for the full input/redundancy/output picture and <a href="../../docs/reference/options/filter.html">the filter option reference</a> for the per-command rules.</p>
+
+    <h2 id="cache">C — Cache</h2>
+    <p>Cache is the within-session memo for file reads. When the agent reads the same file twice — and on real sessions, this happens constantly — Senkani returns the cached content keyed on (path, mtime) instead of re-processing the read. Unchanged files come back instantly and contribute zero new tokens; if the file's mtime has moved, the cache transparently re-reads from disk and re-populates. Typical savings on read-heavy sessions are 50-99% of the byte budget that would otherwise be repeated reads — a single browse-then-edit loop can pull the same header file ten times in a session, and only the first one pays the token cost. Turn it off if you're intentionally testing a write-then-read cycle and need to see freshly written bytes flow through every read (rare in practice; the mtime check usually catches this for you). The cache is per-pane and per-session; killing the pane clears it. See <a href="../../docs/reference/options/cache.html">cache option reference</a>.</p>
+
+    <h2 id="secrets">S — Secrets</h2>
+    <p>Secrets is the redaction layer that runs between every tool output and the agent. It looks for API keys, JWTs, OAuth tokens, private keys, and a dozen other patterns — both regex matches against common secret shapes and an entropy fallback for high-randomness strings that fit no known shape — and replaces matched substrings with a stable placeholder before the model sees the output. Redaction happens locally; the model never receives the original bytes. This is the only toggle that should stay on by default unless you have a deliberate reason to turn it off (e.g., you're auditing the redactor itself on a fixture you control). Even on panes where you've taken every other safeguard, leaving Secrets off is a one-step path to a leaked credential ending up in agent context or — worse — in a downstream log. See <a href="../../docs/concepts/security-posture.html">security posture</a> for the broader trust-boundary model and <a href="../../docs/reference/options/secrets.html">secrets option reference</a> for the supported pattern families.</p>
+
+    <h2 id="indexer">I — Indexer</h2>
+    <p>Indexer routes symbol-lookup work to the tree-sitter index Senkani maintains for your project, instead of letting the agent grep entire files. With Indexer on, an "outline this file" request returns just the symbol names and line ranges (<a href="../../docs/reference/mcp/senkani_outline.html"><code>senkani_outline</code></a>), a "find this function" request returns the matching symbol's lines (<a href="../../docs/reference/mcp/senkani_fetch.html"><code>senkani_fetch</code></a>), and a "search for X" request searches the index in milliseconds (<a href="../../docs/reference/mcp/senkani_search.html"><code>senkani_search</code></a>). Reading the full body of a 2,000-line file when the agent only needed the signature of one function costs roughly 95% more tokens than the indexed path. Turn it off only when you genuinely need full-file reads — most often during a refactor where context above and below the symbol matters as much as the symbol itself. See <a href="../../docs/reference/options/indexer.html">indexer option reference</a>.</p>
+
+    <h2 id="terse">T — Terse</h2>
+    <p>Terse is the only switch that shrinks what the model <em>emits</em>, not what it reads. It does two things: injects a system-prompt clause that asks the model to skip preamble, narration, and trailing summaries; and strips filler phrases from upstream tool outputs so the model isn't trained mid-session to mimic them. Typical output-token reductions on agent-driven sessions are in the 50-75% range, with the largest savings on chatty models that would otherwise restate the question, narrate each tool call, and wrap with a recap. Terse defaults to <em>off</em> — unlike the other four toggles — because some interactive sessions genuinely want the narration (live pair-programming, teaching, debugging where you want the model to think out loud). Turn it on for batch agent work, long unattended runs, and anywhere you're paying for output tokens at scale. See <a href="../../docs/concepts/compression-layer.html">compression layer</a> for how Terse fits the input/redundancy/output split.</p>
+
+    <h2>How to toggle</h2>
+    <p>Click any of the five letters in a pane header to open that pane's settings panel. The Optimization section lists all five with their explanations and a switch each; flip the switch and the change takes effect immediately for the current session. Settings persist per-pane to <code>~/.senkani/panes/{paneId}.env</code> and reload with the pane. Environment-variable overrides (<code>SENKANI_FILTER=on|off</code>, etc.) and the <code>senkani_session</code> MCP toggle are available for scripted control; see the <a href="../../docs/reference/options/fcsit.html">FCSIT options reference</a> for the full surface.</p>
+
+    <div class="seealso"><h3>See also</h3><ul>
+        <li><a href="../../docs/concepts/compression-layer.html">Compression layer</a></li>
+        <li><a href="../../docs/concepts/security-posture.html">Security posture</a></li>
+        <li><a href="../../docs/reference/options/fcsit.html">FCSIT options reference</a></li>
+        <li><a href="../../docs/reference/panes/settings.html">Pane settings panel</a></li>
+    </ul></div>
+  </article>
+</main>
+<footer class="site-foot">
+  <div class="foot-grid">
+    <div>
+      <div class="foot-wordmark">sen<span class="accent">kani</span></div>
+      <p class="foot-tagline"><span lang="zh">閃蟹</span> — "fast claw." A native macOS binary written in Swift.</p>
+    </div>
+    <div class="foot-col"><h4>Product</h4><ul><li><a href="../../docs/what-is-senkani.html">What is it?</a></li><li><a href="../../docs/concepts.html">Concepts</a></li><li><a href="../../docs/reference.html">Reference</a></li><li><a href="../../docs/guides.html">Guides</a></li><li><a href="../../docs/status.html">Status</a></li></ul></div>
+    <div class="foot-col"><h4>Reference</h4><ul><li><a href="../../docs/reference/mcp.html">MCP tools</a></li><li><a href="../../docs/reference/cli.html">CLI commands</a></li><li><a href="../../docs/reference/options.html">Options &amp; env</a></li><li><a href="../../docs/reference/panes.html">Panes</a></li><li><a href="../../docs/changelog.html">Changelog</a></li></ul></div>
+    <div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/ckluis/senkani">GitHub repo</a></li><li><a href="../../docs/guides/install.html">Install</a></li><li><a href="../../docs/guides/troubleshooting.html">Troubleshooting</a></li><li><a href="../../docs/about.html">About &amp; license</a></li></ul></div>
+  </div>
+  <div class="foot-meta">
+    <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
+    <span><a href="../../docs/changelog.html">v0.2.0 changelog</a></span>
+  </div>
+</footer>
+<script src="../../assets/app.js" defer></script>
+</body>
+</html>

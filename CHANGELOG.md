@@ -9,6 +9,72 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 11 — FCSIT pane header UX redesign: click any letter → settings panel (`fcsit-pane-toggles-ux-redesign-2026-05-11`)
+
+- **Why:** The v0.3.0 onboarding pass surfaced that the five FCSIT
+  letters in the pane header had no persistent affordance —
+  state was conveyed by color tint alone with no label and no
+  recurring hover tooltip, and three competing explainer surfaces
+  (first-use popover, double-click feature drawer, gear-icon
+  settings panel) were partly redundant. Operator quote: "If you
+  didn't memorize it you would forget everything." The redesign
+  collapses the three explainer surfaces into ONE canonical
+  surface — the pane settings panel — reached by clicking any
+  letter directly.
+- `SenkaniApp/Views/PaneContainerView.swift` — header retired: no
+  chevron, no gear icon, no first-use popover, no
+  `FeatureDetailDrawer` invocation. Clicking F / C / S / I / T
+  opens the settings panel; toggling lives inside the panel
+  next to each option's explanation. Color tint on the letter
+  continues to convey on/off state.
+- `SenkaniApp/Views/PaneSettingsPanel.swift` —
+  `SettingsToggleRow` gains optional `learnMoreURL: URL?`;
+  every F / C / S / I / T row renders a
+  <code>Learn more →</code> link beneath its subtitle pointing
+  at the matching anchor on the new per-pane-optimizers concept
+  page.
+- `Sources/Core/FCSITDisclosure.swift` — first-use surface
+  (`firstUseTitle`, `firstUseBody`, `firstUseFooter`,
+  `firstUseExplanation` field, `firstUseSeenDefaultsKey`,
+  `shouldShowFirstUse`) removed. New `learnMoreURL(forKey:)`
+  helper returns the canonical docs URL. The retired
+  UserDefaults key is preserved as `retiredFirstUseSeenDefaultsKey`
+  for the launch-time cleanup below; everything else in the type
+  (`Entry`, `all`, `entry(forKey:)`, `accessibilityLabel`,
+  `accessibilityHint`) is unchanged.
+- `SenkaniApp/App/SenkaniApp.swift` — `init()` now calls
+  `cleanupRetiredFCSITFirstUseKey()`, an idempotent
+  `UserDefaults.standard.removeObject(forKey:)` against the
+  retired key so cfprefsd state on upgrading machines is cleared
+  on first launch.
+- `SenkaniApp/Views/FCSITFirstUsePopover.swift` — deleted.
+- `SenkaniApp/Views/SavingsCardView.swift` — deleted
+  (`FeatureToggleCompact`, `FeatureInfo`, `FeatureDetailDrawer`
+  had no remaining callers after the header refactor).
+- `docs/concepts/per-pane-optimizers.html` — new concept page
+  with anchors `#filter`, `#cache`, `#secrets`, `#indexer`,
+  `#terse`; each anchor section ~150 words covering what the
+  toggle does, when to flip it, and cross-links to upstream
+  subsystem deep-dives. `docs/concepts.html` nav + card grid
+  updated; every existing `docs/concepts/*.html` sidebar nav
+  picks up the new entry.
+- `docs/reference/options/fcsit.html` — "First-use disclosure"
+  section retired; "How to toggle" rewritten so the UI bullet
+  describes the new click-letter-opens-settings affordance.
+- Tests: `Tests/SenkaniTests/OnboardingP2DisclosureTests.swift`
+  refreshed — dropped `firstUsePredicate` assertions, added
+  `retiredFirstUseKey` (defaults-key spelling pinned for the
+  cleanup migration), `learnMoreURLPerKey` (per-toggle URL
+  shape), `paneContainerHeaderRetiresLegacyAffordances`
+  (no-chevron / no-gear / no-popover header shape + click-opens-
+  settings wiring), `paneSettingsPanelWiresLearnMoreURLs`
+  (per-row URL wiring + Learn-more link copy),
+  `senkaniAppClearsRetiredFCSITKey` (launch-time cleanup
+  callsite), `firstUsePopoverFileRemoved` (file deletion gate).
+- Suite: 2551 → 2556 (+5 new tests, no test removed; the existing
+  `paneContainerWiresDisclosure` was thinned to keep the
+  accessibility-label guard).
+
 ### May 11 — `TreeSitterCppTests` C++ parse-time perf gate widened 10 ms → 20 ms (`treesitter-cpp-parse-perf-gate-flake-2026-05-11`)
 
 - **Why:** The `C++ file parses under 10 ms` gate (median-of-3) was set

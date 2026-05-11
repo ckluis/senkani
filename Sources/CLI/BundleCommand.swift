@@ -22,7 +22,7 @@ import Bundle
 // ~/.aws --output /tmp/secrets.md` gets rejected before any file is
 // opened (Schneier P0 from the Luminary audit).
 
-struct BundleCommand: ParsableCommand {
+struct BundleCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "bundle",
         abstract: "Compose the project into a single budget-bounded markdown document."
@@ -49,13 +49,13 @@ struct BundleCommand: ParsableCommand {
     @Option(name: .long, help: "Git ref (branch/tag/SHA) to bundle when using --remote. Defaults to HEAD.")
     var ref: String?
 
-    func run() throws {
+    func run() async throws {
         guard let bundleFormat = BundleFormat(rawValue: format) else {
             fputs("senkani bundle: invalid --format '\(format)'. Expected 'markdown' or 'json'.\n", stderr)
             throw ExitCode(2)
         }
         if let repo = remote {
-            try runRemote(repo: repo, format: bundleFormat)
+            try await runRemote(repo: repo, format: bundleFormat)
             return
         }
         // 1. Resolve + validate root.
@@ -69,9 +69,16 @@ struct BundleCommand: ParsableCommand {
         }
 
         // 2. Load (or rebuild) the symbol index.
+        //
+        // AST walks (tree-sitter backends + DependencyExtractor) recurse
+        // on AST depth — the build runs on a large-stack background
+        // Thread for stack-guard symmetry with `MCPSession.ensureIndex`.
+        // See `RunOnLargeStackThread.swift`.
         let index: SymbolIndex
         if rebuildIndex {
-            index = IndexStore.buildOrUpdate(projectRoot: validatedRoot, force: true)
+            index = await runOnLargeStackThread {
+                IndexStore.buildOrUpdate(projectRoot: validatedRoot, force: true)
+            }
             try? IndexStore.save(index, projectRoot: validatedRoot)
         } else if let cached = IndexStore.load(projectRoot: validatedRoot) {
             index = cached
@@ -79,7 +86,9 @@ struct BundleCommand: ParsableCommand {
             // Build on first bundle — the CLI doesn't have a warm session
             // to fall back on, so we just do the work now.
             fputs("senkani bundle: no index found, building one now...\n", stderr)
-            index = IndexStore.buildOrUpdate(projectRoot: validatedRoot, force: false)
+            index = await runOnLargeStackThread {
+                IndexStore.buildOrUpdate(projectRoot: validatedRoot, force: false)
+            }
             try? IndexStore.save(index, projectRoot: validatedRoot)
         }
 
@@ -111,7 +120,7 @@ struct BundleCommand: ParsableCommand {
 
     // MARK: - Remote path
 
-    private func runRemote(repo: String, format bundleFormat: BundleFormat) throws {
+    private func runRemote(repo: String, format bundleFormat: BundleFormat) async throws {
         // Validate first so malformed identifiers fail fast with a
         // clear message, before any network activity.
         do {
@@ -124,10 +133,8 @@ struct BundleCommand: ParsableCommand {
         let client = RemoteRepoClient()
         let document: String
         do {
-            let inputs = try runAsync {
-                try await BundleComposer.fetchRemote(
-                    client: client, repo: repo, ref: ref)
-            }
+            let inputs = try await BundleComposer.fetchRemote(
+                client: client, repo: repo, ref: ref)
             let opts = BundleOptions(
                 projectRoot: repo,
                 maxTokens: budget
@@ -142,28 +149,6 @@ struct BundleCommand: ParsableCommand {
             throw ExitCode(2)
         }
         try emit(document: document)
-    }
-
-    /// Run an async block from a sync `run()` context. `semaphore.wait`
-    /// is fine here because `run()` is invoked on its own short-lived
-    /// process, not a shared runloop.
-    private func runAsync<T: Sendable>(_ op: @Sendable @escaping () async throws -> T) throws -> T {
-        let semaphore = DispatchSemaphore(value: 0)
-        let box = ResultBox<T>()
-        Task {
-            do { box.value = .success(try await op()) }
-            catch { box.value = .failure(error) }
-            semaphore.signal()
-        }
-        semaphore.wait()
-        switch box.value! {
-        case .success(let v): return v
-        case .failure(let e): throw e
-        }
-    }
-
-    private final class ResultBox<T>: @unchecked Sendable {
-        var value: Result<T, Error>?
     }
 
     // MARK: - Emit

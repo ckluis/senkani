@@ -18,7 +18,7 @@
 import ArgumentParser
 
 @main
-struct Senkani: ParsableCommand {
+struct Senkani: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "senkani",
         abstract: "CLI proxy that reduces LLM token consumption by filtering command output.",

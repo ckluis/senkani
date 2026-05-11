@@ -9,6 +9,43 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 11 — Indexer CLI entry points run on a large-stack background Thread (`indexer-cli-entry-points-large-stack-thread-2026-05-11`)
+
+- **Why:** Closes the stack-guard asymmetry filed off the
+  `mcp-warmindex-treesitter-walk-stack-overflow-2026-05-10` ship.
+  `MCPSession.ensureIndex` already wrapped `IndexStore.buildOrUpdate`
+  in `runOnLargeStackThread` (16 MB) so AST walks can't smash the
+  cooperative pool's 544 KB stack — but the CLI entry points
+  (`senkani index`, `senkani bundle`, `senkani bundle --rebuild-index`,
+  cold-bundle fallback) were still running on the main thread's 8 MB
+  stack. Comfortable for any realistic AST, but not infinite — a
+  pathological TS/Swift AST against an external repo via `senkani
+  index /path/to/big-monorepo` could still trap. Symmetry restored.
+- Hoisted `Senkani` root command and `Index` / `BundleCommand`
+  subcommands from `ParsableCommand` to `AsyncParsableCommand`.
+  ArgumentParser's mixed-roster dispatcher (`AsyncParsableCommand.main()`
+  in swift-argument-parser 1.3.0+) calls async `run()` for the two
+  converted subcommands, sync `run()` for the other 28 — no change to
+  the rest of the CLI surface.
+- Each of the four `IndexStore.buildOrUpdate` call sites in
+  `Sources/CLI/{IndexCommand,BundleCommand}.swift` now wraps the
+  build in `await runOnLargeStackThread { ... }`. Removed the
+  semaphore-trick `runAsync` helper in `BundleCommand` (used only by
+  the remote-fetch path) — `try await BundleComposer.fetchRemote(...)`
+  is called directly now that `run()` is async, removing one of the
+  deadlock surfaces flagged in the warmindex round.
+- `IndexStore.buildOrUpdate` itself stays synchronous — wrapping
+  happens at the four entry sites, not inside the utility. Contract
+  documented in `RunOnLargeStackThread.swift`'s doc-comment so future
+  CLI commands that build the index can't reintroduce the gap.
+- Suite: thread-routing refactor with no test-count change; existing
+  CLISmokeTests + Bundle* coverage applies. Full `./tools/test-safe.sh`
+  green across all 8 chunks (1186 tests in chunk[other] alone).
+- Out of scope (filed separately):
+  `indexer-backends-iterative-walk-refactor-2026-05-11` is the proper
+  long-term fix — iterative AST walks with depth caps. This round
+  only adds the thread-level guard.
+
 ### May 11 — `senkani doctor` FileProvider eviction scanner emits relative paths consistently (`doctor-fileprovider-eviction-star2-path-mismatch-2026-05-11`)
 
 - **Why:** `DoctorFileProviderEvictionTests.swift:163` was failing

@@ -21,6 +21,15 @@ import Foundation
 /// recursion runs on a Thread sized for real codebases instead of the
 /// cooperative pool's small stack.
 ///
+/// **CLI entry-point contract.** Every CLI subcommand that ends up
+/// calling `IndexStore.buildOrUpdate` (today: `senkani index`,
+/// `senkani bundle`) is `AsyncParsableCommand` and wraps the build
+/// in `await runOnLargeStackThread { ... }`. `IndexStore.buildOrUpdate`
+/// itself stays synchronous — wrapping happens at the entry sites so
+/// the safety contract is symmetric with `MCPSession.ensureIndex`.
+/// Don't add new sync CLI paths that call `IndexStore.buildOrUpdate`
+/// without this helper.
+///
 /// 16 MB handles ASTs up to roughly 8000 levels deep at typical Swift
 /// frame sizes — well past anything a real source file can produce. If
 /// a future bug surfaces a deeper tree, the answer is to fix the

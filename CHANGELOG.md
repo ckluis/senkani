@@ -9,6 +9,31 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 11 — `TreeSitterCppTests` C++ parse-time perf gate widened 10 ms → 20 ms (`treesitter-cpp-parse-perf-gate-flake-2026-05-11`)
+
+- **Why:** The `C++ file parses under 10 ms` gate (median-of-3) was set
+  by `parallel-runner-flake-perf-budget-remaining-parsers` (commit
+  `5a552d0`) on a hardware baseline that doesn't generalize. The
+  parent-finding round close on 2026-05-11 hit `median 0.013278708 s >
+  0.01 s` on the operator's Mac. On-hardware bench (30 samples) showed
+  per-sample p50 ~1.5 ms, p95 ~4.5 ms, p99 ~6.8 ms under full-suite
+  parallel CPU contention; isolation p99 was ~2.5 ms. Median-of-3
+  worst case observed ~4-7 ms, but a sufficiently contended sample
+  triple can drift above 10 ms. The wall-clock-flake family is the
+  same one that motivated the May 5 widening of PHP/Scala/Ruby; this
+  is the C++ sibling getting the same treatment.
+- `Tests/SenkaniTests/TreeSitterCppTests.swift:362` — threshold
+  changed from `.milliseconds(10)` to `.milliseconds(20)`. Comment
+  updated with the bench evidence and the `runOnLargeStackThread`-
+  hypothesis disconfirmation (the wrap is NOT in this test's code
+  path — `TreeSitterBackend.index` is called synchronously without
+  the wrap, so wrap-spawn-cost was never a factor for this gate).
+- Validation: 5 consecutive full-suite runs (2551 tests each) on
+  operator hardware, all green. C++ perf test passed in 3.16-3.77 s
+  wall-clock (test-method wall, including the 3 internal samples and
+  framework overhead) every run.
+- Suite: 2551 → 2551 (gate widened, no test added/removed).
+
 ### May 11 — `tools/soak/runner/08-make-app-bundle.command` always rebuilds (`soak-bundle-script-stale-binary-rebuild-2026-05-11`)
 
 - **Why:** The bundle script gated its build on `[ ! -x .build/debug/SenkaniApp ]` —

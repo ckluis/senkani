@@ -9,7 +9,24 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
-### May 11 — `senkani uninstall` 10th category: `~/Library/Preferences/dev.senkani.app.plist` (`uninstall-scanner-userdefaults-preferences-gap-2026-05-11`)
+### May 11 — `docs/guides/uninstall.html` synced to 10-category scanner emit (`docs-uninstall-guide-stale-categories-list-2026-05-11`)
+
+- **Why:** Doc-only follow-up from the cat-10 ship. The "what
+  `senkani uninstall --yes --keep-data` removes" bulleted list in
+  `docs/guides/uninstall.html` had drifted three categories behind
+  the scanner: cat-8 (webContentRuleLists, 2026-05-02), cat-9
+  (modelMetadataCache, 2026-05-03), and the just-shipped cat-10
+  (appPreferences, 2026-05-11) were absent. Lines 71-72 also
+  mis-stated category-2's target as `~/.claude/settings.json`
+  (the global file) when it's actually per-project
+  `<project>/.claude/settings.json` files.
+- Re-wrote the list to mirror `UninstallArtifactScanner.swift`'s
+  `Artifact.description` text verbatim, in scanner emit order:
+  "Always removed" group covers cats 1, 2, 3, 4, 6, 7, 8, 9;
+  "Removed unless `--keep-data`" group covers cats 5 and 10.
+  Cat-2 now correctly names per-project hook files and the
+  workspace.json + legacy `~/.claude/projects/` discovery split.
+- Doc-only. Source unchanged. No test delta.
 
 - **Why:** Pre-fix, `senkani uninstall --yes` left
   `~/Library/Preferences/dev.senkani.app.plist` on disk — so

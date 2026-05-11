@@ -66,17 +66,23 @@
 
     <h2>Commit</h2>
     <pre class="code">senkani uninstall --yes --keep-data</pre>
-    <p>Removes:</p>
+    <p>The scanner walks ten categories in a fixed order. Always removed:</p>
     <ul>
-      <li>MCP server entry from <code>~/.claude/settings.json</code>.</li>
-      <li>PreToolUse + PostToolUse hook entries from <code>~/.claude/settings.json</code>.</li>
-      <li>Project-level hooks in every <code>.claude/</code> Senkani touched.</li>
-      <li><code>~/.senkani/bin/senkani-hook</code>.</li>
-      <li><code>~/.senkani/</code> runtime dir.</li>
-      <li>senkani launchd plists (if any <code>senkani schedule</code> jobs exist).</li>
-      <li>Per-project <code>.senkani/</code> dirs.</li>
+      <li>MCP registration in <code>~/.claude/settings.json</code> — the global Claude Code settings file. One scan step, one file.</li>
+      <li>Hook registrations in per-project <code>&lt;project&gt;/.claude/settings.json</code> files (PreToolUse + PostToolUse). Senkani's workspace.json drives the project list; the legacy <code>~/.claude/projects/</code> tree is also scanned for back-compat. One scan step, N project files.</li>
+      <li>Hook binary at <code>~/.senkani/bin/senkani-hook</code>.</li>
+      <li>Runtime directory <code>~/.senkani/</code> (workspace, metrics, sockets, panes).</li>
+      <li>Launchd plist(s) in <code>~/Library/LaunchAgents/</code> — only <code>com.senkani.*.plist</code> entries created by <code>senkani schedule</code>.</li>
+      <li><code>.senkani/</code> directories in tracked projects (per-project symbol indexes).</li>
+      <li>WebKit content rule list(s) under <code>~/Library/WebKit/&lt;bundle&gt;/ContentRuleLists/</code> — files prefixed <code>ContentRuleList-senkani</code>, compiled by Senkani's subresource blocklist.</li>
+      <li>Model metadata cache at <code>~/Library/Caches/dev.senkani/</code> (downloaded-model registry).</li>
     </ul>
-    <p><code>--keep-data</code> preserves the session database at <code>~/Library/Application Support/Senkani/</code> <em>and</em> the SenkaniApp UserDefaults plist at <code>~/Library/Preferences/dev.senkani.app.plist</code> (FCSIT toggles, milestone progress, first-use flags). Drop the flag if you want everything gone — including the first-launch state, so the next launch behaves like a fresh install.</p>
+    <p>Removed unless <code>--keep-data</code>:</p>
+    <ul>
+      <li>Session database at <code>~/Library/Application Support/Senkani/</code> (FCSIT history, agent stats, knowledge base).</li>
+      <li>App preferences at <code>~/Library/Preferences/dev.senkani.app.plist</code> plus any ByHost variants (FCSIT toggles, milestone progress, first-use flags). cfprefsd's in-memory snapshot is evicted in the same step so the next launch reads from disk.</li>
+    </ul>
+    <p><code>--keep-data</code> keeps the session database and app preferences in place. Drop the flag if you want everything gone — including the first-launch state, so the next launch behaves like a fresh install.</p>
 
     <h2>Full wipe</h2>
     <pre class="code">senkani wipe --yes</pre>

@@ -9,6 +9,35 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 11 — `senkani doctor` FileProvider eviction scanner emits relative paths consistently (`doctor-fileprovider-eviction-star2-path-mismatch-2026-05-11`)
+
+- **Why:** `DoctorFileProviderEvictionTests.swift:163` was failing
+  because `FileProviderEvictionScanner.scan(root:)` emitted absolute
+  paths under temp roots — `URL(fileURLWithPath:).path` canonicalizes
+  `/var/folders/.../T/...` to `/private/var/folders/.../T/...` during
+  enumeration, but the prefix-trim used the unresolved `root` string
+  passed in. The `hasPrefix(root + "/")` check fell through, hit the
+  silent `else { star2Siblings.append(path) }` fallback, and the
+  contract ("paths relative to project root") quietly broke. Test
+  caught it; operator-facing behavior on real project paths was
+  unaffected (no `/var` ↔ `/private/var` divergence on `~/Desktop/…`).
+- Fix in `Sources/CLI/FileProviderEvictionCheck.swift`: resolve `root`
+  once at scan entry via `realpath(3)` (the only Foundation API that
+  reliably follows `/var` → `/private/var`; `URL.resolvingSymlinksInPath`
+  doesn't for paths that aren't pre-resolved). Recursive-walk prefix
+  trim now uses the resolved root.
+- Removed the silent absolute-path fallback. The mismatch branch now
+  fires `assertionFailure` in debug and `continue`s in release — if
+  Foundation's URL enumerator ever produces a non-descendant, the
+  bug surfaces instead of leaking absolute paths into the report.
+- Doc-comments added to `FileProviderEvictionReport.star2Siblings`
+  and `.datalessPaths` declaring the relative-to-resolved-root
+  contract; `scan(root:)` doc-comment explains the symlink-resolution
+  rationale so the next refactor can't reintroduce the divergence.
+- Suite: 2551 → 2551 (+0 new; restored 1 previously-failing test to
+  green). Filtered `swift test --filter DoctorFileProviderEviction`
+  green (9/9), full `swift test` green.
+
 ### May 11 — `docs/guides/uninstall.html` synced to 10-category scanner emit (`docs-uninstall-guide-stale-categories-list-2026-05-11`)
 
 - **Why:** Doc-only follow-up from the cat-10 ship. The "what

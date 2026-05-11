@@ -14,7 +14,11 @@ import Foundation
 public struct FileProviderEvictionReport: Sendable, Equatable {
     public var scannedRoot: String
     public var pathUnderFileProvider: Bool
+    /// Paths flagged as `SF_DATALESS`. Always project-root-relative
+    /// (the resolved root passed to `scan(root:)`).
     public var datalessPaths: [String]
+    /// `* 2` Finder-shadow paths. Always project-root-relative (the
+    /// resolved root passed to `scan(root:)`).
     public var star2Siblings: [String]
 
     public var hasFinding: Bool {
@@ -58,10 +62,31 @@ public enum FileProviderEvictionScanner {
     /// the symbol isn't reliably exposed through Swift's Darwin module.
     public static let SF_DATALESS_FLAG: UInt32 = 0x4000_0000
 
+    /// Walks `root`'s checkout tree and operator-tracked source roots
+    /// for FileProvider-eviction symptoms. All emitted paths in the
+    /// returned report (`datalessPaths`, `star2Siblings`) are relative
+    /// to the symlink-resolved form of `root` — Foundation canonicalizes
+    /// `/var/folders/...` to `/private/var/folders/...` during URL
+    /// enumeration, so the scanner resolves `root` once at entry to
+    /// keep both sides of the prefix-trim in the same canonical form.
     public static func scan(root: String) -> FileProviderEvictionReport {
         let underFileProvider = pathUnderFileProvider(path: root)
         var datalessPaths: [String] = []
         var star2Siblings: [String] = []
+
+        // Symlink-resolved root for the recursive-walk relative-path
+        // trim below. URL enumeration canonicalizes paths through
+        // `/private/var/...`; trimming against the unresolved `root`
+        // (e.g. an `NSTemporaryDirectory()`-derived path) leaks the
+        // absolute form into the report. `realpath(3)` walks every
+        // segment against the live file system — `URL.resolvingSymlinksInPath`
+        // does not reliably follow `/var` → `/private/var` for paths
+        // that don't pre-exist as URL-resolved strings.
+        let resolvedRoot: String = root.withCString { cPath in
+            guard let cResolved = realpath(cPath, nil) else { return root }
+            defer { free(cResolved) }
+            return String(cString: cResolved)
+        }
 
         let fm = FileManager.default
 
@@ -108,11 +133,20 @@ public enum FileProviderEvictionScanner {
                 let name = fileURL.lastPathComponent
                 guard matchesStar2Pattern(name) else { continue }
                 let path = fileURL.path
-                if path.hasPrefix(root + "/") {
-                    star2Siblings.append(String(path.dropFirst(root.count + 1)))
-                } else {
-                    star2Siblings.append(path)
+                guard path.hasPrefix(resolvedRoot + "/") else {
+                    // Foundation's URL enumeration is supposed to
+                    // produce descendants of the enumeration root.
+                    // If we ever see a path that isn't, the scanner's
+                    // invariant has broken — flag in debug, skip in
+                    // release to avoid emitting absolute paths that
+                    // would silently violate the relative-path
+                    // contract.
+                    assertionFailure(
+                        "enumerated path \(path) is not a descendant of \(resolvedRoot)"
+                    )
+                    continue
                 }
+                star2Siblings.append(String(path.dropFirst(resolvedRoot.count + 1)))
             }
         }
 

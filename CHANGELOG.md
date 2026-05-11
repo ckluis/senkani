@@ -9,6 +9,20 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 11 — `.gitignore` codifies the Cowork debugging-artifact convention (`discriminator-artifacts-gitignore-2026-05-11`)
+
+- **What:** added five root-anchored patterns (`/_*.command`,
+  `/_*.log`, `/_*.stderr`, `/_*.stdout`, `/_*-SenkaniApp.app/`) plus a
+  block comment explaining the leading-underscore Cowork convention
+  for ephemeral debugging artifacts at the repo root.
+- **Verification:** `git check-ignore -v` matches every artifact in
+  the 2026-05-11 Cowork-session untracked set (12+ `_discriminator-*`
+  / `_onboarding-pass-*` / `_swift-test-discriminator*` files) to
+  the new rules; anti-match verified for deep paths
+  (`Sources/Foo/_internal.swift`, `tools/soak/runner/_lib.sh`) so
+  the root-anchor doesn't bleed; pre-change `git ls-files | grep ^_`
+  returned empty, so no retro-ignore of tracked files.
+
 ### May 11 — Environment finding closed: iCloud Drive Desktop & Documents sync corruption of `.build/checkouts/` (`build-env-swiftpm-checkout-corruption-icloud-eviction-2026-05-09`)
 
 - **What closes:** the May 9 environment finding whose Phase A

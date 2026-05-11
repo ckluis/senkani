@@ -22,3 +22,15 @@ charter.md
 * 2.sh
 * 2.py
 * 2/
+
+# Cowork-generated debugging artifacts at the repo root. Convention:
+# leading underscore + script-type extension signals "operator/Cowork-
+# driven, ephemeral" (build/test discriminators, onboarding-pass
+# captures, screencap commands, staged .app bundles). Anchored at root
+# with leading `/` so a deeper `Sources/Foo/_internal.swift`-style file
+# is not accidentally matched.
+/_*.command
+/_*.log
+/_*.stderr
+/_*.stdout
+/_*-SenkaniApp.app/

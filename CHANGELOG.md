@@ -9,6 +9,33 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 11 — `swift test` build path restored on `main` (`release-v0-3-0-test-build-broken-mlx-swift-lm-mlxlmcommon-2026-05-09`)
+
+- **Root cause:** the 2026-05-09 `swift test` build-break that
+  surfaced hundreds of MLXLMCommon "cannot find type" errors
+  (`ToolCall`, `ModelContainer`, `KVCache`, etc.) was NOT a real
+  pin defect — it was iCloud Drive Desktop & Documents Folders
+  FileProvider eviction corrupting `.build/checkouts/` for
+  multiple SwiftPM packages mid-resolve. Same Package.swift, same
+  `Package.resolved`, same mlx-swift-lm SHA pin (`2a296f145c…`),
+  same HEAD: only the environment changed.
+- **Remediation:** iCloud Drive Desktop & Documents Folders sync
+  disabled for the operator account; project stays at
+  `~/Desktop/projects/senkani/` with local-copy semantics.
+- **Verification:** discriminator pair on a clean `.build/`:
+  `swift build -c debug` exit 0 in 141.42 s (zero errors);
+  `swift test` exit 0 in 228 s with **2559 tests passed in
+  12.978 s** of execution. No Package.swift / Package.resolved
+  mutations; pin-rationale block at `Package.swift:23-69` preserved
+  verbatim. Hypothesis #4 (FileProvider eviction) confirmed; #1
+  (debug-vs-release conditional) ruled out by direct discriminator
+  evidence.
+- **Downstream:** unblocks `test-suite-flake-reverification-2026-05-07`
+  (pre-condition gate now passes) and removes one `blocked_by`
+  entry from `release-v0-3-0-promote-changelog-heading`. The
+  underlying environment finding (`build-env-swiftpm-checkout-
+  corruption-icloud-eviction-2026-05-09`) tracks separately.
+
 ### May 11 — `senkani uninstall` scanner: category-11 `appCacheDirectory` (`~/Library/Caches/dev.senkani.app/`) (`uninstall-scanner-extension-candidate-library-caches-dev.senkani.app-2026-05-11`)
 
 - **Why:** The `uninstall-rewalk-step9-apppreferences-2026-05-11`

@@ -9,6 +9,41 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 12 — Milestone-4 savings-pipeline defect pinned via Cowork diagnostic walk; Fix path 5 routed (`onboarding-milestone-4-savings-pipeline-zero-2026-05-11`)
+
+- **What closes:** the P0 release-blocker defect surfaced by the
+  2026-05-11 milestones-4-7 walk —
+  `OnboardingMilestone.firstNonzeroSavings` never fires because the
+  savings pipeline writes `saved_tokens=0` on every `token_events`
+  row across both observed sources (`claude_session`, `mcp_tool`).
+- **Walk verdict:** `A=zero  B=intree:SenkaniApp/Services/ClaudeSessionWatcher.swift  C=yes`
+  → decision-tree row "A=zero (ALL sources zero, including in-tree
+  `mcp_tool`) | * | C=yes" fires → **Fix path 5** (two-part
+  instrumentation). Walk-round corrigendum: the groom-round grep's
+  `Sources/Tools/tools/` restriction missed the in-tree writer at
+  `SenkaniApp/Services/ClaudeSessionWatcher.swift:176` (hardcoded
+  `savedTokens: 0` on line 181); walk extended grep to
+  `SenkaniApp/` and identified the writer mid-execution.
+- **Evidence:**
+  `tools/soak/evidence/milestone-4-defect-20260512-090521/`
+  (tarball: `…-090521.tgz`, 1.81 MB). 1070 token_events rows across
+  both sources, all `saved_tokens=0`; milestone gate at
+  `Sources/Core/SessionDatabase+TokenEventAPI.swift:118-119`
+  confirmed intact; `milestones.json` untouched during the
+  three-prompt Claude session (`diff` empty, mtime `2026-05-11
+  16:52:34`).
+- **Follow-ups filed:**
+  `savings-pipeline-two-part-instrumentation-2026-05-12` (Fix path 5
+  — wire ClaudeSessionWatcher savedTokens from JSONL
+  `usage.cache_read_input_tokens` + instrument
+  `MCPSession.recordMetrics:980` compression-delta);
+  `groom-round-writer-search-root-extension-2026-05-12` (groom-round
+  pre-audit grep root must include `SenkaniApp/`);
+  `walk-capture-screencapture-tcc-gap-terminal-2026-05-12` (Terminal
+  lacks Screen Recording TCC — 2 PNG acceptance boxes substituted
+  with text-state via `mcp__computer-use__zoom` /
+  `mcp__computer-use__screenshot`).
+
 ### May 11 — `.gitignore` codifies the Cowork debugging-artifact convention (`discriminator-artifacts-gitignore-2026-05-11`)
 
 - **What:** added five root-anchored patterns (`/_*.command`,

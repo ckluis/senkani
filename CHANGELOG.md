@@ -9,6 +9,43 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 13 — Autonomous-loop pre-audit search-root rule (`groom-round-writer-search-root-extension-2026-05-12`)
+
+- **What ships:** the autonomous-loop skill at
+  `~/.claude/skills/senkani-autonomous/SKILL.md` gains a new
+  `## Pre-audit search roots` section that enumerates the
+  derivation rule for search roots at round time (Package.swift
+  target `path:` directives + repo-root `*.xcodeproj` peer dirs +
+  optional `manifest.pre_audit.source_roots` union). All three
+  pre-audit-inventory phase-2 sites (build, groom, scope-groom)
+  now reference the shared rule instead of saying "grep the
+  codebase" without scope.
+- **Why:** the 2026-05-12 groom round on
+  `onboarding-milestone-4-savings-pipeline-zero-2026-05-11` greped
+  only `Sources/` and `tools/`, returned 0 matches as expected, and
+  the walk-round corrigendum found the actual writer at
+  `SenkaniApp/Services/ClaudeSessionWatcher.swift:176`. Missing the
+  `SenkaniApp/` source root produced a false-negative pre-audit
+  that the walk-round had to correct mid-flight.
+- **Manifest:** `spec/autonomous-manifest.yaml` gains an optional
+  `pre_audit.source_roots: []` block (empty by default — auto-
+  derivation covers senkani today; the block is the safety valve
+  for vendored or generated source roots auto-derivation cannot
+  reach).
+- **Probe:** `tools/autonomous/probe-pre-audit-roots.sh` is the
+  operator-runnable mirror of the skill's in-context derivation.
+  Prints the resolved root set and exits non-zero if `SenkaniApp/`
+  falls out of coverage. BSD-awk compatible (no gawk extensions).
+- **Process doc:** `spec/autonomous/PROCESS.md` gains a
+  `## Pre-audit search roots` subsection capturing the invariant,
+  the three-layer derivation rule, when to pin
+  `pre_audit.source_roots`, and the probe pointer. Cross-references
+  the originating audit trail at
+  `tools/soak/evidence/milestone-4-defect-20260512-090521/06-writer-grep.txt`.
+- **Tests delta:** n/a (process change — no Swift code modified;
+  zero `.swift` files touched, so the existing test suite is
+  byte-identical and stays green by construction).
+
 ### May 13 — Savings-pipeline two-part instrumentation lands (Fix path 5) (`savings-pipeline-two-part-instrumentation-2026-05-12`)
 
 - **What ships:** the P0 follow-up to the May-12 walk's Fix path 5

@@ -9,6 +9,49 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 13 — Savings-pipeline two-part instrumentation lands (Fix path 5) (`savings-pipeline-two-part-instrumentation-2026-05-12`)
+
+- **What ships:** the P0 follow-up to the May-12 walk's Fix path 5
+  routing. Two coordinated edits restore `OnboardingMilestone.firstNonzeroSavings`
+  fire eligibility on the `claude_session` writer path and surface the
+  `mcp_tool` compression-delta failure mode as a structured log event.
+- **Part A — `ClaudeSessionWatcher` derives `savedTokens` from JSONL
+  `cache_read_input_tokens`.** The realtime tail in
+  `SenkaniApp/Services/ClaudeSessionWatcher.swift:147` previously had
+  its own copy of the JSONL parser that hardcoded `savedTokens: 0`
+  (line 181 in the pre-fix shape). That parser is now extracted as
+  `ClaudeSessionReader.parseAssistantUsageLine(_:)` in
+  `Sources/Core/ClaudeSessionReader.swift:68`, consumed by both the
+  watcher and the existing `ClaudeSessionReader.readNew` cursor-driven
+  path so the `cache_read_input_tokens → savedTokens` mapping has a
+  single source of truth that future contributors can't accidentally
+  reintroduce a divergent copy of.
+- **Part B — `MCPSession.recordMetrics` emits compression-delta
+  diagnostics.** Two-tier emission added at
+  `Sources/MCP/Session/MCPSession.swift:982`:
+  - `mcp.metrics.compression_negative` fires UNCONDITIONALLY when
+    `savedBytes <= 0` (raw_bytes / compressed_bytes / saved_bytes /
+    tool_name / feature / command), so the cases where compression
+    underperforms surface in operator stderr without configuration.
+  - `mcp.metrics.recorded` fires per-call when
+    `SENKANI_SAVINGS_DEBUG=1` (env-cached via `MCPSession.savingsDebugEnabled`,
+    matching the `Logger.isJSON` cache pattern), for diagnostic
+    deep-dives where every recordMetrics entry needs inspection.
+- **Tests delta:** +8 (4 in `Tests/SenkaniTests/AgentTrackingTests.swift`
+  pin the parser contract incl. `parseAssistantUsageExtractsCacheReadTokens`
+  with a fixture `cache_read_input_tokens: 1234`; 4 in
+  `Tests/SenkaniTests/MCPSessionTests.swift` under
+  `@Suite("MCP Session recordMetrics diagnostics", .serialized, .loggerSinkGate)`
+  pin the negative-delta diagnostic + env-gated verbose paths). Full
+  test-safe.sh harness green — 2645 tests pass across 8 chunks.
+- **Milestone-fire validation rolls into the parent walk** —
+  `release-v0-3-0-onboarding-pass-milestones-4-7-walk-2026-05-11`
+  (groomed; `manual_ready`) re-runs the milestones-4 sub-walk on a
+  fresh Claude session with cache-hit re-prompts to confirm
+  `~/.senkani/onboarding/milestones.json` gains the
+  `firstNonzeroSavings` ISO8601 timestamp (file mode `0600`) and the
+  Welcome banner suppresses the "Next: firstNonzeroSavings" nudge.
+
 ### May 12 — Milestone-4 savings-pipeline defect pinned via Cowork diagnostic walk; Fix path 5 routed (`onboarding-milestone-4-savings-pipeline-zero-2026-05-11`)
 
 - **What closes:** the P0 release-blocker defect surfaced by the

@@ -154,32 +154,26 @@ class ClaudeSessionWatcher {
               let text = String(data: newData, encoding: .utf8) else { return }
         lastReadOffset = newOffset
 
-        let lines = text.components(separatedBy: "\n").filter { !$0.isEmpty }
-
-        for line in lines {
-            guard let data = line.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-
-            // Only process assistant messages with usage data
-            guard json["type"] as? String == "assistant",
-                  let message = json["message"] as? [String: Any],
-                  let usage = message["usage"] as? [String: Any] else { continue }
-
-            let inputTokens = usage["input_tokens"] as? Int ?? 0
-            let outputTokens = usage["output_tokens"] as? Int ?? 0
-            let model = message["model"] as? String
+        for line in text.components(separatedBy: "\n") {
+            // Delegate JSONL parsing to the canonical helper in Core so the
+            // realtime tail path and the cursor-driven `readNew` path can't
+            // drift in how they extract `cache_read_input_tokens` (the bug
+            // surfaced 2026-05-12: this watcher previously had its own
+            // copy of the parser and hardcoded `savedTokens: 0`, suppressing
+            // the `firstNonzeroSavings` onboarding milestone).
+            guard let parsed = ClaudeSessionReader.parseAssistantUsageLine(line) else { continue }
 
             SessionDatabase.shared.recordTokenEvent(
-                sessionId: json["sessionId"] as? String ?? "unknown",
+                sessionId: parsed.sessionId ?? "unknown",
                 paneId: paneId.uuidString,
                 projectRoot: projectRoot,
                 source: "claude_session",
                 toolName: nil,
-                model: model,
-                inputTokens: inputTokens,
-                outputTokens: outputTokens,
-                savedTokens: 0,
-                costCents: Self.estimateCost(input: inputTokens, output: outputTokens, model: model),
+                model: parsed.model,
+                inputTokens: parsed.inputTokens,
+                outputTokens: parsed.outputTokens,
+                savedTokens: parsed.cacheReadTokens,
+                costCents: Self.estimateCost(input: parsed.inputTokens, output: parsed.outputTokens, model: parsed.model),
                 feature: nil,
                 command: nil
             )

@@ -369,4 +369,66 @@ struct ClaudeSessionReaderTests {
         let events = ClaudeSessionReader.readNew(db: db, projectsDir: "/tmp/nonexistent-\(UUID().uuidString)")
         #expect(events.isEmpty)
     }
+
+    // MARK: - parseAssistantUsageLine (savings-pipeline-two-part-instrumentation-2026-05-12 Part A)
+
+    /// Pin the cache_read_input_tokens → ParsedUsage.cacheReadTokens mapping.
+    /// `ClaudeSessionWatcher` (SenkaniApp, not in test deps) calls this helper
+    /// and passes `parsed.cacheReadTokens` directly as `savedTokens` to
+    /// `recordTokenEvent`, so this test pins the value flow that the
+    /// onboarding `firstNonzeroSavings` milestone gate (`if savedTokens > 0`)
+    /// depends on. Parent finding: 2026-05-12 walk surfaced 1067 claude_session
+    /// rows with saved_tokens=0 because the watcher had its own copy of the
+    /// JSONL parser that didn't extract cache_read_input_tokens.
+    @Test func parseAssistantUsageExtractsCacheReadTokens() throws {
+        let line = #"{"type":"assistant","sessionId":"sess-abc","timestamp":"2026-05-12T10:00:00.000Z","message":{"usage":{"input_tokens":50,"output_tokens":20,"cache_read_input_tokens":1234,"cache_creation_input_tokens":7},"model":"claude-sonnet-4-6"}}"#
+        let parsed = try #require(ClaudeSessionReader.parseAssistantUsageLine(line))
+        #expect(parsed.cacheReadTokens == 1234)
+        #expect(parsed.cacheWriteTokens == 7)
+        #expect(parsed.inputTokens == 50)
+        #expect(parsed.outputTokens == 20)
+        #expect(parsed.sessionId == "sess-abc")
+        #expect(parsed.model == "claude-sonnet-4-6")
+    }
+
+    @Test func parseAssistantUsageHandlesMissingCacheFields() throws {
+        // Older JSONL formats may omit cache_* fields; default to 0, not nil.
+        let line = #"{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":40},"model":"claude-haiku-4-5"}}"#
+        let parsed = try #require(ClaudeSessionReader.parseAssistantUsageLine(line))
+        #expect(parsed.cacheReadTokens == 0)
+        #expect(parsed.cacheWriteTokens == 0)
+        #expect(parsed.inputTokens == 100)
+        #expect(parsed.outputTokens == 40)
+    }
+
+    @Test func parseAssistantUsageRejectsNonAssistantLines() {
+        #expect(ClaudeSessionReader.parseAssistantUsageLine(#"{"type":"user","content":"hi"}"#) == nil)
+        #expect(ClaudeSessionReader.parseAssistantUsageLine(#"{"type":"tool_result","tool_use_id":"x"}"#) == nil)
+        #expect(ClaudeSessionReader.parseAssistantUsageLine("not json") == nil)
+        #expect(ClaudeSessionReader.parseAssistantUsageLine("") == nil)
+        #expect(ClaudeSessionReader.parseAssistantUsageLine(#"{"type":"assistant","message":{}}"#) == nil,
+                "missing usage block → nil")
+    }
+
+    /// End-to-end: feed JSONL with cache_read_input_tokens through the
+    /// production reader entry point and confirm cacheReadTokens flows
+    /// through to TokenEvent (the readFile path consumed by ClaudeSessionReader.readNew).
+    @Test func readNewSurfacesCacheReadTokens() throws {
+        let (db, dbPath) = makeTempDB()
+        defer { cleanupDB(path: dbPath) }
+
+        let projectsDir = "/tmp/senkani-cache-read-\(UUID().uuidString)"
+        let subdir = projectsDir + "/proj-cache"
+        try FileManager.default.createDirectory(atPath: subdir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: projectsDir) }
+
+        let sessionId = UUID().uuidString
+        let filePath = subdir + "/" + sessionId + ".jsonl"
+        let line = #"{"type":"assistant","timestamp":"2026-05-12T10:00:00.000Z","message":{"usage":{"input_tokens":500,"output_tokens":100,"cache_read_input_tokens":4096,"cache_creation_input_tokens":0},"model":"claude-sonnet-4-6"}}"#
+        try (line + "\n").write(toFile: filePath, atomically: true, encoding: .utf8)
+
+        let events = ClaudeSessionReader.readNew(db: db, projectsDir: projectsDir)
+        #expect(events.count == 1)
+        #expect(events[0].cacheReadTokens == 4096)
+    }
 }

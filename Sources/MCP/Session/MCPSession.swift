@@ -27,6 +27,34 @@ actor MCPSession {
     /// default.
     @TaskLocal public static var currentToggleOverrides: ToggleOverrides?
 
+    /// Cached `SENKANI_SAVINGS_DEBUG` env-var lookup. When set to a truthy
+    /// value (`1`, `true`, `on`, `yes`), `recordMetrics` emits a
+    /// `mcp.metrics.recorded` event for every tool call (raw/compressed
+    /// bytes, tool name, feature). Off by default — `mcp.metrics.compression_negative`
+    /// fires unconditionally for the diagnostic case (`savedBytes <= 0`)
+    /// regardless of this flag.
+    ///
+    /// Mirrors the `Logger.isJSON` cache pattern: env read once, memoized
+    /// for the process lifetime. Tests reset via `_resetSavingsDebugCacheForTesting`.
+    nonisolated(unsafe) private static var _savingsDebugEnabled: Bool?
+    nonisolated(unsafe) private static let savingsDebugLock = NSLock()
+
+    public static var savingsDebugEnabled: Bool {
+        savingsDebugLock.lock(); defer { savingsDebugLock.unlock() }
+        if let cached = _savingsDebugEnabled { return cached }
+        let raw = ProcessInfo.processInfo.environment["SENKANI_SAVINGS_DEBUG"]?.lowercased() ?? ""
+        let v = (raw == "1" || raw == "true" || raw == "on" || raw == "yes")
+        _savingsDebugEnabled = v
+        return v
+    }
+
+    /// Test-only: clear the cached env lookup so a test can flip
+    /// `SENKANI_SAVINGS_DEBUG` and observe the new behavior in-process.
+    public static func _resetSavingsDebugCacheForTesting() {
+        savingsDebugLock.lock(); defer { savingsDebugLock.unlock() }
+        _savingsDebugEnabled = nil
+    }
+
     /// Per-connection feature-toggle override map. Each field is optional —
     /// nil means "fall back to the session's default toggle"; `.some(true)`
     /// or `.some(false)` overrides for the lifetime of the wrapped tool call.
@@ -978,6 +1006,40 @@ actor MCPSession {
         perFeatureSaved[feature, default: 0] += (rawBytes - compressedBytes)
 
         let savedBytes = rawBytes - compressedBytes
+
+        // Compression-delta diagnostics (parent_finding 2026-05-12: real
+        // Claude-session-driven Read tool calls observed `savedBytes <= 0`
+        // on every mcp_tool row, suppressing the `firstNonzeroSavings`
+        // onboarding milestone via the `if savedTokens > 0` gate).
+        //
+        // Two-tier emission, per acceptance criterion B:
+        // - High-signal: when `savedBytes <= 0`, ALWAYS emit so the
+        //   compression-hurts-here case surfaces in the operator's stderr
+        //   without env-var configuration. Volume is bounded by how often
+        //   the compression layer fails to beat the raw payload — not a
+        //   per-call hot path.
+        // - Per-call verbose: gated behind SENKANI_SAVINGS_DEBUG=1 for
+        //   diagnostic deep-dives where every recordMetrics entry needs
+        //   inspection. Off by default to keep production stderr quiet.
+        if savedBytes <= 0 {
+            Logger.log("mcp.metrics.compression_negative", fields: [
+                "raw_bytes":        .int(rawBytes),
+                "compressed_bytes": .int(compressedBytes),
+                "saved_bytes":      .int(savedBytes),
+                "tool_name":        .string(feature),
+                "feature":          .string(feature),
+                "command":          .string(command ?? ""),
+            ])
+        }
+        if MCPSession.savingsDebugEnabled {
+            Logger.log("mcp.metrics.recorded", fields: [
+                "raw_bytes":        .int(rawBytes),
+                "compressed_bytes": .int(compressedBytes),
+                "saved_bytes":      .int(savedBytes),
+                "tool_name":        .string(feature),
+                "feature":          .string(feature),
+            ])
+        }
 
         // JSONL write — matches MetricEntry format expected by MetricsWatcher
         if let path = metricsFilePath {

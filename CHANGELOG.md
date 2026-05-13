@@ -9,6 +9,57 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 13 — Autonomous-loop subsystem-tag disambiguation (`process-gap-skills-subsystem-tag-collision-2026-05-13`)
+
+- **What ships:** a new `autonomous_skill` subsystem tag that maps
+  to `spec/autonomous/PROCESS.md`, alongside the existing `skills`
+  tag (which keeps its HandManifest meaning, mapping to
+  `spec/skills.md`). Two unrelated concepts shared the name "skills"
+  in this repo — the senkani user-facing HandManifest CLI feature
+  and the `~/.claude/skills/senkani-autonomous/SKILL.md` operator
+  loop. Doc-sync's `path_from_tag: subsystem` mechanically routed
+  loop-edit rounds to `spec/skills.md` (wrong target); this round
+  closes the gap.
+- **Surface area:** `spec/autonomous-manifest.yaml` declares
+  `autonomous_skill: spec/autonomous/PROCESS.md` (alphabetised
+  in-place) with a comment block immediately above the `skills:`
+  line explaining the disambiguation. The intent-tags reference
+  block at the bottom of the manifest gained `autonomous_skill` in
+  the subsystem-tags list. `spec/autonomous/PROCESS.md` gained a
+  new "Tag selection: `skills` vs `autonomous_skill`" section
+  (between `## Doc sync` and `## Index regeneration`) documenting
+  the disambiguation plus a one-line "if you find yourself reaching
+  for `skills` on a SKILL.md change, you want `autonomous_skill`"
+  heuristic. Three currently-open mistagged backlog items got their
+  `affects:` swapped from `skills` to `autonomous_skill`
+  (`process-gap-build-round-categorical-action-vetting-2026-05-07`,
+  `process-gap-harness-vs-item-authorization-mismatch`, and the
+  build-round item itself). Completed items keep their historical
+  tags (operator chose "Yes — sweep in this round" over "Sweep
+  open + audit completed/" during scope-groom).
+- **Mechanical guard:** new
+  `tools/autonomous/check-autonomous-skill-tag.py` script walks
+  `spec/autonomous/backlog/*.md`, flags items where `affects:`
+  contains `skills` but the body references surface markers
+  (`SKILL.md`, `spec/autonomous/`, `~/.claude/skills/`,
+  `tools/autonomous/`) that suggest the change is actually an
+  autonomous-loop change. Exits non-zero with one line per flagged
+  item; informational, not a CI gate. Verified pre-sweep that the
+  script would have flagged all three swept items (false-negative
+  test) and verified post-sweep that the script exits 0 on the
+  swept backlog (acceptance probe).
+- **Why it matters:** future rounds that touch the loop's SKILL.md
+  or `tools/autonomous/` machinery can now tag `autonomous_skill`
+  and have doc-sync resolve to `spec/autonomous/PROCESS.md` (the
+  correct durable spec) instead of `spec/skills.md` (HandManifest).
+  The script catches the easy-to-make mistake automatically.
+- **Originating finding:** close-mode evidence scan in
+  `groom-round-writer-search-root-extension-2026-05-12` (shipped
+  2026-05-13) — finding #1 detected the routing mismatch at
+  doc-sync time and filed this item before commit. Audit trail
+  closed by appending a cross-reference one-liner to the
+  discovering round's `## Execution evidence` section.
+
 ### May 13 — Autonomous-loop pre-audit search-root rule (`groom-round-writer-search-root-extension-2026-05-12`)
 
 - **What ships:** the autonomous-loop skill at

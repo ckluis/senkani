@@ -56,6 +56,64 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Wave-by-wave (most recent first)
 
+### release-v0-3-0-onboarding-pass — Luminary P0/P1/P2 chain validation on clean install closes pass-with-amendment 2026-05-14
+
+The v0.3.0 release-gating onboarding-pass walk closed today after a
+3-day Cowork-driven validation arc (2026-05-11 partial-pass → 2026-05-13
+re-walk setup → 2026-05-14 milestones 4-7 + `summary.allComplete`
+witnessed → closure).
+
+AC outcomes (final, four-of-four boxes ticked):
+
+- **AC #1 Welcome + FCSIT** — pass-with-amendment. Welcome view (閃蟹 logo
+  + project chooser + 4 task starters + milestone hint + "Show all
+  panes" escape) renders on every clean-install relaunch. FCSIT
+  first-use disclosure popover was retired by commit `b56e221`
+  (`fcsit-pane-toggles-ux-redesign`, 2026-05-11) — the replacement
+  "click any FCSIT letter → settings panel" surface is the one that
+  ships. Filed as Finding #A so the next onboarding-pass walk
+  template tests the right surface.
+- **AC #2 First task starter + first-value layout** — pass (re-
+  verified). "Open a tracked shell in senkani" provisions Terminal
+  (primary, active) + Agent Timeline (secondary, insight) panes.
+  Sidebar updates to "1 running". Palette-gallery parity holds; no
+  inert actions on starter cards.
+- **AC #3 Senkani Active proof strip** — pass (re-verified).
+  `ActivationProofStrip` renders above the terminal body on the
+  active Terminal pane with PROJECT / MCP / HOOKS / TRACK / EVENTS
+  chips; absent on non-terminal panes (Agent Timeline) and absent on
+  inactive panes. Source-confirmed terminal-only + active-only
+  guard.
+- **AC #4 Milestones + file mode + env-var** — pass-with-amendment.
+  All 7 milestones crossed on one install — `milestones.json` final
+  state captured at 374 bytes, mode `0600`, all 7 keys present
+  (`projectSelected: 2026-05-14T12:42:47.435Z` … `firstWorkstreamCreated:
+  2026-05-14T13:26:41.825Z`). `summary.allComplete` banner-
+  disappears witnessed via a freshly-added throwaway project's
+  Welcome view rendering with NO bottom milestone banner. The
+  `SENKANI_ONBOARDING_MILESTONES=off` env-var no-op verification
+  sub-clause stays deferred to Finding #C — no `onboarding` CLI
+  subcommand or in-app verification surface ships today, so the env-
+  var contract cannot be operator-verified within a walk session
+  without a design decision on the inspection path.
+
+Six findings filed today (2026-05-14) + three back-filed from the
+2026-05-11 walk:
+
+- `release-v0-3-0-onboarding-pass-AC1-fcsit-popover-acceptance-stale-2026-05-11` — text amendment for future walk templates.
+- `uninstall-scanner-extension-candidate-saved-application-state-2026-05-11` — add `~/Library/Saved Application State/dev.senkani.app.savedState/` as a new uninstall scanner category.
+- `onboarding-milestones-cli-surface-or-env-var-verification-path-2026-05-11` — scope-groomable; pick CLI subcommand vs in-app surface vs accept `cat`-and-diff.
+- `onboarding-milestones-key-casing-mismatch-2026-05-14` — `firstNonzeroSavings` lowercase `z` on disk vs spec text's capital `Z`.
+- `workstream-creates-git-worktree-side-effect-2026-05-14` — scope-groomable; intentional design or accidental coupling?
+- `pane-close-x-button-drag-handle-collision-2026-05-14` — close X button overlaps right-edge drag handle, reliable close requires finangling.
+- `project-and-workstream-no-remove-ui-2026-05-14` — scope-groomable; no UI surface to remove a project or workstream once added.
+- `onboarding-pass-stale-bundle-hazard-2026-05-14` — scope-groomable; wrapped `_onboarding-pass-SenkaniApp.app` silently goes stale when new commits land on `main`.
+- `onboarding-milestone-recorder-gap-projectSelected-agentLaunched-2026-05-14` — once-only milestones recorded 2026-05-11 were missing from `milestones.json` on the 2026-05-14 walk-resume despite no operator-visible uninstall.
+
+Unblocks `release-v0-3-0-surface-pass` and drops one `blocked_by` from
+`release-v0-3-0-promote-changelog-heading`. Per-item file archived to
+`spec/autonomous/completed/2026/2026-05-14-release-v0-3-0-onboarding-pass-luminary-p0-p1-p2-chain-validation-on-clean-install.md`.
+
 ### onboarding-p2-milestone-callsites — Welcome banner advances on real-machine first run 2026-05-01
 
 Round wired `OnboardingMilestoneStore.record(.X)` into the seven

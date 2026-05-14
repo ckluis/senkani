@@ -73,8 +73,75 @@ final class WorkspaceModel {
         activePaneID = project.activeWorkstream?.panes.first?.id
     }
 
-    /// Remove a project and all its panes.
+    /// Remove a project and all its panes (in-memory only).
+    /// Prefer `removeProject(id:options:)` for the tiered-checkbox
+    /// destructive flow; this overload is kept for the small number
+    /// of callsites that only need the in-memory drop.
     func removeProject(id: UUID) {
+        _ = removeProject(id: id, options: .none)
+    }
+
+    /// Tiered project removal. Honors `ProjectRemovalOptions` flags
+    /// per-artifact and executes in a fixed order so partial failures
+    /// are deterministic and recoverable:
+    ///
+    ///   1. Branches (one per opted-in workstream)
+    ///   2. Worktree directories (one per opted-in workstream)
+    ///   3. Per-project app-support directory
+    ///   4. In-memory model removal (sidebar entry)
+    ///
+    /// Each step's failure is collected into the returned array; the
+    /// dialog shows them inline and lets the operator opt in to
+    /// `force: true` and retry. The in-memory removal (step 4) always
+    /// runs — the sidebar entry is what "remove" means and is
+    /// rendered as a disabled-checked checkbox in the dialog.
+    @discardableResult
+    func removeProject(id: UUID, options: ProjectRemovalOptions) -> [RemovalFailure] {
+        guard let project = projects.first(where: { $0.id == id }) else { return [] }
+        var failures: [RemovalFailure] = []
+        let fm = FileManager.default
+
+        // Step 1: branches (in deterministic workstream order).
+        for ws in project.workstreams {
+            guard options.removeBranch[ws.id] == true,
+                  let branch = ws.branch else { continue }
+            let repoRoot = ws.effectiveRoot(projectPath: project.path)
+            if let err = WorktreeGitInspector.deleteBranch(repoPath: repoRoot, branch: branch) {
+                failures.append(RemovalFailure(artifact: branch, reason: err))
+            }
+        }
+
+        // Step 2: worktree dirs. Default workstream's "worktree" is
+        // the project root itself — never remove that here.
+        for ws in project.workstreams {
+            guard options.removeWorktreeDir[ws.id] == true,
+                  let wtPath = ws.worktreePath,
+                  !ws.isDefault else { continue }
+            let res = GitWorktreeManager.removeWorktree(path: wtPath, force: options.force)
+            if case .failure(let err) = res {
+                failures.append(RemovalFailure(
+                    artifact: wtPath,
+                    reason: err.errorDescription ?? "unknown git worktree error"
+                ))
+            }
+        }
+
+        // Step 3: per-project app-support dir.
+        if options.removeAppSupportDir {
+            let dir = ProjectAppSupport.directory(for: project.id)
+            if fm.fileExists(atPath: dir) {
+                do {
+                    try fm.removeItem(atPath: dir)
+                } catch {
+                    failures.append(RemovalFailure(
+                        artifact: dir,
+                        reason: error.localizedDescription
+                    ))
+                }
+            }
+        }
+
+        // Step 4: sidebar / in-memory (always).
         projects.removeAll { $0.id == id }
         if activeProjectID == id {
             activeProjectID = projects.first?.id
@@ -85,6 +152,53 @@ final class WorkspaceModel {
                 activePaneID = nil
             }
         }
+        return failures
+    }
+
+    /// Tiered workstream removal. Honors `WorkstreamRemovalOptions`
+    /// flags per-artifact and executes in a fixed order:
+    ///
+    ///   1. Branch
+    ///   2. Worktree directory
+    ///   3. Sidebar / in-memory (delegated to `ProjectModel.removeWorkstream`)
+    ///
+    /// The in-memory step respects the existing default-workstream
+    /// and last-workstream invariants — it refuses to drop either,
+    /// and surfaces that refusal as a `RemovalFailure` so the dialog
+    /// can show the operator why the row stayed.
+    @discardableResult
+    func removeWorkstream(id workstreamID: UUID, from project: ProjectModel, options: WorkstreamRemovalOptions) -> [RemovalFailure] {
+        guard let ws = project.workstreams.first(where: { $0.id == workstreamID }) else { return [] }
+        var failures: [RemovalFailure] = []
+
+        if options.removeBranch, let branch = ws.branch {
+            let repoRoot = ws.effectiveRoot(projectPath: project.path)
+            if let err = WorktreeGitInspector.deleteBranch(repoPath: repoRoot, branch: branch) {
+                failures.append(RemovalFailure(artifact: branch, reason: err))
+            }
+        }
+
+        if options.removeWorktreeDir, let wtPath = ws.worktreePath, !ws.isDefault {
+            let res = GitWorktreeManager.removeWorktree(path: wtPath, force: options.force)
+            if case .failure(let err) = res {
+                failures.append(RemovalFailure(
+                    artifact: wtPath,
+                    reason: err.errorDescription ?? "unknown git worktree error"
+                ))
+            }
+        }
+
+        // Sidebar entry (always — delegates to model invariant checks).
+        let removed = project.removeWorkstream(id: workstreamID)
+        if !removed {
+            failures.append(RemovalFailure(
+                artifact: ws.name,
+                reason: "Cannot remove the default or only workstream of a project."
+            ))
+        } else if project.activeWorkstreamID != nil, let pane = project.activeWorkstream?.panes.first {
+            activePaneID = pane.id
+        }
+        return failures
     }
 
     // MARK: - Pane management (adds to active project)
@@ -112,21 +226,32 @@ final class WorkspaceModel {
 
     /// Create a new workstream with git worktree. Full-auto: creates worktree + terminal pane.
     /// Returns the created WorkstreamModel on success, or a GitError on failure.
+    ///
+    /// `branch` lets the create sheet honor an operator-provided
+    /// branch name override (Finding #E disclosure UX). When nil,
+    /// `GitWorktreeManager.createWorktree` auto-generates
+    /// `feature/<YYYYMMDD>-<slug>` and we mirror that here for the
+    /// model record.
     @discardableResult
-    func addWorkstream(name: String, to project: ProjectModel) -> Result<WorkstreamModel, GitWorktreeManager.GitError> {
+    func addWorkstream(name: String, branch: String? = nil, to project: ProjectModel) -> Result<WorkstreamModel, GitWorktreeManager.GitError> {
         let slug = GitWorktreeManager.slugify(name)
 
         let result = GitWorktreeManager.createWorktree(
             projectRoot: project.path,
             slug: slug,
-            branch: nil
+            branch: branch
         )
 
         switch result {
         case .success(let worktreePath):
-            let fmt = DateFormatter()
-            fmt.dateFormat = "yyyyMMdd"
-            let branchName = "feature/\(fmt.string(from: Date()))-\(slug)"
+            let branchName: String
+            if let override = branch, !override.isEmpty {
+                branchName = override
+            } else {
+                let fmt = DateFormatter()
+                fmt.dateFormat = "yyyyMMdd"
+                branchName = "feature/\(fmt.string(from: Date()))-\(slug)"
+            }
 
             let ws = WorkstreamModel(
                 name: name,

@@ -161,9 +161,13 @@ struct WelcomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.windowBackgroundColor))
         .sheet(isPresented: $showNewWorkstreamSheet) {
-            NewWorkstreamSheet { name in
+            NewWorkstreamSheet(project: workspace.activeProject) { name, branchOverride in
                 if let project = workspace.activeProject {
-                    let result = workspace.addWorkstream(name: name, to: project)
+                    let result = workspace.addWorkstream(
+                        name: name,
+                        branch: branchOverride,
+                        to: project
+                    )
                     if case .failure(let error) = result {
                         fputs(
                             "[senkani] Failed to create workstream: \(error.localizedDescription)\n",

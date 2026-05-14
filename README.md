@@ -52,7 +52,15 @@ banner disappears once all seven fire. When the next milestone is
 **New Workstream** inline, so a fresh-install user has an active CTA
 alongside the passive **WORKSTREAMS** sidebar — which is now visible
 whenever a project is active, instead of unlocking only after the
-project already has two or more workstreams. The milestone log is
+project already has two or more workstreams. Removing a project or
+workstream is a hover-revealed **X** on the sidebar row that opens a
+tiered-checkbox confirmation dialog (operator picks per-artifact what
+to delete — sidebar entry mandatory, per-project app-support directory,
+per-workstream `.worktrees/<slug>/`, per-workstream feature branch);
+branches with unpushed commits surface an inline warning, force-remove
+is an explicit opt-in only after a failure, and `+ New Workstream`
+discloses the worktree path + branch name (editable) before it fires.
+The milestone log is
 local-only at `~/.senkani/onboarding/milestones.json` (mode 0600, no
 upload path) — opt out with `SENKANI_ONBOARDING_MILESTONES=off`.
 Inspect the live env-var state + on-disk JSON with

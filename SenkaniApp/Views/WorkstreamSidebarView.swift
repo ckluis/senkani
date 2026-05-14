@@ -9,6 +9,8 @@ struct WorkstreamSidebarView: View {
     let project: ProjectModel
     let workspace: WorkspaceModel
     @State private var showNewSheet = false
+    @State private var hoveredWorkstreamID: UUID?
+    @State private var removalTarget: WorkstreamModel?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -56,13 +58,23 @@ struct WorkstreamSidebarView: View {
         .frame(width: 160)
         .background(SenkaniTheme.paneShell)
         .sheet(isPresented: $showNewSheet) {
-            NewWorkstreamSheet { name in
-                let result = workspace.addWorkstream(name: name, to: project)
+            NewWorkstreamSheet(project: project) { name, branchOverride in
+                let result = workspace.addWorkstream(name: name, branch: branchOverride, to: project)
                 if case .failure(let error) = result {
                     fputs("[senkani] Failed to create workstream: \(error.localizedDescription)\n", stderr)
                 }
             }
         }
+        .sheet(item: $removalTarget) { ws in
+            WorkstreamRemoveSheet(workstream: ws, project: project, workspace: workspace)
+        }
+    }
+
+    /// Show the hover X only when more than one workstream exists and
+    /// this row isn't the default — matches model invariants in
+    /// `ProjectModel.removeWorkstream`.
+    private func canRemove(_ ws: WorkstreamModel) -> Bool {
+        !ws.isDefault && project.workstreams.count > 1
     }
 
     // MARK: - Workstream Row
@@ -94,10 +106,25 @@ struct WorkstreamSidebarView: View {
 
                 Spacer()
 
-                // Pane count
-                Text("\(ws.panes.count)")
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(SenkaniTheme.textTertiary)
+                // Hover-revealed remove X (suppressed for default + lone workstream).
+                if hoveredWorkstreamID == ws.id && canRemove(ws) {
+                    Button {
+                        removalTarget = ws
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(SenkaniTheme.textTertiary)
+                            .frame(width: 12, height: 12)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove workstream…")
+                } else {
+                    // Pane count
+                    Text("\(ws.panes.count)")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(SenkaniTheme.textTertiary)
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
@@ -108,5 +135,8 @@ struct WorkstreamSidebarView: View {
             )
         }
         .buttonStyle(.plain)
+        .onHover { inside in
+            hoveredWorkstreamID = inside ? ws.id : (hoveredWorkstreamID == ws.id ? nil : hoveredWorkstreamID)
+        }
     }
 }

@@ -67,6 +67,77 @@ struct OnboardingMilestoneTests {
                 "Progression.order must match the enum's allCases order.")
     }
 
+    @Test("Canonical raw-value spelling is pinned per case (locks casing — `firstNonzeroSavings` lowercase `z`)")
+    func canonicalRawValueSpellingIsPinned() {
+        // Lock the literal `String` rawValue for every case so the
+        // on-disk JSON key cannot silently drift across a rename.
+        // Filed as `onboarding-milestones-key-casing-mismatch-2026-05-14`
+        // after a walk-time discrepancy between operator-written AC
+        // text (capital `Z` typo) and the actual recorder output
+        // (lowercase `z`). The recorder has always been canonical;
+        // this test makes the canonical spelling load-bearing test
+        // state, so a future case rename must come through here.
+        let expected: [OnboardingMilestone: String] = [
+            .projectSelected:             "projectSelected",
+            .agentLaunched:               "agentLaunched",
+            .firstTrackedEvent:           "firstTrackedEvent",
+            .firstNonzeroSavings:         "firstNonzeroSavings",
+            .firstBudgetSet:              "firstBudgetSet",
+            .firstWorkstreamCreated:      "firstWorkstreamCreated",
+            .firstStagedProposalReviewed: "firstStagedProposalReviewed",
+        ]
+        for milestone in OnboardingMilestone.allCases {
+            guard let want = expected[milestone] else {
+                Issue.record("New milestone case \(milestone) added without a canonical-spelling pin in this test.")
+                continue
+            }
+            #expect(milestone.rawValue == want,
+                    "Canonical spelling drift for \(milestone): expected '\(want)', got '\(milestone.rawValue)'.")
+        }
+        #expect(expected.count == OnboardingMilestone.allCases.count,
+                "Pin table must cover every case; got \(expected.count) pins for \(OnboardingMilestone.allCases.count) cases.")
+    }
+
+    @Test("Store silently drops unknown on-disk keys — legacy/non-canonical entries cannot crash a read")
+    func storeIgnoresUnknownOnDiskKeys() throws {
+        // Durable evidence for AC #4 of
+        // `onboarding-milestones-key-casing-mismatch-2026-05-14`:
+        // no migration shipped because no existing install holds a
+        // non-canonical key (the recorder is Codable-driven on the
+        // canonical rawValue), AND the store tolerates unknown keys
+        // on read (see Sources/Core/OnboardingMilestoneStore.swift
+        // around the `OnboardingMilestone(rawValue: key)` guard).
+        // This test pins both halves of that contract so a future
+        // refactor cannot weaken either.
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let dir = (home as NSString).appendingPathComponent(".senkani/onboarding")
+        try FileManager.default.createDirectory(
+            atPath: dir, withIntermediateDirectories: true
+        )
+        let path = OnboardingMilestoneStore.filePath(home: home)
+        // Hand-written JSON mixing one canonical key, one hypothetical
+        // legacy capital-Z key (the typo from Finding #D), and one
+        // junk key. Only the canonical key must surface on read.
+        let json = """
+        {
+          "firstNonzeroSavings": "2026-05-13T19:40:08.572Z",
+          "firstNonZeroSavings": "2026-05-13T19:40:08.572Z",
+          "totallyUnknownLegacyKey": "2026-05-13T19:40:08.572Z"
+        }
+        """
+        try json.write(toFile: path, atomically: true, encoding: .utf8)
+
+        let completed = OnboardingMilestoneStore.completed(home: home)
+        #expect(completed[.firstNonzeroSavings] != nil,
+                "Canonical key must round-trip from a hand-written file.")
+        #expect(completed.count == 1,
+                "Only the canonical key may surface; got \(completed.count) entries from a 3-key file.")
+        let landedKeys = completed.keys.map(\.rawValue).sorted()
+        #expect(landedKeys == ["firstNonzeroSavings"],
+                "Unknown keys must be silently dropped; got \(landedKeys).")
+    }
+
     @Test("Every milestone has title + populating event + next-action copy")
     func copyTableIsComplete() {
         for milestone in OnboardingMilestone.allCases {

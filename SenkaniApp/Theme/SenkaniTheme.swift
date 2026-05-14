@@ -103,6 +103,17 @@ enum SenkaniTheme {
     /// Resize handle invisible hit target width.
     static let resizeHandleHitWidth: CGFloat = 28
 
+    /// Top inset excluded from the right-edge resize handle's hit region so
+    /// it never intercepts clicks on the pane-close `X` (in the 24pt header)
+    /// or the settings-panel `X` (top-trailing of the body when open).
+    ///
+    /// Derivation (kept ≥ sum so changes upstream don't silently regress):
+    /// `accentLineHeight (1.5) + activeAccentLineHeight (2.5 worst case)
+    /// + headerHeight (24) + separator (0.5) + settings-panel-x inset (8)
+    /// + settings-panel-x icon (14) + safety margin ≈ 60`.
+    /// See `PaneRightEdgeHandleGeometryTests` for the invariant test.
+    static let resizeHandleTopExclusionInset: CGFloat = 60
+
     /// Active pane border width.
     static let activeBorderWidth: CGFloat = 1.5
 

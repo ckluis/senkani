@@ -19,6 +19,25 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 > linked file, and lets the next `/senkani-autonomous` close-mode
 > sweep finalize.
 
+> **Process standard for walk-runner bundle staleness (added 2026-05-14).**
+> Walk runners that wrap the SenkaniApp binary into an `.app` bundle
+> under `tools/soak/runner/` are now guarded against silent stale-walk
+> hazards by `senkani doctor` check #20 and the shared rebuild helper
+> exposed as `senkani walk rebuild-bundle <bundle>` (shipped
+> 2026-05-14 via
+> [`onboarding-pass-stale-bundle-hazard-2026-05-14`](../../spec/autonomous/completed/2026/2026-05-14-onboarding-pass-stale-bundle-hazard-2026-05-14.md)).
+> Onboarding-pass precheck runners (e.g.
+> `tools/soak/runner/rewalk-2026-05-13-01-precheck.command`) invoke the
+> helper at pre-flight; the operator no longer needs to manually
+> compare bundle binary mtime against `main` HEAD or perform the
+> `swift build` / `cp` / `codesign` / `lsregister` dance by hand.
+> `senkani doctor` auto-rebuilds on detected staleness unless
+> `--no-rebuild-stale-bundle` is passed. Reason: 2026-05-14
+> onboarding-pass walk Finding #H — the wrapped bundle the
+> 2026-05-11 walk session was driving silently fell behind `main`
+> by a critical-AC commit; only the walk's plan-level check
+> caught it.
+
 > **Process standard for uninstall test plans (added 2026-05-05).**
 > Every groomed uninstall test plan (v3 amendment, v0.4.0 release
 > pass, or any future variant) MUST include a

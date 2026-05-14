@@ -2,6 +2,14 @@
 # Wrap the swift-built SenkaniApp executable in a minimal .app bundle so
 # macOS LaunchServices treats it as a GUI app and opens its main window.
 # Then `open` it.
+#
+# TODO (onboarding-pass-stale-bundle-hazard-2026-05-14): the second-pass
+# refresh paths in this script (swift build + cp into existing bundle +
+# lsregister) overlap `senkani walk rebuild-bundle`. For now the
+# from-scratch create path stays inline (Info.plist + Resources copy is
+# bundle-create-only); only the *refresh* path of sibling rewalk runners
+# has migrated. If this script ever gains a "bundle exists; just
+# refresh" branch, swap to `senkani walk rebuild-bundle <bundle>`.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 LOG="$HERE/08-bundle.log"

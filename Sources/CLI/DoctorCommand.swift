@@ -31,6 +31,9 @@ struct Doctor: ParsableCommand {
     @Option(name: .long, help: "Free-form note recorded on the new repair anchor's operator_note field.")
     var note: String?
 
+    @Flag(name: .long, help: "When check #20 detects a stale walk bundle, skip the auto-rebuild and only warn. Default is rebuild.")
+    var noRebuildStaleBundle = false
+
     // MARK: - Counters
 
     private struct Results {
@@ -123,6 +126,12 @@ struct Doctor: ParsableCommand {
         // 19. FileProvider eviction risk on .build/ checkouts
         //     (build-env-swiftpm-checkout-corruption-icloud-eviction-2026-05-09 Phase A).
         checkFileProviderEviction(&results)
+
+        // 20. Walk-bundle staleness — `tools/soak/runner/[_onboarding-pass-]SenkaniApp.app`
+        //     binary mtime vs merge-target HEAD commit time. Auto-
+        //     rebuilds via BundleRebuilder unless --no-rebuild-stale-bundle.
+        //     (onboarding-pass-stale-bundle-hazard-2026-05-14.)
+        checkBundleStaleness(&results)
 
         print("")
         var parts: [String] = []
@@ -1114,6 +1123,100 @@ struct Doctor: ParsableCommand {
             case .fail: results.failed += 1
             case .skip: results.skipped += 1
             }
+        }
+    }
+
+    // MARK: - Check 20: Walk-bundle staleness
+
+    /// Pure formatter for the bundle-staleness check.
+    ///
+    /// Shape (`.stale`):
+    ///   ✗ Bundle staleness — <bundle> is older than HEAD (<ref>)
+    ///     bundle: <yyyy-MM-dd HH:mm:ss> | HEAD: <yyyy-MM-dd HH:mm:ss> [— <subject>]
+    ///     recommended: `senkani walk rebuild-bundle <bundle>` (or rely on auto-rebuild)
+    static func formatBundleStalenessLines(
+        _ report: BundleStalenessReport,
+        mergeTarget: String
+    ) -> [(Status, String)] {
+        switch report.verdict {
+        case .fresh:
+            return [(.pass, "Bundle staleness: \(report.bundlePath) is up-to-date with \(mergeTarget) HEAD")]
+        case .notApplicable:
+            let reason = report.notApplicableReason ?? "not applicable"
+            return [(.skip, "Bundle staleness: skipped (\(reason))")]
+        case .stale:
+            let fmt = DateFormatter()
+            fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
+            let bundleStr = report.binaryMtime.map { fmt.string(from: $0) } ?? "?"
+            let headStr = report.headCommitTime.map { fmt.string(from: $0) } ?? "?"
+            let subject = report.headCommitSubject.map { " — \($0)" } ?? ""
+            return [
+                (.fail, "Bundle staleness — \(report.bundlePath) is older than \(mergeTarget) HEAD"),
+                (.fail, "  bundle: \(bundleStr) | HEAD: \(headStr)\(subject)"),
+                (.fail, "  recommended: `senkani walk rebuild-bundle \(report.bundlePath)` (or rely on auto-rebuild)"),
+            ]
+        }
+    }
+
+    private func checkBundleStaleness(_ results: inout Results) {
+        let projectRoot = FileManager.default.currentDirectoryPath
+        guard let bundlePath = BundleStalenessScanner.discoverBundlePath(
+            projectRoot: projectRoot
+        ) else {
+            // Silent skip — no walk bundle present, so the check is
+            // irrelevant. Don't bump the skipped counter (the doctor
+            // surface already has many "X: not running" skips; this
+            // one is too niche to surface for non-walk runs).
+            return
+        }
+        let mergeTarget = BundleStalenessScanner.resolveMergeTarget(
+            projectRoot: projectRoot
+        )
+        let headCt = BundleStalenessScanner.headCommitTime(
+            projectRoot: projectRoot, ref: mergeTarget
+        )
+        let headSubject = BundleStalenessScanner.headCommitSubject(
+            projectRoot: projectRoot, ref: mergeTarget
+        )
+        let report = BundleStalenessScanner.scan(
+            bundlePath: bundlePath,
+            headCommitTime: headCt,
+            headCommitSubject: headSubject
+        )
+        for (status, message) in Self.formatBundleStalenessLines(
+            report, mergeTarget: mergeTarget
+        ) {
+            printStatus(status, message)
+            switch status {
+            case .pass: results.passed += 1
+            case .fixed: results.fixed += 1
+            case .fail: results.failed += 1
+            case .skip: results.skipped += 1
+            }
+        }
+        // Auto-rebuild on stale unless opted out. The print line is the
+        // operator-visible signal that doctor is about to invoke a side
+        // effect; --no-rebuild-stale-bundle reverses the default.
+        guard report.verdict == .stale else { return }
+        if noRebuildStaleBundle {
+            printStatus(.skip, "Bundle staleness: --no-rebuild-stale-bundle set; skipping auto-rebuild.")
+            return
+        }
+        printStatus(.fixed, "Bundle staleness: rebuilding via shared helper...")
+        do {
+            try BundleRebuilder.rebuild(
+                bundlePath: bundlePath,
+                projectRoot: projectRoot
+            ) { print("  \($0)") }
+            // Re-balance counters: the .fail lines from the report
+            // tripped results.failed by 3; the rebuild succeeded, so
+            // demote those to fixed.
+            results.failed -= 3
+            results.fixed += 3
+            printStatus(.fixed, "Bundle staleness: bundle refreshed.")
+        } catch {
+            printStatus(.fail, "Bundle staleness: rebuild failed — \(error)")
+            results.failed += 1
         }
     }
 

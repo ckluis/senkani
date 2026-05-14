@@ -65,6 +65,7 @@
         <li><a href="../../docs/reference/cli/senkani-skill.html"><code>senkani skill</code></a></li>
         <li><a href="../../docs/reference/cli/senkani-pack.html"><code>senkani pack</code></a></li>
         <li><code>senkani onboarding</code></li>
+        <li><code>senkani walk</code></li>
       </ul>
     </div>
   </aside>
@@ -107,6 +108,7 @@
       <a class="listing-row" href="../../docs/reference/cli/senkani-pack.html"><div class="listing-name">senkani pack</div><div class="listing-desc">Install, uninstall, and list SkillPacks (multi-skill bundles + HookRouter policy fragment + context doc). Collision-diff on install; chained provenance via <code>pack_audits</code>.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
       <a class="listing-row" href="../../docs/reference/cli/senkani-models.html"><div class="listing-name">senkani models</div><div class="listing-desc">List, pull, or verify Senkani's local ML models (vision, embeddings, Layer-3 PII classifier). Operator-explicit pulls; no auto-download.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
       <div class="listing-row"><div class="listing-name">senkani onboarding milestones</div><div class="listing-desc">Read-only verification surface for <code>~/.senkani/onboarding/milestones.json</code>. Prints the live <code>SENKANI_ONBOARDING_MILESTONES</code> gate state, resolved path, file's JSON, and a derived <code>summary.allComplete</code> line — bypasses the env gate on reads so <code>=off</code> still surfaces on-disk truth.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></div>
+      <div class="listing-row"><div class="listing-name">senkani walk rebuild-bundle</div><div class="listing-desc">Rebuild SenkaniApp from current HEAD and refresh the wrapped <code>.app</code> bundle under <code>tools/soak/runner/</code>: <code>swift build --product SenkaniApp</code> → copy debug binary into <code>Contents/MacOS/SenkaniApp</code> → ad-hoc <code>codesign --force --sign -</code> → <code>lsregister -f</code>. Shared callable form used by <code>senkani doctor</code> check #20 and the walk-runner <code>.command</code> scripts (eliminating the inline rebuild dance).</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></div>
     </div>
   </article>
 </main>

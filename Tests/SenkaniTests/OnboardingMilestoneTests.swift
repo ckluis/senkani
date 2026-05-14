@@ -165,6 +165,95 @@ struct OnboardingMilestoneTests {
                 "Store file must be 0600 — milestone log is user-local data; got \(String(describing: posix)).")
     }
 
+    @Test("Concurrent records on distinct milestones all land — no lost-update race",
+          .timeLimit(.minutes(1)))
+    func recordIsSerializedAcrossConcurrentMilestones() async {
+        // Fix verification for
+        // `onboarding-milestone-recorder-gap-projectSelected-agentLaunched-2026-05-14`:
+        // before this round, `record()` had a TOCTOU between the
+        // `completed(...)` read and the `write(...)` call. Two
+        // concurrent records on different milestones could each read
+        // the same baseline, mutate their own snapshot, and write
+        // back — last write wins, the other's update vanishes.
+        // The recordLock now serializes the critical section.
+        //
+        // We exercise the race by firing N records per milestone
+        // concurrently via `withTaskGroup`. After the storm, every
+        // one of the seven milestone keys must be on disk.
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+
+        let storms = 16  // per-milestone concurrent record fan-out
+        let baseDate = Date(timeIntervalSince1970: 1_750_000_000)
+
+        await withTaskGroup(of: Void.self) { group in
+            for (index, milestone) in OnboardingMilestone.allCases.enumerated() {
+                for storm in 0..<storms {
+                    let when = baseDate.addingTimeInterval(
+                        Double(index * storms + storm)
+                    )
+                    group.addTask {
+                        _ = OnboardingMilestoneStore.record(
+                            milestone, at: when, home: home
+                        )
+                    }
+                }
+            }
+        }
+
+        let completed = OnboardingMilestoneStore.completed(home: home)
+        let landedKeys = completed.keys.map(\.rawValue).sorted()
+        for milestone in OnboardingMilestone.allCases {
+            #expect(completed[milestone] != nil,
+                    "Concurrent record storm dropped \(milestone). Got keys: \(landedKeys).")
+        }
+        #expect(completed.count == OnboardingMilestone.allCases.count,
+                "Exactly 7 keys must land; got \(completed.count).")
+    }
+
+    @Test("record does not enforce predecessor chain — Progression owns ordering")
+    func recordDoesNotEnforcePredecessorChain() {
+        // The "Atomicity contract" doc on OnboardingMilestoneStore
+        // pins this as intentional: the Store is a passive observer,
+        // the chain logic lives in OnboardingMilestoneProgression.
+        // Recording `firstTrackedEvent` without `projectSelected`
+        // must succeed and write only the recorded key — no
+        // backfill, no refusal. The UI surface reads the
+        // Progression's "next" ordering, which surfaces
+        // `projectSelected` for the user to cross on its own merits.
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let when = Date(timeIntervalSince1970: 1_750_000_000)
+
+        let wrote = OnboardingMilestoneStore.record(
+            .firstTrackedEvent, at: when, home: home
+        )
+        #expect(wrote,
+                "record must succeed when a predecessor is missing — the Store is observation-level, not a state machine.")
+
+        let completed = OnboardingMilestoneStore.completed(home: home)
+        #expect(completed[.firstTrackedEvent] != nil,
+                "firstTrackedEvent must persist.")
+        #expect(completed[.projectSelected] == nil,
+                "Predecessor must NOT be backfilled — that's a Progression concern, not a Store concern.")
+        #expect(completed[.agentLaunched] == nil,
+                "Predecessor must NOT be backfilled — same rationale.")
+        let landedKeys = completed.keys.map(\.rawValue).sorted()
+        #expect(completed.count == 1,
+                "Exactly one key must land; got keys \(landedKeys).")
+
+        // The UI surface (read via Progression) sees `projectSelected`
+        // as the next step the user should cross, even though
+        // `firstTrackedEvent` already fired out of order. This is the
+        // canonical recovery path for the recorder-fired-out-of-order
+        // case (e.g. operator `rm -f` of the file mid-walk).
+        let summary = OnboardingMilestoneProgression.summary(
+            completed: Set(completed.keys)
+        )
+        #expect(summary.next == .projectSelected,
+                "Progression must surface projectSelected as next even though firstTrackedEvent already fired — chain reasoning lives in Progression, not Store.")
+    }
+
     @Test("Env gate SENKANI_ONBOARDING_MILESTONES=off no-ops every API")
     func envGateNoOps() {
         let home = makeTempHome()

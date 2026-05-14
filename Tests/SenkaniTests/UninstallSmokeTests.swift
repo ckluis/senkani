@@ -37,7 +37,7 @@ struct UninstallSmokeTests {
             try? FileManager.default.removeItem(at: root)
         }
 
-        /// Seed every one of the 11 categories that the scanner knows about.
+        /// Seed every one of the 12 categories that the scanner knows about.
         func seedAll() throws {
             try seedGlobalMCPRegistration()
             try seedProjectHooks()
@@ -50,6 +50,7 @@ struct UninstallSmokeTests {
             try seedModelMetadataCache()
             try seedAppPreferences()
             try seedAppCacheDirectory()
+            try seedSavedApplicationState()
         }
 
         func seedGlobalMCPRegistration() throws {
@@ -290,6 +291,35 @@ struct UninstallSmokeTests {
                                    withIntermediateDirectories: true)
         }
 
+        /// Seed `~/Library/Saved Application State/dev.senkani.app.savedState/`
+        /// (the macOS NSWindowRestoration state directory for processes
+        /// running under the SenkaniApp bundle ID). Mirrors the
+        /// 2026-05-11 onboarding-pass Finding #B observation that the
+        /// directory survived `senkani uninstall --yes`, leaving stale
+        /// window position from prior runs that opened the main window
+        /// off-screen during the next clean-install walk. Also seeds an
+        /// unrelated `<bundle>.savedState/` sibling to verify the
+        /// scanner's prefix filter doesn't sweep non-senkani state.
+        func seedSavedApplicationState() throws {
+            let fm = FileManager.default
+            let stateRoot = home + "/Library/Saved Application State"
+            let senkaniState = stateRoot + "/dev.senkani.app.savedState"
+            try fm.createDirectory(atPath: senkaniState,
+                                   withIntermediateDirectories: true)
+            // Seed a stray windows.plist inside to ensure removal strips
+            // the whole subtree (mirrors cat-11's Cache.db fixture). The
+            // real macOS contents are `windows.plist` + `data.data`.
+            try Data().write(to: URL(fileURLWithPath:
+                senkaniState + "/windows.plist"))
+            try Data().write(to: URL(fileURLWithPath:
+                senkaniState + "/data.data"))
+            // Unrelated savedState — must NOT be flagged.
+            try fm.createDirectory(atPath: stateRoot + "/com.other.tool.savedState",
+                                   withIntermediateDirectories: true)
+            try Data().write(to: URL(fileURLWithPath:
+                stateRoot + "/com.other.tool.savedState/windows.plist"))
+        }
+
         func scanner(keepData: Bool = false) -> UninstallArtifactScanner {
             UninstallArtifactScanner(
                 homeDir: home, appSupportDir: appSupport, keepData: keepData)
@@ -311,7 +341,7 @@ struct UninstallSmokeTests {
                 "one artifact per category when fully seeded")
     }
 
-    @Test func keepDataOmitsSessionDatabaseAndAppPreferencesAndAppCacheDirectory() throws {
+    @Test func keepDataOmitsSessionDatabaseAndAppPreferencesAndAppCacheDirectoryAndSavedApplicationState() throws {
         let f = try Fixture()
         try f.seedAll()
 
@@ -323,8 +353,10 @@ struct UninstallSmokeTests {
                 "--keep-data must suppress the appPreferences artifact (user customization)")
         #expect(!categories.contains(.appCacheDirectory),
                 "--keep-data must suppress the appCacheDirectory artifact (bundle-ID cache)")
-        #expect(categories.count == UninstallArtifactScanner.Category.allCases.count - 3,
-                "all categories minus sessionDatabase + appPreferences + appCacheDirectory are still discovered")
+        #expect(!categories.contains(.savedApplicationState),
+                "--keep-data must suppress the savedApplicationState artifact (window position)")
+        #expect(categories.count == UninstallArtifactScanner.Category.allCases.count - 4,
+                "all categories minus sessionDatabase + appPreferences + appCacheDirectory + savedApplicationState are still discovered")
     }
 
     @Test func keepDataFalseIncludesSessionDatabase() throws {
@@ -655,6 +687,79 @@ struct UninstallSmokeTests {
         let artifacts = f.scanner().scan()
         #expect(artifacts.isEmpty,
                 "OS-managed sibling caches must not produce artifacts — got \(artifacts.map(\.category.rawValue))")
+    }
+
+    @Test func discoveryFindsSavedApplicationStateAndIdempotentRemoval() throws {
+        let f = try Fixture()
+        try f.seedSavedApplicationState()
+
+        // Scan should pick up only the dev.senkani.app.savedState dir;
+        // the unrelated com.other.tool.savedState sibling must NOT be
+        // flagged.
+        let artifacts = f.scanner().scan()
+        let categories = Set(artifacts.map(\.category))
+        #expect(categories == [.savedApplicationState],
+                "only savedApplicationState should be discovered, got \(categories.map(\.rawValue).sorted())")
+
+        if let item = artifacts.first(where: { $0.category == .savedApplicationState }) {
+            #expect(item.description.contains("dev.senkani.app.savedState"),
+                    "expected description to mention dev.senkani.app.savedState path, got: \(item.description)")
+        }
+
+        // Removal strips the whole subtree — including the seeded
+        // windows.plist + data.data files.
+        for item in artifacts where item.category == .savedApplicationState {
+            try item.remove()
+        }
+
+        let fm = FileManager.default
+        let stateRoot = f.home + "/Library/Saved Application State"
+        #expect(!fm.fileExists(atPath: stateRoot + "/dev.senkani.app.savedState"),
+                "dev.senkani.app.savedState dir should be gone after removal")
+        #expect(!fm.fileExists(atPath: stateRoot + "/dev.senkani.app.savedState/windows.plist"),
+                "windows.plist inside dev.senkani.app.savedState should be gone after removal")
+        #expect(!fm.fileExists(atPath: stateRoot + "/dev.senkani.app.savedState/data.data"),
+                "data.data inside dev.senkani.app.savedState should be gone after removal")
+
+        // Unrelated sibling must remain untouched.
+        #expect(fm.fileExists(atPath: stateRoot + "/com.other.tool.savedState"),
+                "unrelated savedState sibling must NOT be removed")
+        #expect(fm.fileExists(atPath: stateRoot + "/com.other.tool.savedState/windows.plist"),
+                "unrelated savedState file must NOT be removed")
+
+        // Re-scan must be empty (idempotent).
+        #expect(f.scanner().scan().isEmpty,
+                "after removal, scanner finds nothing")
+    }
+
+    @Test func keepDataOmitsSavedApplicationState() throws {
+        let f = try Fixture()
+        try f.seedSavedApplicationState()
+
+        // With --keep-data, the saved-state directory must be preserved
+        // (window position is ergonomic state, matches cat-11
+        // appCacheDirectory semantics).
+        let categories = Set(f.scanner(keepData: true).scan().map(\.category))
+        #expect(!categories.contains(.savedApplicationState),
+                "--keep-data must suppress the savedApplicationState artifact")
+    }
+
+    @Test func scannerIgnoresSavedApplicationStateSiblings() throws {
+        let f = try Fixture()
+        let fm = FileManager.default
+
+        // Seed ONLY an unrelated <other>.savedState sibling — no
+        // dev.senkani.app.savedState. The scanner must produce zero
+        // artifacts.
+        let stateRoot = f.home + "/Library/Saved Application State"
+        try fm.createDirectory(atPath: stateRoot + "/com.other.tool.savedState",
+                               withIntermediateDirectories: true)
+        try Data().write(to: URL(fileURLWithPath:
+            stateRoot + "/com.other.tool.savedState/windows.plist"))
+
+        let artifacts = f.scanner().scan()
+        #expect(artifacts.isEmpty,
+                "non-senkani savedState dirs must not produce artifacts — got \(artifacts.map(\.category.rawValue))")
     }
 
     @Test func scannerIgnoresOSManagedSenkaniCachesWithoutDevSenkani() throws {

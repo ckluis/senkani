@@ -66,7 +66,7 @@
 
     <h2>Commit</h2>
     <pre class="code">senkani uninstall --yes --keep-data</pre>
-    <p>The scanner walks eleven categories in a fixed order. Always removed:</p>
+    <p>The scanner walks twelve categories in a fixed order. Always removed:</p>
     <ul>
       <li>MCP registration in <code>~/.claude/settings.json</code> — the global Claude Code settings file. One scan step, one file.</li>
       <li>Hook registrations in per-project <code>&lt;project&gt;/.claude/settings.json</code> files (PreToolUse + PostToolUse). Senkani's workspace.json drives the project list; the legacy <code>~/.claude/projects/</code> tree is also scanned for back-compat. One scan step, N project files.</li>
@@ -82,8 +82,9 @@
       <li>Session database at <code>~/Library/Application Support/Senkani/</code> (FCSIT history, agent stats, knowledge base).</li>
       <li>App preferences at <code>~/Library/Preferences/dev.senkani.app.plist</code> plus any ByHost variants (FCSIT toggles, milestone progress, first-use flags). cfprefsd's in-memory snapshot is evicted in the same step so the next launch reads from disk.</li>
       <li>Cache directory at <code>~/Library/Caches/dev.senkani.app/</code> — macOS auto-creates this for any process running under the SenkaniApp bundle ID. Distinct from the bundle-ID-only <code>dev.senkani/</code> cat-9 entry above. Surfaced 2026-05-11 by the Step-9 broad sweep; honors <code>--keep-data</code> per operator decision.</li>
+      <li>Saved application state at <code>~/Library/Saved Application State/dev.senkani.app.savedState/</code> — macOS NSWindowRestoration writes window position, last-open documents, and per-window restore state here keyed by bundle ID. Surfaced 2026-05-14 by the onboarding-pass walk (Finding #B): the directory survived <code>senkani uninstall --yes</code> and the next install opened SenkaniApp's main window off-screen from the prior run's coordinates, breaking the clean-install premise of the walk. Honors <code>--keep-data</code> — window position is ergonomic state.</li>
     </ul>
-    <p><code>--keep-data</code> keeps the session database, app preferences, and bundle-ID cache directory in place. Drop the flag if you want everything gone — including the first-launch state, so the next launch behaves like a fresh install.</p>
+    <p><code>--keep-data</code> keeps the session database, app preferences, bundle-ID cache directory, and saved application state in place. Drop the flag if you want everything gone — including the first-launch state, so the next launch behaves like a fresh install.</p>
 
     <h2>Full wipe</h2>
     <pre class="code">senkani wipe --yes</pre>

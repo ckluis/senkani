@@ -60,6 +60,20 @@ import Core
 /// candidate-library-caches-dev.senkani.app-2026-05-11` backlog
 /// item's acceptance for the explicit operator decision.
 ///
+/// Category-12 (`savedApplicationState`) was added 2026-05-14 after
+/// the `release-v0-3-0-onboarding-pass` 2026-05-11 walk Finding #B
+/// surfaced that SenkaniApp's main window opened off-screen mid-
+/// walkthrough — macOS persists window position, last-open documents,
+/// and NSWindowRestoration state in `~/Library/Saved Application
+/// State/<bundleID>.savedState/` and that directory survived a full
+/// `--yes` uninstall, breaking the premise of every clean-install
+/// onboarding walk. Path:
+/// `~/Library/Saved Application State/dev.senkani.app.savedState/`.
+/// Like cat-11 the dir is macOS-managed but bears the senkani bundle
+/// identity; removal strips the whole subtree. Honored under
+/// `--keep-data`: window position is ergonomic state, parallel to
+/// cat-11's bundle-ID cache.
+///
 /// Out-of-scope (by design — verified 2026-05-11):
 /// - `~/Library/Caches/SenkaniApp` — macOS-managed (auto-created per
 ///   bundle name; no Senkani write code path).
@@ -75,7 +89,7 @@ import Core
 ///   or Claude Code itself. Senkani's hook lives at
 ///   `~/.senkani/bin/senkani-hook` (category-3, `hookBinary`).
 struct UninstallArtifactScanner {
-    /// The eleven artifact categories `senkani uninstall` can remove. The
+    /// The twelve artifact categories `senkani uninstall` can remove. The
     /// string value is a stable identifier for assertions; user-facing text
     /// lives in `Artifact.description`.
     enum Category: String, CaseIterable, Sendable {
@@ -90,6 +104,7 @@ struct UninstallArtifactScanner {
         case modelMetadataCache
         case appPreferences
         case appCacheDirectory
+        case savedApplicationState
     }
 
     struct Artifact {
@@ -122,6 +137,9 @@ struct UninstallArtifactScanner {
     var appPreferencesPlist: String { homeDir + "/Library/Preferences/dev.senkani.app.plist" }
     var appPreferencesByHostDir: String { homeDir + "/Library/Preferences/ByHost" }
     var appCacheDir: String { homeDir + "/Library/Caches/dev.senkani.app" }
+    var savedApplicationStateDir: String {
+        homeDir + "/Library/Saved Application State/dev.senkani.app.savedState"
+    }
     static let appPreferencesBundleID = "dev.senkani.app"
 
     func scan() -> [Artifact] {
@@ -390,6 +408,26 @@ struct UninstallArtifactScanner {
                     icon: "\u{1F4BE}",
                     description: "Cache directory at ~/Library/Caches/dev.senkani.app/",
                     remove: { try fm.removeItem(atPath: cacheDir) }
+                ))
+            }
+        }
+
+        // 12. SenkaniApp saved-application-state directory at
+        // ~/Library/Saved Application State/dev.senkani.app.savedState/.
+        // macOS NSWindowRestoration writes window position, last-open
+        // documents, and per-window restore state here keyed by bundle
+        // ID. Survives uninstall today and breaks clean-install
+        // validation walks (window opens off-screen from prior runs).
+        // Honored under `--keep-data` — window position is ergonomic
+        // state, parallel to cat-11's treatment.
+        if !keepData {
+            let savedStateDir = savedApplicationStateDir
+            if fm.fileExists(atPath: savedStateDir) {
+                items.append(Artifact(
+                    category: .savedApplicationState,
+                    icon: "\u{1FA9F}",
+                    description: "Saved application state at ~/Library/Saved Application State/dev.senkani.app.savedState/",
+                    remove: { try fm.removeItem(atPath: savedStateDir) }
                 ))
             }
         }

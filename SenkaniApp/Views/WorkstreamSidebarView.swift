@@ -1,8 +1,10 @@
 import SwiftUI
 
-/// Conditional second sidebar showing workstreams for the active project.
-/// Only visible when the project has 2+ workstreams.
-/// Progressive disclosure: invisible for single-workstream projects.
+/// Second sidebar showing workstreams for the active project.
+/// Visible whenever a project is active — the "+ New Workstream"
+/// button is the discoverability surface for the
+/// `firstWorkstreamCreated` onboarding milestone, so the sidebar
+/// must render on a fresh install (count == 1) too.
 struct WorkstreamSidebarView: View {
     let project: ProjectModel
     let workspace: WorkspaceModel

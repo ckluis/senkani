@@ -197,6 +197,37 @@ struct OnboardingMilestoneCallsiteTests {
             "addWorkstream must record .firstWorkstreamCreated on success.")
     }
 
+    // 6a. ContentView — WorkstreamSidebarView always-visible invariant.
+    //     The `workstreams.count > 1` gate hid the only discoverable
+    //     "+ New Workstream" affordance on fresh projects, making the
+    //     `.firstWorkstreamCreated` milestone unreachable
+    //     (onboarding-milestone-6 finding, walk 2026-05-13).
+    @Test("ContentView renders WorkstreamSidebarView without a count > 1 gate")
+    func contentViewWorkstreamSidebarAlwaysVisible() {
+        let src = read("SenkaniApp/Views/ContentView.swift")
+        #expect(!src.isEmpty,
+                "SenkaniApp/Views/ContentView.swift must exist.")
+        #expect(src.contains("WorkstreamSidebarView"),
+                "ContentView must render WorkstreamSidebarView.")
+        #expect(!src.contains("project.workstreams.count > 1"),
+                "ContentView must not gate WorkstreamSidebarView on project.workstreams.count > 1 — the gate hides the only discoverable + New Workstream UI on a fresh project and strands users on the seven-milestone arc.")
+    }
+
+    // 6b. WelcomeView — onboarding banner CTA wires NewWorkstreamSheet
+    //     into workspace.addWorkstream so a fresh-install user can
+    //     cross `.firstWorkstreamCreated` from the active onboarding
+    //     surface, not only the always-visible sidebar.
+    @Test("WelcomeView banner CTA presents NewWorkstreamSheet and calls workspace.addWorkstream")
+    func welcomeViewBannerOffersNewWorkstreamSheet() {
+        let src = read("SenkaniApp/Views/WelcomeView.swift")
+        #expect(!src.isEmpty,
+                "SenkaniApp/Views/WelcomeView.swift must exist.")
+        #expect(src.contains("NewWorkstreamSheet"),
+                "WelcomeView must reference NewWorkstreamSheet so the banner CTA can present it.")
+        #expect(src.contains("workspace.addWorkstream"),
+                "WelcomeView's banner tap path must route through workspace.addWorkstream so the .firstWorkstreamCreated milestone fires.")
+    }
+
     // 7. SprintReviewViewModel.accept and .reject — fire
     //    .firstStagedProposalReviewed.
     @Test("SprintReviewViewModel.accept/reject record .firstStagedProposalReviewed")

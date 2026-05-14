@@ -46,8 +46,13 @@ struct ContentView: View {
                     .fill(SenkaniTheme.appBackground)
                     .frame(width: 1)
 
-                // Workstream sidebar (conditional — only when 2+ workstreams)
-                if let project = workspace.activeProject, project.workstreams.count > 1 {
+                // Workstream sidebar — always visible when a project is
+                // active. The "+ New Workstream" button is the only
+                // discoverable UI path for the `firstWorkstreamCreated`
+                // onboarding milestone on a fresh install, so the gate
+                // that previously hid the sidebar until count > 1
+                // would have stranded users on the seven-milestone arc.
+                if let project = workspace.activeProject {
                     WorkstreamSidebarView(project: project, workspace: workspace)
                         .transition(.move(edge: .leading).combined(with: .opacity))
 

@@ -47,9 +47,14 @@ A modest **Next: &lt;step&gt;** banner on the Welcome screen surfaces the next
 early-use milestone the user hasn't reached yet (project picked → agent
 launched → first tracked event → first non-zero savings → first budget
 set → first workstream created → first staged proposal reviewed); the
-banner disappears once all seven fire. The milestone log is local-only at
-`~/.senkani/onboarding/milestones.json` (mode 0600, no upload path) — opt
-out with `SENKANI_ONBOARDING_MILESTONES=off`.
+banner disappears once all seven fire. When the next milestone is
+*first workstream created*, the banner becomes tappable and opens
+**New Workstream** inline, so a fresh-install user has an active CTA
+alongside the passive **WORKSTREAMS** sidebar — which is now visible
+whenever a project is active, instead of unlocking only after the
+project already has two or more workstreams. The milestone log is
+local-only at `~/.senkani/onboarding/milestones.json` (mode 0600, no
+upload path) — opt out with `SENKANI_ONBOARDING_MILESTONES=off`.
 See [docs/guides/first-session.html](docs/guides/first-session.html)
 for the walkthrough.
 

@@ -55,6 +55,11 @@ whenever a project is active, instead of unlocking only after the
 project already has two or more workstreams. The milestone log is
 local-only at `~/.senkani/onboarding/milestones.json` (mode 0600, no
 upload path) — opt out with `SENKANI_ONBOARDING_MILESTONES=off`.
+Inspect the live env-var state + on-disk JSON with
+`senkani onboarding milestones` (read-only; ignores the env gate so
+`=off` still surfaces on-disk truth — the gate is opt-out-of-recording,
+not opt-out-of-observability). `cat ~/.senkani/onboarding/milestones.json`
+is the script-friendly raw fallback.
 See [docs/guides/first-session.html](docs/guides/first-session.html)
 for the walkthrough.
 

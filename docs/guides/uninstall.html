@@ -86,6 +86,11 @@
     </ul>
     <p><code>--keep-data</code> keeps the session database, app preferences, bundle-ID cache directory, and saved application state in place. Drop the flag if you want everything gone — including the first-launch state, so the next launch behaves like a fresh install.</p>
 
+    <h2>Verify the onboarding-milestone opt-out</h2>
+    <p>Setting <code>SENKANI_ONBOARDING_MILESTONES=off</code> makes every read and write inside <code>OnboardingMilestoneStore</code> a no-op so a privacy-strict user can opt out without recompiling. To verify the gate is active and confirm nothing further is being written to <code>~/.senkani/onboarding/milestones.json</code>, run the read-only inspection subcommand:</p>
+    <pre class="code">senkani onboarding milestones</pre>
+    <p>The subcommand emits four blocks: the live <code>SENKANI_ONBOARDING_MILESTONES: on|off</code> status, the absolute path to <code>milestones.json</code>, the file's JSON contents pretty-printed (or <code>(file does not exist yet)</code>), and a derived <code>summary.allComplete</code> line. Reads deliberately bypass the env gate so <code>=off</code> still surfaces on-disk truth — the gate is opt-out-of-recording, not opt-out-of-observability. <code>cat ~/.senkani/onboarding/milestones.json</code> is the script-friendly raw fallback when the <code>senkani</code> binary isn't on PATH.</p>
+
     <h2>Full wipe</h2>
     <pre class="code">senkani wipe --yes</pre>
     <p>Deletes the session DB + socket-auth token. Doesn't uninstall. Use this when you want to reset your stats.</p>

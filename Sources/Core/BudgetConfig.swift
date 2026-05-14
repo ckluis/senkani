@@ -33,6 +33,35 @@ public struct BudgetConfig: Codable, Sendable {
         self.softLimitPercent = softLimitPercent
     }
 
+    // Explicit Codable. Auto-synthesis treats every non-Optional stored
+    // property as a required JSON key, ignoring Swift-side default values
+    // — so a `budget.json` that omits `softLimitPercent` would otherwise
+    // throw `keyNotFound`, silently fall through to env defaults, and
+    // never fire `.firstBudgetSet`. Each non-Optional field uses
+    // `decodeIfPresent ?? default` so partial-schema files decode cleanly.
+    private enum CodingKeys: String, CodingKey {
+        case perSessionLimitCents
+        case dailyLimitCents
+        case weeklyLimitCents
+        case softLimitPercent
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.perSessionLimitCents = try c.decodeIfPresent(Int.self, forKey: .perSessionLimitCents)
+        self.dailyLimitCents = try c.decodeIfPresent(Int.self, forKey: .dailyLimitCents)
+        self.weeklyLimitCents = try c.decodeIfPresent(Int.self, forKey: .weeklyLimitCents)
+        self.softLimitPercent = try c.decodeIfPresent(Double.self, forKey: .softLimitPercent) ?? 0.8
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(perSessionLimitCents, forKey: .perSessionLimitCents)
+        try c.encodeIfPresent(dailyLimitCents, forKey: .dailyLimitCents)
+        try c.encodeIfPresent(weeklyLimitCents, forKey: .weeklyLimitCents)
+        try c.encode(softLimitPercent, forKey: .softLimitPercent)
+    }
+
     // MARK: - Cached Loading
 
     /// Actor-isolated cache so concurrent callers share the same config without races.

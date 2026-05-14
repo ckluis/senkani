@@ -155,12 +155,12 @@ struct OnboardingMilestoneCallsiteTests {
         let home = makeTempHome()
         defer { cleanupHome(home) }
 
-        // Default file (every limit nil) must NOT fire. The synthesised
-        // Codable requires every field to be present — softLimitPercent
-        // doesn't have an `Optional<Double>` type, so we always supply
-        // it even when no budget limits are set.
+        // Default file (every limit nil) must NOT fire. Partial-schema
+        // decode resilience landed via onboarding-milestone-5: an empty
+        // `{}` is now sufficient — softLimitPercent defaults to 0.8 via
+        // the explicit `init(from:)` in BudgetConfig.
         let defaultPath = home + "/budget-default.json"
-        try Data(#"{"softLimitPercent":0.8}"#.utf8)
+        try Data("{}".utf8)
             .write(to: URL(fileURLWithPath: defaultPath))
         OnboardingMilestoneStore.withTestHome(home) {
             let cfg = BudgetConfig.loadFromDisk(path: defaultPath)

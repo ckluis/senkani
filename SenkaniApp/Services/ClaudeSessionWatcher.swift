@@ -9,9 +9,27 @@ import Core
 /// the active file for new lines. Handles conversation rotation automatically.
 ///
 /// Source: ~/.claude/projects/<encoded-cwd>/*.jsonl
-class ClaudeSessionWatcher {
+///
+/// Concurrency contract: all mutable state below is owned by `stateQueue`
+/// (a private serial dispatch queue). Reads and writes — including from
+/// dispatch-source event and cancel handlers — must run on
+/// `stateQueue.async`. Dispatch sources still publish events on
+/// `.global(qos: .utility)` (no back-pressure on filesystem events), but
+/// their handlers hop to `stateQueue` before touching state. Each source's
+/// cancel handler captures its file descriptor as a LOCAL — never reads
+/// `self.fileFD` / `self.dirFD` — so cancelling a stale source closes the
+/// correct fd even if `startWatchingFile` has already reassigned the
+/// property to a newer fd. Rationale: the original design read
+/// `self.fileFD` inside the cancel handler closure, which crashed the app
+/// (`EXC_BREAKPOINT` at `makeFileSystemObjectSource`) when a stale cancel
+/// handler raced with a fresh `open()`+`makeFileSystemObjectSource()` and
+/// closed the just-opened fd before the source could bind to it.
+final class ClaudeSessionWatcher: @unchecked Sendable {
     private let projectRoot: String
     private let paneId: UUID
+
+    // Serial queue owns ALL mutable state below.
+    private let stateQueue = DispatchQueue(label: "dev.senkani.claude-session-watcher")
 
     // Directory watching — detects new conversation files
     private var dirSource: DispatchSourceFileSystemObject?
@@ -25,6 +43,9 @@ class ClaudeSessionWatcher {
     private var watchedFile: String?
 
     // Track files we've already started reading to avoid double-counting
+    // within a single process lifetime. Note: this set is in-memory only,
+    // so app restart re-emits historical lines — tracked separately as
+    // `claude-session-watcher-restart-double-count-2026-05-14`.
     private var processedFiles: Set<String> = []
 
     /// Compute the Claude Code session directory for a project path.
@@ -42,41 +63,39 @@ class ClaudeSessionWatcher {
     }
 
     func start() {
-        let dir = Self.claudeProjectDir(for: projectRoot)
-
-        // Ensure the directory exists (Claude Code may not have created it yet)
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-
-        // Start directory watcher — fires when new .jsonl files appear
-        startDirectoryWatcher(dir: dir)
-
-        // Check for existing session files immediately
-        checkForNewSession()
+        stateQueue.async { [weak self] in
+            guard let self else { return }
+            let dir = Self.claudeProjectDir(for: self.projectRoot)
+            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            self.startDirectoryWatcher(dir: dir)
+            self.checkForNewSession()
+        }
     }
 
     // MARK: - Directory Watching
+    // Caller MUST be on stateQueue.
 
     private func startDirectoryWatcher(dir: String) {
-        dirFD = open(dir, O_RDONLY | O_EVTONLY)
-        guard dirFD >= 0 else {
+        let fd = open(dir, O_RDONLY | O_EVTONLY)
+        guard fd >= 0 else {
             Logger.log("claude_session_watcher.dir_open_failed", fields: ["dir": .path(dir)])
             return
         }
 
         let src = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: dirFD,
+            fileDescriptor: fd,
             eventMask: [.write],
             queue: .global(qos: .utility)
         )
         src.setEventHandler { [weak self] in
-            self?.checkForNewSession()
+            self?.stateQueue.async { [weak self] in self?.checkForNewSession() }
         }
-        src.setCancelHandler { [weak self] in
-            guard let self, self.dirFD >= 0 else { return }
-            close(self.dirFD)
-            self.dirFD = -1
-        }
+        // Cancel handler captures `fd` LOCALLY — does not read self.dirFD.
+        // This is the load-bearing detail; see class-level contract.
+        src.setCancelHandler { close(fd) }
         src.resume()
+
+        dirFD = fd
         dirSource = src
     }
 
@@ -100,14 +119,20 @@ class ClaudeSessionWatcher {
     }
 
     // MARK: - File Tailing
+    // Caller MUST be on stateQueue.
 
     private func startWatchingFile(_ path: String, seekToEnd: Bool) {
-        // Clean up old file watcher
+        let prior = watchedFile
+
+        // Tear down the old file watcher. Source-cancellation is async; the
+        // cancel handler closes the OLD fd via its locally-captured `fd`,
+        // so we do NOT call close(fileFD) here — that would double-close
+        // once the cancel handler runs.
         fileSource?.cancel()
         fileSource = nil
         fileHandle?.closeFile()
         fileHandle = nil
-        if fileFD >= 0 { close(fileFD); fileFD = -1 }
+        fileFD = -1
 
         watchedFile = path
 
@@ -121,24 +146,31 @@ class ClaudeSessionWatcher {
         lastReadOffset = fh.offsetInFile
         fileHandle = fh
 
-        fileFD = open(path, O_RDONLY | O_EVTONLY)
-        guard fileFD >= 0 else { return }
+        let fd = open(path, O_RDONLY | O_EVTONLY)
+        guard fd >= 0 else { return }
 
         let src = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fileFD,
+            fileDescriptor: fd,
             eventMask: [.write, .extend],
             queue: .global(qos: .utility)
         )
         src.setEventHandler { [weak self] in
-            self?.readNewMessages()
+            self?.stateQueue.async { [weak self] in self?.readNewMessages() }
         }
-        src.setCancelHandler { [weak self] in
-            guard let self, self.fileFD >= 0 else { return }
-            close(self.fileFD)
-            self.fileFD = -1
-        }
+        // Captures `fd` locally — see class-level contract.
+        src.setCancelHandler { close(fd) }
         src.resume()
+
+        fileFD = fd
         fileSource = src
+
+        if let prior {
+            Logger.log("claude_session_watcher.rotated",
+                       fields: ["from": .path(prior), "to": .path(path)])
+        } else {
+            Logger.log("claude_session_watcher.attached",
+                       fields: ["path": .path(path)])
+        }
 
         // Read any existing content (for new files, this reads from the beginning)
         readNewMessages()
@@ -202,15 +234,26 @@ class ClaudeSessionWatcher {
     }
 
     func stop() {
-        dirSource?.cancel()
-        dirSource = nil
-        fileSource?.cancel()
-        fileSource = nil
-        fileHandle?.closeFile()
-        fileHandle = nil
+        stateQueue.async { [weak self] in
+            guard let self else { return }
+            self.dirSource?.cancel()
+            self.dirSource = nil
+            self.fileSource?.cancel()
+            self.fileSource = nil
+            self.fileHandle?.closeFile()
+            self.fileHandle = nil
+            self.fileFD = -1
+            self.dirFD = -1
+        }
     }
 
     deinit {
-        stop()
+        // `stop()` is async and may not run before deallocation, so cancel
+        // sources directly here. Each source's cancel handler captures its
+        // fd as a local, so the fds close correctly without needing `self`
+        // to still exist.
+        dirSource?.cancel()
+        fileSource?.cancel()
+        fileHandle?.closeFile()
     }
 }

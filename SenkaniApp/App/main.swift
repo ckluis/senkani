@@ -4,6 +4,13 @@ import Core
 import SwiftUI
 import HookRelay
 
+// Raise RLIMIT_NOFILE before any subsystem opens fds. macOS apps launched
+// via LaunchServices inherit launchd's 256 soft cap, which a recursive
+// index pass can exhaust — triggering EMFILE on the next system asset
+// load (e.g. CoreAnimation's default.metallib). Closes
+// senkani-app-emfile-crash-during-pane-launch-2026-05-15.
+raiseFileDescriptorLimit()
+
 let isSocketMode = CommandLine.arguments.contains("--socket-server")
 let isHookMode = CommandLine.arguments.contains("--hook")
 // MCP mode requires an explicit flag. The previous fallback

@@ -15,146 +15,39 @@ import SQLite3
 /// binary (`senkani-mig-helper`, built from `tools/migration-runner/`) twice
 /// against the same DB and asserting exactly-once semantics: exactly one
 /// process applies the migrations, the other sees them as already applied.
+///
+/// All helper spawn / barrier / reap mechanics go through
+/// `MigrationHelperFixture` — the single source of truth that pins the IPC
+/// contract and guarantees no helper outlives its parent test, even on
+/// throw, swift-testing cancellation, or assertion failure. Direct
+/// `Process()` use of `senkani-mig-helper` is forbidden in test code (the
+/// pre-2026-05-15 inline pattern leaked ~18 zombies; see
+/// `spec/autonomous/backlog/swift-test-suite-hang-mig-helper-zombies-2026-05-14.md`).
 @Suite("MigrationRunner multi-process")
 struct MigrationMultiProcTests {
-
-    /// Parsed helper stdout — one line of JSON per run.
-    private struct HelperResult {
-        let pid: Int
-        let applied: [Int]
-        let target: Int
-        let error: String?
-    }
-
-    /// Locate the built helper binary. SwiftPM stamps `CommandLine.arguments[0]`
-    /// with a toolchain path (not the test binary), so we probe well-known
-    /// locations relative to the current working directory instead. `swift
-    /// test` runs with CWD at the package root, so `.build/debug/<exe>` is
-    /// the canonical spot. Callers can override via `SENKANI_MIG_HELPER`.
-    private static func helperPath() throws -> String {
-        if let override = ProcessInfo.processInfo.environment["SENKANI_MIG_HELPER"],
-           FileManager.default.isExecutableFile(atPath: override) {
-            return override
-        }
-        let cwd = FileManager.default.currentDirectoryPath
-        let candidates = [
-            cwd + "/.build/debug/senkani-mig-helper",
-            cwd + "/.build/arm64-apple-macosx/debug/senkani-mig-helper",
-            cwd + "/.build/x86_64-apple-macosx/debug/senkani-mig-helper",
-        ]
-        for candidate in candidates where FileManager.default.isExecutableFile(atPath: candidate) {
-            return candidate
-        }
-        throw HelperMissing.notFound(searchedFrom: cwd)
-    }
-
-    private enum HelperMissing: Error, CustomStringConvertible {
-        case notFound(searchedFrom: String)
-        var description: String {
-            switch self {
-            case .notFound(let from):
-                return "senkani-mig-helper not found searching from \(from) — run `swift build --product senkani-mig-helper` first"
-            }
-        }
-    }
-
-    /// Spawn a helper process, return its stdout/stderr/exit status.
-    private static func runHelper(
-        binary: String,
-        dbPath: String,
-        readyPath: String,
-        goPath: String
-    ) -> Process {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: binary)
-        proc.arguments = [dbPath, "--ready", readyPath, "--go", goPath]
-        proc.standardOutput = Pipe()
-        proc.standardError = Pipe()
-        return proc
-    }
-
-    private static func parse(_ stdout: String) throws -> HelperResult {
-        // Helper prints exactly one JSON line, followed by a trailing newline.
-        let line = stdout
-            .split(whereSeparator: { $0.isNewline })
-            .last
-            .map(String.init) ?? ""
-        guard let data = line.data(using: .utf8),
-              let any = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            throw HelperParse.malformed(line)
-        }
-        let pid = (any["pid"] as? Int) ?? -1
-        let applied = (any["applied"] as? [Int]) ?? []
-        let target = (any["target"] as? Int) ?? 0
-        let errObj = any["error"]
-        let error: String? = (errObj is NSNull) ? nil : (errObj as? String)
-        return HelperResult(pid: pid, applied: applied, target: target, error: error)
-    }
-
-    private enum HelperParse: Error, CustomStringConvertible {
-        case malformed(String)
-        var description: String {
-            switch self {
-            case .malformed(let s): return "could not parse helper JSON: '\(s)'"
-            }
-        }
-    }
-
-    private static func readAllToString(_ handle: FileHandle) -> String {
-        let data = handle.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8) ?? ""
-    }
 
     // MARK: - Tests
 
     @Test("two concurrent helpers: exactly one applies the registry, the other no-ops")
     func twoHelpersRaceOneWinsOneNoops() throws {
-        let binary = try Self.helperPath()
-
         let tmpDir = NSTemporaryDirectory() + "mig-mp-\(UUID().uuidString)/"
         try FileManager.default.createDirectory(atPath: tmpDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
         let dbPath = tmpDir + "race.db"
-        let readyA = tmpDir + "ready.A"
-        let readyB = tmpDir + "ready.B"
-        let goFile = tmpDir + "go"
 
-        let procA = Self.runHelper(binary: binary, dbPath: dbPath, readyPath: readyA, goPath: goFile)
-        let procB = Self.runHelper(binary: binary, dbPath: dbPath, readyPath: readyB, goPath: goFile)
+        let pair = try MigrationHelperFixture.spawnPair(dbPath: dbPath, tmpDir: tmpDir)
+        defer { pair.terminateAndWait(timeout: 60) }
 
-        try procA.run()
-        try procB.run()
+        try pair.waitReady(timeout: 15)
+        pair.release()
+        let outcome = pair.joinExitsOrKill(timeout: 60)
+        #expect(outcome == .exitedCleanly,
+                "both helpers must exit on their own under the 60s budget; got \(outcome)")
 
-        // Spin until both helpers signal readiness, then release the barrier
-        // so both race for flock within the same few microseconds.
-        let deadline = Date().addingTimeInterval(15)
-        while Date() < deadline {
-            if FileManager.default.fileExists(atPath: readyA),
-               FileManager.default.fileExists(atPath: readyB) {
-                break
-            }
-            usleep(5_000)
-        }
-        #expect(FileManager.default.fileExists(atPath: readyA), "helper A never signaled ready")
-        #expect(FileManager.default.fileExists(atPath: readyB), "helper B never signaled ready")
+        #expect(pair.procA.terminationStatus == 0, "A exit non-zero; stderr=\(pair.readStderrA())")
+        #expect(pair.procB.terminationStatus == 0, "B exit non-zero; stderr=\(pair.readStderrB())")
 
-        FileManager.default.createFile(atPath: goFile, contents: nil)
-
-        procA.waitUntilExit()
-        procB.waitUntilExit()
-
-        let outA = Self.readAllToString((procA.standardOutput as! Pipe).fileHandleForReading)
-        let errA = Self.readAllToString((procA.standardError as! Pipe).fileHandleForReading)
-        let outB = Self.readAllToString((procB.standardOutput as! Pipe).fileHandleForReading)
-        let errB = Self.readAllToString((procB.standardError as! Pipe).fileHandleForReading)
-
-        #expect(procA.terminationStatus == 0, "A exit status non-zero; stderr=\(errA)")
-        #expect(procB.terminationStatus == 0, "B exit status non-zero; stderr=\(errB)")
-
-        let resA = try Self.parse(outA)
-        let resB = try Self.parse(outB)
-
+        let resA = try pair.parseStdoutA()
+        let resB = try pair.parseStdoutB()
         #expect(resA.error == nil, "helper A reported error: \(resA.error ?? "")")
         #expect(resB.error == nil, "helper B reported error: \(resB.error ?? "")")
 
@@ -196,11 +89,8 @@ struct MigrationMultiProcTests {
 
     @Test("concurrent helpers against an already-migrated DB both no-op")
     func twoHelpersAgainstMigratedDBBothNoop() throws {
-        let binary = try Self.helperPath()
-
         let tmpDir = NSTemporaryDirectory() + "mig-mp-\(UUID().uuidString)/"
         try FileManager.default.createDirectory(atPath: tmpDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
         let dbPath = tmpDir + "seeded.db"
 
         // Pre-apply the full registry so both helpers see a fully-migrated DB.
@@ -211,37 +101,20 @@ struct MigrationMultiProcTests {
         _ = try MigrationRunner.run(db: seed!, dbPath: dbPath)
         sqlite3_close(seed)
 
-        let readyA = tmpDir + "ready.A"
-        let readyB = tmpDir + "ready.B"
-        let goFile = tmpDir + "go"
+        let pair = try MigrationHelperFixture.spawnPair(dbPath: dbPath, tmpDir: tmpDir)
+        defer { pair.terminateAndWait(timeout: 60) }
 
-        let procA = Self.runHelper(binary: binary, dbPath: dbPath, readyPath: readyA, goPath: goFile)
-        let procB = Self.runHelper(binary: binary, dbPath: dbPath, readyPath: readyB, goPath: goFile)
+        try pair.waitReady(timeout: 15)
+        pair.release()
+        let outcome = pair.joinExitsOrKill(timeout: 60)
+        #expect(outcome == .exitedCleanly,
+                "both helpers must exit on their own under the 60s budget; got \(outcome)")
 
-        try procA.run()
-        try procB.run()
+        #expect(pair.procA.terminationStatus == 0)
+        #expect(pair.procB.terminationStatus == 0)
 
-        let deadline = Date().addingTimeInterval(15)
-        while Date() < deadline {
-            if FileManager.default.fileExists(atPath: readyA),
-               FileManager.default.fileExists(atPath: readyB) {
-                break
-            }
-            usleep(5_000)
-        }
-        FileManager.default.createFile(atPath: goFile, contents: nil)
-
-        procA.waitUntilExit()
-        procB.waitUntilExit()
-
-        let outA = Self.readAllToString((procA.standardOutput as! Pipe).fileHandleForReading)
-        let outB = Self.readAllToString((procB.standardOutput as! Pipe).fileHandleForReading)
-
-        let resA = try Self.parse(outA)
-        let resB = try Self.parse(outB)
-
-        #expect(procA.terminationStatus == 0)
-        #expect(procB.terminationStatus == 0)
+        let resA = try pair.parseStdoutA()
+        let resB = try pair.parseStdoutB()
         #expect(resA.applied.isEmpty && resB.applied.isEmpty,
                 "already-migrated DB must yield no-op for both; got A=\(resA.applied) B=\(resB.applied)")
         #expect(resA.error == nil && resB.error == nil)
@@ -249,48 +122,99 @@ struct MigrationMultiProcTests {
 
     @Test("kill-switch lockfile blocks concurrent helper launches")
     func lockfileBlocksBothHelpers() throws {
-        let binary = try Self.helperPath()
-
         let tmpDir = NSTemporaryDirectory() + "mig-mp-\(UUID().uuidString)/"
         try FileManager.default.createDirectory(atPath: tmpDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
         let dbPath = tmpDir + "locked.db"
 
         // Plant the kill-switch lockfile — both helpers must refuse to run.
         try "planted".data(using: .utf8)!.write(to: URL(fileURLWithPath: dbPath + ".schema.lock"))
 
-        let readyA = tmpDir + "ready.A"
-        let readyB = tmpDir + "ready.B"
-        let goFile = tmpDir + "go"
+        let pair = try MigrationHelperFixture.spawnPair(dbPath: dbPath, tmpDir: tmpDir)
+        defer { pair.terminateAndWait(timeout: 60) }
 
-        let procA = Self.runHelper(binary: binary, dbPath: dbPath, readyPath: readyA, goPath: goFile)
-        let procB = Self.runHelper(binary: binary, dbPath: dbPath, readyPath: readyB, goPath: goFile)
+        try pair.waitReady(timeout: 15)
+        pair.release()
+        let outcome = pair.joinExitsOrKill(timeout: 60)
+        #expect(outcome == .exitedCleanly,
+                "both helpers must exit on their own under the 60s budget; got \(outcome)")
 
-        try procA.run()
-        try procB.run()
+        #expect(pair.procA.terminationStatus == 1, "kill-switch must cause non-zero exit")
+        #expect(pair.procB.terminationStatus == 1, "kill-switch must cause non-zero exit")
 
-        let deadline = Date().addingTimeInterval(15)
-        while Date() < deadline {
-            if FileManager.default.fileExists(atPath: readyA),
-               FileManager.default.fileExists(atPath: readyB) {
-                break
-            }
-            usleep(5_000)
-        }
-        FileManager.default.createFile(atPath: goFile, contents: nil)
-
-        procA.waitUntilExit()
-        procB.waitUntilExit()
-
-        #expect(procA.terminationStatus == 1, "kill-switch must cause non-zero exit")
-        #expect(procB.terminationStatus == 1, "kill-switch must cause non-zero exit")
-
-        let outA = Self.readAllToString((procA.standardOutput as! Pipe).fileHandleForReading)
-        let outB = Self.readAllToString((procB.standardOutput as! Pipe).fileHandleForReading)
-        let resA = try Self.parse(outA)
-        let resB = try Self.parse(outB)
+        let resA = try pair.parseStdoutA()
+        let resB = try pair.parseStdoutB()
         #expect(resA.error?.contains("lockfile") == true, "A error must mention lockfile; got: \(resA.error ?? "")")
         #expect(resB.error?.contains("lockfile") == true, "B error must mention lockfile; got: \(resB.error ?? "")")
+    }
+
+    @Test("helper exits with status 3 when go barrier never fires (bounded wait)")
+    func helperTimesOutWhenGoNeverFires() throws {
+        // Prove the helper-side go-barrier timeout (SENKANI_MIG_HELPER_GO_TIMEOUT_SEC):
+        // spawn a helper with a `go` path that the parent never creates, and
+        // assert the helper exits 3 within the timeout + a small slop margin.
+        //
+        // This is the keystone test for the 2026-05-15 zombie fix. If the
+        // helper's go-barrier ever regresses to unbounded spin, this test
+        // hangs the suite (caught here, not in production).
+
+        let tmpDir = NSTemporaryDirectory() + "mig-mp-timeout-\(UUID().uuidString)/"
+        try FileManager.default.createDirectory(atPath: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        let dbPath = tmpDir + "timeout.db"
+        let readyPath = tmpDir + "ready"
+        let goPath = tmpDir + "go" // intentionally never created
+
+        let binary = try MigrationHelperFixture.helperPath()
+        let proc = MigrationHelperFixture.makeHelper(
+            binary: binary, dbPath: dbPath, readyPath: readyPath, goPath: goPath
+        )
+        // Drive the helper through the short test-only timeout — 1s gives
+        // the suite a tight deadline (test completes <3s in the happy
+        // path) without flaking when the runner is loaded.
+        var env = ProcessInfo.processInfo.environment
+        env["SENKANI_MIG_HELPER_GO_TIMEOUT_SEC"] = "1"
+        proc.environment = env
+
+        let started = Date()
+        try proc.run()
+        defer {
+            if proc.isRunning {
+                proc.terminate()
+                let killDeadline = Date().addingTimeInterval(2.0)
+                while proc.isRunning && Date() < killDeadline { usleep(20_000) }
+                if proc.isRunning, proc.processIdentifier > 0 {
+                    kill(proc.processIdentifier, SIGKILL)
+                }
+                proc.waitUntilExit()
+            }
+        }
+
+        // Helper must exit within timeout + reasonable slop. Generous
+        // upper bound to absorb runner contention.
+        let deadline = started.addingTimeInterval(15)
+        while proc.isRunning && Date() < deadline {
+            usleep(20_000)
+        }
+        #expect(!proc.isRunning, "helper must exit within 15s when go barrier never fires; was the timeout ignored?")
+
+        proc.waitUntilExit()
+        let elapsed = Date().timeIntervalSince(started)
+
+        // The helper should exit fast — well under 10s even on a loaded
+        // runner. Asserts the timeout is doing the work, not e.g., the
+        // SIGKILL-after-defer fallback.
+        #expect(elapsed < 10.0,
+                "helper took \(elapsed)s — expected near 1s (timeout). Did the bound work?")
+
+        #expect(proc.terminationStatus == 3,
+                "helper must exit with status 3 (go-fifo timeout); got \(proc.terminationStatus) — status 0/1/2 would mean the timeout did not classify correctly")
+
+        // Stdout must contain a parseable error JSON with a timeout marker.
+        let stdoutData = (proc.standardOutput as! Pipe).fileHandleForReading.readDataToEndOfFile()
+        let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
+        #expect(stdout.contains("go-fifo timeout"),
+                "stdout must contain go-fifo timeout marker; got: \(stdout)")
     }
 
     // MARK: - Helpers
@@ -315,3 +239,4 @@ struct MigrationMultiProcTests {
         return Int(sqlite3_column_int(stmt, 0))
     }
 }
+

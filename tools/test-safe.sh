@@ -40,6 +40,18 @@
 #                           (set when re-running after a known-good
 #                           pre-flight or when bisecting older
 #                           commits without those guards).
+#   SKIP_MIG_HELPER_CHECK   Skip the stale-`senkani-mig-helper`-process
+#                           pre-flight guard. Off by default — a fresh
+#                           `swift test` cannot start while leftover
+#                           helpers from a previous run are still alive
+#                           (they will contend for the same flock /tmp
+#                           sidecars and have historically deadlocked
+#                           fresh runs). See
+#                           spec/autonomous/backlog/swift-test-suite-hang-mig-helper-zombies-2026-05-14.md.
+#   FORCE_REAP_MIG_HELPERS  When the guard finds stale helpers, send
+#                           SIGKILL and continue. Default behavior is to
+#                           print PIDs + cputime + tmp-dir paths and
+#                           refuse to start the run.
 #
 # Adding a new suite to the harness
 #   New tests fall into the catch-all `other` chunk by default.
@@ -111,6 +123,15 @@ preflight() {
   if [ -z "${SKIP_GRAMMAR_HASH_CHECK:-}" ] && [ -x ./tools/verify-grammar-hashes.sh ]; then
     ./tools/verify-grammar-hashes.sh
   fi
+  # Stale-helper guard. Refuses to start a new test run while any
+  # senkani-mig-helper process from a previous (likely-deadlocked) run
+  # is still alive — fresh test spawns would compete with them for
+  # /tmp sidecars and have historically deadlocked the whole suite.
+  # Operator can override with FORCE_REAP_MIG_HELPERS=1 to send SIGKILL
+  # and continue, or SKIP_MIG_HELPER_CHECK=1 to bypass the check entirely.
+  if ! mig_helper_zombie_guard; then
+    exit 2
+  fi
   # /tmp staleness alarm — a future test that creates `SessionDatabase(path:)`
   # without the canonical sidecar cleanup (see
   # Tests/SenkaniTests/Helpers/TempSessionDatabase.swift) leaks `.migrating`
@@ -127,6 +148,57 @@ preflight() {
            "Clear with: rm /tmp/senkani-*"
     fi
   fi
+}
+
+# Stale-helper guard. Detects leftover `senkani-mig-helper` processes
+# from a previous (likely-deadlocked) test run and either reaps them
+# (FORCE_REAP_MIG_HELPERS=1) or prints them and exits non-zero. Background:
+# pre-2026-05-15 each MigrationMultiProcTests test inlined an unbounded
+# busy-poll on a parent-supplied `go` file; if the parent test crashed
+# before writing `go`, the helper spun forever. Across Apr/May 2026 this
+# leaked ~18 zombies that accumulated ~90 min of CPU each. The helper-side
+# timeout (commit 2026-05-15) keeps new tests from leaking, but any
+# residual zombies from before the fix can still deadlock a fresh suite.
+# This guard catches them.
+mig_helper_zombie_guard() {
+  if [ -n "${SKIP_MIG_HELPER_CHECK:-}" ]; then
+    return 0
+  fi
+  local pids
+  pids="$(pgrep -f senkani-mig-helper 2>/dev/null || true)"
+  if [ -z "$pids" ]; then
+    return 0
+  fi
+  local n
+  n="$(echo "$pids" | wc -l | tr -d ' ')"
+  echo "::error::found ${n} stale senkani-mig-helper process(es) — running new tests will compete with them and may deadlock the suite:"
+  # `ps` accepts a space-separated PID list via -p.
+  # shellcheck disable=SC2086
+  ps -o pid,etime,cputime,command -p $pids 2>/dev/null | head -50 || true
+  if [ -n "${FORCE_REAP_MIG_HELPERS:-}" ]; then
+    echo "FORCE_REAP_MIG_HELPERS=1 — sending SIGKILL to ${n} process(es)"
+    # shellcheck disable=SC2086
+    kill -9 $pids 2>/dev/null || true
+    # Give the kernel up to 2 s to reap; in practice this is sub-second.
+    local waited=0
+    while [ "$waited" -lt 20 ]; do
+      sleep 0.1
+      waited=$(( waited + 1 ))
+      if [ -z "$(pgrep -f senkani-mig-helper 2>/dev/null || true)" ]; then
+        echo "reaped ${n} stale helper(s); continuing"
+        return 0
+      fi
+    done
+    local remaining
+    remaining="$(pgrep -f senkani-mig-helper 2>/dev/null || true)"
+    echo "::error::reap failed — ${remaining} still alive"
+    return 1
+  fi
+  echo
+  echo "to reap and continue: FORCE_REAP_MIG_HELPERS=1 $0 $*"
+  echo "to bypass guard:      SKIP_MIG_HELPER_CHECK=1 $0 $*"
+  echo "to reap manually:     pkill -9 -f senkani-mig-helper"
+  return 1
 }
 
 # /tmp staleness post-flight (runs in the all-mode tail). Same idea as the

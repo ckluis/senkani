@@ -20,6 +20,15 @@ import Core
 //   0 — migration attempt completed (applied may be empty if another process won)
 //   1 — migration threw
 //   2 — argument parse / open error
+//   3 — go-fifo timeout (parent never wrote `--go` file within bound)
+//
+// Environment knobs:
+//   SENKANI_MIG_HELPER_GO_TIMEOUT_SEC — max seconds to spin on `--go` barrier
+//     before bailing with exit 3. Default 30. The pre-2026-05-15 helper
+//     spun unbounded, which left zombie helpers across days when the
+//     parent test process crashed without ever creating `--go` — the
+//     hang root cause documented in
+//     spec/autonomous/backlog/swift-test-suite-hang-mig-helper-zombies-2026-05-14.md.
 
 @inline(__always)
 private func emit(pid: Int32, applied: [Int], target: Int, error: String?) {
@@ -60,12 +69,31 @@ while i < args.count {
 
 // Optional start-barrier: announce readiness, then spin until the driver
 // touches the go file. Narrows the window between helper launches so both are
-// contending for flock at roughly the same instant.
+// contending for flock at roughly the same instant. The spin is bounded by
+// SENKANI_MIG_HELPER_GO_TIMEOUT_SEC (default 30s); on timeout the helper
+// emits a structured error JSON and exits 3 so an abandoned helper cannot
+// outlive its parent test process.
 if let ready = readyPath {
     FileManager.default.createFile(atPath: ready, contents: nil)
 }
 if let go = goPath {
+    let goTimeoutSec: Double = {
+        if let raw = ProcessInfo.processInfo.environment["SENKANI_MIG_HELPER_GO_TIMEOUT_SEC"],
+           let v = Double(raw), v > 0 {
+            return v
+        }
+        return 30.0
+    }()
+    let deadline = Date().addingTimeInterval(goTimeoutSec)
     while !FileManager.default.fileExists(atPath: go) {
+        if Date() >= deadline {
+            FileHandle.standardError.write(Data(
+                "senkani-mig-helper: timeout waiting for go barrier at \(go) after \(goTimeoutSec)s\n".utf8
+            ))
+            emit(pid: getpid(), applied: [], target: 0,
+                 error: "go-fifo timeout after \(goTimeoutSec)s")
+            exit(3)
+        }
         usleep(5_000) // 5ms
     }
 }

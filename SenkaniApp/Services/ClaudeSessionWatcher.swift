@@ -24,9 +24,18 @@ import Core
 /// (`EXC_BREAKPOINT` at `makeFileSystemObjectSource`) when a stale cancel
 /// handler raced with a fresh `open()`+`makeFileSystemObjectSource()` and
 /// closed the just-opened fd before the source could bind to it.
+///
+/// Restart contract: per-file read progress lives in
+/// `claude_session_cursors` (keyed by absolute path). On every batch the
+/// watcher delegates to `ClaudeSessionTail.tail`, which reads from the
+/// persisted offset and writes the post-read offset back. Restarts pick
+/// up exactly where the prior process stopped — historical lines are not
+/// re-emitted (`claude-session-watcher-restart-double-count-2026-05-14`).
 final class ClaudeSessionWatcher: @unchecked Sendable {
     private let projectRoot: String
     private let paneId: UUID
+    private let database: SessionDatabase
+    private let claudeProjectDirOverride: String?
 
     // Serial queue owns ALL mutable state below.
     private let stateQueue = DispatchQueue(label: "dev.senkani.claude-session-watcher")
@@ -38,15 +47,7 @@ final class ClaudeSessionWatcher: @unchecked Sendable {
     // Current file tailing — reads new JSONL lines
     private var fileSource: DispatchSourceFileSystemObject?
     private var fileFD: Int32 = -1
-    private var fileHandle: FileHandle?
-    private var lastReadOffset: UInt64 = 0
     private var watchedFile: String?
-
-    // Track files we've already started reading to avoid double-counting
-    // within a single process lifetime. Note: this set is in-memory only,
-    // so app restart re-emits historical lines — tracked separately as
-    // `claude-session-watcher-restart-double-count-2026-05-14`.
-    private var processedFiles: Set<String> = []
 
     /// Compute the Claude Code session directory for a project path.
     /// Claude encodes paths by replacing / with -, keeping the leading dash.
@@ -56,20 +57,29 @@ final class ClaudeSessionWatcher: @unchecked Sendable {
         return NSHomeDirectory() + "/.claude/projects/" + encoded
     }
 
-    init(projectRoot: String, paneId: UUID) {
+    init(projectRoot: String,
+         paneId: UUID,
+         database: SessionDatabase = .shared,
+         claudeProjectDirOverride: String? = nil) {
         // Normalize for consistent DB storage
         self.projectRoot = URL(fileURLWithPath: projectRoot).standardized.path
         self.paneId = paneId
+        self.database = database
+        self.claudeProjectDirOverride = claudeProjectDirOverride
     }
 
     func start() {
         stateQueue.async { [weak self] in
             guard let self else { return }
-            let dir = Self.claudeProjectDir(for: self.projectRoot)
+            let dir = self.resolvedClaudeDir()
             try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
             self.startDirectoryWatcher(dir: dir)
             self.checkForNewSession()
         }
+    }
+
+    private func resolvedClaudeDir() -> String {
+        claudeProjectDirOverride ?? Self.claudeProjectDir(for: projectRoot)
     }
 
     // MARK: - Directory Watching
@@ -100,28 +110,31 @@ final class ClaudeSessionWatcher: @unchecked Sendable {
     }
 
     private func checkForNewSession() {
-        let dir = Self.claudeProjectDir(for: projectRoot)
+        let dir = resolvedClaudeDir()
         guard let latest = findLatestSession(in: dir) else { return }
 
         // Same file we're already watching — no switch needed
         if latest == watchedFile { return }
 
-        // Finish reading remaining lines from old file before switching
-        if watchedFile != nil {
-            readNewMessages()
+        // Finish reading remaining lines from old file before switching.
+        // Cursor-based: tail picks up from the persisted offset, so this
+        // flush is best-effort and idempotent against a concurrent FSEvent.
+        if let prior = watchedFile {
+            _ = ClaudeSessionTail.tail(
+                path: prior,
+                projectRoot: projectRoot,
+                paneId: paneId.uuidString,
+                db: database
+            )
         }
 
-        // If we've seen this file before, seek to end to avoid double-counting.
-        // If it's brand new, read from the beginning — every line is unprocessed.
-        let seekToEnd = processedFiles.contains(latest)
-        startWatchingFile(latest, seekToEnd: seekToEnd)
-        processedFiles.insert(latest)
+        startWatchingFile(latest)
     }
 
     // MARK: - File Tailing
     // Caller MUST be on stateQueue.
 
-    private func startWatchingFile(_ path: String, seekToEnd: Bool) {
+    private func startWatchingFile(_ path: String) {
         let prior = watchedFile
 
         // Tear down the old file watcher. Source-cancellation is async; the
@@ -130,24 +143,15 @@ final class ClaudeSessionWatcher: @unchecked Sendable {
         // once the cancel handler runs.
         fileSource?.cancel()
         fileSource = nil
-        fileHandle?.closeFile()
-        fileHandle = nil
         fileFD = -1
 
         watchedFile = path
 
-        guard let fh = FileHandle(forReadingAtPath: path) else {
+        let fd = open(path, O_RDONLY | O_EVTONLY)
+        guard fd >= 0 else {
             Logger.log("claude_session_watcher.open_failed", fields: ["path": .path(path)])
             return
         }
-        if seekToEnd {
-            fh.seekToEndOfFile()
-        }
-        lastReadOffset = fh.offsetInFile
-        fileHandle = fh
-
-        let fd = open(path, O_RDONLY | O_EVTONLY)
-        guard fd >= 0 else { return }
 
         let src = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fd,
@@ -172,51 +176,18 @@ final class ClaudeSessionWatcher: @unchecked Sendable {
                        fields: ["path": .path(path)])
         }
 
-        // Read any existing content (for new files, this reads from the beginning)
+        // Initial drain — cursor decides whether this is suffix-only or first read.
         readNewMessages()
     }
 
     private func readNewMessages() {
-        guard let fh = fileHandle else { return }
-
-        fh.seek(toFileOffset: lastReadOffset)
-        let newData = fh.readDataToEndOfFile()
-        let newOffset = fh.offsetInFile
-        guard newOffset > lastReadOffset, !newData.isEmpty,
-              let text = String(data: newData, encoding: .utf8) else { return }
-        lastReadOffset = newOffset
-
-        for line in text.components(separatedBy: "\n") {
-            // Delegate JSONL parsing to the canonical helper in Core so the
-            // realtime tail path and the cursor-driven `readNew` path can't
-            // drift in how they extract `cache_read_input_tokens` (the bug
-            // surfaced 2026-05-12: this watcher previously had its own
-            // copy of the parser and hardcoded `savedTokens: 0`, suppressing
-            // the `firstNonzeroSavings` onboarding milestone).
-            guard let parsed = ClaudeSessionReader.parseAssistantUsageLine(line) else { continue }
-
-            SessionDatabase.shared.recordTokenEvent(
-                sessionId: parsed.sessionId ?? "unknown",
-                paneId: paneId.uuidString,
-                projectRoot: projectRoot,
-                source: "claude_session",
-                toolName: nil,
-                model: parsed.model,
-                inputTokens: parsed.inputTokens,
-                outputTokens: parsed.outputTokens,
-                savedTokens: parsed.cacheReadTokens,
-                costCents: Self.estimateCost(input: parsed.inputTokens, output: parsed.outputTokens, model: parsed.model),
-                feature: nil,
-                command: nil
-            )
-        }
-    }
-
-    private static func estimateCost(input: Int, output: Int, model: String?) -> Int {
-        let pricing = ModelPricing.find(model ?? "sonnet")
-        let dollars = Double(input) / 1_000_000.0 * pricing.inputPerMillion
-                    + Double(output) / 1_000_000.0 * pricing.outputPerMillion
-        return Int(dollars * 100.0)
+        guard let path = watchedFile else { return }
+        _ = ClaudeSessionTail.tail(
+            path: path,
+            projectRoot: projectRoot,
+            paneId: paneId.uuidString,
+            db: database
+        )
     }
 
     private func findLatestSession(in dir: String) -> String? {
@@ -240,8 +211,6 @@ final class ClaudeSessionWatcher: @unchecked Sendable {
             self.dirSource = nil
             self.fileSource?.cancel()
             self.fileSource = nil
-            self.fileHandle?.closeFile()
-            self.fileHandle = nil
             self.fileFD = -1
             self.dirFD = -1
         }
@@ -254,6 +223,5 @@ final class ClaudeSessionWatcher: @unchecked Sendable {
         // to still exist.
         dirSource?.cancel()
         fileSource?.cancel()
-        fileHandle?.closeFile()
     }
 }

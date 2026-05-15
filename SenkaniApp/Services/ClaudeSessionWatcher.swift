@@ -25,6 +25,20 @@ import Core
 /// handler raced with a fresh `open()`+`makeFileSystemObjectSource()` and
 /// closed the just-opened fd before the source could bind to it.
 ///
+/// Burst-rotation contract: the file `setEventHandler` closure captures the
+/// intended path as a LOCAL, and the `stateQueue.async` body guards on
+/// `self.watchedFile == capturedPath` before reading. Without this guard,
+/// pending events from a stale `fileSource` (cancelled but not yet
+/// drained) re-run after a fresh `startWatchingFile` has already
+/// reassigned `watchedFile`, causing the leftover events to read the NEW
+/// active file from offset 0 — the 95% double-emit observed in the 200×10
+/// burst harness (`claude-session-watcher-stress-harness-burst-rotation-
+/// double-emit-and-partial-drop-2026-05-15`). The guard short-circuits
+/// stale callbacks without losing data: the rotation path drains the prior
+/// file via `ClaudeSessionWatcherPlan` before the watch flips. Combined
+/// with the planner's intermediate-file drain (silent-drop fix), a burst
+/// of 200 sessions × 10 events ingests exactly 2000 rows.
+///
 /// Restart contract: per-file read progress lives in
 /// `claude_session_cursors` (keyed by absolute path). On every batch the
 /// watcher delegates to `ClaudeSessionTail.tail`, which reads from the
@@ -48,6 +62,12 @@ final class ClaudeSessionWatcher: @unchecked Sendable {
     private var fileSource: DispatchSourceFileSystemObject?
     private var fileFD: Int32 = -1
     private var watchedFile: String?
+
+    // Files we've called `ClaudeSessionTail.tail` on at least once during
+    // this process's lifetime. Used by `ClaudeSessionWatcherPlan` to skip
+    // repeated drain attempts under burst (cursor table is the source of
+    // truth on restart, so this in-memory set is safe to drop).
+    private var drainedFiles: Set<String> = []
 
     /// Compute the Claude Code session directory for a project path.
     /// Claude encodes paths by replacing / with -, keeping the leading dash.
@@ -111,24 +131,34 @@ final class ClaudeSessionWatcher: @unchecked Sendable {
 
     private func checkForNewSession() {
         let dir = resolvedClaudeDir()
-        guard let latest = findLatestSession(in: dir) else { return }
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return }
 
-        // Same file we're already watching — no switch needed
-        if latest == watchedFile { return }
+        let plan = ClaudeSessionWatcherPlan.plan(
+            directoryFiles: entries,
+            dirPath: dir,
+            currentWatched: watchedFile,
+            drainedFiles: drainedFiles,
+            mtime: { path in
+                (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date) ?? .distantPast
+            }
+        )
 
-        // Finish reading remaining lines from old file before switching.
-        // Cursor-based: tail picks up from the persisted offset, so this
-        // flush is best-effort and idempotent against a concurrent FSEvent.
-        if let prior = watchedFile {
+        // Drain every intermediate file the planner identified. Cursor-
+        // idempotent so re-tailing a fully-read file is cheap. The
+        // `drainedFiles` set prevents O(N²) re-iteration under burst.
+        for path in plan.toDrain {
             _ = ClaudeSessionTail.tail(
-                path: prior,
+                path: path,
                 projectRoot: projectRoot,
                 paneId: paneId.uuidString,
                 db: database
             )
+            drainedFiles.insert(path)
         }
 
-        startWatchingFile(latest)
+        if let next = plan.newWatched {
+            startWatchingFile(next)
+        }
     }
 
     // MARK: - File Tailing
@@ -158,8 +188,16 @@ final class ClaudeSessionWatcher: @unchecked Sendable {
             eventMask: [.write, .extend],
             queue: .global(qos: .utility)
         )
+        // Capture the intended path locally. The stateQueue body guards on
+        // `self.watchedFile == capturedPath` so leftover events from a
+        // cancelled source can't read the post-rotation file from offset 0.
+        // See class-level "Burst-rotation contract".
+        let capturedPath = path
         src.setEventHandler { [weak self] in
-            self?.stateQueue.async { [weak self] in self?.readNewMessages() }
+            self?.stateQueue.async { [weak self] in
+                guard let self, self.watchedFile == capturedPath else { return }
+                self.readNewMessages()
+            }
         }
         // Captures `fd` locally — see class-level contract.
         src.setCancelHandler { close(fd) }
@@ -188,20 +226,6 @@ final class ClaudeSessionWatcher: @unchecked Sendable {
             paneId: paneId.uuidString,
             db: database
         )
-    }
-
-    private func findLatestSession(in dir: String) -> String? {
-        guard let files = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return nil }
-        let jsonlFiles = files.filter { $0.hasSuffix(".jsonl") && !$0.contains("index") }
-
-        return jsonlFiles
-            .map { dir + "/" + $0 }
-            .sorted { path1, path2 in
-                let t1 = (try? FileManager.default.attributesOfItem(atPath: path1)[.modificationDate] as? Date) ?? .distantPast
-                let t2 = (try? FileManager.default.attributesOfItem(atPath: path2)[.modificationDate] as? Date) ?? .distantPast
-                return t1 > t2
-            }
-            .first
     }
 
     func stop() {

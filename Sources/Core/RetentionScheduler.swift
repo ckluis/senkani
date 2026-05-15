@@ -111,6 +111,9 @@ public final class RetentionScheduler: @unchecked Sendable {
         let tokenPruned = SessionDatabase.shared.pruneTokenEvents(
             olderThanDays: config.tokenEventsDays
         )
+        let cursorPruned = SessionDatabase.shared.pruneSessionCursors(
+            olderThanDays: config.tokenEventsDays
+        )
         let sandboxPruned = SessionDatabase.shared.pruneSandboxedResults(
             olderThan: TimeInterval(config.sandboxResultsHours) * 3600
         )
@@ -123,6 +126,7 @@ public final class RetentionScheduler: @unchecked Sendable {
             "sandbox_results_hours": .int(config.sandboxResultsHours),
             "validation_results_hours": .int(config.validationResultsHours),
             "token_events_pruned": .int(tokenPruned),
+            "claude_session_cursors_pruned": .int(cursorPruned),
             "sandbox_results_pruned": .int(sandboxPruned),
             "validation_results_pruned": .int(validationPruned)
         ])
@@ -132,6 +136,8 @@ public final class RetentionScheduler: @unchecked Sendable {
         // don't pollute the counter table.
         SessionDatabase.shared.recordEvent(
             type: "retention.pruned.token_events", delta: tokenPruned)
+        SessionDatabase.shared.recordEvent(
+            type: "retention.pruned.claude_session_cursors", delta: cursorPruned)
         SessionDatabase.shared.recordEvent(
             type: "retention.pruned.sandboxed_results", delta: sandboxPruned)
         SessionDatabase.shared.recordEvent(

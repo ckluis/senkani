@@ -314,6 +314,10 @@ actor MCPSession {
         SessionDatabase.shared.pruneSandboxedResults()
         // Prune token_events older than 90 days to prevent unbounded table growth
         SessionDatabase.shared.pruneTokenEvents()
+        // Same cadence for claude_session_cursors — the watcher upserts one
+        // row per JSONL file it ever opens, so without this the table grows
+        // monotonically across operator-months.
+        SessionDatabase.shared.pruneSessionCursors()
         // Phase H+1 daily cadence sweep — promote `.recurring` rules with
         // sufficient evidence to `.staged` so they're visible to the
         // operator on the next `senkani learn status`. Lazy on session

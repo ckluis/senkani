@@ -216,4 +216,33 @@ struct TokenEventStoreTests {
         let stats = db.tokenStatsForProject("/tmp/proj")
         #expect(stats.commandCount == 0, "row gone from token_events")
     }
+
+    @Test func pruneSessionCursorsDropsStaleRows() {
+        let (db, path) = makeTempDB()
+        defer { TempSessionDatabase.cleanup(path: path) }
+
+        let oldA = "/tmp/jsonl-old-a-\(UUID().uuidString).jsonl"
+        let oldB = "/tmp/jsonl-old-b-\(UUID().uuidString).jsonl"
+        let fresh = "/tmp/jsonl-fresh-\(UUID().uuidString).jsonl"
+
+        db.setSessionCursor(path: oldA, byteOffset: 100, turnIndex: 1)
+        db.setSessionCursor(path: oldB, byteOffset: 200, turnIndex: 2)
+        db.setSessionCursor(path: fresh, byteOffset: 300, turnIndex: 3)
+        flush(db)
+
+        // Backdate two rows to 100 days ago; leave the fresh one alone.
+        let oldTs = Date().addingTimeInterval(-100 * 86400).timeIntervalSince1970
+        db.executeRawSQL(
+            "UPDATE claude_session_cursors SET updated_at = \(oldTs) WHERE path IN ('\(oldA)', '\(oldB)');"
+        )
+
+        let pruned = db.pruneSessionCursors(olderThanDays: 90)
+        #expect(pruned == 2, "both stale cursor rows pruned at 90-day cutoff")
+
+        #expect(db.getSessionCursor(path: oldA) == (0, 0), "old cursor A gone")
+        #expect(db.getSessionCursor(path: oldB) == (0, 0), "old cursor B gone")
+        let kept = db.getSessionCursor(path: fresh)
+        #expect(kept.byteOffset == 300, "fresh cursor retained")
+        #expect(kept.turnIndex == 3, "fresh cursor retained intact")
+    }
 }

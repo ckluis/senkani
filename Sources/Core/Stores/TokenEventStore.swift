@@ -860,6 +860,27 @@ final class TokenEventStore: @unchecked Sendable {
         }
     }
 
+    /// Prune `claude_session_cursors` rows whose `updated_at` is older than N
+    /// days (default: 90). Mirrors `pruneTokenEvents`; sibling so the
+    /// RetentionScheduler can log a per-table delta. Cursor rows accumulate
+    /// one-per-JSONL-file the watcher ever opens (keyed by absolute path),
+    /// and Claude Code rotates JSONLs per conversation, so without this the
+    /// table grows monotonically over an install's lifetime.
+    @discardableResult
+    func pruneSessionCursors(olderThanDays: Int = 90) -> Int {
+        let cutoff = Date().addingTimeInterval(-Double(olderThanDays) * 86400).timeIntervalSince1970
+        return parent.queue.sync {
+            guard let db = parent.db else { return 0 }
+            let sql = "DELETE FROM claude_session_cursors WHERE updated_at < ?;"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_double(stmt, 1, cutoff)
+            sqlite3_step(stmt)
+            return Int(sqlite3_changes(db))
+        }
+    }
+
     // MARK: - Diagnostics
 
     #if DEBUG

@@ -254,4 +254,9 @@ extension SessionDatabase {
     public func pruneTokenEvents(olderThanDays: Int = 90) -> Int {
         tokenEventStore.pruneTokenEvents(olderThanDays: olderThanDays)
     }
+
+    @discardableResult
+    public func pruneSessionCursors(olderThanDays: Int = 90) -> Int {
+        tokenEventStore.pruneSessionCursors(olderThanDays: olderThanDays)
+    }
 }

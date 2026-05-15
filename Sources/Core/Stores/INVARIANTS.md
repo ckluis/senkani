@@ -318,10 +318,15 @@ TokenEventStore
   project_root : token_events.project_root (single source of truth — see I5)
   Transactions : single-statement writes, serialized via parent.queue
   Redaction    : command
-  Notes        : The 90-day prune (pruneTokenEvents) is the only retention
-                 policy for analytics history. Cursors are per-path, not
-                 per-session — that's deliberate so a stopped session
-                 doesn't lose its place.
+  Notes        : The 90-day prune covers BOTH tables — `pruneTokenEvents`
+                 deletes token_events by `timestamp`; `pruneSessionCursors`
+                 (sibling, same cutoff days) deletes claude_session_cursors
+                 by `updated_at`. RetentionScheduler.tick calls both and
+                 logs per-table deltas. Cursors are per-path, not per-
+                 session — that's deliberate so a stopped session doesn't
+                 lose its place; the prune drops cursor rows whose JSONL
+                 hasn't been touched in 90 days, matching Claude Code's
+                 own JSONL retention horizon.
 
 SandboxStore
   Tables       : sandboxed_results

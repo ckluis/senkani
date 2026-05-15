@@ -24,6 +24,20 @@ import Glibc
 /// dispatch source runs on `queue`. Each accepted connection gets
 /// its own short-lived task that either completes (response sent +
 /// closed) or runs the bidirectional pipe to EOF on either side.
+///
+/// fd ownership contract: the accept-source's cancel handler captures
+/// the bound listening `fd` as a LOCAL — never reads `self.listenFD`
+/// — so a stale cancel handler closes the correct fd even if `start()`
+/// has already reassigned `self.listenFD` to a newer fd. The `= -1`
+/// nil-out of `self.listenFD` happens in `stop()` under the lock.
+/// Rationale: the original design read `self.listenFD` inside the
+/// cancel handler closure; a stop()-then-start() sequence (config
+/// reload, port collision recovery, test teardown + re-init) could
+/// queue an old cancel handler that fired after the new listener had
+/// bound, silently closing the new healthy listening socket. Same
+/// race-class as `ClaudeSessionWatcher`'s 2026-05-14 EXC_BREAKPOINT
+/// fix — listener variant is silent-failure rather than crash, since
+/// `accept(-1, …)` returns EBADF and the listener appears stopped.
 public final class EgressListener: @unchecked Sendable {
 
     public struct Config: Sendable {
@@ -149,15 +163,8 @@ public final class EgressListener: @unchecked Sendable {
         source.setEventHandler { [weak self] in
             self?.acceptOne()
         }
-        source.setCancelHandler { [weak self] in
-            guard let self else { return }
-            self.lock.lock()
-            if self.listenFD >= 0 {
-                close(self.listenFD)
-                self.listenFD = -1
-            }
-            self.lock.unlock()
-        }
+        // Capture fd locally — see class doc `fd ownership contract`.
+        source.setCancelHandler { close(fd) }
 
         lock.lock()
         listenFD = fd
@@ -182,6 +189,10 @@ public final class EgressListener: @unchecked Sendable {
         let path = config.portFilePath
         let writePort = config.writePortFile
         boundPort = 0
+        // Nil out under the lock; the actual close(fd) happens
+        // asynchronously in the dispatch source's cancel handler,
+        // which captured the fd locally.
+        listenFD = -1
         lock.unlock()
 
         source?.cancel()

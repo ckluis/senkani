@@ -9,6 +9,31 @@ import Darwin.POSIX
 /// Unix domain socket MCP server.
 /// Listens on ~/.senkani/mcp.sock, accepts multiple connections, each getting
 /// its own MCP Server + SocketTransport backed by the shared MCPSession.
+///
+/// Three listeners coexist: the main MCP socket (`socketPath`,
+/// long-lived MCP connections), the hook socket (`hookSocketPath`,
+/// short-lived hook events), and the pane socket (`paneSocketPath`,
+/// pane control IPC). Each has its own dispatch queue and accept
+/// source.
+///
+/// fd ownership contract: each accept-source's cancel handler captures
+/// its bound listening `fd` as a LOCAL — never reads
+/// `self.listenFD` / `self.hookListenFD` / `self.paneListenFD` — so a
+/// stale cancel handler closes the correct fd even if a subsequent
+/// `start()` has already reassigned the property to a newer fd. The
+/// `= -1` nil-out of each property happens in `stop()` under the
+/// lock; `stop()` does NOT call `Darwin.close()` on the listen fds —
+/// the cancel handler is the sole closer. Rationale: the original
+/// design read `self.<fd-property>` inside the cancel handler and
+/// also closed the same fd manually from `stop()`. A stop()-then-
+/// start() sequence (test setup/teardown, restart on config reload)
+/// could queue an old cancel handler that fired after the new
+/// listener had bound, silently closing the new healthy listening
+/// socket — and `stop()`'s manual close could double-close the
+/// already-closed fd depending on dispatch-queue scheduling. Same
+/// race-class as `ClaudeSessionWatcher`'s 2026-05-14 EXC_BREAKPOINT
+/// fix — listener variant is silent-failure (the server appears to
+/// start but `accept()` returns EBADF) rather than crash.
 public final class SocketServerManager: @unchecked Sendable {
     public static let shared = SocketServerManager()
 
@@ -125,18 +150,13 @@ public final class SocketServerManager: @unchecked Sendable {
         paneAcceptSource?.cancel()
         paneAcceptSource = nil
 
-        if listenFD >= 0 {
-            Darwin.close(listenFD)
-            listenFD = -1
-        }
-        if hookListenFD >= 0 {
-            Darwin.close(hookListenFD)
-            hookListenFD = -1
-        }
-        if paneListenFD >= 0 {
-            Darwin.close(paneListenFD)
-            paneListenFD = -1
-        }
+        // Nil out under the lock; the actual close(fd) happens
+        // asynchronously in each dispatch source's cancel handler,
+        // which captured its fd locally. See class doc `fd ownership
+        // contract`.
+        listenFD = -1
+        hookListenFD = -1
+        paneListenFD = -1
 
         // Clean up socket files
         unlink(socketPath)
@@ -218,13 +238,8 @@ public final class SocketServerManager: @unchecked Sendable {
         source.setEventHandler { [weak self] in
             self?.acceptConnection()
         }
-        source.setCancelHandler { [weak self] in
-            guard let self else { return }
-            if self.listenFD >= 0 {
-                Darwin.close(self.listenFD)
-                self.listenFD = -1
-            }
-        }
+        // Capture fd locally — see class doc `fd ownership contract`.
+        source.setCancelHandler { Darwin.close(fd) }
         acceptSource = source
         source.resume()
 
@@ -431,13 +446,8 @@ public final class SocketServerManager: @unchecked Sendable {
         source.setEventHandler { [weak self] in
             self?.acceptHookConnection()
         }
-        source.setCancelHandler { [weak self] in
-            guard let self else { return }
-            if self.hookListenFD >= 0 {
-                Darwin.close(self.hookListenFD)
-                self.hookListenFD = -1
-            }
-        }
+        // Capture fd locally — see class doc `fd ownership contract`.
+        source.setCancelHandler { Darwin.close(fd) }
         hookAcceptSource = source
         source.resume()
 
@@ -557,13 +567,8 @@ public final class SocketServerManager: @unchecked Sendable {
 
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: paneQueue)
         source.setEventHandler { [weak self] in self?.acceptPaneConnection() }
-        source.setCancelHandler { [weak self] in
-            guard let self else { return }
-            if self.paneListenFD >= 0 {
-                Darwin.close(self.paneListenFD)
-                self.paneListenFD = -1
-            }
-        }
+        // Capture fd locally — see class doc `fd ownership contract`.
+        source.setCancelHandler { Darwin.close(fd) }
         paneAcceptSource = source
         source.resume()
 

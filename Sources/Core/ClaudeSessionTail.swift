@@ -42,7 +42,7 @@ public enum ClaudeSessionTail {
         paneId: String,
         db: SessionDatabase
     ) -> ReadResult {
-        let (cursorOffset, _) = db.getSessionCursor(path: path)
+        let (cursorOffset, _) = db.getSessionCursor(path: path, reader: "watcher")
         guard let fh = FileHandle(forReadingAtPath: path) else {
             return ReadResult(eventsEmitted: 0, newOffset: cursorOffset)
         }
@@ -105,9 +105,14 @@ public enum ClaudeSessionTail {
         }
 
         // Persist new cursor AFTER emit batch — see invariant note above.
+        // reader: "watcher" — the realtime tail has no concept of turns;
+        // ClaudeSessionReader.readNew is the monotonic-turn-count writer
+        // and scopes to reader: "reader". The split (migration 21) keeps
+        // them from clobbering each other's row.
         db.setSessionCursor(path: path,
                             byteOffset: Int(newOffset),
-                            turnIndex: 0)
+                            turnIndex: 0,
+                            reader: "watcher")
 
         return ReadResult(eventsEmitted: emitted,
                           newOffset: Int(newOffset),

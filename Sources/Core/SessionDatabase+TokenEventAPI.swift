@@ -174,12 +174,12 @@ extension SessionDatabase {
         tokenEventStore.sessionSummaries(projectRoot: projectRoot, limit: limit)
     }
 
-    public func getSessionCursor(path: String) -> (byteOffset: Int, turnIndex: Int) {
-        tokenEventStore.getSessionCursor(path: path)
+    public func getSessionCursor(path: String, reader: String) -> (byteOffset: Int, turnIndex: Int) {
+        tokenEventStore.getSessionCursor(path: path, reader: reader)
     }
 
-    public func setSessionCursor(path: String, byteOffset: Int, turnIndex: Int) {
-        tokenEventStore.setSessionCursor(path: path, byteOffset: byteOffset, turnIndex: turnIndex)
+    public func setSessionCursor(path: String, byteOffset: Int, turnIndex: Int, reader: String) {
+        tokenEventStore.setSessionCursor(path: path, byteOffset: byteOffset, turnIndex: turnIndex, reader: reader)
     }
 
     public func unfilteredExecCommands(

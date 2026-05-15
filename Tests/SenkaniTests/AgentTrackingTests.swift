@@ -212,7 +212,7 @@ struct SessionCursorTests {
         let (db, path) = makeTempDB()
         defer { cleanupDB(path: path) }
 
-        let (offset, turn) = db.getSessionCursor(path: "/nonexistent/file.jsonl")
+        let (offset, turn) = db.getSessionCursor(path: "/nonexistent/file.jsonl", reader: "watcher")
         #expect(offset == 0)
         #expect(turn == 0)
     }
@@ -222,11 +222,11 @@ struct SessionCursorTests {
         defer { cleanupDB(path: path) }
 
         let filePath = "/tmp/session-abc.jsonl"
-        db.setSessionCursor(path: filePath, byteOffset: 1024, turnIndex: 7)
+        db.setSessionCursor(path: filePath, byteOffset: 1024, turnIndex: 7, reader: "watcher")
 
         Thread.sleep(forTimeInterval: 0.05)
 
-        let (offset, turn) = db.getSessionCursor(path: filePath)
+        let (offset, turn) = db.getSessionCursor(path: filePath, reader: "watcher")
         #expect(offset == 1024)
         #expect(turn == 7)
     }
@@ -236,14 +236,53 @@ struct SessionCursorTests {
         defer { cleanupDB(path: path) }
 
         let filePath = "/tmp/session-xyz.jsonl"
-        db.setSessionCursor(path: filePath, byteOffset: 100, turnIndex: 3)
+        db.setSessionCursor(path: filePath, byteOffset: 100, turnIndex: 3, reader: "watcher")
         Thread.sleep(forTimeInterval: 0.05)
-        db.setSessionCursor(path: filePath, byteOffset: 500, turnIndex: 12)
+        db.setSessionCursor(path: filePath, byteOffset: 500, turnIndex: 12, reader: "watcher")
         Thread.sleep(forTimeInterval: 0.05)
 
-        let (offset, turn) = db.getSessionCursor(path: filePath)
+        let (offset, turn) = db.getSessionCursor(path: filePath, reader: "watcher")
         #expect(offset == 500, "Expected latest cursor value")
         #expect(turn == 12, "Expected latest turn index")
+    }
+
+    /// Pinning test for migration 21 (claude-session-cursor-turn-index-
+    /// ownership-conflict-2026-05-15). Exercises both readers against
+    /// the same JSONL path and asserts each writer only mutates its own
+    /// `(path, reader)` row. FAILS against the pre-fix single-PK code:
+    /// the second `setSessionCursor` would overwrite the first.
+    @Test func pinningTwoReadersDoNotCollideOnSamePath() {
+        let (db, path) = makeTempDB()
+        defer { cleanupDB(path: path) }
+
+        let filePath = "/tmp/session-pinned-\(UUID().uuidString).jsonl"
+
+        // Watcher writes: byte_offset=1000, turn_index=0 (watcher always 0).
+        db.setSessionCursor(path: filePath, byteOffset: 1000, turnIndex: 0, reader: "watcher")
+        // Reader writes: byte_offset=500, turn_index=7 (monotonic turn count).
+        db.setSessionCursor(path: filePath, byteOffset: 500, turnIndex: 7, reader: "reader")
+
+        Thread.sleep(forTimeInterval: 0.05)
+
+        // Each reader sees its own row, untouched by the other.
+        let watcherSeen = db.getSessionCursor(path: filePath, reader: "watcher")
+        #expect(watcherSeen.byteOffset == 1000, "watcher row clobbered by reader's write")
+        #expect(watcherSeen.turnIndex == 0)
+
+        let readerSeen = db.getSessionCursor(path: filePath, reader: "reader")
+        #expect(readerSeen.byteOffset == 500, "reader row clobbered by watcher's write")
+        #expect(readerSeen.turnIndex == 7)
+
+        // Subsequent updates also stay isolated.
+        db.setSessionCursor(path: filePath, byteOffset: 2000, turnIndex: 0, reader: "watcher")
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let readerAfter = db.getSessionCursor(path: filePath, reader: "reader")
+        #expect(readerAfter.byteOffset == 500, "reader row clobbered by second watcher write")
+        #expect(readerAfter.turnIndex == 7)
+
+        let watcherAfter = db.getSessionCursor(path: filePath, reader: "watcher")
+        #expect(watcherAfter.byteOffset == 2000)
     }
 }
 

@@ -50,12 +50,21 @@ final class TokenEventStore: @unchecked Sendable {
             execSilent("ALTER TABLE token_events ADD COLUMN connection_id TEXT;")
             execSilent("CREATE INDEX IF NOT EXISTS idx_token_events_session ON token_events(session_id);")
             execSilent("CREATE INDEX IF NOT EXISTS idx_token_events_connection ON token_events(connection_id);")
+            // Schema shape: PRIMARY KEY (path, reader) — Migration 21
+            // (claude-session-cursor-turn-index-ownership-conflict-2026-05-15)
+            // split the table so the realtime watcher and the cursor-driven
+            // reader scope to their own rows. Fresh installs land here
+            // directly; migration 21 rebuilds legacy installs. The two
+            // writer identities (`watcher` | `reader`) are documented in
+            // INVARIANTS.md.
             exec("""
                 CREATE TABLE IF NOT EXISTS claude_session_cursors (
-                    path TEXT PRIMARY KEY,
+                    path TEXT NOT NULL,
                     byte_offset INTEGER NOT NULL DEFAULT 0,
                     turn_index INTEGER NOT NULL DEFAULT 0,
-                    updated_at REAL NOT NULL
+                    updated_at REAL NOT NULL,
+                    reader TEXT NOT NULL DEFAULT 'watcher',
+                    PRIMARY KEY (path, reader)
                 );
             """)
             execSilent("CREATE INDEX IF NOT EXISTS idx_token_events_project_tool_time ON token_events(project_root, tool_name, timestamp);")
@@ -803,29 +812,43 @@ final class TokenEventStore: @unchecked Sendable {
 
     // MARK: - Session cursors (ClaudeSessionReader, AXI.3 Tier 1)
 
-    /// Return the stored (byteOffset, turnIndex) for a JSONL file path, or (0, 0) if new.
-    func getSessionCursor(path: String) -> (byteOffset: Int, turnIndex: Int) {
+    /// Per-reader identity for the `claude_session_cursors` table. Migration 21
+    /// (claude-session-cursor-turn-index-ownership-conflict-2026-05-15) split
+    /// the PK to `(path, reader)` so the realtime watcher and the cursor-
+    /// driven background reader stop colliding on `turn_index`. New reader
+    /// identities require an INVARIANTS.md update + a new reader-identity
+    /// string the call-site is expected to pass.
+    ///
+    /// Existing identities:
+    ///   - `"watcher"` — `ClaudeSessionTail.tail`. Writes `turn_index=0`
+    ///     because the watcher has no concept of turns.
+    ///   - `"reader"` — `ClaudeSessionReader.readNew`. Writes `turn_index`
+    ///     incrementally per assistant turn.
+
+    /// Return the stored (byteOffset, turnIndex) for (path, reader), or (0, 0) if new.
+    func getSessionCursor(path: String, reader: String) -> (byteOffset: Int, turnIndex: Int) {
         return parent.queue.sync {
             guard let db = parent.db else { return (0, 0) }
-            let sql = "SELECT byte_offset, turn_index FROM claude_session_cursors WHERE path = ?;"
+            let sql = "SELECT byte_offset, turn_index FROM claude_session_cursors WHERE path = ? AND reader = ?;"
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return (0, 0) }
             defer { sqlite3_finalize(stmt) }
             sqlite3_bind_text(stmt, 1, (path as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 2, (reader as NSString).utf8String, -1, nil)
             guard sqlite3_step(stmt) == SQLITE_ROW else { return (0, 0) }
             return (Int(sqlite3_column_int64(stmt, 0)), Int(sqlite3_column_int64(stmt, 1)))
         }
     }
 
-    /// Persist the cursor for a JSONL file after a successful read pass.
-    func setSessionCursor(path: String, byteOffset: Int, turnIndex: Int) {
+    /// Persist the cursor for (path, reader) after a successful read pass.
+    func setSessionCursor(path: String, byteOffset: Int, turnIndex: Int, reader: String) {
         let now = Date().timeIntervalSince1970
         parent.queue.async { [weak parent] in
             guard let parent, let db = parent.db else { return }
             let sql = """
-                INSERT INTO claude_session_cursors (path, byte_offset, turn_index, updated_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(path) DO UPDATE SET
+                INSERT INTO claude_session_cursors (path, byte_offset, turn_index, updated_at, reader)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(path, reader) DO UPDATE SET
                     byte_offset = excluded.byte_offset,
                     turn_index  = excluded.turn_index,
                     updated_at  = excluded.updated_at;
@@ -837,6 +860,7 @@ final class TokenEventStore: @unchecked Sendable {
             sqlite3_bind_int64(stmt, 2, Int64(byteOffset))
             sqlite3_bind_int64(stmt, 3, Int64(turnIndex))
             sqlite3_bind_double(stmt, 4, now)
+            sqlite3_bind_text(stmt, 5, (reader as NSString).utf8String, -1, nil)
             sqlite3_step(stmt)
         }
     }

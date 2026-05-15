@@ -120,7 +120,7 @@ struct ClaudeSessionTailTests {
         let probeSession = "probe-\(UUID().uuidString)"
         // Pre-seed the cursor at offset 10_000 to simulate a prior read on
         // a much longer file that has since been replaced by a shorter one.
-        db.setSessionCursor(path: jsonlPath, byteOffset: 10_000, turnIndex: 0)
+        db.setSessionCursor(path: jsonlPath, byteOffset: 10_000, turnIndex: 0, reader: "watcher")
         _ = db.tokenStatsAllProjects()
 
         let lines = (0..<5).map { _ in makeAssistantUsageLine(sessionId: probeSession) }

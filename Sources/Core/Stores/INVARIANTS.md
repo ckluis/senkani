@@ -322,11 +322,33 @@ TokenEventStore
                  deletes token_events by `timestamp`; `pruneSessionCursors`
                  (sibling, same cutoff days) deletes claude_session_cursors
                  by `updated_at`. RetentionScheduler.tick calls both and
-                 logs per-table deltas. Cursors are per-path, not per-
-                 session — that's deliberate so a stopped session doesn't
-                 lose its place; the prune drops cursor rows whose JSONL
-                 hasn't been touched in 90 days, matching Claude Code's
-                 own JSONL retention horizon.
+                 logs per-table deltas. Cursors are per-(path, reader),
+                 not per-session — that's deliberate so a stopped session
+                 doesn't lose its place; the prune drops cursor rows whose
+                 JSONL hasn't been touched in 90 days, matching Claude
+                 Code's own JSONL retention horizon. Prune is reader-
+                 agnostic — a stale row is stale regardless of identity.
+
+                 `claude_session_cursors` PRIMARY KEY is (path, reader)
+                 as of Migration 21 (claude-session-cursor-turn-index-
+                 ownership-conflict-2026-05-15). Two readers write
+                 distinct turn_index semantics into this table and must
+                 NOT collide on the same row:
+                   - `reader='watcher'` — ClaudeSessionTail.tail (realtime
+                     watcher delegated from SenkaniApp's
+                     ClaudeSessionWatcher). Writes turn_index=0; the
+                     watcher has no concept of turns.
+                   - `reader='reader'`  — ClaudeSessionReader.readNew
+                     (cursor-driven background reader). Writes turn_index
+                     incrementally per assistant turn.
+                 Adding a third reader (e.g., a debug inspector, an
+                 export pipeline) requires (a) declaring a new reader-
+                 identity string here, (b) wiring the call-site through
+                 getSessionCursor / setSessionCursor with the new
+                 identity, and (c) verifying the new identity is unique
+                 in the existing row set. Reusing `watcher` or `reader`
+                 for an unrelated purpose silently corrupts the original
+                 owner's row.
 
 SandboxStore
   Tables       : sandboxed_results

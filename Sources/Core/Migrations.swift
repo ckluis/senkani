@@ -1110,6 +1110,86 @@ public enum MigrationRegistry {
             try exec("CREATE INDEX IF NOT EXISTS idx_pack_audits_anchor ON pack_audits(chain_anchor_id, id);")
             try exec("CREATE INDEX IF NOT EXISTS idx_pack_audits_pack ON pack_audits(pack_name, id);")
         },
+        Migration(version: 21, description: "claude_session_cursors PRIMARY KEY (path, reader) for two-reader split (claude-session-cursor-turn-index-ownership-conflict-2026-05-15)") { db in
+            // Co-ownership fix per the 2026-05-15 scope-groom round. Two
+            // readers write distinct turn_index semantics into the same
+            // (path)-keyed row of `claude_session_cursors`:
+            //   - ClaudeSessionTail (realtime watcher) writes turn_index=0
+            //     because the watcher has no concept of turns.
+            //   - ClaudeSessionReader.readNew writes turn_index
+            //     incrementally per assistant turn.
+            // Today readNew is exercised only by AgentTrackingTests; the
+            // hazard ships the moment readNew is wired into a production
+            // service. The structural fix is a composite PK so each writer
+            // scopes to its own row. Migration 21 rebuilds the existing
+            // table (SQLite cannot ALTER a PK in place); TokenEventStore.
+            // setupSchema creates the new shape for fresh installs.
+            //
+            // The migration is idempotent: it no-ops on fresh installs
+            // (table not yet created by setupSchema, which runs after
+            // migrations) and on already-migrated DBs (reader column
+            // already present). All existing rows backfill to
+            // reader='watcher' — readNew is test-only today, and test
+            // databases are torn down per case, so no live row belongs to
+            // readNew yet.
+            func exec(_ sql: String) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                throw MigrationError.sqlFailed(stage: "v21", detail: msg)
+            }
+
+            // Probe: does the legacy table exist? Fresh installs haven't
+            // created it yet (setupSchema runs after migrations); no-op.
+            var probeStmt: OpaquePointer?
+            let probeSQL = "SELECT name FROM sqlite_master WHERE type='table' AND name='claude_session_cursors' LIMIT 1;"
+            guard sqlite3_prepare_v2(db, probeSQL, -1, &probeStmt, nil) == SQLITE_OK else {
+                throw MigrationError.sqlFailed(stage: "v21 probe", detail: String(cString: sqlite3_errmsg(db)))
+            }
+            let tableExists = sqlite3_step(probeStmt) == SQLITE_ROW
+            sqlite3_finalize(probeStmt)
+            guard tableExists else { return }
+
+            // Idempotency: if `reader` column is already present, the
+            // rebuild already ran. Bail.
+            var infoStmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "PRAGMA table_info(claude_session_cursors);", -1, &infoStmt, nil) == SQLITE_OK else {
+                throw MigrationError.sqlFailed(stage: "v21 table_info", detail: String(cString: sqlite3_errmsg(db)))
+            }
+            var hasReader = false
+            while sqlite3_step(infoStmt) == SQLITE_ROW {
+                if let c = sqlite3_column_text(infoStmt, 1),
+                   String(cString: c) == "reader" {
+                    hasReader = true
+                }
+            }
+            sqlite3_finalize(infoStmt)
+            guard !hasReader else { return }
+
+            // Standard SQLite recipe for ALTER-PRIMARY-KEY: create the
+            // new-shape table under a temporary name, INSERT … SELECT
+            // with reader='watcher' backfilled, DROP the old, RENAME the
+            // new into place. No additional indexes exist on this table
+            // (verified 2026-05-15), so the dance is short.
+            try exec("""
+                CREATE TABLE claude_session_cursors_v21 (
+                    path TEXT NOT NULL,
+                    byte_offset INTEGER NOT NULL DEFAULT 0,
+                    turn_index INTEGER NOT NULL DEFAULT 0,
+                    updated_at REAL NOT NULL,
+                    reader TEXT NOT NULL DEFAULT 'watcher',
+                    PRIMARY KEY (path, reader)
+                );
+            """)
+            try exec("""
+                INSERT INTO claude_session_cursors_v21 (path, byte_offset, turn_index, updated_at, reader)
+                SELECT path, byte_offset, turn_index, updated_at, 'watcher' FROM claude_session_cursors;
+            """)
+            try exec("DROP TABLE claude_session_cursors;")
+            try exec("ALTER TABLE claude_session_cursors_v21 RENAME TO claude_session_cursors;")
+        },
     ]
 
     /// Open a 'migration-v18' anchor for a table at MAX(id) so that new

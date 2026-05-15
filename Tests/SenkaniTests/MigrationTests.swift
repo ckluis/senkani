@@ -296,6 +296,162 @@ struct MigrationRunnerTests {
                 "flock sidecar must exist after a run() call")
     }
 
+    @Test("v21 backfills claude_session_cursors with reader='watcher' and rebuilds PK")
+    func migration21BackfillsReaderColumn() throws {
+        // Per claude-session-cursor-turn-index-ownership-conflict-2026-05-15:
+        // Migration 21 must rebuild the legacy single-column-PK
+        // `claude_session_cursors` table into a composite (path, reader)
+        // PK, backfilling existing rows to reader='watcher' with
+        // byte_offset, turn_index, and updated_at preserved bit-identical.
+        let db = Self.openMemory()
+        defer { sqlite3_close(db) }
+
+        // Seed the legacy schema (pre-migration shape: PRIMARY KEY (path)).
+        Self.exec(db, """
+            CREATE TABLE claude_session_cursors (
+                path TEXT PRIMARY KEY,
+                byte_offset INTEGER NOT NULL DEFAULT 0,
+                turn_index INTEGER NOT NULL DEFAULT 0,
+                updated_at REAL NOT NULL
+            );
+        """)
+
+        // Three rows with distinct (path, byte_offset, turn_index,
+        // updated_at) — covers default values plus a non-trivial row.
+        Self.exec(db, """
+            INSERT INTO claude_session_cursors (path, byte_offset, turn_index, updated_at)
+            VALUES
+              ('/tmp/a.jsonl', 100, 1, 1700000000.0),
+              ('/tmp/b.jsonl', 250, 5, 1700000100.5),
+              ('/tmp/c.jsonl',   0, 0, 1700000200.25);
+        """)
+
+        // Run all migrations including v21. The runner walks v1..v21 in
+        // order; v1-v20 are idempotent against the unrelated tables we
+        // haven't created (CREATE … IF NOT EXISTS / ADD COLUMN guarded).
+        _ = try MigrationRunner.run(db: db, dbPath: ":memory:", registry: MigrationRegistry.all)
+
+        // Post-migration: `reader` column must exist with default 'watcher'.
+        var hasReader = false
+        var infoStmt: OpaquePointer?
+        #expect(sqlite3_prepare_v2(db, "PRAGMA table_info(claude_session_cursors);", -1, &infoStmt, nil) == SQLITE_OK)
+        while sqlite3_step(infoStmt) == SQLITE_ROW {
+            if let c = sqlite3_column_text(infoStmt, 1),
+               String(cString: c) == "reader" {
+                hasReader = true
+            }
+        }
+        sqlite3_finalize(infoStmt)
+        #expect(hasReader, "reader column missing after v21")
+
+        // The composite PK must list (path, reader). PRAGMA index_list +
+        // index_info would be the canonical check; the simpler shape
+        // assertion is "every row has a non-NULL reader and the count
+        // matches the seeded rows" — UNIQUE on (path) alone was the
+        // pre-migration constraint, so a second row with the same path
+        // but different reader must be insertable post-migration.
+        var insertStmt: OpaquePointer?
+        let insertSQL = """
+            INSERT INTO claude_session_cursors (path, byte_offset, turn_index, updated_at, reader)
+            VALUES ('/tmp/a.jsonl', 999, 99, 1700000300.0, 'reader');
+        """
+        #expect(sqlite3_exec(db, insertSQL, nil, nil, nil) == SQLITE_OK,
+                "post-migration must permit (same path, different reader); composite PK absent")
+        sqlite3_finalize(insertStmt)
+
+        // Every pre-existing row backfilled to reader='watcher', with
+        // byte_offset / turn_index / updated_at bit-identical to seed.
+        var stmt: OpaquePointer?
+        let sql = """
+            SELECT path, byte_offset, turn_index, updated_at, reader
+            FROM claude_session_cursors
+            WHERE reader = 'watcher'
+            ORDER BY path;
+        """
+        #expect(sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK)
+        defer { sqlite3_finalize(stmt) }
+
+        struct Row { let path: String; let byteOffset: Int64; let turnIndex: Int64; let updatedAt: Double }
+        var rows: [Row] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            rows.append(Row(
+                path: String(cString: sqlite3_column_text(stmt, 0)),
+                byteOffset: sqlite3_column_int64(stmt, 1),
+                turnIndex: sqlite3_column_int64(stmt, 2),
+                updatedAt: sqlite3_column_double(stmt, 3)
+            ))
+        }
+
+        #expect(rows.count == 3, "expected 3 backfilled rows, got \(rows.count)")
+        #expect(rows[0].path == "/tmp/a.jsonl")
+        #expect(rows[0].byteOffset == 100)
+        #expect(rows[0].turnIndex == 1)
+        #expect(rows[0].updatedAt == 1700000000.0, "updated_at preserved bit-identical")
+        #expect(rows[1].path == "/tmp/b.jsonl")
+        #expect(rows[1].byteOffset == 250)
+        #expect(rows[1].turnIndex == 5)
+        #expect(rows[1].updatedAt == 1700000100.5)
+        #expect(rows[2].path == "/tmp/c.jsonl")
+        #expect(rows[2].byteOffset == 0)
+        #expect(rows[2].turnIndex == 0)
+        #expect(rows[2].updatedAt == 1700000200.25)
+    }
+
+    @Test("v21 is a no-op when claude_session_cursors does not exist (fresh-install path)")
+    func migration21NoOpOnFreshInstall() throws {
+        // Fresh installs: MigrationRunner runs BEFORE TokenEventStore.
+        // setupSchema, so claude_session_cursors does not yet exist. v21
+        // must no-op rather than fail. setupSchema then creates the
+        // post-migration shape directly.
+        let db = Self.openMemory()
+        defer { sqlite3_close(db) }
+
+        // Run all migrations against a database with no claude_session_cursors.
+        _ = try MigrationRunner.run(db: db, dbPath: ":memory:", registry: MigrationRegistry.all)
+
+        // Table should still not exist (v21 didn't create it — setupSchema does).
+        #expect(!Self.tableExists(db, "claude_session_cursors"),
+                "v21 must not create claude_session_cursors; setupSchema does that on fresh installs")
+    }
+
+    @Test("v21 is idempotent — running twice over an already-migrated table is a no-op")
+    func migration21IdempotentReentry() throws {
+        let db = Self.openMemory()
+        defer { sqlite3_close(db) }
+
+        // Seed the post-migration shape directly (simulates a DB that
+        // already ran v21 but lost its schema_migrations row somehow —
+        // matches the same defense ALTERs use elsewhere).
+        Self.exec(db, """
+            CREATE TABLE claude_session_cursors (
+                path TEXT NOT NULL,
+                byte_offset INTEGER NOT NULL DEFAULT 0,
+                turn_index INTEGER NOT NULL DEFAULT 0,
+                updated_at REAL NOT NULL,
+                reader TEXT NOT NULL DEFAULT 'watcher',
+                PRIMARY KEY (path, reader)
+            );
+        """)
+        Self.exec(db, """
+            INSERT INTO claude_session_cursors (path, byte_offset, turn_index, updated_at, reader)
+            VALUES ('/tmp/already.jsonl', 42, 3, 1700000500.0, 'reader');
+        """)
+
+        _ = try MigrationRunner.run(db: db, dbPath: ":memory:", registry: MigrationRegistry.all)
+
+        // Row survives unchanged — v21 hit the `hasReader` early-return path.
+        var stmt: OpaquePointer?
+        let sql = "SELECT byte_offset, turn_index, updated_at, reader FROM claude_session_cursors WHERE path = '/tmp/already.jsonl';"
+        #expect(sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK)
+        defer { sqlite3_finalize(stmt) }
+        #expect(sqlite3_step(stmt) == SQLITE_ROW)
+        #expect(sqlite3_column_int64(stmt, 0) == 42)
+        #expect(sqlite3_column_int64(stmt, 1) == 3)
+        #expect(sqlite3_column_double(stmt, 2) == 1700000500.0)
+        #expect(String(cString: sqlite3_column_text(stmt, 3)) == "reader",
+                "reader-identity preserved through idempotent re-run")
+    }
+
     @Test("lockfile refuses subsequent runs until removed")
     func lockfileRefusesRun() throws {
         let tmpDir = NSTemporaryDirectory() + "migration-test-\(UUID().uuidString)/"

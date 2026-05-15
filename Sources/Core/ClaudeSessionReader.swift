@@ -162,7 +162,7 @@ public enum ClaudeSessionReader {
         guard let handle = FileHandle(forReadingAtPath: path) else { return [] }
         defer { handle.closeFile() }
 
-        let (byteOffset, turnIndex) = db.getSessionCursor(path: path)
+        let (byteOffset, turnIndex) = db.getSessionCursor(path: path, reader: "reader")
         if byteOffset > 0 {
             handle.seek(toFileOffset: UInt64(byteOffset))
         }
@@ -199,7 +199,10 @@ public enum ClaudeSessionReader {
         }
 
         // Always advance cursor even if no events (skips junk lines on next read).
-        db.setSessionCursor(path: path, byteOffset: newCursor, turnIndex: currentTurn)
+        // reader: "reader" — readNew tracks monotonic turn_index; the
+        // realtime tail (reader: "watcher") writes turn_index=0 and lives
+        // on its own (path, reader) row post-migration-21.
+        db.setSessionCursor(path: path, byteOffset: newCursor, turnIndex: currentTurn, reader: "reader")
 
         return events
     }

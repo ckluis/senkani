@@ -257,6 +257,40 @@ struct BashPerformanceTests {
     }
 }
 
+// MARK: - Bash Depth-Stress Tests
+
+@Suite("TreeSitterBackend — Bash Depth Stress")
+struct TreeSitterBashDepthStressTests {
+
+    // Chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Generates a deeply-nested `if ... then ... fi` Bash source and indexes
+    // it WITHOUT `runOnLargeStackThread` to prove the iterative walk is
+    // cooperative-pool-safe. The pre-refactor recursive walk would have
+    // consumed ~2200 Swift call frames descending the if_statement chain
+    // and crashed on the cooperative pool's smaller stack. The iterative
+    // form runs in heap-allocated work-stack memory and clears it.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() {
+        let depth = 2200
+        var source = "first() { :; }\n"
+        for _ in 0..<depth {
+            source += "if true; then "
+        }
+        source += "echo deep"
+        for _ in 0..<depth {
+            source += "; fi"
+        }
+        source += "\nlast() { :; }\n"
+
+        let entries = indexBash(source)
+        let funcs = entries.filter { $0.kind == .function }
+        // Two top-level functions emitted in source order; the deep
+        // nested `if` chain in between contributes no symbols.
+        #expect(funcs.map(\.name) == ["first", "last"])
+        #expect(funcs.allSatisfy { $0.container == nil })
+    }
+}
+
 // MARK: - Helper
 
 private func indexBash(_ source: String) -> [IndexEntry] {

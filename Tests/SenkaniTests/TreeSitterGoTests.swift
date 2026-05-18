@@ -346,6 +346,42 @@ struct TreeSitterGoPerformanceTests {
     }
 }
 
+// MARK: - Suite N: Depth stress (iterative-walk pilot)
+
+@Suite("TreeSitterBackend — Go Depth Stress")
+struct TreeSitterGoDepthStressTests {
+
+    // Deeply nested parenthesized expressions force the AST walk to
+    // descend `depth` levels via the default arm. The pre-refactor
+    // recursive walk consumed Swift call frames at this depth and
+    // stack-overflowed on the cooperative pool (incident 7C27A798,
+    // 2026-05-10). The iterative work-stack form must traverse the
+    // same tree on the cooperative pool without crashing, and must
+    // emit `first` and `last` in the source-order order the recursive
+    // form did.
+    @Test func testDepthStressIterative() {
+        let depth = 2200
+        let opens = String(repeating: "(", count: depth)
+        let closes = String(repeating: ")", count: depth)
+        let source = """
+        package main
+
+        func first() {}
+
+        var _ = \(opens)0\(closes)
+
+        func last() {}
+        """
+
+        let entries = indexGo(source)
+        let funcs = entries.filter { $0.kind == .function }
+
+        #expect(funcs.count == 2, "Expected 2 top-level functions, got \(funcs.count)")
+        #expect(funcs.map(\.name) == ["first", "last"], "Symbol order must remain left-to-right pre-order")
+        #expect(funcs.allSatisfy { $0.container == nil }, "Top-level functions carry no container")
+    }
+}
+
 // MARK: - Helper
 
 private func indexGo(_ code: String) -> [IndexEntry] {

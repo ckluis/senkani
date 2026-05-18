@@ -32,24 +32,62 @@ internal enum GraphQLBackend: TreeSitterLanguageBackend {
 
     // MARK: - Walk
 
+    // Iterative work-stack of (node, container) tuples. Replaces a
+    // recursive descent so AST depth no longer consumes Swift call
+    // frames. Chain child of `indexer-backends-iterative-walk-refactor-
+    // 2026-05-11` (GoBackend pilot + BashBackend / CBackend /
+    // CppBackend / CSharpBackend / DartBackend / ElixirBackend
+    // predecessors 2026-05-18). GraphQLBackend's substrate is the
+    // simplest minor variant in the chain — one pre-refactor recursion
+    // site, no container derivation. The dispatch shifts from
+    // "iterate children, switch on child.nodeType" to "pop node,
+    // switch on node.nodeType" — semantically identical because the
+    // pop sequence reproduces the iteration order, and GraphQL's root
+    // (`source_file` / `document`) never matches a definition kind so
+    // the per-iteration child-emission semantics still hold. Definition
+    // arms emit the entry without descent (matches pre-refactor "no
+    // recurse on this child"); the default arm reverse-pushes children
+    // with `currentContainer` preserved (matches pre-refactor
+    // `walk(child, ..., container: container)` at line 52 of the
+    // pre-refactor source). The malformed-definition edge case — node
+    // matches a definition kind but `extractName` returns nil — falls
+    // through to the default arm's child push, matching pre-refactor
+    // behavior where `if let kind = …, let name = …` failing on `name`
+    // triggers the `else if child.childCount > 0 { walk(child, …) }`
+    // branch.
     private static func walk(
-        _ node: Node, file: String, source: NSString, lines: [String],
+        _ root: Node, file: String, source: NSString, lines: [String],
         container: String?, entries: inout [IndexEntry]
     ) {
-        for i in 0..<Int(node.childCount) {
-            guard let child = node.child(at: i) else { continue }
-            let type = child.nodeType ?? ""
+        var stack: [(Node, String?)] = [(root, container)]
+        while let (node, currentContainer) = stack.popLast() {
+            let type = node.nodeType ?? ""
+
             if let kind = definitionKind(type),
-               let name = extractName(child, source: source) {
+               let name = extractName(node, source: source) {
                 entries.append(IndexEntry(
                     name: name, kind: kind, file: file,
-                    startLine: TreeSitterBackend.startLine(of: child),
-                    endLine: TreeSitterBackend.endLine(of: child),
-                    signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: child)),
-                    container: container, engine: "tree-sitter"
+                    startLine: TreeSitterBackend.startLine(of: node),
+                    endLine: TreeSitterBackend.endLine(of: node),
+                    signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: node)),
+                    container: currentContainer, engine: "tree-sitter"
                 ))
-            } else if child.childCount > 0 {
-                walk(child, file: file, source: source, lines: lines, container: container, entries: &entries)
+                // No descent — matches pre-refactor (definition emit
+                // without recurse into children).
+                continue
+            }
+
+            // Default arm — push children in reverse so LIFO pop
+            // preserves left-to-right pre-order traversal. Symbol-
+            // emission order matches the pre-refactor recursive form
+            // exactly. Container preserved (GraphQL has no
+            // container-derivation arms).
+            let count = Int(node.childCount)
+            guard count > 0 else { continue }
+            for i in stride(from: count - 1, through: 0, by: -1) {
+                if let child = node.child(at: i) {
+                    stack.append((child, currentContainer))
+                }
             }
         }
     }

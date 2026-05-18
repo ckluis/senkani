@@ -208,6 +208,58 @@ struct TreeSitterDartDepthStressTests {
     }
 }
 
+// MARK: - GraphQL Depth-Stress Tests
+
+@Suite("TreeSitterBackend — GraphQL Depth Stress")
+struct TreeSitterGraphQLDepthStressTests {
+
+    // Chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Generates a top-level executable operation whose selection set
+    // nests 2200 levels deep, bracketed by two top-level
+    // `object_type_definition`s, and indexes the file WITHOUT
+    // `runOnLargeStackThread` to prove the iterative walk is
+    // cooperative-pool-safe.
+    //
+    // Why nested selection sets, not nested types: GraphQL's
+    // `object_type_definition` (and the other definition kinds) emit
+    // the entry without descent — so depth inside `{ field: Type }`
+    // bodies is not walked. The deep chain must live in a node whose
+    // descendants fall through the default arm (reverse-push children
+    // with container preserved). A top-level `operation_definition`
+    // (e.g. `query Deep { … }`) satisfies this: the recursive walker
+    // descends through `executable_definition` → `operation_definition`
+    // → `selection_set` → `selection` → `field` → `selection_set` (…),
+    // none of which match `definitionKind`. The pre-refactor recursive
+    // walk would consume thousands of Swift call frames at this depth
+    // and crash on the cooperative pool's smaller stack; the iterative
+    // form runs in heap-allocated work-stack memory.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() {
+        let depth = 2200
+        // Build `a { a { a { … __typename … } } }` with `depth`
+        // levels of nesting. Each level is the field `a` with a
+        // selection set, terminated by a leaf field `__typename`.
+        let opens = String(repeating: "a { ", count: depth)
+        let closes = String(repeating: " }", count: depth)
+        let source = """
+        type First { id: ID! }
+
+        query Deep {
+        \(opens)__typename\(closes)
+        }
+
+        type Last { id: ID! }
+        """
+
+        let entries = indexLang(source, language: "graphql", ext: "graphql")
+        let classes = entries.filter { $0.kind == .class }
+        #expect(classes.map(\.name) == ["First", "Last"],
+                "Bracketing object_type_definition symbols must emit in left-to-right pre-order")
+        #expect(classes.allSatisfy { $0.container == nil },
+                "Top-level GraphQL definitions carry no container")
+    }
+}
+
 // MARK: - Helpers
 
 private func indexLang(_ source: String, language: String, ext: String) -> [IndexEntry] {

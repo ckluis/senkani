@@ -165,6 +165,49 @@ struct DartTomlGraphQLTests {
     }
 }
 
+// MARK: - Dart Depth-Stress Tests
+
+@Suite("TreeSitterBackend — Dart Depth Stress")
+struct TreeSitterDartDepthStressTests {
+
+    // Chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Generates a top-level variable initializer whose expression is a
+    // deeply-nested parenthesized chain, bracketed by two top-level
+    // functions, and indexes the file WITHOUT `runOnLargeStackThread`
+    // to prove the iterative walk is cooperative-pool-safe.
+    //
+    // Why a top-level variable initializer, not a function body: Dart's
+    // `function_signature` switch arm emits + returns without walking
+    // the function body, so depth inside `{...}` is not walked. The
+    // deep chain must live in a node whose descendants fall through the
+    // default arm (reverse-push children). A top-level variable
+    // initializer satisfies this: the variable declaration descends via
+    // default-arm pushes through the initializer expression chain. The
+    // pre-refactor recursive walk would consume ~2200 Swift call frames
+    // and crash on the cooperative pool's smaller stack; the iterative
+    // form runs in heap-allocated work-stack memory.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() {
+        let depth = 2200
+        let opens = String(repeating: "(", count: depth)
+        let closes = String(repeating: ")", count: depth)
+        let source = """
+        void first() {}
+
+        final int x = \(opens)0\(closes);
+
+        void last() {}
+        """
+
+        let entries = indexLang(source, language: "dart", ext: "dart")
+        let funcs = entries.filter { $0.kind == .function }
+        #expect(funcs.map(\.name) == ["first", "last"],
+                "Symbol order must remain left-to-right pre-order")
+        #expect(funcs.allSatisfy { $0.container == nil },
+                "Top-level Dart functions carry no container")
+    }
+}
+
 // MARK: - Helpers
 
 private func indexLang(_ source: String, language: String, ext: String) -> [IndexEntry] {

@@ -10,6 +10,12 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ---
 
+## Closed — 2026-05-18 — Release v0.3.0 surface-pass (eight new-feature validations on real machine)
+
+`release-v0-3-0-surface-pass` (`affects: manual_validation_needed`) closed across a three-day operator-driven walk 2026-05-16 / 17 / 18. Acceptance roll-up: 4 of 8 lines green (schema migrations v7+v14, DiffViewerPane V.12 hunks + denial annotations + rate cap, quant-frontier 2026-Q2 report after walk-side recovery to durable location, search_web PASS-with-amendment); 4 of 8 lines SPLIT/FAIL surfacing the same Phase-round gap class (Core library + tests shipped without production wiring): T.6 NotificationRouter + MacOSLocalSink zero production callers; V.5c `senkani authorship backfill` audit-chain row + `endSession` silently lost on every run (100 % reproducible — `parent.queue.async` + CLI-exit-before-drain); U.8 `AmplificationGuard.validate` zero production callers, no Schedules pane in SenkaniApp, no `--prose` flag on CLI; V.16 paired-numbers companion stack reachable end-to-end requires T.6c + operator setup. Five findings filed including a **P0 release-blocker** (`authorship-backfill-audit-row-not-durable-2026-05-17`); promote item `release-v0-3-0-promote-changelog-heading` is no longer blocked by `blocked_by` items but is blocked by the new P0 finding by the audit-chain integrity story. Archived at `spec/autonomous/completed/2026/2026-05-18-release-v0-3-0-surface-pass-eight-new-feature-validations-on-real-machine.md`; evidence at `tools/soak/evidence/surface-pass-2026-05-16/`.
+
+---
+
 ## Cowork-runnable test plans (groomed; ready to execute)
 
 > Pointers to per-item test plans groomed by `/senkani-autonomous`.

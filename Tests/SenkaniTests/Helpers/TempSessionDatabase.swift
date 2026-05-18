@@ -76,4 +76,16 @@ enum TempSessionDatabase {
         sqlite3_busy_timeout(handle, secondaryHandleBusyTimeoutMs)
         return handle
     }
+
+    /// Recursively unlink an ephemeral `projectRoot` and every file under
+    /// it. Tests that pass `/tmp/senkani-<tag>-<UUID>` as `projectRoot` to
+    /// `MCPSession` or any consumer of `KnowledgeStore(projectRoot:)`
+    /// inadvertently materialize `<root>/.senkani/` (KnowledgeStore.swift:184)
+    /// and never reclaim the tree on test exit. `cleanup(projectRoot:)` is
+    /// the symmetric counterpart to `cleanup(path:)`: pair it with `defer`
+    /// at every callsite that constructs a `/tmp/senkani-*` root string.
+    /// Idempotent — missing dirs are silently ignored.
+    static func cleanup(projectRoot: String) {
+        try? FileManager.default.removeItem(atPath: projectRoot)
+    }
 }

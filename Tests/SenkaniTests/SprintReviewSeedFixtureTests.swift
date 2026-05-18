@@ -46,8 +46,9 @@ struct SprintReviewSeedFixtureTests {
             #expect(afterSeed.rules.first?.id == seededId)
             #expect(afterSeed.rules.first?.status == .staged)
 
-            let db = SessionDatabase(
-                path: "/tmp/senkani-seed-fixture-db-\(UUID().uuidString)/senkani.db")
+            let dbDir = "/tmp/senkani-seed-fixture-db-\(UUID().uuidString)"
+            let db = SessionDatabase(path: dbDir + "/senkani.db")
+            defer { TempSessionDatabase.cleanup(projectRoot: dbDir) }
             let root = NSTemporaryDirectory()
                 + "senkani-seed-fixture-root-\(UUID().uuidString)"
             try FileManager.default.createDirectory(

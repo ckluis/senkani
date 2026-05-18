@@ -16,22 +16,25 @@ import Foundation
 @Suite("MCPSession — actor isolation (Phase A)")
 struct MCPSessionActorIsolationTests {
 
-    private func makeSession() -> MCPSession {
-        MCPSession(
-            projectRoot: "/tmp/senkani-actor-iso-\(UUID().uuidString)",
+    private func makeSession() -> (MCPSession, String) {
+        let root = "/tmp/senkani-actor-iso-\(UUID().uuidString)"
+        let session = MCPSession(
+            projectRoot: root,
             filterEnabled: false,
             secretsEnabled: false,
             indexerEnabled: false,
             cacheEnabled: false,
             terseEnabled: false
         )
+        return (session, root)
     }
 
     /// Race recordMetrics + updateConfig + noteDeprecation on one session and
     /// confirm the published counters land on exact expected totals — proving
     /// the actor's mutually-exclusive isolation holds across mixed mutators.
     @Test func concurrentMutatorsConverge() async {
-        let session = makeSession()
+        let (session, root) = makeSession()
+        defer { TempSessionDatabase.cleanup(projectRoot: root) }
 
         let totalCalls = 200
         let bytesPerCall = 1_000
@@ -74,7 +77,8 @@ struct MCPSessionActorIsolationTests {
     /// A regression to lock-free mutation would either let two tasks see
     /// `true` (set-insertion race) or trip Swift's runtime concurrency guard.
     @Test func noteDeprecationFiresExactlyOnceUnderRace() async {
-        let session = makeSession()
+        let (session, root) = makeSession()
+        defer { TempSessionDatabase.cleanup(projectRoot: root) }
 
         let key = "knowledge.detail"
         let workerCount = 50
@@ -103,7 +107,8 @@ struct MCPSessionActorIsolationTests {
     /// SenkaniApp consumers would need `await` and break the build. This
     /// test compiles ⇒ guarantee holds.
     @Test func nonisolatedLetFieldsRemainSyncReadable() {
-        let session = makeSession()
+        let (session, root) = makeSession()
+        defer { TempSessionDatabase.cleanup(projectRoot: root) }
 
         // No `await` on any of these accesses — must compile in a sync context.
         let _ = session.projectRoot

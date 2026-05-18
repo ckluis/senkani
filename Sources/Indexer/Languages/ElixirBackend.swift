@@ -35,55 +35,88 @@ internal enum ElixirBackend: TreeSitterLanguageBackend {
         walk(root, file: file, source: source, lines: lines, container: container, entries: &entries)
     }
 
+    // Iterative work-stack of (node, container) tuples. Replaces a
+    // recursive descent so AST depth no longer consumes Swift call
+    // frames. Chain child of `indexer-backends-iterative-walk-refactor-
+    // 2026-05-11` (GoBackend pilot 2026-05-18, BashBackend / CBackend /
+    // CppBackend / CSharpBackend / DartBackend predecessors 2026-05-18).
+    // Elixir's substrate is novel vs the C-family chain — declarations
+    // are `call` nodes whose first identifier child is the macro name.
+    // The `defmodule` arm pushes the `do_block` body with the module
+    // name as the new container; the `def`/`defp`/`defmacro`/
+    // `defmacrop` arm emits the entry without descent; the call-with-
+    // no-identifier-target fall-through pushes children with
+    // currentContainer preserved (matches pre-refactor `walk(child,
+    // container: container)`); the default arm pushes children with
+    // currentContainer preserved.
     private static func walk(
-        _ node: Node, file: String, source: NSString, lines: [String],
+        _ root: Node, file: String, source: NSString, lines: [String],
         container: String?, entries: inout [IndexEntry]
     ) {
-        for i in 0..<Int(node.childCount) {
-            guard let child = node.child(at: i) else { continue }
-            let type = child.nodeType ?? ""
+        var stack: [(Node, String?)] = [(root, container)]
+        while let (node, currentContainer) = stack.popLast() {
+            let type = node.nodeType ?? ""
 
             switch type {
             case "call":
-                guard let targetNode = TreeSitterBackend.findChildByType(child, type: "identifier"),
+                guard let targetNode = TreeSitterBackend.findChildByType(node, type: "identifier"),
                       let target = TreeSitterBackend.nodeText(targetNode, source: source) else {
-                    if child.childCount > 0 {
-                        walk(child, file: file, source: source, lines: lines, container: container, entries: &entries)
+                    // No identifier target — push children with
+                    // container preserved (matches pre-refactor
+                    // `walk(child, ..., container: container)`).
+                    let count = Int(node.childCount)
+                    guard count > 0 else { continue }
+                    for i in stride(from: count - 1, through: 0, by: -1) {
+                        if let child = node.child(at: i) {
+                            stack.append((child, currentContainer))
+                        }
                     }
-                    break
+                    continue
                 }
                 switch target {
                 case "defmodule":
-                    if let name = extractModuleName(child, source: source) {
+                    if let name = extractModuleName(node, source: source) {
                         entries.append(IndexEntry(
                             name: name, kind: .class, file: file,
-                            startLine: TreeSitterBackend.startLine(of: child),
-                            endLine: TreeSitterBackend.endLine(of: child),
-                            signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: child)),
-                            container: container, engine: "tree-sitter"
+                            startLine: TreeSitterBackend.startLine(of: node),
+                            endLine: TreeSitterBackend.endLine(of: node),
+                            signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: node)),
+                            container: currentContainer, engine: "tree-sitter"
                         ))
-                        if let doBlock = TreeSitterBackend.findChildByType(child, type: "do_block") {
-                            walk(doBlock, file: file, source: source, lines: lines, container: name, entries: &entries)
+                        if let doBlock = TreeSitterBackend.findChildByType(node, type: "do_block") {
+                            // Re-bind container to the module name for
+                            // the body's descendants — matches
+                            // pre-refactor `walk(doBlock, ...,
+                            // container: name)`.
+                            stack.append((doBlock, name))
                         }
                     }
                 case "def", "defp", "defmacro", "defmacrop":
-                    if let name = extractFunctionName(child, source: source) {
-                        let kind: SymbolKind = container != nil ? .method : .function
+                    if let name = extractFunctionName(node, source: source) {
+                        let kind: SymbolKind = currentContainer != nil ? .method : .function
                         entries.append(IndexEntry(
                             name: name, kind: kind, file: file,
-                            startLine: TreeSitterBackend.startLine(of: child),
-                            endLine: TreeSitterBackend.endLine(of: child),
-                            signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: child)),
-                            container: container, engine: "tree-sitter"
+                            startLine: TreeSitterBackend.startLine(of: node),
+                            endLine: TreeSitterBackend.endLine(of: node),
+                            signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: node)),
+                            container: currentContainer, engine: "tree-sitter"
                         ))
                     }
+                    // No descent — matches pre-refactor.
                 default:
                     break
                 }
 
             default:
-                if child.childCount > 0 {
-                    walk(child, file: file, source: source, lines: lines, container: container, entries: &entries)
+                // Push children in reverse so LIFO pop preserves
+                // left-to-right pre-order traversal — symbol-emission
+                // order matches the pre-refactor recursive form exactly.
+                let count = Int(node.childCount)
+                guard count > 0 else { continue }
+                for i in stride(from: count - 1, through: 0, by: -1) {
+                    if let child = node.child(at: i) {
+                        stack.append((child, currentContainer))
+                    }
                 }
             }
         }

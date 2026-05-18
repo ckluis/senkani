@@ -375,6 +375,52 @@ struct ElixirPerformanceTests {
     }
 }
 
+// MARK: - Depth Stress
+
+@Suite("TreeSitterBackend — Elixir Depth Stress")
+struct TreeSitterElixirDepthStressTests {
+
+    // Chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Generates a top-level module-level expression whose right-hand
+    // side is a deeply-nested parenthesized chain, bracketed by two
+    // top-level `defmodule` declarations, and indexes the file WITHOUT
+    // `runOnLargeStackThread` to prove the iterative walk is
+    // cooperative-pool-safe.
+    //
+    // Why a top-level expression (not a function body): Elixir's
+    // pre-refactor recursion sites are (i) the call-with-no-identifier-
+    // target fall-through and (ii) the default arm. Both descend via
+    // child push. A bare top-level expression
+    // `x = (((...0...)))` parses as a `binary_operator` node whose
+    // right-hand chain of `block`/parenthesized expressions falls
+    // through the default arm. The pre-refactor recursive walk would
+    // consume ~2200 Swift call frames and crash on the cooperative
+    // pool's smaller stack; the iterative form runs in heap-allocated
+    // work-stack memory.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() {
+        let depth = 2200
+        let opens = String(repeating: "(", count: depth)
+        let closes = String(repeating: ")", count: depth)
+        let source = """
+        defmodule First do
+        end
+
+        x = \(opens)0\(closes)
+
+        defmodule Last do
+        end
+        """
+
+        let entries = indexElixir(source)
+        let classes = entries.filter { $0.kind == .class }
+        #expect(classes.map(\.name) == ["First", "Last"],
+                "Bracketing defmodule symbols must emit in left-to-right pre-order")
+        #expect(classes.allSatisfy { $0.container == nil },
+                "Top-level Elixir modules carry no container")
+    }
+}
+
 // MARK: - Helper
 
 private func indexElixir(_ source: String) -> [IndexEntry] {

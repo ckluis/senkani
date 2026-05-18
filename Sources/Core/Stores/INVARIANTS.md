@@ -301,6 +301,61 @@ the same code, and the version stamp matches the schema shape.
 
 ---
 
+## I10 — Chain-participating writes commit synchronously from the caller
+
+**Rule.** `CommandStore.recordCommand`, `CommandStore.endSession`,
+and `CommandStore.recordBudgetDecision` MUST run via
+`parent.queue.sync`, not `parent.queue.async`. The caller's frame
+does not return until the row is committed to disk (or rolled back
+on failure). Every other store-write that participates in the
+tamper-evident chain (T.5 round 1 / round 3) honors the same rule.
+
+**Why.** The V.5c audit-chain contract names these writes as the
+"self-audited row in the chain" — they MUST be durable when the
+caller observes a non-error return. Async dispatch breaks the
+contract in two failure modes:
+
+1. **Short-lived CLI processes** (`AuthorshipBackfillRunner` was the
+   first identified caller, but the rule generalizes to every
+   future `senkani <subcommand>` that records a command row). The
+   process exits → `SessionDatabase.shared` is torn down → the
+   dispatch queue's pending blocks are abandoned mid-write → the
+   row never lands on disk. Filed and fixed as
+   `authorship-backfill-audit-row-not-durable-2026-05-17` (P0 by
+   the audit-chain integrity story).
+2. **Verify-after-write races** in any caller that wants to surface
+   "audit row recorded" load-bearingly: if the write hasn't
+   committed yet, a `commandCount(sessionId:)` SELECT will see 0
+   and the caller has to choose between racing the queue or
+   sleeping arbitrarily. Sync semantics make the verify trivially
+   correct.
+
+Long-running processes (the MCP server, SenkaniApp) historically got
+away with async because the queue drained naturally before process
+exit. The 2026-05-18 fix removes that accident-of-process-lifecycle —
+all callers now observe the same contract.
+
+**The cost.** One `sqlite3_exec` per call (~microseconds typical, ~1
+ms worst-case for a contention spike). Below noise for every call
+site today.
+
+**Tests.**
+- `Tests/SenkaniTests/AuthorshipBackfillTests.swift::runnerAuditRowAndEndSessionDurablePostExit`
+  pins the post-fix contract — flipping any of the three writes
+  back to `queue.async` fails the regression watch the moment the
+  runner returns.
+- The runner itself (`Sources/Core/AuthorshipBackfillRunner.swift`)
+  carries an explicit verify-after-write SELECT (`commandCount(sessionId:)`)
+  whose `Result.auditRowVerified` field gates the CLI's
+  `"Audit-chain row recorded"` success line — making the claim
+  load-bearing instead of structurally false (Bach's red flag from
+  the original filing).
+- The other 13 `queue.sync` accesses in `CommandStore.swift` are
+  the rest of the consistent pattern — these three writes were the
+  only outliers prior to 2026-05-18.
+
+---
+
 ## Appendix — store-by-store quick reference
 
 ```

@@ -159,7 +159,16 @@ final class CommandStore: @unchecked Sendable {
         // a single `Authorization: Bearer ey...` line fits inside that cap.
         let previewRedaction = PersistenceRedaction.redact(outputPreview.map { String($0.prefix(500)) })
         let preview = previewRedaction.redacted
-        parent.queue.async { [weak parent, weak self] in
+        // 2026-05-18: chain-participating writes commit synchronously per
+        // the V.5c durability contract — async dispatch + short-lived CLI
+        // callers (AuthorshipBackfillRunner) silently dropped audit rows
+        // when the process exited before the queue drained. Filed as
+        // authorship-backfill-audit-row-not-durable-2026-05-17. Every
+        // other queue access in this file is already .sync; these three
+        // writes were the inconsistent outliers. See
+        // Sources/Core/Stores/INVARIANTS.md § Chain-participating writes
+        // are caller-durable for the invariant.
+        parent.queue.sync { [weak parent, weak self] in
             guard let parent, let self, let db = parent.db else { return }
 
             guard sqlite3_exec(db, "BEGIN IMMEDIATE;", nil, nil, nil) == SQLITE_OK else { return }
@@ -288,7 +297,10 @@ final class CommandStore: @unchecked Sendable {
     /// End a session, recording its end time and duration.
     func endSession(sessionId: String) {
         let now = Date().timeIntervalSince1970
-        parent.queue.async { [weak parent] in
+        // 2026-05-18: sync to match recordCommand. Short-lived CLI
+        // callers (AuthorshipBackfillRunner) exit before async would
+        // drain, leaving sessions.ended_at NULL on every backfill.
+        parent.queue.sync { [weak parent] in
             guard let parent, let db = parent.db else { return }
             let sql = """
                 UPDATE sessions SET
@@ -303,6 +315,23 @@ final class CommandStore: @unchecked Sendable {
             sqlite3_bind_double(stmt, 2, now)
             sqlite3_bind_text(stmt, 3, (sessionId as NSString).utf8String, -1, nil)
             sqlite3_step(stmt)
+        }
+    }
+
+    /// Count of `commands` rows for the given session. Used by short-
+    /// lived CLI callers (e.g. `AuthorshipBackfillRunner`) to verify
+    /// that a `recordCommand` write actually committed before the
+    /// process exits — the V.5c audit-chain durability contract.
+    func commandCount(sessionId: String) -> Int {
+        return parent.queue.sync {
+            guard let db = parent.db else { return 0 }
+            let sql = "SELECT COUNT(*) FROM commands WHERE session_id = ?;"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+            return Int(sqlite3_column_int64(stmt, 0))
         }
     }
 
@@ -642,7 +671,11 @@ final class CommandStore: @unchecked Sendable {
         compressedBytes: Int = 0
     ) {
         let now = Date().timeIntervalSince1970
-        parent.queue.async { [weak parent, weak self] in
+        // 2026-05-18: sync per the V.5c chain-participation durability
+        // contract. Today's only caller is MCP/ToolRouter (long-running,
+        // would have drained anyway), but a future short-lived CLI caller
+        // would hit the same silent-loss bug recordCommand had.
+        parent.queue.sync { [weak parent, weak self] in
             guard let parent, let self, let db = parent.db else { return }
 
             // T.5 round 3: chain-aware budget-decision insert. Canonical

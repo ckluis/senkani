@@ -299,7 +299,90 @@ struct AuthorshipBackfillRunnerTests {
         #expect(result.updated == 0)
         #expect(result.auditSessionId == nil,
                 "Empty batch does not open a session — keeps the audit log clean")
+        #expect(result.auditRowVerified == nil,
+                "Empty batch reports nil verification (no write attempted, none to verify)")
         #expect(Self.auditRowCount(audit, toolName: "authorship.backfill") == 0,
                 "No audit row written when no rows updated")
+    }
+
+    /// Regression-watch for `authorship-backfill-audit-row-not-durable-2026-05-17` (P0).
+    ///
+    /// Pre-2026-05-18, `CommandStore.recordCommand` and `endSession`
+    /// were `parent.queue.async`, so a short-lived CLI process that
+    /// called the runner and immediately returned lost both writes to
+    /// queue-teardown before the dispatched blocks ran. The runner's
+    /// `auditSessionId` was set (createSession is `queue.sync` and
+    /// committed synchronously), but the corresponding `commands` row
+    /// + the `sessions.ended_at` update silently never landed.
+    ///
+    /// The fix (2026-05-18): change those two writes to `queue.sync`
+    /// to match every other queue access in `CommandStore.swift`, and
+    /// add an explicit verify-after-write SELECT inside the runner so
+    /// the CLI's `"Audit-chain row recorded"` claim becomes load-
+    /// bearing instead of structurally false. This test pins the
+    /// post-fix contract — if anyone reverts the writes to `async`,
+    /// `result.auditRowVerified` flips to `false` and / or
+    /// `sessions.ended_at` reverts to NULL the moment the runner
+    /// returns, and this test fails.
+    @Test("Runner's audit-chain row + endSession are durable post-CLI-exit (regression watch for 2026-05-18 fix)")
+    func runnerAuditRowAndEndSessionDurablePostExit() {
+        let (kb, kbPath) = makeKB()
+        let (audit, auditPath) = makeAuditDB()
+        defer {
+            TempKnowledgeStore.close(kb, path: kbPath)
+            TempSessionDatabase.close(audit, path: auditPath)
+        }
+
+        let cutoff = Date(timeIntervalSince1970: 1_700_000_000)
+        seedLegacyNullRow(kb, name: "Regression-Pre-V5-A", createdAt: Date(timeIntervalSince1970: 1_710_000_000))
+        seedLegacyNullRow(kb, name: "Regression-Pre-V5-B", createdAt: Date(timeIntervalSince1970: 1_720_000_000))
+
+        let result = AuthorshipBackfillRunner.run(
+            store: kb,
+            sessionDatabase: audit,
+            since: cutoff,
+            sinceLabel: "2023-11-14",
+            tag: .mixed,
+            projectRoot: "/tmp/regression-watch"
+        )
+
+        #expect(result.updated == 2, "Two seeded NULL rows tagged")
+        #expect(result.auditSessionId != nil, "Non-empty batch opens a session")
+        #expect(result.auditRowVerified == true,
+                "Verify-after-write SELECT confirms the audit-chain row landed before the runner returned. If this fails, recordCommand has likely been flipped back to queue.async — see the comment in CommandStore.swift dated 2026-05-18.")
+
+        guard let sid = result.auditSessionId else { return }
+
+        // Direct SQL verification — the runner's auditRowVerified is the
+        // primary contract; the test triple-checks via the actual table
+        // rows to defend against a future refactor that might satisfy
+        // auditRowVerified through some other code path.
+        let cmdCount = audit.commandCount(sessionId: sid)
+        #expect(cmdCount == 1,
+                "Exactly one audit-chain row in `commands` for the session (got \(cmdCount))")
+
+        // `sessions.ended_at` durability — the other half of the same
+        // bug class. Pre-fix this stayed NULL on every backfill because
+        // endSession was also queue.async.
+        let endedAt = Self.sessionEndedAt(audit, sessionId: sid)
+        #expect(endedAt != nil,
+                "sessions.ended_at is non-NULL post-runner-return. If NULL: endSession has likely been flipped back to queue.async — same bug class.")
+    }
+
+    /// Direct SQL read of `sessions.ended_at` for the regression test.
+    /// Returns `nil` when the column is NULL (the pre-fix failure mode)
+    /// OR when the row is missing.
+    private static func sessionEndedAt(_ db: SessionDatabase, sessionId: String) -> Double? {
+        return db.queue.sync {
+            guard let raw = db.db else { return nil }
+            var stmt: OpaquePointer?
+            let sql = "SELECT ended_at FROM sessions WHERE id = ?;"
+            guard sqlite3_prepare_v2(raw, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+            if sqlite3_column_type(stmt, 0) == SQLITE_NULL { return nil }
+            return sqlite3_column_double(stmt, 0)
+        }
     }
 }

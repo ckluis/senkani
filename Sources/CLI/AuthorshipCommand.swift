@@ -88,7 +88,17 @@ struct AuthorshipBackfill: ParsableCommand {
 
         print("Tagged \(result.updated) row(s) as \(chosen.displayLabel) (\(chosen.rawValue)).")
         if let sid = result.auditSessionId {
-            print("Audit-chain row recorded (commands table, session=\(sid.prefix(8))…).")
+            // V.5c durability check: only claim the audit row exists
+            // if commandCount(sessionId:) confirmed it after the write.
+            // Pre-2026-05-18, this message printed unconditionally and
+            // was structurally false because recordCommand was async +
+            // the CLI exited before the queue drained.
+            if result.auditRowVerified == true {
+                print("Audit-chain row recorded (commands table, session=\(sid.prefix(8))…).")
+            } else {
+                fputs("ERROR: audit-chain row NOT durable for session \(sid). Backfill rows were tagged but the chain entry did not commit before this process exits. Filed as `authorship-backfill-audit-row-not-durable-2026-05-17` — if this regression has recurred, please reopen.\n", stderr)
+                throw ExitCode(3)
+            }
         }
     }
 

@@ -14,8 +14,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Build & test
+  # Matrix fan-out: each of the 8 named chunks defined in
+  # `tools/test-safe.sh` runs in its own GH Actions job. Wall-clock
+  # for the workflow as a whole is bounded by the slowest single
+  # chunk, not by the sum of all chunks. SwiftPM build cache is
+  # shared across slots via the `actions/cache@v4` key on
+  # `Package.resolved` — 7 of 8 jobs should hit the cache on a
+  # no-deps PR.
+  #
+  # `chunk:` list is hard-coded here to keep the workflow self-
+  # contained and reviewable. Keep in lockstep with the `CHUNKS`
+  # array in `tools/test-safe.sh`. Renames or additions to that
+  # array require a matching edit here. The single-source-of-truth
+  # alternative (workflow-output pre-job emitting `--list-chunks`)
+  # was rejected on simplicity grounds during scope-groom (build
+  # round 2026-05-18): drift risk is small, reviewability win is
+  # large.
+  chunk:
+    name: chunk[${{ matrix.chunk }}]
     # macos-15 ships Xcode 16.4 / Swift 6.1.2 by default. The project
     # is developed against Swift 6.3 — 6.1's stricter actor-isolation
     # enforcement flagged dozens of legitimate-on-6.3 sites. Pinning
@@ -23,6 +39,18 @@ jobs:
     # closes that gap without retrofitting hundreds of source sites.
     runs-on: macos-15
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk:
+          - parsers
+          - learning
+          - kb
+          - pane
+          - hook
+          - session
+          - onboarding
+          - other
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,19 +79,40 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-
 
-      # tools/test-safe.sh now runs the suite in named chunks, each a
-      # separate `swiftpm-testing-helper` invocation. A SIGTRAP in one
-      # chunk fails only that chunk; the rest still produce signal.
-      # Per-chunk retry-on-flake (3×) lives inside the script — the
-      # outer retry loop the prior workflow used is gone, since the
-      # chunked harness already covers the same flake envelope without
-      # paying for a full re-run on every retry.
-      - name: Build & test (chunked harness)
-        run: ./tools/test-safe.sh
+      # Run the single chunk this matrix slot owns. `--chunk $name`
+      # invokes one `swiftpm-testing-helper` process scoped to that
+      # chunk's regex; the per-chunk SIGTRAP-retry envelope
+      # (`TEST_SAFE_RETRIES`, default 3) lives inside the script.
+      - name: Build & test (chunk[${{ matrix.chunk }}])
+        run: ./tools/test-safe.sh --chunk ${{ matrix.chunk }}
 
-      # Diagnostic surface: print the chunk regex table in the run log
-      # so reviewers reading a failed run can see what's in each chunk
-      # without reading the script source.
+  # Branch-protection aggregator. One check, depends on every
+  # chunk job. If any chunk red-lines, `summary` red-lines.
+  # Operator post-merge: re-point branch protection from the
+  # retired `Build & test` check to `Build & test (summary)`.
+  summary:
+    name: Build & test (summary)
+    needs: chunk
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Aggregate chunk results
+        env:
+          NEEDS_RESULT: ${{ needs.chunk.result }}
+        run: |
+          echo "matrix result: $NEEDS_RESULT"
+          if [ "$NEEDS_RESULT" != "success" ]; then
+            echo "::error title=chunk-matrix-failed::one or more chunks failed; see chunk[*] job logs"
+            exit 1
+          fi
+
+      # Diagnostic surface: print the chunk regex table in the
+      # summary job log so reviewers reading a failed run can see
+      # what's in each chunk without spelunking individual job
+      # logs.
       - name: Chunk inventory (for log archaeology)
         if: always()
         run: ./tools/test-safe.sh --list-chunks

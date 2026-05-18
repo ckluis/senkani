@@ -9,6 +9,14 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 18 — CI matrix fan-out across all 8 test-safe chunks (`ci-test-suite-batched-execution-2026-05-08`)
+
+- **What ships:** `.github/workflows/test.yml` replaces the single `Build & test` job with a `strategy.matrix` over the 8 chunk names (`parsers`, `learning`, `kb`, `pane`, `hook`, `session`, `onboarding`, `other`). Each matrix slot runs `./tools/test-safe.sh --chunk $name` in its own macOS runner with its own per-chunk memory budget. A `summary` job aggregates pass/fail into one branch-protection check; `Build & test (summary)` replaces the retired `Build & test` status check.
+- **Why now:** sequential pre-round baseline ~14 min wall-clock with `chunk[other]` SIGTRAP-retry-exhausting deterministically across PR-CI run 25554316180, main-CI run 25554480209 (commit `dd51156`), and PR-CI run 25572249946 (commit `ca916c7`, CHANGELOG-only diff). Operator's local `swift test` was clean green on each — flake is GH-Actions-runner-environment-specific. Matrix isolation gives `chunk[other]` its own runner/memory budget; either fixes the SIGTRAP by isolation alone, or narrows the failure surface to one sub-chunk.
+- **Operator post-merge:** re-point branch protection from `Build & test` to `Build & test (summary)`. Wall-clock target ≤ 6 min on the first representative PR. If `chunk[other]` SIGTRAP-retry-exhausts post-merge, the parent finding `ci-chunk-other-sigtrap-retry-exhaust-2026-05-08` (currently blocked by this item; unblocked after this close) absorbs the conditional sub-split decision (`other-models` / `other-cli` / `other-misc`).
+- **Tests:** no test deltas. Workflow change only. Local invocation `./tools/test-safe.sh` (no args) preserves sequential execution unchanged.
+- **Validation in this round:** YAML parses clean, `./tools/test-safe.sh --list-chunks` matches the workflow's hard-coded matrix list (8 chunks, lockstep maintained), `./tools/test-safe.sh --chunk <unknown>` fails fast with the expected `unknown chunk` error. Wall-clock / SIGTRAP-non-recurrence / cache-hit-on-7-of-8 / parent-finding closing-evidence are operator-driven post-merge — they require CI observation that the autonomous loop cannot perform.
+
 ## v0.3.0 — 2026-05-18
 
 ### May 18 — `swift build` (debug + release) is warning-clean; unblocks the v0.3.0 promote AC4 zero-warning gate (`release-v0-3-0-build-warnings-block-zero-warning-ac-2026-05-18`)

@@ -37,7 +37,7 @@ actor MCPSession {
     /// Mirrors the `Logger.isJSON` cache pattern: env read once, memoized
     /// for the process lifetime. Tests reset via `_resetSavingsDebugCacheForTesting`.
     nonisolated(unsafe) private static var _savingsDebugEnabled: Bool?
-    nonisolated(unsafe) private static let savingsDebugLock = NSLock()
+    private static let savingsDebugLock = NSLock()
 
     public static var savingsDebugEnabled: Bool {
         savingsDebugLock.lock(); defer { savingsDebugLock.unlock() }

@@ -27,7 +27,7 @@ import Foundation
 /// per `HookRouter.handle` call. Sub-microsecond on macOS — well below
 /// the 5 ms hook performance budget.
 public enum HookSeamLock {
-    nonisolated(unsafe) public static let shared = NSRecursiveLock()
+    public static let shared = NSRecursiveLock()
 
     /// Acquire the seam lock for the duration of `body`, then release.
     /// Tests wrap their seam-override-and-defer block in this helper to

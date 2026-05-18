@@ -75,7 +75,7 @@ public enum KnowledgeParser {
     // MARK: Date Formatters (compiled once, thread-safe)
 
     // ISO8601 with time component — for last_enriched in frontmatter
-    nonisolated(unsafe) static let isoFull: DateFormatter = {
+    static let isoFull: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'"
@@ -84,7 +84,7 @@ public enum KnowledgeParser {
     }()
 
     // Date-only — for evidence table rows and decision records
-    nonisolated(unsafe) static let isoDate: DateFormatter = {
+    static let isoDate: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "yyyy-MM-dd"
@@ -95,19 +95,19 @@ public enum KnowledgeParser {
     // MARK: Compiled Regexes (compiled once, thread-safe)
 
     // Frontmatter block: ---\n...\n---
-    nonisolated(unsafe) static let frontmatterRE: NSRegularExpression =
+    static let frontmatterRE: NSRegularExpression =
         try! NSRegularExpression(pattern: "\\A---[ \\t]*\\n([\\s\\S]*?)\\n---", options: [])
 
     // H1 heading: # EntityName
-    nonisolated(unsafe) static let h1RE: NSRegularExpression =
+    static let h1RE: NSRegularExpression =
         try! NSRegularExpression(pattern: "^# (.+)$", options: .anchorsMatchLines)
 
     // Wiki-link relation: [[TargetName]] relation_type
-    nonisolated(unsafe) static let wikiLinkRE: NSRegularExpression =
+    static let wikiLinkRE: NSRegularExpression =
         try! NSRegularExpression(pattern: "\\[\\[([^\\]]+)\\]\\](?:\\s+([\\w_]+))?", options: [])
 
     // Decision record: - [YYYY-MM-DD] text  or  - [YYYY-MM-DD] text because rationale
-    nonisolated(unsafe) static let decisionRE: NSRegularExpression =
+    static let decisionRE: NSRegularExpression =
         try! NSRegularExpression(
             pattern: "^- \\[(\\d{4}-\\d{2}-\\d{2})\\] (.+?)(?:\\s+because\\s+(.+))?$",
             options: .anchorsMatchLines)

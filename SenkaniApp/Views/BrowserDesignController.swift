@@ -168,8 +168,8 @@ private final class _BridgeHandler: NSObject, WKScriptMessageHandler {
         _ userContentController: WKUserContentController,
         didReceive message: WKScriptMessage
     ) {
-        let body = message.body
         Task { @MainActor [weak self] in
+            let body = message.body
             self?.parent?.receive(body)
         }
     }

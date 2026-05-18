@@ -341,6 +341,7 @@ let package = Package(
             name: "Core",
             dependencies: ["Filter"],
             path: "Sources/Core",
+            exclude: ["Stores/INVARIANTS.md"],
             resources: [
                 .copy("Presets/Defaults/log-rotation.json"),
                 .copy("Presets/Defaults/morning-brief.json"),

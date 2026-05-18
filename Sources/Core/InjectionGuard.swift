@@ -99,7 +99,7 @@ public enum InjectionGuard {
     /// scan subsumes what used to be N independent `String.contains` calls.
     /// N=23 keywords × 1 MB input was ~500 ms; single compiled alternation
     /// is ~25 ms on the same input.
-    nonisolated(unsafe) private static let keywordRegex: NSRegularExpression = {
+    private static let keywordRegex: NSRegularExpression = {
         let escaped = keywords.map { NSRegularExpression.escapedPattern(for: $0) }
         let pattern = escaped.joined(separator: "|")
         // Force-unwrap is safe: the only possible failure is a malformed pattern,
@@ -189,7 +189,7 @@ public enum InjectionGuard {
         let regex: NSRegularExpression
     }
 
-    nonisolated(unsafe) private static let compiledPatterns: [Pattern] = {
+    private static let compiledPatterns: [Pattern] = {
         let defs: [(String, String)] = [
             // Instruction Override — English
             ("instruction override", "\\bignore\\s+(?:all\\s+)?previous\\s+instructions\\b"),

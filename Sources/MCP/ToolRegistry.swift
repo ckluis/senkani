@@ -398,7 +398,7 @@ enum ToolRegistry {
                     ]),
                     annotations: .init(readOnlyHint: false, idempotentHint: false, openWorldHint: false)
                 ),
-                handler: .asyncHandler { args, session in await KnowledgeTool.handle(arguments: args, session: session) }
+                handler: .asyncHandler { args, session in KnowledgeTool.handle(arguments: args, session: session) }
             ),
         ]
     }

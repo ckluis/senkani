@@ -166,7 +166,7 @@ public struct LearnedRulesFile: Codable {
             // non-filter-rule artifacts (context docs, future cases)
             // untouched in their original relative positions.
             var out: [LearnedArtifact] = []
-            var ruleQueue = newValue
+            let ruleQueue = newValue
             var usedIds = Set<String>()
             for artifact in artifacts {
                 if case .filterRule(let old) = artifact {

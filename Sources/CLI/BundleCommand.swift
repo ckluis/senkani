@@ -102,8 +102,8 @@ struct BundleCommand: AsyncParsableCommand {
         //    a knowledge store, so skip silently when no DB exists.
         var entities: [KnowledgeEntity] = []
         let kbPath = validatedRoot + "/.senkani/knowledge.db"
-        if FileManager.default.fileExists(atPath: kbPath),
-           let store = try? KnowledgeStore(projectRoot: validatedRoot) {
+        if FileManager.default.fileExists(atPath: kbPath) {
+            let store = KnowledgeStore(projectRoot: validatedRoot)
             entities = store.allEntities(sortedBy: .mentionCountDesc)
         }
 

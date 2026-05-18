@@ -129,7 +129,7 @@ public enum EntropyScanner {
         return false
     }
 
-    nonisolated(unsafe) private static let uuidRegex: NSRegularExpression = {
+    private static let uuidRegex: NSRegularExpression = {
         // swiftlint:disable:next force_try
         try! NSRegularExpression(
             pattern: #"^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$"#

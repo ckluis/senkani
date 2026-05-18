@@ -402,6 +402,50 @@ struct CppPerformanceTests {
     }
 }
 
+// MARK: - C++ Depth-Stress Tests
+
+@Suite("TreeSitterBackend — C++ Depth Stress")
+struct TreeSitterCppDepthStressTests {
+
+    // Chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Generates a top-level variable declaration whose initializer is a
+    // deeply-nested parenthesized-expression chain, and indexes the
+    // file WITHOUT `runOnLargeStackThread` to prove the iterative walk
+    // is cooperative-pool-safe. Two function prototypes bracket the
+    // deep expression to assert pre-order symbol emission.
+    //
+    // Why parenthesized expressions, not compound statements: in C++
+    // the `function_definition` switch arm extracts and returns without
+    // walking the function body, so depth inside `{...}` is not walked.
+    // The deep chain must live inside a `declaration` whose
+    // descendants fall into the iterative push via the declaration
+    // else-branch (no function declarator → push children). The pre-
+    // refactor walk would consume ~2200 Swift call frames descending
+    // the parenthesized_expression chain and crash on the cooperative
+    // pool's smaller stack. The iterative form runs in heap-allocated
+    // work-stack memory.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() {
+        let depth = 2200
+        let opens = String(repeating: "(", count: depth)
+        let closes = String(repeating: ")", count: depth)
+        let source = """
+        int first(void);
+
+        int x = \(opens)0\(closes);
+
+        int last(void);
+        """
+
+        let entries = indexCpp(source)
+        let funcs = entries.filter { $0.kind == .function }
+        #expect(funcs.map(\.name) == ["first", "last"],
+                "Symbol order must remain left-to-right pre-order")
+        #expect(funcs.allSatisfy { $0.container == nil },
+                "Top-level C++ function prototypes carry no container")
+    }
+}
+
 // MARK: - Helper
 
 private func indexCpp(_ source: String) -> [IndexEntry] {

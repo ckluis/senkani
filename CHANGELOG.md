@@ -4,10 +4,12 @@ All shipped features live here so the README can stay focused on what
 Senkani *is*. Entries are grouped by the server version reported by
 `senkani_version` (see `VersionTool.serverVersion`).
 
-## v0.3.0 — unreleased
+## v0.4.0 — unreleased
 
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
+
+## v0.3.0 — 2026-05-18
 
 ### May 18 — `swift build` (debug + release) is warning-clean; unblocks the v0.3.0 promote AC4 zero-warning gate (`release-v0-3-0-build-warnings-block-zero-warning-ac-2026-05-18`)
 

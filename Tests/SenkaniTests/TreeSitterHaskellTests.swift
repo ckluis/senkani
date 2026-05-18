@@ -371,6 +371,64 @@ struct HaskellPerformanceTests {
     }
 }
 
+// MARK: - Haskell Depth Stress
+
+@Suite("TreeSitterBackend — Haskell Depth Stress")
+struct TreeSitterHaskellDepthStressTests {
+
+    // Chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Generates a top-level value binding whose right-hand side is a
+    // 2200-deep lambda chain, bracketed by two top-level function
+    // declarations, and indexes the file WITHOUT `runOnLargeStackThread`
+    // to prove the iterative walk is cooperative-pool-safe.
+    //
+    // Why lambdas (not parenthesized expressions like the other chain
+    // children's fixtures): tree-sitter-haskell 0.23.1's GLR parser
+    // exhausts internal state at ~125 nested parens (`(((…)))`) and
+    // returns no tree, so the parens fixture used by the C / Cpp /
+    // CSharp / Dart / Elixir / GraphQL chain predecessors cannot reach
+    // 2000-depth on Haskell. Right-associative lambda chains
+    // (`\x -> \x -> \x -> … 0`) avoid the precedence-resolution
+    // explosion and parse cleanly at 2200 depth.
+    //
+    // Note on what the walker traverses: HaskellBackend's pre-refactor
+    // recursion sites were (i) walk's default arm (line 56), and
+    // (ii) walkDeclarations' class/instance body recursion (lines
+    // 116/130). Both of those operate on declarations-grouping nodes
+    // (`declarations` / `class_declarations` / `instance_declarations`);
+    // the `function`/`bind` arm emits a binding symbol WITHOUT
+    // descending into its expression body, so the deep lambda chain
+    // is not directly walked in this fixture. The test still validates
+    // the iterative-form correctness contract: (a) the iterative
+    // walker emits the bracketing top-level symbols in source order
+    // on a deep parse tree, (b) the iterative form is defense-in-depth
+    // / grammar-update-future-proofing — if a future tree-sitter-
+    // haskell update or backend change starts descending through value-
+    // binding bodies, the structural guarantee that no AST shape can
+    // consume Swift call frames already holds.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() {
+        let depth = 2200
+        let lambdas = String(repeating: "\\x -> ", count: depth)
+        let source = """
+        first :: Int -> Int
+        first n = n
+
+        x = \(lambdas)0
+
+        last :: Int -> Int
+        last n = n
+        """
+
+        let entries = indexHaskell(source)
+        let funcs = entries.filter { $0.kind == .function }
+        #expect(funcs.map(\.name) == ["first", "x", "last"],
+                "Bracketing top-level Haskell functions and value binding must emit in left-to-right pre-order")
+        #expect(funcs.allSatisfy { $0.container == nil },
+                "Top-level Haskell functions and value bindings carry no container")
+    }
+}
+
 // MARK: - Helper
 
 private func indexHaskell(_ source: String) -> [IndexEntry] {

@@ -337,6 +337,40 @@ struct LuaPerformanceTests {
     }
 }
 
+// MARK: - Suite N: Depth stress (iterative-walk chain child)
+
+@Suite("TreeSitterBackend — Lua Depth Stress")
+struct TreeSitterLuaDepthStressTests {
+
+    // Deeply nested parenthesized expressions in a top-level local
+    // assignment force the AST walk to descend `depth` levels via the
+    // default arm. The pre-refactor recursive walk consumed Swift
+    // call frames at this depth and would stack-overflow on the
+    // cooperative pool. The iterative work-stack form must traverse
+    // the same tree on the cooperative pool without crashing, and
+    // must emit bracketing `first` / `last` in the source-order order
+    // the recursive form did.
+    @Test func testDepthStressIterative() {
+        let depth = 2200
+        let opens = String(repeating: "(", count: depth)
+        let closes = String(repeating: ")", count: depth)
+        let source = """
+        function first() end
+
+        local _ = \(opens)0\(closes)
+
+        function last() end
+        """
+
+        let entries = indexLua(source)
+        let funcs = entries.filter { $0.kind == .function }
+
+        #expect(funcs.count == 2, "Expected 2 top-level functions, got \(funcs.count)")
+        #expect(funcs.map(\.name) == ["first", "last"], "Symbol order must remain left-to-right pre-order")
+        #expect(funcs.allSatisfy { $0.container == nil }, "Top-level functions carry no container")
+    }
+}
+
 // MARK: - Helper
 
 private func indexLua(_ source: String) -> [IndexEntry] {

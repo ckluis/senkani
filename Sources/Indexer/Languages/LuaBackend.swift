@@ -32,30 +32,52 @@ internal enum LuaBackend: TreeSitterLanguageBackend {
         walk(root, file: file, source: source, lines: lines, container: container, entries: &entries)
     }
 
+    // Iterative work-stack of (node, container) tuples. Replaces a
+    // recursive descent so AST depth no longer consumes Swift call
+    // frames on the cooperative pool. Umbrella chain child of
+    // `indexer-backends-iterative-walk-refactor-2026-05-11`
+    // (alphabetical successor to KotlinBackend; closest precedent
+    // GoBackend/BashBackend — single recursion site, no body-rebind
+    // arms). LuaBackend's outer-walk container is never read by
+    // emission — the `function_declaration` arm derives container
+    // from the function-name shape via `extractLuaFunctionName`; the
+    // iterative form passes `currentContainer` through unchanged on
+    // the default-arm reverse-push but the emit arm ignores it,
+    // matching the pre-refactor `container: luaContainer` at
+    // emission.
     private static func walk(
-        _ node: Node, file: String, source: NSString, lines: [String],
+        _ root: Node, file: String, source: NSString, lines: [String],
         container: String?, entries: inout [IndexEntry]
     ) {
-        for i in 0..<Int(node.childCount) {
-            guard let child = node.child(at: i) else { continue }
-            let type = child.nodeType ?? ""
+        var stack: [(Node, String?)] = [(root, container)]
+        while let (node, currentContainer) = stack.popLast() {
+            let type = node.nodeType ?? ""
 
             switch type {
             case "function_declaration":
-                if let (name, luaContainer) = TreeSitterBackend.extractLuaFunctionName(child, source: source) {
+                if let (name, luaContainer) = TreeSitterBackend.extractLuaFunctionName(node, source: source) {
                     let kind: SymbolKind = luaContainer != nil ? .method : .function
                     entries.append(IndexEntry(
                         name: name, kind: kind, file: file,
-                        startLine: TreeSitterBackend.startLine(of: child),
-                        endLine: TreeSitterBackend.endLine(of: child),
-                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: child)),
+                        startLine: TreeSitterBackend.startLine(of: node),
+                        endLine: TreeSitterBackend.endLine(of: node),
+                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: node)),
                         container: luaContainer, engine: "tree-sitter"
                     ))
                 }
+                // No descent — matches pre-refactor "function_declaration
+                // arm returns without recursing into the child".
 
             default:
-                if child.childCount > 0 {
-                    walk(child, file: file, source: source, lines: lines, container: container, entries: &entries)
+                // Push children in reverse so LIFO pop preserves
+                // left-to-right pre-order traversal — symbol-emission
+                // order matches the pre-refactor recursive form exactly.
+                let count = Int(node.childCount)
+                guard count > 0 else { continue }
+                for i in stride(from: count - 1, through: 0, by: -1) {
+                    if let child = node.child(at: i) {
+                        stack.append((child, currentContainer))
+                    }
                 }
             }
         }

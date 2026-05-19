@@ -432,6 +432,55 @@ struct KotlinPerformanceTests {
     }
 }
 
+// MARK: - Suite: Kotlin Depth Stress
+
+@Suite("TreeSitterBackend — Kotlin Depth Stress")
+struct TreeSitterKotlinDepthStressTests {
+
+    // Chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Generates a top-level class with a property initializer whose
+    // expression is a deeply-nested parenthesized chain, and indexes the
+    // file WITHOUT `runOnLargeStackThread` to prove the iterative walk
+    // is cooperative-pool-safe. Two empty top-level classes bracket the
+    // deep expression to assert pre-order symbol emission.
+    //
+    // Why a property initializer inside a class, not a function body:
+    // Kotlin's `function_declaration` switch arm emits and returns
+    // without walking the body, so depth inside `fun foo() { ... }` is
+    // not walked. `property_declaration` also emits without descent. The
+    // deep chain must live inside a node whose descendants fall through
+    // the default arm (reverse-push children). A `class_declaration`
+    // satisfies this: it emits + pushes the body with the class name
+    // as container; the body descends to its property/expression
+    // children via the default arm; the initializer expression chain
+    // pushes ~2200 deep. The pre-refactor walk would consume ~2200
+    // Swift call frames and crash on the cooperative pool's smaller
+    // stack; the iterative form runs in heap-allocated work-stack
+    // memory.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() {
+        let depth = 2200
+        let opens = String(repeating: "(", count: depth)
+        let closes = String(repeating: ")", count: depth)
+        let source = """
+        class First
+
+        class Container {
+            val x = \(opens)0\(closes)
+        }
+
+        class Last
+        """
+
+        let entries = indexKotlin(source)
+        let classes = entries.filter { $0.kind == .class }
+        #expect(classes.map(\.name) == ["First", "Container", "Last"],
+                "Symbol order must remain left-to-right pre-order")
+        #expect(classes.allSatisfy { $0.container == nil },
+                "Top-level Kotlin classes carry no container")
+    }
+}
+
 // MARK: - Helper
 
 private func indexKotlin(_ source: String) -> [IndexEntry] {

@@ -458,6 +458,62 @@ struct ZigPerformanceTests {
     }
 }
 
+// MARK: - Zig Depth-Stress Tests
+
+@Suite("TreeSitterBackend — Zig Depth Stress")
+struct ZigDepthStressTests {
+
+    // Chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Generates a 2200-deep chain of nested `const A = struct { … }`
+    // declarations bracketed by two top-level function declarations to
+    // assert pre-order symbol emission. Indexes the file WITHOUT
+    // `runOnLargeStackThread` to prove the iterative walk is
+    // cooperative-pool-safe.
+    //
+    // Why a nested struct chain (not a top-level parenthesized const
+    // initializer like the TypeScript precedent): Zig's leaf-emit
+    // arms (function_declaration, container_field, test_declaration)
+    // don't descend, so deep parens inside their bodies cannot
+    // exercise the walk's stack. The variable_declaration arm only
+    // pushes a body when the RHS is `struct_declaration` (matches
+    // pre-refactor line 142's recurse) — a plain `const x = (((…0…)))`
+    // consumes the entire variable_declaration without descent into
+    // the parens, so deep parens at top level cannot reach the work
+    // stack. Nested struct declarations are the cleanest Zig shape
+    // that does exercise depth: each `const A = struct { … };` fires
+    // the variable_declaration arm, emits an entry, and pushes the
+    // struct body. Inside the struct body, the inner
+    // `const A = struct { … };` is reached via the default arm's
+    // reverse-push (matches pre-refactor line 95's recurse), and the
+    // cycle repeats. Pre-refactor recursive walk consumes ~2 Swift
+    // call frames per nesting level (`walk` → `walkVariableDeclaration`
+    // → `walk` → …), so a 2200-deep chain blows the cooperative
+    // pool's smaller stack; the iterative form runs in heap-allocated
+    // work-stack memory regardless of depth.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() {
+        let depth = 2200
+        var openings = ""
+        var closings = ""
+        for _ in 0..<depth {
+            openings += "const A = struct { "
+            closings += " };"
+        }
+        let source = """
+        fn first() void {}
+
+        \(openings)\(closings)
+
+        fn last() void {}
+        """
+
+        let entries = indexZig(source)
+        let funcs = entries.filter { $0.kind == .function && $0.container == nil }
+        #expect(funcs.map(\.name) == ["first", "last"],
+                "Bracketing top-level functions must emit in left-to-right pre-order")
+    }
+}
+
 // MARK: - Helper
 
 private func indexZig(_ source: String) -> [IndexEntry] {

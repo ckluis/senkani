@@ -337,6 +337,53 @@ struct TreeSitterRustPerformanceTests {
     }
 }
 
+@Suite("TreeSitterBackend — Rust Depth Stress")
+struct TreeSitterRustDepthStressTests {
+
+    // Chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Generates a top-level const with a deeply-nested parenthesized
+    // initializer, and indexes the file WITHOUT `runOnLargeStackThread`
+    // to prove the iterative walk is cooperative-pool-safe. Two empty
+    // top-level structs bracket the deep expression to assert
+    // pre-order symbol emission.
+    //
+    // Why a top-level const initializer, not a function body or an
+    // impl block: Rust's leaf-emit arms (`function_item`,
+    // `function_signature_item`, `struct_item`, `enum_item`,
+    // `type_item`) emit and return without walking the body, and
+    // `trait_item` / `impl_item` only descend into a `findBody`-
+    // resolved body block. The deep chain must live inside a node
+    // whose descendants fall through the default arm (reverse-push
+    // children). A top-level `const X: i32 = (((...0...)));` satisfies
+    // this: the const_item itself is not specifically matched by an
+    // arm (Rust's grammar emits `const_item`, not one of the matched
+    // types), so it falls through default and the parenthesized
+    // expression chain pushes ~2200 deep. The pre-refactor walk would
+    // consume ~2200 Swift call frames and crash on the cooperative
+    // pool's smaller stack; the iterative form runs in heap-allocated
+    // work-stack memory.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() {
+        let depth = 2200
+        let opens = String(repeating: "(", count: depth)
+        let closes = String(repeating: ")", count: depth)
+        let source = """
+        struct First;
+
+        const X: i32 = \(opens)0\(closes);
+
+        struct Last;
+        """
+
+        let entries = indexRust(source)
+        let structs = entries.filter { $0.kind == .struct }
+        #expect(structs.map(\.name) == ["First", "Last"],
+                "Symbol order must remain left-to-right pre-order")
+        #expect(structs.allSatisfy { $0.container == nil },
+                "Top-level Rust structs carry no container")
+    }
+}
+
 // MARK: - Helper
 
 private func indexRust(_ code: String) -> [IndexEntry] {

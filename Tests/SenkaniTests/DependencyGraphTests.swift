@@ -323,3 +323,59 @@ struct ToolOutputTests {
         #expect(!output.contains("Imported by"))
     }
 }
+
+// MARK: - DependencyExtractor Depth Stress
+
+@Suite("DependencyExtractor — Depth Stress")
+struct DependencyExtractorDepthStressTests {
+
+    // LAST chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Drives a 2200-deep nested `const A = struct { … }` chain through
+    // `DependencyExtractor.extractImports(source:language:"zig")` to
+    // prove both of DependencyExtractor's walkers are cooperative-pool-
+    // safe.
+    //
+    // Why a Zig nested-struct chain (matching the immediate precedent
+    // `ZigBackend`'s depth-stress fixture rather than a TS/Swift paren
+    // chain): every per-language extractor inside DependencyExtractor
+    // dispatches through `walk(root)` which visits every node, so any
+    // language whose tree-sitter parser accepts a deep AST exercises
+    // the iterative work-stack. Zig's nested struct chain is the same
+    // shape ZigBackend's round used 2026-05-19, so we re-use it for
+    // continuity with the umbrella's chain.
+    //
+    // Coverage of the two refactored helpers:
+    //   • `walk` — `extractZig` calls `walk(root)` which visits all
+    //     ~2200 levels of the chain. Pre-refactor: ~1 Swift call frame
+    //     per level (`walk(root) → walk(child) → …`) blows the
+    //     cooperative pool. Post-refactor: heap-allocated `[Node]`
+    //     work-stack scales with depth in heap memory regardless of
+    //     stack size.
+    //   • `findFirstDescendantOfType` — not exercised at depth by this
+    //     fixture (no `@import` calls in the chain, so the per-node
+    //     guard `nodeType == "builtin_function"` never fires inside
+    //     `extractZig`). Its iterative correctness is verified by
+    //     (a) structural equivalence to `walk`'s iterative form
+    //     (same pop/check/reverse-push shape) and (b) the existing
+    //     `Zig @import` test in `ImportExtractionTests` which
+    //     exercises it functionally on a real `@import("std")` call.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() throws {
+        let depth = 2200
+        var openings = ""
+        var closings = ""
+        for _ in 0..<depth {
+            openings += "const A = struct { "
+            closings += " };"
+        }
+        let source = """
+        const std = @import("std");
+
+        \(openings)\(closings)
+        """
+
+        let imports = try DependencyExtractor.extractImports(source: source, language: "zig")
+        #expect(imports == ["std"],
+                "Walk + findFirstDescendantOfType must still extract the top-level @import even with a 2200-deep nested struct chain in the same file")
+    }
+}

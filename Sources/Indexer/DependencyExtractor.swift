@@ -373,11 +373,22 @@ public enum DependencyExtractor {
 
     // MARK: - Walker helpers
 
+    // Iterative pre-order DFS. Heap-allocated work-stack instead of
+    // recursive descent so deep ASTs (e.g., 2200-level nested struct
+    // chains) don't blow the cooperative-pool stack. Pre-order
+    // semantics preserved by visiting BEFORE pushing children, and
+    // left-to-right child order preserved by reverse-pushing so LIFO
+    // pop reproduces the recursive form's iteration order.
     private static func walk(_ node: Node, visit: (Node) -> Void) {
-        visit(node)
-        for i in 0..<Int(node.childCount) {
-            if let child = node.child(at: i) {
-                walk(child, visit: visit)
+        var stack: [Node] = [node]
+        while let current = stack.popLast() {
+            visit(current)
+            let count = Int(current.childCount)
+            guard count > 0 else { continue }
+            for i in stride(from: count - 1, through: 0, by: -1) {
+                if let child = current.child(at: i) {
+                    stack.append(child)
+                }
             }
         }
     }
@@ -422,12 +433,23 @@ public enum DependencyExtractor {
         return nil
     }
 
+    // Iterative short-circuit DFS. Same heap work-stack shape as
+    // `walk` above. Pre-refactor checks the current node BEFORE
+    // recursing into children — iterative form must match by checking
+    // each popped node's `nodeType` BEFORE pushing its children. The
+    // reverse-push + LIFO-pop preserves the pre-refactor's
+    // left-to-right pre-order match order so the first node returned
+    // is the same node the recursive form would have returned.
     private static func findFirstDescendantOfType(_ node: Node, type: String) -> Node? {
-        if node.nodeType == type { return node }
-        for i in 0..<Int(node.childCount) {
-            if let child = node.child(at: i),
-               let found = findFirstDescendantOfType(child, type: type) {
-                return found
+        var stack: [Node] = [node]
+        while let current = stack.popLast() {
+            if current.nodeType == type { return current }
+            let count = Int(current.childCount)
+            guard count > 0 else { continue }
+            for i in stride(from: count - 1, through: 0, by: -1) {
+                if let child = current.child(at: i) {
+                    stack.append(child)
+                }
             }
         }
         return nil

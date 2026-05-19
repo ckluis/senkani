@@ -17,10 +17,10 @@ import Foundation
 // U.10a-1 ships the schema, the 8 first-class lanes, the 4 trivial
 // modes, and the `inclusion_reason: "mode-pending-u10b"` placeholder
 // for the 3 modes (`slice`, `diff-only`, `summary`) that ship in
-// U.10b. The `sensitivity` field is populated by U.10a-1's pre-scan
-// but the hard refusal path + `--allow-secrets` override + chained
-// `bundle.secret.allow` / `bundle.dispatch` audit rows are U.10a-2's
-// scope.
+// U.10b. U.10a-2 layers the secret gate on top — see
+// `Sources/Bundle/BundleSecretGate.swift` for the `composeManifestGated`
+// wrapper, refusal-without-override semantics, and the chained
+// `bundle.secret.allow` / `bundle.dispatch` audit-row writers.
 
 /// The eight first-class lanes in the manifest vocabulary. Lane
 /// membership is the schema-level axis: every consumer can switch
@@ -68,9 +68,11 @@ public enum ContextFreshness: String, Sendable, CaseIterable, Hashable, Codable 
 }
 
 /// Per-item sensitivity classification. `clean` = no secret-detector
-/// hits. `redacted` = content was scrubbed by `SecretDetector.scan`
-/// before being attached. `flagged` = at least one pattern matched
-/// and the item is held for the U.10a-2 gate decision.
+/// hits. `flagged` = at least one pattern matched and the item is
+/// held for the U.10a-2 gate's override decision (`--allow-secrets` /
+/// `allow_secrets:true`). `redacted` is reserved for downstream
+/// callers that ship scrubbed content alongside the manifest; the
+/// in-tree producer paths emit `clean` or `flagged` only.
 public enum ContextSensitivity: String, Sendable, CaseIterable, Hashable, Codable {
     case clean
     case redacted

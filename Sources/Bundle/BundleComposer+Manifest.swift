@@ -16,10 +16,12 @@ import Indexer
 // `inclusion_reason: "mode-pending-u10b"` so the surface is forward-
 // compatible without crashing.
 //
-// The secret gate + `--allow-secrets` override + `bundle.secret.allow`
-// / `bundle.dispatch` chained audit rows are U.10a-2's scope. U.10a-1
-// pre-scans free-text content via SecretDetector and tags the item's
-// `sensitivity` field; refusal/override behavior lands in U.10a-2.
+// The U.10a-2 secret gate layers on top of this producer in
+// `BundleSecretGate.swift` — items whose free-text content hits
+// `SecretDetector.scan` carry `sensitivity: .flagged`, and the gate's
+// `composeManifestGated()` wrapper refuses to emit unless the caller
+// passes `allowSecrets: true`. The chained `bundle.secret.allow` /
+// `bundle.dispatch` audit-row writes live in the gate file too.
 
 public struct ManifestOptions: Sendable {
     public let projectRoot: String
@@ -159,7 +161,13 @@ extension BundleComposer {
         let mode: ContextMode = options.modes.contains(.full) ? .full : .excludedWithReason
         let scan = SecretDetector.scan(readme)
         let estimated = estimateTokens(scan.redacted.count)
-        let sensitivity: ContextSensitivity = scan.patterns.isEmpty ? .clean : .redacted
+        // U.10a-2 gate semantics: a SecretDetector hit means the
+        // underlying source carried a secret pattern, so the item is
+        // *flagged* — held for the gate's override decision. The body
+        // composer's own redaction still runs downstream; the manifest's
+        // job is to surface "would I have shipped a secret-bearing
+        // source?" before the body is materialized.
+        let sensitivity: ContextSensitivity = scan.patterns.isEmpty ? .clean : .flagged
         return [ContextManifestItem(
             id: "file:README",
             lane: .file,
@@ -248,7 +256,8 @@ extension BundleComposer {
             let content = entity.compiledUnderstanding
             let scan = SecretDetector.scan(content)
             let estimated = estimateTokens(scan.redacted.count)
-            let sensitivity: ContextSensitivity = scan.patterns.isEmpty ? .clean : .redacted
+            // U.10a-2 gate semantics — see fileLaneItems for the rationale.
+            let sensitivity: ContextSensitivity = scan.patterns.isEmpty ? .clean : .flagged
             return ContextManifestItem(
                 id: "knowledge:\(entity.name)",
                 lane: .knowledge,

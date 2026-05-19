@@ -58,6 +58,9 @@ struct BundleCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Comma-separated lane list for --preview. Default: file,diff,codemap,symbol,knowledge,runtime,manual,artifact.")
     var lanes: String?
 
+    @Flag(name: .long, help: "Override the U.10a-2 secret gate. Required when any manifest item carries a SecretDetector hit (sensitivity=flagged). Every override fires a chained bundle.secret.allow audit row in token_events.")
+    var allowSecrets: Bool = false
+
     func run() async throws {
         guard let bundleFormat = BundleFormat(rawValue: format) else {
             fputs("senkani bundle: invalid --format '\(format)'. Expected 'markdown' or 'json'.\n", stderr)
@@ -127,9 +130,21 @@ struct BundleCommand: AsyncParsableCommand {
                 modes: parseModes(modes) ?? ContextMode.trivial,
                 lanes: parseLanes(lanes) ?? Set(ContextLane.allCases)
             )
-            let manifest = BundleComposer.composeManifest(
-                options: manifestOpts, inputs: inputs)
-            try emit(document: BundleComposer.renderManifestJSON(manifest))
+            do {
+                let manifest = try BundleComposer.composeManifestGated(
+                    options: manifestOpts,
+                    inputs: inputs,
+                    allowSecrets: allowSecrets,
+                    preview: true,
+                    recorder: LiveBundleAuditRecorder(),
+                    sessionId: nil,
+                    projectRoot: validatedRoot
+                )
+                try emit(document: BundleComposer.renderManifestJSON(manifest))
+            } catch let e as ManifestSecretGateError {
+                fputs("senkani bundle: \(e.description)\n", stderr)
+                throw ExitCode(3)
+            }
             return
         }
 

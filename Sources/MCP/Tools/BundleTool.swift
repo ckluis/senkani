@@ -33,6 +33,11 @@ import Bundle
 //     modes. Unknown entries silently dropped (no crash).
 //   - `lanes` (optional array of strings): U.10a-1. Restrict the
 //     manifest to the requested lanes. Default = all 8.
+//   - `allow_secrets` (optional bool, default false): U.10a-2. Override
+//     the secret gate. When any manifest item carries a SecretDetector
+//     hit (sensitivity=flagged), composeManifestGated refuses unless
+//     this flag is true. Every override fires a chained
+//     bundle.secret.allow audit row in token_events.
 //
 // Safety:
 //   - Any free-text content (README, KB `compiledUnderstanding`)
@@ -123,14 +128,33 @@ enum BundleTool {
                 modes: Self.parseModeList(arguments?["modes"]) ?? ContextMode.trivial,
                 lanes: Self.parseLaneList(arguments?["lanes"]) ?? Set(ContextLane.allCases)
             )
-            let manifest = BundleComposer.composeManifest(
-                options: manifestOpts, inputs: inputs)
+            let allowSecrets = arguments?["allow_secrets"]?.boolValue ?? false
+            let manifest: ContextManifest
+            do {
+                manifest = try BundleComposer.composeManifestGated(
+                    options: manifestOpts,
+                    inputs: inputs,
+                    allowSecrets: allowSecrets,
+                    preview: true,
+                    recorder: LiveBundleAuditRecorder(),
+                    sessionId: session.sessionId,
+                    projectRoot: root
+                )
+            } catch let e as ManifestSecretGateError {
+                return .init(content: [.text(
+                    text: "Error: \(e.description)",
+                    annotations: nil, _meta: nil)], isError: true)
+            } catch {
+                return .init(content: [.text(
+                    text: "Error: \(error.localizedDescription)",
+                    annotations: nil, _meta: nil)], isError: true)
+            }
             let manifestJSON = BundleComposer.renderManifestJSON(manifest)
             await session.recordMetrics(
                 rawBytes: 0,
                 compressedBytes: manifestJSON.utf8.count,
                 feature: "bundle.preview",
-                command: "preview=true modes=\(manifestOpts.modes.count) lanes=\(manifestOpts.lanes.count)",
+                command: "preview=true modes=\(manifestOpts.modes.count) lanes=\(manifestOpts.lanes.count) allow_secrets=\(allowSecrets)",
                 outputPreview: String(manifestJSON.prefix(200))
             )
             return .init(content: [.text(text: manifestJSON, annotations: nil, _meta: nil)])

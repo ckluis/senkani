@@ -362,7 +362,7 @@ enum ToolRegistry {
                 name: "bundle",
                 schema: Tool(
                     name: "bundle",
-                    description: "Budget-bounded repo snapshot as a single markdown (or JSON) document. Local mode composes symbol outlines + dep graph + KB entities + README (critical context first). Remote mode (pass remote:\"owner/name\") snapshots any public GitHub repo via senkani_repo — same host allowlist + SecretDetector. Params: root, max_tokens, include, format (markdown|json), remote (owner/name), ref (branch/tag/SHA for --remote).",
+                    description: "Budget-bounded repo snapshot as a single markdown (or JSON) document. Local mode composes symbol outlines + dep graph + KB entities + README (critical context first). Remote mode (pass remote:\"owner/name\") snapshots any public GitHub repo via senkani_repo — same host allowlist + SecretDetector. Pass preview:true (U.10a) to emit a ContextManifest review surface JSON instead of the body. Params: root, max_tokens, include, format (markdown|json), remote (owner/name), ref (branch/tag/SHA for --remote), preview, modes, lanes.",
                     inputSchema: .object([
                         "type": .string("object"),
                         "properties": .object([
@@ -372,6 +372,9 @@ enum ToolRegistry {
                             "format": .object(["type": .string("string"), "description": .string("Output format: 'markdown' (default) or 'json' (stable BundleDocument schema).")]),
                             "remote": .object(["type": .string("string"), "description": .string("Bundle a public GitHub repo (owner/name) instead of the local project. Validated strictly; host-allowlisted.")]),
                             "ref": .object(["type": .string("string"), "description": .string("Git ref (branch/tag/SHA) for `remote` bundles. Defaults to HEAD / default branch.")]),
+                            "preview": .object(["type": .string("boolean"), "description": .string("U.10a-1: emit a ContextManifest review surface (JSON) instead of the body. Default false.")]),
+                            "modes": .object(["type": .string("array"), "items": .object(["type": .string("string"), "enum": .array([.string("full"), .string("codemap"), .string("artifact-stubbed"), .string("excluded-with-reason"), .string("slice"), .string("diff-only"), .string("summary")])]), "description": .string("U.10a-1 (with preview:true): restrict the manifest to these modes. Default: full, codemap, artifact-stubbed, excluded-with-reason (the 4 trivial modes). Requesting slice/diff-only/summary emits a stub item with inclusion_reason: mode-pending-u10b.")]),
+                            "lanes": .object(["type": .string("array"), "items": .object(["type": .string("string"), "enum": .array([.string("file"), .string("diff"), .string("codemap"), .string("symbol"), .string("knowledge"), .string("runtime"), .string("manual"), .string("artifact")])]), "description": .string("U.10a-1 (with preview:true): restrict the manifest to these lanes. Default: all 8.")]),
                         ]),
                     ]),
                     annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)

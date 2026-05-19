@@ -49,6 +49,15 @@ struct BundleCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Git ref (branch/tag/SHA) to bundle when using --remote. Defaults to HEAD.")
     var ref: String?
 
+    @Flag(name: .long, help: "Emit a ContextManifest review surface (JSON) instead of the bundle body. See U.10a.")
+    var preview: Bool = false
+
+    @Option(name: .long, help: "Comma-separated mode list for --preview. Default: full,codemap,artifact-stubbed,excluded-with-reason.")
+    var modes: String?
+
+    @Option(name: .long, help: "Comma-separated lane list for --preview. Default: file,diff,codemap,symbol,knowledge,runtime,manual,artifact.")
+    var lanes: String?
+
     func run() async throws {
         guard let bundleFormat = BundleFormat(rawValue: format) else {
             fputs("senkani bundle: invalid --format '\(format)'. Expected 'markdown' or 'json'.\n", stderr)
@@ -107,15 +116,49 @@ struct BundleCommand: AsyncParsableCommand {
             entities = store.allEntities(sortedBy: .mentionCountDesc)
         }
 
-        // 6. Compose.
-        let opts = BundleOptions(projectRoot: validatedRoot, maxTokens: budget)
+        // 6. Compose — preview path emits the manifest surface only.
         let inputs = BundleInputs(
             index: index, graph: graph,
             entities: entities, readme: readme)
+
+        if preview {
+            let manifestOpts = ManifestOptions(
+                projectRoot: validatedRoot,
+                modes: parseModes(modes) ?? ContextMode.trivial,
+                lanes: parseLanes(lanes) ?? Set(ContextLane.allCases)
+            )
+            let manifest = BundleComposer.composeManifest(
+                options: manifestOpts, inputs: inputs)
+            try emit(document: BundleComposer.renderManifestJSON(manifest))
+            return
+        }
+
+        let opts = BundleOptions(projectRoot: validatedRoot, maxTokens: budget)
         let document = BundleComposer.compose(options: opts, inputs: inputs, format: bundleFormat)
 
         // 7. Emit.
         try emit(document: document)
+    }
+
+    /// Parse a comma-separated `--modes` value. Unknown entries are
+    /// silently dropped (matches the MCP tool's `include` parsing).
+    /// Returns nil for empty input so callers fall back to the default.
+    private func parseModes(_ raw: String?) -> Set<ContextMode>? {
+        guard let raw, !raw.isEmpty else { return nil }
+        let parsed = raw
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .compactMap { ContextMode(rawValue: $0) }
+        return parsed.isEmpty ? nil : Set(parsed)
+    }
+
+    private func parseLanes(_ raw: String?) -> Set<ContextLane>? {
+        guard let raw, !raw.isEmpty else { return nil }
+        let parsed = raw
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .compactMap { ContextLane(rawValue: $0) }
+        return parsed.isEmpty ? nil : Set(parsed)
     }
 
     // MARK: - Remote path

@@ -24,6 +24,15 @@ import Bundle
 //   - `format` (optional string): "markdown" (default) or "json". The
 //     JSON shape is stable (see BundleDocument). Unknown values fall
 //     back to markdown.
+//   - `preview` (optional bool, default false): U.10a-1. Emit a
+//     ContextManifest review surface as JSON instead of the bundle
+//     body. Mirrors `senkani bundle --preview`. Stable byte-equal
+//     output with the CLI form (parity contract).
+//   - `modes` (optional array of strings): U.10a-1. Restrict the
+//     manifest to the requested modes. Default = the 4 trivial
+//     modes. Unknown entries silently dropped (no crash).
+//   - `lanes` (optional array of strings): U.10a-1. Restrict the
+//     manifest to the requested lanes. Default = all 8.
 //
 // Safety:
 //   - Any free-text content (README, KB `compiledUnderstanding`)
@@ -99,16 +108,38 @@ enum BundleTool {
         let entities = session.knowledgeStore.allEntities(sortedBy: .mentionCountDesc)
         let readme = BundleComposer.readme(at: root)
 
-        let opts = BundleOptions(
-            projectRoot: root,
-            maxTokens: maxTokens,
-            include: include
-        )
         let inputs = BundleInputs(
             index: index,
             graph: graph,
             entities: entities,
             readme: readme
+        )
+
+        // U.10a-1 preview path — short-circuit before the body composer.
+        let preview = arguments?["preview"]?.boolValue ?? false
+        if preview {
+            let manifestOpts = ManifestOptions(
+                projectRoot: root,
+                modes: Self.parseModeList(arguments?["modes"]) ?? ContextMode.trivial,
+                lanes: Self.parseLaneList(arguments?["lanes"]) ?? Set(ContextLane.allCases)
+            )
+            let manifest = BundleComposer.composeManifest(
+                options: manifestOpts, inputs: inputs)
+            let manifestJSON = BundleComposer.renderManifestJSON(manifest)
+            await session.recordMetrics(
+                rawBytes: 0,
+                compressedBytes: manifestJSON.utf8.count,
+                feature: "bundle.preview",
+                command: "preview=true modes=\(manifestOpts.modes.count) lanes=\(manifestOpts.lanes.count)",
+                outputPreview: String(manifestJSON.prefix(200))
+            )
+            return .init(content: [.text(text: manifestJSON, annotations: nil, _meta: nil)])
+        }
+
+        let opts = BundleOptions(
+            projectRoot: root,
+            maxTokens: maxTokens,
+            include: include
         )
 
         let output = BundleComposer.compose(options: opts, inputs: inputs, format: format)
@@ -203,6 +234,29 @@ enum BundleTool {
         )
 
         return .init(content: [.text(text: output, annotations: nil, _meta: nil)])
+    }
+
+    /// Parse a `Value.array` of strings into a Set of ContextModes.
+    /// Unknown entries are silently dropped (mirrors `include` parsing
+    /// — a typo shouldn't hard-fail the call).
+    fileprivate static func parseModeList(_ raw: Value?) -> Set<ContextMode>? {
+        guard case let .array(arr)? = raw else { return nil }
+        var parsed: Set<ContextMode> = []
+        for v in arr {
+            guard let s = v.stringValue, let m = ContextMode(rawValue: s) else { continue }
+            parsed.insert(m)
+        }
+        return parsed.isEmpty ? nil : parsed
+    }
+
+    fileprivate static func parseLaneList(_ raw: Value?) -> Set<ContextLane>? {
+        guard case let .array(arr)? = raw else { return nil }
+        var parsed: Set<ContextLane> = []
+        for v in arr {
+            guard let s = v.stringValue, let l = ContextLane(rawValue: s) else { continue }
+            parsed.insert(l)
+        }
+        return parsed.isEmpty ? nil : parsed
     }
 
     /// Rough source-byte estimate for the savings metric. Walks the

@@ -310,6 +310,58 @@ struct TreeSitterTypeScriptPerformanceTests {
     }
 }
 
+// MARK: - Suite 5: TypeScript Depth-Stress
+
+@Suite("TreeSitterBackend — TypeScript Depth Stress")
+struct TreeSitterTypeScriptDepthStressTests {
+
+    // Chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Generates a top-level lexical_declaration whose initializer is a
+    // 2200-deep parenthesized-expression chain, bracketed by two
+    // top-level function declarations to assert pre-order symbol
+    // emission. Indexes the file WITHOUT `runOnLargeStackThread` to
+    // prove the iterative walk is cooperative-pool-safe.
+    //
+    // Why a top-level const initializer: leaf-emit arms
+    // (function_declaration, type_alias_declaration, method_definition)
+    // don't descend, and the body-rebind arms (class_declaration,
+    // interface_declaration, enum_declaration) only descend into a
+    // body block whose internal expression depth tops out around grammar
+    // structure, not user-controllable parens. The deep chain must live
+    // in a node whose descendants fall through the default arm —
+    // `lexical_declaration` (TS-grammar node for `const`/`let`) is not
+    // matched by any special arm and falls through default, then the
+    // variable_declarator → parenthesized_expression chain pushes
+    // ~2200 deep through repeated default-arm descent. The pre-refactor
+    // recursive walk would consume ~2200 Swift call frames and crash
+    // on the cooperative pool's smaller stack; the iterative form runs
+    // in heap-allocated work-stack memory.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() {
+        let depth = 2200
+        let opens = String(repeating: "(", count: depth)
+        let closes = String(repeating: ")", count: depth)
+        let source = """
+        function first() { return 1; }
+
+        // Top-level lexical_declaration with a 2200-deep parenthesized
+        // initializer. lexical_declaration falls through the default
+        // arm; the parenthesized_expression chain descends via
+        // repeated reverse-pushes.
+        const x = \(opens)0\(closes);
+
+        function last() { return 2; }
+        """
+
+        let entries = indexTypeScript(source)
+        let funcs = entries.filter { $0.kind == .function }
+        #expect(funcs.map(\.name) == ["first", "last"],
+                "Bracketing top-level functions must emit in left-to-right pre-order")
+        #expect(funcs.allSatisfy { $0.container == nil },
+                "Top-level TypeScript functions carry no container")
+    }
+}
+
 // MARK: - Helpers
 
 private func indexTypeScript(_ code: String) -> [IndexEntry] {

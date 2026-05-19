@@ -814,10 +814,10 @@ struct Doctor: ParsableCommand {
         case unexpectedError(String)
     }
 
-    /// Pure formatter: returns the `(Status, message)` the doctor surface
-    /// emits for the Layer 3 PII classifier line. Tests inject `(status,
-    /// smoke)` to drive all four branches; production passes the live
-    /// `ModelManager` status + a real adapter smoke probe.
+    /// Single-line formatter — kept for tests that exercise the
+    /// Layer 3 status line in isolation. Production now calls
+    /// `formatLayer3PIIClassifierLines` (plural) so the T.2b-2
+    /// commit-sha + last-eval lines surface alongside.
     ///
     /// Schneier (silent-degradation visibility): the backend-not-ready
     /// branch is an EXPLICIT line, not a silent skip. Operators see
@@ -850,12 +850,67 @@ struct Doctor: ParsableCommand {
         }
     }
 
-    /// Thin wrapper around `formatLayer3PIIClassifierLine` that reads
-    /// from the live `ModelManager` + smokes the production
-    /// `Layer3Inference.productionDefault`.
+    /// Three-line formatter (T.2b-2 extension). Returns the Layer 3
+    /// status line (always) plus the model-id-plus-commit-sha line
+    /// AND the last-eval line whenever the classifier is `.verified`.
+    /// The two extra lines are NOT emitted for non-verified states
+    /// (regex+entropy or downloading paths) — there's nothing
+    /// meaningful to surface yet.
+    static func formatLayer3PIIClassifierLines(
+        status: ModelStatus?,
+        smoke: () -> Layer3SmokeOutcome,
+        lastError: String? = nil,
+        localCommitSha: String? = nil,
+        lastEval: (timestamp: Date, f1: Double)? = nil
+    ) -> [(Status, String)] {
+        let primary = formatLayer3PIIClassifierLine(
+            status: status,
+            smoke: smoke,
+            lastError: lastError
+        )
+        guard status == .verified else { return [primary] }
+
+        let sha = localCommitSha.map { String($0.prefix(12)) } ?? "unknown"
+        let modelLine: (Status, String) = (
+            localCommitSha == nil ? .skip : .pass,
+            "Layer 3 classifier model: \(PIIClassifierAdapter.modelId) @ \(sha)"
+        )
+
+        let evalLine: (Status, String)
+        if let lastEval {
+            let band = PIIClassifierEvalGate.bandLabel(
+                for: PIIClassifierEvalGate.f1Status(lastEval.f1)
+            )
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime]
+            let ts = formatter.string(from: lastEval.timestamp)
+            let status: Status
+            switch PIIClassifierEvalGate.f1Status(lastEval.f1) {
+            case .clean: status = .pass
+            case .warn: status = .fail
+            case .abort: status = .fail
+            }
+            evalLine = (
+                status,
+                String(format: "Layer 3 last eval: %@ — F1 %.3f (%@)", ts, lastEval.f1, band)
+            )
+        } else {
+            evalLine = (.skip, "Layer 3 last eval: never run")
+        }
+
+        return [primary, modelLine, evalLine]
+    }
+
+    /// Thin wrapper. Reads the live `ModelManager` + smokes the
+    /// production `Layer3Inference.productionDefault` + pulls the
+    /// last eval row from the shared `SessionDatabase`.
     private func checkPIIClassifierLayer3(_ results: inout Results) {
         let info = ModelManager.shared.models.first(where: { $0.id == PIIClassifierAdapter.modelId })
-        let (status, message) = Self.formatLayer3PIIClassifierLine(
+        let latest = SessionDatabase.shared.latestEvalResult(modelId: PIIClassifierAdapter.modelId)
+        let lastEvalTuple: (timestamp: Date, f1: Double)? = latest.map {
+            (timestamp: $0.timestamp, f1: $0.f1)
+        }
+        let lines = Self.formatLayer3PIIClassifierLines(
             status: info?.status,
             smoke: {
                 do {
@@ -867,14 +922,18 @@ struct Doctor: ParsableCommand {
                     return .unexpectedError(String(describing: error))
                 }
             },
-            lastError: info?.lastError
+            lastError: info?.lastError,
+            localCommitSha: nil,  // populated by T.2a-followup
+            lastEval: lastEvalTuple
         )
-        printStatus(status, message)
-        switch status {
-        case .pass: results.passed += 1
-        case .skip: results.skipped += 1
-        case .fail: results.failed += 1
-        case .fixed: results.fixed += 1
+        for (status, message) in lines {
+            printStatus(status, message)
+            switch status {
+            case .pass: results.passed += 1
+            case .skip: results.skipped += 1
+            case .fail: results.failed += 1
+            case .fixed: results.fixed += 1
+            }
         }
     }
 

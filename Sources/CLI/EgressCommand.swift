@@ -75,12 +75,22 @@ struct Egress: ParsableCommand {
                 throw ExitCode(1)
             }
 
-            // Default policy: deny everything. Operators add allow rules
-            // by editing `~/.senkani/egress-rules.json` (T.1c surface);
-            // until that lands, a deny-by-default daemon is intentional.
-            let rules = EgressRulesLoader.load()
+            // T.1b: prefer the per-pane policy file
+            // `~/.senkani/egress-policy.json`. Fall back to the legacy
+            // flat `egress-rules.json` if the policy file is missing —
+            // T.1a operators keep working without re-shaping their config.
+            let (policy, degraded) = EgressPolicyLoader.load()
+            if let degraded {
+                FileHandle.standardError.write(Data("egress: \(degraded)\n".utf8))
+            }
             let listener = EgressListener(
-                rules: rules,
+                policy: policy,
+                judge: nil,  // T.1b judge wiring requires Gemma availability;
+                             // operator can enable via a follow-up CLI flag
+                             // once `senkani doctor --install-judge-model`
+                             // lands. Daemon static-only by default is the
+                             // Schneier-preferred posture (no model layer
+                             // unless explicitly opted into).
                 database: SessionDatabase.shared,
                 config: .init(port: port)
             )
@@ -201,6 +211,31 @@ enum EgressRulesLoader {
             return EgressRule(id: w.id, pattern: w.pattern, mode: mode, decision: decision)
         }
         return EgressRuleEngine(rules: parsed)
+    }
+}
+
+/// T.1b — loads the per-pane policy from
+/// `~/.senkani/egress-policy.json`. If the policy file is missing,
+/// falls back to wrapping the legacy `egress-rules.json` flat
+/// allowlist into a single policy that applies to every `PaneMode`
+/// — so T.1a operators get T.1b semantics for free without re-shaping
+/// their config.
+enum EgressPolicyLoader {
+    static var policyPath: String {
+        NSHomeDirectory() + "/.senkani/egress-policy.json"
+    }
+
+    static func load() -> (policy: EgressPolicy, degradedReason: String?) {
+        // If the operator has migrated to the new file, use it.
+        if FileManager.default.fileExists(atPath: policyPath) {
+            return EgressPolicy.load(from: policyPath)
+        }
+        // T.1a back-compat: wrap the legacy flat allowlist into a
+        // per-pane policy that applies to every mode.
+        let legacy = EgressRulesLoader.load()
+        var engines: [PaneMode: EgressRuleEngine] = [:]
+        for mode in PaneMode.allCases { engines[mode] = legacy }
+        return (EgressPolicy(engines: engines), nil)
     }
 }
 

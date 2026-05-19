@@ -16,7 +16,9 @@ extension SessionDatabase {
         ruleId: String,
         latencyUs: Int64 = 0,
         paneId: String? = nil,
-        projectRoot: String? = nil
+        projectRoot: String? = nil,
+        paneMode: PaneMode? = nil,
+        judgeRationale: String? = nil
     ) -> Bool {
         egressDecisionStore.record(
             host: host,
@@ -25,7 +27,9 @@ extension SessionDatabase {
             ruleId: ruleId,
             latencyUs: latencyUs,
             paneId: paneId,
-            projectRoot: projectRoot
+            projectRoot: projectRoot,
+            paneMode: paneMode,
+            judgeRationale: judgeRationale
         )
     }
 

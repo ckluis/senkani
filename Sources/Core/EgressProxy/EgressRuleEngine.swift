@@ -107,7 +107,7 @@ public struct EgressEvaluation: Sendable, Equatable {
     public static let defaultDeny = EgressEvaluation(decision: .deny, ruleId: "default-deny")
 }
 
-public struct EgressRuleEngine: Sendable {
+public struct EgressRuleEngine: Sendable, Equatable {
     public let rules: [EgressRule]
 
     public init(rules: [EgressRule]) {

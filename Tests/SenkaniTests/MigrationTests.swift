@@ -494,6 +494,39 @@ struct MigrationRunnerTests {
         """)
     }
 
+    /// Seed a `egress_decisions` table in its post-v19 / pre-v23 shape so
+    /// migration v23 has something to ALTER. Also seeds the `chain_anchors`
+    /// table (originally created at v4) so v23's anchor-rename + anchor-
+    /// open SQL has a destination.
+    private static func seedPreV23EgressDecisions(_ db: OpaquePointer) {
+        exec(db, """
+            CREATE TABLE IF NOT EXISTS chain_anchors (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                table_name TEXT NOT NULL,
+                started_at REAL NOT NULL,
+                started_at_rowid INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                operator_note TEXT
+            );
+        """)
+        exec(db, """
+            CREATE TABLE egress_decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                host TEXT NOT NULL,
+                method TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                rule_id TEXT NOT NULL,
+                latency_us INTEGER NOT NULL DEFAULT 0,
+                pane_id TEXT,
+                project_root TEXT,
+                prev_hash TEXT,
+                entry_hash TEXT,
+                chain_anchor_id INTEGER
+            );
+        """)
+    }
+
     @Test("v22 adds the five axes/runner columns to validation_results")
     func migration22AddsRunnerColumns() throws {
         let db = Self.openMemory()
@@ -577,14 +610,16 @@ struct MigrationRunnerTests {
         #expect(rows[2].outcome == "blocking" && rows[2].status == "fail")
     }
 
-    @Test("v22 advances the migration ledger by exactly one row over a v21-baseline DB")
-    func migration22AdvancesLedgerByOne() throws {
+    @Test("v22 + v23 advance the migration ledger by exactly two rows over a v21-baseline DB")
+    func migration22And23AdvanceLedgerByTwo() throws {
         let db = Self.openMemory()
         defer { sqlite3_close(db) }
 
-        // Seed schema_migrations to v21 + a pre-v22 validation_results so
-        // the runner sees exactly one pending migration (v22).
+        // Seed schema_migrations to v21 + a pre-v22 validation_results AND
+        // a pre-v23 egress_decisions (created at v19) so the runner sees
+        // exactly two pending migrations (v22 + v23).
         Self.seedPreV22ValidationResults(db)
+        Self.seedPreV23EgressDecisions(db)
         Self.exec(db, """
             CREATE TABLE schema_migrations (
                 version INTEGER PRIMARY KEY,
@@ -604,8 +639,8 @@ struct MigrationRunnerTests {
         let report = try MigrationRunner.run(db: db, dbPath: ":memory:", registry: MigrationRegistry.all)
         let after = Self.appliedCount(db)
 
-        #expect(after - before == 1, "ledger must advance by exactly one row (v22); got \(after - before)")
-        #expect(report.appliedVersions == [22], "runner must report v22 as the single newly-applied version; got \(report.appliedVersions)")
+        #expect(after - before == 2, "ledger must advance by exactly two rows (v22 + v23); got \(after - before)")
+        #expect(report.appliedVersions == [22, 23], "runner must report v22 + v23 as the newly-applied versions; got \(report.appliedVersions)")
     }
 
     @Test("lockfile refuses subsequent runs until removed")

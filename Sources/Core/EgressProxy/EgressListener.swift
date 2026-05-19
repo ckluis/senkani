@@ -70,7 +70,8 @@ public final class EgressListener: @unchecked Sendable {
         case upstreamFailure       = "upstream_unreachable"
     }
 
-    private let rules: EgressRuleEngine
+    private let policy: EgressPolicy
+    private let judge: JudgeAdapter?
     private let database: SessionDatabase
     private let config: Config
     private let queue = DispatchQueue(label: "com.senkani.egress-listener", qos: .userInitiated)
@@ -81,10 +82,29 @@ public final class EgressListener: @unchecked Sendable {
     private var boundPort: Int = 0
     private var running = false
 
-    public init(rules: EgressRuleEngine, database: SessionDatabase = .shared, config: Config = Config()) {
-        self.rules = rules
+    /// T.1b primary init — takes a per-pane policy and an optional
+    /// judge adapter. Production wires both; tests can pass `judge: nil`
+    /// to assert static-only behavior.
+    public init(
+        policy: EgressPolicy,
+        judge: JudgeAdapter? = nil,
+        database: SessionDatabase = .shared,
+        config: Config = Config()
+    ) {
+        self.policy = policy
+        self.judge = judge
         self.database = database
         self.config = config
+    }
+
+    /// Back-compat init for T.1a callers. Wraps the flat rule engine in
+    /// an `EgressPolicy` covering every `PaneMode`. No judge adapter
+    /// (static-only behavior — matches T.1a semantics exactly).
+    public convenience init(rules: EgressRuleEngine, database: SessionDatabase = .shared, config: Config = Config()) {
+        var engines: [PaneMode: EgressRuleEngine] = [:]
+        for mode in PaneMode.allCases { engines[mode] = rules }
+        let policy = EgressPolicy(engines: engines)
+        self.init(policy: policy, judge: nil, database: database, config: config)
     }
 
     /// Bound port after `start()` succeeds. Zero before start / after stop.
@@ -223,7 +243,8 @@ public final class EgressListener: @unchecked Sendable {
         }
 
         let handler = EgressConnectionHandler(
-            rules: rules,
+            policy: policy,
+            judge: judge,
             database: database,
             clientFD: clientFD
         )

@@ -40,6 +40,14 @@ public enum HookRouter {
     /// Test seam for validation advisory delivery. Production uses `.shared`.
     nonisolated(unsafe) static var validationDatabase: SessionDatabase = .shared
 
+    /// T.1b — pane-mode resolver seam. Maps `pane_id` → `PaneMode`. The
+    /// EgressProxy daemon reads the resolved mode from the
+    /// `X-Senkani-Pane-Mode` header on incoming requests; production
+    /// wires HookRouter PreToolUse to write the header on every
+    /// MCP/CLI subprocess invocation (handled in a follow-up phase).
+    /// Tests inject a stub. Default returns `.general` for every pane.
+    nonisolated(unsafe) public static var paneModeResolver: (String?) -> PaneMode = { _ in .default }
+
     /// V.12b test seam — tests inject a feed with a short window or
     /// a custom rate-cap sink to assert the suppression behavior
     /// without polluting the shared feed's state. Production uses

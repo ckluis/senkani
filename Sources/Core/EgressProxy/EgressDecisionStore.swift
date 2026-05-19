@@ -36,7 +36,9 @@ public final class EgressDecisionStore: @unchecked Sendable {
         ruleId: String,
         latencyUs: Int64,
         paneId: String? = nil,
-        projectRoot: String? = nil
+        projectRoot: String? = nil,
+        paneMode: PaneMode? = nil,
+        judgeRationale: String? = nil
     ) -> Bool {
         let normalizedRoot = SessionDatabase.normalizePath(projectRoot)
         let now = Date().timeIntervalSince1970
@@ -44,8 +46,17 @@ public final class EgressDecisionStore: @unchecked Sendable {
             guard let db = parent.db else { return false }
             let anchorId = chain.resolveAnchorId(db: db)
             let prevHash = chain.latestEntryHash(db: db, anchorId: anchorId)
+            // T.1b: include `judge_rationale` + `pane_mode` in the
+            // canonical column map for all anchors EXCEPT the legacy
+            // pre-v23 `fresh-install-pre-v23` whose existing rows were
+            // hashed without them. Post-v23 anchors (migration-v23,
+            // post-v23 fresh-install, future repair-* rebinds) use
+            // the new shape. Mirrored in
+            // `ChainVerifier.verifyAnchorEgressDecisions`.
+            let reason = chain.anchorReason(db: db, anchorId: anchorId) ?? ""
+            let useLegacyShape = (reason == "fresh-install-pre-v23")
 
-            let columns: [String: ChainHasher.CanonicalValue] = [
+            var columns: [String: ChainHasher.CanonicalValue] = [
                 "timestamp":     .real(now),
                 "host":          .text(host),
                 "method":        .text(method),
@@ -55,6 +66,10 @@ public final class EgressDecisionStore: @unchecked Sendable {
                 "pane_id":       paneId.map { .text($0) } ?? .null,
                 "project_root":  normalizedRoot.map { .text($0) } ?? .null,
             ]
+            if !useLegacyShape {
+                columns["judge_rationale"] = judgeRationale.map { .text($0) } ?? .null
+                columns["pane_mode"] = paneMode.map { .text($0.rawValue) } ?? .null
+            }
             let entryHash = ChainHasher.entryHash(
                 table: "egress_decisions", columns: columns, prev: prevHash
             )
@@ -63,8 +78,9 @@ public final class EgressDecisionStore: @unchecked Sendable {
                 INSERT INTO egress_decisions
                     (timestamp, host, method, decision, rule_id, latency_us,
                      pane_id, project_root,
+                     judge_rationale, pane_mode,
                      prev_hash, entry_hash, chain_anchor_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
@@ -85,13 +101,23 @@ public final class EgressDecisionStore: @unchecked Sendable {
             } else {
                 sqlite3_bind_null(stmt, 8)
             }
-            if let prevHash {
-                sqlite3_bind_text(stmt, 9, (prevHash as NSString).utf8String, -1, nil)
+            if let judgeRationale {
+                sqlite3_bind_text(stmt, 9, (judgeRationale as NSString).utf8String, -1, nil)
             } else {
                 sqlite3_bind_null(stmt, 9)
             }
-            sqlite3_bind_text(stmt, 10, (entryHash as NSString).utf8String, -1, nil)
-            sqlite3_bind_int64(stmt, 11, anchorId)
+            if let paneMode {
+                sqlite3_bind_text(stmt, 10, (paneMode.rawValue as NSString).utf8String, -1, nil)
+            } else {
+                sqlite3_bind_null(stmt, 10)
+            }
+            if let prevHash {
+                sqlite3_bind_text(stmt, 11, (prevHash as NSString).utf8String, -1, nil)
+            } else {
+                sqlite3_bind_null(stmt, 11)
+            }
+            sqlite3_bind_text(stmt, 12, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(stmt, 13, anchorId)
 
             guard sqlite3_step(stmt) == SQLITE_DONE else { return false }
             chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
@@ -110,6 +136,8 @@ public final class EgressDecisionStore: @unchecked Sendable {
         public let latencyUs: Int64
         public let paneId: String?
         public let projectRoot: String?
+        public let paneMode: PaneMode?
+        public let judgeRationale: String?
     }
 
     /// Return the N most recent rows in descending id order. Used by
@@ -121,7 +149,8 @@ public final class EgressDecisionStore: @unchecked Sendable {
             guard let db = parent.db else { return [] }
             let sql = """
                 SELECT id, timestamp, host, method, decision, rule_id,
-                       latency_us, pane_id, project_root
+                       latency_us, pane_id, project_root,
+                       pane_mode, judge_rationale
                   FROM egress_decisions
                  ORDER BY id DESC
                  LIMIT ?;
@@ -145,11 +174,19 @@ public final class EgressDecisionStore: @unchecked Sendable {
                 let projectRoot: String? = sqlite3_column_type(stmt, 8) == SQLITE_NULL
                     ? nil
                     : sqlite3_column_text(stmt, 8).map { String(cString: $0) }
+                let paneModeStr: String? = sqlite3_column_type(stmt, 9) == SQLITE_NULL
+                    ? nil
+                    : sqlite3_column_text(stmt, 9).map { String(cString: $0) }
+                let judgeRationale: String? = sqlite3_column_type(stmt, 10) == SQLITE_NULL
+                    ? nil
+                    : sqlite3_column_text(stmt, 10).map { String(cString: $0) }
                 let decision = EgressRule.Decision(rawValue: decisionStr) ?? .deny
+                let paneMode = paneModeStr.flatMap { PaneMode(rawValue: $0) }
                 out.append(Row(
                     id: id, timestamp: Date(timeIntervalSince1970: ts),
                     host: host, method: method, decision: decision, ruleId: ruleId,
-                    latencyUs: latency, paneId: paneId, projectRoot: projectRoot
+                    latencyUs: latency, paneId: paneId, projectRoot: projectRoot,
+                    paneMode: paneMode, judgeRationale: judgeRationale
                 ))
             }
             return out

@@ -25,10 +25,16 @@ import Glibc
 ///      write rewritten head, then pipe both directions.
 final class EgressConnectionHandler: @unchecked Sendable {
 
-    private let rules: EgressRuleEngine
+    private let policy: EgressPolicy
+    private let judge: JudgeAdapter?
     private let database: SessionDatabase
     private let clientFD: Int32
     private let startTime: DispatchTime
+    /// Resolved during request-head parsing (PaneMode.default if no
+    /// `X-Senkani-Pane-Mode` header is present). Used by the decision
+    /// recorder so audit rows carry the framing for the dispatched
+    /// decision.
+    private var resolvedPaneMode: PaneMode = .default
 
     /// Maximum request-head bytes the proxy will buffer before parsing.
     /// HTTP allows large header sets, but for proxy traffic 16 KB is
@@ -45,11 +51,27 @@ final class EgressConnectionHandler: @unchecked Sendable {
     /// without timeout — the EOF on either side terminates the pipe.
     private static let readTimeoutSeconds: Int = 5
 
-    init(rules: EgressRuleEngine, database: SessionDatabase, clientFD: Int32) {
-        self.rules = rules
+    init(
+        policy: EgressPolicy,
+        judge: JudgeAdapter? = nil,
+        database: SessionDatabase,
+        clientFD: Int32
+    ) {
+        self.policy = policy
+        self.judge = judge
         self.database = database
         self.clientFD = clientFD
         self.startTime = DispatchTime.now()
+    }
+
+    /// Back-compat init that wraps a flat rule engine in an EgressPolicy
+    /// covering every PaneMode. T.1a callers (listener tests, fixture
+    /// drivers) keep working without ceremony.
+    convenience init(rules: EgressRuleEngine, database: SessionDatabase, clientFD: Int32) {
+        var engines: [PaneMode: EgressRuleEngine] = [:]
+        for mode in PaneMode.allCases { engines[mode] = rules }
+        let policy = EgressPolicy(engines: engines)
+        self.init(policy: policy, judge: nil, database: database, clientFD: clientFD)
     }
 
     func run() {
@@ -86,24 +108,101 @@ final class EgressConnectionHandler: @unchecked Sendable {
             return
         }
 
-        let evaluation = rules.evaluate(host: parsed.host)
+        // T.1b: parse `X-Senkani-Pane-Mode` from the rest-of-head bytes
+        // BEFORE rule evaluation so the per-mode rule engine + audit
+        // row both reflect the framing. Default = .general when absent.
+        resolvedPaneMode = Self.parsePaneModeHeader(restOfHead)
+
+        let engine = policy.engine(for: resolvedPaneMode)
+        var evaluation = engine.evaluate(host: parsed.host)
         let normalizedHost = EgressHostNormalizer.normalize(parsed.host)
+        var judgeRationale: String? = nil
+
+        // T.1b: judge fallback on static-miss. Conditions:
+        //   1. Static engine returned `defaultDeny` (no explicit rule).
+        //   2. The pane mode allows judge dispatch (NOT .redteam).
+        //   3. A judge adapter is wired in.
+        // Otherwise the static `defaultDeny` stands.
+        if evaluation.ruleId == "default-deny",
+           resolvedPaneMode.allowsJudge,
+           let judge {
+            let verdict = judge.evaluate(JudgeRequest(
+                host: normalizedHost,
+                method: parsed.method,
+                paneMode: resolvedPaneMode
+            ))
+            judgeRationale = verdict.rationale
+            evaluation = EgressEvaluation(decision: verdict.decision, ruleId: "judge-\(verdict.decision.rawValue)")
+        }
+
         if evaluation.decision == .deny {
-            recordDecision(host: normalizedHost, method: parsed.method, decision: .deny, ruleId: evaluation.ruleId)
+            recordDecision(
+                host: normalizedHost, method: parsed.method,
+                decision: .deny, ruleId: evaluation.ruleId,
+                paneMode: resolvedPaneMode, judgeRationale: judgeRationale
+            )
             sendStatus(403, message: "Forbidden")
             return
         }
 
         if parsed.method == "CONNECT" {
-            handleConnect(parsed: parsed, ruleId: evaluation.ruleId, normalizedHost: normalizedHost)
+            handleConnect(
+                parsed: parsed,
+                ruleId: evaluation.ruleId,
+                normalizedHost: normalizedHost,
+                judgeRationale: judgeRationale
+            )
         } else {
             handlePlainHTTP(
                 parsed: parsed,
                 ruleId: evaluation.ruleId,
                 normalizedHost: normalizedHost,
-                restOfHead: restOfHead
+                restOfHead: Self.stripPaneModeHeader(restOfHead),
+                judgeRationale: judgeRationale
             )
         }
+    }
+
+    // MARK: - Pane-mode header
+
+    /// Parse `X-Senkani-Pane-Mode: <mode>` from the request-head bytes
+    /// after the first line. Header name is case-insensitive per HTTP.
+    /// Returns `.default` (.general) if header is absent, malformed,
+    /// or carries an unrecognized mode token.
+    static func parsePaneModeHeader(_ headBytes: Data) -> PaneMode {
+        guard let s = String(data: headBytes, encoding: .utf8) else { return .default }
+        let lines = s.split(separator: "\r\n", omittingEmptySubsequences: true)
+        let headerLower = PaneMode.proxyHeader.lowercased()
+        for line in lines {
+            guard let colonIdx = line.firstIndex(of: ":") else { continue }
+            let name = line[..<colonIdx].lowercased()
+            if name.trimmingCharacters(in: .whitespaces) == headerLower {
+                let value = line[line.index(after: colonIdx)...]
+                return PaneMode.parseHeaderValue(String(value))
+            }
+        }
+        return .default
+    }
+
+    /// Remove the `X-Senkani-Pane-Mode` header before forwarding the
+    /// request upstream — the header is internal-only (Schneier
+    /// 2026-05-19: never leak the framing taxonomy to the destination).
+    static func stripPaneModeHeader(_ headBytes: Data) -> Data {
+        guard let s = String(data: headBytes, encoding: .utf8) else { return headBytes }
+        let headerLower = PaneMode.proxyHeader.lowercased()
+        var out = ""
+        // The header carries CRLF line terminators. Split on CRLF, drop
+        // matching lines, rejoin so the upstream byte stream is intact.
+        let parts = s.components(separatedBy: "\r\n")
+        for part in parts {
+            if let colonIdx = part.firstIndex(of: ":") {
+                let name = part[..<colonIdx].lowercased().trimmingCharacters(in: .whitespaces)
+                if name == headerLower { continue }
+            }
+            if !out.isEmpty { out += "\r\n" }
+            out += part
+        }
+        return Data(out.utf8)
     }
 
     // MARK: - Plain HTTP
@@ -112,14 +211,15 @@ final class EgressConnectionHandler: @unchecked Sendable {
         parsed: HTTPRequestLine.ParsedRequest,
         ruleId: String,
         normalizedHost: String,
-        restOfHead: Data
+        restOfHead: Data,
+        judgeRationale: String?
     ) {
         // Rewrite the absolute-URL request line to origin form.
         // `GET http://host:port/path HTTP/1.1` → `GET /path HTTP/1.1`.
         let path = parsed.path ?? "/"
         let rewrittenLine = "\(parsed.method) \(path) \(parsed.httpVersion)\r\n"
         guard let upstreamFD = EgressUpstreamConnector.connect(host: parsed.host, port: parsed.port) else {
-            recordDecision(host: normalizedHost, method: parsed.method, decision: .deny, ruleId: "upstream_unreachable")
+            recordDecision(host: normalizedHost, method: parsed.method, decision: .deny, ruleId: "upstream_unreachable", paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
             sendStatus(502, message: "Bad Gateway")
             return
         }
@@ -127,7 +227,7 @@ final class EgressConnectionHandler: @unchecked Sendable {
 
         // Allow row written before piping so chain integrity holds even
         // if the upstream resets mid-flight.
-        recordDecision(host: normalizedHost, method: parsed.method, decision: .allow, ruleId: ruleId)
+        recordDecision(host: normalizedHost, method: parsed.method, decision: .allow, ruleId: ruleId, paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
 
         // Write rewritten head: rewritten-first-line + rest-of-head bytes.
         var combined = Data(rewrittenLine.utf8)
@@ -145,7 +245,8 @@ final class EgressConnectionHandler: @unchecked Sendable {
     private func handleConnect(
         parsed: HTTPRequestLine.ParsedRequest,
         ruleId: String,
-        normalizedHost: String
+        normalizedHost: String,
+        judgeRationale: String?
     ) {
         // Send 200 Connection Established to client. Per RFC 7231, no
         // body, no headers required.
@@ -158,7 +259,7 @@ final class EgressConnectionHandler: @unchecked Sendable {
         var peek = Data()
         let r = readUpTo(fd: clientFD, maxBytes: Self.maxSNIPeekBytes, into: &peek)
         guard r > 0, !peek.isEmpty else {
-            recordDecision(host: normalizedHost, method: parsed.method, decision: .deny, ruleId: "sni_unparseable")
+            recordDecision(host: normalizedHost, method: parsed.method, decision: .deny, ruleId: "sni_unparseable", paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
             return
         }
 
@@ -166,24 +267,24 @@ final class EgressConnectionHandler: @unchecked Sendable {
         do {
             sni = try TLSClientHelloSNI.extract(peek)
         } catch {
-            recordDecision(host: normalizedHost, method: parsed.method, decision: .deny, ruleId: "sni_unparseable")
+            recordDecision(host: normalizedHost, method: parsed.method, decision: .deny, ruleId: "sni_unparseable", paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
             return
         }
 
         let normalizedSNI = EgressHostNormalizer.normalize(sni)
         if normalizedSNI != normalizedHost {
-            recordDecision(host: normalizedHost, method: parsed.method, decision: .deny, ruleId: "sni_mismatch")
+            recordDecision(host: normalizedHost, method: parsed.method, decision: .deny, ruleId: "sni_mismatch", paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
             return
         }
 
         // SNI matches CONNECT line. Open upstream and tunnel.
         guard let upstreamFD = EgressUpstreamConnector.connect(host: parsed.host, port: parsed.port) else {
-            recordDecision(host: normalizedHost, method: parsed.method, decision: .deny, ruleId: "upstream_unreachable")
+            recordDecision(host: normalizedHost, method: parsed.method, decision: .deny, ruleId: "upstream_unreachable", paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
             return
         }
         defer { close(upstreamFD) }
 
-        recordDecision(host: normalizedHost, method: parsed.method, decision: .allow, ruleId: ruleId)
+        recordDecision(host: normalizedHost, method: parsed.method, decision: .allow, ruleId: ruleId, paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
 
         // Replay the peeked ClientHello bytes upstream first.
         guard writeAll(fd: upstreamFD, data: peek) else { return }
@@ -316,7 +417,14 @@ final class EgressConnectionHandler: @unchecked Sendable {
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
     }
 
-    private func recordDecision(host: String, method: String, decision: EgressRule.Decision, ruleId: String) {
+    private func recordDecision(
+        host: String,
+        method: String,
+        decision: EgressRule.Decision,
+        ruleId: String,
+        paneMode: PaneMode? = nil,
+        judgeRationale: String? = nil
+    ) {
         let elapsed = DispatchTime.now().uptimeNanoseconds &- startTime.uptimeNanoseconds
         let latencyUs = Int64(elapsed / 1_000)
         database.recordEgressDecision(
@@ -324,7 +432,9 @@ final class EgressConnectionHandler: @unchecked Sendable {
             method: method,
             decision: decision,
             ruleId: ruleId,
-            latencyUs: max(latencyUs, 1)  // always > 0 per acceptance
+            latencyUs: max(latencyUs, 1),  // always > 0 per acceptance
+            paneMode: paneMode,
+            judgeRationale: judgeRationale
         )
     }
 }

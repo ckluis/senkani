@@ -1246,7 +1246,106 @@ public enum MigrationRegistry {
                  WHERE result_status IS NULL;
             """)
         },
+        Migration(version: 23, description: "egress_decisions: T.1b judge_rationale + pane_mode columns") { db in
+            // T.1b ships the Gemma judge fallback + per-pane policy.
+            // Two new columns extend `egress_decisions` so the post-hoc
+            // audit row carries both the judge's rationale (when
+            // dispatched) and the resolved pane mode that framed the
+            // decision:
+            //
+            //   judge_rationale TEXT  -- nil for static-rule decisions
+            //   pane_mode       TEXT  -- 'research'|'write'|'redteam'|'general'|nil
+            //
+            // Chain-hash compatibility: chain-era rows under the v19
+            // 'fresh-install' anchor were hashed WITHOUT these columns
+            // in their canonical column map. Adding them to the
+            // canonical shape across the board would break their
+            // entry_hash verification. Mirrors the v18 pattern:
+            //   1. ALTER columns idempotently.
+            //   2. Rename the existing 'fresh-install' anchor to
+            //      'fresh-install-pre-v23' so the writer + verifier
+            //      can switch shapes per anchor.
+            //   3. Open a 'migration-v23' anchor at MAX(id) — only
+            //      when the table has rows — so new writes that
+            //      include judge_rationale / pane_mode chain under
+            //      the new canonical shape.
+            //
+            // Backfill: existing pre-v23 rows leave both new columns
+            // NULL (they predate T.1b dispatch). The verifier reads
+            // them as `.null` only on the v23+ anchor segment; on the
+            // 'fresh-install-pre-v23' segment they're absent from the
+            // canonical map entirely.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v23", detail: msg)
+            }
+
+            try exec("ALTER TABLE egress_decisions ADD COLUMN judge_rationale TEXT;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE egress_decisions ADD COLUMN pane_mode TEXT;", allowDuplicateColumn: true)
+
+            // Rename the existing 'fresh-install' anchor so the writer
+            // + verifier can branch on it. Mirrors the v18 pattern.
+            try exec("""
+                UPDATE chain_anchors
+                   SET reason = 'fresh-install-pre-v23'
+                 WHERE table_name = 'egress_decisions'
+                   AND reason = 'fresh-install';
+            """)
+
+            try openPaneModeAnchor(db: db, table: "egress_decisions")
+        },
     ]
+
+    /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)
+    /// so post-T.1b writes that include judge_rationale + pane_mode in
+    /// the canonical map chain under the new shape while legacy rows
+    /// verify under 'fresh-install-pre-v23'. No-op on empty tables —
+    /// fresh installs land on a 'fresh-install' anchor that uses the
+    /// new canonical shape from the start.
+    private static func openPaneModeAnchor(db: OpaquePointer, table: String) throws {
+        var stmt: OpaquePointer?
+        let countSQL = "SELECT COUNT(*), COALESCE(MAX(id), 0) FROM \(table);"
+        guard sqlite3_prepare_v2(db, countSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(
+                stage: "v23 count(\(table))",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        var rowCount: Int64 = 0
+        var maxRowid: Int64 = 0
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            rowCount = sqlite3_column_int64(stmt, 0)
+            maxRowid = sqlite3_column_int64(stmt, 1)
+        }
+        sqlite3_finalize(stmt)
+        guard rowCount > 0 else { return }
+
+        let now = Date().timeIntervalSince1970
+        let insertSQL = """
+            INSERT INTO chain_anchors
+                (table_name, started_at, started_at_rowid, reason, operator_note)
+            VALUES (?, ?, ?, 'migration-v23', NULL);
+        """
+        guard sqlite3_prepare_v2(db, insertSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(
+                stage: "v23 anchor insert(\(table))",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_bind_text(stmt, 1, (table as NSString).utf8String, -1, nil)
+        sqlite3_bind_double(stmt, 2, now)
+        sqlite3_bind_int64(stmt, 3, maxRowid)
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            sqlite3_finalize(stmt)
+            throw MigrationError.sqlFailed(
+                stage: "v23 anchor step(\(table))",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_finalize(stmt)
+    }
 
     /// Open a 'migration-v18' anchor for a table at MAX(id) so that new
     /// post-migration writes chain under the new canonical shape (which

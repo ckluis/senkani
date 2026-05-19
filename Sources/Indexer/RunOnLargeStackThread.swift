@@ -34,7 +34,14 @@ import Foundation
 /// frame sizes — well past anything a real source file can produce. If
 /// a future bug surfaces a deeper tree, the answer is to fix the
 /// recursion (iterative walk or depth cap), not to keep raising the
-/// stack.
+/// stack. As of 2026-05-19, every language backend's `walk` is
+/// iterative (umbrella `indexer-backends-iterative-walk-refactor-
+/// 2026-05-11`, 22 child rounds converted Go/Bash/C/C++/C#/Dart/Elixir/
+/// GraphQL/Haskell/Java/Kotlin/Lua/PHP/Python/Ruby/Rust/Scala/Swift/
+/// TOML/TypeScript/Zig backends plus `DependencyExtractor` to explicit
+/// `(Node, String?)` work-stacks); this helper is retained as
+/// defense-in-depth and as the safe cooperative-pool→main-stack
+/// handoff for any future AST work.
 public func runOnLargeStackThread<T: Sendable>(
     stackSize: Int = 16 * 1024 * 1024,
     _ work: @Sendable @escaping () -> T

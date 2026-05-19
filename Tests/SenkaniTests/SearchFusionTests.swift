@@ -6,6 +6,12 @@ import Foundation
 
 private func makeTempFTS() -> (SymbolFTSStore, String) {
     let dir = "/tmp/senkani-fts-test-\(UUID().uuidString)"
+    // SymbolFTSStore.openDB now requires `projectRoot` to exist on disk
+    // (defense-in-depth guard against vanished-projectRoot side effects;
+    // see `mcp-session-warmindex-detached-task-races-test-cleanup-2026-05-18`,
+    // shipped 2026-05-19). The store no longer auto-creates the project
+    // root, so tests create it explicitly here.
+    try! FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
     let store = SymbolFTSStore(projectRoot: dir)
     return (store, dir)
 }
@@ -190,8 +196,13 @@ struct RRFRankerTests {
 struct SearchFusionFallbackTests {
 
     @Test func ftsSearchWithEmptyStoreReturnsEmpty() throws {
-        // A store pointing to a non-existent project directory has no indexed symbols
-        let dir = "/tmp/senkani-nonexistent-\(UUID().uuidString)"
+        // A store with no indexed symbols returns empty results. The dir
+        // must exist on disk — `SymbolFTSStore.openDB` refuses to resurrect
+        // a vanished projectRoot via `createDirectory(withIntermediate-
+        // Directories: true)` (defense-in-depth guard added 2026-05-19,
+        // pairs with `IndexStore.save`'s top-level guard).
+        let dir = "/tmp/senkani-empty-fts-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         let store = SymbolFTSStore(projectRoot: dir)
         defer { cleanupDir(dir) }
 
@@ -199,5 +210,29 @@ struct SearchFusionFallbackTests {
         try store.rebuild(entries: [])
         let results = try store.search(query: "anything", limit: 10)
         #expect(results.isEmpty)
+    }
+
+    @Test func ftsRebuildThrowsWhenProjectRootMissing() throws {
+        // The guard at `SymbolFTSStore.openDB` refuses to resurrect a
+        // vanished projectRoot. `rebuild` (which calls `openDB`) must
+        // throw rather than recreate the dir as a side effect.
+        let dir = "/tmp/senkani-vanished-\(UUID().uuidString)"
+        let store = SymbolFTSStore(projectRoot: dir)
+        // Note: directory never created.
+
+        do {
+            try store.rebuild(entries: [])
+            Issue.record("expected throw — projectRoot does not exist")
+        } catch {
+            // Expected. The exact error case doesn't matter — `try?` callers
+            // (e.g. `IndexStore.save`'s FTS rebuild call) swallow it.
+        }
+
+        // Critical invariant: rebuild's failure must not have created the
+        // projectRoot or .senkani/ as a side effect.
+        #expect(!FileManager.default.fileExists(atPath: dir),
+                "projectRoot must not be resurrected by failed rebuild()")
+        #expect(!FileManager.default.fileExists(atPath: dir + "/.senkani"),
+                ".senkani must not be created when projectRoot is missing")
     }
 }

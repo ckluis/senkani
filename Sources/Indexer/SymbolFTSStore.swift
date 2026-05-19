@@ -8,8 +8,10 @@ import SQLite3
 /// SQLite WAL mode handles concurrent readers + one writer without corruption.
 public struct SymbolFTSStore {
     public let dbPath: String
+    public let projectRoot: String
 
     public init(projectRoot: String) {
+        self.projectRoot = projectRoot
         self.dbPath = projectRoot + "/.senkani/index.db"
     }
 
@@ -34,6 +36,19 @@ public struct SymbolFTSStore {
     // MARK: - Connection
 
     private func openDB() throws -> OpaquePointer {
+        // Defense-in-depth twin of the guard at `IndexStore.save`'s top.
+        // `createDirectory(withIntermediateDirectories: true)` below would
+        // otherwise resurrect a vanished `projectRoot` as a side effect of
+        // creating `<projectRoot>/.senkani/`. The race that matters:
+        // `MCPSession.warmIndex`'s detached Task drives
+        // `IndexStore.save` → `SymbolFTSStore.rebuild`; even with the
+        // top-level guard, `projectRoot` can disappear between save's
+        // JSON write and the FTS rebuild call. Both guards together close
+        // the leak (`mcp-session-warmindex-detached-task-races-test-
+        // cleanup-2026-05-18`, 2026-05-19).
+        guard FileManager.default.fileExists(atPath: projectRoot) else {
+            throw FTSError.openFailed(dbPath)
+        }
         let dir = (dbPath as NSString).deletingLastPathComponent
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
 

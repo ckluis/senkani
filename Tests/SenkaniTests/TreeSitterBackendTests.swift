@@ -229,3 +229,81 @@ struct TreeSitterBackendTests {
         return (try? TreeSitterBackend.index(files: [filePath], language: "swift", projectRoot: tmpDir)) ?? []
     }
 }
+
+@Suite("TreeSitterBackend — Swift Depth Stress")
+struct TreeSitterSwiftDepthStressTests {
+
+    // Chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Generates a top-level call_expression with deeply-nested
+    // parenthesized arguments, and indexes the file WITHOUT
+    // `runOnLargeStackThread` to prove the iterative walk is
+    // cooperative-pool-safe. Two empty top-level classes bracket the
+    // deep expression to assert pre-order symbol emission.
+    //
+    // Why a top-level call_expression, not a class-body bare
+    // expression (the ScalaBackend pattern): tree-sitter-swift's
+    // grammar does NOT accept bare parenthesized expressions inside
+    // a class body (class body requires declarations, not statements),
+    // so a `class Container { (((...0...))) }` fixture forces the
+    // parser into deep error-recovery — the recovery itself blew the
+    // cooperative-pool stack at depth ~1000 even though the iterative
+    // walk handles arbitrary depth. The fix: put the deep chain at
+    // top level inside a syntactically-valid construct. A top-level
+    // `print(\(opens)0\(closes))` is valid Swift script-mode syntax
+    // (tree-sitter-swift accepts top-level expression statements);
+    // the parser produces a clean tree (no error recovery), and the
+    // call_expression + its parenthesized-argument chain falls
+    // through the default arm at every level so the iterative walk's
+    // work-stack descends ~2200 deep through heap-backed memory.
+    //
+    // Why not a property initializer or a function body: Swift's
+    // leaf-emit arms (`function_declaration` /
+    // `protocol_function_declaration`, `init_declaration`,
+    // `property_declaration` / `protocol_property_declaration`) emit
+    // and return without descending into the body or initializer
+    // subtree, so the deep chain cannot live inside a
+    // `let x = (((...)))` property or a function body — the walk
+    // would never reach the parens. The deep chain must live in a
+    // node whose descendants fall through the default arm
+    // (reverse-push children). Top-level call_expression satisfies
+    // this — call_expression is not one of the matched arms, so it
+    // falls through default and the parenthesized-argument chain
+    // pushes ~2200 deep through repeated default-arm descent. The
+    // pre-refactor walk would consume ~2200 Swift call frames and
+    // crash on the cooperative pool's smaller stack; the iterative
+    // form runs in heap-allocated work-stack memory.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() {
+        let depth = 2200
+        let opens = String(repeating: "(", count: depth)
+        let closes = String(repeating: ")", count: depth)
+        let source = """
+        class First {}
+
+        print(\(opens)0\(closes))
+
+        class Last {}
+        """
+
+        let entries = indexSwiftDepth(source)
+        let classes = entries.filter { $0.kind == .class }
+        #expect(classes.map(\.name) == ["First", "Last"],
+                "Symbol order must remain left-to-right pre-order")
+        #expect(classes.allSatisfy { $0.container == nil },
+                "Top-level Swift classes carry no container")
+    }
+}
+
+// MARK: - Helper
+
+private func indexSwiftDepth(_ code: String) -> [IndexEntry] {
+    let tmpDir = NSTemporaryDirectory() + "senkani-swift-depth-test-\(UUID().uuidString)"
+    let filePath = "test.swift"
+    let fullPath = tmpDir + "/" + filePath
+
+    try? FileManager.default.createDirectory(atPath: tmpDir, withIntermediateDirectories: true)
+    try? code.write(toFile: fullPath, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+    return (try? TreeSitterBackend.index(files: [filePath], language: "swift", projectRoot: tmpDir)) ?? []
+}

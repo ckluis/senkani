@@ -261,6 +261,54 @@ struct TreeSitterPythonPerformanceTests {
     }
 }
 
+// MARK: - Python Depth Stress
+
+@Suite("TreeSitterBackend — Python Depth Stress")
+struct TreeSitterPythonDepthStressTests {
+
+    // Chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Generates a top-level class with a class-attribute initializer whose
+    // expression is a deeply-nested parenthesized chain, and indexes the
+    // file WITHOUT `runOnLargeStackThread` to prove the iterative walk is
+    // cooperative-pool-safe. Two empty top-level classes bracket the deep
+    // expression to assert pre-order symbol emission.
+    //
+    // Why a class-attribute initializer, not a function body: Python's
+    // `function_definition` switch arm emits via extractFunction and
+    // returns without walking the body, so depth inside `def f(): …` is
+    // not walked. The deep chain must live inside a node whose descendants
+    // fall through the default arm (reverse-push children). A class with
+    // an attribute initializer satisfies this: class_definition emits +
+    // pushes the body with the class name as container, the body
+    // descends to the assignment statement via default, and the
+    // assignment's parenthesized expression chain pushes ~2200 deep. The
+    // pre-refactor walk would consume ~2200 Swift call frames and crash
+    // on the cooperative pool's smaller stack; the iterative form runs
+    // in heap-allocated work-stack memory.
+    @Test func testDepthStressIterative() {
+        let depth = 2200
+        let opens = String(repeating: "(", count: depth)
+        let closes = String(repeating: ")", count: depth)
+        let source = """
+        class First:
+            pass
+
+        class Container:
+            x = \(opens)0\(closes)
+
+        class Last:
+            pass
+        """
+
+        let entries = indexPython(source)
+        let classes = entries.filter { $0.kind == .class }
+        #expect(classes.map(\.name) == ["First", "Container", "Last"],
+                "Symbol order must remain left-to-right pre-order")
+        #expect(classes.allSatisfy { $0.container == nil },
+                "Top-level Python classes carry no container")
+    }
+}
+
 // MARK: - Helper
 
 private func indexPython(_ code: String) -> [IndexEntry] {

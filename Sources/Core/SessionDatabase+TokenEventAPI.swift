@@ -120,6 +120,14 @@ extension SessionDatabase {
         }
     }
 
+    /// Returns true when at least one `token_events` row has the given
+    /// `(source, feature)` pair. Surface used by
+    /// `senkani doctor --install-validation-browser` to idempotently
+    /// gate the chained-row write on first detection.
+    public func tokenEventExists(source: String, feature: String) -> Bool {
+        tokenEventStore.tokenEventExists(source: source, feature: feature)
+    }
+
     public func tokenStatsForProject(_ projectRoot: String, since: Date? = nil) -> PaneTokenStats {
         tokenEventStore.tokenStatsForProject(projectRoot, since: since)
     }

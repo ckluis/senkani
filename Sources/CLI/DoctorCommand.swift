@@ -34,6 +34,9 @@ struct Doctor: ParsableCommand {
     @Flag(name: .long, help: "When check #20 detects a stale walk bundle, skip the auto-rebuild and only warn. Default is rebuild.")
     var noRebuildStaleBundle = false
 
+    @Flag(name: .long, help: "Print the operator-runnable command to install Playwright Chromium (U.2a-1). Does NOT auto-download. Idempotent: writes a single `validation.browser.install` chained audit row on first cache detection.")
+    var installValidationBrowser = false
+
     // MARK: - Counters
 
     private struct Results {
@@ -57,6 +60,14 @@ struct Doctor: ParsableCommand {
             var results = Results()
             checkAuditChain(&results)
             if results.failed > 0 { throw ExitCode.failure }
+            return
+        }
+
+        // U.2a-1 focused install motion — print the operator-runnable
+        // command, refuse to auto-download, write a chained audit row on
+        // first cache detection.
+        if installValidationBrowser {
+            runInstallValidationBrowser()
             return
         }
 
@@ -144,6 +155,66 @@ struct Doctor: ParsableCommand {
         if results.failed > 0 {
             throw ExitCode.failure
         }
+    }
+
+    // MARK: - --install-validation-browser (U.2a-1)
+
+    /// Operator-runnable motion: print `npx playwright install chromium`,
+    /// probe the Chromium cache, write a single `validation.browser.install`
+    /// chained audit row on first detection. Does NOT auto-download —
+    /// keeps the operator in the loop for any third-party-binary install.
+    ///
+    /// Idempotency: the chained-row write is gated on a
+    /// `tokenEventExists(source: "doctor", feature: "validation.browser.install")`
+    /// probe. Subsequent invocations after the first detection print
+    /// `already installed` and write no new audit row.
+    private func runInstallValidationBrowser() {
+        let cachePath = PlaywrightSubprocessRunner.defaultChromiumCachePath
+        let installed = FileManager.default.fileExists(atPath: cachePath)
+
+        if !installed {
+            print("Playwright Chromium is not installed at:")
+            print("  \(cachePath)")
+            print("")
+            print("Run:")
+            print("  npx playwright install chromium")
+            print("")
+            print("This is the operator-runnable install for U.2a-1's")
+            print("browser-validation runtime. senkani will NOT auto-download")
+            print("third-party binaries.")
+            return
+        }
+
+        let alreadyRecorded = SessionDatabase.shared.tokenEventExists(
+            source: "doctor",
+            feature: "validation.browser.install"
+        )
+        if !alreadyRecorded {
+            SessionDatabase.shared.recordTokenEvent(
+                sessionId: "doctor",
+                paneId: nil,
+                projectRoot: nil,
+                source: "doctor",
+                toolName: nil,
+                model: nil,
+                inputTokens: 0,
+                outputTokens: 0,
+                savedTokens: 0,
+                costCents: 0,
+                feature: "validation.browser.install",
+                command: nil
+            )
+            // Wait for the async write to land before returning so the
+            // next invocation's existence probe sees the row.
+            SessionDatabase.shared.flushWrites()
+            print("Playwright Chromium detected at:")
+            print("  \(cachePath)")
+            print("First detection recorded to validation_results audit chain.")
+            return
+        }
+
+        print("Playwright Chromium already installed at:")
+        print("  \(cachePath)")
     }
 
     // MARK: - --repair-chain (Phase T.5 round 4)

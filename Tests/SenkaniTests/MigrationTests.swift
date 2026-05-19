@@ -452,6 +452,162 @@ struct MigrationRunnerTests {
                 "reader-identity preserved through idempotent re-run")
     }
 
+    // MARK: - U.2a-1 migration v22 (validation_results axes columns)
+
+    /// Seed a populated `validation_results` table in its pre-v22 shape,
+    /// then run all migrations to confirm v22 adds the five new columns
+    /// without disturbing existing rows. The pre-v22 shape is the result
+    /// of v3 + v5 (validation outcome metadata + T.5 chain extension).
+    private static func seedPreV22ValidationResults(_ db: OpaquePointer) {
+        exec(db, """
+            CREATE TABLE validation_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                validator_name TEXT NOT NULL,
+                category TEXT NOT NULL,
+                exit_code INTEGER NOT NULL,
+                raw_output TEXT,
+                advisory TEXT NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                created_at REAL NOT NULL,
+                delivered INTEGER DEFAULT 0,
+                outcome TEXT NOT NULL DEFAULT 'advisory',
+                reason TEXT,
+                surfaced_at REAL,
+                prev_hash TEXT,
+                entry_hash TEXT,
+                chain_anchor_id INTEGER
+            );
+        """)
+        exec(db, """
+            INSERT INTO validation_results
+              (session_id, file_path, validator_name, category, exit_code, advisory,
+               duration_ms, created_at, outcome)
+            VALUES
+              ('s1', '/tmp/a.swift', 'swiftc', 'syntax', 1, 'lint fail',
+               42, 1700000000.0, 'advisory'),
+              ('s2', '/tmp/b.swift', 'swiftc', 'syntax', 0, 'ok',
+               18, 1700000010.0, 'clean'),
+              ('s3', '/tmp/c.swift', 'rubocop', 'lint', 2, 'forbid',
+               99, 1700000020.0, 'blocking');
+        """)
+    }
+
+    @Test("v22 adds the five axes/runner columns to validation_results")
+    func migration22AddsRunnerColumns() throws {
+        let db = Self.openMemory()
+        defer { sqlite3_close(db) }
+
+        Self.seedPreV22ValidationResults(db)
+        _ = try MigrationRunner.run(db: db, dbPath: ":memory:", registry: MigrationRegistry.all)
+
+        let expected: Set<String> = [
+            "axes", "target_url", "plan_steps", "result_status", "screenshot_path",
+        ]
+        var found: Set<String> = []
+        var infoStmt: OpaquePointer?
+        #expect(sqlite3_prepare_v2(db, "PRAGMA table_info(validation_results);", -1, &infoStmt, nil) == SQLITE_OK)
+        while sqlite3_step(infoStmt) == SQLITE_ROW {
+            if let c = sqlite3_column_text(infoStmt, 1) {
+                let name = String(cString: c)
+                if expected.contains(name) { found.insert(name) }
+            }
+        }
+        sqlite3_finalize(infoStmt)
+
+        #expect(found == expected, "v22 must add axes/target_url/plan_steps/result_status/screenshot_path; missing: \(expected.subtracting(found))")
+    }
+
+    @Test("v22 preserves pre-existing validation_results rows with NOT NULL defaults applied")
+    func migration22PreservesRowsWithDefaults() throws {
+        let db = Self.openMemory()
+        defer { sqlite3_close(db) }
+
+        Self.seedPreV22ValidationResults(db)
+        _ = try MigrationRunner.run(db: db, dbPath: ":memory:", registry: MigrationRegistry.all)
+
+        var stmt: OpaquePointer?
+        let sql = """
+            SELECT axes, plan_steps, target_url, screenshot_path
+              FROM validation_results
+             ORDER BY id ASC;
+        """
+        #expect(sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK)
+        defer { sqlite3_finalize(stmt) }
+
+        var rowCount = 0
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            rowCount += 1
+            #expect(String(cString: sqlite3_column_text(stmt, 0)) == "[]", "axes NOT NULL default '[]' must apply to legacy row")
+            #expect(String(cString: sqlite3_column_text(stmt, 1)) == "[]", "plan_steps NOT NULL default '[]' must apply to legacy row")
+            #expect(sqlite3_column_type(stmt, 2) == SQLITE_NULL, "target_url nullable; legacy row should be NULL")
+            #expect(sqlite3_column_type(stmt, 3) == SQLITE_NULL, "screenshot_path nullable; legacy row should be NULL")
+        }
+        #expect(rowCount == 3, "all three seeded rows must survive v22 unmodified")
+    }
+
+    @Test("v22 backfills result_status from outcome — advisory/clean → pass, blocking → fail")
+    func migration22BackfillsResultStatus() throws {
+        let db = Self.openMemory()
+        defer { sqlite3_close(db) }
+
+        Self.seedPreV22ValidationResults(db)
+        _ = try MigrationRunner.run(db: db, dbPath: ":memory:", registry: MigrationRegistry.all)
+
+        var stmt: OpaquePointer?
+        #expect(sqlite3_prepare_v2(db, """
+            SELECT outcome, result_status
+              FROM validation_results
+             ORDER BY id ASC;
+        """, -1, &stmt, nil) == SQLITE_OK)
+        defer { sqlite3_finalize(stmt) }
+
+        struct Backfill { let outcome: String; let status: String }
+        var rows: [Backfill] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            rows.append(Backfill(
+                outcome: String(cString: sqlite3_column_text(stmt, 0)),
+                status: String(cString: sqlite3_column_text(stmt, 1))
+            ))
+        }
+        #expect(rows.count == 3)
+        #expect(rows[0].outcome == "advisory" && rows[0].status == "pass")
+        #expect(rows[1].outcome == "clean" && rows[1].status == "pass")
+        #expect(rows[2].outcome == "blocking" && rows[2].status == "fail")
+    }
+
+    @Test("v22 advances the migration ledger by exactly one row over a v21-baseline DB")
+    func migration22AdvancesLedgerByOne() throws {
+        let db = Self.openMemory()
+        defer { sqlite3_close(db) }
+
+        // Seed schema_migrations to v21 + a pre-v22 validation_results so
+        // the runner sees exactly one pending migration (v22).
+        Self.seedPreV22ValidationResults(db)
+        Self.exec(db, """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at REAL NOT NULL,
+                description TEXT NOT NULL
+            );
+        """)
+        for version in 1...21 {
+            Self.exec(db, """
+                INSERT INTO schema_migrations (version, applied_at, description)
+                VALUES (\(version), 1700000000.0, 'baseline stamp');
+            """)
+        }
+        Self.exec(db, "PRAGMA user_version = 21;")
+
+        let before = Self.appliedCount(db)
+        let report = try MigrationRunner.run(db: db, dbPath: ":memory:", registry: MigrationRegistry.all)
+        let after = Self.appliedCount(db)
+
+        #expect(after - before == 1, "ledger must advance by exactly one row (v22); got \(after - before)")
+        #expect(report.appliedVersions == [22], "runner must report v22 as the single newly-applied version; got \(report.appliedVersions)")
+    }
+
     @Test("lockfile refuses subsequent runs until removed")
     func lockfileRefusesRun() throws {
         let tmpDir = NSTemporaryDirectory() + "migration-test-\(UUID().uuidString)/"

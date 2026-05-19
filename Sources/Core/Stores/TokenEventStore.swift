@@ -218,6 +218,29 @@ final class TokenEventStore: @unchecked Sendable {
         )
     }
 
+    // MARK: - Existence probes
+
+    /// Returns true when at least one `token_events` row has the given
+    /// `(source, feature)` pair. Used by `senkani doctor
+    /// --install-validation-browser` to idempotently skip writing a
+    /// second `validation.browser.install` audit row on re-invocation.
+    func tokenEventExists(source: String, feature: String) -> Bool {
+        return parent.queue.sync {
+            guard let db = parent.db else { return false }
+            let sql = """
+                SELECT 1 FROM token_events
+                WHERE source = ? AND feature = ?
+                LIMIT 1;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (source as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 2, (feature as NSString).utf8String, -1, nil)
+            return sqlite3_step(stmt) == SQLITE_ROW
+        }
+    }
+
     // MARK: - Stats
 
     /// Aggregate stats for a project (sidebar display). Optionally scoped to a start date.

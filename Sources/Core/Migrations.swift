@@ -1190,6 +1190,62 @@ public enum MigrationRegistry {
             try exec("DROP TABLE claude_session_cursors;")
             try exec("ALTER TABLE claude_session_cursors_v21 RENAME TO claude_session_cursors;")
         },
+        Migration(version: 22, description: "validation_results: U.2a-1 axes vocabulary + planner/runner result columns") { db in
+            // U.2a-1 ships the durable runtime contract for ValidationAxes.
+            // Five new columns extend `validation_results` so U.2a-2's
+            // dispatch surface (MCP tool + CLI + axis assertion libraries)
+            // can write structured browser-validation outcomes without
+            // another migration. The columns:
+            //
+            //   axes             TEXT  NOT NULL DEFAULT '[]'  -- JSON array of ValidationAxes rawValues
+            //   target_url       TEXT                          -- URL the plan ran against
+            //   plan_steps       TEXT  NOT NULL DEFAULT '[]'  -- JSON array of ValidationStep records
+            //   result_status    TEXT                          -- 'pass' | 'fail' | 'partial' (backfilled from outcome)
+            //   screenshot_path  TEXT                          -- absolute path to captured screenshot
+            //
+            // The write-path (`ValidationStore.insertValidationResult`)
+            // stays unchanged this round — these columns sit at their
+            // defaults for new auto-validate rows until U.2a-2 wires the
+            // structured-result writer. Chain hashing therefore stays on
+            // the v3+v5 column set; no chain anchor needs to open here.
+            // U.2a-2 will introduce a `migration-v22` anchor at MAX(id) so
+            // post-v22 writes that DO include axes/target_url/plan_steps/
+            // result_status/screenshot_path can hash under the new shape
+            // while legacy rows verify under the old.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v22", detail: msg)
+            }
+
+            // SQLite cannot add NOT NULL columns without a DEFAULT to a
+            // populated table; the two JSON-array columns default to '[]'.
+            try exec("ALTER TABLE validation_results ADD COLUMN axes TEXT NOT NULL DEFAULT '[]';", allowDuplicateColumn: true)
+            try exec("ALTER TABLE validation_results ADD COLUMN target_url TEXT;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE validation_results ADD COLUMN plan_steps TEXT NOT NULL DEFAULT '[]';", allowDuplicateColumn: true)
+            try exec("ALTER TABLE validation_results ADD COLUMN result_status TEXT;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE validation_results ADD COLUMN screenshot_path TEXT;", allowDuplicateColumn: true)
+
+            // Backfill `result_status` from the legacy `outcome` so
+            // existing rows have a non-NULL value once U.2a-2's reader
+            // surfaces start querying by status.
+            //   advisory  -> 'pass'    (non-blocking finding)
+            //   blocking  -> 'fail'    (refusal-class finding)
+            //   clean     -> 'pass'    (no finding at all)
+            //   anything else -> 'pass' (conservative fallback)
+            try exec("""
+                UPDATE validation_results
+                   SET result_status = CASE
+                       WHEN outcome = 'blocking' THEN 'fail'
+                       ELSE 'pass'
+                   END
+                 WHERE result_status IS NULL;
+            """)
+        },
     ]
 
     /// Open a 'migration-v18' anchor for a table at MAX(id) so that new

@@ -260,6 +260,88 @@ struct TreeSitterGraphQLDepthStressTests {
     }
 }
 
+// MARK: - TOML Depth-Stress Tests
+
+@Suite("TreeSitterBackend — TOML Depth Stress")
+struct TreeSitterTomlDepthStressTests {
+
+    // Chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Indexes a TOML file whose top-level pair has a 2200-deep
+    // nested-array value, bracketed by two `[table]` headers, and
+    // verifies the iterative walk emits the bracketing tables in
+    // source order without crashing.
+    //
+    // TOML's walk-reachable depth is fundamentally bounded by the
+    // grammar:
+    //   - `pair` is leaf-emit (no descent into the pair's value
+    //     subtree), so a deeply-nested `array` or `inline_table` that
+    //     appears as a pair value is parsed but never walked.
+    //   - `table` / `table_array_element` recurse one level into the
+    //     header node's children (header brackets + key + pairs),
+    //     none of which chain deeply.
+    //   - No valid TOML construct produces a walk-reachable chain of
+    //     nodes that fall through the default arm with childCount > 0
+    //     at thousands of levels.
+    //
+    // What this fixture DOES test:
+    //   1. The parser handles a 2200-deep nested array without
+    //      crashing (parse-tree depth ≫ walk-reachable depth).
+    //   2. The iterative walk's `pair` arm correctly emits the
+    //      top-level pair WITHOUT descending into the deep value
+    //      subtree — matches pre-refactor leaf-emit semantics
+    //      exactly. The pre-refactor recursive walk also leaf-emits
+    //      `pair`, so neither form descends; the iterative form's
+    //      virtue is that the work-stack itself is heap-backed, so
+    //      pop+dispatch costs nothing in Swift call frames.
+    //   3. Bracketing `[first]` and `[last]` headers emit in source
+    //      order, proving the iterative form's reverse-push +
+    //      LIFO-pop preserves left-to-right pre-order over
+    //      `document.children`.
+    //
+    // The fixture is the deepest VALID TOML we can express that
+    // exercises the iterative walk's stack at all. The umbrella's
+    // canonical 2200-paren strategy works for languages with an
+    // expression context whose deep descendants fall through the
+    // default arm (Php / Python / Ruby / Rust / Scala / Swift all
+    // have such a context); TOML does not. Documented here so future
+    // chain children can recognize the pattern.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() {
+        let depth = 2200
+        let opens = String(repeating: "[", count: depth)
+        let closes = String(repeating: "]", count: depth)
+        let source = """
+        [first]
+        a = 1
+
+        # Top-level pair with a 2200-deep nested array value.
+        # `pair` is leaf-emit; the array is parsed but never walked.
+        deep = \(opens)0\(closes)
+
+        [last]
+        a = 1
+        """
+
+        let entries = indexLang(source, language: "toml", ext: "toml")
+        let tables = entries.filter { $0.kind == .extension }
+        #expect(tables.map(\.name) == ["first", "last"],
+                "Bracketing [table] headers must emit in left-to-right pre-order")
+        #expect(tables.allSatisfy { $0.container == nil },
+                "Top-level TOML tables carry no container")
+        // The top-level `deep` pair emits before any table header
+        // (it sits between [first] and [last] only because the
+        // table-header section extends until the next header — the
+        // `deep` pair is parsed as a child of the [first] table,
+        // with container = "first"). Verify it emits as .property
+        // under "first".
+        let deepPair = entries.first { $0.name == "deep" }
+        #expect(deepPair != nil, "Deep-valued pair must emit")
+        #expect(deepPair?.container == "first",
+                "Pair following [first] header carries container = first")
+        #expect(deepPair?.kind == .property)
+    }
+}
+
 // MARK: - Helpers
 
 private func indexLang(_ source: String, language: String, ext: String) -> [IndexEntry] {

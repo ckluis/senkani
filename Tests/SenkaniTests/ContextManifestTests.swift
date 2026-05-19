@@ -197,11 +197,13 @@ struct ContextManifestModeTests {
                 "lanes whose preferred mode isn't requested must downgrade to excludedWithReason")
     }
 
-    @Test func pendingModesEmitStubWithoutCrashing() {
-        // The 3 pending modes (slice, diff-only, summary) emit one
-        // forward-compat stub each with inclusion_reason
-        // mode-pending-u10b — the surface accepts the request and
-        // tells the caller the work is deferred.
+    @Test func pendingModesWithoutInputsEmitNoSpuriousItems() {
+        // After U.10b: the 3 once-pending modes (slice, diff-only,
+        // summary) are LIVE — but require their pre-resolved inputs
+        // (SliceRequest, DiffRequest, entitySummaries / KB entities).
+        // Requesting the modes WITHOUT providing the inputs is well-
+        // defined: zero items emit for those modes, and no
+        // `mode-pending-u10b` stub surfaces.
         let opts = ManifestOptions(
             projectRoot: "/tmp/u10a-fixture",
             modes: [.slice, .diffOnly, .summary],
@@ -211,14 +213,18 @@ struct ContextManifestModeTests {
         let manifest = BundleComposer.composeManifest(
             options: opts, inputs: makeInputs())
         let stubs = manifest.items.filter { $0.inclusionReason == "mode-pending-u10b" }
-        #expect(stubs.count == 3, "one stub per requested pending mode")
-        let stubModes = Set(stubs.map(\.mode))
-        #expect(stubModes == [.slice, .diffOnly, .summary])
-        // Each stub attaches to its natural lane: slice→file,
-        // diff-only→diff, summary→knowledge.
-        #expect(stubs.first { $0.mode == .slice }?.lane == .file)
-        #expect(stubs.first { $0.mode == .diffOnly }?.lane == .diff)
-        #expect(stubs.first { $0.mode == .summary }?.lane == .knowledge)
+        #expect(stubs.isEmpty, "U.10b removed every mode-pending-u10b stub")
+        // Without a SliceRequest, no slice item.
+        #expect(manifest.items.filter { $0.mode == .slice }.isEmpty)
+        // Without a DiffRequest, no diff-only item.
+        #expect(manifest.items.filter { $0.mode == .diffOnly }.isEmpty)
+        // Summary mode emits one item per KB entity in the fixture
+        // (makeInputs supplies one). Entries without entitySummaries
+        // and with non-empty compiledUnderstanding hit the KB-fallback
+        // branch — U.10b live behavior, not a stub.
+        let summaryItems = manifest.items.filter { $0.mode == .summary }
+        #expect(summaryItems.count == 1, "one summary item per KB entity")
+        #expect(summaryItems.first?.inclusionReason == "summary_kb_fallback")
     }
 
     @Test func defaultModesExcludePendingStubs() {

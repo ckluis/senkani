@@ -33,18 +33,58 @@ public struct ManifestOptions: Sendable {
     /// their tool_id leave nil.
     public let toolId: String?
 
+    // U.10b — pre-resolved mode inputs. The CLI/MCP layer performs I/O
+    // (file read for slice, `git diff` shell for diff-only, Gemma async
+    // for summary) and passes the resolved data here so the producer
+    // stays synchronous and deterministic. When a mode is requested
+    // but its corresponding input is nil, the producer emits no items
+    // for that mode (no more `mode-pending-u10b` stubs).
+
+    /// Pre-resolved slice for `slice` mode. CLI `--slice <path>:<a>:<b>`,
+    /// MCP `slice:"<path>:<a>:<b>"`. When present and `.slice` is in
+    /// `modes`, the producer emits one file-lane item.
+    public let slice: SliceRequest?
+
+    /// Pre-resolved diff for `diff-only` mode. CLI `--diff <selector>`,
+    /// MCP `diff:"<selector>"`. When present and `.diffOnly` is in
+    /// `modes`, the producer emits one diff-lane item per file in
+    /// `perFileDiff`.
+    public let diff: DiffRequest?
+
+    /// Pre-resolved per-entity summaries for `summary` mode. Keyed by
+    /// `KnowledgeEntity.name`. CLI/MCP populate via
+    /// `GemmaRationaleRewriter.summarize(content:budgetTokens:)`; when
+    /// an entry is missing, the producer falls back to the entity's
+    /// `compiledUnderstanding`. When neither is present (no entry +
+    /// empty understanding), the item emits with
+    /// `inclusion_reason: "summary_unavailable"`.
+    public let entitySummaries: [String: String]?
+
+    /// Token budget used to flag `summary` items whose
+    /// `tokens_actual` diverges from `tokens_estimated`. Defaults to
+    /// 200 — matches a "compress this entity into ~200 tokens" budget.
+    public let summaryBudgetTokens: Int
+
     public init(
         projectRoot: String,
         modes: Set<ContextMode> = ContextMode.trivial,
         lanes: Set<ContextLane> = Set(ContextLane.allCases),
         now: Date = Date(),
-        toolId: String? = nil
+        toolId: String? = nil,
+        slice: SliceRequest? = nil,
+        diff: DiffRequest? = nil,
+        entitySummaries: [String: String]? = nil,
+        summaryBudgetTokens: Int = 200
     ) {
         self.projectRoot = projectRoot
         self.modes = modes
         self.lanes = lanes
         self.now = now
         self.toolId = toolId
+        self.slice = slice
+        self.diff = diff
+        self.entitySummaries = entitySummaries
+        self.summaryBudgetTokens = summaryBudgetTokens
     }
 }
 
@@ -71,16 +111,26 @@ extension BundleComposer {
             switch lane {
             case .file:
                 items.append(contentsOf: fileLaneItems(inputs: inputs, options: options))
+                // U.10b — slice mode is attached to the file lane.
+                if options.modes.contains(.slice), let slice = options.slice {
+                    items.append(sliceItem(slice: slice, options: options))
+                }
             case .diff:
-                // No diff data plumbed in U.10a-1. Diff lane sees real
-                // items in U.10b when `diff-only` mode ships.
-                break
+                // U.10b — diff-only mode emits per-file items here.
+                if options.modes.contains(.diffOnly), let diff = options.diff {
+                    items.append(contentsOf: diffItems(diff: diff, options: options))
+                }
             case .codemap:
                 items.append(contentsOf: codemapLaneItems(inputs: inputs, options: options))
             case .symbol:
                 items.append(contentsOf: symbolLaneItems(inputs: inputs, options: options))
             case .knowledge:
                 items.append(contentsOf: knowledgeLaneItems(inputs: inputs, options: options))
+                // U.10b — summary mode emits an alternate per-entity
+                // representation alongside the full knowledge items.
+                if options.modes.contains(.summary) {
+                    items.append(contentsOf: summaryItems(inputs: inputs, options: options))
+                }
             case .runtime:
                 // No runtime artifacts plumbed in U.10a-1.
                 break
@@ -100,23 +150,6 @@ extension BundleComposer {
                     toolId: options.toolId
                 ))
             }
-        }
-
-        // Pending-mode stubs. When a caller explicitly requests a
-        // U.10b-pending mode, emit ONE stub per pending mode so the
-        // request shape is forward-compatible — crashing on "not yet
-        // implemented" would force callers to feature-detect.
-        for mode in [ContextMode.slice, .diffOnly, .summary]
-        where options.modes.contains(mode) {
-            items.append(ContextManifestItem(
-                id: "mode-stub:\(mode.rawValue)",
-                lane: stubLane(for: mode),
-                mode: mode,
-                tokensEstimated: 0,
-                tokensActual: 0,
-                inclusionReason: "mode-pending-u10b",
-                toolId: options.toolId
-            ))
         }
 
         let counts = buildCounts(items: items)
@@ -298,15 +331,129 @@ extension BundleComposer {
         max(0, chars / 4)
     }
 
-    /// Pending-mode stubs need a lane to attach to. The natural lane
-    /// for each pending mode: slice → file, diff-only → diff,
-    /// summary → knowledge. Consumers can filter by lane *or* mode.
-    private static func stubLane(for mode: ContextMode) -> ContextLane {
-        switch mode {
-        case .slice: return .file
-        case .diffOnly: return .diff
-        case .summary: return .knowledge
-        default: return .file
+    // MARK: - U.10b mode helpers
+
+    /// `slice` mode — emit one file-lane item carrying the pre-resolved
+    /// slice. `tokens_estimated` reflects the requested line span (end -
+    /// start + 1, in token estimate), `tokens_actual` is the slice's
+    /// actual char/4 — so an unexpectedly long line flips
+    /// `freshness: stale_estimate`.
+    private static func sliceItem(
+        slice: SliceRequest, options: ManifestOptions
+    ) -> ContextManifestItem {
+        // Estimate: assume ~40 chars per line of code at the heuristic
+        // boundary. Doesn't need to be exact — the freshness check
+        // surfaces meaningful drift only.
+        let lineCount = max(1, slice.range.end - slice.range.start + 1)
+        let estimated = estimateTokens(lineCount * 40)
+        let actual = estimateTokens(slice.content.count)
+        let scan = SecretDetector.scan(slice.content)
+        let sensitivity: ContextSensitivity = scan.patterns.isEmpty ? .clean : .flagged
+        return ContextManifestItem(
+            id: "slice:\(slice.path)#\(slice.range.start)-\(slice.range.end)",
+            lane: .file,
+            path: slice.path,
+            range: slice.range,
+            mode: .slice,
+            tokensEstimated: estimated,
+            tokensActual: actual,
+            freshness: freshnessFor(estimated: estimated, actual: actual),
+            sensitivity: sensitivity,
+            inclusionReason: "slice_\(slice.range.start)_\(slice.range.end)",
+            toolId: options.toolId
+        )
+    }
+
+    /// `diff-only` mode — one item per file in the resolved diff.
+    /// `inclusion_reason` carries the selector verbatim (e.g.
+    /// `diff_branch:main`) so reviewers can replay the same git command.
+    private static func diffItems(
+        diff: DiffRequest, options: ManifestOptions
+    ) -> [ContextManifestItem] {
+        let reason = "diff_\(diff.selector.rawValue)"
+        return diff.perFileDiff.keys.sorted().map { path in
+            let body = diff.perFileDiff[path] ?? ""
+            let scan = SecretDetector.scan(body)
+            // Diff content is *especially* high-risk for secrets — the
+            // gate's existing flagged-item check fires on these the
+            // same way it does for the file lane.
+            let sensitivity: ContextSensitivity = scan.patterns.isEmpty ? .clean : .flagged
+            let actual = estimateTokens(scan.redacted.count)
+            return ContextManifestItem(
+                id: "diff:\(path)",
+                lane: .diff,
+                path: path,
+                mode: .diffOnly,
+                tokensEstimated: actual,
+                tokensActual: actual,
+                sensitivity: sensitivity,
+                inclusionReason: reason,
+                toolId: options.toolId
+            )
         }
+    }
+
+    /// `summary` mode — one item per knowledge entity, content is either
+    /// the pre-resolved Gemma summary (when present in
+    /// `options.entitySummaries`), the entity's compiledUnderstanding
+    /// (KB fallback), or absent — emitting
+    /// `inclusion_reason: "summary_unavailable"`.
+    private static func summaryItems(
+        inputs: BundleInputs, options: ManifestOptions
+    ) -> [ContextManifestItem] {
+        let sorted = inputs.entities.sorted {
+            if $0.mentionCount != $1.mentionCount { return $0.mentionCount > $1.mentionCount }
+            return $0.name < $1.name
+        }
+        let budgetEstimate = max(0, options.summaryBudgetTokens)
+        return sorted.map { entity in
+            let preResolved = options.entitySummaries?[entity.name]
+            let kbFallback = entity.compiledUnderstanding
+            let summary = preResolved ?? (kbFallback.isEmpty ? nil : kbFallback)
+            let reason: String
+            let actualContent: String
+            switch (preResolved, summary) {
+            case (.some, _):
+                reason = "summary_gemma"
+                actualContent = preResolved!
+            case (.none, .some):
+                reason = "summary_kb_fallback"
+                actualContent = kbFallback
+            case (.none, .none):
+                reason = "summary_unavailable"
+                actualContent = ""
+            }
+            let scan = SecretDetector.scan(actualContent)
+            let sensitivity: ContextSensitivity = scan.patterns.isEmpty ? .clean : .flagged
+            let actual = estimateTokens(scan.redacted.count)
+            return ContextManifestItem(
+                id: "summary:\(entity.name)",
+                lane: .knowledge,
+                path: entity.sourcePath,
+                mode: .summary,
+                tokensEstimated: budgetEstimate,
+                tokensActual: actual,
+                freshness: freshnessFor(estimated: budgetEstimate, actual: actual),
+                sensitivity: sensitivity,
+                inclusionReason: reason,
+                toolId: options.toolId
+            )
+        }
+    }
+
+    /// Freshness rule: `tokens_actual` divergence from
+    /// `tokens_estimated` by more than ±20 % flips `.staleEstimate`.
+    /// Zero-estimate items are treated as fresh when actual is also
+    /// zero, stale otherwise (a non-empty body with no budget is by
+    /// definition off).
+    private static func freshnessFor(
+        estimated: Int, actual: Int
+    ) -> ContextFreshness {
+        if estimated == 0 {
+            return actual == 0 ? .fresh : .staleEstimate
+        }
+        let delta = abs(actual - estimated)
+        // delta / estimated > 0.20  ↔  delta * 5 > estimated
+        return delta * 5 > estimated ? .staleEstimate : .fresh
     }
 }

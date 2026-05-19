@@ -123,10 +123,39 @@ enum BundleTool {
         // U.10a-1 preview path — short-circuit before the body composer.
         let preview = arguments?["preview"]?.boolValue ?? false
         if preview {
+            // U.10b — pre-resolve slice / diff inputs at the MCP layer
+            // so the producer stays synchronous. Malformed strings
+            // return an isError result before any compose call.
+            let sliceReq: SliceRequest?
+            if let raw = arguments?["slice"]?.stringValue, !raw.isEmpty {
+                guard let parsed = Self.parseSliceArg(raw, projectRoot: root) else {
+                    return .init(content: [.text(
+                        text: "Error: invalid `slice` — expected '<path>:<start>:<end>' with 1 ≤ start ≤ end, path resolvable under projectRoot.",
+                        annotations: nil, _meta: nil)], isError: true)
+                }
+                sliceReq = parsed
+            } else {
+                sliceReq = nil
+            }
+
+            let diffReq: DiffRequest?
+            if let raw = arguments?["diff"]?.stringValue, !raw.isEmpty {
+                guard let parsed = Self.parseDiffArg(raw, projectRoot: root) else {
+                    return .init(content: [.text(
+                        text: "Error: invalid `diff` — expected 'unstaged', 'staged', 'branch:<ref>', or 'range:<a>..<b>'.",
+                        annotations: nil, _meta: nil)], isError: true)
+                }
+                diffReq = parsed
+            } else {
+                diffReq = nil
+            }
+
             let manifestOpts = ManifestOptions(
                 projectRoot: root,
                 modes: Self.parseModeList(arguments?["modes"]) ?? ContextMode.trivial,
-                lanes: Self.parseLaneList(arguments?["lanes"]) ?? Set(ContextLane.allCases)
+                lanes: Self.parseLaneList(arguments?["lanes"]) ?? Set(ContextLane.allCases),
+                slice: sliceReq,
+                diff: diffReq
             )
             let allowSecrets = arguments?["allow_secrets"]?.boolValue ?? false
             let manifest: ContextManifest
@@ -281,6 +310,99 @@ enum BundleTool {
             parsed.insert(l)
         }
         return parsed.isEmpty ? nil : parsed
+    }
+
+    /// U.10b. Parse `slice:"<path>:<start>:<end>"`. Mirrors the CLI's
+    /// parseSlice — path-traversal-safe, returns nil on any malformed
+    /// or unreadable input.
+    fileprivate static func parseSliceArg(
+        _ raw: String, projectRoot: String
+    ) -> SliceRequest? {
+        let components = raw.components(separatedBy: ":")
+        guard components.count == 3,
+              !components[0].isEmpty,
+              let start = Int(components[1]),
+              let end = Int(components[2]),
+              start >= 1, end >= start
+        else { return nil }
+        let relPath = components[0]
+        let absPath: String
+        if relPath.hasPrefix("/") {
+            absPath = relPath
+        } else {
+            absPath = (projectRoot as NSString).appendingPathComponent(relPath)
+        }
+        let resolved = URL(fileURLWithPath: absPath).standardizedFileURL.path
+        let rootResolved = URL(fileURLWithPath: projectRoot).standardizedFileURL.path
+        guard resolved.hasPrefix(rootResolved + "/") || resolved == rootResolved else {
+            return nil
+        }
+        guard let body = try? String(contentsOfFile: resolved, encoding: .utf8) else {
+            return nil
+        }
+        let lines = body.split(separator: "\n", omittingEmptySubsequences: false)
+        let lo = max(0, start - 1)
+        let hi = min(lines.count, end)
+        guard lo < hi else { return nil }
+        let sliced = lines[lo..<hi].joined(separator: "\n")
+        return SliceRequest(
+            path: relPath,
+            range: ContextRange(start: start, end: end),
+            content: sliced
+        )
+    }
+
+    /// U.10b. Parse `diff:"<selector>"` and shell `git diff`. Mirrors
+    /// the CLI's parseDiff; returns nil on parser or git failure.
+    fileprivate static func parseDiffArg(
+        _ raw: String, projectRoot: String
+    ) -> DiffRequest? {
+        guard let selector = DiffSelector(rawValue: raw) else { return nil }
+        let args: [String]
+        switch selector {
+        case .unstaged: args = ["diff"]
+        case .staged: args = ["diff", "--cached"]
+        case .branch(let ref): args = ["diff", "\(ref)...HEAD"]
+        case .range(let a, let b): args = ["diff", "\(a)..\(b)"]
+        }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        proc.arguments = ["git", "-C", projectRoot] + args
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = Pipe()
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+        } catch {
+            return nil
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let patch = String(data: data, encoding: .utf8) ?? ""
+        var result: [String: String] = [:]
+        let lines = patch.split(separator: "\n", omittingEmptySubsequences: false)
+        var current: String? = nil
+        var buffer: [String] = []
+        func flush() {
+            if let path = current {
+                result[path, default: ""] += buffer.joined(separator: "\n")
+            }
+            buffer.removeAll(keepingCapacity: true)
+        }
+        for line in lines {
+            if line.hasPrefix("diff --git ") {
+                flush()
+                let tokens = line.split(separator: " ", omittingEmptySubsequences: true)
+                if let last = tokens.last, last.hasPrefix("b/") {
+                    current = String(last.dropFirst(2))
+                } else {
+                    current = nil
+                }
+            }
+            buffer.append(String(line))
+        }
+        flush()
+        return DiffRequest(selector: selector, perFileDiff: result)
     }
 
     /// Rough source-byte estimate for the savings metric. Walks the

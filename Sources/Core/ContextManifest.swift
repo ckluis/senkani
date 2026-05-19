@@ -89,6 +89,89 @@ public struct ContextRange: Codable, Sendable, Equatable, Hashable {
     }
 }
 
+// MARK: - U.10b mode inputs
+//
+// Three pre-resolved input types feed the U.10b modes. The CLI/MCP
+// layer performs the I/O (file read for slice, `git diff` shell-out
+// for diff-only, Gemma async call for summary) and passes the
+// resolved data into `ManifestOptions`. The producer
+// (`BundleComposer.composeManifest`) stays synchronous + deterministic.
+
+/// Pre-resolved file slice for `slice` mode. `content` is the actual
+/// extracted text (CLI reads the file at `path` and slices by `range`).
+/// `tokens_actual` in the emitted manifest item is `content.count / 4`.
+public struct SliceRequest: Sendable, Equatable {
+    public let path: String
+    public let range: ContextRange
+    public let content: String
+    public init(path: String, range: ContextRange, content: String) {
+        self.path = path
+        self.range = range
+        self.content = content
+    }
+}
+
+/// Selector for `diff-only` mode. Mirrors the four `git diff`
+/// invocations: unstaged (`git diff`), staged (`git diff --cached`),
+/// branch (`git diff <ref>...HEAD`), and range (`git diff <a>..<b>`).
+public enum DiffSelector: Sendable, Equatable, Hashable {
+    case unstaged
+    case staged
+    case branch(String)
+    case range(String, String)
+
+    /// Stable string form for the manifest's `inclusion_reason` field
+    /// and CLI/MCP parsing. Round-trippable via `init(rawValue:)`.
+    public var rawValue: String {
+        switch self {
+        case .unstaged: return "unstaged"
+        case .staged: return "staged"
+        case .branch(let ref): return "branch:\(ref)"
+        case .range(let a, let b): return "range:\(a)..\(b)"
+        }
+    }
+
+    /// Parse a selector from CLI `--diff <value>` / MCP `diff: "<value>"`.
+    /// Returns nil for malformed input.
+    public init?(rawValue: String) {
+        if rawValue == "unstaged" { self = .unstaged; return }
+        if rawValue == "staged" { self = .staged; return }
+        if rawValue.hasPrefix("branch:") {
+            let ref = String(rawValue.dropFirst("branch:".count))
+            guard !ref.isEmpty else { return nil }
+            self = .branch(ref)
+            return
+        }
+        if rawValue.hasPrefix("range:") {
+            let body = rawValue.dropFirst("range:".count)
+            // Match the canonical git two-dot range — we don't try to
+            // accept three-dot here because `diff <a>..<b>` and
+            // `diff <a>...<b>` mean materially different things and
+            // we don't want to guess.
+            let parts = body.components(separatedBy: "..")
+            guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
+            self = .range(parts[0], parts[1])
+            return
+        }
+        return nil
+    }
+}
+
+/// Pre-resolved diff for `diff-only` mode. `perFileDiff` is a map of
+/// file path → diff hunks (one entry per file the selector touched).
+/// CLI/MCP shells out to `git diff <selector>` and parses the patch
+/// into per-file blocks; the producer emits one manifest item per
+/// entry, with `lane: .diff`, `mode: .diffOnly`, and
+/// `inclusion_reason: "diff_<selector.rawValue>"`.
+public struct DiffRequest: Sendable, Equatable {
+    public let selector: DiffSelector
+    public let perFileDiff: [String: String]
+    public init(selector: DiffSelector, perFileDiff: [String: String]) {
+        self.selector = selector
+        self.perFileDiff = perFileDiff
+    }
+}
+
 /// A single manifest entry. All keys map to fixed JSON names; the
 /// `CodingKeys` block is the contract surface. Optional fields use
 /// nil to indicate "not applicable" (vs empty string which would

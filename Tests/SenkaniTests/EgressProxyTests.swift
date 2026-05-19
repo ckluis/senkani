@@ -1057,6 +1057,76 @@ struct EgressListenerLiveTests {
             Issue.record("expected .ok across 1k writes, got \(result)")
         }
     }
+
+    /// T.1b follow-up — end-to-end redteam chain via subprocess env.
+    ///
+    /// Proves the write-side path the round shipped: a subprocess reads
+    /// `SENKANI_PANE_MODE` from its env, emits the matching
+    /// `X-Senkani-Pane-Mode` header through `HTTP_PROXY`, the daemon's
+    /// connection handler parses the header, the per-pane policy
+    /// engine selects `.redteam`, and the deny-on-miss invariant
+    /// records `pane_mode = redteam` on the audit row WITHOUT invoking
+    /// the judge. The MockJudgeAdapter `callCount` MUST stay at 0 —
+    /// Vitalik posture: a judge can be prompted into "allow" and is
+    /// disqualified from redteam decisions.
+    @Test("redteam subprocess env → header → audit row, judge call count stays 0")
+    func redteamSubprocessEnvEndToEnd() throws {
+        let db = tempDB()
+        // Per-pane policy: redteam engine carries no rules so any host
+        // hits the deny-on-miss path. (Other modes are irrelevant here.)
+        let policy = EgressPolicy(engines: [
+            .general:  EgressRuleEngine(rules: []),
+            .research: EgressRuleEngine(rules: []),
+            .write:    EgressRuleEngine(rules: []),
+            .redteam:  EgressRuleEngine(rules: []),
+        ])
+        // Judge MUST NOT be invoked on a redteam static-miss.
+        let judge = MockJudgeAdapter(verdict: JudgeVerdict(decision: .allow, rationale: "should never run"))
+        let listener = EgressListener(
+            policy: policy,
+            judge: judge,
+            database: db,
+            config: .init(port: 0, writePortFile: false, portFilePath: "")
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        // Subprocess writes a raw HTTP request to the proxy, threading
+        // the `X-Senkani-Pane-Mode` header out of its own environment.
+        // Using `/bin/bash -c` with `$SENKANI_PANE_MODE` proves the env
+        // is consulted at request-emit time — not hard-coded.
+        let script = #"""
+        printf 'GET http://blocked.example.com/ HTTP/1.1\r\nHost: blocked.example.com\r\nX-Senkani-Pane-Mode: %s\r\nConnection: close\r\n\r\n' "$SENKANI_PANE_MODE" | /usr/bin/nc 127.0.0.1 \#(listener.port)
+        """#
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/bash")
+        proc.arguments = ["-c", script]
+        var env = ProcessInfo.processInfo.environment
+        env["SENKANI_PANE_MODE"] = PaneMode.redteam.rawValue
+        proc.environment = env
+        let outPipe = Pipe()
+        proc.standardOutput = outPipe
+        proc.standardError = FileHandle(forWritingAtPath: "/dev/null") ?? FileHandle.standardError
+        try proc.run()
+        proc.waitUntilExit()
+
+        let respData = outPipe.fileHandleForReading.readDataToEndOfFile()
+        let respStr = String(data: respData, encoding: .utf8) ?? ""
+        #expect(respStr.contains("403 Forbidden"))
+
+        let row = waitForRow(db: db)
+        try #require(row != nil)
+        #expect(row!.decision == .deny)
+        #expect(row!.paneMode == .redteam,
+                "audit row must record redteam pane_mode from subprocess env-derived header")
+        #expect(row!.host == "blocked.example.com")
+
+        // Vitalik invariant: judge MUST NOT be invoked on a redteam
+        // static-miss. Counter remains 0 even though the static engine
+        // returned default-deny.
+        #expect(judge.callCount == 0,
+                "redteam pane must skip judge dispatch on static-miss")
+    }
 }
 #endif
 

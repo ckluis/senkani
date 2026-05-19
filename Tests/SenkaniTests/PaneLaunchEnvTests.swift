@@ -153,4 +153,37 @@ struct PaneLaunchEnvTests {
         #expect(env["SENKANI_MCP_INDEX"]   == "off")
         #expect(env["SENKANI_MCP_TERSE"]   == "on")
     }
+
+    // MARK: - T.1b follow-up — SENKANI_PANE_MODE injection
+
+    /// Asserts the pane subprocess env carries the resolved pane mode
+    /// as a discoverable string. Senkani-aware HTTP clients read this
+    /// and emit the `X-Senkani-Pane-Mode` header on outbound requests.
+    @Test func paneModeDefaultsToGeneralAndIsCarriedByBothBundles() {
+        let defaultTerminal = PaneLaunchEnv.terminal(Self.sampleInputs)
+        let defaultOllama = PaneLaunchEnv.ollamaLauncher(Self.sampleInputs, resolvedModelTag: "llama3.1:8b")
+        // Inputs default is `.general`; the env var is its rawValue.
+        #expect(defaultTerminal["SENKANI_PANE_MODE"] == "general")
+        #expect(defaultOllama["SENKANI_PANE_MODE"] == "general")
+
+        // Explicit `.redteam` flows through both bundles unchanged.
+        let redteamInputs = PaneLaunchEnv.Inputs(
+            paneID: Self.sampleInputs.paneID,
+            projectRoot: Self.sampleInputs.projectRoot,
+            metricsFilePath: Self.sampleInputs.metricsFilePath,
+            configFilePath: Self.sampleInputs.configFilePath,
+            workspaceSlug: Self.sampleInputs.workspaceSlug,
+            paneSlug: Self.sampleInputs.paneSlug,
+            filterOn: true,
+            cacheOn: true,
+            secretsOn: true,
+            indexerOn: true,
+            terseOn: false,
+            paneMode: .redteam
+        )
+        let redteamTerminal = PaneLaunchEnv.terminal(redteamInputs)
+        let redteamOllama = PaneLaunchEnv.ollamaLauncher(redteamInputs, resolvedModelTag: "llama3.1:8b")
+        #expect(redteamTerminal["SENKANI_PANE_MODE"] == "redteam")
+        #expect(redteamOllama["SENKANI_PANE_MODE"] == "redteam")
+    }
 }

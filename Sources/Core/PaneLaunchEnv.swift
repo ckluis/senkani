@@ -32,6 +32,7 @@ public enum PaneLaunchEnv {
         public let secretsOn: Bool
         public let indexerOn: Bool
         public let terseOn: Bool
+        public let paneMode: PaneMode
 
         public init(
             paneID: UUID,
@@ -44,7 +45,8 @@ public enum PaneLaunchEnv {
             cacheOn: Bool,
             secretsOn: Bool,
             indexerOn: Bool,
-            terseOn: Bool
+            terseOn: Bool,
+            paneMode: PaneMode = .default
         ) {
             self.paneID = paneID
             self.projectRoot = projectRoot
@@ -57,6 +59,7 @@ public enum PaneLaunchEnv {
             self.secretsOn = secretsOn
             self.indexerOn = indexerOn
             self.terseOn = terseOn
+            self.paneMode = paneMode
         }
     }
 
@@ -79,6 +82,7 @@ public enum PaneLaunchEnv {
         "SENKANI_MCP_SECRETS",
         "SENKANI_MCP_INDEX",
         "SENKANI_MCP_TERSE",
+        "SENKANI_PANE_MODE",
     ]
 
     /// Env bundle for a plain Terminal pane. Used by
@@ -130,6 +134,14 @@ public enum PaneLaunchEnv {
             "SENKANI_MCP_TERSE":     i.terseOn   ? "on" : "off",
             "SENKANI_WORKSPACE_SLUG": i.workspaceSlug,
             "SENKANI_PANE_SLUG":      i.paneSlug,
+            // T.1b follow-up: subprocess-facing pane mode. Senkani-aware
+            // HTTP clients read this and add the `X-Senkani-Pane-Mode`
+            // header on outbound requests; the EgressProxy daemon parses
+            // it and routes through the per-mode policy engine. Defense-
+            // in-depth — daemon defaults to `.general` when the header
+            // is missing, so a subprocess that ignores this env var
+            // still hits the deny-on-miss invariant of the rule engine.
+            "SENKANI_PANE_MODE":      i.paneMode.rawValue,
         ]
     }
 }

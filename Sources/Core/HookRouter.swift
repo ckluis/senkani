@@ -44,9 +44,14 @@ public enum HookRouter {
     /// EgressProxy daemon reads the resolved mode from the
     /// `X-Senkani-Pane-Mode` header on incoming requests; production
     /// wires HookRouter PreToolUse to write the header on every
-    /// MCP/CLI subprocess invocation (handled in a follow-up phase).
-    /// Tests inject a stub. Default returns `.general` for every pane.
-    nonisolated(unsafe) public static var paneModeResolver: (String?) -> PaneMode = { _ in .default }
+    /// MCP/CLI subprocess invocation via `PaneLaunchEnv`'s
+    /// `SENKANI_PANE_MODE` env var. Default reads from the
+    /// process-wide `PaneModeStore.shared` (`~/.senkani/pane-modes.json`);
+    /// tests inject a stub. Default-install (no file) returns
+    /// `.general` for every pane.
+    nonisolated(unsafe) public static var paneModeResolver: (String?) -> PaneMode = { paneID in
+        PaneModeStore.shared.resolve(paneID: paneID)
+    }
 
     /// V.12b test seam — tests inject a feed with a short window or
     /// a custom rate-cap sink to assert the suppression behavior

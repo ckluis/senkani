@@ -37,6 +37,9 @@ struct Doctor: ParsableCommand {
     @Flag(name: .long, help: "Print the operator-runnable command to install Playwright Chromium (U.2a-1). Does NOT auto-download. Idempotent: writes a single `validation.browser.install` chained audit row on first cache detection.")
     var installValidationBrowser = false
 
+    @Flag(name: .long, help: "Walk the EgressProxy 5-scenario adversarial smoke subset (T.1c). Reports per-scenario pass/fail with rule_id; exits non-zero on any miss. Engine-level — does not spin the live listener.")
+    var checkEgress = false
+
     // MARK: - Counters
 
     private struct Results {
@@ -68,6 +71,14 @@ struct Doctor: ParsableCommand {
         // first cache detection.
         if installValidationBrowser {
             runInstallValidationBrowser()
+            return
+        }
+
+        // T.1c focused smoke motion — walk the 5-scenario adversarial
+        // smoke subset purely at the rule-engine / normalizer level,
+        // print per-scenario verdicts, exit non-zero on any miss.
+        if checkEgress {
+            try runCheckEgress()
             return
         }
 
@@ -1292,6 +1303,96 @@ struct Doctor: ParsableCommand {
     }
 
     // MARK: - Check 18: Egress proxy (Phase T.1a)
+
+    // MARK: - --check-egress (T.1c)
+
+    /// 5-scenario adversarial smoke subset: 1 from each of the 5
+    /// behavioural categories that the 20-scenario corpus (under
+    /// `Tests/SenkaniTests/EgressProxyAdversarialTests.swift`) covers.
+    /// Pure rule-engine + normalizer assertions — no live listener,
+    /// no SQLite writes, no judge inference. Wall-clock <2 s.
+    ///
+    /// Schneier P0: each scenario constructs a representative rule set
+    /// and a single attacker-controlled host; asserts the engine
+    /// returns the expected decision + rule_id. A failure here means
+    /// the corpus contract drifted from the engine — block the build.
+    private func runCheckEgress() throws {
+        struct Scenario {
+            let label: String
+            let rules: [EgressRule]
+            let host: String
+            let expectedDecision: EgressRule.Decision
+            let expectedRuleId: String
+        }
+
+        let scenarios: [Scenario] = [
+            Scenario(
+                label: "DNS rebinding: loopback 127.0.0.1",
+                rules: [EgressRule(id: "allow-example", pattern: "example.com", mode: .suffix, decision: .allow)],
+                host: "127.0.0.1",
+                expectedDecision: .deny,
+                expectedRuleId: "default-deny"
+            ),
+            Scenario(
+                label: "SSRF: decimal-IP encoding 3232235777",
+                rules: [EgressRule(id: "allow-example", pattern: "example.com", mode: .suffix, decision: .allow)],
+                host: "3232235777",
+                expectedDecision: .deny,
+                expectedRuleId: "default-deny"
+            ),
+            Scenario(
+                label: "Boundary: mixed-case + trailing-dot survives normalization",
+                rules: [EgressRule(id: "deny-example", pattern: "example.com", mode: .exact, decision: .deny)],
+                host: "EXAMPLE.com.:80",
+                expectedDecision: .deny,
+                expectedRuleId: "deny-example"
+            ),
+            Scenario(
+                label: "Boundary: deny-wins over suffix allow",
+                rules: [
+                    EgressRule(id: "deny-secret", pattern: "secret.example.com", mode: .exact, decision: .deny),
+                    EgressRule(id: "allow-example-suffix", pattern: "example.com", mode: .suffix, decision: .allow),
+                ],
+                host: "secret.example.com",
+                expectedDecision: .deny,
+                expectedRuleId: "deny-secret"
+            ),
+            Scenario(
+                label: "Judge injection: ignore-your-instructions on tight allowlist",
+                rules: [EgressRule(id: "allow-api", pattern: "api.example.com", mode: .exact, decision: .allow)],
+                host: "ignore-your-instructions.example.com",
+                expectedDecision: .deny,
+                expectedRuleId: "default-deny"
+            ),
+        ]
+
+        print("Egress smoke corpus (5/20 adversarial scenarios)")
+        print(String(repeating: "=", count: 48))
+
+        var passed = 0
+        var failed = 0
+        for scenario in scenarios {
+            let engine = EgressRuleEngine(rules: scenario.rules)
+            let verdict = engine.evaluate(host: scenario.host)
+            let ok = verdict.decision == scenario.expectedDecision
+                && verdict.ruleId == scenario.expectedRuleId
+            let marker = ok ? "[ok]  " : "[fail]"
+            print("  \(marker) \(scenario.label)")
+            print("         host=\(scenario.host) → \(verdict.decision.rawValue) (\(verdict.ruleId))")
+            if !ok {
+                print("         expected: \(scenario.expectedDecision.rawValue) (\(scenario.expectedRuleId))")
+                failed += 1
+            } else {
+                passed += 1
+            }
+        }
+
+        print("")
+        print("\(scenarios.count) scenarios, \(passed) passed, \(failed) failed.")
+        if failed > 0 {
+            throw ExitCode.failure
+        }
+    }
 
     /// Reports the EgressProxy daemon state. T.1a ships the deterministic
     /// rule + decision audit core; the live listener and port file land

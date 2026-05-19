@@ -33,10 +33,14 @@ public enum EgressHostNormalizer {
         if s.hasSuffix("/") {
             s.removeLast()
         }
-        // Strip trailing dot BEFORE port stripping — combined inputs like
-        // `example.com:80.` would otherwise produce `80.` for the port
-        // part and fail Int conversion. Operator-supplied hosts in the
-        // wild combine these in arbitrary order.
+        // Trailing-dot strip runs BOTH before and after port-strip. The
+        // pre-strip pass handles `example.com:80.` (dot trails the
+        // port) — without it, the port parser sees `80.` and fails
+        // Int conversion, leaving the dot in the final result. The
+        // post-strip pass handles `EXAMPLE.com.:80` (dot precedes the
+        // port) — without it the port-strip would expose a residual
+        // dot that breaks exact-match deny rules. T.1c adversarial
+        // corpus surfaced the second case.
         if s.hasSuffix(".") {
             s.removeLast()
         }
@@ -48,6 +52,10 @@ public enum EgressHostNormalizer {
                defaultStrippablePorts.contains(port) {
                 s = String(s[..<colonIdx])
             }
+        }
+        // Post-port-strip dot pass (see comment above).
+        if s.hasSuffix(".") {
+            s.removeLast()
         }
         return s.lowercased()
     }

@@ -565,7 +565,7 @@ private extension UInt16 {
 /// Build a minimal valid TLS 1.2 ClientHello carrying one server_name
 /// extension with the given hostname. File-level so multiple suites
 /// can share it.
-private func makeClientHello(sni: String) -> Data {
+func makeClientHello(sni: String) -> Data {
     var ext = Data()
     let nameBytes = Data(sni.utf8)
     let listInner = Data([0x00]) + UInt16(nameBytes.count).bigEndianBytes + nameBytes
@@ -751,7 +751,7 @@ private func tempDB() -> SessionDatabase {
     return SessionDatabase(path: dir + "senkani.db")
 }
 
-private func waitForRow(db: SessionDatabase, timeoutSeconds: Double = 3.0) -> EgressDecisionStore.Row? {
+func waitForRow(db: SessionDatabase, timeoutSeconds: Double = 3.0) -> EgressDecisionStore.Row? {
     let deadline = Date().addingTimeInterval(timeoutSeconds)
     while Date() < deadline {
         let rows = db.recentEgressDecisions(limit: 1)

@@ -105,6 +105,14 @@ struct Doctor: ParsableCommand {
         // 5b. Per-RAM-tier Gemma 4 output quality
         checkMLTierQuality(&results)
 
+        // 5c. PIIClassifier Layer 3 wiring (T.2b-1). Surfaces the four
+        // states the operator needs to see: not pulled (status .available),
+        // backend not ready (status .verified but adapter throws),
+        // available (status .verified + smoke OK), verification failed
+        // (status .broken / .error). T.2b-2 extends this with the F1 +
+        // commit-sha + last-eval-run suffixes.
+        checkPIIClassifierLayer3(&results)
+
         // 6. SQLite database
         checkDatabase(&results)
 
@@ -352,7 +360,7 @@ struct Doctor: ParsableCommand {
         "token_events", "validation_results", "sandboxed_results",
         "commands", "pane_refresh_state", "policy_snapshots",
         "confirmations", "trust_audits", "egress_decisions",
-        "pack_audits"
+        "pack_audits", "eval_results"
     ]
 
     private static let chainAuditSummaryNames: String =
@@ -791,6 +799,82 @@ struct Doctor: ParsableCommand {
                 head, r.passed, r.total, pct,
                 Int(r.medianLatencyMs.rounded()), r.totalOutputTokens
             )
+        }
+    }
+
+    // MARK: - Check 5c: PIIClassifier Layer 3 (T.2b-1)
+
+    /// Outcome of the Layer 3 smoke probe — used by the pure formatter
+    /// so tests can drive all four branches without touching the live
+    /// `Layer3Inference.productionDefault` (which always throws
+    /// BackendNotReadyError until T.2a-followup ships inference wiring).
+    enum Layer3SmokeOutcome {
+        case success
+        case backendNotReady
+        case unexpectedError(String)
+    }
+
+    /// Pure formatter: returns the `(Status, message)` the doctor surface
+    /// emits for the Layer 3 PII classifier line. Tests inject `(status,
+    /// smoke)` to drive all four branches; production passes the live
+    /// `ModelManager` status + a real adapter smoke probe.
+    ///
+    /// Schneier (silent-degradation visibility): the backend-not-ready
+    /// branch is an EXPLICIT line, not a silent skip. Operators see
+    /// the gating in doctor output, not just at log time.
+    static func formatLayer3PIIClassifierLine(
+        status: ModelStatus?,
+        smoke: () -> Layer3SmokeOutcome,
+        lastError: String? = nil
+    ) -> (Status, String) {
+        guard let status else {
+            return (.skip, "Layer 3 PII classifier: model id '\(PIIClassifierAdapter.modelId)' not registered")
+        }
+        switch status {
+        case .available:
+            return (.skip, "Layer 3 PII classifier: not pulled (regex+entropy active)")
+        case .verified:
+            switch smoke() {
+            case .success:
+                return (.pass, "Layer 3 PII classifier: available")
+            case .backendNotReady:
+                return (.skip, "Layer 3 PII classifier: backend not ready (T.2a-followup not yet wired)")
+            case .unexpectedError(let detail):
+                return (.fail, "Layer 3 PII classifier: smoke probe failed — \(detail)")
+            }
+        case .broken, .error:
+            let why = lastError.map { " — \($0)" } ?? ""
+            return (.fail, "Layer 3 PII classifier: verification failed\(why)")
+        case .downloading, .downloaded, .verifying:
+            return (.skip, "Layer 3 PII classifier: \(status.rawValue)")
+        }
+    }
+
+    /// Thin wrapper around `formatLayer3PIIClassifierLine` that reads
+    /// from the live `ModelManager` + smokes the production
+    /// `Layer3Inference.productionDefault`.
+    private func checkPIIClassifierLayer3(_ results: inout Results) {
+        let info = ModelManager.shared.models.first(where: { $0.id == PIIClassifierAdapter.modelId })
+        let (status, message) = Self.formatLayer3PIIClassifierLine(
+            status: info?.status,
+            smoke: {
+                do {
+                    _ = try Layer3Inference.productionDefault.detectSpans("ping")
+                    return .success
+                } catch is PIIClassifierAdapter.BackendNotReadyError {
+                    return .backendNotReady
+                } catch {
+                    return .unexpectedError(String(describing: error))
+                }
+            },
+            lastError: info?.lastError
+        )
+        printStatus(status, message)
+        switch status {
+        case .pass: results.passed += 1
+        case .skip: results.skipped += 1
+        case .fail: results.failed += 1
+        case .fixed: results.fixed += 1
         }
     }
 

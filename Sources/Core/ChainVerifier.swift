@@ -72,7 +72,15 @@ public enum ChainVerifier {
                 "trust_audits":       verifyTable(db: db, table: "trust_audits",       verify: verifyAnchorTrustAudits),
                 "egress_decisions":   verifyTable(db: db, table: "egress_decisions",   verify: verifyAnchorEgressDecisions),
                 "pack_audits":        verifyTable(db: db, table: "pack_audits",        verify: verifyAnchorPackAudits),
+                "eval_results":       verifyTable(db: db, table: "eval_results",       verify: verifyAnchorEvalResults),
             ]
+        }
+    }
+
+    public static func verifyEvalResults(_ database: SessionDatabase) -> Result {
+        return database.queue.sync {
+            guard let db = database.db else { return .noChain }
+            return verifyTable(db: db, table: "eval_results", verify: verifyAnchorEvalResults)
         }
     }
 
@@ -542,6 +550,36 @@ public enum ChainVerifier {
             }
             let prev = optionalText(stmt, 11)
             let stored = sqlite3_column_text(stmt, 12).map { String(cString: $0) } ?? ""
+            return (rowid, columns, prev, stored)
+        }
+    }
+
+    /// Walk `eval_results` rows for one anchor. T.2b-1 ships the table
+    /// + writer; canonical column shape mirrors the writer in
+    /// `EvalResultsStore.record`.
+    /// `entry_hash IS NOT NULL` filter — see `verifyAnchorTokenEvents` notes.
+    private static func verifyAnchorEvalResults(db: OpaquePointer, anchor: Anchor) -> Result? {
+        let sql = """
+            SELECT id, timestamp, model_id, fixture_id,
+                   precision, recall, f1, duration_ms,
+                   prev_hash, entry_hash
+              FROM eval_results
+             WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
+             ORDER BY id ASC;
+        """
+        return walkTable(db: db, table: "eval_results", anchor: anchor, sql: sql) { stmt in
+            let rowid = sqlite3_column_int64(stmt, 0)
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "timestamp":   .real(sqlite3_column_double(stmt, 1)),
+                "model_id":    textValue(stmt, 2),
+                "fixture_id":  textValue(stmt, 3),
+                "precision":   .real(sqlite3_column_double(stmt, 4)),
+                "recall":      .real(sqlite3_column_double(stmt, 5)),
+                "f1":          .real(sqlite3_column_double(stmt, 6)),
+                "duration_ms": .integer(sqlite3_column_int64(stmt, 7)),
+            ]
+            let prev = optionalText(stmt, 8)
+            let stored = sqlite3_column_text(stmt, 9).map { String(cString: $0) } ?? ""
             return (rowid, columns, prev, stored)
         }
     }

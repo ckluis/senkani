@@ -20,12 +20,19 @@ struct ModelIDConsistencyTests {
         let embedId = EmbedEngine.modelId
         let visionIds = Set(ModelManager.visionModelIds)
         let piiId = PIIClassifierAdapter.modelId
+        // T.2b-1 registered the PII-Masking-300k dataset entry. The
+        // eval harness in T.2b-2 owns the download driver for this id;
+        // it is intentionally NOT routed through the MCP download
+        // handler (which targets inference models). The dataset entry
+        // is operator-pulled only.
+        let datasetIds: Set<String> = ["pii-masking-300k-eval"]
         for model in ModelManager.shared.models {
             let isHandled = model.id == embedId
                 || visionIds.contains(model.id)
                 || model.id == piiId
+                || datasetIds.contains(model.id)
             #expect(isHandled,
-                    "Model '\(model.id)' must be handled by download handler (embed, vision, or pii-classifier)")
+                    "Model '\(model.id)' must be handled by download handler (embed, vision, pii-classifier, or dataset)")
         }
     }
 

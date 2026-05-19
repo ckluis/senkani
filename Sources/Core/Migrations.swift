@@ -1299,6 +1299,48 @@ public enum MigrationRegistry {
 
             try openPaneModeAnchor(db: db, table: "egress_decisions")
         },
+        Migration(version: 24, description: "eval_results chained table (Phase T.2b-1 PIIClassifier Layer 3 audit)") { db in
+            // T.2b-1 — `eval_results` is the durable observability surface
+            // for PIIClassifier model-quality drift across releases. T.2b-2
+            // (eval harness) writes the first rows once the
+            // pii-masking-300k-eval dataset is pulled; this migration
+            // ships the table + chain shape so the writer (EvalResultsStore)
+            // can land in the same round without a second migration when
+            // T.2b-2 closes.
+            //
+            // Same shape as v19 (egress_decisions) / v20 (pack_audits):
+            // self-contained CREATE, no migration anchor (table is created
+            // empty — first write opens a 'fresh-install' anchor lazily
+            // via ChainState).
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v24", detail: msg)
+            }
+
+            try exec("""
+                CREATE TABLE IF NOT EXISTS eval_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp REAL NOT NULL,
+                    model_id TEXT NOT NULL,
+                    fixture_id TEXT NOT NULL,
+                    precision REAL NOT NULL,
+                    recall REAL NOT NULL,
+                    f1 REAL NOT NULL,
+                    duration_ms INTEGER NOT NULL DEFAULT 0,
+                    prev_hash TEXT,
+                    entry_hash TEXT,
+                    chain_anchor_id INTEGER
+                );
+            """)
+            try exec("CREATE INDEX IF NOT EXISTS idx_eval_results_anchor ON eval_results(chain_anchor_id, id);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_eval_results_model ON eval_results(model_id, id);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_eval_results_time ON eval_results(timestamp);")
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)

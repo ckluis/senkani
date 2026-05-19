@@ -214,6 +214,18 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
             requiredRAM: 4,
             quantMethod: "INT8"
         ),
+        // T.2b-1 registration: the eval dataset used by T.2b-2's
+        // PII-Masking-300k F1 harness. No verification fixture this
+        // round — T.2b-2 owns dataset-shape validation. Pull is
+        // operator-explicit (multi-GB; never auto-pulled). The eval
+        // harness skips when status != .verified.
+        ModelInfo(
+            id: "pii-masking-300k-eval",
+            name: "PII-Masking-300k Eval Dataset (ai4privacy)",
+            repoId: "ai4privacy/pii-masking-300k",
+            expectedSizeBytes: 5_000_000_000,   // ~5GB; refined when pulled
+            requiredRAM: 1                       // dataset only — no inference
+        ),
     ]
 
     // MARK: - RAM Detection & Auto-Selection

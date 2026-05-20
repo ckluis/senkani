@@ -636,7 +636,7 @@ struct MigrationRunnerTests {
         #expect(rows[2].outcome == "blocking" && rows[2].status == "fail")
     }
 
-    @Test("v22 + v23 + v24 + v25 advance the migration ledger by exactly four rows over a v21-baseline DB")
+    @Test("v22 + v23 + v24 + v25 + v26 advance the migration ledger by exactly five rows over a v21-baseline DB")
     func migration22And23AdvanceLedgerByTwo() throws {
         let db = Self.openMemory()
         defer { sqlite3_close(db) }
@@ -669,8 +669,8 @@ struct MigrationRunnerTests {
         let report = try MigrationRunner.run(db: db, dbPath: ":memory:", registry: MigrationRegistry.all)
         let after = Self.appliedCount(db)
 
-        #expect(after - before == 4, "ledger must advance by exactly four rows (v22 + v23 + v24 + v25); got \(after - before)")
-        #expect(report.appliedVersions == [22, 23, 24, 25], "runner must report v22 + v23 + v24 + v25 as the newly-applied versions; got \(report.appliedVersions)")
+        #expect(after - before == 5, "ledger must advance by exactly five rows (v22 + v23 + v24 + v25 + v26); got \(after - before)")
+        #expect(report.appliedVersions == [22, 23, 24, 25, 26], "runner must report v22 + v23 + v24 + v25 + v26 as the newly-applied versions; got \(report.appliedVersions)")
     }
 
     @Test("lockfile refuses subsequent runs until removed")

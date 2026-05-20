@@ -150,6 +150,9 @@ struct Doctor: ParsableCommand {
         // 17. Trust flags — soft-flag FP-rate counter (Phase U.4a)
         checkTrustFlags(&results)
 
+        // 17b. Session work bus — U.9a queue + stream + offsets
+        checkSessionWorkBus(&results)
+
         // 18. Egress proxy — T.1a daemon scaffold + decision audit log
         checkEgressProxy(&results)
 
@@ -442,6 +445,35 @@ struct Doctor: ParsableCommand {
             case .skip: results.skipped += 1
             }
         }
+    }
+
+    // MARK: - Check 18: Session work bus (Phase U.9a)
+
+    /// Surface the U.9a queue + stream diagnostics: pending/processing/
+    /// dead-letter row counts, active leases, retried total, by-kind
+    /// rollup, and per-consumer lag against `session_event_stream`.
+    /// All non-blocking informational lines — `senkani doctor` exit
+    /// code stays 0 regardless of bus state in U.9a (substrate-only).
+    private func checkSessionWorkBus(_ results: inout Results) {
+        let q = SessionDatabase.shared.sessionWorkQueueStore.diagnostics()
+        let kinds = q.byKind.isEmpty
+            ? "none"
+            : q.byKind.sorted(by: { $0.key < $1.key })
+                .map { "\($0.key)=\($0.value)" }.joined(separator: ", ")
+        printStatus(.pass, "session work queue — pending: \(q.pending) | processing: \(q.processing) | succeeded: \(q.succeeded) | dead_letter: \(q.deadLetter) | active_leases: \(q.activeLeases) | retried_total: \(q.retriedTotal) | by_kind: \(kinds)")
+        results.passed += 1
+
+        let stream = SessionDatabase.shared.sessionEventStreamStore
+        let consumers = stream?.allConsumerIds() ?? []
+        for cid in consumers {
+            let lag = stream?.lag(consumerId: cid) ?? 0
+            printStatus(.pass, "session event stream consumer '\(cid)' — lag: \(lag) rows")
+            results.passed += 1
+        }
+
+        let cfg = (try? WorkBusConfigStore.load()) ?? WorkBusConfig()
+        printStatus(.pass, "work-bus config — dual_write: \(cfg.dualWrite)")
+        results.passed += 1
     }
 
     // MARK: - Check 17: Trust flags (Phase U.4a)

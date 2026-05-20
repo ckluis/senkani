@@ -1380,6 +1380,98 @@ public enum MigrationRegistry {
             try exec("ALTER TABLE trust_audits ADD COLUMN observed_sample INTEGER;", allowDuplicateColumn: true)
             try exec("ALTER TABLE trust_audits ADD COLUMN call_id TEXT;", allowDuplicateColumn: true)
         },
+        Migration(version: 26, description: "session_work_queue + session_event_stream + session_event_stream_offsets (Phase U.9a substrate)") { db in
+            // U.9a substrate — three new tables in `senkani.db`:
+            //   session_work_queue          — durable queue rows with
+            //                                 lease/heartbeat/retry/DLQ
+            //                                 lifecycle. Honker's
+            //                                 transactional-outbox shape:
+            //                                 enqueue is part of the
+            //                                 caller's write transaction.
+            //   session_event_stream        — append-only mirror of
+            //                                 canonical events
+            //                                 (`token_events`,
+            //                                 `agent_trace_event`,
+            //                                 `validation_results`) for
+            //                                 independent-consumer offset
+            //                                 tracking.
+            //   session_event_stream_offsets — per-consumer offset
+            //                                 (consumer_id PK,
+            //                                 last_processed_event_id).
+            //                                 Seeded with four rows on
+            //                                 first migration: validation
+            //                                 / agent_timeline /
+            //                                 notifications /
+            //                                 compound_learning_analytics.
+            //
+            // No chain anchor — these tables are operational state
+            // (queue + stream), not audit ledger. T.5 chain participants
+            // remain unchanged. The outbox helper invokes both the
+            // canonical row write AND the stream append AND the queue
+            // enqueue in the same SessionDatabase.queue.sync block so
+            // rollback semantics are atomic at the queue boundary.
+            func exec(_ sql: String) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc != SQLITE_OK {
+                    throw MigrationError.sqlFailed(stage: "v26", detail: msg)
+                }
+            }
+            try exec("""
+                CREATE TABLE IF NOT EXISTS session_work_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind TEXT NOT NULL,
+                    payload TEXT NOT NULL DEFAULT '',
+                    state TEXT NOT NULL DEFAULT 'pending',
+                    lease_owner TEXT,
+                    lease_expires_at REAL,
+                    heartbeat_at REAL,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    retry_reason TEXT,
+                    result_summary TEXT,
+                    next_wakeup_at REAL NOT NULL DEFAULT 0,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    project_root TEXT
+                );
+            """)
+            try exec("CREATE INDEX IF NOT EXISTS idx_swq_state_wakeup ON session_work_queue(state, next_wakeup_at);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_swq_kind_state ON session_work_queue(kind, state);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_swq_lease_expires ON session_work_queue(lease_expires_at);")
+            try exec("""
+                CREATE TABLE IF NOT EXISTS session_event_stream (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_table TEXT NOT NULL,
+                    source_id INTEGER NOT NULL,
+                    kind TEXT NOT NULL,
+                    project_root TEXT,
+                    created_at REAL NOT NULL
+                );
+            """)
+            try exec("CREATE INDEX IF NOT EXISTS idx_ses_id ON session_event_stream(id);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_ses_source ON session_event_stream(source_table, source_id);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_ses_kind ON session_event_stream(kind);")
+            try exec("""
+                CREATE TABLE IF NOT EXISTS session_event_stream_offsets (
+                    consumer_id TEXT PRIMARY KEY,
+                    last_processed_event_id INTEGER NOT NULL DEFAULT 0,
+                    updated_at REAL NOT NULL
+                );
+            """)
+            // Seed four consumer rows on first migration. Idempotent via
+            // INSERT OR IGNORE — re-running the migration keeps any
+            // operator-advanced offsets intact.
+            let now = Date().timeIntervalSince1970
+            for consumer in ["validation", "agent_timeline", "notifications", "compound_learning_analytics"] {
+                try exec("""
+                    INSERT OR IGNORE INTO session_event_stream_offsets
+                        (consumer_id, last_processed_event_id, updated_at)
+                    VALUES ('\(consumer)', 0, \(now));
+                """)
+            }
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)

@@ -85,6 +85,8 @@ public final class SessionDatabase: @unchecked Sendable {
     internal var egressDecisionStore: EgressDecisionStore!
     public var packAuditStore: PackAuditStore!
     internal var evalResultsStore: EvalResultsStore!
+    public var sessionWorkQueueStore: SessionWorkQueueStore!
+    public var sessionEventStreamStore: SessionEventStreamStore!
 
     // MARK: - Init
 
@@ -135,6 +137,8 @@ public final class SessionDatabase: @unchecked Sendable {
         egressDecisionStore = EgressDecisionStore(parent: self)
         packAuditStore = PackAuditStore(parent: self)
         evalResultsStore = EvalResultsStore(parent: self)
+        sessionWorkQueueStore = SessionWorkQueueStore(parent: self)
+        sessionEventStreamStore = SessionEventStreamStore(parent: self)
     }
 
     /// Testable initializer — opens a DB at a custom path (use a temp file).
@@ -174,6 +178,8 @@ public final class SessionDatabase: @unchecked Sendable {
         egressDecisionStore = EgressDecisionStore(parent: self)
         packAuditStore = PackAuditStore(parent: self)
         evalResultsStore = EvalResultsStore(parent: self)
+        sessionWorkQueueStore = SessionWorkQueueStore(parent: self)
+        sessionEventStreamStore = SessionEventStreamStore(parent: self)
     }
 
     // MARK: - Observability counters (migration v2)

@@ -1,0 +1,14 @@
+{
+  "name": "senkani-playwright-runner",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Senkani Playwright subprocess runner — drives headless Chromium for U.2 browser-validation axes (perf + completeness shipping in U.2a-2a; security + design landing in U.2b-axes).",
+  "type": "module",
+  "main": "runner.ts",
+  "scripts": {
+    "install-browsers": "playwright install chromium"
+  },
+  "dependencies": {
+    "playwright": "^1.40.0"
+  }
+}

@@ -35,3 +35,31 @@ public struct RenderFrame: Sendable, Equatable {
         return out
     }
 }
+
+/// V.15b's delta-encoder result. V.15a-2 ships only the seam — the
+/// `payload` is empty and `RenderFrame.diff(against:)` returns a
+/// no-op delta. V.15b will fill `payload` with the minimal ANSI
+/// cursor-positioning + content-overwrite sequence that turns
+/// `previous` into `self`, enabling the <50 ms p95 SSH update path.
+public struct ANSIDelta: Sendable, Equatable {
+    public let payload: String
+
+    public init(payload: String = "") {
+        self.payload = payload
+    }
+
+    public static let noop = ANSIDelta(payload: "")
+}
+
+extension RenderFrame {
+    /// V.15b-fill-in seam. V.15a-2 returns `.noop` so call sites
+    /// compile against the final shape today; V.15b implements the
+    /// actual delta encoder without restructuring the runner. Per
+    /// operator's 2026-05-07 Q6 verdict ("pre-shape now").
+    public func diff(against previous: RenderFrame) -> ANSIDelta {
+        // V.15b fills this in. Until then, callers fall back to
+        // `toANSI()` for full-clear-and-paint.
+        _ = previous
+        return .noop
+    }
+}

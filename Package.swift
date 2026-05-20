@@ -371,6 +371,13 @@ let package = Package(
             ],
             path: "Sources/Bundle"
         ),
+        .target(
+            name: "MonitorTUI",
+            dependencies: [
+                "Core",
+            ],
+            path: "Sources/MonitorTUI"
+        ),
         .executableTarget(
             name: "CLI",
             dependencies: [
@@ -379,6 +386,7 @@ let package = Package(
                 "Indexer",
                 "Bench",
                 "Bundle",
+                "MonitorTUI",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             path: "Sources/CLI"
@@ -446,6 +454,7 @@ let package = Package(
                 "MCPServer",
                 "CLI",
                 "HookRelay",
+                "MonitorTUI",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Testing", package: "swift-testing"),
             ],

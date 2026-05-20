@@ -111,6 +111,12 @@ enum PreviewMode {
 struct WebViewRepresentable: NSViewRepresentable {
     let filePath: String
     let mode: PreviewMode
+    /// V.10b — optional user scripts to register on the WKWebView's
+    /// userContentController. `HTMLPreviewView` populates this from
+    /// `DesignSystemUserScript.userScripts(for:css:)` based on the
+    /// current `HTMLPreviewMode`. Default `[]` keeps markdown +
+    /// pre-V.10b HTML call sites unchanged.
+    var userScripts: [WKUserScript] = []
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -132,9 +138,14 @@ struct WebViewRepresentable: NSViewRepresentable {
         // SECURITY: Disable cross-origin resource sharing for all modes
         config.setValue(false, forKey: "allowUniversalAccessFromFileURLs")
 
+        for script in userScripts {
+            config.userContentController.addUserScript(script)
+        }
+
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
         context.coordinator.webView = webView
+        context.coordinator.currentUserScriptCount = userScripts.count
         context.coordinator.startWatching(path: filePath, mode: mode)
         loadContent(into: webView)
         return webView
@@ -142,7 +153,18 @@ struct WebViewRepresentable: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         let coord = context.coordinator
-        if coord.currentPath != filePath || coord.currentMode != mode {
+        let scriptsChanged = coord.currentUserScriptCount != userScripts.count
+        if scriptsChanged {
+            // V.10b — design-system mode flip rebuilds the user-script
+            // set. Removing all + re-adding is the only WKWebKit-
+            // sanctioned path; there is no public "replace script N" API.
+            webView.configuration.userContentController.removeAllUserScripts()
+            for script in userScripts {
+                webView.configuration.userContentController.addUserScript(script)
+            }
+            coord.currentUserScriptCount = userScripts.count
+        }
+        if coord.currentPath != filePath || coord.currentMode != mode || scriptsChanged {
             coord.stopWatching()
             coord.startWatching(path: filePath, mode: mode)
             loadContent(into: webView)
@@ -497,6 +519,7 @@ struct WebViewRepresentable: NSViewRepresentable {
         weak var webView: WKWebView?
         var currentPath: String = ""
         var currentMode: PreviewMode = .markdown
+        var currentUserScriptCount: Int = 0
         private var source: DispatchSourceFileSystemObject?
         private var fileDescriptor: Int32 = -1
 

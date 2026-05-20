@@ -315,6 +315,19 @@ async function main(): Promise<void> {
             totalFailed += r.failed;
             allAdvisories.push(...r.advisories);
         }
+        // U.2b-axes — security + design axes ship Swift evaluators in
+        // this round (Sources/Core/Validation/{security,design}.swift)
+        // with full unit-test coverage. TS-side DOM-walk measurements
+        // for the two axes are tracked under the mandatory-follow-up
+        // item filed at U.2b-axes close. Until then, the TS runner
+        // emits a structured informational advisory rather than
+        // silently skipping — Russell no-silent-acceptance.
+        if (axesRun.includes("security")) {
+            allAdvisories.push("security axis dispatched but TS-side measurement deferred — Swift evaluator (SecurityAxis) is the canonical surface; see process-gap-validate-browser-ts-runner-security-design-measurements-2026-05-19");
+        }
+        if (axesRun.includes("design")) {
+            allAdvisories.push("design axis dispatched but TS-side measurement deferred — Swift evaluator (DesignAxis) is the canonical surface; see process-gap-validate-browser-ts-runner-security-design-measurements-2026-05-19");
+        }
 
         let screenshotPath: string | null = null;
         if (request.screenshot !== false) {

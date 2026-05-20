@@ -26,6 +26,18 @@ public enum PaneMode: String, Sendable, Codable, Equatable, CaseIterable {
         self != .redteam
     }
 
+    /// PIIClassifier (Layer 3) softmax floor consumed by
+    /// `FilterPipeline.process(...)`. `redteam` lowers the floor so
+    /// borderline detections (e.g. 0.75) still get masked; other panes
+    /// keep the production default (0.85) to avoid false positives
+    /// stealing reviewable bytes. T.2c-2.
+    public var piiSensitivityThreshold: Double {
+        switch self {
+        case .redteam: return 0.70
+        case .research, .write, .general: return 0.85
+        }
+    }
+
     /// Internal proxy header name carrying the pane mode from the
     /// client (HookRouter-managed subprocess) to the daemon. The
     /// daemon strips this header before forwarding upstream so it is

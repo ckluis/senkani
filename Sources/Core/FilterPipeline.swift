@@ -31,7 +31,15 @@ public struct FilterPipeline: Sendable {
 
     /// Run the full pipeline: filter + secret detection.
     /// Returns filtered output and per-feature metrics.
-    public func process(command: String, output: String) -> PipelineResult {
+    /// `paneMode` controls the Layer 3 PIIClassifier softmax floor —
+    /// `.redteam` lowers the threshold (T.2c-2); other panes keep the
+    /// production default. Non-test callers omit it (defaults to
+    /// `.default`/`.general`).
+    public func process(
+        command: String,
+        output: String,
+        paneMode: PaneMode = .default
+    ) -> PipelineResult {
         let sloStart = Date()
         let rawBytes = output.utf8.count
         var currentOutput = output
@@ -78,7 +86,7 @@ public struct FilterPipeline: Sendable {
             let status = layer3StatusProvider()
             if status == .verified {
                 do {
-                    let spans = try layer3.detectSpans(currentOutput)
+                    let spans = try layer3.detectSpans(currentOutput, paneMode.piiSensitivityThreshold)
                     if !spans.isEmpty {
                         let redaction = PIISpanRedactor.apply(spans: spans, to: currentOutput)
                         currentOutput = redaction.redacted
@@ -197,7 +205,9 @@ public struct PipelineResult: Sendable {
 /// until T.2a-followup wires `forward` + tokenize + decode. Tests
 /// inject a synchronous closure for the contextual-PII path.
 public struct Layer3Inference: Sendable {
-    public typealias DetectSpans = @Sendable (_ text: String) throws -> [PIISpan]
+    /// `threshold` is the per-pane PIIClassifier softmax floor — seam
+    /// implementations decide which spans clear the floor (T.2c-2).
+    public typealias DetectSpans = @Sendable (_ text: String, _ threshold: Double) throws -> [PIISpan]
 
     public let detectSpans: DetectSpans
 
@@ -209,7 +219,7 @@ public struct Layer3Inference: Sendable {
     /// every call throws `BackendNotReadyError(stage: "inference")`.
     /// T.2a-followup replaces this default with a tokenize → forward →
     /// decode bridge backed by `MLXInferenceLock.shared`.
-    public static let productionDefault = Layer3Inference { _ in
+    public static let productionDefault = Layer3Inference { _, _ in
         throw PIIClassifierAdapter.BackendNotReadyError(stage: "inference")
     }
 }

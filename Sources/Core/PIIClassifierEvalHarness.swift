@@ -117,7 +117,7 @@ public struct PIIClassifierEvalHarness: Sendable {
         // forward + tokenize + decode, this throws BackendNotReadyError
         // every time and the harness returns .skipped.
         do {
-            _ = try layer3.detectSpans("ping")
+            _ = try layer3.detectSpans("ping", 0.85)
         } catch is PIIClassifierAdapter.BackendNotReadyError {
             return .skipped(reason: "classifier backend not ready (T.2a-followup not yet wired)")
         } catch {

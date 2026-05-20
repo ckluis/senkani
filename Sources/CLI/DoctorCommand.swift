@@ -363,7 +363,7 @@ struct Doctor: ParsableCommand {
         "token_events", "validation_results", "sandboxed_results",
         "commands", "pane_refresh_state", "policy_snapshots",
         "confirmations", "trust_audits", "egress_decisions",
-        "pack_audits", "eval_results"
+        "pack_audits", "eval_results", "surrogate_writes"
     ]
 
     private static let chainAuditSummaryNames: String =
@@ -959,7 +959,7 @@ struct Doctor: ParsableCommand {
             status: info?.status,
             smoke: {
                 do {
-                    _ = try Layer3Inference.productionDefault.detectSpans("ping")
+                    _ = try Layer3Inference.productionDefault.detectSpans("ping", 0.85)
                     return .success
                 } catch is PIIClassifierAdapter.BackendNotReadyError {
                     return .backendNotReady

@@ -87,6 +87,7 @@ public final class SessionDatabase: @unchecked Sendable {
     internal var evalResultsStore: EvalResultsStore!
     public var sessionWorkQueueStore: SessionWorkQueueStore!
     public var sessionEventStreamStore: SessionEventStreamStore!
+    public var surrogateWritesStore: SurrogateWritesStore!
 
     // MARK: - Init
 
@@ -139,6 +140,7 @@ public final class SessionDatabase: @unchecked Sendable {
         evalResultsStore = EvalResultsStore(parent: self)
         sessionWorkQueueStore = SessionWorkQueueStore(parent: self)
         sessionEventStreamStore = SessionEventStreamStore(parent: self)
+        surrogateWritesStore = SurrogateWritesStore(parent: self)
     }
 
     /// Testable initializer — opens a DB at a custom path (use a temp file).
@@ -180,6 +182,7 @@ public final class SessionDatabase: @unchecked Sendable {
         evalResultsStore = EvalResultsStore(parent: self)
         sessionWorkQueueStore = SessionWorkQueueStore(parent: self)
         sessionEventStreamStore = SessionEventStreamStore(parent: self)
+        surrogateWritesStore = SurrogateWritesStore(parent: self)
     }
 
     // MARK: - Observability counters (migration v2)

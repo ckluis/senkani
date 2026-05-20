@@ -120,7 +120,7 @@ struct PIIClassifierEvalGateTests {
         let skipped1 = PIIClassifierEvalHarness(
             datasetStatusProvider: { .available },
             classifierStatusProvider: { .verified },
-            layer3: Layer3Inference { _ in [] },
+            layer3: Layer3Inference { _, _ in [] },
             resultsSink: { _, _, _, _, _ in
                 Issue.record("resultsSink must NOT fire when dataset not pulled")
             },
@@ -134,7 +134,7 @@ struct PIIClassifierEvalGateTests {
 
         // Conditional-skip path 2 — both verified, but inference seam
         // throws BackendNotReadyError (T.2a-followup not wired).
-        let throwingSeam = Layer3Inference { _ in
+        let throwingSeam = Layer3Inference { _, _ in
             throw PIIClassifierAdapter.BackendNotReadyError(stage: "inference")
         }
         let skipped2 = PIIClassifierEvalHarness(
@@ -157,7 +157,7 @@ struct PIIClassifierEvalGateTests {
         let harness = PIIClassifierEvalHarness(
             datasetStatusProvider: { .verified },
             classifierStatusProvider: { .verified },
-            layer3: Layer3Inference { _ in [] },
+            layer3: Layer3Inference { _, _ in [] },
             resultsSink: { _, _, _, _, _ in
                 sunkRowCount.increment()
             },

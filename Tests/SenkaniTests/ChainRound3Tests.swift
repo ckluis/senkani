@@ -207,14 +207,15 @@ struct ChainRound3Tests {
         db.flushWrites()
 
         let perTable = ChainVerifier.verifyAll(db)
-        // Eleven chain participants: token_events + 3 from T.5 round 3 +
+        // Twelve chain participants: token_events + 3 from T.5 round 3 +
         // pane_refresh_state (V.1 round 2) + policy_snapshots (T.5
         // extension via migration v17) + confirmations (T.6a) +
         // trust_audits (U.4a) + egress_decisions (T.1a, migration v19) +
         // pack_audits (V.11a, migration v20) + eval_results (T.2b-1,
-        // migration v24). Tables with no rows surface as .noChain —
-        // still counted in the map shape.
-        #expect(perTable.count == 11)
+        // migration v24) + surrogate_writes (T.2c-2, migration v27).
+        // Tables with no rows surface as .noChain — still counted in
+        // the map shape.
+        #expect(perTable.count == 12)
         for table in ["token_events", "validation_results", "sandboxed_results", "commands"] {
             guard let r = perTable[table] else {
                 Issue.record("missing result for \(table)")

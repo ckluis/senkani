@@ -183,9 +183,30 @@ public actor SurrogateVault {
     /// match of the original value; touches `last_seen` on reuse.
     @discardableResult
     public func allocate(originalValue: String, category: String) throws -> String {
+        try allocateDetailed(originalValue: originalValue, category: category).id
+    }
+
+    /// Detailed allocation that distinguishes "new allocation" from
+    /// "reuse of an existing surrogate." T.2c-2 audit-chain writers
+    /// rely on `isNew` to emit one chain row per ALLOCATION (not per
+    /// reuse).
+    public struct AllocationResult: Sendable, Equatable {
+        public let id: String
+        public let isNew: Bool
+        public init(id: String, isNew: Bool) {
+            self.id = id
+            self.isNew = isNew
+        }
+    }
+
+    @discardableResult
+    public func allocateDetailed(
+        originalValue: String,
+        category: String
+    ) throws -> AllocationResult {
         if let existing = indexByValue[category]?[originalValue] {
             try Self.updateLastSeenOn(db: db, surrogateID: existing)
-            return existing
+            return AllocationResult(id: existing, isNew: false)
         }
         let next = (counters[category] ?? 0) + 1
         counters[category] = next
@@ -204,7 +225,7 @@ public actor SurrogateVault {
         byValue[originalValue] = surrogateID
         indexByValue[category] = byValue
         originalBySurrogateID[surrogateID] = originalValue
-        return surrogateID
+        return AllocationResult(id: surrogateID, isNew: true)
     }
 
     /// Map a surrogate id back to its original value. Returns nil
@@ -241,6 +262,28 @@ public actor SurrogateVault {
 
     public func getMeta(_ key: String) throws -> String? {
         try Self.getMetaOn(db: db, key: key)
+    }
+
+    /// T.2c-2 — mark the engagement closed. Stamps `meta.closed_at`
+    /// with the current ISO-8601 timestamp. Idempotent: re-stamping an
+    /// already-closed engagement preserves the original `closed_at`
+    /// (operator hand-off boundary is the first close, not the last
+    /// re-close).
+    @discardableResult
+    public func markClosed() throws -> String {
+        if let existing = try Self.getMetaOn(db: db, key: "closed_at") {
+            return existing
+        }
+        let ts = Self.isoNow()
+        try Self.setMetaOn(db: db, key: "closed_at", value: ts)
+        return ts
+    }
+
+    /// T.2c-2 — whether the engagement has been marked closed.
+    /// `AnonymizationProxy.rewriteInbound` consults this and renders
+    /// surrogates literally post-close.
+    public func isClosed() throws -> Bool {
+        try Self.getMetaOn(db: db, key: "closed_at") != nil
     }
 
     // MARK: - Crypto (nonisolated, pure functions of plaintext+key)

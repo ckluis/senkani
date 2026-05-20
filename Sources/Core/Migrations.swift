@@ -1472,6 +1472,42 @@ public enum MigrationRegistry {
                 """)
             }
         },
+        Migration(version: 27, description: "surrogate_writes chained table (Phase T.2c-2 AnonymizationProxy)") { db in
+            // T.2c-2 — one row per surrogate ALLOCATION (NOT per reuse).
+            // Chain rows do NOT include `original_value` — encryption at
+            // rest in `SurrogateVault` is the privacy boundary; this row
+            // is the integrity boundary. The chain proves "the engagement
+            // allocated surrogate X for category Y at time T" without
+            // exposing the underlying original.
+            //
+            // Schema columns participate in the canonical row hash
+            // (alphabetically sorted): `at`, `category`, `engagement_id`,
+            // `surrogate_id`. `prev_hash`, `entry_hash`, `chain_anchor_id`
+            // are excluded per `ChainHasher.excludedColumns`.
+            func exec(_ sql: String) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc != SQLITE_OK {
+                    throw MigrationError.sqlFailed(stage: "v27", detail: msg)
+                }
+            }
+            try exec("""
+                CREATE TABLE IF NOT EXISTS surrogate_writes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    engagement_id TEXT NOT NULL,
+                    surrogate_id TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    at REAL NOT NULL,
+                    prev_hash TEXT,
+                    entry_hash TEXT,
+                    chain_anchor_id INTEGER NOT NULL DEFAULT 0
+                );
+            """)
+            try exec("CREATE INDEX IF NOT EXISTS idx_surrogate_writes_engagement ON surrogate_writes(engagement_id);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_surrogate_writes_anchor ON surrogate_writes(chain_anchor_id);")
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)

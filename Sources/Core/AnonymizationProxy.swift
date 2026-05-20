@@ -70,19 +70,31 @@ public struct ScrubResult: Sendable {
     }
 }
 
+/// Sink for one chained `surrogate_writes` row. Production binds this
+/// to `SessionDatabase.shared.surrogateWritesStore.record(...)`; tests
+/// inject a closure that records into an in-memory buffer.
+public typealias SurrogateAuditSink = @Sendable (
+    _ engagementID: String,
+    _ surrogateID: String,
+    _ category: String
+) -> Void
+
 public actor AnonymizationProxy {
     private let engagement: EngagementContext
     private let vault: SurrogateVault
     private let emitter: PIISpanEmitter
+    private let auditSink: SurrogateAuditSink?
 
     public init(
         engagement: EngagementContext,
         vault: SurrogateVault,
-        emitter: PIISpanEmitter
+        emitter: PIISpanEmitter,
+        auditSink: SurrogateAuditSink? = nil
     ) {
         self.engagement = engagement
         self.vault = vault
         self.emitter = emitter
+        self.auditSink = auditSink
     }
 
     /// Replace every detected PII span with a per-engagement
@@ -106,14 +118,24 @@ public actor AnonymizationProxy {
         var allocations: [SurrogateAllocation] = []
         var seen: Set<String> = []
         for span in spans {
-            let id = try await vault.allocate(
+            let result = try await vault.allocateDetailed(
                 originalValue: span.text,
                 category: span.category
             )
-            perSpanID.append(id)
-            if seen.insert(id).inserted {
+            perSpanID.append(result.id)
+            // T.2c-2: emit one chain row per ALLOCATION (not per reuse).
+            // Vault's `isNew` flag is the cross-call truth — reuse within
+            // a single scrub call AND reuse across calls both surface as
+            // `isNew == false`.
+            if result.isNew {
+                auditSink?(engagement.id, result.id, span.category)
+            }
+            // First-time-seen-this-call dedupe for the per-call surrogate
+            // list returned to the caller (separate from the audit-chain
+            // signal above).
+            if seen.insert(result.id).inserted {
                 allocations.append(SurrogateAllocation(
-                    surrogateID: id,
+                    surrogateID: result.id,
                     category: span.category,
                     originalValue: span.text
                 ))
@@ -133,7 +155,16 @@ public actor AnonymizationProxy {
     /// (`"PRIVATE_PERSON_001"`) and code-fenced
     /// (`` `PRIVATE_PERSON_001` ``) tokens round-trip safely.
     /// Unknown ids are left alone — never invents an "original."
+    ///
+    /// T.2c-2: when the engagement is closed (`meta.closed_at` set),
+    /// rewrite-back is disabled — the operator sees the literal
+    /// surrogates so post-close audit trails preserve the anonymized
+    /// view. Per Cavoukian: the operator hand-off boundary makes
+    /// surrogates the audit artifact, not originals.
     public func rewriteInbound(_ text: String) async throws -> String {
+        if try await vault.isClosed() {
+            return text
+        }
         let known = await vault.knownSurrogateIDs()
         if known.isEmpty { return text }
 

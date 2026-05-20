@@ -73,7 +73,15 @@ public enum ChainVerifier {
                 "egress_decisions":   verifyTable(db: db, table: "egress_decisions",   verify: verifyAnchorEgressDecisions),
                 "pack_audits":        verifyTable(db: db, table: "pack_audits",        verify: verifyAnchorPackAudits),
                 "eval_results":       verifyTable(db: db, table: "eval_results",       verify: verifyAnchorEvalResults),
+                "surrogate_writes":   verifyTable(db: db, table: "surrogate_writes",   verify: verifyAnchorSurrogateWrites),
             ]
+        }
+    }
+
+    public static func verifySurrogateWrites(_ database: SessionDatabase) -> Result {
+        return database.queue.sync {
+            guard let db = database.db else { return .noChain }
+            return verifyTable(db: db, table: "surrogate_writes", verify: verifyAnchorSurrogateWrites)
         }
     }
 
@@ -580,6 +588,33 @@ public enum ChainVerifier {
             ]
             let prev = optionalText(stmt, 8)
             let stored = sqlite3_column_text(stmt, 9).map { String(cString: $0) } ?? ""
+            return (rowid, columns, prev, stored)
+        }
+    }
+
+    /// Walk `surrogate_writes` rows for one anchor.
+    /// `entry_hash IS NOT NULL` filter — see `verifyAnchorTokenEvents` notes.
+    /// T.2c-2 — chain rows carry `(engagement_id, surrogate_id, category, at)`;
+    /// `original_value` is intentionally absent (privacy boundary lives in
+    /// the encrypted `SurrogateVault`, not in this audit chain).
+    private static func verifyAnchorSurrogateWrites(db: OpaquePointer, anchor: Anchor) -> Result? {
+        let sql = """
+            SELECT id, engagement_id, surrogate_id, category, at,
+                   prev_hash, entry_hash
+              FROM surrogate_writes
+             WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
+             ORDER BY id ASC;
+        """
+        return walkTable(db: db, table: "surrogate_writes", anchor: anchor, sql: sql) { stmt in
+            let rowid = sqlite3_column_int64(stmt, 0)
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "engagement_id": textValue(stmt, 1),
+                "surrogate_id":  textValue(stmt, 2),
+                "category":      textValue(stmt, 3),
+                "at":            .real(sqlite3_column_double(stmt, 4)),
+            ]
+            let prev = optionalText(stmt, 5)
+            let stored = sqlite3_column_text(stmt, 6).map { String(cString: $0) } ?? ""
             return (rowid, columns, prev, stored)
         }
     }

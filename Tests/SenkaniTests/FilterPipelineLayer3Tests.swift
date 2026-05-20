@@ -17,7 +17,7 @@ struct FilterPipelineLayer3Tests {
             """
         let pipeline = FilterPipeline(
             config: FeatureConfig(filter: false, secrets: true, terse: false, injectionGuard: false),
-            layer3: Layer3Inference { text in
+            layer3: Layer3Inference { text, _ in
                 // Inject a "Harry Potter" contextual-PII span at the
                 // exact character offset where it appears in the
                 // post-regex/entropy-redacted text. The redactor uses
@@ -55,7 +55,7 @@ struct FilterPipelineLayer3Tests {
     @Test("Layer 3 inactive path: status .available no-ops, regex+entropy still redact, latch fires .notPulled once per process")
     func inactivePathHoldsLatch() {
         Layer3GateState.shared._resetForTests()
-        let mockLayer3 = Layer3Inference { _ in
+        let mockLayer3 = Layer3Inference { _, _ in
             Issue.record("layer3 inference must NOT be called when status != .verified")
             return []
         }
@@ -98,7 +98,7 @@ struct FilterPipelineLayer3Tests {
     func backendNotReadyGracefulDegradation() {
         Layer3GateState.shared._resetForTests()
         let seamCallCount = SendableCounter()
-        let throwingSeam = Layer3Inference { _ in
+        let throwingSeam = Layer3Inference { _, _ in
             seamCallCount.increment()
             throw PIIClassifierAdapter.BackendNotReadyError(stage: "inference")
         }

@@ -214,6 +214,143 @@ final class ValidationStore: @unchecked Sendable {
         }
     }
 
+    /// U.2a-2b — insert a structured browser-validation row. Populates the
+    /// v22 columns (`axes`, `target_url`, `plan_steps`, `result_status`,
+    /// `screenshot_path`) so HookRouter's PreToolUse gate can read
+    /// `result_status = 'fail'` for the session.
+    ///
+    /// Chain note: this writer hashes under the existing `fresh-install`
+    /// anchor's canonical column shape (same set as
+    /// `insertValidationResult`). The v22 columns are stored as opaque
+    /// data and not yet part of the entry hash — opening a
+    /// `migration-v22` anchor that includes them is deferred to a
+    /// follow-up round so this round's scope stays bounded. Existing
+    /// rows verify unchanged; new browser rows verify under the same
+    /// shape as legacy auto-validate rows.
+    func insertBrowserValidationResult(
+        sessionId: String,
+        targetURL: String,
+        axes: [String],
+        planStepsJSON: String,
+        resultStatus: String,
+        assertionsPassed: Int,
+        assertionsFailed: Int,
+        advisory: String,
+        screenshotPath: String?
+    ) {
+        let now = Date().timeIntervalSince1970
+        // Encode `axes` as a JSON array string — column shape from v22.
+        let axesJSON: String = {
+            guard let data = try? JSONSerialization.data(withJSONObject: axes, options: [.sortedKeys]),
+                  let str = String(data: data, encoding: .utf8) else { return "[]" }
+            return str
+        }()
+        // Map result_status to outcome for legacy queries.
+        let legacyOutcome = resultStatus == "fail" ? "blocking" : "advisory"
+        let exitCode: Int32 = resultStatus == "pass" ? 0 : 1
+        let durationMs = 0
+
+        parent.queue.async { [weak parent, weak self] in
+            guard let parent, let self, let db = parent.db else { return }
+
+            let anchorId = self.chain.resolveAnchorId(db: db)
+            let prevHash = self.chain.latestEntryHash(db: db, anchorId: anchorId)
+            // Hash only the legacy column set so the chain stays intact
+            // with pre-v22 fresh-install anchor rows.
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "session_id":     .text(sessionId),
+                "file_path":      .text(targetURL),
+                "validator_name": .text("validate_browser"),
+                "category":       .text("browser"),
+                "exit_code":      .integer(Int64(exitCode)),
+                "raw_output":     .null,
+                "advisory":       .text(advisory),
+                "duration_ms":    .integer(Int64(durationMs)),
+                "created_at":     .real(now),
+                "delivered":      .integer(0),
+                "outcome":        .text(legacyOutcome),
+                "reason":         .null,
+                "surfaced_at":    .null,
+            ]
+            let entryHash = ChainHasher.entryHash(
+                table: "validation_results", columns: columns, prev: prevHash
+            )
+
+            let sql = """
+                INSERT INTO validation_results
+                (session_id, file_path, validator_name, category, exit_code, raw_output, advisory, duration_ms, created_at, outcome, reason,
+                 prev_hash, entry_hash, chain_anchor_id,
+                 axes, target_url, plan_steps, result_status, screenshot_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 2, (targetURL as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, "validate_browser", -1, nil)
+            sqlite3_bind_text(stmt, 4, "browser", -1, nil)
+            sqlite3_bind_int(stmt, 5, exitCode)
+            sqlite3_bind_null(stmt, 6)
+            sqlite3_bind_text(stmt, 7, (advisory as NSString).utf8String, -1, nil)
+            sqlite3_bind_int(stmt, 8, Int32(durationMs))
+            sqlite3_bind_double(stmt, 9, now)
+            sqlite3_bind_text(stmt, 10, (legacyOutcome as NSString).utf8String, -1, nil)
+            sqlite3_bind_null(stmt, 11)
+            Self.bindOptionalText(stmt, 12, prevHash)
+            sqlite3_bind_text(stmt, 13, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(stmt, 14, anchorId)
+            sqlite3_bind_text(stmt, 15, (axesJSON as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 16, (targetURL as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 17, (planStepsJSON as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 18, (resultStatus as NSString).utf8String, -1, nil)
+            Self.bindOptionalText(stmt, 19, screenshotPath)
+            if sqlite3_step(stmt) == SQLITE_DONE {
+                self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
+            }
+        }
+    }
+
+    /// U.2a-2b — read the first failing browser-validation row for a
+    /// session (used by HookRouter's PreToolUse hard-block gate). Returns
+    /// the row's `target_url`, `axes`, and `advisory` so the refusal
+    /// contract can populate `failing_axis` and `fixture_id` without
+    /// leaking the assertion payload (Schneier side-channel guard).
+    func firstFailingBrowserValidation(sessionId: String) -> SessionDatabase.BrowserValidationFailRow? {
+        return parent.queue.sync { () -> SessionDatabase.BrowserValidationFailRow? in
+            guard let db = parent.db else { return nil }
+            let sql = """
+                SELECT id, target_url, axes, advisory, created_at
+                FROM validation_results
+                WHERE session_id = ?
+                  AND result_status = 'fail'
+                  AND delivered = 0
+                ORDER BY created_at DESC
+                LIMIT 1;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+            let id = sqlite3_column_int64(stmt, 0)
+            let url: String? = sqlite3_column_type(stmt, 1) == SQLITE_NULL
+                ? nil : String(cString: sqlite3_column_text(stmt, 1))
+            let axes: String = sqlite3_column_type(stmt, 2) == SQLITE_NULL
+                ? "[]" : String(cString: sqlite3_column_text(stmt, 2))
+            let advisory: String = sqlite3_column_type(stmt, 3) == SQLITE_NULL
+                ? "" : String(cString: sqlite3_column_text(stmt, 3))
+            let created = sqlite3_column_double(stmt, 4)
+            return SessionDatabase.BrowserValidationFailRow(
+                id: id,
+                targetURL: url,
+                axesJSON: axes,
+                advisory: advisory,
+                createdAt: Date(timeIntervalSince1970: created)
+            )
+        }
+    }
+
     /// Legacy compatibility helper for callers/tests that explicitly want the
     /// old destructive read.
     func fetchAndMarkDelivered(sessionId: String) -> [SessionDatabase.ValidationResultRow] {

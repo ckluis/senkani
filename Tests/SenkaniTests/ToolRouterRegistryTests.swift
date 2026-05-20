@@ -46,6 +46,7 @@ struct ToolRouterRegistryTests {
             "explore", "outline", "session", "validate", "parse",
             "embed", "vision", "deps", "pane", "watch", "version",
             "repo", "bundle", "knowledge",
+            "validate_browser", // U.2a-2b — browser validation dispatch surface.
         ]
         let actual = Set(ToolRegistry.byName.keys)
         #expect(actual == expected,

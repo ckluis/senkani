@@ -385,6 +385,26 @@ enum ToolRegistry {
                 handler: .asyncHandler { args, session in await BundleTool.handle(arguments: args, session: session) }
             ),
             ToolDefinition(
+                name: "validate_browser",
+                schema: Tool(
+                    name: "validate_browser",
+                    description: "U.2a-2b — drive a Playwright Chromium pass against a URL across the four ValidationAxes (perf, completeness, security, design). Writes a chained validation_results row + a chained validation.dispatch token_events row. allow_failed:true emits an additional chained validation.fail.allow override row instead of leaving HookRouter to hard-block the next Apply tool call. Side-channel guard: refusal envelope carries only failing_axis + fixture_id + advisory + override_hint — never the failed assertion's payload.",
+                    inputSchema: .object([
+                        "type": .string("object"),
+                        "properties": .object([
+                            "target_url": .object(["type": .string("string"), "description": .string("HTTP or HTTPS URL to validate. file:// is not allowed — the EgressProxy same-origin allowlist denies off-host requests for the duration of the run.")]),
+                            "axes": .object(["type": .string("array"), "items": .object(["type": .string("string"), "enum": .array([.string("perf"), .string("completeness"), .string("security"), .string("design")])]), "description": .string("Subset of axes to run (default: all four). Order does not affect output.")]),
+                            "diff_target": .object(["type": .string("string"), "description": .string("Selector mirroring senkani_bundle's diff: 'unstaged', 'staged', 'branch:<ref>', or 'range:<a>..<b>'. Empty → one step per axis keyed on the target URL.")]),
+                            "allow_failed": .object(["type": .string("boolean"), "description": .string("Override the hard-block. When true and the run returns result_status:fail, the dispatcher writes a chained validation.fail.allow audit row instead of leaving HookRouter to refuse the next Apply tool call. Default: false.")]),
+                            "screenshot": .object(["type": .string("boolean"), "description": .string("Capture a screenshot via the Playwright runner. Default: true.")]),
+                        ]),
+                        "required": .array([.string("target_url")]),
+                    ]),
+                    annotations: .init(readOnlyHint: false, idempotentHint: false, openWorldHint: true)
+                ),
+                handler: .asyncHandler { args, session in await ValidateBrowserTool.handle(arguments: args, session: session) }
+            ),
+            ToolDefinition(
                 name: "knowledge",
                 schema: Tool(
                     name: "knowledge",

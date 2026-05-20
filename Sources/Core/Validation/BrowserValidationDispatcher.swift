@@ -33,6 +33,11 @@ public enum BrowserValidationDispatcher {
         public let screenshot: Bool
         public let sessionId: String
         public let projectRoot: String?
+        /// U.2b-1a — runner selector. `.subprocess` invokes the runner
+        /// closure as before; `.headless` short-circuits to a structured
+        /// `headless_not_yet_implemented` refusal until U.2b-1b lands the
+        /// off-screen WKWebView runner.
+        public let dispatch: BrowserDispatchMode
 
         public init(
             targetURL: String,
@@ -41,7 +46,8 @@ public enum BrowserValidationDispatcher {
             allowFailed: Bool,
             screenshot: Bool,
             sessionId: String,
-            projectRoot: String?
+            projectRoot: String?,
+            dispatch: BrowserDispatchMode = .subprocess
         ) {
             self.targetURL = targetURL
             self.axes = axes
@@ -50,6 +56,7 @@ public enum BrowserValidationDispatcher {
             self.screenshot = screenshot
             self.sessionId = sessionId
             self.projectRoot = projectRoot
+            self.dispatch = dispatch
         }
     }
 
@@ -142,7 +149,24 @@ public enum BrowserValidationDispatcher {
         }
 
         let plan = buildPlan(diff: request.diff, axes: request.axes, targetURL: request.targetURL)
-        let result = runRunner(runner, plan: plan, request: request)
+        let result: PlaywrightResult
+        switch request.dispatch {
+        case .subprocess:
+            result = runRunner(runner, plan: plan, request: request)
+        case .headless:
+            // U.2b-1a scaffold — no off-screen WKWebView yet. Skip the
+            // runner closure entirely and synthesize a structured
+            // refusal. U.2b-1b replaces this branch with the real
+            // headless runner.
+            result = PlaywrightResult(
+                resultStatus: "fail",
+                axesRun: [],
+                assertionsPassed: 0,
+                assertionsFailed: 0,
+                screenshotPath: nil,
+                advisory: "headless_not_yet_implemented — landing in U.2b-1b; use dispatch:'subprocess' for now"
+            )
+        }
 
         let advisory = formatAdvisory(
             resultStatus: result.resultStatus,
@@ -166,7 +190,8 @@ public enum BrowserValidationDispatcher {
         resultSink(row)
 
         let dispatchCmd = encodeAuditCommand(targetURL: request.targetURL, axes: request.axes,
-                                              result: result, allowFailed: request.allowFailed)
+                                              result: result, allowFailed: request.allowFailed,
+                                              dispatchMode: request.dispatch)
         tokenEventSink(TokenEventInput(
             sessionId: request.sessionId,
             projectRoot: request.projectRoot,
@@ -178,7 +203,8 @@ public enum BrowserValidationDispatcher {
             let overrideCmd = encodeOverrideCommand(
                 targetURL: request.targetURL,
                 axes: request.axes,
-                failingAxes: failingAxes(advisory: result.advisory, axesRun: result.axesRun)
+                failingAxes: failingAxes(advisory: result.advisory, axesRun: result.axesRun),
+                dispatchMode: request.dispatch
             )
             tokenEventSink(TokenEventInput(
                 sessionId: request.sessionId,
@@ -306,20 +332,22 @@ public enum BrowserValidationDispatcher {
         targetURL: String,
         axes: [ValidationAxes],
         result: PlaywrightResult,
-        allowFailed: Bool
+        allowFailed: Bool,
+        dispatchMode: BrowserDispatchMode
     ) -> String {
         let axesStr = axes.map(\.rawValue).sorted().joined(separator: ",")
-        return "validate_browser url=\(targetURL) axes=\(axesStr) status=\(result.resultStatus) passed=\(result.assertionsPassed) failed=\(result.assertionsFailed) allow_failed=\(allowFailed)"
+        return "validate_browser url=\(targetURL) axes=\(axesStr) status=\(result.resultStatus) passed=\(result.assertionsPassed) failed=\(result.assertionsFailed) allow_failed=\(allowFailed) runner=\(dispatchMode.auditChainRunnerValue)"
     }
 
     private static func encodeOverrideCommand(
         targetURL: String,
         axes: [ValidationAxes],
-        failingAxes: [String]
+        failingAxes: [String],
+        dispatchMode: BrowserDispatchMode
     ) -> String {
         let axesStr = axes.map(\.rawValue).sorted().joined(separator: ",")
         let failing = failingAxes.sorted().joined(separator: ",")
-        return "validate_browser_override url=\(targetURL) axes=\(axesStr) failing_axes=\(failing)"
+        return "validate_browser_override url=\(targetURL) axes=\(axesStr) failing_axes=\(failing) runner=\(dispatchMode.auditChainRunnerValue)"
     }
 
     private static func failingAxes(advisory: String?, axesRun: [String]) -> [String] {

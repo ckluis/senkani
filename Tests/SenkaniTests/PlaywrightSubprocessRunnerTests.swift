@@ -25,7 +25,7 @@ struct PlaywrightSubprocessRunnerTests {
         #expect(runner.chromiumCacheInstalled() == false)
 
         do {
-            _ = try runner.run(plan: [], targetUrl: "https://example.com")
+            _ = try runner.run(plan: [], targetURL: "https://example.com", screenshot: false)
             Issue.record("expected validationBrowserMissing; runner returned without throwing")
         } catch let error as PlaywrightRunnerError {
             #expect(error == .validationBrowserMissing(installHint: "senkani doctor --install-validation-browser"),

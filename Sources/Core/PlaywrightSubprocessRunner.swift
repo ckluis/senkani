@@ -80,7 +80,7 @@ extension PlaywrightRunnerError: CustomStringConvertible {
 /// U.2a-2 layers the per-axis assertion libraries (perf.swift +
 /// completeness.swift) the TS driver dispatches to, and the MCP tool
 /// + CLI subcommand that drive this runner.
-public final class PlaywrightSubprocessRunner: @unchecked Sendable {
+public final class PlaywrightSubprocessRunner: BrowserRunner, @unchecked Sendable {
     /// Absolute path to the Playwright Chromium cache the install
     /// detector probes. Resolves `~` against the current user's home.
     public static var defaultChromiumCachePath: String {
@@ -121,7 +121,7 @@ public final class PlaywrightSubprocessRunner: @unchecked Sendable {
         return FileManager.default.fileExists(atPath: chromiumCachePath)
     }
 
-    /// Run the plan against `targetUrl`. Refuses with
+    /// Run the plan against `targetURL`. Refuses with
     /// `validationBrowserMissing` when Chromium cache is absent — the
     /// CLI/MCP layer translates this into the install-hint advisory.
     ///
@@ -129,14 +129,22 @@ public final class PlaywrightSubprocessRunner: @unchecked Sendable {
     /// subprocess spawn itself is wired here for U.2a-2 to test
     /// against; production callers route through it once the per-axis
     /// assertion libraries are in place.
-    public func run(plan: [ValidationStep], targetUrl: String) throws -> PlaywrightResult {
+    ///
+    /// U.2b-1a — `screenshot:` parameter is accepted on the protocol
+    /// signature so callers can request a screenshot without driving the
+    /// per-step plan; the TS subprocess produces a screenshot when its
+    /// plan steps request one (today's behavior), so this argument is
+    /// currently a no-op pass-through. U.2b-1b's headless WKWebView
+    /// runner honors the bool directly.
+    public func run(plan: [ValidationStep], targetURL: String, screenshot: Bool) throws -> PlaywrightResult {
+        _ = screenshot  // Pass-through; TS subprocess respects per-step screenshot config.
         guard chromiumCacheInstalled() else {
             throw PlaywrightRunnerError.validationBrowserMissing(
                 installHint: "senkani doctor --install-validation-browser"
             )
         }
 
-        let requestJSON = try Self.encodeRequest(plan: plan, targetUrl: targetUrl)
+        let requestJSON = try Self.encodeRequest(plan: plan, targetUrl: targetURL)
         return try spawnAndDecode(requestJSON: requestJSON)
     }
 

@@ -22,6 +22,16 @@ enum ValidateBrowserTool {
         let screenshot = arguments?["screenshot"]?.boolValue ?? true
         let diff: DiffRequest? = parseDiff(arguments?["diff_target"]?.stringValue, projectRoot: session.projectRoot)
 
+        let dispatchMode: BrowserDispatchMode
+        if let parsed = parseDispatch(arguments?["dispatch"]?.stringValue) {
+            dispatchMode = parsed
+        } else {
+            return .init(
+                content: [.text(text: "Error: dispatch must be 'subprocess' or 'headless'", annotations: nil, _meta: nil)],
+                isError: true
+            )
+        }
+
         let request = BrowserValidationDispatcher.Request(
             targetURL: url,
             axes: axes,
@@ -29,12 +39,13 @@ enum ValidateBrowserTool {
             allowFailed: allowFailed,
             screenshot: screenshot,
             sessionId: session.sessionId ?? "mcp-validate-browser",
-            projectRoot: session.projectRoot
+            projectRoot: session.projectRoot,
+            dispatch: dispatchMode
         )
 
         let runner = PlaywrightSubprocessRunner()
-        let runnerClosure: BrowserValidationDispatcher.Runner = { plan, target, _ in
-            try runner.run(plan: plan, targetUrl: target)
+        let runnerClosure: BrowserValidationDispatcher.Runner = { plan, target, screenshot in
+            try runner.run(plan: plan, targetURL: target, screenshot: screenshot)
         }
         let db = SessionDatabase.shared
         let resultSink: BrowserValidationDispatcher.ResultSink = { row in
@@ -110,6 +121,14 @@ enum ValidateBrowserTool {
         default:
             return all
         }
+    }
+
+    /// Parse the `dispatch` argument. Omitted → `.subprocess`. Unknown
+    /// values return nil; the handler turns nil into a structured
+    /// `invalidArguments`-shaped Response.
+    private static func parseDispatch(_ raw: String?) -> BrowserDispatchMode? {
+        guard let raw, !raw.isEmpty else { return .subprocess }
+        return BrowserDispatchMode(rawValue: raw)
     }
 
     /// Parse the `diff_target` argument. Empty or unrecognized values

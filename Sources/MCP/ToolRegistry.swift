@@ -397,6 +397,7 @@ enum ToolRegistry {
                             "diff_target": .object(["type": .string("string"), "description": .string("Selector mirroring senkani_bundle's diff: 'unstaged', 'staged', 'branch:<ref>', or 'range:<a>..<b>'. Empty → one step per axis keyed on the target URL.")]),
                             "allow_failed": .object(["type": .string("boolean"), "description": .string("Override the hard-block. When true and the run returns result_status:fail, the dispatcher writes a chained validation.fail.allow audit row instead of leaving HookRouter to refuse the next Apply tool call. Default: false.")]),
                             "screenshot": .object(["type": .string("boolean"), "description": .string("Capture a screenshot via the Playwright runner. Default: true.")]),
+                            "dispatch": .object(["type": .string("string"), "enum": .array([.string("subprocess"), .string("headless")]), "description": .string("U.2b-1a — runner selector. 'subprocess' (default) drives the node+Playwright Chromium subprocess. 'headless' is reserved for U.2b-1b's off-screen WKWebView runner and currently returns a structured headless_not_yet_implemented refusal so callers can wire the surface ahead of the implementation. Audit-chain rows carry runner=<value> in both modes (subprocess → 'subprocess'; headless → 'wkwebview-headless').")]),
                         ]),
                         "required": .array([.string("target_url")]),
                     ]),

@@ -41,6 +41,9 @@ struct Validate: ParsableCommand {
     @Option(name: .long, help: "[--browser] Output format. 'json' produces byte-identical output to the senkani_validate_browser MCP response.")
     var format: String?
 
+    @Option(name: .long, help: "[--browser] Runner selector. 'subprocess' (default) drives the node+Playwright Chromium subprocess; 'headless' is reserved for U.2b-1b's off-screen WKWebView runner and currently returns a structured headless_not_yet_implemented refusal.")
+    var dispatch: String = "subprocess"
+
     func run() throws {
         let projectRoot = root ?? FileManager.default.currentDirectoryPath
         if browser {
@@ -115,6 +118,10 @@ struct Validate: ParsableCommand {
             let parsed = names.compactMap { ValidationAxes(rawValue: $0) }
             return parsed.isEmpty ? ValidationAxes.allCases : parsed
         }()
+        guard let dispatchMode = BrowserDispatchMode(rawValue: dispatch) else {
+            print("Error: dispatch must be 'subprocess' or 'headless'")
+            throw ExitCode.failure
+        }
         let diff: DiffRequest? = {
             guard let diffTarget, !diffTarget.isEmpty,
                   let selector = DiffSelector(rawValue: diffTarget) else { return nil }
@@ -129,12 +136,13 @@ struct Validate: ParsableCommand {
             allowFailed: allowFailed,
             screenshot: screenshot,
             sessionId: sessionId,
-            projectRoot: projectRoot
+            projectRoot: projectRoot,
+            dispatch: dispatchMode
         )
 
         let runner = PlaywrightSubprocessRunner()
-        let runnerClosure: BrowserValidationDispatcher.Runner = { plan, target, _ in
-            try runner.run(plan: plan, targetUrl: target)
+        let runnerClosure: BrowserValidationDispatcher.Runner = { plan, target, screenshot in
+            try runner.run(plan: plan, targetURL: target, screenshot: screenshot)
         }
         let db = SessionDatabase.shared
         let resultSink: BrowserValidationDispatcher.ResultSink = { row in

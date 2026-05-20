@@ -39,6 +39,10 @@ struct FragmentationDetectorTests {
             "tool_name", "reason", "score", "correlation_count",
             "flag_id", "label", "labeled_by",
             "prev_hash", "entry_hash", "chain_anchor_id",
+            // U.4b-1 — migration v25 added three columns for the
+            // `promotion` and `override` row kinds. Persisted as
+            // opaque data; not in the chain canonical hash this round.
+            "observed_rate", "observed_sample", "call_id",
         ]
         #expect(cols == expected, "table_info columns: \(cols.sorted())")
     }

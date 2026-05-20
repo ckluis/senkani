@@ -157,6 +157,23 @@ public enum HookRouter {
         _ = SessionDatabase.shared.recordTrustFlag(flag, score: score)
     }
 
+    /// U.4b-1 — current `TrustMode` resolver. Default reads from
+    /// `~/.senkani/trust.json` via `TrustSettingsStore.load`. Tests
+    /// inject a canned mode. Failure to read returns `.softFlag` (the
+    /// fresh-install default) so an unreadable settings file never
+    /// surprises the operator with a sudden `.blocking` posture.
+    nonisolated(unsafe) public static var trustModeReader: () -> TrustMode = {
+        (try? TrustSettingsStore.load())?.mode ?? .softFlag
+    }
+
+    /// U.4b-1 — override existence check for the HookRouter denial
+    /// path. Returns true when an `override` row exists for the given
+    /// `callId`. Production wires `SessionDatabase.shared
+    /// .trustOverrideExists`; tests inject a canned closure.
+    nonisolated(unsafe) public static var trustOverrideReader: (String) -> Bool = { callId in
+        SessionDatabase.shared.trustOverrideExists(callId: callId)
+    }
+
     /// T.4b — synchronous lookup seam for the credential gateway. The
     /// gateway runs inside `handle()` (sync), but `CredentialVault` is
     /// an actor — bridging happens here, not inside the gateway, so
@@ -245,6 +262,28 @@ public enum HookRouter {
             for flag in flags {
                 let score = TrustScorer.score(flags: [flag])
                 trustFlagSink(flag, score)
+            }
+
+            // U.4b-1 — promotion-gate denial path. When the operator
+            // has flipped trust mode to `.blocking` AND at least one
+            // flag fired for this PreToolUse, deny the call with a
+            // structured refusal. Override check fires first so a
+            // recently-overridden callId proceeds.
+            if eventName == "PreToolUse", !flags.isEmpty,
+               trustModeReader() == .blocking {
+                let callId = "\(sid):\(toolName):\(Int(Date().timeIntervalSince1970))"
+                if !trustOverrideReader(callId) {
+                    let firstFlag = flags[0]
+                    let body = "trust mode is blocking; \(firstFlag.reason.rawValue) flag fired for \(toolName) (correlation \(firstFlag.correlationCount)). Override with: senkani trust override \(callId)"
+                    emitDenialAnnotation(
+                        severity: .mustFix,
+                        body: body,
+                        toolName: toolName,
+                        toolInput: toolInput,
+                        sessionId: sessionId
+                    )
+                    return blockResponse(body, eventName: eventName)
+                }
             }
         }
 

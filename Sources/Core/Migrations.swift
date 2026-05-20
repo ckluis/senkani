@@ -1341,6 +1341,45 @@ public enum MigrationRegistry {
             try exec("CREATE INDEX IF NOT EXISTS idx_eval_results_model ON eval_results(model_id, id);")
             try exec("CREATE INDEX IF NOT EXISTS idx_eval_results_time ON eval_results(timestamp);")
         },
+        Migration(version: 25, description: "trust_audits: U.4b-1 promotion + override row kinds (observed_rate, observed_sample, call_id columns)") { db in
+            // U.4b-1 — `FragmentationDetector` mode flip (`softFlag` →
+            // `blocking`) writes a chained `promotion` row carrying
+            // (fp_rate_max, min_labeled_sample, observed_rate,
+            // observed_sample, promoted_by, from→to). Per-call
+            // override writes a chained `override` row carrying
+            // (call_id, flag_id, operator, justification). Both kinds
+            // share the existing `trust_audits` chain.
+            //
+            // Three new nullable columns:
+            //   observed_rate     REAL   -- promotion rows only
+            //   observed_sample   INTEGER-- promotion rows only
+            //   call_id           TEXT   -- override rows only
+            //
+            // Chain shape: the new columns are persisted but NOT in
+            // the canonical hash map this round — same pattern v22
+            // used for validation_results' axes/target_url/plan_steps
+            // (U.2a-2b shipped that scope-cut and filed a follow-up
+            // for the migration anchor work). Opening a `migration-
+            // v25` anchor that includes the new columns in the
+            // canonical map is tracked under
+            // `process-gap-trust-audits-migration-v25-anchor-pending-
+            // 2026-05-20`. Existing rows verify unchanged; new
+            // promotion/override rows verify under the same shape as
+            // legacy flag/label rows with the new columns stored as
+            // opaque data.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v25", detail: msg)
+            }
+            try exec("ALTER TABLE trust_audits ADD COLUMN observed_rate REAL;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE trust_audits ADD COLUMN observed_sample INTEGER;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE trust_audits ADD COLUMN call_id TEXT;", allowDuplicateColumn: true)
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)

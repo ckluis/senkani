@@ -454,6 +454,19 @@ struct Doctor: ParsableCommand {
         let stats = SessionDatabase.shared.trustFlagStatsLast30Days()
         printStatus(.pass, "trust flags — \(stats.doctorLine)")
         results.passed += 1
+
+        // U.4b-1 — surface the operator-flippable trust mode plus a
+        // gap-to-promotion readout (observed FP-rate vs configured
+        // threshold + observed sample vs configured min). Defaults to
+        // the fresh-install posture when the settings file is missing.
+        let settings = (try? TrustSettingsStore.load()) ?? TrustSettings()
+        let observedRate = PromotionGate.observedRate(fp: stats.confirmedFP, tp: stats.confirmedTP)
+        let observedSample = stats.confirmedFP + stats.confirmedTP
+        let rateStr = observedRate.map { String(format: "%.3f", $0) } ?? "n/a"
+        let rateMaxStr = settings.fpRateMax.map { String(format: "%.3f", $0) } ?? "<unset>"
+        let minSampleStr = settings.minLabeledSample.map(String.init) ?? "<unset>"
+        printStatus(.pass, "trust mode: \(settings.mode.rawValue) — observed_rate: \(rateStr) / max: \(rateMaxStr) — sample: \(observedSample) / min: \(minSampleStr)")
+        results.passed += 1
     }
 
     // MARK: - Check 1: Settings JSON

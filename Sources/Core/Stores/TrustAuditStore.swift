@@ -151,6 +151,196 @@ final class TrustAuditStore: @unchecked Sendable {
         }
     }
 
+    // MARK: - U.4b-1 writers (promotion + override)
+
+    /// Insert one `promotion` row recording a `set-mode` flip. `from`
+    /// and `to` are the prior and new modes (raw strings). `fpRateMax`
+    /// and `minLabeledSample` may be nil only when the demotion path
+    /// (`.blocking → .softFlag`) writes a row without thresholds —
+    /// the gate doesn't apply to demotions.
+    ///
+    /// Chain shape note: this writer hashes under the existing
+    /// `fresh-install` anchor's canonical column shape (same set used
+    /// by `recordFlag` / `recordLabel`). The v25-added columns
+    /// (`observed_rate`, `observed_sample`) are persisted as opaque
+    /// data and NOT yet part of the entry hash — same scope-cut U.2a-
+    /// 2b used for `validation_results` v22 columns. Opening a
+    /// `migration-v25` anchor is the deferred follow-up tracked in
+    /// `process-gap-trust-audits-migration-v25-anchor-pending-
+    /// 2026-05-20`.
+    @discardableResult
+    func recordPromotion(
+        from: String,
+        to: String,
+        fpRateMax: Double?,
+        minLabeledSample: Int?,
+        observedRate: Double?,
+        observedSample: Int,
+        promotedBy: String,
+        at: Date = Date()
+    ) -> Int64 {
+        return parent.queue.sync {
+            guard let db = parent.db else { return -1 }
+
+            let anchorId = chain.resolveAnchorId(db: db)
+            let prevHash = chain.latestEntryHash(db: db, anchorId: anchorId)
+
+            // Encode the from→to plus configured thresholds into the
+            // existing `reason` + `score` + `correlation_count` columns
+            // so the canonical hash captures them under the unchanged
+            // canonical shape:
+            //   reason = "from_<from>_to_<to>"
+            //   score = (fp_rate_max * 1_000_000) as Int, or 0 if nil
+            //   correlation_count = min_labeled_sample, or 0 if nil
+            // The promotion-specific v25 columns (observed_rate /
+            // observed_sample) are written as side data; the audit
+            // trail still has every witness recoverable.
+            let reasonStr = "from_\(from)_to_\(to)"
+            let scoreInt = Int64((fpRateMax ?? 0.0) * 1_000_000)
+            let sampleInt = Int64(minLabeledSample ?? 0)
+
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "kind":              .text("promotion"),
+                "created_at":        .real(at.timeIntervalSince1970),
+                "session_id":        .null,
+                "pane_id":           .null,
+                "tool_name":         .null,
+                "reason":            .text(reasonStr),
+                "score":             .integer(scoreInt),
+                "correlation_count": .integer(sampleInt),
+                "flag_id":           .null,
+                "label":             .null,
+                "labeled_by":        .text(promotedBy),
+            ]
+            let entryHash = ChainHasher.entryHash(
+                table: "trust_audits", columns: columns, prev: prevHash
+            )
+
+            let sql = """
+                INSERT INTO trust_audits
+                    (kind, created_at, session_id, pane_id, tool_name,
+                     reason, score, correlation_count,
+                     flag_id, label, labeled_by,
+                     prev_hash, entry_hash, chain_anchor_id,
+                     observed_rate, observed_sample)
+                VALUES (?, ?, NULL, NULL, NULL, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?);
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return -1 }
+            defer { sqlite3_finalize(stmt) }
+
+            sqlite3_bind_text(stmt, 1, ("promotion" as NSString).utf8String, -1, nil)
+            sqlite3_bind_double(stmt, 2, at.timeIntervalSince1970)
+            sqlite3_bind_text(stmt, 3, (reasonStr as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(stmt, 4, scoreInt)
+            sqlite3_bind_int64(stmt, 5, sampleInt)
+            sqlite3_bind_text(stmt, 6, (promotedBy as NSString).utf8String, -1, nil)
+            Self.bindOptionalText(stmt, 7, prevHash)
+            sqlite3_bind_text(stmt, 8, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(stmt, 9, anchorId)
+            if let rate = observedRate {
+                sqlite3_bind_double(stmt, 10, rate)
+            } else {
+                sqlite3_bind_null(stmt, 10)
+            }
+            sqlite3_bind_int64(stmt, 11, Int64(observedSample))
+
+            guard sqlite3_step(stmt) == SQLITE_DONE else { return -1 }
+            chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
+            return sqlite3_last_insert_rowid(db)
+        }
+    }
+
+    /// Insert one `override` row re-allowing a denied call. `callId`
+    /// identifies the HookRouter tool-call event the override
+    /// addresses. `flagId` points at the `trust_audits` flag row that
+    /// triggered the denial (may be nil for pre-emptive overrides
+    /// that don't have a flag row yet). `justification` is operator-
+    /// supplied free-text, optional.
+    @discardableResult
+    func recordOverride(
+        callId: String,
+        flagId: Int64?,
+        operator opAlias: String,
+        justification: String?,
+        at: Date = Date()
+    ) -> Int64 {
+        return parent.queue.sync {
+            guard let db = parent.db else { return -1 }
+
+            let anchorId = chain.resolveAnchorId(db: db)
+            let prevHash = chain.latestEntryHash(db: db, anchorId: anchorId)
+
+            // Encode justification into the `reason` column so it
+            // participates in the canonical hash. callId lives in the
+            // v25-added column (persisted but not hashed).
+            let reasonStr = justification ?? "no-justification"
+
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "kind":              .text("override"),
+                "created_at":        .real(at.timeIntervalSince1970),
+                "session_id":        .null,
+                "pane_id":           .null,
+                "tool_name":         .null,
+                "reason":            .text(reasonStr),
+                "score":             .null,
+                "correlation_count": .null,
+                "flag_id":           flagId.map { .integer($0) } ?? .null,
+                "label":             .null,
+                "labeled_by":        .text(opAlias),
+            ]
+            let entryHash = ChainHasher.entryHash(
+                table: "trust_audits", columns: columns, prev: prevHash
+            )
+
+            let sql = """
+                INSERT INTO trust_audits
+                    (kind, created_at, session_id, pane_id, tool_name,
+                     reason, score, correlation_count,
+                     flag_id, label, labeled_by,
+                     prev_hash, entry_hash, chain_anchor_id,
+                     call_id)
+                VALUES (?, ?, NULL, NULL, NULL, ?, NULL, NULL, ?, NULL, ?, ?, ?, ?, ?);
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return -1 }
+            defer { sqlite3_finalize(stmt) }
+
+            sqlite3_bind_text(stmt, 1, ("override" as NSString).utf8String, -1, nil)
+            sqlite3_bind_double(stmt, 2, at.timeIntervalSince1970)
+            sqlite3_bind_text(stmt, 3, (reasonStr as NSString).utf8String, -1, nil)
+            if let fid = flagId {
+                sqlite3_bind_int64(stmt, 4, fid)
+            } else {
+                sqlite3_bind_null(stmt, 4)
+            }
+            sqlite3_bind_text(stmt, 5, (opAlias as NSString).utf8String, -1, nil)
+            Self.bindOptionalText(stmt, 6, prevHash)
+            sqlite3_bind_text(stmt, 7, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(stmt, 8, anchorId)
+            sqlite3_bind_text(stmt, 9, (callId as NSString).utf8String, -1, nil)
+
+            guard sqlite3_step(stmt) == SQLITE_DONE else { return -1 }
+            chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
+            return sqlite3_last_insert_rowid(db)
+        }
+    }
+
+    /// U.4b-1 — does an override row exist for the given callId? Used
+    /// by the HookRouter denial path to check the per-call allowlist
+    /// before refusing. Cheap indexed lookup.
+    func overrideExists(callId: String) -> Bool {
+        return parent.queue.sync {
+            guard let db = parent.db else { return false }
+            let sql = "SELECT 1 FROM trust_audits WHERE kind = 'override' AND call_id = ? LIMIT 1;"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (callId as NSString).utf8String, -1, nil)
+            return sqlite3_step(stmt) == SQLITE_ROW
+        }
+    }
+
     // MARK: - Reads
 
     /// Recent flag rows, newest first. UI list source.

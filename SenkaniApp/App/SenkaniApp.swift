@@ -29,6 +29,17 @@ struct SenkaniGUI: App {
         // CLI installs/uninstalls converge through the on-event
         // mtime check inside HookRouter.handle().
         HookRouter.refreshInstalledPacks()
+
+        // T.6 — production notification wiring. Install the router
+        // before requesting UN authorization so an immediately-
+        // following `NotificationDelivery.deliver(...)` from any
+        // Core producer reaches the (now non-nil) router. UN's
+        // own delivery is async and gated by the user's grant; if
+        // the operator hasn't yet accepted the TCC prompt the
+        // OS layer silently swallows the banner — the in-process
+        // router is still installed correctly.
+        NotificationBootstrap.bootstrap()
+        NotificationBootstrap.requestAuthorizationIfNeeded()
     }
 
     /// One-shot removal of the retired FCSIT first-use disclosure

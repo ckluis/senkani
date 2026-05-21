@@ -99,6 +99,9 @@ swift build -c release</pre>
       <p>From the Welcome surface, click <strong>Choose project folder</strong> and pick the repo your agent will run in. The Claude / Ollama agent cards then unlock; clicking <strong>Start Claude in &lt;project&gt;</strong> opens a Terminal pane in that directory and launches <code>claude</code>. The pane shows a <strong>Senkani Active</strong> proof strip (PROJECT, MCP, HOOKS, TRACK, EVENTS) so you can confirm every component is wired up before the first command runs.</p>
     </div>
 
+    <h2>Notification permission</h2>
+    <p>On first launch SenkaniApp asks macOS for permission to post local notifications (the standard system TCC prompt). Granting lets the app show a one-time banner when you cross a celebrate-moment — currently the first non-zero token-saving the optimizer reports. If you deny, every other surface still works; the in-process notification fan-out is installed regardless, the OS just silently drops the banner request. Per-sink and per-event subscriptions are configurable via <code>~/.senkani/notifications.json</code>; missing file means every sink subscribes to every event (opt-out, not opt-in).</p>
+
     <h2>If you don't use Claude Code</h2>
     <p><code>senkani init</code> is already hooks-only — it never touches MCP. The MCP entry is written by SenkaniApp on launch, but it's gated on <code>SENKANI_PANE_ID</code> and stays dormant unless a Claude Code session runs inside a Senkani-managed terminal. For Cursor, Copilot, or another non-MCP agent, run <code>senkani init</code> in each project to get the hook-driven filter pipeline + secret redaction; the MCP server entry sits idle. See <a href="../../docs/guides/cursor-copilot.html">Wire up Cursor / Copilot</a>.</p>
 

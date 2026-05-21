@@ -239,12 +239,32 @@ public enum OnboardingMilestoneStore {
         // suite parallel deadlock surfaced in
         // `swift-test-serial-full-suite-stall-investigation-2026-05-18`.
         let resolvedHome = home ?? resolveDefaultHome()
+        let isFirstRecord: Bool
         recordLock.lock()
-        defer { recordLock.unlock() }
         var current = completed(home: resolvedHome, env: env)
-        if current[milestone] != nil { return false }
+        if current[milestone] != nil {
+            recordLock.unlock()
+            return false
+        }
         current[milestone] = at
         write(current, home: resolvedHome)
+        isFirstRecord = true
+        recordLock.unlock()
+        // T.6 production hookup: fire a NotifyEvent on the first
+        // time a high-value milestone is recorded. The delivery
+        // point is no-op until SenkaniApp installs a router, so
+        // CLI / tests / first-install never see banners they
+        // didn't ask for. `firstNonzeroSavings` is the celebrate-
+        // moment ("you saved tokens for the first time");
+        // `projectSelected` is intentionally silent because users
+        // who just configured the app don't need a banner to
+        // confirm what they just clicked.
+        if isFirstRecord, milestone == .firstNonzeroSavings {
+            let copy = OnboardingMilestoneCopy.entry(for: milestone)
+            NotificationDelivery.deliver(
+                .notifyDone(toolName: "onboarding", summary: copy.title)
+            )
+        }
         return true
     }
 

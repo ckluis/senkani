@@ -170,6 +170,21 @@ extension Schedule {
             abstract: "List all scheduled tasks."
         )
 
+        // SCHEDULE column rendering. Counter-cadence rows have a
+        // `COUNTER:<event>:<N>` sentinel `cronPattern` that
+        // `CronToLaunchd.humanReadable` can't decode (1-field input
+        // falls through to the raw string), so the operator would see
+        // `COUNTER:tool_call:10` instead of `every 10 tool_calls`.
+        // Mirror `SenkaniApp/Views/ScheduleView.swift:172` and prefer
+        // `eventCounterCadence` prose when present. Cron rows fall
+        // through to the existing human-readable rendering.
+        internal static func renderSchedule(for task: ScheduledTask) -> String {
+            if let counter = task.eventCounterCadence, !counter.isEmpty {
+                return counter
+            }
+            return CronToLaunchd.humanReadable(task.cronPattern)
+        }
+
         func run() throws {
             let tasks = ScheduleStore.list()
 
@@ -202,7 +217,7 @@ extension Schedule {
             dateFormatter.timeStyle = .short
 
             for task in tasks {
-                let humanCron = CronToLaunchd.humanReadable(task.cronPattern)
+                let schedule = Self.renderSchedule(for: task)
                 let truncCmd = task.command.count > cmdW
                     ? String(task.command.prefix(cmdW - 3)) + "..."
                     : task.command
@@ -211,7 +226,7 @@ extension Schedule {
 
                 let row = [
                     task.name.padding(toLength: nameW, withPad: " ", startingAt: 0),
-                    humanCron.padding(toLength: cronW, withPad: " ", startingAt: 0),
+                    schedule.padding(toLength: cronW, withPad: " ", startingAt: 0),
                     truncCmd.padding(toLength: cmdW, withPad: " ", startingAt: 0),
                     (task.enabled ? "yes" : "no").padding(toLength: enabledW, withPad: " ", startingAt: 0),
                     lastRun.padding(toLength: lastRunW, withPad: " ", startingAt: 0),

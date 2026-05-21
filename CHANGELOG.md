@@ -9,6 +9,8 @@ Senkani *is*. Entries are grouped by the server version reported by
 _Add new entries here as work ships. Promote this section to a
 dated heading at release time._
 
+### May 21 — bug: `senkani schedule list` SCHEDULE column now renders counter-cadence rows with the prose, not the raw `COUNTER:<event>:<N>` sentinel — `Sources/CLI/ScheduleCommand.swift::Schedule.ListTasks` gains a `renderSchedule(for:)` helper that mirrors `SenkaniApp/Views/ScheduleView.swift:172` and prefers `task.eventCounterCadence` when non-empty; cron rows continue to use `CronToLaunchd.humanReadable` (`schedule-cli-list-counter-cadence-display-2026-05-21`, defects-outside-criteria split from `schedule-cli-counter-cadence-flag-2026-05-21`)
+
 ### May 21 — feature: `senkani schedule create` gains `--counter-cadence <expr>` flag — mutually exclusive with `--cron`, parses via `CounterCadence.parse`, refuses `N < 2` up front; on success writes the `ScheduledTask` JSON with a `COUNTER:<event>:<N>` sentinel `cronPattern` and `eventCounterCadence: <expr>` and skips plist generation + `launchctl load` entirely (counter cadences fire from HookRouter post-tool reactions, not launchd) (`schedule-cli-counter-cadence-flag-2026-05-21`, Finding C-counter split from `schedule-amplification-guard-and-pane-not-wired-2026-05-17`)
 
 ### May 21 — bug: `senkani schedule create` now refuses amplifying crons — `AmplificationGuard` wired into the CLI, boundary `<` → `<=` so `* * * * *` (60s gap == floor) is rejected up front (`schedule-amplification-guard-and-pane-not-wired-2026-05-17`, Finding A; Findings B + C split into follow-up items)

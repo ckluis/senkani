@@ -18,7 +18,15 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Cowork-runnable test plans (groomed; ready to execute)
 
-> Pointers to per-item test plans groomed by `/senkani-autonomous`.
+### ci-chunk-other-sigtrap-retry-exhaust — matrix-CI rewalk for chunk[other] SIGTRAP recurrence 2026-05-21
+
+- **Item:** [`spec/autonomous/backlog/ci-chunk-other-sigtrap-retry-exhaust-2026-05-08.md`](../../spec/autonomous/backlog/ci-chunk-other-sigtrap-retry-exhaust-2026-05-08.md)
+- **Exec mode:** Cowork or operator (entirely shell-driven via `gh` CLI; no GUI; first `gh auth status` may need operator hands)
+- **Time estimate:** ~30-60 minutes operator-supervised across the walk; 1 day to 2 weeks elapsed (cadence-bound by `main`-branch push velocity)
+- **What it proves:** whether the matrix-CI fan-out shipped 2026-05-18 (`.github/workflows/test.yml` 8-chunk matrix) incidentally closed the chunk[other] SIGTRAP retry-exhaust observed in 3 pre-matrix reproductions (2026-05-08 PR-CI 25554316180, main-CI 25554480209, PR-CI 25572249946). The validation accumulates 5 consecutive matrix-CI runs of chunk[other] against `main` HEAD and branches: 5/5 green → parent acceptance #2 closes via the matrix-fan-out reference; any SIGTRAP recurrence → file `ci-chunk-other-sub-split-<chunks>-2026-05-21` per parent acceptance #3.
+- **Pre-condition:** local main is 140 commits ahead of origin/main as of 2026-05-21; step 2 of the plan pushes those commits to trigger the first matrix-CI run on `main` (operator-decision push — 140 commits is large; operator may prefer to split into smaller pushes, but the rolling-5-window admits incremental accumulation either way).
+
+
 > The plan body lives in the per-item file; this section is a
 > cadence-friendly index. Operator (or Cowork in Claude Desktop)
 > picks one, runs it, follows the `## Operator contract` in the

@@ -126,6 +126,75 @@ struct SymbolFTSStoreTests {
         let after = try store.search(query: "oldFunction", limit: 5)
         #expect(after.isEmpty, "Symbols from removed file should not appear after incremental update")
     }
+
+    /// Round-trip proof for the SQLITE_TRANSIENT_DESTRUCTOR conversion:
+    /// inserts five rows via the public `rebuild` writer, queries them back
+    /// by name prefix, and asserts that every stored column equals the
+    /// originally-inserted bytes. Pre-conversion (when binds used the nil
+    /// SQLITE_STATIC destructor against Swift String / NSString bridge
+    /// temporaries) the columns could read as garbage on any iteration
+    /// where ARC released the temporary before sqlite3_step copied the
+    /// bytes — non-deterministic, but observable in production drift.
+    /// Post-conversion this test must stay green forever.
+    /// See `sqlite-bind-static-indexer-symbolftsstore-2026-05-21`.
+    @Test func ftsRoundTripPreservesAllColumnsByteForByte() throws {
+        let (store, dir) = makeTempFTS()
+        defer { cleanupDir(dir) }
+
+        // Use distinct values per column so a cross-column corruption
+        // (e.g. file path bleeding into container) is detectable.
+        let originals: [IndexEntry] = [
+            IndexEntry(name: "alphaConnect", kind: .function,
+                       file: "Sources/Alpha/AlphaConnect.swift", startLine: 10,
+                       signature: "func alphaConnect(_ host: String) -> Bool",
+                       container: "AlphaService"),
+            IndexEntry(name: "alphaDisconnect", kind: .function,
+                       file: "Sources/Alpha/AlphaConnect.swift", startLine: 42,
+                       signature: "func alphaDisconnect(reason: DisconnectReason)",
+                       container: "AlphaService"),
+            IndexEntry(name: "alphaPing", kind: .method,
+                       file: "Sources/Alpha/Ping.swift", startLine: 7,
+                       signature: nil,
+                       container: nil),
+            IndexEntry(name: "alphaQueue", kind: .property,
+                       file: "Sources/Alpha/Queue.swift", startLine: 100,
+                       signature: "var alphaQueue: AsyncStream<Event>",
+                       container: "AlphaService"),
+            IndexEntry(name: "alphaZeta", kind: .struct,
+                       file: "Sources/Alpha/Zeta.swift", startLine: 1,
+                       signature: "struct alphaZeta: Sendable",
+                       container: nil),
+        ]
+        try store.rebuild(entries: originals)
+
+        let results = try store.search(query: "alpha", limit: 50)
+        #expect(results.count == originals.count,
+                "Round-trip should return all \(originals.count) inserted rows; got \(results.count)")
+
+        // Build a name → original lookup so we can compare regardless of
+        // BM25 ordering.
+        let originalByName = Dictionary(uniqueKeysWithValues:
+            originals.map { ($0.name, $0) })
+
+        for r in results {
+            guard let original = originalByName[r.entry.name] else {
+                Issue.record("Result name '\(r.entry.name)' does not match any inserted row")
+                continue
+            }
+            #expect(r.entry.name == original.name,
+                    "name byte-mismatch: stored '\(r.entry.name)' vs original '\(original.name)'")
+            #expect(r.entry.signature == original.signature,
+                    "signature byte-mismatch for '\(original.name)': stored \(String(describing: r.entry.signature)) vs original \(String(describing: original.signature))")
+            #expect(r.entry.container == original.container,
+                    "container byte-mismatch for '\(original.name)': stored \(String(describing: r.entry.container)) vs original \(String(describing: original.container))")
+            #expect(r.entry.kind == original.kind,
+                    "kind byte-mismatch for '\(original.name)': stored \(r.entry.kind) vs original \(original.kind)")
+            #expect(r.entry.file == original.file,
+                    "file byte-mismatch for '\(original.name)': stored '\(r.entry.file)' vs original '\(original.file)'")
+            #expect(r.entry.startLine == original.startLine,
+                    "startLine mismatch for '\(original.name)': stored \(r.entry.startLine) vs original \(original.startLine)")
+        }
+    }
 }
 
 // MARK: - RRFRanker Tests

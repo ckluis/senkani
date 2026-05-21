@@ -82,16 +82,16 @@ final class TrustAuditStore: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return -1 }
             defer { sqlite3_finalize(stmt) }
 
-            sqlite3_bind_text(stmt, 1, ("flag" as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, ("flag" as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 2, flag.createdAt.timeIntervalSince1970)
-            sqlite3_bind_text(stmt, 3, (flag.sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, (flag.sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             Self.bindOptionalText(stmt, 4, flag.paneId)
-            sqlite3_bind_text(stmt, 5, (flag.toolName as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 6, (flag.reason.rawValue as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 5, (flag.toolName as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 6, (flag.reason.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 7, Int64(score))
             sqlite3_bind_int64(stmt, 8, Int64(flag.correlationCount))
             Self.bindOptionalText(stmt, 9, prevHash)
-            sqlite3_bind_text(stmt, 10, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 10, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 11, anchorId)
 
             guard sqlite3_step(stmt) == SQLITE_DONE else { return -1 }
@@ -148,13 +148,13 @@ final class TrustAuditStore: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return -1 }
             defer { sqlite3_finalize(stmt) }
 
-            sqlite3_bind_text(stmt, 1, ("label" as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, ("label" as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 2, at.timeIntervalSince1970)
             sqlite3_bind_int64(stmt, 3, flagId)
-            sqlite3_bind_text(stmt, 4, (label.rawValue as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 5, (labeledBy as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 4, (label.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 5, (labeledBy as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             Self.bindOptionalText(stmt, 6, prevHash)
-            sqlite3_bind_text(stmt, 7, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 7, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 8, anchorId)
 
             guard sqlite3_step(stmt) == SQLITE_DONE else { return -1 }
@@ -244,14 +244,14 @@ final class TrustAuditStore: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return -1 }
             defer { sqlite3_finalize(stmt) }
 
-            sqlite3_bind_text(stmt, 1, ("promotion" as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, ("promotion" as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 2, at.timeIntervalSince1970)
-            sqlite3_bind_text(stmt, 3, (reasonStr as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, (reasonStr as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 4, scoreInt)
             sqlite3_bind_int64(stmt, 5, sampleInt)
-            sqlite3_bind_text(stmt, 6, (promotedBy as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 6, (promotedBy as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             Self.bindOptionalText(stmt, 7, prevHash)
-            sqlite3_bind_text(stmt, 8, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 8, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 9, anchorId)
             if let rate = observedRate {
                 sqlite3_bind_double(stmt, 10, rate)
@@ -327,19 +327,19 @@ final class TrustAuditStore: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return -1 }
             defer { sqlite3_finalize(stmt) }
 
-            sqlite3_bind_text(stmt, 1, ("override" as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, ("override" as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 2, at.timeIntervalSince1970)
-            sqlite3_bind_text(stmt, 3, (reasonStr as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, (reasonStr as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             if let fid = flagId {
                 sqlite3_bind_int64(stmt, 4, fid)
             } else {
                 sqlite3_bind_null(stmt, 4)
             }
-            sqlite3_bind_text(stmt, 5, (opAlias as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 5, (opAlias as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             Self.bindOptionalText(stmt, 6, prevHash)
-            sqlite3_bind_text(stmt, 7, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 7, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 8, anchorId)
-            sqlite3_bind_text(stmt, 9, (callId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 9, (callId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
 
             guard sqlite3_step(stmt) == SQLITE_DONE else { return -1 }
             chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
@@ -357,7 +357,7 @@ final class TrustAuditStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (callId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (callId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             return sqlite3_step(stmt) == SQLITE_ROW
         }
     }
@@ -637,7 +637,7 @@ final class TrustAuditStore: @unchecked Sendable {
 
     private static func bindOptionalText(_ stmt: OpaquePointer?, _ index: Int32, _ value: String?) {
         if let val = value {
-            sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         } else {
             sqlite3_bind_null(stmt, index)
         }

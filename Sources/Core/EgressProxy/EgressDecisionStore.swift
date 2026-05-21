@@ -86,37 +86,37 @@ public final class EgressDecisionStore: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
             defer { sqlite3_finalize(stmt) }
             sqlite3_bind_double(stmt, 1, now)
-            sqlite3_bind_text(stmt, 2, (host as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 3, (method as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 4, (decision.rawValue as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 5, (ruleId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 2, (host as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 3, (method as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 4, (decision.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 5, (ruleId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 6, latencyUs)
             if let paneId {
-                sqlite3_bind_text(stmt, 7, (paneId as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 7, (paneId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 7)
             }
             if let normalizedRoot {
-                sqlite3_bind_text(stmt, 8, (normalizedRoot as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 8, (normalizedRoot as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 8)
             }
             if let judgeRationale {
-                sqlite3_bind_text(stmt, 9, (judgeRationale as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 9, (judgeRationale as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 9)
             }
             if let paneMode {
-                sqlite3_bind_text(stmt, 10, (paneMode.rawValue as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 10, (paneMode.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 10)
             }
             if let prevHash {
-                sqlite3_bind_text(stmt, 11, (prevHash as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 11, (prevHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 11)
             }
-            sqlite3_bind_text(stmt, 12, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 12, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 13, anchorId)
 
             guard sqlite3_step(stmt) == SQLITE_DONE else { return false }

@@ -90,19 +90,19 @@ final class SandboxStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (resultId as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (resultId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 3, now)
-            sqlite3_bind_text(stmt, 4, (redactedCommand as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 5, (redactedOutput as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 4, (redactedCommand as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 5, (redactedOutput as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 6, Int64(lineCount))
             sqlite3_bind_int64(stmt, 7, Int64(byteCount))
             if let prev = prevHash {
-                sqlite3_bind_text(stmt, 8, (prev as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 8, (prev as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 8)
             }
-            sqlite3_bind_text(stmt, 9, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 9, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 10, anchorId)
             if sqlite3_step(stmt) == SQLITE_DONE {
                 self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
@@ -121,7 +121,7 @@ final class SandboxStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (resultId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (resultId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
 
             guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
             let command = String(cString: sqlite3_column_text(stmt, 0))

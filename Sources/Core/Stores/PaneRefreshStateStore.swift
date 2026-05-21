@@ -63,9 +63,9 @@ public final class PaneRefreshStateStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (normalizedRoot as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (tileId as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 3, (state.cacheType.rawValue as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (normalizedRoot as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (tileId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 3, (state.cacheType.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 4, state.cacheDuration)
             sqlite3_bind_double(stmt, 5, state.nextUpdate.timeIntervalSince1970)
             sqlite3_bind_int64(stmt, 6, Int64(state.retryCount))
@@ -74,7 +74,7 @@ public final class PaneRefreshStateStore: @unchecked Sendable {
             sqlite3_bind_int64(stmt, 9, state.contentAvailable ? 1 : 0)
             sqlite3_bind_double(stmt, 10, writtenAt)
             Self.bindOptionalText(stmt, 11, prevHash)
-            sqlite3_bind_text(stmt, 12, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 12, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 13, anchorId)
 
             if sqlite3_step(stmt) == SQLITE_DONE {
@@ -104,8 +104,8 @@ public final class PaneRefreshStateStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (normalizedRoot as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (tileId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (normalizedRoot as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (tileId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
             return Self.decode(stmt)
         }
@@ -135,8 +135,8 @@ public final class PaneRefreshStateStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [:] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (normalizedRoot as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (normalizedRoot as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (normalizedRoot as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (normalizedRoot as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             var out: [String: PaneRefreshState] = [:]
             while sqlite3_step(stmt) == SQLITE_ROW {
                 let tileId = String(cString: sqlite3_column_text(stmt, 0))
@@ -189,7 +189,7 @@ public final class PaneRefreshStateStore: @unchecked Sendable {
 
     private static func bindOptionalText(_ stmt: OpaquePointer?, _ index: Int32, _ value: String?) {
         if let val = value {
-            sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         } else {
             sqlite3_bind_null(stmt, index)
         }

@@ -109,19 +109,19 @@ final class ValidationStore: @unchecked Sendable {
                 return
             }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (filePath as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 3, (validatorName as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 4, (category as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (filePath as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 3, (validatorName as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 4, (category as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int(stmt, 5, exitCode)
             Self.bindOptionalText(stmt, 6, rawOutput)
-            sqlite3_bind_text(stmt, 7, (advisory as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 7, (advisory as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int(stmt, 8, Int32(durationMs))
             sqlite3_bind_double(stmt, 9, now)
-            sqlite3_bind_text(stmt, 10, (resolvedOutcome as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 10, (resolvedOutcome as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             Self.bindOptionalText(stmt, 11, reason)
             Self.bindOptionalText(stmt, 12, prevHash)
-            sqlite3_bind_text(stmt, 13, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 13, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 14, anchorId)
             if sqlite3_step(stmt) == SQLITE_DONE {
                 self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
@@ -155,7 +155,7 @@ final class ValidationStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, selectSql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
 
             var results: [SessionDatabase.ValidationResultRow] = []
             while sqlite3_step(stmt) == SQLITE_ROW {
@@ -184,9 +184,9 @@ final class ValidationStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             if let outcome {
-                sqlite3_bind_text(stmt, 2, (outcome as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 2, (outcome as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             }
 
             var results: [SessionDatabase.ValidationResultRow] = []
@@ -368,7 +368,7 @@ final class ValidationStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
             let id = sqlite3_column_int64(stmt, 0)
             let url: String? = sqlite3_column_type(stmt, 1) == SQLITE_NULL
@@ -585,7 +585,7 @@ final class ValidationStore: @unchecked Sendable {
 
     private static func bindOptionalText(_ stmt: OpaquePointer?, _ index: Int32, _ value: String?) {
         if let val = value {
-            sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         } else {
             sqlite3_bind_null(stmt, index)
         }

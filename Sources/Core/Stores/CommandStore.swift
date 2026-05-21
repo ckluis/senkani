@@ -113,16 +113,16 @@ final class CommandStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return id }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 2, now)
             sqlite3_bind_int(stmt, 3, Int32(paneCount))
             if let root = normalizedRoot {
-                sqlite3_bind_text(stmt, 4, (root as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 4, (root as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 4)
             }
             if let agent = agentType {
-                sqlite3_bind_text(stmt, 5, (agent.rawValue as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 5, (agent.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 5)
             }
@@ -222,37 +222,37 @@ final class CommandStore: @unchecked Sendable {
                 """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 2, now)
-            sqlite3_bind_text(stmt, 3, (toolName as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, (toolName as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             if let cmd = redactedCommand {
-                sqlite3_bind_text(stmt, 4, (cmd as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 4, (cmd as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 4)
             }
             sqlite3_bind_int64(stmt, 5, Int64(rawBytes))
             sqlite3_bind_int64(stmt, 6, Int64(compressedBytes))
             if let feat = feature {
-                sqlite3_bind_text(stmt, 7, (feat as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 7, (feat as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 7)
             }
             if let prev = preview {
-                sqlite3_bind_text(stmt, 8, (prev as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 8, (prev as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 8)
             }
             if let cid = connectionId {
-                sqlite3_bind_text(stmt, 9, (cid as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 9, (cid as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 9)
             }
             if let prevH = prevHash {
-                sqlite3_bind_text(stmt, 10, (prevH as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 10, (prevH as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 10)
             }
-            sqlite3_bind_text(stmt, 11, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 11, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 12, anchorId)
             let insertRC = sqlite3_step(stmt)
             sqlite3_finalize(stmt)
@@ -277,7 +277,7 @@ final class CommandStore: @unchecked Sendable {
             sqlite3_bind_int64(updateStmt, 1, Int64(rawBytes))
             sqlite3_bind_int64(updateStmt, 2, Int64(saved))
             sqlite3_bind_int(updateStmt, 3, Int32(costCents))
-            sqlite3_bind_text(updateStmt, 4, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(updateStmt, 4, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             let updateRC = sqlite3_step(updateStmt)
             sqlite3_finalize(updateStmt)
             guard updateRC == SQLITE_DONE else { return }
@@ -313,7 +313,7 @@ final class CommandStore: @unchecked Sendable {
             defer { sqlite3_finalize(stmt) }
             sqlite3_bind_double(stmt, 1, now)
             sqlite3_bind_double(stmt, 2, now)
-            sqlite3_bind_text(stmt, 3, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_step(stmt)
         }
     }
@@ -329,7 +329,7 @@ final class CommandStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
             return Int(sqlite3_column_int64(stmt, 0))
         }
@@ -404,7 +404,7 @@ final class CommandStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (sanitized as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (sanitized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int(stmt, 2, Int32(min(limit, 200)))
 
             var results: [CommandSearchResult] = []
@@ -483,7 +483,7 @@ final class CommandStore: @unchecked Sendable {
                 return LifetimeStats(totalSessions: 0, totalCommands: 0, totalRawBytes: 0, totalSavedBytes: 0, totalCostSavedCents: 0)
             }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (projectRoot as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (projectRoot as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
 
             if sqlite3_step(stmt) == SQLITE_ROW {
                 return LifetimeStats(
@@ -547,7 +547,7 @@ final class CommandStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
 
             var results: [(command: String, rawBytes: Int, compressedBytes: Int)] = []
             while sqlite3_step(stmt) == SQLITE_ROW {
@@ -602,12 +602,12 @@ final class CommandStore: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
 
-            sqlite3_bind_text(stmt, 1, (commandPrefix as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (likePattern as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (commandPrefix as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (likePattern as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             var nextBind: Int32 = 3
             if let root = projectRoot {
                 let normalized = SessionDatabase.normalizePath(root) ?? root
-                sqlite3_bind_text(stmt, nextBind, (normalized as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, nextBind, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
                 nextBind += 1
             }
             sqlite3_bind_int(stmt, nextBind, Int32(limit))
@@ -713,18 +713,18 @@ final class CommandStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 2, now)
-            sqlite3_bind_text(stmt, 3, (toolName as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, (toolName as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 4, Int64(rawBytes))
             sqlite3_bind_int64(stmt, 5, Int64(compressedBytes))
-            sqlite3_bind_text(stmt, 6, (decision as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 6, (decision as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             if let prevH = prevHash {
-                sqlite3_bind_text(stmt, 7, (prevH as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 7, (prevH as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 7)
             }
-            sqlite3_bind_text(stmt, 8, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 8, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 9, anchorId)
             if sqlite3_step(stmt) == SQLITE_DONE {
                 self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
@@ -748,7 +748,7 @@ final class CommandStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (connectionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (connectionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int(stmt, 2, Int32(min(limit, 1000)))
 
             var rows: [CommandSearchResult] = []
@@ -800,7 +800,7 @@ final class CommandStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [:] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
 
             var out: [String: ConnectionAggregateRow] = [:]
             while sqlite3_step(stmt) == SQLITE_ROW {

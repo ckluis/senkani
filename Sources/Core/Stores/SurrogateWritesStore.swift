@@ -55,16 +55,16 @@ public final class SurrogateWritesStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (engagementID as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (surrogateID as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 3, (category as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (engagementID as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (surrogateID as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 3, (category as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 4, ts)
             if let prevHash {
-                sqlite3_bind_text(stmt, 5, (prevHash as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 5, (prevHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 5)
             }
-            sqlite3_bind_text(stmt, 6, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 6, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 7, anchorId)
 
             guard sqlite3_step(stmt) == SQLITE_DONE else { return false }

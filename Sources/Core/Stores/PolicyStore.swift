@@ -79,16 +79,16 @@ final class PolicyStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 2, config.capturedAt.timeIntervalSince1970)
-            sqlite3_bind_text(stmt, 3, (hash as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 4, (json as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, (hash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 4, (json as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             if let prevHash {
-                sqlite3_bind_text(stmt, 5, (prevHash as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 5, (prevHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 5)
             }
-            sqlite3_bind_text(stmt, 6, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 6, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 7, anchorId)
 
             let rc = sqlite3_step(stmt)
@@ -122,7 +122,7 @@ final class PolicyStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
             return PolicySnapshotRow(
                 id: Int(sqlite3_column_int64(stmt, 0)),
@@ -148,7 +148,7 @@ final class PolicyStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             var out: [PolicySnapshotRow] = []
             while sqlite3_step(stmt) == SQLITE_ROW {
                 out.append(PolicySnapshotRow(

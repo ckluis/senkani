@@ -1610,7 +1610,7 @@ public enum MigrationRegistry {
                 stage: "v23 anchor insert(\(table))",
                 detail: String(cString: sqlite3_errmsg(db)))
         }
-        sqlite3_bind_text(stmt, 1, (table as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 1, (table as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         sqlite3_bind_double(stmt, 2, now)
         sqlite3_bind_int64(stmt, 3, maxRowid)
         guard sqlite3_step(stmt) == SQLITE_DONE else {
@@ -1655,7 +1655,7 @@ public enum MigrationRegistry {
                 stage: "v18 anchor insert(\(table))",
                 detail: String(cString: sqlite3_errmsg(db)))
         }
-        sqlite3_bind_text(stmt, 1, (table as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 1, (table as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         sqlite3_bind_double(stmt, 2, now)
         sqlite3_bind_int64(stmt, 3, maxRowid)
         guard sqlite3_step(stmt) == SQLITE_DONE else {
@@ -1695,7 +1695,7 @@ public enum MigrationRegistry {
         guard sqlite3_prepare_v2(db, insertSQL, -1, &stmt, nil) == SQLITE_OK else {
             throw MigrationError.sqlFailed(stage: "v5 anchor insert(\(table))", detail: String(cString: sqlite3_errmsg(db)))
         }
-        sqlite3_bind_text(stmt, 1, (table as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 1, (table as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         sqlite3_bind_double(stmt, 2, now)
         sqlite3_bind_int64(stmt, 3, maxRowid)
         guard sqlite3_step(stmt) == SQLITE_DONE else {

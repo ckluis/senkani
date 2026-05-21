@@ -31,7 +31,7 @@ final class AnnotationRateCapStore: @unchecked Sendable {
             defer { sqlite3_finalize(stmt) }
             sqlite3_bind_double(stmt, 1, row.windowStart.timeIntervalSince1970)
             sqlite3_bind_double(stmt, 2, row.windowEnd.timeIntervalSince1970)
-            sqlite3_bind_text(stmt, 3, (row.severity as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, (row.severity as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 4, Int64(row.suppressedCount))
             sqlite3_bind_int64(stmt, 5, Int64(row.threshold))
             sqlite3_bind_double(stmt, 6, now.timeIntervalSince1970)

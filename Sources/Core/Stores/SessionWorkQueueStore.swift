@@ -69,8 +69,8 @@ public final class SessionWorkQueueStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return -1 }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (kind as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (payload as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (kind as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (payload as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 3, wakeup)
             sqlite3_bind_double(stmt, 4, now)
             sqlite3_bind_double(stmt, 5, now)
@@ -113,7 +113,7 @@ public final class SessionWorkQueueStore: @unchecked Sendable {
             var idx: Int32 = 1
             sqlite3_bind_double(stmt, idx, nowEpoch); idx += 1
             for k in (kinds ?? []) {
-                sqlite3_bind_text(stmt, idx, (k as NSString).utf8String, -1, nil); idx += 1
+                sqlite3_bind_text(stmt, idx, (k as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1
             }
             sqlite3_bind_int(stmt, idx, Int32(limit))
 
@@ -143,7 +143,7 @@ public final class SessionWorkQueueStore: @unchecked Sendable {
                 var uStmt: OpaquePointer?
                 guard sqlite3_prepare_v2(db, updateSQL, -1, &uStmt, nil) == SQLITE_OK else { continue }
                 defer { sqlite3_finalize(uStmt) }
-                sqlite3_bind_text(uStmt, 1, (owner as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(uStmt, 1, (owner as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
                 sqlite3_bind_double(uStmt, 2, expiresEpoch)
                 sqlite3_bind_double(uStmt, 3, nowEpoch)
                 sqlite3_bind_double(uStmt, 4, nowEpoch)
@@ -185,7 +185,7 @@ public final class SessionWorkQueueStore: @unchecked Sendable {
             sqlite3_bind_double(stmt, 2, nowEpoch)
             sqlite3_bind_double(stmt, 3, nowEpoch)
             sqlite3_bind_int64(stmt, 4, id)
-            sqlite3_bind_text(stmt, 5, (owner as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 5, (owner as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             return sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db) > 0
         }
     }
@@ -223,7 +223,7 @@ public final class SessionWorkQueueStore: @unchecked Sendable {
             sqlite3_bind_double(stmt, 2, wakeup)
             sqlite3_bind_double(stmt, 3, nowEpoch)
             sqlite3_bind_int64(stmt, 4, id)
-            sqlite3_bind_text(stmt, 5, (owner as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 5, (owner as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             let ok = sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db) > 0
             if ok { parent.recordEvent(type: "session_work_queue.retried") }
             return ok
@@ -310,7 +310,7 @@ public final class SessionWorkQueueStore: @unchecked Sendable {
             var counts: [String: Int] = [:]
             var stmt: OpaquePointer?
             if sqlite3_prepare_v2(db, stateSQL, -1, &stmt, nil) == SQLITE_OK {
-                if let pr = projectRoot { sqlite3_bind_text(stmt, 1, (pr as NSString).utf8String, -1, nil) }
+                if let pr = projectRoot { sqlite3_bind_text(stmt, 1, (pr as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR) }
                 while sqlite3_step(stmt) == SQLITE_ROW {
                     counts[String(cString: sqlite3_column_text(stmt, 0))] = Int(sqlite3_column_int64(stmt, 1))
                 }
@@ -398,11 +398,11 @@ public final class SessionWorkQueueStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (newState as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (newState as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             Self.bindOptionalText(stmt, 2, summary)
             sqlite3_bind_double(stmt, 3, nowEpoch)
             sqlite3_bind_int64(stmt, 4, id)
-            sqlite3_bind_text(stmt, 5, (owner as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 5, (owner as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             let ok = sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db) > 0
             if ok { parent.recordEvent(type: eventType) }
             return ok
@@ -411,7 +411,7 @@ public final class SessionWorkQueueStore: @unchecked Sendable {
 
     private static func bindOptionalText(_ stmt: OpaquePointer?, _ index: Int32, _ value: String?) {
         if let val = value {
-            sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         } else {
             sqlite3_bind_null(stmt, index)
         }

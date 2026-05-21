@@ -201,7 +201,7 @@ public enum MigrationRunner {
         }
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_int(stmt, 1, Int32(migration.version))
-        sqlite3_bind_text(stmt, 2, (migration.description as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 2, (migration.description as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         sqlite3_bind_double(stmt, 3, Date().timeIntervalSince1970)
         guard sqlite3_step(stmt) == SQLITE_DONE else {
             throw MigrationError.sqlFailed(stage: "recordApplied step", detail: String(cString: sqlite3_errmsg(db)))

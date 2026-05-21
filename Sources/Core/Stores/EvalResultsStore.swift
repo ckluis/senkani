@@ -69,18 +69,18 @@ public final class EvalResultsStore: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
             defer { sqlite3_finalize(stmt) }
             sqlite3_bind_double(stmt, 1, now)
-            sqlite3_bind_text(stmt, 2, (modelId as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 3, (fixtureId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 2, (modelId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 3, (fixtureId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 4, precision)
             sqlite3_bind_double(stmt, 5, recall)
             sqlite3_bind_double(stmt, 6, f1)
             sqlite3_bind_int64(stmt, 7, durationMs)
             if let prevHash {
-                sqlite3_bind_text(stmt, 8, (prevHash as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 8, (prevHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 8)
             }
-            sqlite3_bind_text(stmt, 9, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 9, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 10, anchorId)
 
             guard sqlite3_step(stmt) == SQLITE_DONE else { return false }
@@ -118,7 +118,7 @@ public final class EvalResultsStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (modelId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (modelId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
             return decodeRow(stmt)
         }

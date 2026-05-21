@@ -68,23 +68,23 @@ public final class PackAuditStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (packName as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (packVersion as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 3, (event as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (packName as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (packVersion as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 3, (event as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 4, now)
-            sqlite3_bind_text(stmt, 5, (sourcePath as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 5, (sourcePath as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             if let sha256 {
-                sqlite3_bind_text(stmt, 6, (sha256 as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 6, (sha256 as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 6)
             }
-            sqlite3_bind_text(stmt, 7, (appliedSkillsJSON as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 7, (appliedSkillsJSON as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             if let prevHash {
-                sqlite3_bind_text(stmt, 8, (prevHash as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 8, (prevHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 8)
             }
-            sqlite3_bind_text(stmt, 9, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 9, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 10, anchorId)
 
             guard sqlite3_step(stmt) == SQLITE_DONE else { return false }

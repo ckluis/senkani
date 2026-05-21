@@ -53,11 +53,11 @@ public final class SessionEventStreamStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return -1 }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (sourceTable as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (sourceTable as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 2, sourceId)
-            sqlite3_bind_text(stmt, 3, (kind as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, (kind as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             if let pr = projectRoot {
-                sqlite3_bind_text(stmt, 4, (pr as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 4, (pr as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 4)
             }
@@ -78,7 +78,7 @@ public final class SessionEventStreamStore: @unchecked Sendable {
             let oSQL = "SELECT last_processed_event_id FROM session_event_stream_offsets WHERE consumer_id = ?;"
             var oStmt: OpaquePointer?
             if sqlite3_prepare_v2(db, oSQL, -1, &oStmt, nil) == SQLITE_OK {
-                sqlite3_bind_text(oStmt, 1, (consumerId as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(oStmt, 1, (consumerId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
                 if sqlite3_step(oStmt) == SQLITE_ROW {
                     offset = sqlite3_column_int64(oStmt, 0)
                 }
@@ -133,7 +133,7 @@ public final class SessionEventStreamStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (consumerId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (consumerId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 2, eventId)
             sqlite3_bind_double(stmt, 3, nowEpoch)
             return sqlite3_step(stmt) == SQLITE_DONE
@@ -154,7 +154,7 @@ public final class SessionEventStreamStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (consumerId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (consumerId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
             return Int(sqlite3_column_int64(stmt, 0))
         }

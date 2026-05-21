@@ -69,7 +69,7 @@ final class LinkStore: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
             defer { sqlite3_finalize(stmt) }
             sqlite3_bind_int64(stmt, 1, link.sourceId)
-            sqlite3_bind_text(stmt, 2, cstr(link.targetName), -1, nil)
+            sqlite3_bind_text(stmt, 2, cstr(link.targetName), -1, SQLITE_TRANSIENT_DESTRUCTOR)
             bindInt64(stmt, 3, link.targetId)
             bindText(stmt, 4, link.relation)
             sqlite3_bind_double(stmt, 5, link.confidence)
@@ -105,7 +105,7 @@ final class LinkStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, cstr(name), -1, nil)
+            sqlite3_bind_text(stmt, 1, cstr(name), -1, SQLITE_TRANSIENT_DESTRUCTOR)
             return linkRows(stmt)
         }
     }
@@ -155,7 +155,7 @@ final class LinkStore: @unchecked Sendable {
     }
 
     private func bindText(_ stmt: OpaquePointer?, _ col: Int32, _ value: String?) {
-        if let v = value { sqlite3_bind_text(stmt, col, cstr(v), -1, nil) }
+        if let v = value { sqlite3_bind_text(stmt, col, cstr(v), -1, SQLITE_TRANSIENT_DESTRUCTOR) }
         else { sqlite3_bind_null(stmt, col) }
     }
 

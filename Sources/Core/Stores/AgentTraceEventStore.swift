@@ -49,14 +49,14 @@ final class AgentTraceEventStore: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
             defer { sqlite3_finalize(stmt) }
 
-            sqlite3_bind_text(stmt, 1, (row.idempotencyKey as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (row.idempotencyKey as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             Self.bindOptionalText(stmt, 2, row.pane)
             Self.bindOptionalText(stmt, 3, row.project)
             Self.bindOptionalText(stmt, 4, row.model)
             Self.bindOptionalText(stmt, 5, row.tier)
             Self.bindOptionalInt(stmt, 6, row.ladderPosition)
             Self.bindOptionalText(stmt, 7, row.feature?.rawValue)
-            sqlite3_bind_text(stmt, 8, (row.result.rawValue as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 8, (row.result.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 9, row.startedAt.timeIntervalSince1970)
             sqlite3_bind_double(stmt, 10, row.completedAt.timeIntervalSince1970)
             sqlite3_bind_int64(stmt, 11, Int64(row.latencyMs))
@@ -109,7 +109,7 @@ final class AgentTraceEventStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (key as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (key as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
 
             func text(_ i: Int32) -> String? {
@@ -156,7 +156,7 @@ final class AgentTraceEventStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM agent_trace_event WHERE idempotency_key = ?;", -1, &stmt, nil) == SQLITE_OK else { return 0 }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (key as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (key as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             return sqlite3_step(stmt) == SQLITE_ROW ? Int(sqlite3_column_int64(stmt, 0)) : 0
         }
     }
@@ -262,8 +262,8 @@ final class AgentTraceEventStore: @unchecked Sendable {
             defer { sqlite3_finalize(stmt) }
 
             var idx: Int32 = 1
-            if let pane { sqlite3_bind_text(stmt, idx, (pane as NSString).utf8String, -1, nil); idx += 1 }
-            if let project { sqlite3_bind_text(stmt, idx, (project as NSString).utf8String, -1, nil); idx += 1 }
+            if let pane { sqlite3_bind_text(stmt, idx, (pane as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1 }
+            if let project { sqlite3_bind_text(stmt, idx, (project as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1 }
             if let since { sqlite3_bind_double(stmt, idx, since.timeIntervalSince1970); idx += 1 }
 
             guard sqlite3_step(stmt) == SQLITE_ROW else {
@@ -298,8 +298,8 @@ final class AgentTraceEventStore: @unchecked Sendable {
             defer { sqlite3_finalize(stmt) }
 
             var idx: Int32 = 1
-            if let pane { sqlite3_bind_text(stmt, idx, (pane as NSString).utf8String, -1, nil); idx += 1 }
-            if let project { sqlite3_bind_text(stmt, idx, (project as NSString).utf8String, -1, nil); idx += 1 }
+            if let pane { sqlite3_bind_text(stmt, idx, (pane as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1 }
+            if let project { sqlite3_bind_text(stmt, idx, (project as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1 }
             sqlite3_bind_int64(stmt, idx, Int64(limit))
 
             var out: [String] = []
@@ -337,7 +337,7 @@ final class AgentTraceEventStore: @unchecked Sendable {
             defer { sqlite3_finalize(stmt) }
 
             var idx: Int32 = 1
-            if let project { sqlite3_bind_text(stmt, idx, (project as NSString).utf8String, -1, nil); idx += 1 }
+            if let project { sqlite3_bind_text(stmt, idx, (project as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1 }
             if let since { sqlite3_bind_double(stmt, idx, since.timeIntervalSince1970); idx += 1 }
             sqlite3_bind_int64(stmt, idx, Int64(limit))
 
@@ -432,7 +432,7 @@ final class AgentTraceEventStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (tier as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (tier as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 2, since.timeIntervalSince1970)
             sqlite3_bind_int64(stmt, 3, Int64(limit))
 
@@ -533,7 +533,7 @@ final class AgentTraceEventStore: @unchecked Sendable {
 
     private static func bindOptionalText(_ stmt: OpaquePointer?, _ index: Int32, _ value: String?) {
         if let val = value {
-            sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         } else {
             sqlite3_bind_null(stmt, index)
         }

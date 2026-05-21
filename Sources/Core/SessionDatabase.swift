@@ -234,8 +234,8 @@ public final class SessionDatabase: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (root as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (type as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (root as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (type as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 3, Int64(delta))
             sqlite3_bind_double(stmt, 4, ts)
             sqlite3_bind_double(stmt, 5, ts)
@@ -267,11 +267,11 @@ public final class SessionDatabase: @unchecked Sendable {
             defer { sqlite3_finalize(stmt) }
             var idx: Int32 = 1
             if let root = projectRoot {
-                sqlite3_bind_text(stmt, idx, (root as NSString).utf8String, -1, nil); idx += 1
+                sqlite3_bind_text(stmt, idx, (root as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1
             }
             if let pfx = prefix {
                 let like = pfx + "%"
-                sqlite3_bind_text(stmt, idx, (like as NSString).utf8String, -1, nil); idx += 1
+                sqlite3_bind_text(stmt, idx, (like as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1
             }
             var out: [EventCountRow] = []
             while sqlite3_step(stmt) == SQLITE_ROW {
@@ -431,8 +431,8 @@ public final class SessionDatabase: @unchecked Sendable {
             var tsStmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, tsSql, -1, &tsStmt, nil) == SQLITE_OK else { return nil }
             defer { sqlite3_finalize(tsStmt) }
-            sqlite3_bind_text(tsStmt, 1, (normalized as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(tsStmt, 2, (command as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(tsStmt, 1, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(tsStmt, 2, (command as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             guard sqlite3_step(tsStmt) == SQLITE_ROW else { return nil }
             guard sqlite3_column_type(tsStmt, 0) != SQLITE_NULL else { return nil }
             let ts = sqlite3_column_double(tsStmt, 0)
@@ -449,7 +449,7 @@ public final class SessionDatabase: @unchecked Sendable {
             var preview: String?
             if sqlite3_prepare_v2(db, previewSql, -1, &prevStmt, nil) == SQLITE_OK {
                 defer { sqlite3_finalize(prevStmt) }
-                sqlite3_bind_text(prevStmt, 1, (command as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(prevStmt, 1, (command as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
                 sqlite3_bind_double(prevStmt, 2, ts)
                 if sqlite3_step(prevStmt) == SQLITE_ROW && sqlite3_column_type(prevStmt, 0) != SQLITE_NULL {
                     preview = String(cString: sqlite3_column_text(prevStmt, 0))
@@ -496,7 +496,7 @@ public final class SessionDatabase: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sessionSql, -1, &stmt, nil) == SQLITE_OK else { return nil }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
 
             let sid = String(cString: sqlite3_column_text(stmt, 0))
@@ -525,7 +525,7 @@ public final class SessionDatabase: @unchecked Sendable {
                 )
             }
             defer { sqlite3_finalize(eventStmt) }
-            sqlite3_bind_text(eventStmt, 1, (sid as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(eventStmt, 1, (sid as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
 
             var lastCommand: String?
             var searches: [String] = []
@@ -613,7 +613,7 @@ public final class SessionDatabase: @unchecked Sendable {
 
             var bindIdx: Int32 = 1
             if let root = normalized {
-                sqlite3_bind_text(stmt, bindIdx, (root as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, bindIdx, (root as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
                 bindIdx += 1
             }
             if let since {
@@ -672,7 +672,7 @@ public final class SessionDatabase: @unchecked Sendable {
             defer { sqlite3_finalize(totalStmt) }
             for (idx, val) in bindValues {
                 if let s = val as? String {
-                    sqlite3_bind_text(totalStmt, idx, (s as NSString).utf8String, -1, nil)
+                    sqlite3_bind_text(totalStmt, idx, (s as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
                 } else if let d = val as? Double {
                     sqlite3_bind_double(totalStmt, idx, d)
                 }
@@ -690,7 +690,7 @@ public final class SessionDatabase: @unchecked Sendable {
             defer { sqlite3_finalize(senkaniStmt) }
             for (idx, val) in bindValues {
                 if let s = val as? String {
-                    sqlite3_bind_text(senkaniStmt, idx, (s as NSString).utf8String, -1, nil)
+                    sqlite3_bind_text(senkaniStmt, idx, (s as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
                 } else if let d = val as? Double {
                     sqlite3_bind_double(senkaniStmt, idx, d)
                 }

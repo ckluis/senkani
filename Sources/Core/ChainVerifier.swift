@@ -198,7 +198,7 @@ public enum ChainVerifier {
         """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, (table as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 1, (table as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
 
         var out: [Anchor] = []
         while sqlite3_step(stmt) == SQLITE_ROW {

@@ -156,10 +156,10 @@ final class TokenEventStore: @unchecked Sendable {
             defer { sqlite3_finalize(stmt) }
 
             sqlite3_bind_double(stmt, 1, now)
-            sqlite3_bind_text(stmt, 2, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 2, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             Self.bindOptionalText(stmt, 3, paneId)
             Self.bindOptionalText(stmt, 4, normalizedRoot)
-            sqlite3_bind_text(stmt, 5, (source as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 5, (source as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             Self.bindOptionalText(stmt, 6, toolName)
             Self.bindOptionalText(stmt, 7, model)
             sqlite3_bind_int64(stmt, 8, Int64(inputTokens))
@@ -171,7 +171,7 @@ final class TokenEventStore: @unchecked Sendable {
             Self.bindOptionalText(stmt, 14, modelTier)
             Self.bindOptionalText(stmt, 15, connectionId)
             Self.bindOptionalText(stmt, 16, prevHash)
-            sqlite3_bind_text(stmt, 17, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 17, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 18, anchorId)
 
             if sqlite3_step(stmt) == SQLITE_DONE {
@@ -235,8 +235,8 @@ final class TokenEventStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (source as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (feature as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (source as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (feature as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             return sqlite3_step(stmt) == SQLITE_ROW
         }
     }
@@ -257,7 +257,7 @@ final class TokenEventStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return .zero }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             if let since {
                 sqlite3_bind_double(stmt, 2, since.timeIntervalSince1970)
             }
@@ -326,7 +326,7 @@ final class TokenEventStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             if let since {
                 sqlite3_bind_double(stmt, 2, since.timeIntervalSince1970)
             }
@@ -411,7 +411,7 @@ final class TokenEventStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             if let since { sqlite3_bind_double(stmt, 2, since.timeIntervalSince1970) }
 
             var results: [(timestamp: Date, cumulativeRaw: Int, cumulativeSaved: Int)] = []
@@ -475,7 +475,7 @@ final class TokenEventStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int(stmt, 2, Int32(limit))
             return Self.parseTimelineRows(stmt)
         }
@@ -549,10 +549,10 @@ final class TokenEventStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             let sanitized = filePath.replacingOccurrences(of: "%", with: "").replacingOccurrences(of: "_", with: "\\_")
             let pathPattern = "%" + sanitized
-            sqlite3_bind_text(stmt, 2, (pathPattern as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 2, (pathPattern as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
             guard sqlite3_column_type(stmt, 0) != SQLITE_NULL else { return nil }
             let ts = sqlite3_column_double(stmt, 0)
@@ -581,7 +581,7 @@ final class TokenEventStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 2, cutoff)
             sqlite3_bind_int(stmt, 3, Int32(limit))
 
@@ -616,7 +616,7 @@ final class TokenEventStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int(stmt, 2, Int32(limit))
 
             var results: [SessionDatabase.SessionSummary] = []
@@ -665,7 +665,7 @@ final class TokenEventStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int(stmt, 2, Int32(minInputTokens))
             sqlite3_bind_int(stmt, 3, Int32(minSessions))
 
@@ -711,7 +711,7 @@ final class TokenEventStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int(stmt, 2, Int32(minSessions))
             sqlite3_bind_int(stmt, 3, Int32(limit))
 
@@ -761,7 +761,7 @@ final class TokenEventStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int(stmt, 2, Int32(minRetries))
             sqlite3_bind_int(stmt, 3, Int32(minSessions))
             sqlite3_bind_int(stmt, 4, Int32(limit))
@@ -813,7 +813,7 @@ final class TokenEventStore: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
             sqlite3_bind_double(stmt, 1, windowSeconds)
-            sqlite3_bind_text(stmt, 2, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 2, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int(stmt, 3, Int32(minSessions))
             sqlite3_bind_int(stmt, 4, Int32(limit))
 
@@ -856,8 +856,8 @@ final class TokenEventStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return (0, 0) }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (path as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (reader as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (path as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (reader as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             guard sqlite3_step(stmt) == SQLITE_ROW else { return (0, 0) }
             return (Int(sqlite3_column_int64(stmt, 0)), Int(sqlite3_column_int64(stmt, 1)))
         }
@@ -879,11 +879,11 @@ final class TokenEventStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (path as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (path as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 2, Int64(byteOffset))
             sqlite3_bind_int64(stmt, 3, Int64(turnIndex))
             sqlite3_bind_double(stmt, 4, now)
-            sqlite3_bind_text(stmt, 5, (reader as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 5, (reader as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_step(stmt)
         }
     }
@@ -973,7 +973,7 @@ final class TokenEventStore: @unchecked Sendable {
 
     private static func bindOptionalText(_ stmt: OpaquePointer?, _ index: Int32, _ value: String?) {
         if let val = value {
-            sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         } else {
             sqlite3_bind_null(stmt, index)
         }

@@ -71,9 +71,9 @@ final class EnrichmentStore: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
             defer { sqlite3_finalize(stmt) }
             sqlite3_bind_int64(stmt, 1, entry.entityId)
-            sqlite3_bind_text(stmt, 2, cstr(entry.sessionId), -1, nil)
-            sqlite3_bind_text(stmt, 3, cstr(entry.whatWasLearned), -1, nil)
-            sqlite3_bind_text(stmt, 4, cstr(entry.source), -1, nil)
+            sqlite3_bind_text(stmt, 2, cstr(entry.sessionId), -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 3, cstr(entry.whatWasLearned), -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 4, cstr(entry.source), -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 5, entry.createdAt.timeIntervalSince1970)
             sqlite3_step(stmt)
             return sqlite3_last_insert_rowid(db)
@@ -127,8 +127,8 @@ final class EnrichmentStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (a as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (b as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (a as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (b as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 3, Int64(entry.commitCount))
             sqlite3_bind_int64(stmt, 4, Int64(entry.totalCommits))
             sqlite3_bind_double(stmt, 5, entry.couplingScore)
@@ -149,8 +149,8 @@ final class EnrichmentStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, cstr(name), -1, nil)
-            sqlite3_bind_text(stmt, 2, cstr(name), -1, nil)
+            sqlite3_bind_text(stmt, 1, cstr(name), -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, cstr(name), -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 3, minScore)
             var out: [CouplingEntry] = []
             while sqlite3_step(stmt) == SQLITE_ROW {

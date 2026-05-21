@@ -167,7 +167,7 @@ public enum ChainRepairer {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, (table as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 1, (table as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         if sqlite3_step(stmt) == SQLITE_ROW {
             return Int(sqlite3_column_int64(stmt, 0))
         }
@@ -194,7 +194,7 @@ public enum ChainRepairer {
             throw RepairError.sqlFailed(stage: "latest-anchor(\(table))", detail: String(cString: sqlite3_errmsg(db)))
         }
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, (table as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 1, (table as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         guard sqlite3_step(stmt) == SQLITE_ROW,
               sqlite3_column_type(stmt, 0) != SQLITE_NULL
         else { return nil }
@@ -271,11 +271,11 @@ public enum ChainRepairer {
             throw RepairError.sqlFailed(stage: "anchor-insert", detail: String(cString: sqlite3_errmsg(db)))
         }
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, (table as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 1, (table as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         sqlite3_bind_double(stmt, 2, now)
         sqlite3_bind_int64(stmt, 3, fromRowid)
-        sqlite3_bind_text(stmt, 4, (reason as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(stmt, 5, (note as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 4, (reason as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+        sqlite3_bind_text(stmt, 5, (note as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         guard sqlite3_step(stmt) == SQLITE_DONE else {
             throw RepairError.sqlFailed(stage: "anchor-step", detail: String(cString: sqlite3_errmsg(db)))
         }

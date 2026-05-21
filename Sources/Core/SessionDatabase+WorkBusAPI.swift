@@ -96,11 +96,11 @@ public final class OutboxTransaction {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return -1 }
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, (sourceTable as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 1, (sourceTable as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         sqlite3_bind_int64(stmt, 2, sourceId)
-        sqlite3_bind_text(stmt, 3, (kind as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 3, (kind as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         if let pr = projectRoot {
-            sqlite3_bind_text(stmt, 4, (pr as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 4, (pr as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         } else {
             sqlite3_bind_null(stmt, 4)
         }
@@ -130,13 +130,13 @@ public final class OutboxTransaction {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return -1 }
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, (kind as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(stmt, 2, (payload as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 1, (kind as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+        sqlite3_bind_text(stmt, 2, (payload as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         sqlite3_bind_double(stmt, 3, wakeup)
         sqlite3_bind_double(stmt, 4, now)
         sqlite3_bind_double(stmt, 5, now)
         if let pr = projectRoot {
-            sqlite3_bind_text(stmt, 6, (pr as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 6, (pr as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         } else {
             sqlite3_bind_null(stmt, 6)
         }

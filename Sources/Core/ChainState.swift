@@ -45,7 +45,7 @@ final class ChainState: @unchecked Sendable {
         let lookup = "SELECT MAX(id) FROM chain_anchors WHERE table_name = ?;"
         if sqlite3_prepare_v2(db, lookup, -1, &stmt, nil) == SQLITE_OK {
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (table as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (table as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             if sqlite3_step(stmt) == SQLITE_ROW,
                sqlite3_column_type(stmt, 0) != SQLITE_NULL {
                 let id = sqlite3_column_int64(stmt, 0)
@@ -63,7 +63,7 @@ final class ChainState: @unchecked Sendable {
         var insertStmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, insert, -1, &insertStmt, nil) == SQLITE_OK else { return 0 }
         defer { sqlite3_finalize(insertStmt) }
-        sqlite3_bind_text(insertStmt, 1, (table as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(insertStmt, 1, (table as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         sqlite3_bind_double(insertStmt, 2, now)
         guard sqlite3_step(insertStmt) == SQLITE_DONE else { return 0 }
 

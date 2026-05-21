@@ -119,19 +119,19 @@ final class EntityStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1,  cstr(entity.name), -1, nil)
-            sqlite3_bind_text(stmt, 2,  cstr(entity.entityType), -1, nil)
+            sqlite3_bind_text(stmt, 1,  cstr(entity.name), -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2,  cstr(entity.entityType), -1, SQLITE_TRANSIENT_DESTRUCTOR)
             bindText(stmt, 3, entity.sourcePath)
-            sqlite3_bind_text(stmt, 4,  cstr(entity.markdownPath), -1, nil)
-            sqlite3_bind_text(stmt, 5,  cstr(entity.contentHash), -1, nil)
-            sqlite3_bind_text(stmt, 6,  cstr(entity.compiledUnderstanding), -1, nil)
+            sqlite3_bind_text(stmt, 4,  cstr(entity.markdownPath), -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 5,  cstr(entity.contentHash), -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 6,  cstr(entity.compiledUnderstanding), -1, SQLITE_TRANSIENT_DESTRUCTOR)
             bindDouble(stmt, 7, entity.lastEnriched?.timeIntervalSince1970)
             sqlite3_bind_int64(stmt, 8,  Int64(entity.mentionCount))
             sqlite3_bind_int64(stmt, 9,  Int64(entity.sessionMentions))
             sqlite3_bind_double(stmt, 10, entity.stalenessScore)
             sqlite3_bind_double(stmt, 11, entity.createdAt.timeIntervalSince1970)
             sqlite3_bind_double(stmt, 12, now)
-            sqlite3_bind_text(stmt, 13, cstr(AuthorshipTracker.encode(authorship)), -1, nil)
+            sqlite3_bind_text(stmt, 13, cstr(AuthorshipTracker.encode(authorship)), -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_step(stmt)
 
             // last_insert_rowid is unreliable for UPSERT update path — query explicitly.
@@ -139,7 +139,7 @@ final class EntityStore: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, "SELECT id FROM knowledge_entities WHERE name=?;",
                                      -1, &idStmt, nil) == SQLITE_OK else { return 0 }
             defer { sqlite3_finalize(idStmt) }
-            sqlite3_bind_text(idStmt, 1, cstr(entity.name), -1, nil)
+            sqlite3_bind_text(idStmt, 1, cstr(entity.name), -1, SQLITE_TRANSIENT_DESTRUCTOR)
             guard sqlite3_step(idStmt) == SQLITE_ROW else { return 0 }
             return sqlite3_column_int64(idStmt, 0)
         }
@@ -152,7 +152,7 @@ final class EntityStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, cstr(name), -1, nil)
+            sqlite3_bind_text(stmt, 1, cstr(name), -1, SQLITE_TRANSIENT_DESTRUCTOR)
             guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
             return rowToEntity(stmt)
         }
@@ -198,7 +198,7 @@ final class EntityStore: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, "DELETE FROM knowledge_entities WHERE name=?;",
                                      -1, &stmt, nil) == SQLITE_OK else { return }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (name as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (name as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_step(stmt)
         }
     }
@@ -221,7 +221,7 @@ final class EntityStore: @unchecked Sendable {
             sqlite3_bind_int64(stmt, 1, Int64(sessionDelta))
             sqlite3_bind_int64(stmt, 2, Int64(lifetimeDelta))
             sqlite3_bind_double(stmt, 3, now)
-            sqlite3_bind_text(stmt, 4, (name as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 4, (name as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_step(stmt)
         }
     }
@@ -274,7 +274,7 @@ final class EntityStore: @unchecked Sendable {
                 sqlite3_bind_int64(stmt, 1, Int64(delta))
                 sqlite3_bind_int64(stmt, 2, Int64(delta))
                 sqlite3_bind_double(stmt, 3, now)
-                sqlite3_bind_text(stmt, 4, (name as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 4, (name as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
                 let rc = sqlite3_step(stmt)
                 if rc != SQLITE_DONE && rc != SQLITE_ROW {
                     let msg = String(cString: sqlite3_errmsg(db))
@@ -311,7 +311,7 @@ final class EntityStore: @unchecked Sendable {
             defer { sqlite3_finalize(stmt) }
             sqlite3_bind_double(stmt, 1, clamped)
             sqlite3_bind_double(stmt, 2, now)
-            sqlite3_bind_text(stmt, 3, (name as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, (name as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_step(stmt)
         }
     }
@@ -375,7 +375,7 @@ final class EntityStore: @unchecked Sendable {
                 """
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (raw as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (raw as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 2, now)
             sqlite3_bind_double(stmt, 3, cutoff)
             guard sqlite3_step(stmt) == SQLITE_DONE else { return 0 }
@@ -419,7 +419,7 @@ final class EntityStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, cstr(sanitized), -1, nil)
+            sqlite3_bind_text(stmt, 1, cstr(sanitized), -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int(stmt, 2, Int32(cap))
 
             var out: [KnowledgeSearchResult] = []
@@ -483,7 +483,7 @@ final class EntityStore: @unchecked Sendable {
     }
 
     private func bindText(_ stmt: OpaquePointer?, _ col: Int32, _ value: String?) {
-        if let v = value { sqlite3_bind_text(stmt, col, cstr(v), -1, nil) }
+        if let v = value { sqlite3_bind_text(stmt, col, cstr(v), -1, SQLITE_TRANSIENT_DESTRUCTOR) }
         else { sqlite3_bind_null(stmt, col) }
     }
 

@@ -636,19 +636,23 @@ struct MigrationRunnerTests {
         #expect(rows[2].outcome == "blocking" && rows[2].status == "fail")
     }
 
-    @Test("v22 + v23 + v24 + v25 + v26 + v27 advance the migration ledger by exactly six rows over a v21-baseline DB")
+    @Test("v22 + v23 + v24 + v25 + v26 + v27 + v28 advance the migration ledger by exactly seven rows over a v21-baseline DB")
     func migration22And23AdvanceLedgerByTwo() throws {
         let db = Self.openMemory()
         defer { sqlite3_close(db) }
 
         // Seed schema_migrations to v21 + a pre-v22 validation_results AND
         // a pre-v23 egress_decisions (created at v19) AND a pre-v25
-        // trust_audits (created at v12) so the runner sees exactly six
-        // pending migrations (v22 + v23 + v24 + v25 + v26 + v27 — v24
-        // ships eval_results self-contained, v25 ships trust_audits
+        // trust_audits (created at v12) so the runner sees exactly seven
+        // pending migrations (v22 + v23 + v24 + v25 + v26 + v27 + v28 —
+        // v24 ships eval_results self-contained, v25 ships trust_audits
         // column ALTERs requiring the v12 table, v26 ships
         // session_work_queue + session_event_stream substrate, v27
-        // ships surrogate_writes for T.2c-2 AnonymizationProxy).
+        // ships surrogate_writes for T.2c-2 AnonymizationProxy, v28
+        // renames the trust_audits fresh-install anchor to
+        // fresh-install-pre-v25 so the v25-added columns can fold
+        // into the canonical hash map under a new migration-v25
+        // anchor opened lazily by the writers).
         Self.seedPreV22ValidationResults(db)
         Self.seedPreV23EgressDecisions(db)
         Self.seedPreV25TrustAudits(db)
@@ -671,8 +675,8 @@ struct MigrationRunnerTests {
         let report = try MigrationRunner.run(db: db, dbPath: ":memory:", registry: MigrationRegistry.all)
         let after = Self.appliedCount(db)
 
-        #expect(after - before == 6, "ledger must advance by exactly six rows (v22 + v23 + v24 + v25 + v26 + v27); got \(after - before)")
-        #expect(report.appliedVersions == [22, 23, 24, 25, 26, 27], "runner must report v22 + v23 + v24 + v25 + v26 + v27 as the newly-applied versions; got \(report.appliedVersions)")
+        #expect(after - before == 7, "ledger must advance by exactly seven rows (v22 + v23 + v24 + v25 + v26 + v27 + v28); got \(after - before)")
+        #expect(report.appliedVersions == [22, 23, 24, 25, 26, 27, 28], "runner must report v22 + v23 + v24 + v25 + v26 + v27 + v28 as the newly-applied versions; got \(report.appliedVersions)")
     }
 
     @Test("lockfile refuses subsequent runs until removed")

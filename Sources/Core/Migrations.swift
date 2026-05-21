@@ -1508,6 +1508,38 @@ public enum MigrationRegistry {
             try exec("CREATE INDEX IF NOT EXISTS idx_surrogate_writes_engagement ON surrogate_writes(engagement_id);")
             try exec("CREATE INDEX IF NOT EXISTS idx_surrogate_writes_anchor ON surrogate_writes(chain_anchor_id);")
         },
+        Migration(version: 28, description: "trust_audits: rename existing fresh-install anchor to fresh-install-pre-v25 (v25 column-shape evolution)") { db in
+            // v25 added observed_rate / observed_sample / call_id columns
+            // but kept them OUT of the canonical hash map — opaque data.
+            // v28 closes that gap so an attacker who flips a stored
+            // observed_rate via SQL UPDATE is caught by ChainVerifier.
+            //
+            // Mirrors the v18 (commands/token_events) + v23 (egress_decisions)
+            // rename pattern. The migration-v25 anchor itself is lazy-opened
+            // on first promotion/override write (TrustAuditStore.
+            // openMigrationV25AnchorIfNeeded), NOT here — promotion/override
+            // are rare; flag/label keep writing under the renamed legacy
+            // anchor until a promotion/override actually happens.
+            //
+            // Post-v28 fresh installs lazy-create a 'fresh-install' anchor on
+            // first write that already uses the v25 canonical shape (no
+            // rename + no migration-v25 needed because nothing predates it).
+            func exec(_ sql: String) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc != SQLITE_OK {
+                    throw MigrationError.sqlFailed(stage: "v28", detail: msg)
+                }
+            }
+            try exec("""
+                UPDATE chain_anchors
+                   SET reason = 'fresh-install-pre-v25'
+                 WHERE table_name = 'trust_audits'
+                   AND reason = 'fresh-install';
+            """)
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)

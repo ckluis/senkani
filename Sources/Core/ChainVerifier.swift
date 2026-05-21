@@ -480,16 +480,25 @@ public enum ChainVerifier {
         }
     }
 
-    /// Walk `trust_audits` rows for one anchor. The store writes both flag
-    /// rows and label rows through the same canonical-input shape — every
-    /// non-chain column appears in the dictionary, with NULLs in the
-    /// kind-specific slots. Verification reads the same eleven columns
-    /// regardless of `kind`.
+    /// Walk `trust_audits` rows for one anchor. The store writes flag,
+    /// label, promotion, and override rows through the same canonical-
+    /// input builder — every non-chain column appears in the dictionary,
+    /// with NULLs in the kind-specific slots.
+    ///
+    /// Anchor-aware canonical shape (v28): rows under
+    /// `fresh-install-pre-v25` were hashed without the three v25-added
+    /// columns (`observed_rate`, `observed_sample`, `call_id`); rows
+    /// under any other anchor (`fresh-install` post-v28, `migration-v25`,
+    /// future `repair-*`) include those columns. Mirrors the writer-side
+    /// switch in `TrustAuditStore.resolveWriteAnchorLocked` /
+    /// `canonicalColumns`.
     /// `entry_hash IS NOT NULL` filter — see `verifyAnchorTokenEvents` notes.
     private static func verifyAnchorTrustAudits(db: OpaquePointer, anchor: Anchor) -> Result? {
+        let useV25Shape = (anchor.reason != "fresh-install-pre-v25")
         let sql = """
             SELECT id, kind, created_at, session_id, pane_id, tool_name,
                    reason, score, correlation_count, flag_id, label, labeled_by,
+                   observed_rate, observed_sample, call_id,
                    prev_hash, entry_hash
               FROM trust_audits
              WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
@@ -497,7 +506,7 @@ public enum ChainVerifier {
         """
         return walkTable(db: db, table: "trust_audits", anchor: anchor, sql: sql) { stmt in
             let rowid = sqlite3_column_int64(stmt, 0)
-            let columns: [String: ChainHasher.CanonicalValue] = [
+            var columns: [String: ChainHasher.CanonicalValue] = [
                 "kind":              textValue(stmt, 1),
                 "created_at":        .real(sqlite3_column_double(stmt, 2)),
                 "session_id":        textOrNull(stmt, 3),
@@ -516,8 +525,17 @@ public enum ChainVerifier {
                 "label":             textOrNull(stmt, 10),
                 "labeled_by":        textOrNull(stmt, 11),
             ]
-            let prev = optionalText(stmt, 12)
-            let stored = sqlite3_column_text(stmt, 13).map { String(cString: $0) } ?? ""
+            if useV25Shape {
+                columns["observed_rate"]   = sqlite3_column_type(stmt, 12) == SQLITE_NULL
+                                                ? .null
+                                                : .real(sqlite3_column_double(stmt, 12))
+                columns["observed_sample"] = sqlite3_column_type(stmt, 13) == SQLITE_NULL
+                                                ? .null
+                                                : .integer(sqlite3_column_int64(stmt, 13))
+                columns["call_id"]         = textOrNull(stmt, 14)
+            }
+            let prev = optionalText(stmt, 15)
+            let stored = sqlite3_column_text(stmt, 16).map { String(cString: $0) } ?? ""
             return (rowid, columns, prev, stored)
         }
     }

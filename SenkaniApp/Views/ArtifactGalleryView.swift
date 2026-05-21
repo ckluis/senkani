@@ -539,15 +539,17 @@ struct ArtifactGalleryView: View {
                 workspace?.addPane(type: type)
             }
 
-        case .focusSprintReview:
+        case .focusSprintReview(let rowId, _):
             guard let project = workspace?.activeProject else { return }
             if let match = project.panes.first(where: { $0.paneType == .sprintReview }) {
                 workspace?.activePaneID = match.id
             } else {
                 workspace?.addPane(type: .sprintReview)
             }
-            // Scroll-to-row binding follow-up — SprintReviewPane does
-            // not currently expose a scroll-target API.
+            // V.9b-1 follow-up — push the rowId through the focus-
+            // request surface so SprintReviewPane scrolls to the row
+            // that backs the gallery artifact.
+            SprintReviewFocusRequest.shared.request(rowId: rowId)
 
         case .revealInFinder(let absolutePath):
             let url = URL(fileURLWithPath: absolutePath)

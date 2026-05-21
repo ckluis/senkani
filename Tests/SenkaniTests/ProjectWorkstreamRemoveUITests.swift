@@ -197,18 +197,47 @@ struct RemoveModelAPITests {
     @Test("removeProject executes in the documented order")
     func removeProjectOrder() {
         let src = read("SenkaniApp/Models/WorkspaceModel.swift")
-        // Branches → worktrees → app-support → sidebar.
-        guard let branchIdx = src.range(of: "Step 1: branches")?.lowerBound,
-              let wtIdx = src.range(of: "Step 2: worktree dirs")?.lowerBound,
+        // Worktrees → branches → app-support → sidebar
+        // (`remove-step-ordering-worktree-before-branch-2026-05-21`):
+        // worktree-first lets a dual-toggle force-retry heal in one
+        // call — removing the worktree detaches the branch so the
+        // Step 2 branch-delete succeeds against a no-longer-checked-
+        // out branch in the same call.
+        guard let wtIdx = src.range(of: "Step 1: worktree dirs")?.lowerBound,
+              let branchIdx = src.range(of: "Step 2: branches")?.lowerBound,
               let appSupportIdx = src.range(of: "Step 3: per-project app-support")?.lowerBound,
               let sidebarIdx = src.range(of: "Step 4: sidebar")?.lowerBound
         else {
             Issue.record("All four step markers must be present in WorkspaceModel.removeProject.")
             return
         }
-        #expect(branchIdx < wtIdx, "Branches must run before worktrees.")
-        #expect(wtIdx < appSupportIdx, "Worktrees must run before app-support.")
+        #expect(wtIdx < branchIdx, "Worktrees must run before branches (one-call force-retry healing).")
+        #expect(branchIdx < appSupportIdx, "Branches must run before app-support.")
         #expect(appSupportIdx < sidebarIdx, "App-support must run before the in-memory sidebar drop.")
+    }
+
+    @Test("removeWorkstream executes in the documented order")
+    func removeWorkstreamOrder() {
+        let src = read("SenkaniApp/Models/WorkspaceModel.swift")
+        // Worktree dir → branch → sidebar
+        // (`remove-step-ordering-worktree-before-branch-2026-05-21`).
+        // Only the body of `removeWorkstream(id:from:options:)` is
+        // examined: locate the function header, then search forward
+        // for the step markers.
+        guard let funcRange = src.range(of: "func removeWorkstream(id workstreamID: UUID, from project: ProjectModel, options: WorkstreamRemovalOptions) -> [RemovalFailure]") else {
+            Issue.record("removeWorkstream(id:from:options:) function header not found.")
+            return
+        }
+        let tail = String(src[funcRange.lowerBound...])
+        guard let wtIdx = tail.range(of: "// Step 1: worktree dir.")?.lowerBound,
+              let branchIdx = tail.range(of: "// Step 2: branch.")?.lowerBound,
+              let sidebarIdx = tail.range(of: "// Step 3: sidebar")?.lowerBound
+        else {
+            Issue.record("Step markers `// Step 1: worktree dir.`, `// Step 2: branch.`, `// Step 3: sidebar` must be present in removeWorkstream body.")
+            return
+        }
+        #expect(wtIdx < branchIdx, "Worktree dir must run before branch (one-call force-retry healing).")
+        #expect(branchIdx < sidebarIdx, "Branch must run before the in-memory sidebar drop.")
     }
 
     @Test("RemovalOptions types are defined")
@@ -444,11 +473,13 @@ private struct InlineRemovalFailure: Equatable {
     let reason: String
 }
 
-/// Mirror of WorkspaceModel.removeWorkstream that implements the
-/// deferred-sidebar invariant. Mutates `workstreams` ONLY when every
-/// opted-in artifact succeeded. The production code at
-/// `SenkaniApp/Models/WorkspaceModel.swift` follows the same shape;
-/// the source-level guard in Suite 7a asserts that.
+/// Mirror of WorkspaceModel.removeWorkstream that implements both the
+/// deferred-sidebar invariant AND the worktree-first ordering
+/// (`remove-step-ordering-worktree-before-branch-2026-05-21`).
+/// Mutates `workstreams` ONLY when every opted-in artifact succeeded.
+/// The production code at `SenkaniApp/Models/WorkspaceModel.swift`
+/// follows the same shape; the source-level guards in Suite 7a and
+/// `removeWorkstreamOrder` assert that.
 private func mirrorRemoveWorkstream(
     id workstreamID: UUID,
     workstreams: inout [InlineWorkstreamRecord],
@@ -458,15 +489,7 @@ private func mirrorRemoveWorkstream(
     guard let ws = workstreams.first(where: { $0.id == workstreamID }) else { return [] }
     var failures: [InlineRemovalFailure] = []
 
-    // Step 1: branch.
-    if options.removeBranch {
-        let (exit, err) = sh(["-C", repoPath, "branch", "-D", ws.branch])
-        if exit != 0 {
-            failures.append(InlineRemovalFailure(artifact: ws.branch, reason: err))
-        }
-    }
-
-    // Step 2: worktree dir.
+    // Step 1: worktree dir.
     if options.removeWorktreeDir {
         var args = ["-C", repoPath, "worktree", "remove"]
         if options.force { args.append("--force") }
@@ -474,6 +497,14 @@ private func mirrorRemoveWorkstream(
         let (exit, err) = sh(args)
         if exit != 0 {
             failures.append(InlineRemovalFailure(artifact: ws.worktreePath, reason: err))
+        }
+    }
+
+    // Step 2: branch.
+    if options.removeBranch {
+        let (exit, err) = sh(["-C", repoPath, "branch", "-D", ws.branch])
+        if exit != 0 {
+            failures.append(InlineRemovalFailure(artifact: ws.branch, reason: err))
         }
     }
 
@@ -566,16 +597,15 @@ struct DeferredSidebarInvariantTests {
         #expect(listExit == 0 && listOut.contains(wsBranch),
                 "Branch MUST still exist after the non-force failure.")
 
-        // Call 2: same toggles, force=true. Worktree-remove now uses
+        // Call 2: worktree-only with force=true. Worktree-remove uses
         // --force (succeeds), and once the worktree is gone the branch
-        // is no longer checked out → `branch -D` succeeds.
-        // NOTE: actual production code calls them in branch→worktree
-        // order, which means on retry branch-delete still fails (still
-        // checked out). The deferred-sidebar guard ensures retry is
-        // legal; the operator-retry-loop ergonomic gap is a separate
-        // concern. For the structural invariant test, simulate the
-        // order operators encounter when worktree dies first: only
-        // worktree-remove with force.
+        // is no longer checked out anywhere. With production's
+        // worktree-first ordering (`remove-step-ordering-worktree-
+        // before-branch-2026-05-21`), a dual-toggle force-retry could
+        // heal in ONE call — that path is exercised by
+        // `dualToggleForceRetryHealsInOneCall`. This test stays as the
+        // per-call deferred-sidebar-invariant signal: failure → retry
+        // → sidebar drops only when failures.isEmpty.
         let secondFailures = mirrorRemoveWorkstream(
             id: wsID,
             workstreams: &workstreams,
@@ -625,16 +655,16 @@ struct DeferredSidebarInvariantTests {
         ) -> [InlineRemovalFailure] {
             guard workstreams.first(where: { $0.id == workstreamID }) != nil else { return [] }
             var failures: [InlineRemovalFailure] = []
-            if options.removeBranch {
-                let (exit, err) = sh(["-C", repoPath, "branch", "-D", workstreams.first(where: { $0.id == workstreamID })!.branch])
-                if exit != 0 { failures.append(InlineRemovalFailure(artifact: "branch", reason: err)) }
-            }
             if options.removeWorktreeDir {
                 var args = ["-C", repoPath, "worktree", "remove"]
                 if options.force { args.append("--force") }
                 args.append(workstreams.first(where: { $0.id == workstreamID })!.worktreePath)
                 let (exit, err) = sh(args)
                 if exit != 0 { failures.append(InlineRemovalFailure(artifact: "worktree", reason: err)) }
+            }
+            if options.removeBranch {
+                let (exit, err) = sh(["-C", repoPath, "branch", "-D", workstreams.first(where: { $0.id == workstreamID })!.branch])
+                if exit != 0 { failures.append(InlineRemovalFailure(artifact: "branch", reason: err)) }
             }
             // BUGGY: mutate sidebar regardless of failures.
             workstreams.removeAll { $0.id == workstreamID }
@@ -741,17 +771,7 @@ struct DeferredSidebarInvariantTests {
         guard let ws = workstreams.first(where: { $0.id == workstreamID }) else { return [] }
         var failures: [InlineRemovalFailure] = []
 
-        if options.removeBranch {
-            // Pre-check: skip if branch is gone.
-            let (refExit, _) = sh(["-C", repoPath, "rev-parse", "--verify", "refs/heads/\(ws.branch)"])
-            if refExit == 0 {
-                let (exit, err) = sh(["-C", repoPath, "branch", "-D", ws.branch])
-                if exit != 0 {
-                    failures.append(InlineRemovalFailure(artifact: ws.branch, reason: err))
-                }
-            }
-        }
-
+        // Step 1: worktree dir (worktree-first ordering).
         if options.removeWorktreeDir {
             if FileManager.default.fileExists(atPath: ws.worktreePath) {
                 var args = ["-C", repoPath, "worktree", "remove"]
@@ -760,6 +780,18 @@ struct DeferredSidebarInvariantTests {
                 let (exit, err) = sh(args)
                 if exit != 0 {
                     failures.append(InlineRemovalFailure(artifact: ws.worktreePath, reason: err))
+                }
+            }
+        }
+
+        // Step 2: branch.
+        if options.removeBranch {
+            // Pre-check: skip if branch is gone.
+            let (refExit, _) = sh(["-C", repoPath, "rev-parse", "--verify", "refs/heads/\(ws.branch)"])
+            if refExit == 0 {
+                let (exit, err) = sh(["-C", repoPath, "branch", "-D", ws.branch])
+                if exit != 0 {
+                    failures.append(InlineRemovalFailure(artifact: ws.branch, reason: err))
                 }
             }
         }
@@ -933,6 +965,80 @@ struct DeferredSidebarInvariantTests {
                 "Branch must be gone after call N+1's branch-delete.")
         #expect(workstreams.isEmpty,
                 "Sidebar entry must be gone after every opted-in artifact step succeeded.")
+    }
+
+    // MARK: Suite 7d — worktree-first ordering: one-call dual-toggle healing
+    //
+    // remove-step-ordering-worktree-before-branch-2026-05-21: with the
+    // production code reordered to run worktree-remove BEFORE branch-
+    // delete, a dual-toggle force-retry heals in ONE call. The
+    // mirror's Step 1 (worktree --force) detaches the branch from the
+    // worktree; Step 2 (branch -D) then succeeds against a no-longer-
+    // checked-out branch in the same call. Pre-fix ordering required
+    // three operator clicks (deselect branch toggle → force-retry to
+    // remove worktree → re-tick branch toggle → click a third time).
+    //
+    // The headline behavioural assertion: dual-toggle ON + force=true
+    // → ONE call → failures.isEmpty, worktree gone, branch gone,
+    // sidebar entry gone.
+
+    @Test("Worktree-first ordering: dual-toggle force-retry heals in ONE call")
+    func dualToggleForceRetryHealsInOneCall() throws {
+        let repo = makeRepoWithCommit()
+        defer { try? FileManager.default.removeItem(atPath: repo) }
+        let wsBranch = "feature/one-call-heal"
+        let wsPath = NSTemporaryDirectory() + "senkani-one-call-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: wsPath) }
+
+        let (addExit, addErr) = sh(["-C", repo, "worktree", "add", "-b", wsBranch, wsPath])
+        try #require(addExit == 0, "worktree add: \(addErr)")
+        // Dirty the worktree so non-force `worktree remove` refuses
+        // on call 1.
+        try "uncommitted".write(toFile: wsPath + "/dirty.txt", atomically: true, encoding: .utf8)
+
+        var workstreams = [InlineWorkstreamRecord(id: UUID(), branch: wsBranch, worktreePath: wsPath)]
+        let wsID = workstreams[0].id
+
+        // Call 1: dual-toggle, force=false → both fail (worktree dirty
+        // refuses non-force; branch checked out at the worktree
+        // refuses `branch -D`).
+        let firstFailures = mirrorRemoveWorkstream(
+            id: wsID,
+            workstreams: &workstreams,
+            repoPath: repo,
+            options: InlineWorkstreamOpts(removeBranch: true, removeWorktreeDir: true, force: false)
+        )
+        #expect(firstFailures.count == 2,
+                "Both worktree-remove (dirty) and branch-delete (checked out) must fail on call 1 without force. Got: \(firstFailures)")
+        #expect(workstreams.count == 1,
+                "Sidebar entry stays after dual failure (deferred-sidebar invariant).")
+        #expect(FileManager.default.fileExists(atPath: wsPath),
+                "Worktree directory must still exist after non-force failure.")
+        let (preExit, preOut) = sh(["-C", repo, "branch", "--list", wsBranch])
+        #expect(preExit == 0 && preOut.contains(wsBranch),
+                "Branch must still exist after non-force failure.")
+
+        // Call 2 (the fix's headline behaviour): same dual-toggle,
+        // force=true. Worktree-first ordering means Step 1 worktree-
+        // remove --force succeeds, which detaches the branch. Step 2
+        // branch-delete then runs against a no-longer-checked-out
+        // branch and succeeds. ONE call. failures.isEmpty. Sidebar
+        // drops via the deferred-sidebar guard.
+        let secondFailures = mirrorRemoveWorkstream(
+            id: wsID,
+            workstreams: &workstreams,
+            repoPath: repo,
+            options: InlineWorkstreamOpts(removeBranch: true, removeWorktreeDir: true, force: true)
+        )
+        #expect(secondFailures.isEmpty,
+                "Dual-toggle force-retry must heal in ONE call with worktree-first ordering. Got: \(secondFailures)")
+        #expect(!FileManager.default.fileExists(atPath: wsPath),
+                "Worktree directory must be gone after force-retry.")
+        let (postExit, postOut) = sh(["-C", repo, "branch", "--list", wsBranch])
+        #expect(postExit == 0 && !postOut.contains(wsBranch),
+                "Branch must be gone after force-retry (Step 2 ran against a non-checked-out branch).")
+        #expect(workstreams.isEmpty,
+                "Sidebar entry must be gone after every opted-in artifact step succeeded in the same call.")
     }
 }
 

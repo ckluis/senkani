@@ -14,7 +14,7 @@ struct VersionToolTests {
 
     @Test func serverVersionMatchesExpectedBump() {
         // If you intentionally bump the server version, update this constant.
-        #expect(VersionTool.serverVersion == "0.2.0")
+        #expect(VersionTool.serverVersion == "0.3.0")
     }
 
     @Test func toolSchemasVersionIsAtLeastOne() {
@@ -22,7 +22,7 @@ struct VersionToolTests {
     }
 
     @Test func serverVersionFollowsSemverShape() {
-        // Guards against accidentally writing "v0.2.0" or "0.2" — clients
+        // Guards against accidentally writing "v0.3.0" or "0.3" — clients
         // cache by exact string match, so the shape has to stay MAJOR.MINOR.PATCH.
         let parts = VersionTool.serverVersion.split(separator: ".")
         #expect(parts.count == 3, "server version must be MAJOR.MINOR.PATCH")

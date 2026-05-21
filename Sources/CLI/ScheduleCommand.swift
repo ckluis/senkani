@@ -522,6 +522,21 @@ extension Schedule.Preset {
                 throw ValidationError(PresetSecretDetector.blockMessage(preset: name, patterns: patterns))
             }
 
+            // U.8 amplification guard: refuse amplifying schedules
+            // BEFORE any disk write. Mirrors the wiring on
+            // `Create.runCron()` so the preset install path can't
+            // bypass the floor via `--cron` override, a malformed
+            // shipped preset record, or a user-shipped preset
+            // (`schedule-preset-install-amplification-guard-not-wired-2026-05-21`).
+            switch AmplificationGuard.validate(cron: task.cronPattern, counter: nil) {
+            case .ok:
+                break
+            case .amplification(let reason, let minSeconds):
+                throw ValidationError(
+                    "Refused: preset `\(name)` would amplify (\(reason)). The amplification floor is \(minSeconds)s. Pick a `--cron` override whose fire interval is above the floor."
+                )
+            }
+
             // Install via the shared plist generator.
             do {
                 _ = try PresetInstaller.install(task: task)

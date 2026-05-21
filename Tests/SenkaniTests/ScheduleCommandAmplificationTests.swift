@@ -117,4 +117,87 @@ struct ScheduleCommandAmplificationTests {
         #expect(verdict == .ok,
                 "Daily 9am cron (86400s gap) must still pass — the `<=` change does not over-reject.")
     }
+
+    // MARK: - Behavioral: preset install with amplifying --cron override
+
+    /// `schedule-preset-install-amplification-guard-not-wired-2026-05-21` —
+    /// the `Schedule.Preset.Install` subcommand calls
+    /// `PresetInstaller.install` and used to bypass AmplificationGuard. An
+    /// operator override of `--cron '* * * * *'` against a shipped preset
+    /// silently accepted, despite the sibling `Create.run()` wiring shipped
+    /// 2026-05-21. This test drives `Preset.Install` end-to-end and asserts
+    /// the same refusal + zero-disk-trace contract.
+    @Test("schedule preset install with `--cron * * * * *` override is refused; JSON + plist absent")
+    func presetInstallEveryMinuteCronOverrideIsRefusedAndLeavesNoDiskTrace() throws {
+        let tmpBase = NSTemporaryDirectory() + "senkani-preset-amplification-\(UUID().uuidString)"
+        let tmpLaunch = NSTemporaryDirectory() + "senkani-preset-amplification-launch-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: tmpBase, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: tmpLaunch, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(atPath: tmpBase)
+            try? FileManager.default.removeItem(atPath: tmpLaunch)
+        }
+
+        let presetName = "log-rotation"
+        let install = try Schedule.Preset.Install.parse([
+            presetName,
+            "--cron", "* * * * *",
+        ])
+
+        var thrown: Error?
+        ScheduleStore.withTestDirs(base: tmpBase, launchAgents: tmpLaunch) {
+            do {
+                try install.run()
+            } catch {
+                thrown = error
+            }
+        }
+
+        guard let err = thrown else {
+            Issue.record("Schedule.Preset.Install.run() must throw for amplifying cron override `* * * * *`")
+            return
+        }
+        let desc = String(describing: err)
+        #expect(desc.lowercased().contains("amplif") || desc.lowercased().contains("amplification floor"),
+                "Thrown error must name the amplification reason. Got: \(desc)")
+
+        // Filesystem must be clean — no JSON, no plist for the preset's name.
+        let jsonPath = tmpBase + "/\(presetName).json"
+        let plistPath = tmpLaunch + "/com.senkani.schedule.\(presetName).plist"
+        #expect(!FileManager.default.fileExists(atPath: jsonPath),
+                "JSON file at \(jsonPath) MUST be absent after preset amplification rejection.")
+        #expect(!FileManager.default.fileExists(atPath: plistPath),
+                "Plist file at \(plistPath) MUST be absent after preset amplification rejection.")
+    }
+
+    // MARK: - Source-level guard: Preset.Install wiring
+
+    @Test("ScheduleCommand.Preset.Install.run() calls AmplificationGuard.validate before disk writes")
+    func presetInstallRunCallsAmplificationGuardBeforeWrites() {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()    // Tests/SenkaniTests
+            .deletingLastPathComponent()    // Tests
+            .deletingLastPathComponent()    // <repo root>
+            .appendingPathComponent("Sources/CLI/ScheduleCommand.swift")
+        let src = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+
+        // Find the start of the Install struct body so we scope the
+        // marker search to that subcommand — the file also contains the
+        // identical `Create.runCron()` wiring, which would otherwise
+        // satisfy this check trivially without the new wiring.
+        guard let installStructRange = src.range(of: "struct Install: ParsableCommand") else {
+            Issue.record("Could not locate `struct Install` in ScheduleCommand.swift")
+            return
+        }
+        let installSlice = String(src[installStructRange.lowerBound...])
+
+        guard let guardRange = installSlice.range(of: "AmplificationGuard.validate(cron: task.cronPattern, counter: nil)"),
+              let installCallRange = installSlice.range(of: "PresetInstaller.install(task: task)")
+        else {
+            Issue.record("Expected AmplificationGuard.validate + PresetInstaller.install markers in Preset.Install body")
+            return
+        }
+        #expect(guardRange.lowerBound < installCallRange.lowerBound,
+                "AmplificationGuard.validate must run BEFORE PresetInstaller.install in Preset.Install.run() so a rejected preset leaves no JSON / plist on disk.")
+    }
 }

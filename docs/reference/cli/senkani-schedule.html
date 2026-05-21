@@ -82,7 +82,7 @@
     <h2>Behavior</h2>
     <p>Generates a launchd plist per schedule. Each fire gets its own worktree + pane pair. Budget cap per run. <code>preset install</code> reuses the same <code>PresetInstaller</code> plist generator as <code>create</code>, so the two code paths produce byte-identical plists.</p>
 
-    <p><strong>Amplification guard.</strong> <code>create</code> calls <code>AmplificationGuard.validate</code> before any disk write. Crons whose first two fires sit at or below the 60-second amplification floor (default <code>defaultMinIntervalSeconds</code>) are refused with a structured error; no JSON is written under <code>~/.senkani/schedules/</code> and no plist is written under <code>~/Library/LaunchAgents/</code>. The canonical reproduction case is <code>--cron '* * * * *'</code> (every-minute, 60s gap == floor); the guard refuses up front so the operator sees a clear rejection instead of a silent downstream clamp by the rate limiter. <code>preset install</code> currently does NOT call the guard — its presets are vetted ahead of ship, but the same wiring will land when the preset path is reviewed.</p>
+    <p><strong>Amplification guard.</strong> <code>create</code> AND <code>preset install</code> both call <code>AmplificationGuard.validate</code> before any disk write. Crons whose first two fires sit at or below the 60-second amplification floor (default <code>defaultMinIntervalSeconds</code>) are refused with a structured error; no JSON is written under <code>~/.senkani/schedules/</code> and no plist is written under <code>~/Library/LaunchAgents/</code>. The canonical reproduction case is <code>--cron '* * * * *'</code> (every-minute, 60s gap == floor); the guard refuses up front so the operator sees a clear rejection instead of a silent downstream clamp by the rate limiter. For <code>preset install</code> the guard runs AFTER cron-override resolution AND AFTER the secret-scan, so an amplifying <code>--cron</code> override against a shipped preset (or a malformed user-shipped preset record) is refused with a message naming the preset name + reason + floor (<code>schedule-preset-install-amplification-guard-not-wired-2026-05-21</code>, shipped 2026-05-21).</p>
 
     <p><strong>Counter-cadence schedules.</strong> Pass <code>--counter-cadence "every N event_name"</code> (mutually exclusive with <code>--cron</code>) to register a schedule that fires from <code>HookRouter</code> post-tool reactions instead of launchd. Counter cadences DO NOT get a launchd plist — only the <code>ScheduledTask</code> JSON is written under <code>~/.senkani/schedules/</code>, with <code>cronPattern</code> set to the sentinel <code>COUNTER:&lt;event&gt;:&lt;N&gt;</code> (the JSON schema requires a non-optional <code>cronPattern</code>; dispatch readers filter on <code>task.eventCounterCadence != nil</code> or <code>CounterCadence.isSentinel(task.cronPattern)</code>). Validation refuses <code>N &lt; 2</code> up front (every-event fires would be clamped to one fire per minute by the rate limiter); the parser tolerates <code>every 10 tool_calls</code>, <code>every 10th tool_call</code>, and <code>every 10 tool_call</code> equivalently. <code>senkani schedule list</code> renders the SCHEDULE column with the operator's prose (e.g. <code>every 10 tool_calls</code>) for counter rows rather than the raw <code>COUNTER:</code> sentinel — cron rows continue to render via <code>CronToLaunchd.humanReadable</code>.</p>
 
@@ -100,7 +100,13 @@ Pick a cron whose fire interval is above the floor.
 
 # Counter-cadence with N=1 is refused at parse time:
 $ senkani schedule create --name every-call --counter-cadence "every 1 tool_call" --command "echo x"
-Validation Error: Counter cadence N=1 is at or below the amplification floor. Pick N >= 2 so the schedule doesn't fire on every event.</pre>
+Validation Error: Counter cadence N=1 is at or below the amplification floor. Pick N >= 2 so the schedule doesn't fire on every event.
+
+# Amplification guard also refuses fast-firing --cron overrides on preset install:
+$ senkani schedule preset install log-rotation --cron "* * * * *"
+Validation Error: Refused: preset `log-rotation` would amplify (cron fires every 60s,
+at or below the 60s amplification floor). The amplification floor is 60s.
+Pick a `--cron` override whose fire interval is above the floor.</pre>
 
     <h2>Subcommands</h2>
     <div class="ref-io-table">

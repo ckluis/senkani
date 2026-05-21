@@ -22,6 +22,15 @@ struct ArtifactGalleryView: View {
     @State private var showRevealSheet = false
     @State private var revealError: String?
 
+    // V.9b-2 — filter toolbar state.
+    @State private var filterModel: ArtifactGalleryFilterModel = .unconstrained
+    @State private var tagInput: String = ""
+    @State private var versionMinText: String = ""
+    @State private var versionMaxText: String = ""
+    @State private var sinceDate: Date = Date()
+    @State private var sinceEnabled: Bool = false
+    @State private var debounceTask: Task<Void, Never>?
+
     // V.9a entrypoint — composed with the three production providers.
     // Recorder wires to SessionDatabase.shared via Live recorder.
     private var store: ArtifactStore {
@@ -67,6 +76,8 @@ struct ArtifactGalleryView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
+            Divider()
+            filterToolbar
             Divider()
 
             if records.isEmpty {
@@ -163,6 +174,156 @@ struct ArtifactGalleryView: View {
         let fmt = RelativeDateTimeFormatter()
         fmt.unitsStyle = .abbreviated
         return fmt.localizedString(for: d, relativeTo: Date())
+    }
+
+    // MARK: - Filter toolbar (V.9b-2)
+
+    private var observedTags: [String] {
+        var seen = Set<String>()
+        for r in records { seen.formUnion(r.tags) }
+        return seen.sorted()
+    }
+
+    private var filterToolbar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            sourcePaneChipsRow
+            tagChipsRow
+            versionAndSinceRow
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+    }
+
+    private var sourcePaneChipsRow: some View {
+        HStack(spacing: 6) {
+            ForEach(ArtifactSourcePane.allCases, id: \.rawValue) { pane in
+                let on = filterModel.selectedSourcePanes.contains(pane)
+                Button {
+                    filterModel.toggleSourcePane(pane)
+                    scheduleRefresh()
+                } label: {
+                    sourcePaneBadge(pane)
+                        .opacity(on ? 1.0 : 0.35)
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+            if !filterModel.isUnconstrained {
+                Button("Clear") {
+                    filterModel.clearAll()
+                    tagInput = ""
+                    versionMinText = ""
+                    versionMaxText = ""
+                    sinceEnabled = false
+                    scheduleRefresh()
+                }
+                .font(.system(size: 10))
+                .buttonStyle(.borderless)
+            }
+        }
+    }
+
+    private var tagChipsRow: some View {
+        HStack(spacing: 4) {
+            TextField("tag", text: $tagInput)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 11))
+                .frame(maxWidth: 110)
+                .onSubmit {
+                    filterModel.addTagChip(tagInput)
+                    tagInput = ""
+                    scheduleRefresh()
+                }
+            if !observedTags.isEmpty, !tagInput.isEmpty {
+                let lower = tagInput.lowercased()
+                let matches = observedTags.filter { $0.lowercased().contains(lower) }.prefix(3)
+                ForEach(Array(matches), id: \.self) { suggestion in
+                    Button(suggestion) {
+                        filterModel.addTagChip(suggestion)
+                        tagInput = ""
+                        scheduleRefresh()
+                    }
+                    .font(.system(size: 9))
+                    .buttonStyle(.borderless)
+                }
+            }
+            ForEach(Array(filterModel.tagChips).sorted(), id: \.self) { tag in
+                Button {
+                    filterModel.removeTagChip(tag)
+                    scheduleRefresh()
+                } label: {
+                    HStack(spacing: 2) {
+                        Text(tag).font(.system(size: 10, weight: .medium))
+                        Image(systemName: "xmark").font(.system(size: 8))
+                    }
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.accentColor.opacity(0.18))
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+    }
+
+    private var versionAndSinceRow: some View {
+        HStack(spacing: 6) {
+            Text("v").font(.system(size: 10)).foregroundStyle(.secondary)
+            TextField("min", text: $versionMinText)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 11))
+                .frame(width: 40)
+                .onSubmit { applyVersionBounds() }
+            Text("–").font(.system(size: 10)).foregroundStyle(.secondary)
+            TextField("max", text: $versionMaxText)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 11))
+                .frame(width: 40)
+                .onSubmit { applyVersionBounds() }
+            Toggle("since", isOn: $sinceEnabled)
+                .font(.system(size: 10))
+                .toggleStyle(.checkbox)
+                .onChange(of: sinceEnabled) { _ in applySince() }
+            if sinceEnabled {
+                DatePicker("", selection: $sinceDate, displayedComponents: [.date])
+                    .labelsHidden()
+                    .controlSize(.mini)
+                    .onChange(of: sinceDate) { _ in applySince() }
+            }
+            Spacer()
+        }
+    }
+
+    private func applyVersionBounds() {
+        filterModel.versionMin = Int(versionMinText.trimmingCharacters(in: .whitespaces))
+        filterModel.versionMax = Int(versionMaxText.trimmingCharacters(in: .whitespaces))
+        scheduleRefresh()
+    }
+
+    private func applySince() {
+        filterModel.since = sinceEnabled ? sinceDate : nil
+        scheduleRefresh()
+    }
+
+    /// Debounce filter changes by the model's published window before
+    /// re-running `ArtifactStore.list(filter:)`. Cancels in-flight
+    /// debounce so rapid keystrokes coalesce.
+    private func scheduleRefresh() {
+        debounceTask?.cancel()
+        let model = filterModel
+        debounceTask = Task { @MainActor in
+            try? await Task.sleep(
+                nanoseconds: UInt64(ArtifactGalleryFilterModel.debounceMilliseconds) * 1_000_000
+            )
+            if Task.isCancelled { return }
+            applyFilter(model)
+        }
+    }
+
+    private func applyFilter(_ model: ArtifactGalleryFilterModel) {
+        records = store.list(filter: model.filter)
+            .sorted { $0.createdAt > $1.createdAt }
     }
 
     // MARK: - Detail
@@ -338,7 +499,7 @@ struct ArtifactGalleryView: View {
     // MARK: - Actions
 
     private func refresh() {
-        records = store.list(filter: .unconstrained)
+        records = store.list(filter: filterModel.filter)
             .sorted { $0.createdAt > $1.createdAt }
     }
 

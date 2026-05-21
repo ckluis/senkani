@@ -88,13 +88,20 @@ final class WorkspaceModel {
     ///   1. Branches (one per opted-in workstream)
     ///   2. Worktree directories (one per opted-in workstream)
     ///   3. Per-project app-support directory
-    ///   4. In-memory model removal (sidebar entry)
+    ///   4. In-memory model removal (sidebar entry) — DEFERRED.
     ///
     /// Each step's failure is collected into the returned array; the
     /// dialog shows them inline and lets the operator opt in to
-    /// `force: true` and retry. The in-memory removal (step 4) always
-    /// runs — the sidebar entry is what "remove" means and is
-    /// rendered as a disabled-checked checkbox in the dialog.
+    /// `force: true` and retry. The in-memory removal (step 4) is the
+    /// LAST step and only fires when every opted-in artifact has been
+    /// deleted — i.e. `failures.isEmpty` at the boundary. This ensures
+    /// retry-after-failure can re-resolve the project via `id` and re-
+    /// run the artifact steps; otherwise the sidebar entry would be
+    /// dropped on call N and the retry's `guard let project = projects
+    /// .first(...)` would short-circuit, leaving the artifacts on disk.
+    /// The dialog still renders the sidebar-entry row as the always-on
+    /// disabled-checked checkbox; "always" means "always, once all the
+    /// opted-in artifacts are gone."
     @discardableResult
     func removeProject(id: UUID, options: ProjectRemovalOptions) -> [RemovalFailure] {
         guard let project = projects.first(where: { $0.id == id }) else { return [] }
@@ -141,7 +148,11 @@ final class WorkspaceModel {
             }
         }
 
-        // Step 4: sidebar / in-memory (always).
+        // Step 4: sidebar / in-memory — DEFERRED until every opted-in
+        // artifact step succeeded. Without this guard, a failed step
+        // 1/2/3 would still drop the in-memory entry, and the retry
+        // path would short-circuit at the top-of-function guard-let.
+        guard failures.isEmpty else { return failures }
         projects.removeAll { $0.id == id }
         if activeProjectID == id {
             activeProjectID = projects.first?.id
@@ -160,7 +171,15 @@ final class WorkspaceModel {
     ///
     ///   1. Branch
     ///   2. Worktree directory
-    ///   3. Sidebar / in-memory (delegated to `ProjectModel.removeWorkstream`)
+    ///   3. Sidebar / in-memory — DEFERRED (delegated to
+    ///      `ProjectModel.removeWorkstream`)
+    ///
+    /// The in-memory step is the LAST step and only fires when every
+    /// opted-in artifact has been deleted — i.e. `failures.isEmpty`
+    /// at the boundary. Without this guard the sidebar entry would
+    /// drop on call N and the retry's top-of-function `guard let ws
+    /// = project.workstreams.first(...)` would short-circuit,
+    /// returning `[]` and leaving the branch + worktree on disk.
     ///
     /// The in-memory step respects the existing default-workstream
     /// and last-workstream invariants — it refuses to drop either,
@@ -188,7 +207,14 @@ final class WorkspaceModel {
             }
         }
 
-        // Sidebar entry (always — delegates to model invariant checks).
+        // Sidebar entry — DEFERRED until every opted-in artifact step
+        // succeeded. Without this guard, a failed step 1/2 would still
+        // drop the in-memory entry, and the retry path's top-of-function
+        // `guard let ws = project.workstreams.first(...)` would short-
+        // circuit, returning `[]` and leaving the branch + worktree on
+        // disk (sidebar-already-mutated regression — fix landed
+        // 2026-05-21).
+        guard failures.isEmpty else { return failures }
         let removed = project.removeWorkstream(id: workstreamID)
         if !removed {
             failures.append(RemovalFailure(

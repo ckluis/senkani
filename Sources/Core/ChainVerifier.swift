@@ -267,11 +267,21 @@ public enum ChainVerifier {
 
     /// Walk `validation_results` rows for one anchor.
     /// `entry_hash IS NOT NULL` filter — see `verifyAnchorTokenEvents` notes.
+    ///
+    /// Anchor-aware canonical shape (v29): rows under
+    /// `fresh-install-pre-v22` were hashed without the five v22-added
+    /// columns (`axes`, `target_url`, `plan_steps`, `result_status`,
+    /// `screenshot_path`); rows under any other anchor (`fresh-install`
+    /// post-v29, `migration-v22`, future `repair-*`) include those
+    /// columns. Mirrors the writer-side switch in
+    /// `ValidationStore.resolveWriteAnchorLocked` / `canonicalColumns`.
     private static func verifyAnchorValidationResults(db: OpaquePointer, anchor: Anchor) -> Result? {
+        let useV22Shape = (anchor.reason != "fresh-install-pre-v22")
         let sql = """
             SELECT id, session_id, file_path, validator_name, category, exit_code,
                    raw_output, advisory, duration_ms, created_at, delivered,
                    outcome, reason, surfaced_at,
+                   axes, target_url, plan_steps, result_status, screenshot_path,
                    prev_hash, entry_hash
               FROM validation_results
              WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
@@ -279,7 +289,7 @@ public enum ChainVerifier {
         """
         return walkTable(db: db, table: "validation_results", anchor: anchor, sql: sql) { stmt in
             let rowid = sqlite3_column_int64(stmt, 0)
-            let columns: [String: ChainHasher.CanonicalValue] = [
+            var columns: [String: ChainHasher.CanonicalValue] = [
                 "session_id":     textValue(stmt, 1),
                 "file_path":      textValue(stmt, 2),
                 "validator_name": textValue(stmt, 3),
@@ -296,8 +306,15 @@ public enum ChainVerifier {
                                     ? .null
                                     : .real(sqlite3_column_double(stmt, 13)),
             ]
-            let prev = optionalText(stmt, 14)
-            let stored = sqlite3_column_text(stmt, 15).map { String(cString: $0) } ?? ""
+            if useV22Shape {
+                columns["axes"]            = textValue(stmt, 14)
+                columns["target_url"]      = textOrNull(stmt, 15)
+                columns["plan_steps"]      = textValue(stmt, 16)
+                columns["result_status"]   = textOrNull(stmt, 17)
+                columns["screenshot_path"] = textOrNull(stmt, 18)
+            }
+            let prev = optionalText(stmt, 19)
+            let stored = sqlite3_column_text(stmt, 20).map { String(cString: $0) } ?? ""
             return (rowid, columns, prev, stored)
         }
     }

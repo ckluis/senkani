@@ -1540,6 +1540,40 @@ public enum MigrationRegistry {
                    AND reason = 'fresh-install';
             """)
         },
+        Migration(version: 29, description: "validation_results: rename existing fresh-install anchor to fresh-install-pre-v22 (v22 column-shape evolution for browser dispatch)") { db in
+            // v22 added axes / target_url / plan_steps / result_status /
+            // screenshot_path columns but kept them OUT of the canonical
+            // hash map — opaque data. v29 closes that gap so an attacker
+            // who flips a stored `result_status` (e.g. 'fail' → 'pass')
+            // via SQL UPDATE is caught by ChainVerifier.
+            //
+            // Mirrors the v18 (commands/token_events) + v23 (egress_decisions)
+            // + v28 (trust_audits) rename pattern. The migration-v22 anchor
+            // itself is lazy-opened on first browser-validation write
+            // (ValidationStore.openMigrationV22AnchorLocked), NOT here —
+            // until the first browser dispatch lands, every write stays
+            // on the renamed legacy anchor under the pre-v22 shape.
+            //
+            // Post-v29 fresh installs lazy-create a 'fresh-install' anchor
+            // on first write that already uses the v22 canonical shape
+            // (no rename + no migration-v22 needed because nothing
+            // predates it).
+            func exec(_ sql: String) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc != SQLITE_OK {
+                    throw MigrationError.sqlFailed(stage: "v29", detail: msg)
+                }
+            }
+            try exec("""
+                UPDATE chain_anchors
+                   SET reason = 'fresh-install-pre-v22'
+                 WHERE table_name = 'validation_results'
+                   AND reason = 'fresh-install';
+            """)
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)

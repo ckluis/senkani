@@ -59,25 +59,37 @@ final class ValidationStore: @unchecked Sendable {
             guard let parent, let self, let db = parent.db else { return }
 
             // T.5 round 3: chain-aware insert.
-            let anchorId = self.chain.resolveAnchorId(db: db)
+            // v29 round (2026-05-21): auto-validate does NOT lazy-open
+            // migration-v22 — it does not populate the v22 columns and
+            // legacy auto-validate rows continue to chain under whatever
+            // anchor is current. On `fresh-install-pre-v22` the canonical
+            // shape stays pre-v22; on `migration-v22` / post-v29
+            // `fresh-install` the canonical map includes the v22 columns
+            // at their DDL defaults ('[]' / NULL / '[]' / NULL / NULL),
+            // matching the row SQLite actually persists.
+            let (anchorId, useV22Shape) = self.resolveWriteAnchorLocked(db: db, ensureV22: false)
             let prevHash = self.chain.latestEntryHash(db: db, anchorId: anchorId)
-            let columns: [String: ChainHasher.CanonicalValue] = [
-                "session_id":     .text(sessionId),
-                "file_path":      .text(filePath),
-                "validator_name": .text(validatorName),
-                "category":       .text(category),
-                "exit_code":      .integer(Int64(exitCode)),
-                "raw_output":     rawOutput.map { .text($0) } ?? .null,
-                "advisory":       .text(advisory),
-                "duration_ms":    .integer(Int64(durationMs)),
-                "created_at":     .real(now),
-                // `delivered`, `outcome`, `reason`, `surfaced_at` are part of
-                // the table's data shape after migrations 3+. They're hashed.
-                "delivered":      .integer(0),
-                "outcome":        .text(resolvedOutcome),
-                "reason":         reason.map { .text($0) } ?? .null,
-                "surfaced_at":    .null,
-            ]
+            let columns = Self.canonicalColumns(
+                sessionId: sessionId,
+                filePath: filePath,
+                validatorName: validatorName,
+                category: category,
+                exitCode: exitCode,
+                rawOutput: rawOutput,
+                advisory: advisory,
+                durationMs: durationMs,
+                createdAt: now,
+                delivered: 0,
+                outcome: resolvedOutcome,
+                reason: reason,
+                surfacedAt: nil,
+                axesJSON: "[]",
+                targetURL: nil,
+                planStepsJSON: "[]",
+                resultStatus: nil,
+                screenshotPath: nil,
+                useV22Shape: useV22Shape
+            )
             let entryHash = ChainHasher.entryHash(
                 table: "validation_results", columns: columns, prev: prevHash
             )
@@ -219,14 +231,17 @@ final class ValidationStore: @unchecked Sendable {
     /// `screenshot_path`) so HookRouter's PreToolUse gate can read
     /// `result_status = 'fail'` for the session.
     ///
-    /// Chain note: this writer hashes under the existing `fresh-install`
-    /// anchor's canonical column shape (same set as
-    /// `insertValidationResult`). The v22 columns are stored as opaque
-    /// data and not yet part of the entry hash — opening a
-    /// `migration-v22` anchor that includes them is deferred to a
-    /// follow-up round so this round's scope stays bounded. Existing
-    /// rows verify unchanged; new browser rows verify under the same
-    /// shape as legacy auto-validate rows.
+    /// Chain note (v29 round, 2026-05-21): this writer is the lazy-open
+    /// trigger for the `migration-v22` anchor. When the current anchor
+    /// is `fresh-install-pre-v22`, the first browser-validation write
+    /// opens a `migration-v22` anchor at `MAX(id)` so that all
+    /// subsequent rows — both browser and auto-validate — chain under
+    /// the v22 canonical shape (which includes axes / target_url /
+    /// plan_steps / result_status / screenshot_path in the hash). Rows
+    /// already chained under `fresh-install-pre-v22` keep verifying
+    /// under the pre-v22 shape. Post-v29 fresh installs land on a
+    /// `fresh-install` anchor whose shape is v22 from row 1 — no rename
+    /// + no migration-v22 needed.
     func insertBrowserValidationResult(
         sessionId: String,
         targetURL: String,
@@ -253,25 +268,29 @@ final class ValidationStore: @unchecked Sendable {
         parent.queue.async { [weak parent, weak self] in
             guard let parent, let self, let db = parent.db else { return }
 
-            let anchorId = self.chain.resolveAnchorId(db: db)
+            let (anchorId, useV22Shape) = self.resolveWriteAnchorLocked(db: db, ensureV22: true)
             let prevHash = self.chain.latestEntryHash(db: db, anchorId: anchorId)
-            // Hash only the legacy column set so the chain stays intact
-            // with pre-v22 fresh-install anchor rows.
-            let columns: [String: ChainHasher.CanonicalValue] = [
-                "session_id":     .text(sessionId),
-                "file_path":      .text(targetURL),
-                "validator_name": .text("validate_browser"),
-                "category":       .text("browser"),
-                "exit_code":      .integer(Int64(exitCode)),
-                "raw_output":     .null,
-                "advisory":       .text(advisory),
-                "duration_ms":    .integer(Int64(durationMs)),
-                "created_at":     .real(now),
-                "delivered":      .integer(0),
-                "outcome":        .text(legacyOutcome),
-                "reason":         .null,
-                "surfaced_at":    .null,
-            ]
+            let columns = Self.canonicalColumns(
+                sessionId: sessionId,
+                filePath: targetURL,
+                validatorName: "validate_browser",
+                category: "browser",
+                exitCode: exitCode,
+                rawOutput: nil,
+                advisory: advisory,
+                durationMs: durationMs,
+                createdAt: now,
+                delivered: 0,
+                outcome: legacyOutcome,
+                reason: nil,
+                surfacedAt: nil,
+                axesJSON: axesJSON,
+                targetURL: targetURL,
+                planStepsJSON: planStepsJSON,
+                resultStatus: resultStatus,
+                screenshotPath: screenshotPath,
+                useV22Shape: useV22Shape
+            )
             let entryHash = ChainHasher.entryHash(
                 table: "validation_results", columns: columns, prev: prevHash
             )
@@ -286,25 +305,43 @@ final class ValidationStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (targetURL as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 3, "validate_browser", -1, nil)
-            sqlite3_bind_text(stmt, 4, "browser", -1, nil)
+            // SQLite TRANSIENT — make SQLite copy the bound bytes immediately.
+            // Required for any binding whose backing storage is a transient
+            // C-string bridge (Swift String → CChar pointer), because the
+            // SQLITE_STATIC contract assumes the pointer is valid until
+            // sqlite3_step, which Swift's bridge cannot guarantee for
+            // expression-temporary `String as NSString`-derived pointers.
+            // Latent corruption pre-v29 — never tripped because the v22
+            // columns were not yet hashed; verifier reads of `category` /
+            // `validator_name` could silently see other column bytes.
+            let transient = unsafeBitCast(OpaquePointer(bitPattern: -1), to: sqlite3_destructor_type.self)
+            sqlite3_bind_text(stmt, 1, sessionId, -1, transient)
+            sqlite3_bind_text(stmt, 2, targetURL, -1, transient)
+            sqlite3_bind_text(stmt, 3, "validate_browser", -1, transient)
+            sqlite3_bind_text(stmt, 4, "browser", -1, transient)
             sqlite3_bind_int(stmt, 5, exitCode)
             sqlite3_bind_null(stmt, 6)
-            sqlite3_bind_text(stmt, 7, (advisory as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 7, advisory, -1, transient)
             sqlite3_bind_int(stmt, 8, Int32(durationMs))
             sqlite3_bind_double(stmt, 9, now)
-            sqlite3_bind_text(stmt, 10, (legacyOutcome as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 10, legacyOutcome, -1, transient)
             sqlite3_bind_null(stmt, 11)
-            Self.bindOptionalText(stmt, 12, prevHash)
-            sqlite3_bind_text(stmt, 13, (entryHash as NSString).utf8String, -1, nil)
+            if let prevHash {
+                sqlite3_bind_text(stmt, 12, prevHash, -1, transient)
+            } else {
+                sqlite3_bind_null(stmt, 12)
+            }
+            sqlite3_bind_text(stmt, 13, entryHash, -1, transient)
             sqlite3_bind_int64(stmt, 14, anchorId)
-            sqlite3_bind_text(stmt, 15, (axesJSON as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 16, (targetURL as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 17, (planStepsJSON as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 18, (resultStatus as NSString).utf8String, -1, nil)
-            Self.bindOptionalText(stmt, 19, screenshotPath)
+            sqlite3_bind_text(stmt, 15, axesJSON, -1, transient)
+            sqlite3_bind_text(stmt, 16, targetURL, -1, transient)
+            sqlite3_bind_text(stmt, 17, planStepsJSON, -1, transient)
+            sqlite3_bind_text(stmt, 18, resultStatus, -1, transient)
+            if let screenshotPath {
+                sqlite3_bind_text(stmt, 19, screenshotPath, -1, transient)
+            } else {
+                sqlite3_bind_null(stmt, 19)
+            }
             if sqlite3_step(stmt) == SQLITE_DONE {
                 self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
             }
@@ -374,6 +411,152 @@ final class ValidationStore: @unchecked Sendable {
             sqlite3_step(stmt)
             return Int(sqlite3_changes(db))
         }
+    }
+
+    // MARK: - v22 chain shape
+
+    /// Anchor name the v29 migration uses to mark legacy chain rows.
+    /// Rows under this anchor were hashed under the 13-column shape
+    /// (pre-v22). Rows under any other anchor reason for
+    /// `validation_results` use the 18-column v22 shape that includes
+    /// `axes`, `target_url`, `plan_steps`, `result_status`,
+    /// `screenshot_path`. See `Migrations.swift` v29 +
+    /// `ChainVerifier.verifyAnchorValidationResults`.
+    static let legacyV22AnchorReason = "fresh-install-pre-v22"
+
+    /// Anchor reason for the lazy-opened v22 anchor. Public so the
+    /// verifier + tests reference the same literal.
+    static let migrationV22AnchorReason = "migration-v22"
+
+    /// Resolve the anchor a write should chain under, plus whether the
+    /// writer should emit the v22 (18-column) canonical shape.
+    ///
+    /// - When `ensureV22 == true` (browser-validation writer) and the
+    ///   current anchor is `fresh-install-pre-v22`, lazy-open a
+    ///   `migration-v22` anchor at `MAX(id)` and return its id with
+    ///   `useV22Shape = true`. Idempotent — second call returns the
+    ///   existing migration-v22 anchor without inserting a duplicate.
+    /// - When `ensureV22 == false` (auto-validate writer), stay on
+    ///   whatever anchor is current; only the canonical shape varies.
+    ///
+    /// Caller MUST be on `parent.queue`.
+    private func resolveWriteAnchorLocked(db: OpaquePointer, ensureV22: Bool) -> (anchorId: Int64, useV22Shape: Bool) {
+        let current = chain.resolveAnchorId(db: db)
+        let reason = chain.anchorReason(db: db, anchorId: current) ?? ""
+        if reason == Self.legacyV22AnchorReason {
+            if ensureV22 {
+                let newAnchorId = Self.openMigrationV22AnchorLocked(db: db)
+                if newAnchorId > 0 {
+                    chain.invalidate()
+                    _ = chain.resolveAnchorId(db: db)  // repopulate cache with new MAX(id)
+                    return (newAnchorId, true)
+                }
+                // Lazy-open failed — fall back to legacy anchor so the
+                // write still succeeds. Loud failure here would block
+                // every browser-validation write on an SQL-level error
+                // the operator can't recover from inline.
+                return (current, false)
+            }
+            return (current, false)
+        }
+        // fresh-install (post-v29), migration-v22, any future repair-*
+        // anchor name → v22 canonical shape.
+        return (current, true)
+    }
+
+    /// Lazy-opens the `migration-v22` anchor at `MAX(id)` for
+    /// `validation_results`. Idempotent — if a `migration-v22` anchor
+    /// already exists for this table, returns its id without inserting
+    /// a new one. Returns -1 on SQL error.
+    private static func openMigrationV22AnchorLocked(db: OpaquePointer) -> Int64 {
+        // Idempotency lookup first — operator may invoke
+        // browser-validation repeatedly across process restarts.
+        var lookupStmt: OpaquePointer?
+        let lookupSQL = "SELECT id FROM chain_anchors WHERE table_name = 'validation_results' AND reason = 'migration-v22' ORDER BY id ASC LIMIT 1;"
+        if sqlite3_prepare_v2(db, lookupSQL, -1, &lookupStmt, nil) == SQLITE_OK {
+            defer { sqlite3_finalize(lookupStmt) }
+            if sqlite3_step(lookupStmt) == SQLITE_ROW,
+               sqlite3_column_type(lookupStmt, 0) != SQLITE_NULL {
+                return sqlite3_column_int64(lookupStmt, 0)
+            }
+        }
+        // MAX(id) of validation_results — every row at this point or
+        // earlier belongs to the legacy `fresh-install-pre-v22` segment.
+        var maxStmt: OpaquePointer?
+        var maxRowid: Int64 = 0
+        let maxSQL = "SELECT COALESCE(MAX(id), 0) FROM validation_results;"
+        if sqlite3_prepare_v2(db, maxSQL, -1, &maxStmt, nil) == SQLITE_OK {
+            defer { sqlite3_finalize(maxStmt) }
+            if sqlite3_step(maxStmt) == SQLITE_ROW {
+                maxRowid = sqlite3_column_int64(maxStmt, 0)
+            }
+        }
+        var insertStmt: OpaquePointer?
+        let now = Date().timeIntervalSince1970
+        let insertSQL = """
+            INSERT INTO chain_anchors
+                (table_name, started_at, started_at_rowid, reason, operator_note)
+            VALUES ('validation_results', ?, ?, 'migration-v22', NULL);
+        """
+        guard sqlite3_prepare_v2(db, insertSQL, -1, &insertStmt, nil) == SQLITE_OK else { return -1 }
+        defer { sqlite3_finalize(insertStmt) }
+        sqlite3_bind_double(insertStmt, 1, now)
+        sqlite3_bind_int64(insertStmt, 2, maxRowid)
+        guard sqlite3_step(insertStmt) == SQLITE_DONE else { return -1 }
+        return sqlite3_last_insert_rowid(db)
+    }
+
+    /// Build the canonical column map for one validation_results row.
+    /// `useV22Shape` controls inclusion of the v22 columns (`axes`,
+    /// `target_url`, `plan_steps`, `result_status`, `screenshot_path`).
+    /// Both writers feed this helper so the column set stays consistent
+    /// for a given shape — if a writer drifted (e.g. forgot a default
+    /// slot), the verifier would surface a hash mismatch on the next
+    /// chain walk.
+    static func canonicalColumns(
+        sessionId: String,
+        filePath: String,
+        validatorName: String,
+        category: String,
+        exitCode: Int32,
+        rawOutput: String?,
+        advisory: String,
+        durationMs: Int,
+        createdAt: Double,
+        delivered: Int,
+        outcome: String,
+        reason: String?,
+        surfacedAt: Double?,
+        axesJSON: String,
+        targetURL: String?,
+        planStepsJSON: String,
+        resultStatus: String?,
+        screenshotPath: String?,
+        useV22Shape: Bool
+    ) -> [String: ChainHasher.CanonicalValue] {
+        var cols: [String: ChainHasher.CanonicalValue] = [
+            "session_id":     .text(sessionId),
+            "file_path":      .text(filePath),
+            "validator_name": .text(validatorName),
+            "category":       .text(category),
+            "exit_code":      .integer(Int64(exitCode)),
+            "raw_output":     rawOutput.map { .text($0) } ?? .null,
+            "advisory":       .text(advisory),
+            "duration_ms":    .integer(Int64(durationMs)),
+            "created_at":     .real(createdAt),
+            "delivered":      .integer(Int64(delivered)),
+            "outcome":        .text(outcome),
+            "reason":         reason.map { .text($0) } ?? .null,
+            "surfaced_at":    surfacedAt.map { .real($0) } ?? .null,
+        ]
+        if useV22Shape {
+            cols["axes"]            = .text(axesJSON)
+            cols["target_url"]      = targetURL.map { .text($0) } ?? .null
+            cols["plan_steps"]      = .text(planStepsJSON)
+            cols["result_status"]   = resultStatus.map { .text($0) } ?? .null
+            cols["screenshot_path"] = screenshotPath.map { .text($0) } ?? .null
+        }
+        return cols
     }
 
     // MARK: - Helpers

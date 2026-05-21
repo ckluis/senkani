@@ -679,6 +679,261 @@ struct DeferredSidebarInvariantTests {
                 "Buggy mirror leaks the worktree directory — the disk-side signal of the original bug.")
         #expect(workstreams.isEmpty)
     }
+
+    // MARK: Suite 7c — partial-success retry idempotency
+    //
+    // remove-partial-success-retry-idempotency-2026-05-21: with the
+    // deferred-sidebar fix in place, a retry call N+1 re-runs every
+    // opted-in artifact step. If on call N step 1 (branch-delete)
+    // succeeded and step 2 (worktree-remove) failed, the force-retry
+    // call N+1 re-runs step 1 against the now-gone branch and
+    // `git branch -D <gone-branch>` returns non-zero, appending a
+    // spurious RemovalFailure. The fix is per-step "already-gone"
+    // detection treated as no-op success.
+    //
+    // These two tests use an idempotent inline mirror that pre-checks
+    // existence before each artifact step (matches the production
+    // `WorkspaceModel` pattern: `WorktreeGitInspector.branchExists` +
+    // `FileManager.fileExists`). Suite 7a's source-level guards
+    // assert the production code matches this shape.
+
+    @Test("removeWorkstream source applies pre-existence guards on branch + worktree steps")
+    func removeWorkstreamPreCheckGuards() {
+        let src = read("SenkaniApp/Models/WorkspaceModel.swift")
+        // Both pre-checks must appear before the destructive call,
+        // inside removeWorkstream's body. The simplest robust assertion
+        // is that the function body contains both probe markers.
+        let branchProbe = "WorktreeGitInspector.branchExists(repoPath: repoRoot, branch: branch)"
+        let pathProbe = "FileManager.default.fileExists(atPath: wtPath)"
+        #expect(src.contains(branchProbe),
+                "removeWorkstream must pre-check branchExists so retry doesn't surface a spurious failure for an already-deleted branch.")
+        #expect(src.contains(pathProbe),
+                "removeWorkstream must pre-check FileManager.fileExists(atPath:) for the worktree so retry doesn't surface a spurious failure for an already-removed worktree.")
+    }
+
+    @Test("removeProject source applies pre-existence guards on branch + worktree steps")
+    func removeProjectPreCheckGuards() {
+        let src = read("SenkaniApp/Models/WorkspaceModel.swift")
+        // removeProject's per-workstream loops must also pre-check
+        // existence. Use the marker phrases from the function body.
+        // (`fm` is the local FileManager.default binding declared at
+        // the top of removeProject.)
+        let branchGuard = "guard WorktreeGitInspector.branchExists(repoPath: repoRoot, branch: branch) else { continue }"
+        let pathGuard = "guard fm.fileExists(atPath: wtPath) else { continue }"
+        #expect(src.contains(branchGuard),
+                "removeProject per-workstream branch step must guard on branchExists before deleteBranch.")
+        #expect(src.contains(pathGuard),
+                "removeProject per-workstream worktree step must guard on fm.fileExists(atPath:) before removeWorktree.")
+    }
+
+    /// Idempotent inline mirror of `WorkspaceModel.removeWorkstream`:
+    /// adds the same pre-existence guards as production code. The
+    /// behavioural tests below use this mirror to drive a real temp
+    /// git repo through partial-success retry and assert
+    /// `failures.isEmpty` rather than the spurious-failure shape that
+    /// would surface without the pre-checks.
+    private func idempotentMirrorRemoveWorkstream(
+        id workstreamID: UUID,
+        workstreams: inout [InlineWorkstreamRecord],
+        repoPath: String,
+        options: InlineWorkstreamOpts
+    ) -> [InlineRemovalFailure] {
+        guard let ws = workstreams.first(where: { $0.id == workstreamID }) else { return [] }
+        var failures: [InlineRemovalFailure] = []
+
+        if options.removeBranch {
+            // Pre-check: skip if branch is gone.
+            let (refExit, _) = sh(["-C", repoPath, "rev-parse", "--verify", "refs/heads/\(ws.branch)"])
+            if refExit == 0 {
+                let (exit, err) = sh(["-C", repoPath, "branch", "-D", ws.branch])
+                if exit != 0 {
+                    failures.append(InlineRemovalFailure(artifact: ws.branch, reason: err))
+                }
+            }
+        }
+
+        if options.removeWorktreeDir {
+            if FileManager.default.fileExists(atPath: ws.worktreePath) {
+                var args = ["-C", repoPath, "worktree", "remove"]
+                if options.force { args.append("--force") }
+                args.append(ws.worktreePath)
+                let (exit, err) = sh(args)
+                if exit != 0 {
+                    failures.append(InlineRemovalFailure(artifact: ws.worktreePath, reason: err))
+                }
+            }
+        }
+
+        guard failures.isEmpty else { return failures }
+        workstreams.removeAll { $0.id == workstreamID }
+        return failures
+    }
+
+    @Test("Partial-success retry: branch already gone — pre-check skips the step, no spurious failure")
+    func branchAlreadyGoneNoSpuriousFailure() throws {
+        // Seed: temp repo with a NOT-checked-out feature branch + a
+        // separate dirty worktree on a different branch. Call N:
+        // branch-delete succeeds (branch is not checked out anywhere).
+        // worktree-remove fails (dirty). Call N+1 with force=true:
+        // branch-delete pre-check trips (branch gone) → no step,
+        // no failure. worktree-remove with --force succeeds. Result:
+        // failures.isEmpty after the retry.
+        let repo = makeRepoWithCommit()
+        defer { try? FileManager.default.removeItem(atPath: repo) }
+
+        // Set up: create the feature branch via worktree add then move
+        // the worktree off it (HEAD goes back to main on the main
+        // worktree; the feature branch ref still exists). The dirty
+        // worktree we'll fail to remove lives on a DIFFERENT branch.
+        let featureBranch = "feature/not-checked-out"
+        let dirtyBranch = "feature/dirty"
+        let featurePath = NSTemporaryDirectory() + "senkani-feature-\(UUID().uuidString)"
+        let dirtyPath = NSTemporaryDirectory() + "senkani-dirty-\(UUID().uuidString)"
+        defer {
+            try? FileManager.default.removeItem(atPath: featurePath)
+            try? FileManager.default.removeItem(atPath: dirtyPath)
+        }
+        let (faExit, faErr) = sh(["-C", repo, "worktree", "add", "-b", featureBranch, featurePath])
+        try #require(faExit == 0, "feature worktree add: \(faErr)")
+        // Remove the feature worktree (clean) so the branch is no
+        // longer checked out anywhere.
+        let (frExit, frErr) = sh(["-C", repo, "worktree", "remove", featurePath])
+        try #require(frExit == 0, "feature worktree clean remove: \(frErr)")
+
+        let (daExit, daErr) = sh(["-C", repo, "worktree", "add", "-b", dirtyBranch, dirtyPath])
+        try #require(daExit == 0, "dirty worktree add: \(daErr)")
+        try "uncommitted".write(toFile: dirtyPath + "/dirty.txt", atomically: true, encoding: .utf8)
+
+        // Inline-mirror with the feature branch + dirty worktree as
+        // the workstream's artifacts.
+        var workstreams = [InlineWorkstreamRecord(id: UUID(), branch: featureBranch, worktreePath: dirtyPath)]
+        let wsID = workstreams[0].id
+
+        // Call N: branch-delete succeeds, worktree-remove fails (dirty).
+        let firstFailures = idempotentMirrorRemoveWorkstream(
+            id: wsID,
+            workstreams: &workstreams,
+            repoPath: repo,
+            options: InlineWorkstreamOpts(removeBranch: true, removeWorktreeDir: true, force: false)
+        )
+        #expect(firstFailures.count == 1,
+                "Only worktree-remove (dirty) should fail on call N. Got: \(firstFailures)")
+        #expect(firstFailures.first?.artifact == dirtyPath,
+                "The failure must be the dirty worktree, not the branch.")
+        let (l1Exit, l1Out) = sh(["-C", repo, "branch", "--list", featureBranch])
+        #expect(l1Exit == 0 && !l1Out.contains(featureBranch),
+                "Branch must be gone after call N's successful branch-delete.")
+        #expect(workstreams.count == 1,
+                "Sidebar entry stays after partial failure (deferred-sidebar invariant).")
+
+        // Call N+1 with force=true: branch pre-check skips (gone),
+        // worktree-remove with force succeeds. Total: zero failures.
+        let secondFailures = idempotentMirrorRemoveWorkstream(
+            id: wsID,
+            workstreams: &workstreams,
+            repoPath: repo,
+            options: InlineWorkstreamOpts(removeBranch: true, removeWorktreeDir: true, force: true)
+        )
+        #expect(secondFailures.isEmpty,
+                "Force-retry must produce zero failures: branch pre-check skips the gone branch, worktree-remove --force succeeds on the dirty worktree. Got: \(secondFailures)")
+        #expect(!FileManager.default.fileExists(atPath: dirtyPath),
+                "Worktree must be gone after force-retry.")
+        #expect(workstreams.isEmpty,
+                "Sidebar entry must be gone after every opted-in artifact step succeeded.")
+    }
+
+    @Test("Partial-success retry: worktree already gone — pre-check skips the step, no spurious failure")
+    func worktreeAlreadyGoneNoSpuriousFailure() throws {
+        // Seed: temp repo with a feature branch checked out at a
+        // worktree. Call N: worktree-remove succeeds (clean), branch-
+        // delete fails (still listed as checked-out by stale prunable
+        // metadata — but here we simulate the inverse by leaving the
+        // branch checked out elsewhere). For a deterministic shape,
+        // we construct: clean worktree (removes OK on call N) +
+        // branch that IS checked out on the main worktree (so branch-
+        // delete refuses).
+        //
+        // Pivot worktree: a SECOND worktree on the same branch we want
+        // to delete. After call N removes that worktree, the branch is
+        // STILL checked out (on the main worktree). Call N+1: worktree
+        // pre-check skips (path gone), branch-delete still fails
+        // because the branch is checked out elsewhere. That's not the
+        // spurious failure we're testing — that's a genuine failure.
+        //
+        // Simpler shape: workstream's branch is one no other worktree
+        // holds. Step 1 on call N: branch-delete succeeds → branch
+        // gone. Step 2 on call N: worktree-remove fails (we make it
+        // dirty AFTER step 1 succeeded, which is the realistic gap
+        // between step 1 and step 2). On call N+1 with force=true:
+        // worktree-remove --force succeeds. The branch step on call
+        // N+1 trips the pre-check (branch gone), no spurious failure.
+        // This is identical to the prior test from the branch-step
+        // perspective, but here we ALSO assert the worktree pre-check
+        // fires when the worktree is gone but the branch was the one
+        // that failed. To get that shape, swap: branch-delete fails
+        // (checked out at the worktree, so refused), worktree-remove
+        // succeeds. Then on retry, worktree pre-check skips (gone),
+        // branch can now be force-deleted.
+        let repo = makeRepoWithCommit()
+        defer { try? FileManager.default.removeItem(atPath: repo) }
+
+        let branchName = "feature/worktree-first-success"
+        let wtPath = NSTemporaryDirectory() + "senkani-wt-first-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: wtPath) }
+        let (addExit, addErr) = sh(["-C", repo, "worktree", "add", "-b", branchName, wtPath])
+        try #require(addExit == 0, "worktree add: \(addErr)")
+
+        var workstreams = [InlineWorkstreamRecord(id: UUID(), branch: branchName, worktreePath: wtPath)]
+        let wsID = workstreams[0].id
+
+        // Call N: only worktree-remove (no force needed — clean
+        // worktree). The branch toggle is OFF to isolate the worktree
+        // step. After: worktree gone, branch still exists.
+        let firstFailures = idempotentMirrorRemoveWorkstream(
+            id: wsID,
+            workstreams: &workstreams,
+            repoPath: repo,
+            options: InlineWorkstreamOpts(removeBranch: false, removeWorktreeDir: true, force: false)
+        )
+        #expect(firstFailures.isEmpty,
+                "Clean worktree-remove must succeed on call N. Got: \(firstFailures)")
+        #expect(!FileManager.default.fileExists(atPath: wtPath),
+                "Worktree path must be gone after call N.")
+        // Branch still exists (not checked out anywhere — the only
+        // worktree was the one we just removed).
+        let (bExit, bOut) = sh(["-C", repo, "branch", "--list", branchName])
+        #expect(bExit == 0 && bOut.contains(branchName),
+                "Branch must still exist after call N (toggle was off).")
+        // Workstreams is empty because failures.isEmpty fired the
+        // deferred sidebar drop. To exercise the call-N+1 idempotency
+        // we re-add the workstream record for the simulation; the
+        // production retry path operates on the in-memory record that
+        // STILL exists because the operator's first call had a
+        // partial-success-then-failure shape (in this test we
+        // simulated full success on step 2 only — to fully exercise
+        // the idempotent retry we now flip the operator's options to
+        // include the branch on the retry and observe pre-check
+        // behavior).
+        workstreams = [InlineWorkstreamRecord(id: wsID, branch: branchName, worktreePath: wtPath)]
+
+        // Call N+1: operator now toggles BOTH on (they realized the
+        // branch also needs to go). Worktree pre-check trips (path
+        // gone) → no step, no failure. Branch-delete succeeds (branch
+        // is not checked out). Total: zero failures.
+        let secondFailures = idempotentMirrorRemoveWorkstream(
+            id: wsID,
+            workstreams: &workstreams,
+            repoPath: repo,
+            options: InlineWorkstreamOpts(removeBranch: true, removeWorktreeDir: true, force: false)
+        )
+        #expect(secondFailures.isEmpty,
+                "Worktree pre-check must skip the gone path; branch-delete on a non-checked-out branch must succeed. Got: \(secondFailures)")
+        let (bExit2, bOut2) = sh(["-C", repo, "branch", "--list", branchName])
+        #expect(bExit2 == 0 && !bOut2.contains(branchName),
+                "Branch must be gone after call N+1's branch-delete.")
+        #expect(workstreams.isEmpty,
+                "Sidebar entry must be gone after every opted-in artifact step succeeded.")
+    }
 }
 
 // MARK: - Suite 6: WorktreeGitInspector source exists with the expected probe shape
@@ -697,5 +952,19 @@ struct GitInspectorSourceTests {
                 "Inspector must expose deleteBranch — used by the dialog after the operator opts in.")
         #expect(src.contains("branch -D"),
                 "deleteBranch must use git branch -D (operator already opted in to destruction via the checkbox).")
+    }
+
+    // remove-partial-success-retry-idempotency-2026-05-21: the
+    // pre-existence helper that makes the branch-step retry-
+    // idempotent. WorkspaceModel.removeProject and removeWorkstream
+    // call this before deleteBranch so an already-cleaned branch is
+    // treated as a no-op success rather than `branch '<gone>' not found`.
+    @Test("WorktreeGitInspector exposes branchExists pre-check helper")
+    func inspectorHasBranchExistsHelper() {
+        let src = read("SenkaniApp/Services/WorkstreamGitInspector.swift")
+        #expect(src.contains("static func branchExists(repoPath: String, branch: String) -> Bool"),
+                "branchExists(repoPath:branch:) -> Bool must exist as the pre-existence probe.")
+        #expect(src.contains("rev-parse"),
+                "branchExists must use git rev-parse --verify (matches unpushedCommits' branch-missing detection).")
     }
 }

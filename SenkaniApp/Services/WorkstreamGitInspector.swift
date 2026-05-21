@@ -55,6 +55,20 @@ enum WorktreeGitInspector {
         return exit == 0 ? nil : err
     }
 
+    /// Pre-existence probe used by `WorkspaceModel.removeProject` /
+    /// `removeWorkstream` to make partial-success retry idempotent:
+    /// if a prior call's branch-delete step succeeded and a later
+    /// step failed, the force-retry call re-runs the branch step
+    /// against a now-gone branch and `git branch -D` returns non-zero
+    /// — surfacing a spurious failure for an already-cleaned artifact.
+    /// Callers should treat `branchExists == false` as a no-op success
+    /// rather than calling `deleteBranch`. Mirror of the `rev-parse
+    /// --verify` shape `unpushedCommits` already uses for `.branchMissing`.
+    static func branchExists(repoPath: String, branch: String) -> Bool {
+        let (_, exit) = runGit(args: ["-C", repoPath, "rev-parse", "--verify", "refs/heads/\(branch)"])
+        return exit == 0
+    }
+
     // MARK: - Private
 
     private static func runGit(args: [String]) -> (String, Int32) {

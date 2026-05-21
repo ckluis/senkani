@@ -102,6 +102,14 @@ final class WorkspaceModel {
     /// The dialog still renders the sidebar-entry row as the always-on
     /// disabled-checked checkbox; "always" means "always, once all the
     /// opted-in artifacts are gone."
+    ///
+    /// Steps 1 and 2 are also IDEMPOTENT: each step pre-checks that
+    /// its target still exists (`WorktreeGitInspector.branchExists`
+    /// for branches, `FileManager.fileExists` for worktree paths) and
+    /// treats "already gone" as a no-op success. Without these guards,
+    /// a partial-success retry re-running step 1 against a branch the
+    /// prior call already deleted would surface `branch '<gone>' not
+    /// found` as a spurious RemovalFailure.
     @discardableResult
     func removeProject(id: UUID, options: ProjectRemovalOptions) -> [RemovalFailure] {
         guard let project = projects.first(where: { $0.id == id }) else { return [] }
@@ -109,10 +117,15 @@ final class WorkspaceModel {
         let fm = FileManager.default
 
         // Step 1: branches (in deterministic workstream order).
+        // Partial-success retry idempotency: skip branches that no
+        // longer exist (a prior call's step succeeded; this call's
+        // re-run would otherwise surface `branch '<gone>' not found`
+        // as a spurious RemovalFailure).
         for ws in project.workstreams {
             guard options.removeBranch[ws.id] == true,
                   let branch = ws.branch else { continue }
             let repoRoot = ws.effectiveRoot(projectPath: project.path)
+            guard WorktreeGitInspector.branchExists(repoPath: repoRoot, branch: branch) else { continue }
             if let err = WorktreeGitInspector.deleteBranch(repoPath: repoRoot, branch: branch) {
                 failures.append(RemovalFailure(artifact: branch, reason: err))
             }
@@ -120,10 +133,14 @@ final class WorkspaceModel {
 
         // Step 2: worktree dirs. Default workstream's "worktree" is
         // the project root itself — never remove that here.
+        // Same idempotency rule: skip paths that no longer exist so a
+        // partial-success retry doesn't surface a spurious failure for
+        // an already-cleaned worktree.
         for ws in project.workstreams {
             guard options.removeWorktreeDir[ws.id] == true,
                   let wtPath = ws.worktreePath,
                   !ws.isDefault else { continue }
+            guard fm.fileExists(atPath: wtPath) else { continue }
             let res = GitWorktreeManager.removeWorktree(path: wtPath, force: options.force)
             if case .failure(let err) = res {
                 failures.append(RemovalFailure(
@@ -185,25 +202,39 @@ final class WorkspaceModel {
     /// and last-workstream invariants — it refuses to drop either,
     /// and surfaces that refusal as a `RemovalFailure` so the dialog
     /// can show the operator why the row stayed.
+    ///
+    /// Steps 1 and 2 are also IDEMPOTENT: each step pre-checks that
+    /// its target still exists and treats "already gone" as a no-op
+    /// success. Without these guards, a partial-success retry re-
+    /// running a step against an already-cleaned artifact would
+    /// surface a spurious `RemovalFailure`.
     @discardableResult
     func removeWorkstream(id workstreamID: UUID, from project: ProjectModel, options: WorkstreamRemovalOptions) -> [RemovalFailure] {
         guard let ws = project.workstreams.first(where: { $0.id == workstreamID }) else { return [] }
         var failures: [RemovalFailure] = []
 
+        // Partial-success retry idempotency: skip artifact steps whose
+        // target is already gone (a prior call's step succeeded; re-
+        // running it would surface a spurious failure for the cleaned
+        // artifact). Mirrors the same guards in `removeProject`.
         if options.removeBranch, let branch = ws.branch {
             let repoRoot = ws.effectiveRoot(projectPath: project.path)
-            if let err = WorktreeGitInspector.deleteBranch(repoPath: repoRoot, branch: branch) {
-                failures.append(RemovalFailure(artifact: branch, reason: err))
+            if WorktreeGitInspector.branchExists(repoPath: repoRoot, branch: branch) {
+                if let err = WorktreeGitInspector.deleteBranch(repoPath: repoRoot, branch: branch) {
+                    failures.append(RemovalFailure(artifact: branch, reason: err))
+                }
             }
         }
 
         if options.removeWorktreeDir, let wtPath = ws.worktreePath, !ws.isDefault {
-            let res = GitWorktreeManager.removeWorktree(path: wtPath, force: options.force)
-            if case .failure(let err) = res {
-                failures.append(RemovalFailure(
-                    artifact: wtPath,
-                    reason: err.errorDescription ?? "unknown git worktree error"
-                ))
+            if FileManager.default.fileExists(atPath: wtPath) {
+                let res = GitWorktreeManager.removeWorktree(path: wtPath, force: options.force)
+                if case .failure(let err) = res {
+                    failures.append(RemovalFailure(
+                        artifact: wtPath,
+                        reason: err.errorDescription ?? "unknown git worktree error"
+                    ))
+                }
             }
         }
 

@@ -54,14 +54,41 @@ struct IndexEngineHashingTests {
     }
 
     /// The fd-bounded regression check. Hashes 200 small files back-
-    /// to-back, recording the process's open-fd count before and after
-    /// each call. The old per-file Process+Pipe path would push the
+    /// to-back, capturing the process's open-fd set before and after
+    /// the loop, and asserts that the count of newly-created fds (set
+    /// difference) stays well under the per-file-subprocess regression
+    /// class. The old per-file `Process` + `Pipe` path would push the
     /// count up by ~3 per call (subprocess + pipe pair) until ARC
-    /// could catch up; the in-process implementation must not grow
-    /// the count beyond a small constant.
+    /// could catch up — yielding 200+ fds open at once for a 200-file
+    /// batch; the in-process `Insecure.SHA1` implementation must not
+    /// grow the count materially.
     ///
     /// This is the regression-watch test for the EMFILE crash.
-    @Test("hashing 200 files does not leak fds (≤ +16 above baseline)")
+    ///
+    /// **Parallel-mode robustness** (added 2026-05-21 by
+    /// `index-engine-hashing-fd-baseline-parallel-flake-2026-05-21`).
+    /// The original shape compared raw counts (`/dev/fd` entries
+    /// before vs after) with a tight `≤ +16` budget. Under default-
+    /// parallel `swift test`, peer test cases concurrently open files
+    /// (SessionDatabase sidecars, `TempSessionDatabase` artifacts,
+    /// etc.) — process-global `/dev/fd` count is shared, so peers'
+    /// open-and-still-held fds at sample time inflate the delta. A
+    /// 2026-05-21 run observed `delta=76` (peer noise) vs the ≤16
+    /// budget. Two mitigations are applied jointly:
+    ///   1. **Set-difference, not count-difference.** Capture the fd
+    ///      set at each sample. The post-loop set excludes fds that
+    ///      peers opened-and-closed during the loop window — that
+    ///      flicker no longer survives. Persistent peer-held fds can
+    ///      still appear in the diff, so:
+    ///   2. **Relaxed bound (< 100).** The EMFILE-class regression
+    ///      (200+ fds open simultaneously) is still detected because
+    ///      production leakage + peer noise would clear 200 easily.
+    ///      Below 100 catches no micro-leak detail, but the round's
+    ///      acceptance for the parallel-flake item explicitly chose
+    ///      this trade — the no-subprocess invariant the test guards
+    ///      is binary (subprocess path → 200+ open fds, in-process
+    ///      path → ~0 from production), not micro-incremental.
+    @Test("hashing 200 files does not leak fds (set-diff < 100 above baseline)")
     func hashingDoesNotLeakFDs() throws {
         let tmpDir = NSTemporaryDirectory() + "senkani-fd-leak-\(UUID().uuidString)"
         try FileManager.default.createDirectory(atPath: tmpDir, withIntermediateDirectories: true)
@@ -76,26 +103,35 @@ struct IndexEngineHashingTests {
             paths.append(p)
         }
 
-        let baseline = openFDCount()
+        let before = openFDSet()
         for p in paths {
             _ = IndexEngine.gitBlobHash(p)
         }
-        let after = openFDCount()
+        let after = openFDSet()
 
-        // Allow a small tolerance for ARC scheduling / SwiftTesting
-        // internal allocations; the per-file subprocess path would
-        // grow this by at least 200 if not bounded.
-        let delta = after - baseline
-        #expect(delta <= 16, "fd delta after 200 hashes = \(delta) (baseline=\(baseline), after=\(after))")
+        // Set-difference excludes fds that peer tests opened AND
+        // closed during the loop window — under parallel `swift test`
+        // those flickers are common. Persistent peer-held fds inflate
+        // the diff modestly; the < 100 bound absorbs that residual
+        // while still catching the 200+ per-file-subprocess regression
+        // class. See the doc comment above for the full rationale.
+        let newFDs = after.subtracting(before)
+        let sample = newFDs.sorted().prefix(20).joined(separator: ",")
+        #expect(newFDs.count < 100,
+                "fd-set delta after 200 hashes = \(newFDs.count) (before=\(before.count), after=\(after.count)). Sample of net new fds: \(sample)")
     }
 
-    /// Count open file descriptors for the current process by listing
-    /// /dev/fd entries. Best-effort — used only to detect order-of-
-    /// magnitude leaks (200+), not exact accounting.
-    private func openFDCount() -> Int {
+    /// Snapshot the process's open-fd set as the contents of `/dev/fd`.
+    /// Set-valued so callers can compute `after.subtracting(before)`
+    /// — peer-test churn that opens-and-closes within the sample
+    /// window doesn't survive into the post-snapshot, so it's
+    /// excluded from the diff. See the parallel-mode robustness note
+    /// on `hashingDoesNotLeakFDs` for why count-difference doesn't
+    /// suffice.
+    private func openFDSet() -> Set<String> {
         guard let entries = try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd") else {
-            return 0
+            return []
         }
-        return entries.count
+        return Set(entries)
     }
 }

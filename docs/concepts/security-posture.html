@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Security posture — concept</title>
-<meta name="description" content="Senkani is a trust boundary. v0.2.0 defaults are all secure: prompt-injection guard on, SSRF hardening on, secret redaction on, schema migrations versioned + cr">
+<meta name="description" content="Senkani is a trust boundary. v0.3.0 defaults are all secure: prompt-injection guard on, SSRF hardening on, secret redaction on, schema migrations versioned + cr">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -63,7 +63,7 @@
     </nav>
     <span class="quadrant concept">Concept · Explanation</span>
     <h1 class="page-title">Security posture</h1>
-    <p class="lede">Senkani is a trust boundary. v0.2.0 defaults are all secure: prompt-injection guard on, SSRF hardening on, secret redaction on, schema migrations versioned + crash-safe. Opt-outs are explicit env vars, not hidden flags.</p>
+    <p class="lede">Senkani is a trust boundary. v0.3.0 defaults are all secure: prompt-injection guard on, SSRF hardening on, secret redaction on, schema migrations versioned + crash-safe. Opt-outs are explicit env vars, not hidden flags.</p>
 
     <h2>What "trust boundary" means</h2>
     <p>The agent on one side; your filesystem, network, and secrets on the other. Everything that crosses the boundary is scanned, redacted, validated, or rejected. The boundary is not a feature; it's the product.</p>
@@ -85,7 +85,7 @@
     <p><code>RetentionScheduler</code> prunes <code>token_events</code> (90 d default), <code>sandboxed_results</code> (24 h default), <code>validation_results</code> (24 h default) on an hourly tick. Tune via <code>~/.senkani/config.json</code> → <code>"retention": {…}</code>.</p>
 
     <h2>Socket authentication — opt-in</h2>
-    <p><code>SENKANI_SOCKET_AUTH=on</code> generates a 32-byte random token at <code>~/.senkani/.token</code> (mode 0600), rotated on every server start. Every connection to <code>mcp.sock</code>/<code>hook.sock</code>/<code>pane.sock</code> must send a length-prefixed handshake frame matching the token. Raises the bar from ambient same-UID socket access to must-read-token-file. <strong>Default off in v0.2.0 for backward compatibility; flipping to on next release.</strong></p>
+    <p><code>SENKANI_SOCKET_AUTH=on</code> generates a 32-byte random token at <code>~/.senkani/.token</code> (mode 0600), rotated on every server start. Every connection to <code>mcp.sock</code>/<code>hook.sock</code>/<code>pane.sock</code> must send a length-prefixed handshake frame matching the token. Raises the bar from ambient same-UID socket access to must-read-token-file. <strong>Default off in v0.3.0 for backward compatibility; opt in via the env var.</strong></p>
 
     <h2>Observability</h2>
     <p>Every security-defense site increments an <code>event_counters</code> row: injection detections, SSRF blocks, socket handshake rejections, schema migrations, retention prunes, command redactions, and policy-snapshot hashing failures (<code>security.policy.hash_failed</code>, <code>security.policy.learned_rules_hash_failed</code> — bumped when <code>policy_snapshots</code> refuses a write because the encoded config or the active learned-rules file could not be hashed cleanly; pre-fix this collapsed silently to <code>policy_hash = ""</code> and dropped one of two distinct broken configs through <code>ON CONFLICT DO NOTHING</code>). Surfaced via <code>senkani stats --security</code> with Gelman-style <code>count/total (pct%)</code> rate annotation, or the <code>senkani_session action:"stats"</code> MCP action.</p>
@@ -132,7 +132,7 @@
   </div>
   <div class="foot-meta">
     <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
-    <span><a href="../../docs/changelog.html">v0.2.0 changelog</a></span>
+    <span><a href="../../docs/changelog.html">v0.3.0 changelog</a></span>
   </div>
 </footer>
 <script src="../../assets/app.js" defer></script>

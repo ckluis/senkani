@@ -39,7 +39,7 @@
      HERO 0 — Project hero
      =================================================================== -->
 <header class="landing-hero">
-  <span class="overline">Native macOS · Swift · Apple Silicon · v0.2.0 · MIT licensed core</span>
+  <span class="overline">Native macOS · Swift · Apple Silicon · v0.3.0 · MIT licensed core</span>
   <h1>Token compression<br>for <span class="accent">AI coding<br>agents.</span></h1>
   <p class="lede">Senkani is a native macOS binary that sits between your coding agent and your filesystem. Every file read is compressed, every shell output filtered, every symbol search answered from a local index — before a single token reaches the model. Claude Code, Cursor, Copilot, any MCP-compatible agent.</p>
   <div class="cta-row">
@@ -252,7 +252,7 @@
     <div class="product-hero-text">
       <span class="overline">Security posture</span>
       <h2>A trust boundary, <span class="accent">not a plugin host.</span></h2>
-      <p>v0.2.0 defaults are all secure: prompt-injection guard on, SSRF hardening on, secret redaction on, schema migrations versioned + crash-safe. Opt-outs are explicit env vars, not hidden flags. Every defense increments a counter you can inspect via <code>senkani stats --security</code>.</p>
+      <p>v0.3.0 defaults are all secure: prompt-injection guard on, SSRF hardening on, secret redaction on, schema migrations versioned + crash-safe. Opt-outs are explicit env vars, not hidden flags. Every defense increments a counter you can inspect via <code>senkani stats --security</code>.</p>
       <ul class="product-hero-bullets">
         <li><strong>SSRF guard.</strong> DNS-pre-resolve + redirect re-validation + <code>WKContentRuleList</code> subresource blocklist. 169.254.169.254 and friends are unreachable.</li>
         <li><strong>14 secret-detector families</strong> + entropy fallback. 1 MB benign input: ~25 ms. Every tool output scanned before the model sees it.</li>
@@ -377,7 +377,7 @@ cd /path/to/your/project
   </div>
   <div class="foot-meta">
     <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
-    <span><a href="https://github.com/ckluis/senkani/blob/main/LICENSE">LICENSE</a> · <a href="docs/changelog.html">v0.2.0 changelog</a></span>
+    <span><a href="https://github.com/ckluis/senkani/blob/main/LICENSE">LICENSE</a> · <a href="docs/changelog.html">v0.3.0 changelog</a></span>
   </div>
 </footer>
 

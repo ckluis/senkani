@@ -155,7 +155,7 @@ A horizontal canvas of panes. Each pane is a primitive type; you arrange them ho
 
 ---
 
-## Security Defaults (v0.2.0)
+## Security Defaults (v0.3.0)
 
 Senkani is a trust boundary for LLM-driven tool calls. Security-sensitive features default to **on**; opt-outs are explicit env vars, not hidden flags.
 

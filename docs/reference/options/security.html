@@ -65,7 +65,7 @@
     <p><code>SENKANI_INJECTION_GUARD=on|off</code> — default <strong>on</strong>. Scans every MCP tool response for instruction-override, tool-call injection, context-manipulation, and exfiltration patterns, with anti-evasion normalization (lowercase, zero-width strip, Cyrillic→Latin homoglyphs). Single linear pass.</p>
 
     <h2>Socket authentication</h2>
-    <p><code>SENKANI_SOCKET_AUTH=on</code> — default <strong>off</strong> (v0.2.0; flipping to on next release). Generates a 32-byte random token at <code>~/.senkani/.token</code> (mode 0600), rotated on every server start. Every connection to <code>mcp.sock</code>/<code>hook.sock</code>/<code>pane.sock</code> must send a length-prefixed handshake frame matching the token before normal protocol begins. Raises the bar from ambient same-UID socket access to must-read-token-file.</p>
+    <p><code>SENKANI_SOCKET_AUTH=on</code> — default <strong>off</strong> (v0.3.0; opt-in via env var). Generates a 32-byte random token at <code>~/.senkani/.token</code> (mode 0600), rotated on every server start. Every connection to <code>mcp.sock</code>/<code>hook.sock</code>/<code>pane.sock</code> must send a length-prefixed handshake frame matching the token before normal protocol begins. Raises the bar from ambient same-UID socket access to must-read-token-file.</p>
 
     <h2>Structured JSON logs</h2>
     <p><code>SENKANI_LOG_JSON=1</code> — default off. When on, emits one JSON object per critical event to stderr. Every <code>.string(_)</code> log field passes through <code>SecretDetector.scan</code> at emit time — a stray API key in a log field is automatically <code>[REDACTED:…]</code>'d.</p>
@@ -96,7 +96,7 @@
   </div>
   <div class="foot-meta">
     <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
-    <span><a href="../../../docs/changelog.html">v0.2.0 changelog</a></span>
+    <span><a href="../../../docs/changelog.html">v0.3.0 changelog</a></span>
   </div>
 </footer>
 <script src="../../../assets/app.js" defer></script>

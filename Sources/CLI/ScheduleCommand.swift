@@ -21,8 +21,11 @@ extension Schedule {
         @Option(name: .long, help: "Task identifier (alphanumeric, dashes, underscores).")
         var name: String
 
-        @Option(name: .long, help: "Cron expression, e.g. \"0 */6 * * *\" for every 6 hours.")
-        var cron: String
+        @Option(name: .long, help: "Cron expression, e.g. \"0 */6 * * *\" for every 6 hours. Mutually exclusive with --counter-cadence.")
+        var cron: String?
+
+        @Option(name: .long, help: "Counter cadence expression, e.g. \"every 10 tool_calls\". Fires from HookRouter post-tool reactions, NOT launchd; no plist is generated. Mutually exclusive with --cron.")
+        var counterCadence: String?
 
         @Option(name: .long, help: "Shell command to run on schedule.")
         var command: String
@@ -43,9 +46,23 @@ extension Schedule {
                 throw ValidationError("Name cannot be empty.")
             }
 
-            // Validate cron expression
-            guard CronToLaunchd.convert(cron) != nil else {
-                throw ValidationError("Invalid cron expression: \"\(cron)\". Expected 5 fields: minute hour day-of-month month day-of-week.")
+            // Cadence: exactly one of --cron / --counter-cadence.
+            switch (cron, counterCadence) {
+            case (nil, nil):
+                throw ValidationError("Provide one of --cron or --counter-cadence.")
+            case (_?, _?):
+                throw ValidationError("--cron and --counter-cadence are mutually exclusive; pick one.")
+            case (let c?, nil):
+                guard CronToLaunchd.convert(c) != nil else {
+                    throw ValidationError("Invalid cron expression: \"\(c)\". Expected 5 fields: minute hour day-of-month month day-of-week.")
+                }
+            case (nil, let expr?):
+                guard let parsed = CounterCadence.parse(expr) else {
+                    throw ValidationError("Invalid counter-cadence expression: \"\(expr)\". Expected `every <N> <event>` (e.g. `every 10 tool_calls`).")
+                }
+                if parsed.everyN < 2 {
+                    throw ValidationError("Counter cadence N=\(parsed.everyN) is at or below the amplification floor. Pick N ≥ 2 so the schedule doesn't fire on every event.")
+                }
             }
 
             // Validate budget
@@ -55,14 +72,25 @@ extension Schedule {
         }
 
         func run() throws {
-            // U.8 amplification guard: reject crons whose first two fires
-            // sit at or below the rate-limiter floor (default 60s). Refuses
-            // BEFORE any disk write so a rejected schedule leaves no JSON
-            // and no plist behind.
+            // U.8 amplification guard: reject schedules whose effective
+            // fire rate sits at or below the rate-limiter floor
+            // (default 60s). Refuses BEFORE any disk write so a rejected
+            // schedule leaves no JSON and no plist behind.
             // `schedule-amplification-guard-and-pane-not-wired-2026-05-17`
-            // shipped this wiring 2026-05-21; pre-fix the Core library had
-            // zero production callers and `senkani schedule create --cron
-            // '* * * * *' --command echo` was accepted silently.
+            // shipped the cron wiring 2026-05-21 (Finding A);
+            // `schedule-cli-counter-cadence-flag-2026-05-21` adds the
+            // counter-cadence branch (Finding C-counter).
+            if let expr = counterCadence {
+                try runCounterCadence(expr)
+            } else if let c = cron {
+                try runCron(c)
+            } else {
+                // Unreachable — validate() rejects (nil, nil).
+                throw ValidationError("Provide one of --cron or --counter-cadence.")
+            }
+        }
+
+        private func runCron(_ cron: String) throws {
             switch AmplificationGuard.validate(cron: cron, counter: nil) {
             case .ok:
                 break
@@ -90,6 +118,45 @@ extension Schedule {
             } catch PresetInstaller.InstallError.writeFailed(let msg) {
                 throw ValidationError(msg)
             }
+        }
+
+        private func runCounterCadence(_ expression: String) throws {
+            // validate() already parsed + range-checked; re-parse here
+            // because @Option holds the original string. parse() is
+            // total / pure, so a nil here is structurally unreachable
+            // and would indicate validate() drift.
+            guard let parsed = CounterCadence.parse(expression) else {
+                throw ValidationError("Invalid counter-cadence expression: \"\(expression)\".")
+            }
+            switch AmplificationGuard.validate(cron: nil, counter: parsed) {
+            case .ok:
+                break
+            case .amplification(let reason, let minSeconds):
+                throw ValidationError(
+                    "Refused: schedule would amplify (\(reason)). The amplification floor is \(minSeconds)s. Pick a counter cadence with N above the floor."
+                )
+            }
+
+            // Counter cadences DON'T get a launchd plist — they fire
+            // from HookRouter post-tool reactions. `cronPattern` is a
+            // sentinel so HookRouter can filter `ScheduleStore.list()`
+            // for counter rows via `CounterCadence.isSentinel`.
+            let task = ScheduledTask(
+                name: name,
+                cronPattern: parsed.sentinelCronPattern,
+                command: command,
+                budgetLimitCents: budget,
+                worktree: worktree,
+                eventCounterCadence: expression
+            )
+
+            do {
+                try ScheduleStore.save(task)
+            } catch {
+                throw ValidationError("Failed to save counter-cadence schedule: \(error)")
+            }
+            print("Saved counter-cadence schedule: ~/.senkani/schedules/\(name).json")
+            print("Cadence: every \(parsed.everyN) \(parsed.eventName)(s). Dispatched by HookRouter — no launchd plist.")
         }
     }
 }

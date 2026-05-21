@@ -145,4 +145,20 @@ public struct CounterCadence: Equatable, Sendable {
         if name.hasSuffix("s") && name.count > 1 { name.removeLast() }
         return name
     }
+
+    /// Sentinel cron pattern stored on counter-cadence `ScheduledTask`
+    /// rows. The existing JSON schema requires `cronPattern: String`
+    /// (non-optional); counter cadences fire from HookRouter post-tool
+    /// reactions, not launchd, so the field gets this sentinel and
+    /// dispatch reads `task.cronPattern.hasPrefix("COUNTER:")` to skip
+    /// the plist path.
+    public var sentinelCronPattern: String {
+        "COUNTER:\(eventName):\(everyN)"
+    }
+
+    /// Whether a cron-shaped string is in fact a counter-cadence
+    /// sentinel rather than a real cron expression.
+    public static func isSentinel(_ cronPattern: String) -> Bool {
+        cronPattern.hasPrefix("COUNTER:")
+    }
 }

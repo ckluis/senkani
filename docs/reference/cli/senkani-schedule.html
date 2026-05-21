@@ -84,8 +84,11 @@
 
     <p><strong>Amplification guard.</strong> <code>create</code> calls <code>AmplificationGuard.validate</code> before any disk write. Crons whose first two fires sit at or below the 60-second amplification floor (default <code>defaultMinIntervalSeconds</code>) are refused with a structured error; no JSON is written under <code>~/.senkani/schedules/</code> and no plist is written under <code>~/Library/LaunchAgents/</code>. The canonical reproduction case is <code>--cron '* * * * *'</code> (every-minute, 60s gap == floor); the guard refuses up front so the operator sees a clear rejection instead of a silent downstream clamp by the rate limiter. <code>preset install</code> currently does NOT call the guard — its presets are vetted ahead of ship, but the same wiring will land when the preset path is reviewed.</p>
 
+    <p><strong>Counter-cadence schedules.</strong> Pass <code>--counter-cadence "every N event_name"</code> (mutually exclusive with <code>--cron</code>) to register a schedule that fires from <code>HookRouter</code> post-tool reactions instead of launchd. Counter cadences DO NOT get a launchd plist — only the <code>ScheduledTask</code> JSON is written under <code>~/.senkani/schedules/</code>, with <code>cronPattern</code> set to the sentinel <code>COUNTER:&lt;event&gt;:&lt;N&gt;</code> (the JSON schema requires a non-optional <code>cronPattern</code>; dispatch readers filter on <code>task.eventCounterCadence != nil</code> or <code>CounterCadence.isSentinel(task.cronPattern)</code>). Validation refuses <code>N &lt; 2</code> up front (every-event fires would be clamped to one fire per minute by the rate limiter); the parser tolerates <code>every 10 tool_calls</code>, <code>every 10th tool_call</code>, and <code>every 10 tool_call</code> equivalently.</p>
+
     <h2>Example</h2>
     <pre class="code">$ senkani schedule create --name nightly-lint --cron "0 3 * * *" --command "swift test"
+$ senkani schedule create --name learn-after-10 --counter-cadence "every 10 tool_calls" --command "senkani learn"
 $ senkani schedule preset list
 $ senkani schedule preset install autoresearch --topic "AI workstation"
 
@@ -93,12 +96,16 @@ $ senkani schedule preset install autoresearch --topic "AI workstation"
 $ senkani schedule create --name fast --cron "* * * * *" --command "echo x"
 Validation Error: Refused: schedule would amplify (cron fires every 60s,
 at or below the 60s amplification floor). The amplification floor is 60s.
-Pick a cron whose fire interval is above the floor.</pre>
+Pick a cron whose fire interval is above the floor.
+
+# Counter-cadence with N=1 is refused at parse time:
+$ senkani schedule create --name every-call --counter-cadence "every 1 tool_call" --command "echo x"
+Validation Error: Counter cadence N=1 is at or below the amplification floor. Pick N >= 2 so the schedule doesn't fire on every event.</pre>
 
     <h2>Subcommands</h2>
     <div class="ref-io-table">
       <div class="head">Subcommand</div><div class="head"></div><div class="head"></div><div class="head">Description</div>
-      <div class="k">create</div><div class="t"></div><div class="default"></div><div class="desc">Create a scheduled task from --name / --cron / --command / --budget / --worktree.</div>
+      <div class="k">create</div><div class="t"></div><div class="default"></div><div class="desc">Create a scheduled task from --name / --cron <em>or</em> --counter-cadence / --command / --budget / --worktree. Exactly one cadence flag is required; --cron drives launchd, --counter-cadence drives HookRouter (no plist).</div>
       <div class="k">list</div><div class="t"></div><div class="default"></div><div class="desc">Show active schedules.</div>
       <div class="k">remove --name &lt;n&gt;</div><div class="t"></div><div class="default"></div><div class="desc">Delete a schedule.</div>
       <div class="k">run --name &lt;n&gt;</div><div class="t"></div><div class="default"></div><div class="desc">Execute a scheduled task (called by launchd).</div>

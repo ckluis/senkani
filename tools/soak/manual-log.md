@@ -18,6 +18,15 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Cowork-runnable test plans (groomed; ready to execute)
 
+### search-web-soft-block-real-network-rewalk — real-DDG rotation recovery on soft-blocked operator IP 2026-05-21
+
+- **Item:** [`spec/autonomous/backlog/search-web-soft-block-real-network-rewalk-2026-05-21.md`](../../spec/autonomous/backlog/search-web-soft-block-real-network-rewalk-2026-05-21.md)
+- **Exec mode:** **either** (purely shell-driven via `python3` heredoc piped to `.build/release/senkani-mcp` over stdio; Cowork can paste each heredoc into Terminal; no GUI hands needed)
+- **Time estimate:** ~15-30 min wall-clock (PATH-PRE-SOFTBLOCKED 3-5 min; PATH-INDUCE 5-15 min; PATH-CANNOT-INDUCE 8-12 min); ~5-10 min operator-supervised attention. Hard cap: 30-min target / 60-min absolute. Bounded inducer caps at ≤30 queries / 60 s wall-clock so DDG does not multi-hour-ban the operator's IP.
+- **What it proves:** the 2026-05-21 build round (`search-web-ddg-soft-block-resilience-2026-05-16`) shipped the autonomous portion against injected fixtures — 10 swift-testing cases green for region rotation, cool-down ledger (0600), structured `allRegionsCooling` payload, 2-attempt HTTP cap. This walk produces the missing operator-side evidence: a real-network `wt-wt`-cooling-then-`us-en`-recovery transcript captured against `lite.duckduckgo.com` from the operator's actual IP, the ledger artifact, and timing observations within the 60-second SLA.
+- **Pre-condition:** `.build/release/senkani-mcp` built (or debug fallback), `lite.duckduckgo.com` reachable, `python3` available. The walk's evidence directory lands under `tools/soak/evidence/search-web-soft-block-rewalk/walk-<TS>/`. The teardown explicitly clears the ledger so the 30-min default cool-down doesn't ghost subsequent `senkani_search_web` calls.
+- **Verdict semantics:** four enumerated states recorded in `verdict.txt` — `PASS` flips item to `done`; `INCOMPLETE-PATH-CANNOT-INDUCE` keeps `manual_ready` and the operator re-attempts on a future day (DDG-soft-block state is uncontrolled); `FAIL-ROTATION-DID-NOT-RECOVER` opens a new backlog item against the rotation regression with evidence linked.
+
 ### ci-chunk-other-sigtrap-retry-exhaust — matrix-CI rewalk for chunk[other] SIGTRAP recurrence 2026-05-21
 
 - **Item:** [`spec/autonomous/backlog/ci-chunk-other-sigtrap-retry-exhaust-2026-05-08.md`](../../spec/autonomous/backlog/ci-chunk-other-sigtrap-retry-exhaust-2026-05-08.md)

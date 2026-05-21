@@ -29,12 +29,33 @@
 #                                       #  bisect)
 #   ./tools/test-safe.sh --list-chunks  # print chunk regex table
 #
+# Pre-test daemon sweep
+#   On every invocation (filter / chunk / all modes — not --list-chunks),
+#   the pre-flight kills stale `SenkaniApp`, `senkani.*--mcp-server`,
+#   `senkaniPackageTests`, `swift-test`, and `swiftpm-testing-helper`
+#   processes that may have leaked from a prior session. These
+#   processes can hold SQLite locks, listening sockets, and port
+#   assignments that the upcoming run expects free; killing them
+#   first removes the cross-session contention class. Best-effort
+#   hygiene — `pkill` failures are logged but never abort the script.
+#   Opt out with `--skip-daemon-sweep` for tests that intentionally
+#   target a long-running senkani daemon (rare). The `swift-test`
+#   pattern is a substring match against the full command line, so
+#   it can collide with concurrent `swift test` runs in another
+#   shell tab — use `--skip-daemon-sweep` if running parallel
+#   harness invocations.
+#
 # Knobs
 #   SWT_NO_PARALLEL=1       Disables Swift Testing's intra-process
 #                           parallelism. Set automatically by every
 #                           chunk run; stays off for passthrough too.
 #   TEST_SAFE_RETRIES=N     Per-chunk retry count on SIGTRAP / non-
 #                           zero exit. Default 3.
+#   SKIP_DAEMON_SWEEP=1     Skip the pre-test daemon sweep. Use when
+#                           a test intentionally targets a pre-launched
+#                           senkani daemon, or when running parallel
+#                           test-safe invocations from multiple shells.
+#                           Also settable via `--skip-daemon-sweep`.
 #   SKIP_MULTIPLIER_CHECK,
 #   SKIP_GRAMMAR_HASH_CHECK Skip the two pre-flight guard scripts
 #                           (set when re-running after a known-good
@@ -104,6 +125,10 @@ while [ $# -gt 0 ]; do
       MODE="list"
       shift
       ;;
+    --skip-daemon-sweep)
+      SKIP_DAEMON_SWEEP=1
+      shift
+      ;;
     *)
       # Unknown args — pass through to swift test (legacy contract).
       MODE="filter"
@@ -117,6 +142,7 @@ done
 # Pre-flight guards (Luminary P0 round 2026-04-24-0 + P2 2026-04-24-13)
 # ---------------------------------------------------------------------
 preflight() {
+  sweep_stale_daemons
   if [ -z "${SKIP_MULTIPLIER_CHECK:-}" ] && [ -x ./tools/check-multiplier-claims.sh ]; then
     ./tools/check-multiplier-claims.sh
   fi
@@ -147,6 +173,51 @@ preflight() {
            "TempSessionDatabase.cleanup(path:) at teardown." \
            "Clear with: rm /tmp/senkani-*"
     fi
+  fi
+}
+
+# Pre-test daemon sweep. Kills stale senkani-flavored processes from
+# prior sessions (likely leaked by an earlier crashed / interrupted
+# test run, soak run, or autonomous round) so the new run doesn't
+# race them for SQLite locks, listening sockets, or port assignments.
+# Best-effort: a failing `pkill` is logged but never aborts. Opt out
+# via SKIP_DAEMON_SWEEP=1 or `--skip-daemon-sweep`.
+#
+# Patterns are substring-matched against the full ps command line
+# (pgrep -f). See the docstring at the top of this file for the
+# concurrent-`swift test` caveat.
+sweep_stale_daemons() {
+  if [ -n "${SKIP_DAEMON_SWEEP:-}" ]; then
+    return 0
+  fi
+  local patterns=(
+    "SenkaniApp"
+    "senkani.*--mcp-server"
+    "senkaniPackageTests"
+    "swift-test"
+    "swiftpm-testing-helper"
+  )
+  local any_killed=0
+  local p
+  for p in "${patterns[@]}"; do
+    local matches
+    matches="$(pgrep -f "$p" 2>/dev/null || true)"
+    if [ -z "$matches" ]; then
+      continue
+    fi
+    local n
+    n="$(echo "$matches" | wc -l | tr -d ' ')"
+    echo "sweep_stale_daemons: killing ${n} stale process(es) matching '${p}'"
+    if ! pkill -f "$p" 2>/dev/null; then
+      echo "::warning::sweep_stale_daemons: pkill failed for '${p}' (best-effort, continuing)"
+    fi
+    any_killed=1
+  done
+  if [ "$any_killed" -eq 0 ]; then
+    echo "sweep_stale_daemons: no stale daemons found"
+  else
+    # Give the kernel a moment to actually reap before swift test launches.
+    sleep 1
   fi
 }
 

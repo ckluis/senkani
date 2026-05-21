@@ -55,6 +55,23 @@ extension Schedule {
         }
 
         func run() throws {
+            // U.8 amplification guard: reject crons whose first two fires
+            // sit at or below the rate-limiter floor (default 60s). Refuses
+            // BEFORE any disk write so a rejected schedule leaves no JSON
+            // and no plist behind.
+            // `schedule-amplification-guard-and-pane-not-wired-2026-05-17`
+            // shipped this wiring 2026-05-21; pre-fix the Core library had
+            // zero production callers and `senkani schedule create --cron
+            // '* * * * *' --command echo` was accepted silently.
+            switch AmplificationGuard.validate(cron: cron, counter: nil) {
+            case .ok:
+                break
+            case .amplification(let reason, let minSeconds):
+                throw ValidationError(
+                    "Refused: schedule would amplify (\(reason)). The amplification floor is \(minSeconds)s. Pick a cron whose fire interval is above the floor."
+                )
+            }
+
             let task = ScheduledTask(
                 name: name,
                 cronPattern: cron,

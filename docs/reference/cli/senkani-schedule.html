@@ -82,10 +82,18 @@
     <h2>Behavior</h2>
     <p>Generates a launchd plist per schedule. Each fire gets its own worktree + pane pair. Budget cap per run. <code>preset install</code> reuses the same <code>PresetInstaller</code> plist generator as <code>create</code>, so the two code paths produce byte-identical plists.</p>
 
+    <p><strong>Amplification guard.</strong> <code>create</code> calls <code>AmplificationGuard.validate</code> before any disk write. Crons whose first two fires sit at or below the 60-second amplification floor (default <code>defaultMinIntervalSeconds</code>) are refused with a structured error; no JSON is written under <code>~/.senkani/schedules/</code> and no plist is written under <code>~/Library/LaunchAgents/</code>. The canonical reproduction case is <code>--cron '* * * * *'</code> (every-minute, 60s gap == floor); the guard refuses up front so the operator sees a clear rejection instead of a silent downstream clamp by the rate limiter. <code>preset install</code> currently does NOT call the guard — its presets are vetted ahead of ship, but the same wiring will land when the preset path is reviewed.</p>
+
     <h2>Example</h2>
     <pre class="code">$ senkani schedule create --name nightly-lint --cron "0 3 * * *" --command "swift test"
 $ senkani schedule preset list
-$ senkani schedule preset install autoresearch --topic "AI workstation"</pre>
+$ senkani schedule preset install autoresearch --topic "AI workstation"
+
+# Amplification guard refuses fast-firing crons:
+$ senkani schedule create --name fast --cron "* * * * *" --command "echo x"
+Validation Error: Refused: schedule would amplify (cron fires every 60s,
+at or below the 60s amplification floor). The amplification floor is 60s.
+Pick a cron whose fire interval is above the floor.</pre>
 
     <h2>Subcommands</h2>
     <div class="ref-io-table">

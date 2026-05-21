@@ -20,6 +20,7 @@ struct AddPaneSheet: View {
         "knowledgeBase": .knowledgeBase,
         "modelManager": .modelManager,
         "sprintReview": .sprintReview,
+        "artifactGallery": .artifactGallery,
         "dashboard": .dashboard,
         "analytics": .analytics,
         "savingsTest": .savingsTest,

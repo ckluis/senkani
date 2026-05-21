@@ -20,6 +20,7 @@ enum PaneType: String, CaseIterable {
     case codeEditor
     case dashboard
     case sprintReview
+    case artifactGallery
     case ollamaLauncher
 }
 
@@ -165,6 +166,7 @@ final class PaneModel: Identifiable {
         case .codeEditor:         self.columnWidth = 560
         case .dashboard:          self.columnWidth = 600
         case .sprintReview:       self.columnWidth = 500
+        case .artifactGallery:    self.columnWidth = 720
         default:                  self.columnWidth = 300
         }
         // Write initial toggle state so the hook script has it from the start

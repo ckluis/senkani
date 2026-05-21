@@ -4,7 +4,7 @@
 [![license](https://img.shields.io/github/license/ckluis/senkani)](LICENSE)
 [![release](https://img.shields.io/github/v/release/ckluis/senkani)](https://github.com/ckluis/senkani/releases)
 
-One macOS binary, two jobs: a **native multi-pane workspace** (SwiftUI, sub-3ms renders, 18 pane types) and an **MCP intelligence layer** that cuts 50–90% of the tokens your AI spends on perception. Compression, symbol indexing, secret redaction, local validators, and Layer-3 hook interception run before the request ever leaves your machine. No workflow changes — point Claude Code at it and your session just costs less.
+One macOS binary, two jobs: a **native multi-pane workspace** (SwiftUI, sub-3ms renders, 19 pane types) and an **MCP intelligence layer** that cuts 50–90% of the tokens your AI spends on perception. Compression, symbol indexing, secret redaction, local validators, and Layer-3 hook interception run before the request ever leaves your machine. No workflow changes — point Claude Code at it and your session just costs less.
 
 ## Quick Start
 
@@ -28,7 +28,7 @@ and roadmap.
 The empty-workspace surface is project-first and task-first: pick a project
 folder, then choose one of four verb-led starters — **Ask Claude in &lt;project&gt;**,
 **Use Ollama in &lt;project&gt;**, **Open a tracked shell**, or **Inspect this project**.
-The full 18-pane gallery is one level deeper behind a **Show all panes** link
+The full 19-pane gallery is one level deeper behind a **Show all panes** link
 for advanced users. The first agent launch auto-assembles a witnessed layout —
 **Ask Claude** and **Open a tracked shell** open the terminal next to a live
 **Agent Timeline** pane so optimization events appear as the user works, with
@@ -130,7 +130,7 @@ Gemma 4 optionally enriches rationale strings (H+2a) — contained to a dedicate
 
 A horizontal canvas of panes. Each pane is a primitive type; you arrange them however makes sense for what you're doing right now, and Senkani persists the layout per project.
 
-**18 pane types:**
+**19 pane types:**
 
 - **Terminal** — SwiftTerm, configurable font size, kill/restart buttons, broadcast mode. The active terminal pane shows a five-chip "Senkani Active" proof strip (PROJECT, MCP, HOOKS, TRACK, EVENTS) that surfaces a runnable next action whenever a setup component is missing — no need to wait for the first intercepted command to know whether Senkani is wired in.
 - **Dashboard** — multi-project portfolio: total savings, project table, feature charts, insights
@@ -148,6 +148,7 @@ A horizontal canvas of panes. Each pane is a primitive type; you arrange them ho
 - **Schedules** — manage recurring tasks via launchd. Ships with five day-1 presets (`log-rotation`, `morning-brief`, `autoresearch`, `competitive-scan`, `senkani-improve`) installable from the pane or via `senkani schedule preset install <name>`; each preset's resolved command is secret-scanned before install, and missing companion prerequisites (Ollama daemon, `guard-research` hook preset, `senkani brief` CLI, …) surface as warnings, not blockers.
 - **Skill Library** — browse, install, and manage AI agent skills
 - **Sprint Review** — GUI counterpart to `senkani learn review`: accept/reject staged compound-learning proposals (filter rules, context docs, instruction patches, workflow playbooks) plus a stale-applied section mirroring the quarterly audit
+- **Artifact Gallery** — split-pane browser over PaneDiary entries, SprintReview snapshots, and on-disk files under `~/.senkani/artifacts/`. Reads through V.9a's `ArtifactStore` (filter by tag / source-pane / version / since). Single-click selects; double-click navigates to the source pane (paneDiary focus, SprintReview focus, Finder reveal for filesystem). Inline lineage drill-in steps back through `versions(of:)`. Redacted artifacts gate behind a confirmation sheet that writes a chained `artifact.secret.allow` audit row on override.
 - **Ollama** — first-class local-LLM launcher: availability-gated, per-pane default-model selector, same MCP env injection terminal panes get. Header **download** button opens a curated-catalog drawer: pick from 5 LLMs (llama3.1:8b, qwen2.5-coder:7b, deepseek-r1:7b, mistral:7b, gemma2:2b), each row discloses size before the pull click and streams `ollama pull` progress into the UI. Install CTA when the daemon isn't running.
 
 **⌘K command palette** opens everything: new panes, themes, actions. Search-as-you-type with category grouping.
@@ -262,7 +263,7 @@ The full caveat — including the action item, owner, and the `tools/check-multi
 | **Bundle** | Core, Filter, Indexer | `BundleComposer` — budget-bounded repo-snapshot composition for `senkani_bundle` |
 | **HookRelay** | — | Zero-dep hook relay library shared by senkani-hook binary and app's --hook mode |
 | **CLI** | Core, Filter, Indexer, Bench | 24 commands: exec, search, bench, doctor, grammars, kb, eval, learn, init, authorship, models, … |
-| **SenkaniApp** | All + SwiftTerm | SwiftUI workspace: 18 pane types, multi-project, ⌘K palette, dashboard, menu bar |
+| **SenkaniApp** | All + SwiftTerm | SwiftUI workspace: 19 pane types, multi-project, ⌘K palette, dashboard, menu bar |
 
 ---
 

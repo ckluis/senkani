@@ -315,6 +315,8 @@ struct PaneContainerView: View {
             DashboardView(workspace: workspace)
         case .sprintReview:
             SprintReviewPane(workspace: workspace)
+        case .artifactGallery:
+            ArtifactGalleryView(workspace: workspace)
         case .ollamaLauncher:
             OllamaLauncherPane(pane: pane, isActive: isActive)
                 .onChange(of: pane.features) { _, _ in pane.features.persist(to: pane.configFilePath) }
@@ -482,6 +484,8 @@ struct PaneContainerView: View {
             return "\(workspace?.projects.count ?? 0) projects"
         case .sprintReview:
             return "review"
+        case .artifactGallery:
+            return "artifacts"
         case .ollamaLauncher:
             return pane.ollamaDefaultModel
         }

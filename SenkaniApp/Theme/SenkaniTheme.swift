@@ -194,6 +194,7 @@ enum SenkaniTheme {
         case .codeEditor: return accentAnalytics
         case .dashboard: return savingsGreen
         case .sprintReview: return accentSkillLibrary
+        case .artifactGallery: return accentSkillLibrary
         case .ollamaLauncher: return accentOllamaLauncher
         }
     }
@@ -218,6 +219,7 @@ enum SenkaniTheme {
         case .codeEditor: return "chevron.left.forwardslash.chevron.right"
         case .dashboard: return "chart.bar.doc.horizontal"
         case .sprintReview: return "sparkles.rectangle.stack"
+        case .artifactGallery: return "rectangle.stack.badge.person.crop"
         case .ollamaLauncher: return "cpu.fill"
         }
     }
@@ -242,6 +244,7 @@ enum SenkaniTheme {
         case .codeEditor: return "View code with syntax highlighting"
         case .dashboard: return "Multi-project portfolio overview"
         case .sprintReview: return "Review staged compound-learning proposals"
+        case .artifactGallery: return "Browse diaries, sprint snapshots, and on-disk artifacts"
         case .ollamaLauncher: return "Local LLM chat via Ollama"
         }
     }
@@ -265,6 +268,7 @@ enum SenkaniTheme {
         case .codeEditor: return "Code Editor"
         case .dashboard: return "Dashboard"
         case .sprintReview: return "Sprint Review"
+        case .artifactGallery: return "Artifact Gallery"
         case .ollamaLauncher: return "Ollama"
         }
     }

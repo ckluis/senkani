@@ -44,6 +44,9 @@ struct Validate: ParsableCommand {
     @Option(name: .long, help: "[--browser] Runner selector. 'subprocess' (default) drives the node+Playwright Chromium subprocess; 'headless' is reserved for U.2b-1b's off-screen WKWebView runner and currently returns a structured headless_not_yet_implemented refusal.")
     var dispatch: String = "subprocess"
 
+    @Option(name: .long, help: "[--browser] EgressProxy URL (e.g. 'http://127.0.0.1:18080'). When set, the spawned Chromium subprocess routes through it with a per-target same-origin allowlist written to SENKANI_EGRESS_POLICY_OVERRIDE. Operator runs 'senkani egress start' first.")
+    var egressProxy: String?
+
     func run() throws {
         let projectRoot = root ?? FileManager.default.currentDirectoryPath
         if browser {
@@ -137,12 +140,14 @@ struct Validate: ParsableCommand {
             screenshot: screenshot,
             sessionId: sessionId,
             projectRoot: projectRoot,
-            dispatch: dispatchMode
+            dispatch: dispatchMode,
+            egressProxyURL: egressProxy
         )
 
-        let runner = PlaywrightSubprocessRunner()
-        let runnerClosure: BrowserValidationDispatcher.Runner = { plan, target, screenshot in
-            try runner.run(plan: plan, targetURL: target, screenshot: screenshot)
+        let runner = PlaywrightSubprocessRunner(egressProxyURL: egressProxy)
+        let runnerClosure: BrowserValidationDispatcher.Runner = { plan, target, screenshot, overridePath in
+            try runner.run(plan: plan, targetURL: target, screenshot: screenshot,
+                           egressPolicyOverridePath: overridePath)
         }
         let db = SessionDatabase.shared
         let resultSink: BrowserValidationDispatcher.ResultSink = { row in

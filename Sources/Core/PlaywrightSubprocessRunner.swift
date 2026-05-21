@@ -102,15 +102,24 @@ public final class PlaywrightSubprocessRunner: BrowserRunner, @unchecked Sendabl
     private let chromiumCachePath: String
     private let runnerPath: String
     private let nodePath: String
+    /// Optional HTTP proxy URL (e.g. `"http://127.0.0.1:18080"`). When
+    /// set, the spawned node subprocess receives `HTTP_PROXY` +
+    /// `HTTPS_PROXY` + `NODE_TLS_REJECT_UNAUTHORIZED=0` env vars so
+    /// Chromium (via Playwright) routes outbound traffic through the
+    /// EgressProxy daemon (T.1a). Wired in
+    /// `process-gap-validate-browser-runner-egress-not-wired-2026-05-19`.
+    public let egressProxyURL: String?
 
     public init(
         chromiumCachePath: String = PlaywrightSubprocessRunner.defaultChromiumCachePath,
         runnerPath: String = PlaywrightSubprocessRunner.defaultRunnerPath,
-        nodePath: String = "/usr/bin/env"
+        nodePath: String = "/usr/bin/env",
+        egressProxyURL: String? = nil
     ) {
         self.chromiumCachePath = chromiumCachePath
         self.runnerPath = runnerPath
         self.nodePath = nodePath
+        self.egressProxyURL = egressProxyURL
     }
 
     /// True when the Playwright Chromium cache directory exists. The
@@ -137,6 +146,25 @@ public final class PlaywrightSubprocessRunner: BrowserRunner, @unchecked Sendabl
     /// currently a no-op pass-through. U.2b-1b's headless WKWebView
     /// runner honors the bool directly.
     public func run(plan: [ValidationStep], targetURL: String, screenshot: Bool) throws -> PlaywrightResult {
+        return try run(plan: plan, targetURL: targetURL, screenshot: screenshot,
+                       egressPolicyOverridePath: nil)
+    }
+
+    /// Extended variant the `BrowserValidationDispatcher` calls. The
+    /// dispatcher computes a per-target `EgressPolicy.sameOriginAllowlist`
+    /// for the run, writes it to a temp JSON file, and passes the path
+    /// here so the spawned node subprocess sees both the proxy URL
+    /// (HTTP_PROXY/HTTPS_PROXY) and the override path
+    /// (SENKANI_EGRESS_POLICY_OVERRIDE) — a daemon (or test stub) reads
+    /// the override path on connect to apply the per-dispatch allowlist.
+    /// Wired in
+    /// `process-gap-validate-browser-runner-egress-not-wired-2026-05-19`.
+    public func run(
+        plan: [ValidationStep],
+        targetURL: String,
+        screenshot: Bool,
+        egressPolicyOverridePath: String?
+    ) throws -> PlaywrightResult {
         _ = screenshot  // Pass-through; TS subprocess respects per-step screenshot config.
         guard chromiumCacheInstalled() else {
             throw PlaywrightRunnerError.validationBrowserMissing(
@@ -145,7 +173,11 @@ public final class PlaywrightSubprocessRunner: BrowserRunner, @unchecked Sendabl
         }
 
         let requestJSON = try Self.encodeRequest(plan: plan, targetUrl: targetURL)
-        return try spawnAndDecode(requestJSON: requestJSON)
+        let extraEnv = Self.buildExtraEnv(
+            egressProxyURL: egressProxyURL,
+            egressPolicyOverridePath: egressPolicyOverridePath
+        )
+        return try spawnAndDecode(requestJSON: requestJSON, extraEnv: extraEnv)
     }
 
     /// Encode the `{plan, target_url}` request the TS driver reads from
@@ -164,10 +196,41 @@ public final class PlaywrightSubprocessRunner: BrowserRunner, @unchecked Sendabl
         return try encoder.encode(Request(plan: plan, targetUrl: targetUrl))
     }
 
-    private func spawnAndDecode(requestJSON: Data) throws -> PlaywrightResult {
+    /// Compute the extra env-var map injected onto the spawned node
+    /// subprocess. When `egressProxyURL` is set, Chromium (via
+    /// Playwright) is told to route through it via the standard
+    /// `HTTP_PROXY` / `HTTPS_PROXY` env vars; `NODE_TLS_REJECT_UNAUTHORIZED=0`
+    /// is set so node accepts the proxy's MITM CA (T.1's existing
+    /// infrastructure handles real cert pinning at the daemon layer).
+    /// When `egressPolicyOverridePath` is set, the path is advertised
+    /// via `SENKANI_EGRESS_POLICY_OVERRIDE` so a daemon (or test stub)
+    /// can pick up the per-dispatch allowlist. Pure; testable without
+    /// spawning anything.
+    public static func buildExtraEnv(
+        egressProxyURL: String?,
+        egressPolicyOverridePath: String?
+    ) -> [String: String] {
+        var env: [String: String] = [:]
+        if let proxy = egressProxyURL, !proxy.isEmpty {
+            env["HTTP_PROXY"] = proxy
+            env["HTTPS_PROXY"] = proxy
+            env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+        }
+        if let overridePath = egressPolicyOverridePath, !overridePath.isEmpty {
+            env["SENKANI_EGRESS_POLICY_OVERRIDE"] = overridePath
+        }
+        return env
+    }
+
+    private func spawnAndDecode(requestJSON: Data, extraEnv: [String: String] = [:]) throws -> PlaywrightResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: nodePath)
         process.arguments = ["node", runnerPath]
+        if !extraEnv.isEmpty {
+            var environment = ProcessInfo.processInfo.environment
+            for (k, v) in extraEnv { environment[k] = v }
+            process.environment = environment
+        }
 
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()

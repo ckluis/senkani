@@ -56,7 +56,7 @@ struct AxesDispatchExtensionTests {
         // keyed on target URL). This is the MCP/CLI default when the
         // caller omits diff_target — the test mirrors that path.
         let seenBox = LockedBox<[String]>(value: [])
-        let runner: BrowserValidationDispatcher.Runner = { plan, _, _ in
+        let runner: BrowserValidationDispatcher.Runner = { plan, _, _, _ in
             let axes = plan.map(\.axis.rawValue)
             seenBox.set(axes)
             return PlaywrightResult(

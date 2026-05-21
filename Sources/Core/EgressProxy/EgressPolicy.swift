@@ -59,15 +59,34 @@ public struct EgressPolicy: Sendable, Equatable {
 
     /// On-disk JSON wire-shape. Decoded at daemon start; never
     /// re-loaded on a per-request hot path.
-    private struct Wire: Decodable {
+    private struct Wire: Codable {
         let modes: [String: [WireRule]]
     }
 
-    private struct WireRule: Decodable {
+    private struct WireRule: Codable {
         let id: String
         let pattern: String
         let mode: String      // exact|prefix|suffix|glob
         let decision: String  // allow|deny
+    }
+
+    /// Encode this policy to the same JSON wire-shape `load(from:)`
+    /// reads. The dispatcher writes its per-target override policy via
+    /// this serializer so a live EgressProxy daemon (or test stub) can
+    /// pick it up via `SENKANI_EGRESS_POLICY_OVERRIDE`. Output is
+    /// byte-stable (`[.sortedKeys, .withoutEscapingSlashes]`).
+    public func encodeWireJSON() throws -> Data {
+        var modes: [String: [WireRule]] = [:]
+        for mode in PaneMode.allCases {
+            let engine = engines[mode] ?? EgressRuleEngine(rules: [])
+            modes[mode.rawValue] = engine.rules.map { r in
+                WireRule(id: r.id, pattern: r.pattern,
+                         mode: r.mode.rawValue, decision: r.decision.rawValue)
+            }
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return try encoder.encode(Wire(modes: modes))
     }
 
     /// Load from a JSON file path. Missing file → defaults. Malformed

@@ -32,6 +32,8 @@ enum ValidateBrowserTool {
             )
         }
 
+        let egressProxyURL = arguments?["egress_proxy_url"]?.stringValue
+
         let request = BrowserValidationDispatcher.Request(
             targetURL: url,
             axes: axes,
@@ -40,12 +42,14 @@ enum ValidateBrowserTool {
             screenshot: screenshot,
             sessionId: session.sessionId ?? "mcp-validate-browser",
             projectRoot: session.projectRoot,
-            dispatch: dispatchMode
+            dispatch: dispatchMode,
+            egressProxyURL: egressProxyURL
         )
 
-        let runner = PlaywrightSubprocessRunner()
-        let runnerClosure: BrowserValidationDispatcher.Runner = { plan, target, screenshot in
-            try runner.run(plan: plan, targetURL: target, screenshot: screenshot)
+        let runner = PlaywrightSubprocessRunner(egressProxyURL: egressProxyURL)
+        let runnerClosure: BrowserValidationDispatcher.Runner = { plan, target, screenshot, overridePath in
+            try runner.run(plan: plan, targetURL: target, screenshot: screenshot,
+                           egressPolicyOverridePath: overridePath)
         }
         let db = SessionDatabase.shared
         let resultSink: BrowserValidationDispatcher.ResultSink = { row in

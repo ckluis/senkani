@@ -84,7 +84,7 @@ struct BrowserRunnerScaffoldTests {
     func auditChainRunnerFieldSubprocess() throws {
         let evSink = LockedArray<BrowserValidationDispatcher.TokenEventInput>()
         let resultSink: BrowserValidationDispatcher.ResultSink = { _ in }
-        let runner: BrowserValidationDispatcher.Runner = { _, _, _ in
+        let runner: BrowserValidationDispatcher.Runner = { _, _, _, _ in
             PlaywrightResult(
                 resultStatus: "pass",
                 axesRun: ["perf", "completeness"],
@@ -136,7 +136,7 @@ struct BrowserRunnerScaffoldTests {
         let evSink = LockedArray<BrowserValidationDispatcher.TokenEventInput>()
         let rowSink = LockedArray<BrowserValidationDispatcher.BrowserValidationRow>()
         let runnerCalled = LockedBox(value: false)
-        let runner: BrowserValidationDispatcher.Runner = { _, _, _ in
+        let runner: BrowserValidationDispatcher.Runner = { _, _, _, _ in
             runnerCalled.set(true)
             Issue.record("headless path must NOT invoke the subprocess runner closure")
             return PlaywrightResult(

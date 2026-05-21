@@ -38,6 +38,14 @@ public enum BrowserValidationDispatcher {
         /// `headless_not_yet_implemented` refusal until U.2b-1b lands the
         /// off-screen WKWebView runner.
         public let dispatch: BrowserDispatchMode
+        /// Optional EgressProxy URL the spawned Chromium subprocess should
+        /// route through (e.g. `"http://127.0.0.1:18080"`). When set, the
+        /// dispatcher computes a same-origin allowlist for `targetURL`,
+        /// writes it to a temp policy file the daemon (or test stub) reads
+        /// via `SENKANI_EGRESS_POLICY_OVERRIDE`, and passes both the proxy
+        /// URL and the override path to the runner closure. Wired in
+        /// `process-gap-validate-browser-runner-egress-not-wired-2026-05-19`.
+        public let egressProxyURL: String?
 
         public init(
             targetURL: String,
@@ -47,7 +55,8 @@ public enum BrowserValidationDispatcher {
             screenshot: Bool,
             sessionId: String,
             projectRoot: String?,
-            dispatch: BrowserDispatchMode = .subprocess
+            dispatch: BrowserDispatchMode = .subprocess,
+            egressProxyURL: String? = nil
         ) {
             self.targetURL = targetURL
             self.axes = axes
@@ -57,6 +66,7 @@ public enum BrowserValidationDispatcher {
             self.sessionId = sessionId
             self.projectRoot = projectRoot
             self.dispatch = dispatch
+            self.egressProxyURL = egressProxyURL
         }
     }
 
@@ -88,7 +98,15 @@ public enum BrowserValidationDispatcher {
     /// Closure shape for the runner. Production wires
     /// `PlaywrightSubprocessRunner.run`; tests inject a deterministic
     /// closure that returns canned `PlaywrightResult` values.
-    public typealias Runner = @Sendable ([ValidationStep], String, Bool) throws -> PlaywrightResult
+    ///
+    /// Arguments: `(plan, targetURL, screenshot, egressPolicyOverridePath)`.
+    /// The 4th argument is nil unless `Request.egressProxyURL` was set —
+    /// in that case the dispatcher computes the per-target same-origin
+    /// allowlist via `EgressPolicy.sameOriginAllowlist`, writes it to a
+    /// temp file, and passes the path here. Production closures pass it
+    /// straight through to `PlaywrightSubprocessRunner.run`; tests can
+    /// assert the path is non-nil and read the file off disk.
+    public typealias Runner = @Sendable ([ValidationStep], String, Bool, String?) throws -> PlaywrightResult
 
     /// Sink for `validation_results` rows. Production wires
     /// `SessionDatabase.shared.insertBrowserValidationResult`; tests
@@ -149,10 +167,23 @@ public enum BrowserValidationDispatcher {
         }
 
         let plan = buildPlan(diff: request.diff, axes: request.axes, targetURL: request.targetURL)
+
+        // Override-channel: when egressProxyURL is set, compute the
+        // per-target same-origin allowlist and write it to a temp file.
+        // The runner closure reads the path and advertises it to the
+        // spawned node subprocess via SENKANI_EGRESS_POLICY_OVERRIDE.
+        // Cleanup runs after the runner returns regardless of outcome.
+        let overridePath = writeEgressOverridePolicyIfNeeded(request: request)
+        defer {
+            if let path = overridePath {
+                try? FileManager.default.removeItem(atPath: path)
+            }
+        }
+
         let result: PlaywrightResult
         switch request.dispatch {
         case .subprocess:
-            result = runRunner(runner, plan: plan, request: request)
+            result = runRunner(runner, plan: plan, request: request, egressPolicyOverridePath: overridePath)
         case .headless:
             // U.2b-1a scaffold — no off-screen WKWebView yet. Skip the
             // runner closure entirely and synthesize a structured
@@ -255,9 +286,41 @@ public enum BrowserValidationDispatcher {
         }
     }
 
-    private static func runRunner(_ runner: Runner, plan: [ValidationStep], request: Request) -> PlaywrightResult {
+    /// Write the per-dispatch `EgressPolicy.sameOriginAllowlist(targetURL:)`
+    /// to a temp JSON file in the wire format
+    /// `EgressPolicy.load(from:)` reads. Returns the temp path on
+    /// success, nil when `Request.egressProxyURL` is unset, the target
+    /// URL is malformed, or the URL is hostless (`file://`). The caller
+    /// is responsible for cleanup via `defer`.
+    ///
+    /// Exposed as `internal` for unit tests; production traffic goes
+    /// through `dispatch(...)`.
+    static func writeEgressOverridePolicyIfNeeded(request: Request) -> String? {
+        guard let proxy = request.egressProxyURL, !proxy.isEmpty,
+              let url = URL(string: request.targetURL),
+              let policy = EgressPolicy.sameOriginAllowlist(targetURL: url) else {
+            return nil
+        }
         do {
-            return try runner(plan, request.targetURL, request.screenshot)
+            let data = try policy.encodeWireJSON()
+            let dir = NSTemporaryDirectory()
+            let filename = "senkani-egress-override-\(UUID().uuidString).json"
+            let path = (dir as NSString).appendingPathComponent(filename)
+            try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+            return path
+        } catch {
+            return nil
+        }
+    }
+
+    private static func runRunner(
+        _ runner: Runner,
+        plan: [ValidationStep],
+        request: Request,
+        egressPolicyOverridePath: String?
+    ) -> PlaywrightResult {
+        do {
+            return try runner(plan, request.targetURL, request.screenshot, egressPolicyOverridePath)
         } catch let error as PlaywrightRunnerError {
             switch error {
             case .validationBrowserMissing(let hint):

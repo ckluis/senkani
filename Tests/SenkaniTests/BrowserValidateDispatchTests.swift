@@ -32,7 +32,7 @@ struct BrowserValidateDispatchTests {
         screenshotPath: String? = "/tmp/senkani-validation-test.png",
         advisory: String? = nil
     ) -> BrowserValidationDispatcher.Runner {
-        { _, _, _ in
+        { _, _, _, _ in
             return PlaywrightResult(
                 resultStatus: resultStatus,
                 axesRun: axes,
@@ -223,7 +223,7 @@ struct BrowserValidateDispatchTests {
 
         // Interleave: pass-dispatch, fail-dispatch, fail-allow-override.
         // 100 pairs of (dispatch row, override row) → 200 rows.
-        let runnerFail: BrowserValidationDispatcher.Runner = { _, _, _ in
+        let runnerFail: BrowserValidationDispatcher.Runner = { _, _, _, _ in
             PlaywrightResult(
                 resultStatus: "fail",
                 axesRun: ["perf"],

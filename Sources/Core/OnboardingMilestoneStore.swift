@@ -21,6 +21,24 @@ import Foundation
 ///     ``recordLock``, an `NSRecursiveLock`. Two concurrent records on
 ///     different milestones from the same process **cannot** lose
 ///     each other's update — they serialize at the lock boundary.
+///   - **Lock-ordering rule** (added 2026-05-21 by
+///     `swift-test-serial-full-suite-stall-investigation-2026-05-18`):
+///     when a `record` call needs to resolve a nil `home:` argument it
+///     does so BEFORE taking ``recordLock``. The earlier shape took
+///     `recordLock` first and then called `resolveDefaultHome()` from
+///     inside the critical section, which in turn took
+///     ``testHomeOverrideLock``. ``withTestHome`` holds
+///     ``testHomeOverrideLock`` across its body, and the body may
+///     itself enter `record` and need ``recordLock`` — cross-thread
+///     this is an AB-BA deadlock. The full-suite parallel-mode hang
+///     traced to exactly this inversion (sample at
+///     `/tmp/senkani-hang-current.txt` taken 2026-05-21 named
+///     `MCPSessionRegistryIsolationTests`, `SprintReviewSeedFixtureTests`,
+///     `ChainVerifierTests`, and `EventCountersTests` blocked at the
+///     same `OnboardingMilestoneStore.record` lock with the lock-holder
+///     parked one frame deeper in `resolveDefaultHome`). The fix
+///     resolves `home` before locking; the ordering rule is now
+///     **testHomeOverrideLock < recordLock** everywhere.
 ///   - **On-disk atomicity**: ``write(_:home:)`` writes to
 ///     `<path>.tmp` then `replaceItemAt` (POSIX `rename(2)`-equivalent
 ///     on macOS), so a crashed write cannot truncate the existing
@@ -211,12 +229,22 @@ public enum OnboardingMilestoneStore {
         env: [String: String]? = nil
     ) -> Bool {
         guard isEnabled(env: env) else { return false }
+        // Resolve `home` BEFORE taking `recordLock`. If we resolved
+        // inside the critical section, `completed()` / `write()` would
+        // call `filePath(home: nil)` → `resolveDefaultHome()` →
+        // `testHomeOverrideLock.lock()` while already holding
+        // `recordLock` — that's AB-BA with `withTestHome`, which holds
+        // `testHomeOverrideLock` across a body that may itself call
+        // `record(home: nil)` and then need `recordLock`. The full-
+        // suite parallel deadlock surfaced in
+        // `swift-test-serial-full-suite-stall-investigation-2026-05-18`.
+        let resolvedHome = home ?? resolveDefaultHome()
         recordLock.lock()
         defer { recordLock.unlock() }
-        var current = completed(home: home, env: env)
+        var current = completed(home: resolvedHome, env: env)
         if current[milestone] != nil { return false }
         current[milestone] = at
-        write(current, home: home)
+        write(current, home: resolvedHome)
         return true
     }
 

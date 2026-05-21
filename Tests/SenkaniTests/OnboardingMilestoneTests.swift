@@ -282,6 +282,115 @@ struct OnboardingMilestoneTests {
                 "Exactly 7 keys must land; got \(completed.count).")
     }
 
+    @Test("record(home: nil) does not deadlock against concurrent withTestHome (AB-BA fix verification)",
+          .timeLimit(.minutes(1)))
+    func recordWithNilHomeDoesNotDeadlockAgainstWithTestHome() {
+        // Fix verification for
+        // `swift-test-serial-full-suite-stall-investigation-2026-05-18`:
+        // before the 2026-05-21 lock-order fix, two threads could
+        // deadlock as follows:
+        //   - Thread A: `withTestHome(temp) { ... }` holds
+        //     `testHomeOverrideLock` across its body. Inside the body
+        //     it calls `record(home: nil)`, which (pre-fix) takes
+        //     `recordLock`, then re-enters `testHomeOverrideLock` via
+        //     `resolveDefaultHome` (recursive — fine on the same
+        //     thread).
+        //   - Thread B: calls `record(home: nil)` directly. Pre-fix:
+        //     takes `recordLock` first, then blocks at
+        //     `resolveDefaultHome` → `testHomeOverrideLock` (held by
+        //     A).
+        //   - Now A's inner record can't take `recordLock` (B holds
+        //     it). AB-BA deadlock. The serial-mode full-suite hang
+        //     observed 2026-05-18 (30+ min wall, 19s CPU, S-state)
+        //     traced to exactly this inversion via a `sample` taken
+        //     2026-05-21.
+        //
+        // Post-fix: `record` resolves `home` BEFORE taking
+        // `recordLock`. Thread B briefly waits on
+        // `testHomeOverrideLock` while A is inside `withTestHome`,
+        // then proceeds. No cross-lock dependency cycle.
+        //
+        // The race window is narrow but deterministic given an
+        // explicit signal. We coordinate via `DispatchSemaphore`:
+        // Thread A signals it has entered `withTestHome` and slept
+        // briefly; Thread B then enters `record(home: nil)` while A
+        // is still in the body and about to call its own inner
+        // `record`. Pre-fix this deadlocks → `.timeLimit(.minutes(1))`
+        // fires the time limit and the test fails. Post-fix both
+        // tasks complete in well under a second.
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+
+        // Use a fresh enough home so the test doesn't read leftover
+        // state. The two milestones (`projectSelected` and
+        // `firstNonzeroSavings`) are chosen so the "first observation
+        // wins" idempotency doesn't shadow either record.
+
+        let enteredWithTestHome = DispatchSemaphore(value: 0)
+        let group = DispatchGroup()
+        // Use raw GCD threads — this test must run two threads that
+        // exercise the lock-order inversion, and
+        // `DispatchSemaphore.wait()` is unavailable from Swift
+        // concurrency async contexts.
+
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            defer { group.leave() }
+            OnboardingMilestoneStore.withTestHome(home) {
+                // Signal B that we hold testHomeOverrideLock.
+                enteredWithTestHome.signal()
+                // Give B time to enter `record(home: nil)` and block
+                // (pre-fix: at testHomeOverrideLock after taking
+                // recordLock; post-fix: at testHomeOverrideLock
+                // BEFORE taking recordLock).
+                Thread.sleep(forTimeInterval: 0.15)
+                // Pre-fix outcome: blocks on recordLock (held by B).
+                // Post-fix outcome: resolveDefaultHome recursively
+                // re-enters testHomeOverrideLock on our own thread
+                // (NSRecursiveLock; succeeds), then takes recordLock
+                // cleanly because B never reached recordLock.
+                _ = OnboardingMilestoneStore.record(
+                    .projectSelected, home: nil)
+            }
+        }
+
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            defer { group.leave() }
+            // Wait for A to enter withTestHome (testHomeOverrideLock
+            // held).
+            enteredWithTestHome.wait()
+            // Pre-fix: takes recordLock first, then blocks on
+            // testHomeOverrideLock (held by A in withTestHome). A
+            // then tries recordLock → AB-BA deadlock.
+            // Post-fix: blocks on testHomeOverrideLock at the very
+            // first step (resolveDefaultHome), recordLock untouched
+            // during the wait. When A exits withTestHome,
+            // testHomeOverrideLock releases and we proceed.
+            _ = OnboardingMilestoneStore.record(
+                .firstNonzeroSavings, home: nil)
+        }
+
+        // Bound at 30s — pre-fix the deadlock is permanent so any
+        // finite bound surfaces the regression; post-fix this returns
+        // in well under a second.
+        let timeout = group.wait(timeout: .now() + .seconds(30))
+        #expect(timeout == .success,
+                "Cross-thread record(home: nil) + withTestHome must NOT deadlock; both tasks failed to finish within 30s.")
+
+        // Primary assertion: neither task deadlocked (we reached this
+        // line within the .timeLimit). The temp home should now hold
+        // `projectSelected` (recorded by A, which was inside
+        // withTestHome so `home: nil` resolved to `home`). B's record
+        // may have written to either `home` (if B's call happened
+        // while A still held testHomeOverrideLock) or to NSHomeDirectory()
+        // (if B's record happened after A released). We don't assert
+        // B's destination — only that the deadlock is broken.
+        let completed = OnboardingMilestoneStore.completed(home: home)
+        #expect(completed[.projectSelected] != nil,
+                "Task A's record inside withTestHome must have landed in temp home.")
+    }
+
     @Test("record does not enforce predecessor chain — Progression owns ordering")
     func recordDoesNotEnforcePredecessorChain() {
         // The "Atomicity contract" doc on OnboardingMilestoneStore

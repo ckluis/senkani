@@ -225,14 +225,20 @@ public enum ChainVerifier {
     ///
     /// Phase B-ii: rows under legacy anchors (`migration-v4`,
     /// `fresh-install-pre-v18`) were hashed without `connection_id`; all
-    /// other anchors include it. Mirrors the writer-side switch in
-    /// `TokenEventStore.recordTokenEvent`.
+    /// other anchors include it. T.3a-4 (v33): rows under
+    /// `migration-v33` and the post-v33 `fresh-install` anchor include
+    /// the four wasm_* columns (`.null` for regular token_events,
+    /// populated for `source='wasm_kill'` rows). Pre-v33 anchors hash
+    /// without the wasm_* columns. Mirrors the writer-side switch in
+    /// `TokenEventStore.recordTokenEvent` + `recordWasmKill`.
     private static func verifyAnchorTokenEvents(db: OpaquePointer, anchor: Anchor) -> Result? {
         let includeConnectionId = !(anchor.reason == "migration-v4" || anchor.reason == "fresh-install-pre-v18")
+        let includeWasmKill = (anchor.reason == "migration-v33" || anchor.reason == "fresh-install")
         let sql = """
             SELECT id, timestamp, session_id, pane_id, project_root, source,
                    tool_name, model, input_tokens, output_tokens, saved_tokens,
                    cost_cents, feature, command, model_tier, connection_id,
+                   wasm_reason, wasm_duration_us, wasm_budget_delta_us, wasm_tool_id,
                    prev_hash, entry_hash
               FROM token_events
              WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
@@ -259,8 +265,18 @@ public enum ChainVerifier {
             if includeConnectionId {
                 columns["connection_id"] = textOrNull(stmt, 15)
             }
-            let prev = optionalText(stmt, 16)
-            let stored = sqlite3_column_text(stmt, 17).map { String(cString: $0) } ?? ""
+            if includeWasmKill {
+                columns["wasm_reason"]          = textOrNull(stmt, 16)
+                columns["wasm_duration_us"]     = sqlite3_column_type(stmt, 17) == SQLITE_NULL
+                                                    ? .null
+                                                    : .integer(sqlite3_column_int64(stmt, 17))
+                columns["wasm_budget_delta_us"] = sqlite3_column_type(stmt, 18) == SQLITE_NULL
+                                                    ? .null
+                                                    : .integer(sqlite3_column_int64(stmt, 18))
+                columns["wasm_tool_id"]         = textOrNull(stmt, 19)
+            }
+            let prev = optionalText(stmt, 20)
+            let stored = sqlite3_column_text(stmt, 21).map { String(cString: $0) } ?? ""
             return (rowid, columns, prev, stored)
         }
     }

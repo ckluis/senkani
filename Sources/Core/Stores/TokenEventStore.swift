@@ -114,8 +114,17 @@ final class TokenEventStore: @unchecked Sendable {
             // legacy fresh-install rows keep verifying under the old
             // shape). Mirrored on the verifier side in
             // `ChainVerifier.verifyAnchorTokenEvents`.
+            //
+            // T.3a-4 (v33): include the four wasm_* columns in the
+            // canonical map for anchors `migration-v33` and the post-v33
+            // `fresh-install` (lazy-created after v33 runs). Pre-v33
+            // anchors hash without the wasm_* columns. Non-wasm_kill
+            // rows under v33 anchors carry the columns as `.null`, which
+            // hashes deterministically — `recordTokenEvent` always
+            // writes them as null.
             let reason = self.chain.anchorReason(db: db, anchorId: anchorId) ?? ""
             let useLegacyShape = (reason == "migration-v4" || reason == "fresh-install-pre-v18")
+            let useV33Shape = (reason == "migration-v33" || reason == "fresh-install")
 
             // Build the canonical-byte input from the to-be-bound values. The
             // three chain columns are excluded by `ChainHasher` — they cannot
@@ -138,6 +147,17 @@ final class TokenEventStore: @unchecked Sendable {
             ]
             if !useLegacyShape {
                 columns["connection_id"] = Self.canonical(connectionId)
+            }
+            if useV33Shape {
+                // Non-wasm_kill rows under v33 anchors hash with the
+                // wasm_* columns as `.null`. Wasm_kill rows go through
+                // `recordWasmKill` which populates the same four keys
+                // with non-null values so the canonical shape stays
+                // uniform per-anchor.
+                columns["wasm_reason"] = .null
+                columns["wasm_duration_us"] = .null
+                columns["wasm_budget_delta_us"] = .null
+                columns["wasm_tool_id"] = .null
             }
             let entryHash = ChainHasher.entryHash(
                 table: "token_events", columns: columns, prev: prevHash
@@ -178,6 +198,113 @@ final class TokenEventStore: @unchecked Sendable {
                 // Update cache only on successful insert. parent.queue
                 // serialization means no other write can interleave between
                 // the prev_hash read and this update.
+                self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
+            }
+        }
+    }
+
+    /// T.3a-4 — record a `wasm_kill` audit row under the existing
+    /// `token_events` chain. The row uses `source='wasm_kill'` and
+    /// populates the four wasm_* columns added in migration v33. Pre-v33
+    /// anchors (`migration-v4`, `migration-v18`, `fresh-install-pre-*`)
+    /// refuse the write — wasm_kill rows can only chain under v33+
+    /// anchors so their canonical map matches the verifier's. If the
+    /// table is still anchored to a pre-v33 anchor (operator hand-
+    /// migrated, or schema_version stamped without running migrations),
+    /// the row is dropped silently — the watchdog's terminate-kill path
+    /// must not throw.
+    func recordWasmKill(
+        sessionId: String,
+        reason: WasmKillReason,
+        durationUs: Int64,
+        budgetDeltaUs: Int64,
+        toolId: String?,
+        projectRoot: String? = nil,
+        paneId: String? = nil
+    ) {
+        let normalizedRoot = SessionDatabase.normalizePath(projectRoot)
+        let now = Date().timeIntervalSince1970
+        parent.queue.async { [weak parent, weak self] in
+            guard let parent, let self, let db = parent.db else { return }
+
+            let anchorId = self.chain.resolveAnchorId(db: db)
+            let anchorReason = self.chain.anchorReason(db: db, anchorId: anchorId) ?? ""
+            let useV33Shape = (anchorReason == "migration-v33" || anchorReason == "fresh-install")
+            // Pre-v33 anchors don't carry the wasm_* canonical shape;
+            // drop the row rather than write under a hash the verifier
+            // cannot reproduce.
+            guard useV33Shape else {
+                Logger.log("wasm_kill.drop", fields: [
+                    "reason": .string("pre_v33_anchor"),
+                    "anchor_reason": .string(anchorReason),
+                ])
+                return
+            }
+            let prevHash = self.chain.latestEntryHash(db: db, anchorId: anchorId)
+
+            var columns: [String: ChainHasher.CanonicalValue] = [
+                "timestamp":      .real(now),
+                "session_id":     .text(sessionId),
+                "pane_id":        Self.canonical(paneId),
+                "project_root":   Self.canonical(normalizedRoot),
+                "source":         .text("wasm_kill"),
+                "tool_name":      Self.canonical(toolId),
+                "model":          .null,
+                "input_tokens":   .integer(0),
+                "output_tokens":  .integer(0),
+                "saved_tokens":   .integer(0),
+                "cost_cents":     .integer(0),
+                "feature":        .text(reason.rawValue),
+                "command":        .null,
+                "model_tier":     .null,
+                "connection_id":  .null,
+                "wasm_reason":    .text(reason.rawValue),
+                "wasm_duration_us": .integer(durationUs),
+                "wasm_budget_delta_us": .integer(budgetDeltaUs),
+                "wasm_tool_id":   Self.canonical(toolId),
+            ]
+            _ = columns  // silence unused warning under future trimming
+            let entryHash = ChainHasher.entryHash(
+                table: "token_events", columns: columns, prev: prevHash
+            )
+
+            let sql = """
+                INSERT INTO token_events
+                (timestamp, session_id, pane_id, project_root, source, tool_name, model,
+                 input_tokens, output_tokens, saved_tokens, cost_cents, feature, command, model_tier,
+                 connection_id,
+                 wasm_reason, wasm_duration_us, wasm_budget_delta_us, wasm_tool_id,
+                 prev_hash, entry_hash, chain_anchor_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+
+            sqlite3_bind_double(stmt, 1, now)
+            sqlite3_bind_text(stmt, 2, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            Self.bindOptionalText(stmt, 3, paneId)
+            Self.bindOptionalText(stmt, 4, normalizedRoot)
+            sqlite3_bind_text(stmt, 5, ("wasm_kill" as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            Self.bindOptionalText(stmt, 6, toolId)
+            sqlite3_bind_null(stmt, 7)  // model
+            sqlite3_bind_int64(stmt, 8, 0)
+            sqlite3_bind_int64(stmt, 9, 0)
+            sqlite3_bind_int64(stmt, 10, 0)
+            sqlite3_bind_int64(stmt, 11, 0)
+            sqlite3_bind_text(stmt, 12, (reason.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)  // feature
+            sqlite3_bind_null(stmt, 13)  // command
+            sqlite3_bind_null(stmt, 14)  // model_tier
+            sqlite3_bind_null(stmt, 15)  // connection_id
+            sqlite3_bind_text(stmt, 16, (reason.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)  // wasm_reason
+            sqlite3_bind_int64(stmt, 17, durationUs)
+            sqlite3_bind_int64(stmt, 18, budgetDeltaUs)
+            Self.bindOptionalText(stmt, 19, toolId)  // wasm_tool_id
+            Self.bindOptionalText(stmt, 20, prevHash)
+            sqlite3_bind_text(stmt, 21, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_int64(stmt, 22, anchorId)
+
+            if sqlite3_step(stmt) == SQLITE_DONE {
                 self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
             }
         }

@@ -1740,6 +1740,75 @@ public enum MigrationRegistry {
             try exec("ALTER TABLE validation_results ADD COLUMN validation_run_id TEXT;", allowDuplicateColumn: true)
             try exec("CREATE INDEX IF NOT EXISTS idx_validation_results_run ON validation_results(validation_run_id);")
         },
+        Migration(version: 33, description: "wasm_kill chained-row columns on token_events for T.3a-4 (wasm_reason, wasm_duration_us, wasm_budget_delta_us, wasm_tool_id)") { db in
+            // T.3a-4 — `wasm_kill` event rows ride the existing `token_events`
+            // chain with four new columns. Chain-hash compatibility mirrors
+            // the v18 connection_id pattern: pre-v33 rows under
+            // `fresh-install`, `migration-v4`, `migration-v18`, or
+            // `fresh-install-pre-v18` were hashed WITHOUT the wasm_* columns
+            // in their canonical map. Adding the columns to the canonical
+            // shape across the board would break their entry_hash. Instead
+            // we open a NEW anchor (`migration-v33`) with `started_at_rowid
+            // = MAX(id)`. New writes register the wasm_* columns in the
+            // canonical map (NULL for non-wasm_kill rows, populated for
+            // wasm_kill rows) and chain under the v33 anchor; legacy rows
+            // keep their existing anchor + old canonical shape.
+            // `ChainVerifier` switches canonical shape per-anchor via the
+            // anchor's `reason` field.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v33", detail: msg)
+            }
+
+            // Self-contained CREATE matches the v18 / v32 baseline so v33
+            // can run against a DB dropped in at any later state.
+            try exec("""
+                CREATE TABLE IF NOT EXISTS token_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp REAL NOT NULL,
+                    session_id TEXT NOT NULL,
+                    pane_id TEXT,
+                    project_root TEXT,
+                    source TEXT NOT NULL,
+                    tool_name TEXT,
+                    model TEXT,
+                    input_tokens INTEGER DEFAULT 0,
+                    output_tokens INTEGER DEFAULT 0,
+                    saved_tokens INTEGER DEFAULT 0,
+                    cost_cents INTEGER DEFAULT 0,
+                    feature TEXT,
+                    command TEXT
+                );
+            """)
+            try exec("ALTER TABLE token_events ADD COLUMN wasm_reason TEXT;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE token_events ADD COLUMN wasm_duration_us INTEGER;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE token_events ADD COLUMN wasm_budget_delta_us INTEGER;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE token_events ADD COLUMN wasm_tool_id TEXT;", allowDuplicateColumn: true)
+            try exec("CREATE INDEX IF NOT EXISTS idx_token_events_wasm_reason ON token_events(wasm_reason) WHERE wasm_reason IS NOT NULL;")
+
+            // Rename existing 'fresh-install' anchor for token_events to
+            // 'fresh-install-pre-v33' so writes + verifier can switch
+            // canonical shapes per anchor. (Earlier renames may have
+            // already produced 'fresh-install-pre-v18'; that name stays.)
+            try exec("""
+                UPDATE chain_anchors
+                   SET reason = 'fresh-install-pre-v33'
+                 WHERE table_name = 'token_events'
+                   AND reason = 'fresh-install';
+            """)
+
+            // Open a 'migration-v33' anchor at MAX(id) so post-v33 writes
+            // chain under the new canonical shape. No-op on empty tables —
+            // fresh installs lazy-create a 'fresh-install' anchor on
+            // first write that uses the v33 canonical shape from the
+            // start.
+            try openWasmKillAnchor(db: db)
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)
@@ -1793,6 +1862,52 @@ public enum MigrationRegistry {
     /// includes `connection_id`) while legacy rows verify under the old
     /// shape. No-op on an empty table — `ChainState` lazy-creates a
     /// 'fresh-install' anchor on first write under the new shape.
+    /// Open a 'migration-v33' anchor for `token_events` at MAX(id) so
+    /// post-v33 writes that include the wasm_* columns in the canonical
+    /// map chain under the new shape, while pre-v33 rows verify under
+    /// 'fresh-install'/'fresh-install-pre-v33'/'migration-v18'. No-op on
+    /// empty tables — fresh installs lazy-create a 'fresh-install'
+    /// anchor on first write that uses the v33 canonical shape from
+    /// the start.
+    private static func openWasmKillAnchor(db: OpaquePointer) throws {
+        var stmt: OpaquePointer?
+        let countSQL = "SELECT COUNT(*), COALESCE(MAX(id), 0) FROM token_events;"
+        guard sqlite3_prepare_v2(db, countSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(
+                stage: "v33 count(token_events)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        var rowCount: Int64 = 0
+        var maxRowid: Int64 = 0
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            rowCount = sqlite3_column_int64(stmt, 0)
+            maxRowid = sqlite3_column_int64(stmt, 1)
+        }
+        sqlite3_finalize(stmt)
+        guard rowCount > 0 else { return }
+
+        let now = Date().timeIntervalSince1970
+        let insertSQL = """
+            INSERT INTO chain_anchors
+                (table_name, started_at, started_at_rowid, reason, operator_note)
+            VALUES ('token_events', ?, ?, 'migration-v33', NULL);
+        """
+        guard sqlite3_prepare_v2(db, insertSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(
+                stage: "v33 anchor insert(token_events)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_bind_double(stmt, 1, now)
+        sqlite3_bind_int64(stmt, 2, maxRowid)
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            sqlite3_finalize(stmt)
+            throw MigrationError.sqlFailed(
+                stage: "v33 anchor step(token_events)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_finalize(stmt)
+    }
+
     private static func openConnectionIdAnchor(db: OpaquePointer, table: String) throws {
         var stmt: OpaquePointer?
         let countSQL = "SELECT COUNT(*), COALESCE(MAX(id), 0) FROM \(table);"

@@ -135,6 +135,29 @@ extension SessionDatabase {
         tokenEventStore.tokenEventExists(source: source, feature: feature)
     }
 
+    /// T.3a-4 — record a wasm_kill chained row. Forwards to
+    /// `TokenEventStore.recordWasmKill`. Pre-v33 anchors silently drop
+    /// the row (see TokenEventStore for the gate).
+    public func recordWasmKill(
+        sessionId: String,
+        reason: WasmKillReason,
+        durationUs: Int64,
+        budgetDeltaUs: Int64,
+        toolId: String?,
+        projectRoot: String? = nil,
+        paneId: String? = nil
+    ) {
+        tokenEventStore.recordWasmKill(
+            sessionId: sessionId,
+            reason: reason,
+            durationUs: durationUs,
+            budgetDeltaUs: budgetDeltaUs,
+            toolId: toolId,
+            projectRoot: projectRoot,
+            paneId: paneId
+        )
+    }
+
     public func tokenStatsForProject(_ projectRoot: String, since: Date? = nil) -> PaneTokenStats {
         tokenEventStore.tokenStatsForProject(projectRoot, since: since)
     }

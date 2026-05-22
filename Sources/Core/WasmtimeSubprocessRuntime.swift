@@ -115,12 +115,18 @@ public actor WasmtimeSubprocessRuntime {
     /// Throws `.wasmtime_missing` if `which wasmtime` returns empty,
     /// or `.subprocessFailed` if the spawn fails or the guest exits
     /// non-zero.
-    public func run(module: Data, input: Data) async throws -> Data {
+    public func run(
+        module: Data,
+        input: Data,
+        sessionId: String? = nil,
+        toolId: String? = nil
+    ) async throws -> Data {
         let wasmtimeURL = try wasmtimeExecutableURL()
         let tmpURL = try writeTempModule(module)
         defer { try? FileManager.default.removeItem(at: tmpURL) }
 
         let (fuel, epochMs) = readBudget(from: manifest)
+        let startedAt = Date()
 
         let process = Process()
         process.executableURL = wasmtimeURL
@@ -157,11 +163,58 @@ public actor WasmtimeSubprocessRuntime {
 
         guard process.terminationStatus == 0 else {
             let stderr = String(data: stderrData, encoding: .utf8) ?? ""
+            // T.3a-4 — classify the kill + record a chained audit row.
+            // Best-effort; the audit-chain write must not throw out of
+            // the kill path. Skipped when no sessionId was supplied
+            // (today's two t3a-2 tests + future T.3b senkani_exec
+            // wiring choose).
+            if let sessionId {
+                let watchdogFired = watchdog.watchdogFired
+                let reason = Self.classifyKill(
+                    stderr: stderr,
+                    watchdogFired: watchdogFired
+                )
+                let durationUs = Int64(Date().timeIntervalSince(startedAt) * 1_000_000)
+                let budgetDeltaUs = durationUs - Int64(epochMs) * 1_000
+                SessionDatabase.shared.recordWasmKill(
+                    sessionId: sessionId,
+                    reason: reason,
+                    durationUs: durationUs,
+                    budgetDeltaUs: budgetDeltaUs,
+                    toolId: toolId
+                )
+            }
             throw WasmtimeRunnerError.subprocessFailed(
                 exitCode: process.terminationStatus, stderr: stderr)
         }
 
         return stdoutData
+    }
+
+    /// Classify a wasmtime non-zero exit into a `WasmKillReason` for the
+    /// `wasm_kill` audit-chain row. Heuristic — reads stderr for
+    /// known error strings emitted by wasmtime 45.0.0; the host
+    /// watchdog's SIGTERM/SIGKILL force `.epoch` because the watchdog
+    /// only arms past the wall-time deadline.
+    static func classifyKill(stderr: String, watchdogFired: Bool) -> WasmKillReason {
+        if watchdogFired {
+            return .epoch
+        }
+        let lower = stderr.lowercased()
+        if lower.contains("fuel") {
+            return .fuel
+        }
+        if lower.contains("interrupt") || lower.contains("timeout") || lower.contains("epoch") {
+            return .epoch
+        }
+        if lower.contains("permission denied")
+            || lower.contains("unknown import")
+            || lower.contains("not allowed")
+            || lower.contains("wasi") && lower.contains("denied")
+        {
+            return .escape
+        }
+        return .crash
     }
 
     /// Read optional `fuel` / `epoch_ms` fields off the manifest if
@@ -231,6 +284,7 @@ public actor WasmtimeSubprocessRuntime {
         let queue = DispatchQueue(label: "com.senkani.wasmtime.watchdog", qos: .userInitiated)
         let killTimer = DispatchSource.makeTimerSource(queue: queue)
         let escalateTimer = DispatchSource.makeTimerSource(queue: queue)
+        let firedBox = WatchdogFiredBox()
 
         // Both timers are created suspended. They MUST be resumed at
         // least once before deinit/cancel, or libdispatch crashes
@@ -253,6 +307,7 @@ public actor WasmtimeSubprocessRuntime {
         )
         killTimer.setEventHandler {
             guard process.isRunning else { return }
+            firedBox.fired = true
             process.terminate()
             escalateTimer.schedule(
                 deadline: .now() + .milliseconds(50),
@@ -261,7 +316,7 @@ public actor WasmtimeSubprocessRuntime {
         }
         killTimer.resume()
 
-        return WatchdogHandle(killTimer: killTimer, escalateTimer: escalateTimer)
+        return WatchdogHandle(killTimer: killTimer, escalateTimer: escalateTimer, firedBox: firedBox)
     }
 
     /// Memoized executable lookup. Called from `run`; throws
@@ -292,9 +347,23 @@ public actor WasmtimeSubprocessRuntime {
 struct WatchdogHandle {
     let killTimer: any DispatchSourceTimer
     let escalateTimer: any DispatchSourceTimer
+    let firedBox: WatchdogFiredBox
+
+    var watchdogFired: Bool { firedBox.fired }
 
     func cancel() {
         killTimer.cancel()
         escalateTimer.cancel()
     }
+}
+
+/// Mutable flag set by the kill timer's event handler when it fires
+/// SIGTERM. `run()` reads it after `waitUntilExit()` to classify a
+/// host-driven kill as `.epoch` regardless of what wasmtime printed to
+/// stderr (the watchdog is the backstop that only arms past the
+/// wall-time deadline). Class wrapper because `WatchdogHandle` is a
+/// value type and the kill-timer handler needs reference semantics to
+/// mutate the flag.
+final class WatchdogFiredBox: @unchecked Sendable {
+    var fired: Bool = false
 }

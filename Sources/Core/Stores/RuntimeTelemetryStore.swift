@@ -326,6 +326,195 @@ public final class RuntimeTelemetryStore: @unchecked Sendable {
         }
     }
 
+    // MARK: - Validation-source queries (V.18a-5)
+
+    /// Summary of the OTLP spans correlated to one `validation_run_id`.
+    /// Returned by `traceSummary(validationRunId:)` to populate the
+    /// validation-failure attach on the next agent-visible row + the
+    /// AgentTimelinePane (V.18a-7) runtime-error badge.
+    ///
+    /// `topSlowestSpans` is at most 3 entries, ordered by descending
+    /// `duration_ns`. `errorCount` counts spans with `status_code > 1`
+    /// (OTLP semantic: 0=Unset, 1=Ok, 2=Error). `totalDurationNs` is
+    /// `max(end) - min(start)` over the run's spans. `traceId` is the
+    /// first matched span's trace_id — the link target for "trace
+    /// detail" surfaces.
+    public struct ValidationTraceSummary: Sendable, Equatable {
+        public struct Span: Sendable, Equatable {
+            public let name: String
+            public let durationNs: Int64
+            public let statusCode: Int?
+            public init(name: String, durationNs: Int64, statusCode: Int?) {
+                self.name = name
+                self.durationNs = durationNs
+                self.statusCode = statusCode
+            }
+        }
+        public let validationRunId: String
+        public let traceId: String?
+        public let topSlowestSpans: [Span]
+        public let errorCount: Int
+        public let totalDurationNs: Int64
+        public let spanCount: Int
+        public init(validationRunId: String, traceId: String?, topSlowestSpans: [Span], errorCount: Int, totalDurationNs: Int64, spanCount: Int) {
+            self.validationRunId = validationRunId
+            self.traceId = traceId
+            self.topSlowestSpans = topSlowestSpans
+            self.errorCount = errorCount
+            self.totalDurationNs = totalDurationNs
+            self.spanCount = spanCount
+        }
+    }
+
+    /// Compute a trace summary across all spans tagged with
+    /// `validationRunId`. Returns nil when no spans match (the agent-
+    /// visible row attaches nothing in that case — pass-results behavior
+    /// per V.18 acceptance bullet 5). Walks `idx_runtime_telemetry_span
+    /// _validation_run` for the lookup.
+    public func traceSummary(validationRunId: String) -> ValidationTraceSummary? {
+        return parent.queue.sync {
+            guard let db = parent.db else { return nil }
+            let sql = """
+                SELECT name, start_unix_ns, end_unix_ns, status_code, trace_id
+                  FROM runtime_telemetry_span
+                 WHERE validation_run_id = ?
+                 ORDER BY (end_unix_ns - start_unix_ns) DESC;
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (validationRunId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+
+            var top: [ValidationTraceSummary.Span] = []
+            var errorCount = 0
+            var minStart: Int64 = .max
+            var maxEnd: Int64 = .min
+            var traceId: String?
+            var spanCount = 0
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                spanCount += 1
+                let name = String(cString: sqlite3_column_text(stmt, 0))
+                let start = sqlite3_column_int64(stmt, 1)
+                let end = sqlite3_column_int64(stmt, 2)
+                let status: Int? = sqlite3_column_type(stmt, 3) == SQLITE_NULL
+                    ? nil
+                    : Int(sqlite3_column_int64(stmt, 3))
+                if traceId == nil, sqlite3_column_type(stmt, 4) != SQLITE_NULL {
+                    traceId = String(cString: sqlite3_column_text(stmt, 4))
+                }
+                if let code = status, code > 1 { errorCount += 1 }
+                if start < minStart { minStart = start }
+                if end > maxEnd { maxEnd = end }
+                if top.count < 3 {
+                    top.append(ValidationTraceSummary.Span(name: name, durationNs: end - start, statusCode: status))
+                }
+            }
+            guard spanCount > 0 else { return nil }
+            let total = (maxEnd > minStart) ? (maxEnd - minStart) : 0
+            return ValidationTraceSummary(
+                validationRunId: validationRunId,
+                traceId: traceId,
+                topSlowestSpans: top,
+                errorCount: errorCount,
+                totalDurationNs: total,
+                spanCount: spanCount
+            )
+        }
+    }
+
+    /// One row of the cross-cutting JOIN between `agent_trace_event`
+    /// and `runtime_telemetry_span` on `(session_id, tool_call_id)`.
+    /// The V.18 scope-groom Q4 decision (2026-05-07) keyed every
+    /// observability story on this JOIN — V.18a-5 makes it land. Used
+    /// by the AgentTimelinePane (V.18a-7) to render a runtime-error
+    /// badge on rows whose paired runtime spans surfaced ERROR /
+    /// duration > p99.
+    public struct CrossCuttingTraceRow: Sendable, Equatable {
+        public let idempotencyKey: String
+        public let sessionId: String
+        public let toolCallId: String
+        public let spanId: String
+        public let spanName: String
+        public let traceId: String
+        public let durationNs: Int64
+        public let statusCode: Int?
+        public init(idempotencyKey: String, sessionId: String, toolCallId: String, spanId: String, spanName: String, traceId: String, durationNs: Int64, statusCode: Int?) {
+            self.idempotencyKey = idempotencyKey
+            self.sessionId = sessionId
+            self.toolCallId = toolCallId
+            self.spanId = spanId
+            self.spanName = spanName
+            self.traceId = traceId
+            self.durationNs = durationNs
+            self.statusCode = statusCode
+        }
+    }
+
+    /// Cross-cutting JOIN — returns one row per matched
+    /// `(agent_trace_event, runtime_telemetry_span)` pair on
+    /// `session_id + tool_call_id`. When `sessionId` is non-nil the
+    /// query scopes to that session; nil returns the full JOIN (capped
+    /// by `limit`). Walks `idx_agent_trace_session_tool` +
+    /// `idx_runtime_telemetry_span_session_tool` so it stays cheap on
+    /// long sessions.
+    public func crossCuttingTraceJoin(sessionId: String? = nil, toolCallId: String? = nil, limit: Int = 1000) -> [CrossCuttingTraceRow] {
+        return parent.queue.sync {
+            guard let db = parent.db, limit > 0 else { return [] }
+            var sql = """
+                SELECT a.idempotency_key, a.session_id, a.tool_call_id,
+                       s.span_id, s.name, s.trace_id,
+                       (s.end_unix_ns - s.start_unix_ns) AS dur, s.status_code
+                  FROM agent_trace_event a
+                  JOIN runtime_telemetry_span s
+                    ON a.session_id = s.session_id
+                   AND a.tool_call_id = s.tool_call_id
+                 WHERE a.session_id IS NOT NULL
+                   AND a.tool_call_id IS NOT NULL
+                """
+            if sessionId != nil { sql += " AND a.session_id = ?" }
+            if toolCallId != nil { sql += " AND a.tool_call_id = ?" }
+            sql += " ORDER BY a.started_at DESC LIMIT ?;"
+
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            var idx: Int32 = 1
+            if let sessionId {
+                sqlite3_bind_text(stmt, idx, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                idx += 1
+            }
+            if let toolCallId {
+                sqlite3_bind_text(stmt, idx, (toolCallId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                idx += 1
+            }
+            sqlite3_bind_int64(stmt, idx, Int64(limit))
+            var out: [CrossCuttingTraceRow] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let key = String(cString: sqlite3_column_text(stmt, 0))
+                let sid = String(cString: sqlite3_column_text(stmt, 1))
+                let tcid = String(cString: sqlite3_column_text(stmt, 2))
+                let spanId = String(cString: sqlite3_column_text(stmt, 3))
+                let name = String(cString: sqlite3_column_text(stmt, 4))
+                let traceId = String(cString: sqlite3_column_text(stmt, 5))
+                let dur = sqlite3_column_int64(stmt, 6)
+                let status: Int? = sqlite3_column_type(stmt, 7) == SQLITE_NULL
+                    ? nil
+                    : Int(sqlite3_column_int64(stmt, 7))
+                out.append(CrossCuttingTraceRow(
+                    idempotencyKey: key,
+                    sessionId: sid,
+                    toolCallId: tcid,
+                    spanId: spanId,
+                    spanName: name,
+                    traceId: traceId,
+                    durationNs: dur,
+                    statusCode: status
+                ))
+            }
+            return out
+        }
+    }
+
     /// Drain the dataset's total `bytes_used` to `targetBytes` by evicting
     /// oldest rows from both tables proportionally. Returns the per-table
     /// delete counts. Idempotent: `bytes_used ≤ targetBytes` on entry

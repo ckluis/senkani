@@ -41,6 +41,12 @@ final class ValidationStore: @unchecked Sendable {
     private let chain = ChainState(table: "validation_results")
 
     /// Store a validation attempt from auto-validate.
+    ///
+    /// V.18a-5 — `validationRunId` is recorded as a non-canonical TEXT
+    /// column on the row. Deliberately excluded from `canonicalColumns`
+    /// so the v22 chain shape verifier walk continues to match. The
+    /// column powers the JOIN against `runtime_telemetry_span` for the
+    /// trace-summary query.
     func insertValidationResult(
         sessionId: String,
         filePath: String,
@@ -51,7 +57,8 @@ final class ValidationStore: @unchecked Sendable {
         advisory: String,
         durationMs: Int,
         outcome: String? = nil,
-        reason: String? = nil
+        reason: String? = nil,
+        validationRunId: String? = nil
     ) {
         let now = Date().timeIntervalSince1970
         let resolvedOutcome = outcome ?? (exitCode == 0 ? "clean" : "advisory")
@@ -97,8 +104,8 @@ final class ValidationStore: @unchecked Sendable {
             let sql = """
                 INSERT INTO validation_results
                 (session_id, file_path, validator_name, category, exit_code, raw_output, advisory, duration_ms, created_at, outcome, reason,
-                 prev_hash, entry_hash, chain_anchor_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                 prev_hash, entry_hash, chain_anchor_id, validation_run_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
@@ -123,6 +130,7 @@ final class ValidationStore: @unchecked Sendable {
             Self.bindOptionalText(stmt, 12, prevHash)
             sqlite3_bind_text(stmt, 13, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 14, anchorId)
+            Self.bindOptionalText(stmt, 15, validationRunId)
             if sqlite3_step(stmt) == SQLITE_DONE {
                 self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
             } else {
@@ -131,6 +139,40 @@ final class ValidationStore: @unchecked Sendable {
                     "operation": .string("insert"),
                 ])
             }
+        }
+    }
+
+    /// V.18a-5 — read a row's `validation_run_id` by row id. nil if the
+    /// row is missing or the column is NULL. Tests use this to verify
+    /// the writer round-trips the id; production callers go through the
+    /// JOIN against `runtime_telemetry_span` instead.
+    func validationRunId(forResultId id: Int64) -> String? {
+        return parent.queue.sync { () -> String? in
+            guard let db = parent.db else { return nil }
+            let sql = "SELECT validation_run_id FROM validation_results WHERE id = ?;"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_int64(stmt, 1, id)
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+            guard sqlite3_column_type(stmt, 0) != SQLITE_NULL else { return nil }
+            return String(cString: sqlite3_column_text(stmt, 0))
+        }
+    }
+
+    /// V.18a-5 — fetch the most recent `validation_results.id` for a
+    /// session. Tests use this to find the row a writer just landed
+    /// without depending on flush ordering.
+    func mostRecentValidationResultId(sessionId: String) -> Int64? {
+        return parent.queue.sync { () -> Int64? in
+            guard let db = parent.db else { return nil }
+            let sql = "SELECT id FROM validation_results WHERE session_id = ? ORDER BY created_at DESC, id DESC LIMIT 1;"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+            return sqlite3_column_int64(stmt, 0)
         }
     }
 
@@ -251,7 +293,8 @@ final class ValidationStore: @unchecked Sendable {
         assertionsPassed: Int,
         assertionsFailed: Int,
         advisory: String,
-        screenshotPath: String?
+        screenshotPath: String?,
+        validationRunId: String? = nil
     ) {
         let now = Date().timeIntervalSince1970
         // Encode `axes` as a JSON array string — column shape from v22.
@@ -299,8 +342,9 @@ final class ValidationStore: @unchecked Sendable {
                 INSERT INTO validation_results
                 (session_id, file_path, validator_name, category, exit_code, raw_output, advisory, duration_ms, created_at, outcome, reason,
                  prev_hash, entry_hash, chain_anchor_id,
-                 axes, target_url, plan_steps, result_status, screenshot_path)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                 axes, target_url, plan_steps, result_status, screenshot_path,
+                 validation_run_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -341,6 +385,14 @@ final class ValidationStore: @unchecked Sendable {
                 sqlite3_bind_text(stmt, 19, screenshotPath, -1, transient)
             } else {
                 sqlite3_bind_null(stmt, 19)
+            }
+            // V.18a-5 — validation_run_id is the JOIN key against
+            // runtime_telemetry_span (validation_run_id index). Not in
+            // canonicalColumns: the chain shape stays v22.
+            if let validationRunId {
+                sqlite3_bind_text(stmt, 20, validationRunId, -1, transient)
+            } else {
+                sqlite3_bind_null(stmt, 20)
             }
             if sqlite3_step(stmt) == SQLITE_DONE {
                 self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)

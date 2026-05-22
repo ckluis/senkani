@@ -1675,6 +1675,71 @@ public enum MigrationRegistry {
             try exec("ALTER TABLE runtime_telemetry_dataset ADD COLUMN span_bytes INTEGER NOT NULL DEFAULT 0;")
             try exec("ALTER TABLE runtime_telemetry_dataset ADD COLUMN log_bytes INTEGER NOT NULL DEFAULT 0;")
         },
+        Migration(version: 32, description: "validation-source JOIN columns for V.18a-5 (agent_trace_event session_id+tool_call_id, validation_results validation_run_id)") { db in
+            // V.18a-5 — wires the validation-source half of V.18's runtime
+            // telemetry pipeline. The scope-groom Q4 decision (2026-05-07)
+            // locked in the cross-cutting JOIN
+            // `agent_trace_event ↔ runtime_telemetry_span ON (session_id,
+            // tool_call_id)` as the load-bearing observability story for
+            // V.18 — but the existing `agent_trace_event` schema (v8/v10/
+            // v14/v16) never carried those columns. Adding them now closes
+            // the gap so the JOIN test in V.18a-5's acceptance can land
+            // against a real schema.
+            //
+            // Chain note: `agent_trace_event` is NOT a chain participant
+            // (AgentTraceEventStore docstring: "this store does NOT
+            // participate in the chain"). New columns are free — no
+            // anchor work needed.
+            //
+            // `validation_results` DOES participate in the chain via the
+            // v22 (18-column) canonical shape — but `validation_run_id`
+            // is a derived link/index field, not a primary fact. It is
+            // deliberately omitted from `ValidationStore.canonicalColumns`
+            // so the chain hash for new rows still matches the v22 shape
+            // verifier walk. The column is added here so non-canonical
+            // tagging (and the new index for JOINs by run id) works.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v32", detail: msg)
+            }
+            // Self-contained CREATE for agent_trace_event matches the
+            // post-v8 / v10 / v14 / v16 baseline so v32 can run against
+            // a DB dropped in at any later state (e.g. the
+            // v21-baseline migration ledger test that seeds
+            // schema_migrations directly without running v1-v21).
+            try exec("""
+                CREATE TABLE IF NOT EXISTS agent_trace_event (
+                    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                    idempotency_key       TEXT NOT NULL UNIQUE,
+                    pane                  TEXT,
+                    project               TEXT,
+                    model                 TEXT,
+                    tier                  TEXT,
+                    feature               TEXT,
+                    result                TEXT NOT NULL,
+                    started_at            REAL NOT NULL,
+                    completed_at          REAL NOT NULL,
+                    latency_ms            INTEGER NOT NULL DEFAULT 0,
+                    tokens_in             INTEGER NOT NULL DEFAULT 0,
+                    tokens_out            INTEGER NOT NULL DEFAULT 0,
+                    cost_cents            INTEGER NOT NULL DEFAULT 0,
+                    redaction_count       INTEGER NOT NULL DEFAULT 0,
+                    validation_status     TEXT,
+                    confirmation_required INTEGER NOT NULL DEFAULT 0,
+                    egress_decisions      INTEGER NOT NULL DEFAULT 0
+                );
+            """)
+            try exec("ALTER TABLE agent_trace_event ADD COLUMN session_id TEXT;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE agent_trace_event ADD COLUMN tool_call_id TEXT;", allowDuplicateColumn: true)
+            try exec("CREATE INDEX IF NOT EXISTS idx_agent_trace_session_tool ON agent_trace_event(session_id, tool_call_id);")
+            try exec("ALTER TABLE validation_results ADD COLUMN validation_run_id TEXT;", allowDuplicateColumn: true)
+            try exec("CREATE INDEX IF NOT EXISTS idx_validation_results_run ON validation_results(validation_run_id);")
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)

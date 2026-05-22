@@ -17,6 +17,9 @@ extension SessionDatabase {
     }
 
     /// Store a validation result from auto-validate.
+    ///
+    /// V.18a-5 — optional `validationRunId` tags the row for the
+    /// cross-cutting JOIN against `runtime_telemetry_span`.
     public func insertValidationResult(
         sessionId: String,
         filePath: String,
@@ -27,7 +30,8 @@ extension SessionDatabase {
         advisory: String,
         durationMs: Int,
         outcome: String? = nil,
-        reason: String? = nil
+        reason: String? = nil,
+        validationRunId: String? = nil
     ) {
         validationStore.insertValidationResult(
             sessionId: sessionId,
@@ -39,8 +43,19 @@ extension SessionDatabase {
             advisory: advisory,
             durationMs: durationMs,
             outcome: outcome,
-            reason: reason
+            reason: reason,
+            validationRunId: validationRunId
         )
+    }
+
+    /// V.18a-5 — read the `validation_run_id` stored on a row.
+    public func validationRunId(forResultId id: Int64) -> String? {
+        validationStore.validationRunId(forResultId: id)
+    }
+
+    /// V.18a-5 — find the most recent validation_results.id for a session.
+    public func mostRecentValidationResultId(sessionId: String) -> Int64? {
+        validationStore.mostRecentValidationResultId(sessionId: sessionId)
     }
 
     /// U.2a-2b — minimal row shape returned by
@@ -58,6 +73,9 @@ extension SessionDatabase {
     }
 
     /// U.2a-2b — insert a structured browser-validation row.
+    ///
+    /// V.18a-5 — optional `validationRunId` tags the row for the
+    /// cross-cutting JOIN against `runtime_telemetry_span`.
     public func insertBrowserValidationResult(
         sessionId: String,
         targetURL: String,
@@ -67,7 +85,8 @@ extension SessionDatabase {
         assertionsPassed: Int,
         assertionsFailed: Int,
         advisory: String,
-        screenshotPath: String?
+        screenshotPath: String?,
+        validationRunId: String? = nil
     ) {
         validationStore.insertBrowserValidationResult(
             sessionId: sessionId,
@@ -78,7 +97,8 @@ extension SessionDatabase {
             assertionsPassed: assertionsPassed,
             assertionsFailed: assertionsFailed,
             advisory: advisory,
-            screenshotPath: screenshotPath
+            screenshotPath: screenshotPath,
+            validationRunId: validationRunId
         )
     }
 

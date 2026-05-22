@@ -47,6 +47,14 @@ public enum BrowserValidationDispatcher {
         /// `process-gap-validate-browser-runner-egress-not-wired-2026-05-19`.
         public let egressProxyURL: String?
 
+        /// V.18a-5 — tool-call id paired with this dispatch. Caller-
+        /// supplied so the cross-cutting JOIN against
+        /// `agent_trace_event` is keyed correctly. Defaults to a
+        /// dispatcher-synthesized UUID when callers don't have one
+        /// (CLI invocations outside an MCP tool-call context); the
+        /// MCP tool wires its envelope's call_id.
+        public let toolCallId: String
+
         public init(
             targetURL: String,
             axes: [ValidationAxes],
@@ -56,7 +64,8 @@ public enum BrowserValidationDispatcher {
             sessionId: String,
             projectRoot: String?,
             dispatch: BrowserDispatchMode = .subprocess,
-            egressProxyURL: String? = nil
+            egressProxyURL: String? = nil,
+            toolCallId: String = UUID().uuidString
         ) {
             self.targetURL = targetURL
             self.axes = axes
@@ -67,6 +76,7 @@ public enum BrowserValidationDispatcher {
             self.projectRoot = projectRoot
             self.dispatch = dispatch
             self.egressProxyURL = egressProxyURL
+            self.toolCallId = toolCallId
         }
     }
 
@@ -119,6 +129,50 @@ public enum BrowserValidationDispatcher {
     /// an array.
     public typealias TokenEventSink = @Sendable (TokenEventInput) -> Void
 
+    /// V.18a-5 — sink for the OTLP span emitted on every dispatch.
+    /// Production wires `SessionDatabase.shared.runtimeTelemetryStore.
+    /// insertSpan(datasetId: <active>, span:)`; tests capture into an
+    /// array. Default `noopSpanSink` drops the span — keeps existing
+    /// callers source-compatible while the receiver/dataset wiring
+    /// stabilises across V.18b-1 / V.18b-2.
+    public typealias SpanSink = @Sendable (DispatchSpan) -> Void
+
+    /// V.18a-5 — minimal span shape emitted on dispatch. One per
+    /// dispatch (not per ValidationStep) — per-step granularity is a
+    /// follow-up (Majors audit: per-dispatch is sufficient for the
+    /// V.18a-7 Agent Timeline badge story; per-step adds noise on a
+    /// 4-axis plan). Attributes carry only metadata (axes list,
+    /// result status, assertion counts) — Schneier guard, no payload.
+    public struct DispatchSpan: Sendable, Equatable {
+        public let validationRunId: String
+        public let sessionId: String
+        public let toolCallId: String
+        public let traceId: String
+        public let spanId: String
+        public let name: String
+        public let startUnixNs: Int64
+        public let endUnixNs: Int64
+        public let statusCode: Int  // OTLP: 0=Unset, 1=Ok, 2=Error
+        public let attributesJson: String
+        public init(validationRunId: String, sessionId: String, toolCallId: String, traceId: String, spanId: String, name: String, startUnixNs: Int64, endUnixNs: Int64, statusCode: Int, attributesJson: String) {
+            self.validationRunId = validationRunId
+            self.sessionId = sessionId
+            self.toolCallId = toolCallId
+            self.traceId = traceId
+            self.spanId = spanId
+            self.name = name
+            self.startUnixNs = startUnixNs
+            self.endUnixNs = endUnixNs
+            self.statusCode = statusCode
+            self.attributesJson = attributesJson
+        }
+    }
+
+    /// Drop-the-span default. Existing callers (MCP tool + CLI) keep
+    /// working until V.18b ramps the dataset selection wiring; tests
+    /// override with a capturing closure.
+    public static let noopSpanSink: SpanSink = { _ in }
+
     /// One validation_results row's worth of input data.
     public struct BrowserValidationRow: Sendable, Equatable {
         public let sessionId: String
@@ -130,6 +184,14 @@ public enum BrowserValidationDispatcher {
         public let assertionsFailed: Int
         public let advisory: String
         public let screenshotPath: String?
+        /// V.18a-5 — populated on every dispatch. Threads through to the
+        /// `validation_results.validation_run_id` column so the JOIN
+        /// against `runtime_telemetry_span` returns the run's spans.
+        public let validationRunId: String
+        /// V.18a-5 — `tool_call_id` paired with this dispatch. Sourced
+        /// from caller (MCP tool / CLI) so the cross-cutting JOIN
+        /// against `agent_trace_event` is keyed correctly.
+        public let toolCallId: String
     }
 
     /// One token_events row's worth of input data.
@@ -152,12 +214,18 @@ public enum BrowserValidationDispatcher {
     /// Single entry point. Throws only for caller-error cases
     /// (invalid URL, empty axes); runner failure is caught and
     /// translated into a `Response` with `result_status:"fail"`.
+    ///
+    /// V.18a-5 — `spanSink` defaults to `noopSpanSink`, preserving
+    /// existing MCP + CLI call shapes. Tests pass a capturing closure
+    /// to assert the emitted span carries the dispatch's
+    /// `validation_run_id` + `(session_id, tool_call_id)` tuple.
     @discardableResult
     public static func dispatch(
         request: Request,
         runner: Runner,
         resultSink: ResultSink,
-        tokenEventSink: TokenEventSink
+        tokenEventSink: TokenEventSink,
+        spanSink: SpanSink = noopSpanSink
     ) throws -> Response {
         guard !request.axes.isEmpty else {
             throw DispatchError.noAxesRequested
@@ -165,6 +233,15 @@ public enum BrowserValidationDispatcher {
         guard URL(string: request.targetURL) != nil else {
             throw DispatchError.invalidTargetURL(request.targetURL)
         }
+
+        // V.18a-5 — `validation_run_id` is generated up-front so the
+        // OTLP span emit + the resultSink row + the audit token_events
+        // row all reference the same id. UUID per dispatch — Schneier:
+        // dispatcher-synthesized, never caller-supplied.
+        let validationRunId = UUID().uuidString
+        let traceId = Self.randomTraceId()
+        let spanId = Self.randomSpanId()
+        let startNs = Self.nowUnixNs()
 
         let plan = buildPlan(diff: request.diff, axes: request.axes, targetURL: request.targetURL)
 
@@ -207,6 +284,27 @@ public enum BrowserValidationDispatcher {
             runnerAdvisory: result.advisory
         )
 
+        let endNs = Self.nowUnixNs()
+        let spanStatusCode: Int = result.resultStatus == "pass" ? 1 : 2
+        let attributesJson = Self.encodeSpanAttributes(
+            axesRun: result.axesRun,
+            resultStatus: result.resultStatus,
+            assertionsPassed: result.assertionsPassed,
+            assertionsFailed: result.assertionsFailed
+        )
+        spanSink(DispatchSpan(
+            validationRunId: validationRunId,
+            sessionId: request.sessionId,
+            toolCallId: request.toolCallId,
+            traceId: traceId,
+            spanId: spanId,
+            name: "validation.dispatch",
+            startUnixNs: startNs,
+            endUnixNs: endNs,
+            statusCode: spanStatusCode,
+            attributesJson: attributesJson
+        ))
+
         let row = BrowserValidationRow(
             sessionId: request.sessionId,
             targetURL: request.targetURL,
@@ -216,7 +314,9 @@ public enum BrowserValidationDispatcher {
             assertionsPassed: result.assertionsPassed,
             assertionsFailed: result.assertionsFailed,
             advisory: advisory,
-            screenshotPath: result.screenshotPath
+            screenshotPath: result.screenshotPath,
+            validationRunId: validationRunId,
+            toolCallId: request.toolCallId
         )
         resultSink(row)
 
@@ -411,6 +511,66 @@ public enum BrowserValidationDispatcher {
         let axesStr = axes.map(\.rawValue).sorted().joined(separator: ",")
         let failing = failingAxes.sorted().joined(separator: ",")
         return "validate_browser_override url=\(targetURL) axes=\(axesStr) failing_axes=\(failing) runner=\(dispatchMode.auditChainRunnerValue)"
+    }
+
+    /// V.18a-5 — current Unix-epoch nanoseconds. Bridges `Date`'s
+    /// double-precision seconds onto the integer Ns precision the
+    /// runtime_telemetry_span schema stores. Sufficient for sub-ms
+    /// span ordering on the dispatch surface.
+    private static func nowUnixNs() -> Int64 {
+        return Int64(Date().timeIntervalSince1970 * 1_000_000_000)
+    }
+
+    /// V.18a-5 — 32-char hex trace id (16-byte OTLP). Random — no
+    /// caller-controllable input.
+    private static func randomTraceId() -> String {
+        var out = ""
+        out.reserveCapacity(32)
+        for _ in 0..<16 {
+            out += String(format: "%02x", UInt8.random(in: 0...255))
+        }
+        return out
+    }
+
+    /// V.18a-5 — 16-char hex span id (8-byte OTLP). Random.
+    private static func randomSpanId() -> String {
+        var out = ""
+        out.reserveCapacity(16)
+        for _ in 0..<8 {
+            out += String(format: "%02x", UInt8.random(in: 0...255))
+        }
+        return out
+    }
+
+    /// V.18a-5 — byte-stable attributes JSON for the dispatch span.
+    /// Schneier guard: NO assertion payloads, only metadata
+    /// (axes list, result status, counts). `[.sortedKeys]` so two
+    /// dispatches with the same axes set encode byte-identically.
+    private static func encodeSpanAttributes(
+        axesRun: [String],
+        resultStatus: String,
+        assertionsPassed: Int,
+        assertionsFailed: Int
+    ) -> String {
+        struct Attrs: Encodable {
+            let axes_run: [String]
+            let result_status: String
+            let assertions_passed: Int
+            let assertions_failed: Int
+        }
+        let attrs = Attrs(
+            axes_run: axesRun.sorted(),
+            result_status: resultStatus,
+            assertions_passed: assertionsPassed,
+            assertions_failed: assertionsFailed
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(attrs),
+              let str = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return str
     }
 
     private static func failingAxes(advisory: String?, axesRun: [String]) -> [String] {

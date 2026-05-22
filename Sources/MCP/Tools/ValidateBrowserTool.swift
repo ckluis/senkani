@@ -63,7 +63,8 @@ enum ValidateBrowserTool {
                 assertionsPassed: row.assertionsPassed,
                 assertionsFailed: row.assertionsFailed,
                 advisory: row.advisory,
-                screenshotPath: row.screenshotPath
+                screenshotPath: row.screenshotPath,
+                validationRunId: row.validationRunId
             )
         }
         let tokenEventSink: BrowserValidationDispatcher.TokenEventSink = { ev in

@@ -41,8 +41,8 @@ final class AgentTraceEventStore: @unchecked Sendable {
                      feature, result, started_at, completed_at, latency_ms,
                      tokens_in, tokens_out, cost_cents, redaction_count,
                      validation_status, confirmation_required, egress_decisions,
-                     plan_id, cost_ledger_version)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     plan_id, cost_ledger_version, session_id, tool_call_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(idempotency_key) DO NOTHING;
             """
             var stmt: OpaquePointer?
@@ -72,6 +72,12 @@ final class AgentTraceEventStore: @unchecked Sendable {
             // to thread it through every call site. Replays and
             // back-dated writes pass an explicit value.
             sqlite3_bind_int64(stmt, 20, Int64(row.costLedgerVersion ?? CostLedger.currentVersion))
+            // V.18a-5: session_id + tool_call_id power the cross-cutting
+            // JOIN against runtime_telemetry_span. Both optional —
+            // pre-v32 rows + non-routed paths legitimately leave them
+            // NULL.
+            Self.bindOptionalText(stmt, 21, row.sessionId)
+            Self.bindOptionalText(stmt, 22, row.toolCallId)
 
             guard sqlite3_step(stmt) == SQLITE_DONE else { return false }
             return sqlite3_changes(db) > 0
@@ -102,7 +108,7 @@ final class AgentTraceEventStore: @unchecked Sendable {
                        feature, result, started_at, completed_at, latency_ms,
                        tokens_in, tokens_out, cost_cents, redaction_count,
                        validation_status, confirmation_required, egress_decisions,
-                       plan_id, cost_ledger_version
+                       plan_id, cost_ledger_version, session_id, tool_call_id
                 FROM agent_trace_event
                 WHERE idempotency_key = ?;
             """
@@ -143,7 +149,9 @@ final class AgentTraceEventStore: @unchecked Sendable {
                 confirmationRequired: sqlite3_column_int64(stmt, 16) != 0,
                 egressDecisions: Int(sqlite3_column_int64(stmt, 17)),
                 planId: text(18),
-                costLedgerVersion: int(19)
+                costLedgerVersion: int(19),
+                sessionId: text(20),
+                toolCallId: text(21)
             )
         }
     }
@@ -323,7 +331,7 @@ final class AgentTraceEventStore: @unchecked Sendable {
                        feature, result, started_at, completed_at, latency_ms,
                        tokens_in, tokens_out, cost_cents, redaction_count,
                        validation_status, confirmation_required, egress_decisions,
-                       plan_id, cost_ledger_version
+                       plan_id, cost_ledger_version, session_id, tool_call_id
                 FROM agent_trace_event
                 """
             var clauses: [String] = []
@@ -371,7 +379,9 @@ final class AgentTraceEventStore: @unchecked Sendable {
                     confirmationRequired: sqlite3_column_int64(stmt, 16) != 0,
                     egressDecisions: Int(sqlite3_column_int64(stmt, 17)),
                     planId: text(18),
-                    costLedgerVersion: intOpt(19)
+                    costLedgerVersion: intOpt(19),
+                    sessionId: text(20),
+                    toolCallId: text(21)
                 ))
             }
             return out
@@ -616,6 +626,14 @@ public struct AgentTraceEvent: Sendable, Equatable {
     /// an explicit value so historical rates aren't silently rebased
     /// when the live ledger advances.
     public let costLedgerVersion: Int?
+    /// V.18a-5 — session id paired with this trace row. nil for
+    /// pre-v32 rows + non-routed paths. Cross-cutting JOIN against
+    /// `runtime_telemetry_span` is keyed on (session_id, tool_call_id).
+    public let sessionId: String?
+    /// V.18a-5 — tool-call id paired with this trace row. nil for
+    /// pre-v32 rows + non-routed paths. Cross-cutting JOIN against
+    /// `runtime_telemetry_span` is keyed on (session_id, tool_call_id).
+    public let toolCallId: String?
 
     public init(
         idempotencyKey: String,
@@ -637,7 +655,9 @@ public struct AgentTraceEvent: Sendable, Equatable {
         confirmationRequired: Bool = false,
         egressDecisions: Int = 0,
         planId: String? = nil,
-        costLedgerVersion: Int? = nil
+        costLedgerVersion: Int? = nil,
+        sessionId: String? = nil,
+        toolCallId: String? = nil
     ) {
         self.idempotencyKey = idempotencyKey
         self.pane = pane
@@ -659,6 +679,8 @@ public struct AgentTraceEvent: Sendable, Equatable {
         self.egressDecisions = egressDecisions
         self.planId = planId
         self.costLedgerVersion = costLedgerVersion
+        self.sessionId = sessionId
+        self.toolCallId = toolCallId
     }
 }
 

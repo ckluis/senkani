@@ -24,6 +24,21 @@
 // path (PlaywrightSubprocessRunner) lets the spawn proceed.
 
 import { chromium, Browser, Page } from "playwright";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+// U.2b-1b-3 — pure-JS measurement bodies extracted to co-located .js
+// template files under `axes/`. Loaded at module init via
+// readFileSync so child U.2b-1b-4 (Swift BrowserPaneRunner lifecycle)
+// can load the SAME byte sequence via WKWebView.evaluateJavaScript.
+// The byte-identity invariant is the parity contract child #6 will
+// diff Playwright vs WKWebView outputs against.
+const AXIS_DIR = join(dirname(fileURLToPath(import.meta.url)), "axes");
+const PERF_JS = readFileSync(join(AXIS_DIR, "perf.js"), "utf8");
+const SECURITY_JS = readFileSync(join(AXIS_DIR, "security.js"), "utf8");
+const DESIGN_JS = readFileSync(join(AXIS_DIR, "design.js"), "utf8");
+const COMPLETENESS_JS = readFileSync(join(AXIS_DIR, "completeness.js"), "utf8");
 
 type Axis = "perf" | "security" | "design" | "completeness";
 
@@ -137,86 +152,20 @@ async function measurePerf(page: Page): Promise<PerfMeasurement> {
     // LCP via PerformanceObserver. INP requires a qualifying interaction
     // event; headless runs without simulated input typically have none —
     // we report null and the Swift PerfAxis treats that as a pass with
-    // advisory "INP not measured".
-    return await page.evaluate(() => {
-        return new Promise<PerfMeasurement>((resolve) => {
-            let lcpMs: number | null = null;
-            try {
-                const po = new PerformanceObserver((list) => {
-                    const entries = list.getEntries() as PerformanceEntry[];
-                    if (entries.length > 0) {
-                        const last = entries[entries.length - 1] as PerformanceEntry & { renderTime?: number };
-                        const ts = last.renderTime ?? last.startTime;
-                        if (typeof ts === "number") {
-                            lcpMs = Math.round(ts);
-                        }
-                    }
-                });
-                po.observe({ type: "largest-contentful-paint", buffered: true });
-            } catch (_e) {
-                // PerformanceObserver not available — leave lcpMs null.
-            }
-            // Give the browser ~500ms to flush LCP candidates.
-            setTimeout(() => {
-                resolve({ inp_ms: null, lcp_ms: lcpMs });
-            }, 500);
-        });
-    });
+    // advisory "INP not measured". Body loaded from axes/perf.js so the
+    // SAME bytes will be loadable by Swift WKWebView.evaluateJavaScript
+    // (U.2b-1b-4).
+    return await page.evaluate(PERF_JS) as PerfMeasurement;
 }
 
 async function measureSecurity(page: Page): Promise<SecurityMeasurement> {
     // DOM walk inside page.evaluate so all element access happens in the
     // browser context. Returns the SecurityMeasurement payload byte-
     // compatible with the Swift `SecurityMeasurement` Codable shape at
-    // Sources/Core/Validation/security.swift.
-    //
-    // Raw attribute reads on purpose: the Swift SecurityAxis evaluator
-    // matches the `javascript:` scheme on the raw `<a href>` (resolved
-    // .href would still return `javascript:...` but raw is the spec'd
-    // surface). For `<script src>`, `same_origin` is computed by
-    // resolving the raw src against `location.href` and comparing the
-    // origin, with a try/catch fallback to `false` on parse failure —
-    // mirrors measureCompleteness's URL handling.
-    return await page.evaluate(() => {
-        const csrfPatterns = ["csrf", "_token", "authenticity_token", "anti_xsrf"];
-
-        const forms: FormElement[] = Array.from(
-            document.querySelectorAll<HTMLFormElement>("form")
-        ).map(f => {
-            const inputs = Array.from(
-                f.querySelectorAll<HTMLInputElement>("input")
-            );
-            const csrfPresent = inputs.some(i => {
-                const name = (i.getAttribute("name") || "").toLowerCase();
-                return csrfPatterns.some(p => name.includes(p));
-            });
-            const rawMethod = f.getAttribute("method");
-            return {
-                action: f.getAttribute("action"),
-                method: (rawMethod ?? "get").toLowerCase(),
-                csrf_token_present: csrfPresent,
-            };
-        });
-
-        const anchors: AnchorElement[] = Array.from(
-            document.querySelectorAll<HTMLAnchorElement>("a[href]")
-        ).map(a => ({ href: a.getAttribute("href") || "" }));
-
-        const scripts: ScriptElement[] = Array.from(
-            document.querySelectorAll<HTMLScriptElement>("script[src]")
-        ).map(s => {
-            const src = s.getAttribute("src") || "";
-            let sameOrigin = false;
-            try {
-                sameOrigin = new URL(src, location.href).origin === location.origin;
-            } catch {
-                sameOrigin = false;
-            }
-            return { src, same_origin: sameOrigin };
-        });
-
-        return { forms, anchors, scripts };
-    });
+    // Sources/Core/Validation/security.swift. Body loaded from
+    // axes/security.js so the SAME bytes will be loadable by Swift
+    // WKWebView.evaluateJavaScript (U.2b-1b-4).
+    return await page.evaluate(SECURITY_JS) as SecurityMeasurement;
 }
 
 async function measureDesign(page: Page): Promise<DesignMeasurement> {
@@ -234,90 +183,15 @@ async function measureDesign(page: Page): Promise<DesignMeasurement> {
     // `DesignAxis` evaluator's soft-pass branch handles null hover/focus
     // measurements; tests covering the headless surface live alongside
     // `DesignAxisTests`.
-    const phase1 = await page.evaluate(() => {
-        const FOCUSABLE_SELECTOR = ":is(a[href], button, input, select, textarea, [tabindex]):not([tabindex='-1'])";
-
-        function parseColor(c: string): [number, number, number] | null {
-            const m = c.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/);
-            if (!m) return null;
-            return [parseFloat(m[1]), parseFloat(m[2]), parseFloat(m[3])];
-        }
-        function relativeLuminance(rgb: [number, number, number]): number {
-            const [r, g, b] = rgb.map(v => {
-                const s = v / 255;
-                return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
-            });
-            return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        }
-        function contrastRatio(fg: string, bg: string): number | null {
-            const f = parseColor(fg);
-            const b = parseColor(bg);
-            if (!f || !b) return null;
-            const lf = relativeLuminance(f);
-            const lb = relativeLuminance(b);
-            const [light, dark] = lf > lb ? [lf, lb] : [lb, lf];
-            return (light + 0.05) / (dark + 0.05);
-        }
-
-        const focusables = Array.from(
-            document.querySelectorAll(FOCUSABLE_SELECTOR)
-        ) as HTMLElement[];
-
-        function stableId(el: Element): string {
-            const tag = el.tagName.toLowerCase();
-            const id = el.getAttribute("id");
-            if (id) return `${tag}#${id}`;
-            const idx = focusables.indexOf(el as HTMLElement);
-            const role = el.getAttribute("role");
-            if (role) return `${tag}[role=${role}]@${idx}`;
-            const type = el.getAttribute("type");
-            if (type && tag === "input") return `${tag}[type=${type}]@${idx}`;
-            return `${tag}@${idx}`;
-        }
-
-        const targetEls = Array.from(
-            document.querySelectorAll('a, button, [role="button"], [tabindex]')
-        ).filter(el => el.getAttribute("tabindex") !== "-1") as HTMLElement[];
-
-        const interactive_targets = targetEls.map(el => {
-            const rect = el.getBoundingClientRect();
-            const cs = getComputedStyle(el);
-            const defaultRatio = contrastRatio(cs.color, cs.backgroundColor);
-            // :focus pseudo-class applies when an element holds keyboard
-            // focus — synthetic `el.focus()` from inside page.evaluate
-            // satisfies that, and `getComputedStyle` reflects the
-            // resulting computed values. `:hover` does NOT trigger from
-            // a synthetic call; left null so the Swift soft-pass kicks
-            // in.
-            let focusRatio: number | null = null;
-            try {
-                el.focus();
-                if (document.activeElement === el) {
-                    const fcs = getComputedStyle(el);
-                    focusRatio = contrastRatio(fcs.color, fcs.backgroundColor);
-                }
-                el.blur();
-            } catch {
-                focusRatio = null;
-            }
-            return {
-                identifier: stableId(el),
-                width_px: Math.round(rect.width),
-                height_px: Math.round(rect.height),
-                default_contrast_ratio: defaultRatio,
-                hover_contrast_ratio: null,
-                focus_contrast_ratio: focusRatio,
-            };
-        });
-
-        const dom_focus_order = focusables.map(el => stableId(el));
-
-        // Clear current focus so the playwright keyboard Tab walk starts
-        // from a known baseline.
-        try { (document.activeElement as HTMLElement | null)?.blur(); } catch { /* ignore */ }
-
-        return { interactive_targets, dom_focus_order };
-    });
+    // Phase1 body loaded from axes/design.js so the SAME bytes will be
+    // loadable by Swift WKWebView.evaluateJavaScript (U.2b-1b-4). The
+    // Tab-walk loop below is auxiliary — it uses playwright's
+    // page.keyboard.press("Tab") which has no WKWebView counterpart and
+    // is not part of the byte-shared measurement surface.
+    const phase1 = await page.evaluate(DESIGN_JS) as {
+        interactive_targets: InteractiveTarget[];
+        dom_focus_order: string[];
+    };
 
     // Tab-walk via playwright keyboard. Iteration count bounded by the
     // dom_focus_order length — handles focus-trapping pages without
@@ -415,32 +289,17 @@ async function npmAuditBestEffort(target_url: string): Promise<string[]> {
 }
 
 async function measureCompleteness(page: Page): Promise<CompletenessMeasurement> {
-    const dom = await page.evaluate(() => {
-        const title = document.title || null;
-        const metaEl = document.querySelector<HTMLMetaElement>('meta[name="description"]');
-        const metaDescription = metaEl?.content ?? null;
-
-        const sameOriginLinks: string[] = Array.from(
-            document.querySelectorAll<HTMLAnchorElement>("a[href]")
-        )
-            .map(a => a.href)
-            .filter(href => {
-                try {
-                    return new URL(href).origin === location.origin;
-                } catch {
-                    return false;
-                }
-            });
-
-        const images: { src: string; alt: string | null }[] = Array.from(
-            document.querySelectorAll<HTMLImageElement>("img")
-        ).map(img => ({
-            src: img.src,
-            alt: img.getAttribute("alt"),
-        }));
-
-        return { title, metaDescription, sameOriginLinks, images };
-    });
+    // DOM-walk body loaded from axes/completeness.js so the SAME bytes
+    // will be loadable by Swift WKWebView.evaluateJavaScript
+    // (U.2b-1b-4). The HEAD-probe loop below is auxiliary — it uses
+    // page.request.fetch which has no WKWebView counterpart in this
+    // form; child #4's Swift loader composes its own probe path.
+    const dom = await page.evaluate(COMPLETENESS_JS) as {
+        title: string | null;
+        metaDescription: string | null;
+        sameOriginLinks: string[];
+        images: { src: string; alt: string | null }[];
+    };
 
     // HEAD-probe each same-origin link. failOnStatusCode: false so 4xx/5xx
     // return a response instead of throwing.

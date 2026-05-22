@@ -71,14 +71,20 @@ public actor WasmtimeSubprocessRuntime {
 
     private let manifest: HandManifest
     private let wasmtimeLookup: WasmtimeLookup
+    private let database: SessionDatabase
+    private let budgetOverride: (fuel: Int64, epochMs: Int)?
     private var cachedExecutableURL: URL?
 
     public init(
         manifest: HandManifest,
-        wasmtimeLookup: WasmtimeLookup? = nil
+        wasmtimeLookup: WasmtimeLookup? = nil,
+        database: SessionDatabase? = nil,
+        budgetOverride: (fuel: Int64, epochMs: Int)? = nil
     ) {
         self.manifest = manifest
         self.wasmtimeLookup = wasmtimeLookup ?? WasmtimeSubprocessRuntime.defaultLookup
+        self.database = database ?? SessionDatabase.shared
+        self.budgetOverride = budgetOverride
     }
 
     /// Default `wasmtime` lookup: `/usr/bin/which wasmtime`. Throws
@@ -125,7 +131,7 @@ public actor WasmtimeSubprocessRuntime {
         let tmpURL = try writeTempModule(module)
         defer { try? FileManager.default.removeItem(at: tmpURL) }
 
-        let (fuel, epochMs) = readBudget(from: manifest)
+        let (fuel, epochMs) = budgetOverride ?? readBudget(from: manifest)
         let startedAt = Date()
 
         let process = Process()
@@ -176,7 +182,7 @@ public actor WasmtimeSubprocessRuntime {
                 )
                 let durationUs = Int64(Date().timeIntervalSince(startedAt) * 1_000_000)
                 let budgetDeltaUs = durationUs - Int64(epochMs) * 1_000
-                SessionDatabase.shared.recordWasmKill(
+                database.recordWasmKill(
                     sessionId: sessionId,
                     reason: reason,
                     durationUs: durationUs,

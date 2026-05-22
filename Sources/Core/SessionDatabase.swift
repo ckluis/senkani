@@ -119,6 +119,10 @@ public final class SessionDatabase: @unchecked Sendable {
         // table, and triggers; TokenEventStore's `claude_session_cursors`
         // and the ALTER for `model_tier`).
         runMigrations(path: dbPath)
+        // V.18a-1: tune page_size + auto_vacuum required by the runtime
+        // telemetry tables. Idempotent — only VACUUMs when current pragma
+        // values don't match the targets.
+        tuneTelemetryPragmas()
         commandStore = CommandStore(parent: self)
         commandStore.setupSchema()
         tokenEventStore = TokenEventStore(parent: self)
@@ -161,6 +165,7 @@ public final class SessionDatabase: @unchecked Sendable {
         }
         enableWAL()
         runMigrations(path: path)
+        tuneTelemetryPragmas()
         commandStore = CommandStore(parent: self)
         commandStore.setupSchema()
         tokenEventStore = TokenEventStore(parent: self)
@@ -387,6 +392,94 @@ public final class SessionDatabase: @unchecked Sendable {
         sqlite3_finalize(stmt)
         // Update query planner statistics for better index selection
         sqlite3_exec(db, "PRAGMA optimize;", nil, nil, nil)
+    }
+
+    // MARK: - Telemetry pragmas (V.18a-1)
+
+    /// Tune database-wide pragmas required by V.18 RuntimeTelemetryDataset:
+    /// `page_size = 8192` and `auto_vacuum = INCREMENTAL`. Both settings are
+    /// per-DB in SQLite, and changing either on an existing DB requires a
+    /// `VACUUM` to rewrite pages. The migration that creates the telemetry
+    /// tables (v30) cannot perform `VACUUM` itself because the runner wraps
+    /// each migration in `BEGIN IMMEDIATE` and `VACUUM` is disallowed in a
+    /// transaction.
+    ///
+    /// Idempotent: if both pragmas are already at target, returns without
+    /// touching the DB. On mismatch, sets both pragmas and runs `VACUUM`
+    /// (which may be a noticeable one-time pause for DBs in the tens-of-MB
+    /// range — logged so operators see the cause).
+    ///
+    /// SQLite auto_vacuum modes: 0 = NONE, 1 = FULL, 2 = INCREMENTAL.
+    internal func tuneTelemetryPragmas() {
+        queue.sync {
+            guard let db = db else { return }
+
+            let currentPageSize = readIntPragma(db: db, "page_size")
+            let currentAutoVacuum = readIntPragma(db: db, "auto_vacuum")
+            let pageSizeMatch = (currentPageSize == 8192)
+            let autoVacuumMatch = (currentAutoVacuum == 2)
+            if pageSizeMatch && autoVacuumMatch { return }
+
+            Logger.log("db.session.telemetry_pragmas_tuning", fields: [
+                "page_size_before": .int(currentPageSize),
+                "auto_vacuum_before": .int(currentAutoVacuum),
+                "page_size_target": .int(8192),
+                "auto_vacuum_target": .int(2),
+                "outcome": .string("starting"),
+            ])
+
+            // SQLite gotcha: `PRAGMA page_size` cannot be changed while
+            // the DB is in WAL journal mode. Temporarily switch to DELETE
+            // mode for the VACUUM-rewrite, then restore WAL. (When only
+            // auto_vacuum needs changing — page_size already correct —
+            // VACUUM under WAL is fine, so we only switch journal modes
+            // when the page_size change is required.)
+            let needsJournalSwap = !pageSizeMatch
+            if needsJournalSwap {
+                _ = sqlite3_exec(db, "PRAGMA journal_mode = DELETE;", nil, nil, nil)
+            }
+            _ = sqlite3_exec(db, "PRAGMA page_size = 8192;", nil, nil, nil)
+            _ = sqlite3_exec(db, "PRAGMA auto_vacuum = INCREMENTAL;", nil, nil, nil)
+
+            var err: UnsafeMutablePointer<CChar>?
+            let rc = sqlite3_exec(db, "VACUUM;", nil, nil, &err)
+            let msg = err.map { String(cString: $0) } ?? ""
+            if let err = err { sqlite3_free(err) }
+
+            if needsJournalSwap {
+                // Restore WAL mode regardless of VACUUM outcome — the DB
+                // must end up in the same journal mode it started in.
+                _ = sqlite3_exec(db, "PRAGMA journal_mode = WAL;", nil, nil, nil)
+            }
+
+            guard rc == SQLITE_OK else {
+                Logger.log("db.session.telemetry_pragmas_vacuum_failed", fields: [
+                    "error": .string(msg),
+                    "outcome": .string("error"),
+                ])
+                return
+            }
+
+            let pageSizeAfter = readIntPragma(db: db, "page_size")
+            let autoVacuumAfter = readIntPragma(db: db, "auto_vacuum")
+            Logger.log("db.session.telemetry_pragmas_tuned", fields: [
+                "page_size_after": .int(pageSizeAfter),
+                "auto_vacuum_after": .int(autoVacuumAfter),
+                "outcome": .string("success"),
+            ])
+        }
+    }
+
+    /// Read an integer-valued PRAGMA on the current connection. Returns 0
+    /// on failure. Caller MUST hold the queue.
+    private func readIntPragma(db: OpaquePointer, _ name: String) -> Int {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA \(name);", -1, &stmt, nil) == SQLITE_OK else { return 0 }
+        defer { sqlite3_finalize(stmt) }
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            return Int(sqlite3_column_int64(stmt, 0))
+        }
+        return 0
     }
 
     // MARK: - Schema Ownership

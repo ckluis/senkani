@@ -1574,6 +1574,85 @@ public enum MigrationRegistry {
                    AND reason = 'fresh-install';
             """)
         },
+        Migration(version: 30, description: "runtime_telemetry_{dataset,span,log} for V.18a-1 RuntimeTelemetryDataset") { db in
+            // V.18a-1 — first of nine V.18 sub-items per the 2026-05-22
+            // operator-approved decomposition. Adds three new tables co-
+            // located in the existing session DB so cross-cutting JOINs
+            // (`agent_trace_event ↔ runtime_telemetry_span` on session_id
+            // + tool_call_id) work natively without ATTACH overhead.
+            //
+            // Schema mirrors the V.18 parent's `## Scope` section
+            // verbatim. Tufte audit (2026-05-22) added FK CASCADE on
+            // dataset_id so V.18a-2's prune can rely on parent-child
+            // semantics; SQLite enforces these only when
+            // `PRAGMA foreign_keys = ON` is set on the connection (the
+            // session DB doesn't currently enable foreign_keys globally
+            // — callers must enable per-connection when they need
+            // cascade behavior). The DECLARATIONS are still
+            // forward-compatible whether enforcement is on or off.
+            //
+            // page_size = 8192 and auto_vacuum = INCREMENTAL are
+            // database-wide settings (SQLite has no per-table
+            // auto_vacuum). They are tuned OUTSIDE this transaction by
+            // SessionDatabase.tuneTelemetryPragmas() — VACUUM cannot
+            // run inside a BEGIN IMMEDIATE block.
+            func exec(_ sql: String) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc != SQLITE_OK {
+                    throw MigrationError.sqlFailed(stage: "v30", detail: msg)
+                }
+            }
+            try exec("""
+                CREATE TABLE IF NOT EXISTS runtime_telemetry_dataset (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_id TEXT NOT NULL,
+                    workstream_id TEXT,
+                    created_at INTEGER NOT NULL,
+                    bytes_used INTEGER NOT NULL DEFAULT 0,
+                    span_count INTEGER NOT NULL DEFAULT 0,
+                    log_count INTEGER NOT NULL DEFAULT 0
+                );
+            """)
+            try exec("""
+                CREATE TABLE IF NOT EXISTS runtime_telemetry_span (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    dataset_id INTEGER NOT NULL REFERENCES runtime_telemetry_dataset(id) ON DELETE CASCADE,
+                    trace_id TEXT NOT NULL,
+                    span_id TEXT NOT NULL,
+                    parent_span_id TEXT,
+                    name TEXT NOT NULL,
+                    start_unix_ns INTEGER NOT NULL,
+                    end_unix_ns INTEGER NOT NULL,
+                    attributes_json TEXT,
+                    status_code INTEGER,
+                    session_id TEXT,
+                    tool_call_id TEXT,
+                    validation_run_id TEXT
+                );
+            """)
+            try exec("""
+                CREATE TABLE IF NOT EXISTS runtime_telemetry_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    dataset_id INTEGER NOT NULL REFERENCES runtime_telemetry_dataset(id) ON DELETE CASCADE,
+                    unix_ns INTEGER NOT NULL,
+                    severity_text TEXT,
+                    body_text TEXT,
+                    attributes_json TEXT,
+                    trace_id TEXT,
+                    span_id TEXT,
+                    session_id TEXT
+                );
+            """)
+            try exec("CREATE INDEX IF NOT EXISTS idx_runtime_telemetry_span_dataset_start ON runtime_telemetry_span(dataset_id, start_unix_ns DESC);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_runtime_telemetry_span_trace ON runtime_telemetry_span(trace_id);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_runtime_telemetry_span_session_tool ON runtime_telemetry_span(session_id, tool_call_id);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_runtime_telemetry_span_validation_run ON runtime_telemetry_span(validation_run_id);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_runtime_telemetry_log_dataset_unix ON runtime_telemetry_log(dataset_id, unix_ns DESC);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_runtime_telemetry_log_trace_span ON runtime_telemetry_log(trace_id, span_id);")
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)

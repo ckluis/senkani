@@ -343,7 +343,10 @@ struct PaneContainerView: View {
                     secretsOn: pane.features.secrets,
                     indexerOn: pane.features.indexer,
                     terseOn: pane.features.terse,
-                    paneMode: HookRouter.paneModeResolver(pane.id.uuidString)
+                    paneMode: HookRouter.paneModeResolver(pane.id.uuidString),
+                    initialCommand: pane.initialCommand,
+                    forwardDevServerTelemetry: pane.forwardDevServerTelemetry,
+                    runtimeTelemetryEndpoint: RuntimeTelemetryEndpoint.localLoopback()
                 ))) { _, new in new }
                 .merging([
                     // Terminal-only extras (model routing) layered on top.

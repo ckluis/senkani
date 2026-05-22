@@ -231,6 +231,17 @@ struct PaneSettingsPanel: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(SenkaniTheme.textPrimary)
 
+            // V.18b-1 — per-pane opt-out for runtime telemetry forwarding.
+            // The injection only happens for dev-server commands
+            // (`npm run dev`, `bun dev`, `pnpm dev`, `yarn dev`, `vite`,
+            // `next dev`); this toggle is the kill-switch.
+            SettingsToggleRow(
+                title: "Forward dev-server telemetry",
+                subtitle: "Inject OTEL_EXPORTER_OTLP_ENDPOINT for dev-server commands so traces flow into the local runtime telemetry receiver.",
+                isOn: $pane.forwardDevServerTelemetry,
+                color: SenkaniTheme.toggleFilter
+            )
+
             VStack(alignment: .leading, spacing: 6) {
                 Text("Metrics file:")
                     .font(.system(size: 10, weight: .medium))

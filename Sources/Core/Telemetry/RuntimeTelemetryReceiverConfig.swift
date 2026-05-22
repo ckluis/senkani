@@ -38,6 +38,25 @@ public enum RuntimeTelemetryReceiverConfigPath {
     }
 }
 
+/// V.18b-1 — resolves the local OTLP/HTTP endpoint URL pane subprocesses
+/// should target when the dev-server allowlist matches. Reads the same
+/// on-disk config the receiver persists at first-bind, so a restarted
+/// receiver keeps the same port and existing panes keep working without
+/// app restart.
+public enum RuntimeTelemetryEndpoint {
+    /// Returns `http://127.0.0.1:<port>` when the receiver has a bound
+    /// port persisted; nil when the config is missing, unreadable, or
+    /// the persisted port is zero (receiver hasn't bound yet).
+    ///
+    /// The path argument exists so unit tests can point at a fixture
+    /// config instead of the operator's `~/.senkani/`.
+    public static func localLoopback(path: String = RuntimeTelemetryReceiverConfigPath.canonical()) -> String? {
+        guard let cfg = try? RuntimeTelemetryReceiverConfigStore.load(path: path) else { return nil }
+        guard cfg.port > 0 else { return nil }
+        return "http://127.0.0.1:\(cfg.port)"
+    }
+}
+
 public enum RuntimeTelemetryReceiverConfigStore {
     /// Read on-disk config. Returns defaults (port=0, drops=0) on
     /// missing file. Throws on corrupt JSON.

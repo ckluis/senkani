@@ -129,6 +129,13 @@ final class PaneModel: Identifiable {
     /// launches with. Per-pane, persisted across restarts. Ignored by
     /// other pane types.
     var ollamaDefaultModel: String = OllamaLauncherSupport.defaultModelTag
+    /// V.18b-1 — per-pane opt-out for runtime telemetry forwarding. When
+    /// `true` (default) and the pane's `initialCommand` matches a dev-
+    /// server prefix (`PaneLaunchEnv.matchesDevServerCommand`), the pane
+    /// subprocess receives `OTEL_EXPORTER_OTLP_ENDPOINT` pointing at the
+    /// local OTLP receiver. When `false`, no endpoint is injected even
+    /// for matching commands.
+    var forwardDevServerTelemetry: Bool = true
 
     init(title: String = "Terminal",
          paneType: PaneType = .terminal,

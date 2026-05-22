@@ -154,6 +154,88 @@ struct PaneLaunchEnvTests {
         #expect(env["SENKANI_MCP_TERSE"]   == "on")
     }
 
+    // MARK: - V.18b-1 — dev-server pane allowlist + OTEL endpoint injection
+
+    /// Inputs builder for V.18b-1 fixtures — defaults to the sample shape
+    /// but lets each test pin the three new fields.
+    private static func v18bInputs(
+        initialCommand: String,
+        forward: Bool = true,
+        endpoint: String? = "http://127.0.0.1:54321"
+    ) -> PaneLaunchEnv.Inputs {
+        PaneLaunchEnv.Inputs(
+            paneID: sampleInputs.paneID,
+            projectRoot: sampleInputs.projectRoot,
+            metricsFilePath: sampleInputs.metricsFilePath,
+            configFilePath: sampleInputs.configFilePath,
+            workspaceSlug: sampleInputs.workspaceSlug,
+            paneSlug: sampleInputs.paneSlug,
+            filterOn: sampleInputs.filterOn,
+            cacheOn: sampleInputs.cacheOn,
+            secretsOn: sampleInputs.secretsOn,
+            indexerOn: sampleInputs.indexerOn,
+            terseOn: sampleInputs.terseOn,
+            initialCommand: initialCommand,
+            forwardDevServerTelemetry: forward,
+            runtimeTelemetryEndpoint: endpoint
+        )
+    }
+
+    @Test func terminalEnvInjectsOTLPEndpointForEveryDevServerPrefix() {
+        // Acceptance bullet 1: each documented dev-server prefix triggers
+        // injection. Verifying the whole allowlist in one test keeps
+        // future drift (prefix added/removed without coverage) loud.
+        for prefix in PaneLaunchEnv.devServerCommandPrefixes {
+            let env = PaneLaunchEnv.terminal(Self.v18bInputs(initialCommand: prefix))
+            #expect(env["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://127.0.0.1:54321",
+                    "dev-server prefix '\(prefix)' must trigger OTEL endpoint injection")
+        }
+
+        // Prefix-with-args also matches — operators routinely append flags
+        // (e.g. `vite --port 5173`). The match rule allows whitespace
+        // continuation but rejects the bare-suffix case (e.g. `vitest`
+        // must NOT trigger).
+        let viteWithFlags = PaneLaunchEnv.terminal(Self.v18bInputs(initialCommand: "vite --port 5173 --host"))
+        #expect(viteWithFlags["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://127.0.0.1:54321")
+        let vitest = PaneLaunchEnv.terminal(Self.v18bInputs(initialCommand: "vitest"))
+        #expect(vitest["OTEL_EXPORTER_OTLP_ENDPOINT"] == nil,
+                "non-allowlisted command 'vitest' must NOT trigger injection")
+    }
+
+    @Test func terminalEnvOmitsOTLPEndpointForNonDevServerCommands() {
+        // Acceptance bullet 2: panes whose command is not in the
+        // allowlist receive no `OTEL_EXPORTER_OTLP_ENDPOINT` env, so
+        // unrelated subprocesses don't accidentally export traces to
+        // the local receiver.
+        for command in ["", "/bin/zsh", "claude", "ls -la", "vitest run", "npm test"] {
+            let env = PaneLaunchEnv.terminal(Self.v18bInputs(initialCommand: command))
+            #expect(env["OTEL_EXPORTER_OTLP_ENDPOINT"] == nil,
+                    "non-allowlisted command '\(command)' must NOT trigger OTEL injection")
+        }
+    }
+
+    @Test func terminalEnvOmitsOTLPEndpointWhenOperatorOptedOut() {
+        // Acceptance bullet 3: per-pane opt-out via the UI pane menu
+        // works. With `forwardDevServerTelemetry=false`, even an
+        // allowlisted command does NOT receive `OTEL_EXPORTER_OTLP_ENDPOINT`.
+        let env = PaneLaunchEnv.terminal(Self.v18bInputs(
+            initialCommand: "npm run dev",
+            forward: false
+        ))
+        #expect(env["OTEL_EXPORTER_OTLP_ENDPOINT"] == nil,
+                "opt-out toggle must suppress OTEL injection for allowlisted commands")
+
+        // No endpoint discovered (receiver hasn't bound a port yet) also
+        // suppresses injection — symmetric failure mode the discovery
+        // helper relies on.
+        let envNoEndpoint = PaneLaunchEnv.terminal(Self.v18bInputs(
+            initialCommand: "npm run dev",
+            endpoint: nil
+        ))
+        #expect(envNoEndpoint["OTEL_EXPORTER_OTLP_ENDPOINT"] == nil,
+                "missing endpoint must suppress injection even for matching commands")
+    }
+
     // MARK: - T.1b follow-up — SENKANI_PANE_MODE injection
 
     /// Asserts the pane subprocess env carries the resolved pane mode

@@ -1,6 +1,7 @@
 import Foundation
 import WebKit
 import AppKit
+import Network
 import Core
 
 /// U.2b-1b-4 — off-screen WKWebView lifecycle + 4-axis evaluateJavaScript
@@ -88,11 +89,28 @@ public final class BrowserPaneRunner: BrowserRunner, @unchecked Sendable {
     private let axesDirectory: URL
     private let axisTimeout: TimeInterval
     private let contentRect: NSRect
+    /// U.2b-1b-5 — Optional EgressProxy URL (e.g.
+    /// `URL(string: "http://127.0.0.1:18080")`). When set, the
+    /// off-screen WKWebView routes traffic through this proxy via
+    /// `WKWebsiteDataStore.proxyConfigurations = [...]` (the
+    /// macOS 14+ surface — note the API is `proxyConfigurations`
+    /// plural, an array of `Network.ProxyConfiguration`; the
+    /// acceptance text calls out `httpProxyConfiguration` which is
+    /// the convenient shorthand for this array's first entry).
+    /// Each `run(...)` writes a per-target same-origin allowlist
+    /// to a temp JSON file (mirroring
+    /// `BrowserValidationDispatcher.writeEgressOverridePolicyIfNeeded`)
+    /// so the daemon can consume it via `SENKANI_EGRESS_POLICY_OVERRIDE`
+    /// when child #6 wires the daemon-side handoff. nil = no proxy
+    /// (direct connect; current default — keeps existing callers
+    /// source-compatible).
+    public let egressProxyURL: URL?
 
     public init(
         axesDirectory: URL? = nil,
         axisTimeout: TimeInterval = BrowserPaneRunner.defaultAxisTimeout,
-        contentRect: NSRect = BrowserPaneRunner.defaultContentRect
+        contentRect: NSRect = BrowserPaneRunner.defaultContentRect,
+        egressProxyURL: URL? = nil
     ) {
         self.axesDirectory = axesDirectory
             ?? BrowserPaneRunner.defaultAxesDirectory()
@@ -100,6 +118,54 @@ public final class BrowserPaneRunner: BrowserRunner, @unchecked Sendable {
                 .appendingPathComponent("Resources/playwright-runner/axes")
         self.axisTimeout = axisTimeout
         self.contentRect = contentRect
+        self.egressProxyURL = egressProxyURL
+    }
+
+    /// U.2b-1b-5 — write the per-target same-origin allowlist to a
+    /// temp JSON file in the wire format `EgressPolicy.load(from:)`
+    /// reads. Returns the temp path on success, nil when
+    /// `proxyURL` is unset, the target URL is malformed, or the URL
+    /// is hostless (e.g. `file://`). Mirrors
+    /// `BrowserValidationDispatcher.writeEgressOverridePolicyIfNeeded`
+    /// in shape — exposed publicly so tests can assert the contract
+    /// without driving an entire `run(...)`. Caller is responsible
+    /// for cleanup via `defer { try? FileManager.default.removeItem(atPath:) }`.
+    public static func writeEgressOverridePolicy(targetURL: String, proxyURL: URL?) -> String? {
+        guard let proxy = proxyURL, !proxy.absoluteString.isEmpty,
+              let url = URL(string: targetURL),
+              let policy = EgressPolicy.sameOriginAllowlist(targetURL: url) else {
+            return nil
+        }
+        do {
+            let data = try policy.encodeWireJSON()
+            let dir = NSTemporaryDirectory()
+            let filename = "senkani-egress-override-\(UUID().uuidString).json"
+            let path = (dir as NSString).appendingPathComponent(filename)
+            try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+            return path
+        } catch {
+            return nil
+        }
+    }
+
+    /// U.2b-1b-5 — build the `Network.ProxyConfiguration` for the
+    /// off-screen WKWebView's website data store. Returns nil when
+    /// `proxyURL` is unset, malformed, or missing a host/port. The
+    /// HTTP CONNECT shape matches the EgressProxy daemon's listener
+    /// convention (T.1a) and routes both HTTP + HTTPS through the
+    /// proxy endpoint via tunneling.
+    public static func makeProxyConfiguration(proxyURL: URL?) -> ProxyConfiguration? {
+        guard let url = proxyURL,
+              let host = url.host, !host.isEmpty else {
+            return nil
+        }
+        let portValue = UInt16(url.port ?? 80)
+        guard let port = NWEndpoint.Port(rawValue: portValue) else { return nil }
+        let endpoint = NWEndpoint.hostPort(
+            host: NWEndpoint.Host(host),
+            port: port
+        )
+        return ProxyConfiguration(httpCONNECTProxy: endpoint, tlsOptions: nil)
     }
 
     // MARK: - BrowserRunner
@@ -128,7 +194,24 @@ public final class BrowserPaneRunner: BrowserRunner, @unchecked Sendable {
             )
         }
 
-        let lifecycle = LifecycleHandle(contentRect: contentRect)
+        // U.2b-1b-5 — write the per-target same-origin allowlist to a
+        // temp JSON file when an egressProxyURL is configured. Cleaned
+        // up via defer regardless of run outcome (success, page-load
+        // failure, axis-eval failure — all clean up).
+        let egressOverridePath = BrowserPaneRunner.writeEgressOverridePolicy(
+            targetURL: targetURL,
+            proxyURL: egressProxyURL
+        )
+        defer {
+            if let p = egressOverridePath {
+                try? FileManager.default.removeItem(atPath: p)
+            }
+        }
+
+        let lifecycle = LifecycleHandle(
+            contentRect: contentRect,
+            proxyConfiguration: BrowserPaneRunner.makeProxyConfiguration(proxyURL: egressProxyURL)
+        )
         do {
             try lifecycle.bringUpSync()
         } catch {
@@ -207,7 +290,10 @@ public final class BrowserPaneRunner: BrowserRunner, @unchecked Sendable {
         guard let url = URL(string: targetURL) else {
             throw RunnerError.invalidTargetURL(targetURL)
         }
-        let lifecycle = LifecycleHandle(contentRect: contentRect)
+        let lifecycle = LifecycleHandle(
+            contentRect: contentRect,
+            proxyConfiguration: BrowserPaneRunner.makeProxyConfiguration(proxyURL: egressProxyURL)
+        )
         try lifecycle.bringUpSync()
         defer { lifecycle.tearDownSync() }
         try lifecycle.loadSync(url: url, timeout: axisTimeout)
@@ -284,18 +370,21 @@ public final class BrowserPaneRunner: BrowserRunner, @unchecked Sendable {
 /// `DispatchSemaphore`.
 private final class LifecycleHandle: @unchecked Sendable {
     private let contentRect: NSRect
+    private let proxyConfiguration: ProxyConfiguration?
     private let lock = NSLock()
     private var state: LifecycleState?
 
-    init(contentRect: NSRect) {
+    init(contentRect: NSRect, proxyConfiguration: ProxyConfiguration? = nil) {
         self.contentRect = contentRect
+        self.proxyConfiguration = proxyConfiguration
     }
 
     func bringUpSync() throws {
         let rect = contentRect
+        let proxy = proxyConfiguration
         let sem = DispatchSemaphore(value: 0)
         DispatchQueue.main.async {
-            let state = LifecycleState(contentRect: rect)
+            let state = LifecycleState(contentRect: rect, proxyConfiguration: proxy)
             state.bringUp()
             self.lock.lock()
             self.state = state
@@ -386,17 +475,26 @@ private final class AnyBox: @unchecked Sendable {
 @MainActor
 private final class LifecycleState {
     private let contentRect: NSRect
+    private let proxyConfiguration: ProxyConfiguration?
     private var window: NSWindow?
     private var webView: WKWebView?
     private var navigationDelegate: NavDelegate?
 
-    init(contentRect: NSRect) {
+    init(contentRect: NSRect, proxyConfiguration: ProxyConfiguration? = nil) {
         self.contentRect = contentRect
+        self.proxyConfiguration = proxyConfiguration
     }
 
     func bringUp() {
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = .nonPersistent()
+        let dataStore: WKWebsiteDataStore = .nonPersistent()
+        // U.2b-1b-5 — when an EgressProxy URL was supplied, set the
+        // website data store's proxyConfigurations array so WKWebView
+        // traffic tunnels through the proxy. macOS 14+ surface.
+        if let proxy = proxyConfiguration {
+            dataStore.proxyConfigurations = [proxy]
+        }
+        config.websiteDataStore = dataStore
         let webView = WKWebView(frame: contentRect, configuration: config)
         let window = NSWindow(
             contentRect: contentRect,

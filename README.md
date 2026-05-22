@@ -75,7 +75,7 @@ for the walkthrough.
 
 ## The MCP Intelligence Layer
 
-21 tools that sit between Claude and your filesystem, compressing everything before it hits your token budget.
+23 tools that sit between Claude and your filesystem, compressing everything before it hits your token budget.
 
 | Tool | What it does | Savings |
 |------|-------------|---------|
@@ -259,7 +259,7 @@ The full caveat — including the action item, owner, and the `tools/check-multi
 | **Filter** | — | Token compression: 44 cmd rules, ANSI strip, dedup, secrets, terse |
 | **Indexer** | SwiftTreeSitter | 25 tree-sitter backends, FTS5 search, dependency graph, incremental parsing, FSEvents |
 | **Bench** | Core, Filter, Indexer | Token savings test suite: 10 tasks × 7 configs, quality gates, JSON export |
-| **MCP** | Core, Filter, Indexer, Bundle, MLX | 21 MCP tools, socket server (mcp + hook + pane), vision + embedding inference, Gemma 4 rationale adapter |
+| **MCP** | Core, Filter, Indexer, Bundle, MLX | 23 MCP tools, socket server (mcp + hook + pane), vision + embedding inference, Gemma 4 rationale adapter |
 | **Bundle** | Core, Filter, Indexer | `BundleComposer` — budget-bounded repo-snapshot composition for `senkani_bundle` |
 | **HookRelay** | — | Zero-dep hook relay library shared by senkani-hook binary and app's --hook mode |
 | **CLI** | Core, Filter, Indexer, Bench | 24 commands: exec, search, bench, doctor, grammars, kb, eval, learn, init, authorship, models, … |

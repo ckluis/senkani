@@ -326,6 +326,244 @@ public final class RuntimeTelemetryStore: @unchecked Sendable {
         }
     }
 
+    // MARK: - Read-only query surface (V.18a-6)
+
+    /// One dataset row surfaced by `listDatasets(...)`. Mirrors the
+    /// `runtime_telemetry_dataset` columns the query tools care about.
+    public struct DatasetRow: Sendable, Equatable {
+        public let id: Int64
+        public let projectId: String
+        public let workstreamId: String?
+        public let createdAt: Int64
+        public let bytesUsed: Int
+        public let spanCount: Int
+        public let logCount: Int
+        public let spanBytes: Int
+        public let logBytes: Int
+        public init(id: Int64, projectId: String, workstreamId: String?, createdAt: Int64, bytesUsed: Int, spanCount: Int, logCount: Int, spanBytes: Int, logBytes: Int) {
+            self.id = id
+            self.projectId = projectId
+            self.workstreamId = workstreamId
+            self.createdAt = createdAt
+            self.bytesUsed = bytesUsed
+            self.spanCount = spanCount
+            self.logCount = logCount
+            self.spanBytes = spanBytes
+            self.logBytes = logBytes
+        }
+    }
+
+    /// V.18a-6 — list datasets, optionally scoped to a project. Empty
+    /// `projectId` returns every row. Ordered most-recent first by
+    /// `created_at DESC, id DESC` for deterministic CLI output.
+    public func listDatasets(projectId: String? = nil) -> [DatasetRow] {
+        return parent.queue.sync {
+            guard let db = parent.db else { return [] }
+            let sql: String
+            if projectId != nil {
+                sql = """
+                    SELECT id, project_id, workstream_id, created_at,
+                           bytes_used, span_count, log_count, span_bytes, log_bytes
+                      FROM runtime_telemetry_dataset
+                     WHERE project_id = ?
+                     ORDER BY created_at DESC, id DESC;
+                    """
+            } else {
+                sql = """
+                    SELECT id, project_id, workstream_id, created_at,
+                           bytes_used, span_count, log_count, span_bytes, log_bytes
+                      FROM runtime_telemetry_dataset
+                     ORDER BY created_at DESC, id DESC;
+                    """
+            }
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            if let projectId {
+                sqlite3_bind_text(stmt, 1, (projectId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            }
+            var rows: [DatasetRow] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let id = sqlite3_column_int64(stmt, 0)
+                let pid = String(cString: sqlite3_column_text(stmt, 1))
+                let wid: String? = sqlite3_column_type(stmt, 2) == SQLITE_NULL
+                    ? nil : String(cString: sqlite3_column_text(stmt, 2))
+                let created = sqlite3_column_int64(stmt, 3)
+                rows.append(DatasetRow(
+                    id: id, projectId: pid, workstreamId: wid, createdAt: created,
+                    bytesUsed: Int(sqlite3_column_int64(stmt, 4)),
+                    spanCount: Int(sqlite3_column_int64(stmt, 5)),
+                    logCount: Int(sqlite3_column_int64(stmt, 6)),
+                    spanBytes: Int(sqlite3_column_int64(stmt, 7)),
+                    logBytes: Int(sqlite3_column_int64(stmt, 8))
+                ))
+            }
+            return rows
+        }
+    }
+
+    /// One span surfaced by the query tools. Carries every column the
+    /// MCP/CLI emit needs; the dispatcher routes text fields through
+    /// `SecretDetector` before serialising.
+    public struct SpanResult: Sendable, Equatable {
+        public let id: Int64
+        public let datasetId: Int64
+        public let traceId: String
+        public let spanId: String
+        public let parentSpanId: String?
+        public let name: String
+        public let startUnixNs: Int64
+        public let endUnixNs: Int64
+        public let attributesJson: String?
+        public let statusCode: Int?
+        public let sessionId: String?
+        public let toolCallId: String?
+        public let validationRunId: String?
+        public init(id: Int64, datasetId: Int64, traceId: String, spanId: String, parentSpanId: String?, name: String, startUnixNs: Int64, endUnixNs: Int64, attributesJson: String?, statusCode: Int?, sessionId: String?, toolCallId: String?, validationRunId: String?) {
+            self.id = id
+            self.datasetId = datasetId
+            self.traceId = traceId
+            self.spanId = spanId
+            self.parentSpanId = parentSpanId
+            self.name = name
+            self.startUnixNs = startUnixNs
+            self.endUnixNs = endUnixNs
+            self.attributesJson = attributesJson
+            self.statusCode = statusCode
+            self.sessionId = sessionId
+            self.toolCallId = toolCallId
+            self.validationRunId = validationRunId
+        }
+    }
+
+    /// Query filter for `querySpans(...)`. Every field is optional but
+    /// at least one MUST be set — the dispatcher refuses unfiltered
+    /// queries (would scan the whole table). `datasetId` scopes to one
+    /// dataset; the four id-based filters drive index lookups; the
+    /// time-range filter walks the `(dataset_id, start_unix_ns DESC)`
+    /// index.
+    public struct QueryFilter: Sendable, Equatable {
+        public var datasetId: Int64?
+        public var traceId: String?
+        public var sessionId: String?
+        public var toolCallId: String?
+        public var validationRunId: String?
+        public var startUnixNsAtOrAfter: Int64?
+        public var endUnixNsAtOrBefore: Int64?
+        public init(datasetId: Int64? = nil, traceId: String? = nil, sessionId: String? = nil, toolCallId: String? = nil, validationRunId: String? = nil, startUnixNsAtOrAfter: Int64? = nil, endUnixNsAtOrBefore: Int64? = nil) {
+            self.datasetId = datasetId
+            self.traceId = traceId
+            self.sessionId = sessionId
+            self.toolCallId = toolCallId
+            self.validationRunId = validationRunId
+            self.startUnixNsAtOrAfter = startUnixNsAtOrAfter
+            self.endUnixNsAtOrBefore = endUnixNsAtOrBefore
+        }
+        public var hasAnyFilter: Bool {
+            return datasetId != nil || traceId != nil || sessionId != nil ||
+                   toolCallId != nil || validationRunId != nil ||
+                   startUnixNsAtOrAfter != nil || endUnixNsAtOrBefore != nil
+        }
+    }
+
+    /// V.18a-6 — query spans with cursor pagination. Returns at most
+    /// `limit` rows whose row-id > `cursorAfterId` (nil → first page).
+    /// Order is `id ASC` so the cursor is monotonic. Refuses to
+    /// run on an empty `filter` (Schneier: no blind table scan).
+    public func querySpans(filter: QueryFilter, limit: Int = 1000, cursorAfterId: Int64? = nil) -> [SpanResult] {
+        guard filter.hasAnyFilter else { return [] }
+        guard limit > 0 else { return [] }
+        return parent.queue.sync {
+            guard let db = parent.db else { return [] }
+            var clauses: [String] = []
+            if filter.datasetId != nil { clauses.append("dataset_id = ?") }
+            if filter.traceId != nil { clauses.append("trace_id = ?") }
+            if filter.sessionId != nil { clauses.append("session_id = ?") }
+            if filter.toolCallId != nil { clauses.append("tool_call_id = ?") }
+            if filter.validationRunId != nil { clauses.append("validation_run_id = ?") }
+            if filter.startUnixNsAtOrAfter != nil { clauses.append("start_unix_ns >= ?") }
+            if filter.endUnixNsAtOrBefore != nil { clauses.append("end_unix_ns <= ?") }
+            if cursorAfterId != nil { clauses.append("id > ?") }
+            let whereClause = clauses.joined(separator: " AND ")
+            let sql = """
+                SELECT id, dataset_id, trace_id, span_id, parent_span_id, name,
+                       start_unix_ns, end_unix_ns, attributes_json, status_code,
+                       session_id, tool_call_id, validation_run_id
+                  FROM runtime_telemetry_span
+                 WHERE \(whereClause)
+                 ORDER BY id ASC
+                 LIMIT ?;
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            var idx: Int32 = 1
+            if let v = filter.datasetId { sqlite3_bind_int64(stmt, idx, v); idx += 1 }
+            if let v = filter.traceId { sqlite3_bind_text(stmt, idx, (v as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1 }
+            if let v = filter.sessionId { sqlite3_bind_text(stmt, idx, (v as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1 }
+            if let v = filter.toolCallId { sqlite3_bind_text(stmt, idx, (v as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1 }
+            if let v = filter.validationRunId { sqlite3_bind_text(stmt, idx, (v as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1 }
+            if let v = filter.startUnixNsAtOrAfter { sqlite3_bind_int64(stmt, idx, v); idx += 1 }
+            if let v = filter.endUnixNsAtOrBefore { sqlite3_bind_int64(stmt, idx, v); idx += 1 }
+            if let v = cursorAfterId { sqlite3_bind_int64(stmt, idx, v); idx += 1 }
+            sqlite3_bind_int64(stmt, idx, Int64(limit))
+            var out: [SpanResult] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                out.append(Self.decodeSpanRow(stmt))
+            }
+            return out
+        }
+    }
+
+    /// V.18a-6 — fetch a single trace's full span tree. Capped at
+    /// `maxSpans` (default 10K) to bound memory on pathological
+    /// traces. Walks `idx_runtime_telemetry_span_trace`.
+    public func spansForTrace(traceId: String, maxSpans: Int = 10_000) -> [SpanResult] {
+        guard maxSpans > 0 else { return [] }
+        return parent.queue.sync {
+            guard let db = parent.db else { return [] }
+            let sql = """
+                SELECT id, dataset_id, trace_id, span_id, parent_span_id, name,
+                       start_unix_ns, end_unix_ns, attributes_json, status_code,
+                       session_id, tool_call_id, validation_run_id
+                  FROM runtime_telemetry_span
+                 WHERE trace_id = ?
+                 ORDER BY start_unix_ns ASC, id ASC
+                 LIMIT ?;
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (traceId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_int64(stmt, 2, Int64(maxSpans))
+            var out: [SpanResult] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                out.append(Self.decodeSpanRow(stmt))
+            }
+            return out
+        }
+    }
+
+    /// Decode one row of the canonical SELECT shape used by `querySpans`
+    /// and `spansForTrace`. Column indexes mirror the SELECT order.
+    private static func decodeSpanRow(_ stmt: OpaquePointer?) -> SpanResult {
+        return SpanResult(
+            id: sqlite3_column_int64(stmt, 0),
+            datasetId: sqlite3_column_int64(stmt, 1),
+            traceId: String(cString: sqlite3_column_text(stmt, 2)),
+            spanId: String(cString: sqlite3_column_text(stmt, 3)),
+            parentSpanId: colText(stmt, 4),
+            name: String(cString: sqlite3_column_text(stmt, 5)),
+            startUnixNs: sqlite3_column_int64(stmt, 6),
+            endUnixNs: sqlite3_column_int64(stmt, 7),
+            attributesJson: colText(stmt, 8),
+            statusCode: sqlite3_column_type(stmt, 9) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 9)),
+            sessionId: colText(stmt, 10),
+            toolCallId: colText(stmt, 11),
+            validationRunId: colText(stmt, 12)
+        )
+    }
+
     // MARK: - Validation-source queries (V.18a-5)
 
     /// Summary of the OTLP spans correlated to one `validation_run_id`.

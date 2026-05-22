@@ -428,6 +428,61 @@ enum ToolRegistry {
                 ),
                 handler: .asyncHandler { args, session in KnowledgeTool.handle(arguments: args, session: session) }
             ),
+            ToolDefinition(
+                name: "senkani_telemetry_list",
+                schema: Tool(
+                    name: "senkani_telemetry_list",
+                    description: "V.18a-6 — list runtime_telemetry datasets, optionally scoped to a project. Returns id, project_id, workstream_id, created_at, bytes_used, span_count, log_count per dataset.",
+                    inputSchema: .object([
+                        "type": .string("object"),
+                        "properties": .object([
+                            "project_id": .object(["type": .string("string"), "description": .string("Scope to one project. Omit for every dataset.")]),
+                        ]),
+                    ]),
+                    annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
+                ),
+                handler: .asyncHandler { args, session in await TelemetryListTool.handle(arguments: args, session: session) }
+            ),
+            ToolDefinition(
+                name: "senkani_telemetry_query",
+                schema: Tool(
+                    name: "senkani_telemetry_query",
+                    description: "V.18a-6 — query runtime_telemetry spans by trace_id, session_id, tool_call_id, validation_run_id, or time range. Limit/cursor budget: max 1000 rows OR 1 MB per page (whichever first). Output routed through SecretDetector.",
+                    inputSchema: .object([
+                        "type": .string("object"),
+                        "properties": .object([
+                            "dataset_id": .object(["type": .string("integer"), "description": .string("Scope to one dataset.")]),
+                            "trace_id": .object(["type": .string("string"), "description": .string("Filter by OTLP trace_id.")]),
+                            "session_id": .object(["type": .string("string"), "description": .string("Filter by senkani session id.")]),
+                            "tool_call_id": .object(["type": .string("string"), "description": .string("Filter by tool-call id (paired with session_id for cross-cutting JOIN against agent_trace_event).")]),
+                            "validation_run_id": .object(["type": .string("string"), "description": .string("Filter by V.18a-5 validation_run_id.")]),
+                            "start_unix_ns_at_or_after": .object(["type": .string("integer"), "description": .string("Lower bound on span start_unix_ns (inclusive).")]),
+                            "end_unix_ns_at_or_before": .object(["type": .string("integer"), "description": .string("Upper bound on span end_unix_ns (inclusive).")]),
+                            "limit": .object(["type": .string("integer"), "description": .string("Max rows per page (default 100, clamped to 1..1000).")]),
+                            "cursor": .object(["type": .string("integer"), "description": .string("Resume after this row id (returned as next_cursor when a page is truncated).")]),
+                        ]),
+                    ]),
+                    annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
+                ),
+                handler: .asyncHandler { args, session in await TelemetryQueryTool.handle(arguments: args, session: session) }
+            ),
+            ToolDefinition(
+                name: "senkani_telemetry_get_trace",
+                schema: Tool(
+                    name: "senkani_telemetry_get_trace",
+                    description: "V.18a-6 — fetch one trace's full span tree, ordered by start_unix_ns ASC. Capped at 10K spans by default; truncated:true means the trace overflowed the cap. Output routed through SecretDetector.",
+                    inputSchema: .object([
+                        "type": .string("object"),
+                        "properties": .object([
+                            "trace_id": .object(["type": .string("string"), "description": .string("OTLP trace_id (hex string from a prior query / dispatch span emit).")]),
+                            "max_spans": .object(["type": .string("integer"), "description": .string("Cap on returned spans (default 10000).")]),
+                        ]),
+                        "required": .array([.string("trace_id")]),
+                    ]),
+                    annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
+                ),
+                handler: .asyncHandler { args, session in await TelemetryGetTraceTool.handle(arguments: args, session: session) }
+            ),
         ]
     }
 }

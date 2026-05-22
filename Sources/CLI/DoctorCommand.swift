@@ -166,6 +166,11 @@ struct Doctor: ParsableCommand {
         //     (onboarding-pass-stale-bundle-hazard-2026-05-14.)
         checkBundleStaleness(&results)
 
+        // 21. Runtime telemetry receiver (Phase V.18a-3) — last-bound
+        //     loopback port + cumulative drops. Loopback boundary is
+        //     performative; see spec/architecture.md.
+        checkRuntimeTelemetryReceiver(&results)
+
         print("")
         var parts: [String] = []
         if results.passed > 0 { parts.append("\(results.passed) passed") }
@@ -1602,5 +1607,19 @@ struct Doctor: ParsableCommand {
             printStatus(.skip, "Egress proxy: down (decisions: \(count))")
             results.skipped += 1
         }
+    }
+
+    /// V.18a-3 — surface the runtime-telemetry receiver's last-bound
+    /// loopback port + cumulative drop count from the persisted
+    /// config file at `~/.senkani/runtime-telemetry-receiver.json`.
+    /// Doctor does not start the receiver; it just reads whatever
+    /// snapshot the last running instance wrote. The loopback bind
+    /// is performative — see spec/architecture.md.
+    private func checkRuntimeTelemetryReceiver(_ results: inout Results) {
+        let cfg = (try? RuntimeTelemetryReceiverConfigStore.load()) ?? RuntimeTelemetryReceiverConfig()
+        let portText = cfg.port > 0 ? ":\(cfg.port)" : "not yet bound"
+        let rateText = "\(cfg.perSourceSpansPerSecond) spans/s/source"
+        printStatus(.pass, "Runtime telemetry receiver — \(portText) | drops: \(cfg.totalDrops) | rate cap: \(rateText) | loopback boundary: performative (local-user trust)")
+        results.passed += 1
     }
 }

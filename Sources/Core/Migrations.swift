@@ -1653,6 +1653,28 @@ public enum MigrationRegistry {
             try exec("CREATE INDEX IF NOT EXISTS idx_runtime_telemetry_log_dataset_unix ON runtime_telemetry_log(dataset_id, unix_ns DESC);")
             try exec("CREATE INDEX IF NOT EXISTS idx_runtime_telemetry_log_trace_span ON runtime_telemetry_log(trace_id, span_id);")
         },
+        Migration(version: 31, description: "runtime_telemetry_dataset per-table byte counters for V.18a-2 store + prune") { db in
+            // V.18a-2 — per-table 500 MB cap requires per-table byte
+            // tracking. V.18a-1's `bytes_used` is the dataset total;
+            // split it into `span_bytes` + `log_bytes` so the
+            // `RuntimeTelemetryStore.recordBytes` write-path can decide
+            // which table needs eviction without an aggregate scan on
+            // every insert. `bytes_used` stays as a denormalized total
+            // for cheap dataset-level reads (CLI + future
+            // `senkani_telemetry_list`). The store keeps all three in
+            // sync inside a single UPDATE on every write/prune.
+            func exec(_ sql: String) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc != SQLITE_OK {
+                    throw MigrationError.sqlFailed(stage: "v31", detail: msg)
+                }
+            }
+            try exec("ALTER TABLE runtime_telemetry_dataset ADD COLUMN span_bytes INTEGER NOT NULL DEFAULT 0;")
+            try exec("ALTER TABLE runtime_telemetry_dataset ADD COLUMN log_bytes INTEGER NOT NULL DEFAULT 0;")
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)

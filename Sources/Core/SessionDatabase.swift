@@ -88,6 +88,9 @@ public final class SessionDatabase: @unchecked Sendable {
     public var sessionWorkQueueStore: SessionWorkQueueStore!
     public var sessionEventStreamStore: SessionEventStreamStore!
     public var surrogateWritesStore: SurrogateWritesStore!
+    /// V.18a-2 — RuntimeTelemetryDataset (runtime_telemetry_{dataset,span,log}).
+    /// Owned schema lives in migrations v30 + v31.
+    public var runtimeTelemetryStore: RuntimeTelemetryStore!
 
     // MARK: - Init
 
@@ -145,6 +148,8 @@ public final class SessionDatabase: @unchecked Sendable {
         sessionWorkQueueStore = SessionWorkQueueStore(parent: self)
         sessionEventStreamStore = SessionEventStreamStore(parent: self)
         surrogateWritesStore = SurrogateWritesStore(parent: self)
+        runtimeTelemetryStore = RuntimeTelemetryStore(parent: self)
+        runtimeTelemetryStore.setupSchema()
     }
 
     /// Testable initializer — opens a DB at a custom path (use a temp file).
@@ -188,6 +193,8 @@ public final class SessionDatabase: @unchecked Sendable {
         sessionWorkQueueStore = SessionWorkQueueStore(parent: self)
         sessionEventStreamStore = SessionEventStreamStore(parent: self)
         surrogateWritesStore = SurrogateWritesStore(parent: self)
+        runtimeTelemetryStore = RuntimeTelemetryStore(parent: self)
+        runtimeTelemetryStore.setupSchema()
     }
 
     // MARK: - Observability counters (migration v2)

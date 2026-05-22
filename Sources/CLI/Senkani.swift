@@ -23,6 +23,6 @@ struct Senkani: AsyncParsableCommand {
         commandName: "senkani",
         abstract: "CLI proxy that reduces LLM token consumption by filtering command output.",
         version: "0.1.0",
-        subcommands: [Exec.self, Init.self, Stats.self, Index.self, Search.self, Fetch.self, Explore.self, Compare.self, Validate.self, MCPInstall.self, Schedule.self, Doctor.self, Grammars.self, BenchCommand.self, Uninstall.self, KB.self, Eval.self, MLEval.self, Learn.self, Wipe.self, Export.self, BundleCommand.self, Authorship.self, Skill.self, Pack.self, Policy.self, Replay.self, Models.self, Egress.self, SprintReview.self, Onboarding.self, Walk.self, Trust.self, Engagement.self, Monitor.self]
+        subcommands: [Exec.self, Init.self, Stats.self, Index.self, Search.self, Fetch.self, Explore.self, Compare.self, Validate.self, MCPInstall.self, Schedule.self, Doctor.self, Grammars.self, BenchCommand.self, Uninstall.self, KB.self, Eval.self, MLEval.self, Learn.self, Wipe.self, Export.self, BundleCommand.self, Authorship.self, Skill.self, Pack.self, Policy.self, Replay.self, Models.self, Egress.self, SprintReview.self, Onboarding.self, Walk.self, Trust.self, Engagement.self, Monitor.self, Prune.self]
     )
 }

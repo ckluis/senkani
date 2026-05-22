@@ -18,6 +18,15 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Cowork-runnable test plans (groomed; ready to execute)
 
+### phase-u4b-2-promotion-gate-gui-surfaces — TrustFlagsView mode toggle + per-flag Override (hybrid implement+verify Cowork walk) 2026-05-22
+
+- **Item:** [`spec/autonomous/backlog/phase-u4b-2-promotion-gate-gui-surfaces.md`](../../spec/autonomous/backlog/phase-u4b-2-promotion-gate-gui-surfaces.md)
+- **Exec mode:** **cowork** (Cowork drives Xcode/editor for the two SwiftUI edits + new `SenkaniApp/Services/TrustGateService.swift` file, then runs the GUI verification walk; final VoiceOver focus-order check is `gui (human)` operator-only)
+- **Time estimate:** ~50-70 min wall-clock (Cowork SwiftUI editing 15-25 min; build + GUI verification 20-30 min; operator a11y check 3 min); hard cap at 90 min wall-clock — if exceeded, abort + retry from fresh state per the per-item file's failure-modes section
+- **What it proves:** the U.4b-2 GUI surfaces materialize on top of U.4b-1's already-shipped runtime contract: header mode-toggle pill reflects current `TrustMode` and surfaces gate-rejection text inline without writing the chain on a probe miss; confirmation sheet on the accept path writes the `promotion` chain row + persists `~/.senkani/trust.json`; per-row "Override" button appears only in `.blocking` mode and writes a `trust_audits.override` row keyed `"flag:<id>"` (advisory in this round — HookRouter doesn't honor flag-keyed overrides yet); state durable across an app relaunch.
+- **Pre-condition:** clean working tree on `main`; freshly built `senkani` CLI; `~/.senkani/trust.json` is backed up + reset to a known starting point in Setup; Cowork primitives (`mcp__computer-use__screenshot`/zoom/click/move/type) available in the Desktop session; sqlite3 reachable for the trust_audits schema confirmation step.
+- **Verdict semantics:** 11-bullet acceptance checklist must all flip ✅ for PASS. Any acceptance failure → leave `status: manual_ready`, append findings to a `## Walk findings <date>` section, file defects-outside-criteria as new backlog items per the loop's mandatory-follow-up-filing rule, retry after patch. On PASS the operator commits the Cowork-applied SwiftUI edits in a separate commit BEFORE flipping the item to `done` (convention `feat: U.4b-2 — promotion-gate GUI surfaces (mode toggle + per-flag override)`).
+
 ### search-web-soft-block-real-network-rewalk — real-DDG rotation recovery on soft-blocked operator IP 2026-05-21
 
 - **Item:** [`spec/autonomous/backlog/search-web-soft-block-real-network-rewalk-2026-05-21.md`](../../spec/autonomous/backlog/search-web-soft-block-real-network-rewalk-2026-05-21.md)

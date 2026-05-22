@@ -463,6 +463,7 @@ let package = Package(
                 .copy("Fixtures/secrets-adversarial"),
                 .copy("Fixtures/routing-corpus.json"),
                 .copy("Fixtures/context-plan-corpus.json"),
+                .copy("Fixtures/wasm"),
             ]
         ),
     ]

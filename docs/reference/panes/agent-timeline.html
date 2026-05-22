@@ -80,6 +80,9 @@
     <h2>Authorship badge</h2>
     <p>Every row shows a subdued <strong>Untagged</strong> capsule. Token events do not yet carry an authorship column — Phase V.5's tag lives on Knowledge Base entries today. The badge surfaces this without ever silently inferring AI / Human / Mixed.</p>
 
+    <h2>Runtime-error badge <small>(V.18a-7)</small></h2>
+    <p>Rows whose <code>session_id</code> / <code>tool_call_id</code> / <code>validation_run_id</code> correlate to runtime-telemetry spans with <code>status_code = ERROR</code> or <code>duration > p99</code> of the visible-window span set show a small badge dot — red for ERROR, amber for slow-only. First click expands a compact inline summary: error count, total duration, and a capped slow-span list (5 entries max). Second click opens a side pane that fetches the full span tree on demand via <code>senkani_telemetry_get_trace</code>. The inline summary is intentionally summary-only — the full span tree is never embedded in prompt context.</p>
+
     <h2>Keyboard</h2>
     <p>Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas).</p>
 

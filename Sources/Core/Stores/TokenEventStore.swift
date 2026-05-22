@@ -466,7 +466,8 @@ final class TokenEventStore: @unchecked Sendable {
             guard let db = parent.db else { return [] }
             let sql = """
                 SELECT id, timestamp, source, tool_name, feature, command,
-                       input_tokens, output_tokens, saved_tokens, cost_cents
+                       input_tokens, output_tokens, saved_tokens, cost_cents,
+                       session_id
                 FROM token_events
                 WHERE project_root = ?
                 ORDER BY timestamp DESC
@@ -487,7 +488,8 @@ final class TokenEventStore: @unchecked Sendable {
             guard let db = parent.db else { return [] }
             let sql = """
                 SELECT id, timestamp, source, tool_name, feature, command,
-                       input_tokens, output_tokens, saved_tokens, cost_cents
+                       input_tokens, output_tokens, saved_tokens, cost_cents,
+                       session_id
                 FROM token_events
                 ORDER BY timestamp DESC
                 LIMIT ?;
@@ -516,6 +518,8 @@ final class TokenEventStore: @unchecked Sendable {
             let output = Int(sqlite3_column_int64(stmt, 7))
             let saved = Int(sqlite3_column_int64(stmt, 8))
             let cost = Int(sqlite3_column_int64(stmt, 9))
+            let sessionId: String? = sqlite3_column_type(stmt, 10) == SQLITE_NULL
+                ? nil : String(cString: sqlite3_column_text(stmt, 10))
 
             results.append(SessionDatabase.TimelineEvent(
                 id: id,
@@ -527,7 +531,8 @@ final class TokenEventStore: @unchecked Sendable {
                 inputTokens: input,
                 outputTokens: output,
                 savedTokens: saved,
-                costCents: cost
+                costCents: cost,
+                sessionId: sessionId
             ))
         }
         return results

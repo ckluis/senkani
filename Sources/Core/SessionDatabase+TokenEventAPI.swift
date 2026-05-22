@@ -30,10 +30,16 @@ extension SessionDatabase {
         public let outputTokens: Int
         public let savedTokens: Int
         public let costCents: Int
+        /// V.18a-7 — session correlation key for the runtime-error badge.
+        /// `token_events.session_id` joins to
+        /// `runtime_telemetry_span.session_id`; the timeline pane uses
+        /// this to find ERROR/p99 spans tied to each row.
+        public let sessionId: String?
 
         public init(id: Int64, timestamp: Date, source: String, toolName: String?,
                     feature: String?, command: String?, inputTokens: Int,
-                    outputTokens: Int, savedTokens: Int, costCents: Int) {
+                    outputTokens: Int, savedTokens: Int, costCents: Int,
+                    sessionId: String? = nil) {
             self.id = id
             self.timestamp = timestamp
             self.source = source
@@ -44,6 +50,7 @@ extension SessionDatabase {
             self.outputTokens = outputTokens
             self.savedTokens = savedTokens
             self.costCents = costCents
+            self.sessionId = sessionId
         }
     }
 

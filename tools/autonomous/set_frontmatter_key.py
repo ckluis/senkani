@@ -42,10 +42,11 @@ from pathlib import Path
 
 # `[a-z_]+` matches every key the autonomous loop writes today
 # (tests_delta, docs_synced, status, shipped, groomed, groomed_by,
-# scope_groomed, scope_groomed_by, last_touched, blocked_by,
-# blocked_reason, parent_finding, findings_filed, split_into,
-# tests_target, type, size, priority, phase, etc.). The validator in
-# roundtrip.py uses the same regex.
+# scope_groomed, scope_groomed_by, decomposed, decomposed_by,
+# decomposable, last_touched, blocked_by, blocked_reason,
+# parent_finding, findings_filed, split_into, tests_target, type,
+# size, priority, phase, etc.). The validator in roundtrip.py uses
+# the same regex.
 _KEY_RE = re.compile(r"^([a-z_]+):\s*(.*)$")
 
 

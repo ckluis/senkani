@@ -55,6 +55,7 @@ VALID_STATUSES = {
 }
 
 GROOMED_DATE_VALID_STATUSES = {"manual_ready", "done", "skipped", "in_progress"}
+DECOMPOSED_DATE_VALID_STATUSES = {"manual_ready", "done", "skipped", "in_progress"}
 
 
 def parse_frontmatter(text: str) -> dict[str, str]:
@@ -84,8 +85,10 @@ def check_file(path: Path) -> list[str]:
         findings.append(f"status: {status!r} is not in the taxonomy ({valid})")
 
     groomable = fm.get("groomable", "").lower() == "true"
+    decomposable = fm.get("decomposable", "").lower() == "true"
     scope_groomable = fm.get("scope_groomable", "").lower() == "true"
     groomed = fm.get("groomed", "").strip()
+    decomposed = fm.get("decomposed", "").strip()
     scope_groomed = fm.get("scope_groomed", "").strip()
 
     if groomable and status not in {"manual", "manual_ready", "in_progress", "blocked"} | {""}:
@@ -110,13 +113,45 @@ def check_file(path: Path) -> list[str]:
                 "Pre-groom items must not carry this field."
             )
 
-    if scope_groomable and status not in {"manual", "open", "blocked", "skipped"} | {""}:
+    if decomposable and status not in {"manual", "manual_ready", "in_progress", "blocked"} | {""}:
+        # Same shape as groomable: post-decompose items keep the flag with
+        # status: manual_ready (for audit) until operator confirms split
+        # and flips to done. `blocked` allowed for the manual + decomposable
+        # + blocked-on-something case. `in_progress` allowed mid-decompose.
+        if status in VALID_STATUSES:
+            findings.append(
+                f"`decomposable: true` but status={status!r} — decompose "
+                "mode picks only `manual` (or post-decompose "
+                "`manual_ready`). Likely the file means `status: manual` "
+                "or should drop `decomposable: true`."
+            )
+
+    if decomposed and status not in DECOMPOSED_DATE_VALID_STATUSES:
+        if status in VALID_STATUSES:
+            findings.append(
+                f"`decomposed: {decomposed}` set but status={status!r}. "
+                "A decomposed date means a decompose-mode round closed "
+                "and wrote `status: manual_ready` (or operator already "
+                "flipped to `done`/`skipped`/`in_progress`). Pre-decompose "
+                "items must not carry this field."
+            )
+
+    if scope_groomable and status not in {"manual", "manual_ready", "in_progress", "open", "blocked", "skipped", "done"} | {""}:
+        # `manual_ready` and `in_progress` allowed because a scope-
+        # groomable item can transit through decompose mode (where the
+        # operator's scope decisions stay queryable as the children inherit
+        # them) or groom mode (where the scope decisions inform the test
+        # plan). `done` allowed because a fully-resolved item retains the
+        # flag as audit trail (the operator's scope-groom answers are
+        # preserved verbatim in the `## Scope decisions` body section).
         if status in VALID_STATUSES:
             findings.append(
                 f"`scope_groomable: true` but status={status!r}. "
                 "Scope-groom picks only `manual`; after the interview "
-                "the item flips to `open`/`blocked`/`skipped` and "
-                "keeps the flag for audit. Other statuses are unusual."
+                "the item flips to `open`/`blocked`/`skipped`/`done` "
+                "and keeps the flag for audit. `manual_ready` / "
+                "`in_progress` are tolerated for items transiting "
+                "decompose or groom mode."
             )
 
     if scope_groomed and status == "manual" and not scope_groomable:

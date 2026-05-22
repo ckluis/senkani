@@ -143,8 +143,8 @@ def _build_question() -> dict[str, Any]:
                 "description": ("Operator accepts that the build "
                                 "round will likely abort and "
                                 "reclassify to `manual` + "
-                                "`groomable: true` for a future "
-                                "groom-round decompose. Use when "
+                                "`decomposable: true` for a future "
+                                "decompose-round split. Use when "
                                 "the operator wants to confirm "
                                 "the abort is the right next "
                                 "step (e.g. learning where the "
@@ -152,11 +152,15 @@ def _build_question() -> dict[str, Any]:
                                 "is itself useful information).")
             },
             {
-                "label": "(b) flip directly to `manual + groomable: true`",
+                "label": "(b) flip directly to `manual + decomposable: true`",
                 "description": ("Skip the wasted build round; let "
-                                "a groom round decompose into "
+                                "a decompose round split into "
                                 "≤60-min sub-items first. Default "
-                                "for meaty items.")
+                                "for meaty items. The decompose "
+                                "round interviews the operator on "
+                                "the split shape and files N "
+                                "children via "
+                                "`tools/autonomous/file_sub_item.py`.")
             },
             {
                 "label": "(c) split into N child scope-groom items now",
@@ -164,7 +168,9 @@ def _build_question() -> dict[str, Any]:
                                 "each becomes a new scope-groomable "
                                 "backlog item. Use when the operator "
                                 "already knows the natural split "
-                                "axis.")
+                                "axis AND each child still needs a "
+                                "go/no-go decision interview (not "
+                                "just a code-decomposition).")
             },
         ],
     }

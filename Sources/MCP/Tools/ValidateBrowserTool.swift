@@ -51,6 +51,14 @@ enum ValidateBrowserTool {
             try runner.run(plan: plan, targetURL: target, screenshot: screenshot,
                            egressPolicyOverridePath: overridePath)
         }
+        // U.2b-1b-6 — look up the off-screen WKWebView runner factory the
+        // host (SenkaniApp at startup) may have registered. When the MCP
+        // server is hosted in SenkaniApp the factory is present and
+        // `.headless` dispatches drive the real BrowserPaneRunner. When
+        // hosted standalone (senkani-mcp binary) the factory is nil and
+        // the dispatcher falls back to the structured refusal.
+        let headlessClosure: BrowserValidationDispatcher.Runner? =
+            BrowserDispatchRegistry.makeHeadlessRunnerClosure(egressProxyURL: egressProxyURL)
         let db = SessionDatabase.shared
         let resultSink: BrowserValidationDispatcher.ResultSink = { row in
             let planJSON = encodePlanSteps(row.planSteps)
@@ -91,6 +99,7 @@ enum ValidateBrowserTool {
             response = try BrowserValidationDispatcher.dispatch(
                 request: request,
                 runner: runnerClosure,
+                headlessRunner: headlessClosure,
                 resultSink: resultSink,
                 tokenEventSink: tokenEventSink
             )

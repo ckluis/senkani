@@ -223,6 +223,7 @@ public enum BrowserValidationDispatcher {
     public static func dispatch(
         request: Request,
         runner: Runner,
+        headlessRunner: Runner? = nil,
         resultSink: ResultSink,
         tokenEventSink: TokenEventSink,
         spanSink: SpanSink = noopSpanSink
@@ -262,18 +263,27 @@ public enum BrowserValidationDispatcher {
         case .subprocess:
             result = runRunner(runner, plan: plan, request: request, egressPolicyOverridePath: overridePath)
         case .headless:
-            // U.2b-1a scaffold — no off-screen WKWebView yet. Skip the
-            // runner closure entirely and synthesize a structured
-            // refusal. U.2b-1b replaces this branch with the real
-            // headless runner.
-            result = PlaywrightResult(
-                resultStatus: "fail",
-                axesRun: [],
-                assertionsPassed: 0,
-                assertionsFailed: 0,
-                screenshotPath: nil,
-                advisory: "headless_not_yet_implemented — landing in U.2b-1b; use dispatch:'subprocess' for now"
-            )
+            // U.2b-1b-6 — wire the off-screen WKWebView runner. The
+            // headlessRunner slot is nil-by-default to preserve source
+            // compatibility with callers that haven't wired it (the CLI
+            // when SenkaniApp's factory isn't registered, or tests that
+            // dispatch without a headless stub). When nil, fall back to
+            // the structured refusal callers were wired against under
+            // U.2b-1a. When non-nil, invoke through the same runRunner
+            // helper so error translation + audit row shapes match the
+            // subprocess arm byte-for-byte.
+            if let headlessRunner {
+                result = runRunner(headlessRunner, plan: plan, request: request, egressPolicyOverridePath: overridePath)
+            } else {
+                result = PlaywrightResult(
+                    resultStatus: "fail",
+                    axesRun: [],
+                    assertionsPassed: 0,
+                    assertionsFailed: 0,
+                    screenshotPath: nil,
+                    advisory: "headless_not_yet_implemented — register a BrowserDispatchRegistry.headlessRunnerFactory at app startup, or use dispatch:'subprocess'"
+                )
+            }
         }
 
         let advisory = formatAdvisory(

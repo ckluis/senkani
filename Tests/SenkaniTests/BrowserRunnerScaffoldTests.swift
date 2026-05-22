@@ -130,8 +130,12 @@ struct BrowserRunnerScaffoldTests {
     }
 
     // MARK: - Test 4: headless dispatch returns structured refusal + audit row
+    // U.2b-1b-6 — refusal path is now gated on whether a headlessRunner is
+    // wired. With no headlessRunner (the default), the dispatcher still
+    // produces the structured headless_not_yet_implemented refusal so
+    // standalone CLI invocations that never load SenkaniApp keep working.
 
-    @Test("dispatch:.headless returns result_status:fail + headless_not_yet_implemented; audit row carries runner=wkwebview-headless")
+    @Test("dispatch:.headless with no headlessRunner returns structured refusal; audit row carries runner=wkwebview-headless")
     func mcpDispatchHeadlessReturnsStructuredRefusal() throws {
         let evSink = LockedArray<BrowserValidationDispatcher.TokenEventInput>()
         let rowSink = LockedArray<BrowserValidationDispatcher.BrowserValidationRow>()
@@ -168,11 +172,11 @@ struct BrowserRunnerScaffoldTests {
         #expect(runnerCalled.get() == false,
                 "headless dispatch must short-circuit before invoking the subprocess runner closure")
         #expect(response.resultStatus == "fail",
-                "headless arm must return result_status:fail until U.2b-1b lands")
+                "headless arm with no headlessRunner falls back to result_status:fail")
         #expect(response.advisory.contains("headless_not_yet_implemented"),
                 "response advisory must carry headless_not_yet_implemented; got: \(response.advisory)")
-        #expect(response.advisory.contains("U.2b-1b"),
-                "advisory must point operators at U.2b-1b; got: \(response.advisory)")
+        #expect(response.advisory.contains("BrowserDispatchRegistry.headlessRunnerFactory") || response.advisory.contains("U.2b-1b"),
+                "advisory must point operators at the registry (post U.2b-1b-6) or at U.2b-1b (pre); got: \(response.advisory)")
         #expect(response.screenshotPath == nil,
                 "headless refusal writes no screenshot")
 

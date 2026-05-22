@@ -11,6 +11,13 @@ import HookRelay
 // senkani-app-emfile-crash-during-pane-launch-2026-05-15.
 raiseFileDescriptorLimit()
 
+// U.2b-1b-6 — register the off-screen WKWebView BrowserPaneRunner with
+// the Core-side BrowserDispatchRegistry so MCP / CLI callers asking for
+// dispatch:"headless" find it. Done before either branch (GUI / MCP /
+// socket / hook) since the registration is a cheap static-slot write and
+// every host mode may need the headless arm wired.
+BrowserPaneRunnerFactory.register()
+
 let isSocketMode = CommandLine.arguments.contains("--socket-server")
 let isHookMode = CommandLine.arguments.contains("--hook")
 // MCP mode requires an explicit flag. The previous fallback

@@ -41,7 +41,7 @@ struct Validate: ParsableCommand {
     @Option(name: .long, help: "[--browser] Output format. 'json' produces byte-identical output to the senkani_validate_browser MCP response.")
     var format: String?
 
-    @Option(name: .long, help: "[--browser] Runner selector. 'subprocess' (default) drives the node+Playwright Chromium subprocess; 'headless' is reserved for U.2b-1b's off-screen WKWebView runner and currently returns a structured headless_not_yet_implemented refusal.")
+    @Option(name: .long, help: "[--browser] Runner selector. 'subprocess' (default) drives the node+Playwright Chromium subprocess. 'headless' drives the off-screen WKWebView runner via BrowserDispatchRegistry's factory (registered by SenkaniApp at startup); standalone CLI invocations without that factory still see a structured headless_not_yet_implemented refusal.")
     var dispatch: String = "subprocess"
 
     @Option(name: .long, help: "[--browser] EgressProxy URL (e.g. 'http://127.0.0.1:18080'). When set, the spawned Chromium subprocess routes through it with a per-target same-origin allowlist written to SENKANI_EGRESS_POLICY_OVERRIDE. Operator runs 'senkani egress start' first.")
@@ -149,6 +149,12 @@ struct Validate: ParsableCommand {
             try runner.run(plan: plan, targetURL: target, screenshot: screenshot,
                            egressPolicyOverridePath: overridePath)
         }
+        // U.2b-1b-6 — look up the headless runner factory the host
+        // (SenkaniApp at startup) may have registered. Nil when running
+        // the standalone CLI binary; the dispatcher then falls back to
+        // the structured headless_not_yet_implemented refusal.
+        let headlessClosure: BrowserValidationDispatcher.Runner? =
+            BrowserDispatchRegistry.makeHeadlessRunnerClosure(egressProxyURL: egressProxy)
         let db = SessionDatabase.shared
         let resultSink: BrowserValidationDispatcher.ResultSink = { row in
             let planJSON = Self.encodePlanSteps(row.planSteps)
@@ -187,6 +193,7 @@ struct Validate: ParsableCommand {
         let response = try BrowserValidationDispatcher.dispatch(
             request: request,
             runner: runnerClosure,
+            headlessRunner: headlessClosure,
             resultSink: resultSink,
             tokenEventSink: tokenEventSink
         )

@@ -48,6 +48,7 @@ interface PlaywrightResult {
     assertions_failed: number;
     screenshot_path: string | null;
     advisory: string | null;
+    security_measurement?: SecurityMeasurement | null;
 }
 
 interface PerfMeasurement {
@@ -70,6 +71,27 @@ interface CompletenessMeasurement {
     meta_description: string | null;
     internal_links: InternalLink[];
     images: ImageElement[];
+}
+
+interface FormElement {
+    action: string | null;
+    method: string;
+    csrf_token_present: boolean;
+}
+
+interface AnchorElement {
+    href: string;
+}
+
+interface ScriptElement {
+    src: string;
+    same_origin: boolean;
+}
+
+interface SecurityMeasurement {
+    forms: FormElement[];
+    anchors: AnchorElement[];
+    scripts: ScriptElement[];
 }
 
 interface PerfExpected {
@@ -122,6 +144,61 @@ async function measurePerf(page: Page): Promise<PerfMeasurement> {
                 resolve({ inp_ms: null, lcp_ms: lcpMs });
             }, 500);
         });
+    });
+}
+
+async function measureSecurity(page: Page): Promise<SecurityMeasurement> {
+    // DOM walk inside page.evaluate so all element access happens in the
+    // browser context. Returns the SecurityMeasurement payload byte-
+    // compatible with the Swift `SecurityMeasurement` Codable shape at
+    // Sources/Core/Validation/security.swift.
+    //
+    // Raw attribute reads on purpose: the Swift SecurityAxis evaluator
+    // matches the `javascript:` scheme on the raw `<a href>` (resolved
+    // .href would still return `javascript:...` but raw is the spec'd
+    // surface). For `<script src>`, `same_origin` is computed by
+    // resolving the raw src against `location.href` and comparing the
+    // origin, with a try/catch fallback to `false` on parse failure —
+    // mirrors measureCompleteness's URL handling.
+    return await page.evaluate(() => {
+        const csrfPatterns = ["csrf", "_token", "authenticity_token", "anti_xsrf"];
+
+        const forms: FormElement[] = Array.from(
+            document.querySelectorAll<HTMLFormElement>("form")
+        ).map(f => {
+            const inputs = Array.from(
+                f.querySelectorAll<HTMLInputElement>("input")
+            );
+            const csrfPresent = inputs.some(i => {
+                const name = (i.getAttribute("name") || "").toLowerCase();
+                return csrfPatterns.some(p => name.includes(p));
+            });
+            const rawMethod = f.getAttribute("method");
+            return {
+                action: f.getAttribute("action"),
+                method: (rawMethod ?? "get").toLowerCase(),
+                csrf_token_present: csrfPresent,
+            };
+        });
+
+        const anchors: AnchorElement[] = Array.from(
+            document.querySelectorAll<HTMLAnchorElement>("a[href]")
+        ).map(a => ({ href: a.getAttribute("href") || "" }));
+
+        const scripts: ScriptElement[] = Array.from(
+            document.querySelectorAll<HTMLScriptElement>("script[src]")
+        ).map(s => {
+            const src = s.getAttribute("src") || "";
+            let sameOrigin = false;
+            try {
+                sameOrigin = new URL(src, location.href).origin === location.origin;
+            } catch {
+                sameOrigin = false;
+            }
+            return { src, same_origin: sameOrigin };
+        });
+
+        return { forms, anchors, scripts };
     });
 }
 
@@ -317,13 +394,16 @@ async function main(): Promise<void> {
         }
         // U.2b-axes — security + design axes ship Swift evaluators in
         // this round (Sources/Core/Validation/{security,design}.swift)
-        // with full unit-test coverage. TS-side DOM-walk measurements
-        // for the two axes are tracked under the mandatory-follow-up
-        // item filed at U.2b-axes close. Until then, the TS runner
-        // emits a structured informational advisory rather than
-        // silently skipping — Russell no-silent-acceptance.
+        // with full unit-test coverage. U.2b-1b-1 (this commit) wires
+        // TS-side `measureSecurity` and ships the SecurityMeasurement
+        // payload back via PlaywrightResult.security_measurement.
+        // Swift's SecurityAxis.evaluate consumes the payload to produce
+        // the three assertion rows.  Design axis still emits the
+        // deferred-advisory until child #2 of the U.2b-1b decomposition
+        // wires measureDesign.
+        let securityMeasurement: SecurityMeasurement | null = null;
         if (axesRun.includes("security")) {
-            allAdvisories.push("security axis dispatched but TS-side measurement deferred — Swift evaluator (SecurityAxis) is the canonical surface; see process-gap-validate-browser-ts-runner-security-design-measurements-2026-05-19");
+            securityMeasurement = await measureSecurity(page);
         }
         if (axesRun.includes("design")) {
             allAdvisories.push("design axis dispatched but TS-side measurement deferred — Swift evaluator (DesignAxis) is the canonical surface; see process-gap-validate-browser-ts-runner-security-design-measurements-2026-05-19");
@@ -349,6 +429,7 @@ async function main(): Promise<void> {
             assertions_failed: totalFailed,
             screenshot_path: screenshotPath,
             advisory: allAdvisories.length > 0 ? allAdvisories.join(" | ") : null,
+            security_measurement: securityMeasurement,
         });
         process.exit(0);
     } catch (err) {

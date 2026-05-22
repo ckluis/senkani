@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>U.2b-1b-1 security roundtrip fixture</title>
+    <script src="/local.js"></script>
+    <script src="https://cdn.example.com/lib.js"></script>
+</head>
+<body>
+    <!--
+        Fixture for runner.ts measureSecurity() byte-shape contract tests.
+        When fed through `Resources/playwright-runner/runner.ts` against an
+        origin of `https://example.com`, the measurement output is
+        captured in Resources/playwright-runner/fixtures/
+        security-roundtrip.expected.json and consumed by the Swift
+        PlaywrightRunnerSecurityMeasurementTests round-trip test.
+
+        Subsequent decomposition children (U.2b-1b-3 pure-JS extraction,
+        U.2b-1b-6 parity corpus) reuse the same fixture pair so jsdom and
+        Chromium emit byte-identical JSON against this input.
+    -->
+    <form method="post" action="/login">
+        <input name="csrf_token" type="hidden" value="x">
+        <input name="username">
+    </form>
+    <form method="get" action="/search">
+        <input name="q">
+    </form>
+    <a href="https://example.com/safe">safe link</a>
+    <a href="javascript:alert(1)">unsafe link</a>
+</body>
+</html>

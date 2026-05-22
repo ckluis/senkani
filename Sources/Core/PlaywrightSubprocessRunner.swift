@@ -13,6 +13,12 @@ public struct PlaywrightResult: Codable, Sendable, Equatable {
     public let assertionsFailed: Int
     public let screenshotPath: String?
     public let advisory: String?
+    /// Security-axis DOM measurement payload, populated by runner.ts's
+    /// `measureSecurity(page)` when the plan includes a security step.
+    /// Consumed by Swift `SecurityAxis.evaluate(measurement:expected:)`
+    /// to produce the three assertion rows. Absent / null when the
+    /// plan does not include a security step. U.2b-1b-1.
+    public let securityMeasurement: SecurityMeasurement?
 
     public init(
         resultStatus: String,
@@ -20,7 +26,8 @@ public struct PlaywrightResult: Codable, Sendable, Equatable {
         assertionsPassed: Int,
         assertionsFailed: Int,
         screenshotPath: String? = nil,
-        advisory: String? = nil
+        advisory: String? = nil,
+        securityMeasurement: SecurityMeasurement? = nil
     ) {
         self.resultStatus = resultStatus
         self.axesRun = axesRun
@@ -28,6 +35,7 @@ public struct PlaywrightResult: Codable, Sendable, Equatable {
         self.assertionsFailed = assertionsFailed
         self.screenshotPath = screenshotPath
         self.advisory = advisory
+        self.securityMeasurement = securityMeasurement
     }
 
     enum CodingKeys: String, CodingKey {
@@ -37,6 +45,7 @@ public struct PlaywrightResult: Codable, Sendable, Equatable {
         case assertionsFailed = "assertions_failed"
         case screenshotPath = "screenshot_path"
         case advisory
+        case securityMeasurement = "security_measurement"
     }
 }
 

@@ -1,0 +1,1 @@
+{"anchors":[{"href":"https://example.com/safe"},{"href":"javascript:alert(1)"}],"forms":[{"action":"/login","csrf_token_present":true,"method":"post"},{"action":"/search","csrf_token_present":false,"method":"get"}],"scripts":[{"same_origin":true,"src":"/local.js"},{"same_origin":false,"src":"https://cdn.example.com/lib.js"}]}

@@ -19,6 +19,18 @@ public struct PlaywrightResult: Codable, Sendable, Equatable {
     /// to produce the three assertion rows. Absent / null when the
     /// plan does not include a security step. U.2b-1b-1.
     public let securityMeasurement: SecurityMeasurement?
+    /// Design-axis DOM measurement payload, populated by runner.ts's
+    /// `measureDesign(page)` when the plan includes a design step.
+    /// Consumed by Swift `DesignAxis.evaluate(measurement:expected:)`
+    /// to produce the three assertion rows. Absent / null when the
+    /// plan does not include a design step. U.2b-1b-2.
+    public let designMeasurement: DesignMeasurement?
+    /// Best-effort npm-audit static-check output, populated by
+    /// runner.ts when `target_url` resolves to localhost / 127.0.0.1 /
+    /// ::1 / *.local AND a `package.json` is discoverable at the
+    /// runner's CWD. Non-local targets and discoverable-package.json-
+    /// absent runs emit an empty list. U.2b-1b-2.
+    public let vulnerableDependencies: [String]?
 
     public init(
         resultStatus: String,
@@ -27,7 +39,9 @@ public struct PlaywrightResult: Codable, Sendable, Equatable {
         assertionsFailed: Int,
         screenshotPath: String? = nil,
         advisory: String? = nil,
-        securityMeasurement: SecurityMeasurement? = nil
+        securityMeasurement: SecurityMeasurement? = nil,
+        designMeasurement: DesignMeasurement? = nil,
+        vulnerableDependencies: [String]? = nil
     ) {
         self.resultStatus = resultStatus
         self.axesRun = axesRun
@@ -36,6 +50,8 @@ public struct PlaywrightResult: Codable, Sendable, Equatable {
         self.screenshotPath = screenshotPath
         self.advisory = advisory
         self.securityMeasurement = securityMeasurement
+        self.designMeasurement = designMeasurement
+        self.vulnerableDependencies = vulnerableDependencies
     }
 
     enum CodingKeys: String, CodingKey {
@@ -46,6 +62,8 @@ public struct PlaywrightResult: Codable, Sendable, Equatable {
         case screenshotPath = "screenshot_path"
         case advisory
         case securityMeasurement = "security_measurement"
+        case designMeasurement = "design_measurement"
+        case vulnerableDependencies = "vulnerable_dependencies"
     }
 }
 

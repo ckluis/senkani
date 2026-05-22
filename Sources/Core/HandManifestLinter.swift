@@ -123,6 +123,36 @@ public enum HandManifestLinter {
                 message: "cadence.schedule, if present, must be non-empty"))
         }
 
+        // V.18a-4 — runtime_telemetry.capture=full demands per-field
+        // operator review. An empty (or absent) validated_fields map
+        // means the operator opted into verbatim capture without
+        // declaring which attribute keys they actually reviewed; warn.
+        if let rt = m.runtimeTelemetry, rt.capture == .full {
+            let v = rt.validatedFields ?? [:]
+            if v.isEmpty {
+                issues.append(.init(
+                    severity: .warning,
+                    path: "runtime_telemetry.validated_fields",
+                    message:
+                        "runtime_telemetry.capture is 'full' but " +
+                        "validated_fields is empty — declare each " +
+                        "captured attribute key with a per-field " +
+                        "validated reason (the `// validated: <reason>` " +
+                        "annotation) so the audit trail records " +
+                        "operator review"))
+            } else {
+                for (key, reason) in v where reason.trimmingCharacters(in: .whitespaces).isEmpty {
+                    issues.append(.init(
+                        severity: .warning,
+                        path: "runtime_telemetry.validated_fields[\(key)]",
+                        message:
+                            "validated_fields['\(key)'] reason is empty " +
+                            "— `// validated: <reason>` annotation must " +
+                            "name why the field is safe to capture verbatim"))
+                }
+            }
+        }
+
         return issues
     }
 

@@ -51,17 +51,24 @@ public final class RuntimeTelemetryReceiver: @unchecked Sendable {
         /// Optional override of the persistence path used by the
         /// drop-counter snapshot. Tests stub this to a temp file.
         public var configPath: String?
+        /// V.18a-4 — per-source opt-in capture-mode map. Keyed by the
+        /// `X-Senkani-Source` header value (typically the producing
+        /// skill's `HandManifest.name`). Sources not present in the
+        /// map default to `.metadata`, the safest mode.
+        public var captureModesBySource: [String: HandRuntimeTelemetry.CaptureMode]
 
         public init(
             port: Int = 0,
             perSourceSpansPerSecond: Int = 1000,
             maxBodyBytes: Int = 4 * 1024 * 1024,
-            configPath: String? = nil
+            configPath: String? = nil,
+            captureModesBySource: [String: HandRuntimeTelemetry.CaptureMode] = [:]
         ) {
             self.port = port
             self.perSourceSpansPerSecond = perSourceSpansPerSecond
             self.maxBodyBytes = maxBodyBytes
             self.configPath = configPath
+            self.captureModesBySource = captureModesBySource
         }
     }
 
@@ -323,14 +330,21 @@ public final class RuntimeTelemetryReceiver: @unchecked Sendable {
     private enum ProcessResult { case ok, badRequest }
 
     private func processBody(path: String, mime: MimeType, body: Data, source: String) -> ProcessResult {
+        // V.18a-4 — per-source capture-mode lookup. Unknown sources
+        // default to the safest mode (`.metadata`); operators widen
+        // explicitly via `HandManifest.runtime_telemetry.capture`.
+        let mode = config.captureModesBySource[source] ?? .metadata
+        let filter: OTLPDecoder.AttributesFilter = { attrs in
+            OTLPPrivacyFilter.filter(attributes: attrs, mode: mode)
+        }
         if path == "/v1/traces" {
             let spans: [RuntimeTelemetryStore.SpanRow]
             do {
                 switch mime {
                 case .otlpProtobuf:
-                    spans = try OTLPDecoder.decodeTracesProtobuf(body)
+                    spans = try OTLPDecoder.decodeTracesProtobuf(body, attributesFilter: filter)
                 case .otlpJSON:
-                    spans = try OTLPDecoder.decodeTracesJSON(body)
+                    spans = try OTLPDecoder.decodeTracesJSON(body, attributesFilter: filter)
                 }
             } catch {
                 return .badRequest
@@ -348,9 +362,9 @@ public final class RuntimeTelemetryReceiver: @unchecked Sendable {
             do {
                 switch mime {
                 case .otlpProtobuf:
-                    logs = try OTLPDecoder.decodeLogsProtobuf(body)
+                    logs = try OTLPDecoder.decodeLogsProtobuf(body, attributesFilter: filter)
                 case .otlpJSON:
-                    logs = try OTLPDecoder.decodeLogsJSON(body)
+                    logs = try OTLPDecoder.decodeLogsJSON(body, attributesFilter: filter)
                 }
             } catch {
                 return .badRequest

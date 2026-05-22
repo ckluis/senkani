@@ -6,9 +6,12 @@ import Foundation
 /// `HandManifest` JSON document round-trips into per-harness output
 /// via `HandManifestExporter`, and is validated by `HandManifestLinter`.
 ///
-/// Schema v1 is **frozen** (see `spec/skills.md`). Future evolutions
-/// land as `schemaVersion: 2` with a parallel `HandManifestV2` type;
-/// they do not edit this struct.
+/// Schema v1 is **frozen** for required-field reshapes. Future
+/// breaking evolutions land as `schemaVersion: 2` with a parallel
+/// `HandManifestV2` type; they do not edit this struct. Optional
+/// fields with safe defaults (decode as `nil` on older manifests,
+/// behave identically to pre-extension code paths) may be added under
+/// v1 — `runtimeTelemetry` is the precedent (V.18a-4, 2026-05-22).
 public struct HandManifest: Codable, Sendable, Equatable {
     public var schemaVersion: Int
     public var name: String
@@ -23,6 +26,10 @@ public struct HandManifest: Codable, Sendable, Equatable {
     public var cadence: HandCadence
     public var sandbox: HandSandbox
     public var capabilities: [String]
+    /// V.18a-4 — opt-in per-source widening for runtime telemetry
+    /// capture. Absent on every pre-V.18a-4 manifest; the receiver
+    /// treats `nil` as `.metadata` (the safe default).
+    public var runtimeTelemetry: HandRuntimeTelemetry?
 
     public init(
         schemaVersion: Int = 1,
@@ -37,7 +44,8 @@ public struct HandManifest: Codable, Sendable, Equatable {
         guardrails: HandGuardrails = .empty,
         cadence: HandCadence = .empty,
         sandbox: HandSandbox = .none,
-        capabilities: [String] = []
+        capabilities: [String] = [],
+        runtimeTelemetry: HandRuntimeTelemetry? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.name = name
@@ -52,6 +60,7 @@ public struct HandManifest: Codable, Sendable, Equatable {
         self.cadence = cadence
         self.sandbox = sandbox
         self.capabilities = capabilities
+        self.runtimeTelemetry = runtimeTelemetry
     }
 
     enum CodingKeys: String, CodingKey {
@@ -60,6 +69,54 @@ public struct HandManifest: Codable, Sendable, Equatable {
         case systemPrompt = "system_prompt"
         case skillMd = "skill_md"
         case guardrails, cadence, sandbox, capabilities
+        case runtimeTelemetry = "runtime_telemetry"
+    }
+}
+
+/// V.18a-4 — per-source opt-in widening for runtime telemetry
+/// capture. Three modes:
+///   - `.metadata` (default): only span/log names, durations, IDs,
+///     timestamps, status codes, severities, and non-sensitive
+///     attribute keys reach storage. HTTP/RPC bodies, headers, and
+///     `process.env.*` attributes are dropped at receive.
+///   - `.redactedBodies`: the same metadata plus the otherwise-
+///     dropped body/header/env attribute keys, but every captured
+///     value is routed through `SecretDetector` before persist.
+///   - `.full`: every attribute persisted verbatim. The
+///     `validatedFields` map MUST cover every attribute key the
+///     operator intends to capture, with a free-text reason
+///     (the `// validated: <reason>` annotation). `HandManifestLinter`
+///     emits a warning when `capture == .full` and `validatedFields`
+///     is nil or empty — the operator skipped the per-field review.
+///
+/// See `spec/architecture.md#runtime-telemetry-receiver-trust-boundary`
+/// (V.18a-3) and `spec/skills.md` (`runtime_telemetry` schema row)
+/// for the durable specs.
+public struct HandRuntimeTelemetry: Codable, Sendable, Equatable {
+    public var capture: CaptureMode
+    /// Per-field operator review record, keyed by OTLP attribute key
+    /// (e.g. `"http.request.body"`). Value is the free-text reason
+    /// the operator captured for the audit trail. Required by lint
+    /// when `capture == .full`.
+    public var validatedFields: [String: String]?
+
+    public init(
+        capture: CaptureMode = .metadata,
+        validatedFields: [String: String]? = nil
+    ) {
+        self.capture = capture
+        self.validatedFields = validatedFields
+    }
+
+    public enum CaptureMode: String, Codable, Sendable, Equatable {
+        case metadata
+        case redactedBodies = "redacted_bodies"
+        case full
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case capture
+        case validatedFields = "validated_fields"
     }
 }
 

@@ -1932,6 +1932,68 @@ public enum MigrationRegistry {
             // start.
             try openCachedTokenAnchor(db: db)
         },
+        Migration(version: 36, description: "provider_runtime_event canonical spine for V.17a-1 (ProviderRuntimeEvent + projection scaffold)") { db in
+            // V.17a-1 — first of six V.17a sub-items per the
+            // 2026-05-23 operator-approved decomposition. Lands the
+            // shared spine: the canonical 10-case event row, conformed
+            // dimensions matching V.2's `agent_trace_event` vocabulary,
+            // `raw_payload_hash UNIQUE` for at-source idempotency, and
+            // a projection-query covering index. Adapters in v17a-2..5
+            // write rows here; the V.17b dashboard reads them.
+            //
+            // Chain note: `provider_runtime_event` is NOT in the T.5
+            // audit chain. Accepted-risk per V.2 precedent: V.2's
+            // `agent_trace_event` doesn't participate either (it is
+            // derived from the chain-anchored `token_events`). V.17a's
+            // table is one further tier of derivation. Tampering is
+            // detectable by re-deriving from the underlying CLI
+            // session logs the adapter ingested. See
+            // `Sources/Core/ProviderRuntime/ProviderRuntimeEvent.swift`
+            // class-doc + `Sources/Core/Stores/ProviderRuntimeEventStore.swift`
+            // class-doc for the audit-chain rationale.
+            //
+            // Projection-status enum lives in
+            // `ProviderRuntimeEvent.ProjectionStatus`; the SQL column
+            // stores the rawValue strings (`ineligible` / `pending` /
+            // `projected` / `dedup`). The covering index
+            // `(provider_id, session_id, observed_at)` powers the
+            // V.17b "events for a session, in time order, by provider"
+            // primary query without a sort.
+            func exec(_ sql: String) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc != SQLITE_OK {
+                    throw MigrationError.sqlFailed(stage: "v36", detail: msg)
+                }
+            }
+            try exec("""
+                CREATE TABLE IF NOT EXISTS provider_runtime_event (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    raw_payload_hash TEXT NOT NULL UNIQUE,
+                    provider_id TEXT NOT NULL,
+                    session_id TEXT,
+                    thread_id TEXT,
+                    turn_id TEXT,
+                    pane TEXT,
+                    event_type TEXT NOT NULL,
+                    observed_at REAL NOT NULL,
+                    prompt_tokens INTEGER,
+                    completion_tokens INTEGER,
+                    cached_tokens INTEGER,
+                    tool_call_id TEXT,
+                    tool_name TEXT,
+                    tool_result TEXT,
+                    approval_id TEXT,
+                    warnings_json TEXT,
+                    projection_status TEXT NOT NULL DEFAULT 'ineligible'
+                );
+            """)
+            try exec("CREATE INDEX IF NOT EXISTS idx_provider_runtime_event_provider_session_time ON provider_runtime_event(provider_id, session_id, observed_at);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_provider_runtime_event_tool_call ON provider_runtime_event(tool_call_id) WHERE tool_call_id IS NOT NULL;")
+            try exec("CREATE INDEX IF NOT EXISTS idx_provider_runtime_event_projection ON provider_runtime_event(projection_status) WHERE projection_status != 'ineligible';")
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)

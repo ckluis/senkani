@@ -91,6 +91,11 @@ public final class SessionDatabase: @unchecked Sendable {
     /// V.18a-2 — RuntimeTelemetryDataset (runtime_telemetry_{dataset,span,log}).
     /// Owned schema lives in migrations v30 + v31.
     public var runtimeTelemetryStore: RuntimeTelemetryStore!
+    /// V.17a-1 — ProviderRuntimeEvent canonical spine
+    /// (provider_runtime_event). Owned schema lives in migration v36.
+    /// Outside the T.5 chain (accepted-risk per V.2 precedent — see
+    /// `Sources/Core/ProviderRuntime/ProviderRuntimeEvent.swift` doc).
+    public var providerRuntimeEventStore: ProviderRuntimeEventStore!
 
     // MARK: - Init
 
@@ -150,6 +155,8 @@ public final class SessionDatabase: @unchecked Sendable {
         surrogateWritesStore = SurrogateWritesStore(parent: self)
         runtimeTelemetryStore = RuntimeTelemetryStore(parent: self)
         runtimeTelemetryStore.setupSchema()
+        providerRuntimeEventStore = ProviderRuntimeEventStore(parent: self)
+        providerRuntimeEventStore.setupSchema()
     }
 
     /// Testable initializer — opens a DB at a custom path (use a temp file).
@@ -195,6 +202,8 @@ public final class SessionDatabase: @unchecked Sendable {
         surrogateWritesStore = SurrogateWritesStore(parent: self)
         runtimeTelemetryStore = RuntimeTelemetryStore(parent: self)
         runtimeTelemetryStore.setupSchema()
+        providerRuntimeEventStore = ProviderRuntimeEventStore(parent: self)
+        providerRuntimeEventStore.setupSchema()
     }
 
     // MARK: - Observability counters (migration v2)

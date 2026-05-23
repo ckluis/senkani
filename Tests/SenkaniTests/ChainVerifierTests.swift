@@ -195,8 +195,11 @@ struct ChainVerifierTests {
         // `connection_id` (NULL when no override) in the canonical column
         // map. T.3a-4 (v33): post-v33 fresh-install anchors additionally
         // include the four wasm_* columns (NULL for non-wasm_kill rows).
-        // Mirrors `TokenEventStore.recordTokenEvent` /
-        // `recordWasmKill` and `ChainVerifier.verifyAnchorTokenEvents`.
+        // V.19a-2 (v35): post-v35 fresh-install anchors additionally
+        // include the five cached-token columns (NULL for rows without
+        // cache observations). Mirrors
+        // `TokenEventStore.recordTokenEvent` / `recordWasmKill` and
+        // `ChainVerifier.verifyAnchorTokenEvents`.
         let columns: [String: ChainHasher.CanonicalValue] = [
             "timestamp":     .real(row.timestamp),
             "session_id":    .text(row.sessionId),
@@ -217,6 +220,11 @@ struct ChainVerifierTests {
             "wasm_duration_us":     .null,
             "wasm_budget_delta_us": .null,
             "wasm_tool_id":         .null,
+            "cached_prompt_tokens":      .null,
+            "cache_write_tokens":        .null,
+            "cache_read_tokens":         .null,
+            "prefill_ms_saved_estimate": .null,
+            "cache_origin":              .null,
         ]
         let expected = ChainHasher.entryHash(
             table: "token_events", columns: columns, prev: nil

@@ -93,11 +93,36 @@ final class TokenEventStore: @unchecked Sendable {
         feature: String?,
         command: String?,
         modelTier: String? = nil,
-        connectionId: String? = nil
+        connectionId: String? = nil,
+        // V.19a-2 — cached-token accounting. Defaults preserve current
+        // call sites that pre-date cache integration. Callers wiring the
+        // V.19a-1 MLXPrefixCache hooks supply non-nil values per
+        // inference call. Each accounting source writes to its own
+        // column so cached-token reporting stays isolated from
+        // `saved_tokens` (FilterPipeline / senkani_bundle /
+        // RuntimeTelemetryDataset privacy-redaction).
+        //
+        // `cachedPromptTokens` — total cached prompt occupancy observed
+        // at call time (snapshot of cache state).
+        // `cacheWriteTokens` — tokens written to the cache by this
+        // inference call (prefill that populates the prefix).
+        // `cacheReadTokens` — tokens reused FROM the cache by this
+        // inference call (prefix shared with prior sessions/turns).
+        // `prefillMsSavedEstimate` — derived (per-token prefill cost ×
+        // cacheReadTokens); caller computes.
+        // `cacheOrigin` — discriminator for the cache subsystem; raw
+        // value of `CacheOrigin` enum. V.19a-2 ships only
+        // `prefix_cache`.
+        cachedPromptTokens: Int? = nil,
+        cacheWriteTokens: Int? = nil,
+        cacheReadTokens: Int? = nil,
+        prefillMsSavedEstimate: Int? = nil,
+        cacheOrigin: CacheOrigin? = nil
     ) {
         let normalizedRoot = SessionDatabase.normalizePath(projectRoot)
         let now = Date().timeIntervalSince1970
         let redactedCommand = PersistenceRedaction.redactedString(command)
+        let cacheOriginRaw = cacheOrigin?.rawValue
         parent.queue.async { [weak parent, weak self] in
             guard let parent, let self, let db = parent.db else { return }
 
@@ -116,15 +141,29 @@ final class TokenEventStore: @unchecked Sendable {
             // `ChainVerifier.verifyAnchorTokenEvents`.
             //
             // T.3a-4 (v33): include the four wasm_* columns in the
-            // canonical map for anchors `migration-v33` and the post-v33
-            // `fresh-install` (lazy-created after v33 runs). Pre-v33
-            // anchors hash without the wasm_* columns. Non-wasm_kill
-            // rows under v33 anchors carry the columns as `.null`, which
-            // hashes deterministically — `recordTokenEvent` always
-            // writes them as null.
+            // canonical map for anchors `migration-v33`, the post-v33
+            // pre-v35 `fresh-install-pre-v35` anchor, the v35 anchor,
+            // AND the post-v35 `fresh-install` anchor. Pre-v33 anchors
+            // hash without the wasm_* columns. Non-wasm_kill rows under
+            // these anchors carry the columns as `.null`, which hashes
+            // deterministically — `recordTokenEvent` always writes them
+            // as null.
+            //
+            // V.19a-2 (v35): include the five cached-token columns in
+            // the canonical map for anchors `migration-v35` and the
+            // post-v35 `fresh-install` (lazy-created after v35 runs).
+            // Pre-v35 anchors hash without the cached-token columns.
+            // Rows without cache observations carry the columns as
+            // `.null` under v35 shape, which hashes deterministically.
             let reason = self.chain.anchorReason(db: db, anchorId: anchorId) ?? ""
             let useLegacyShape = (reason == "migration-v4" || reason == "fresh-install-pre-v18")
-            let useV33Shape = (reason == "migration-v33" || reason == "fresh-install")
+            let useV33Shape = (
+                reason == "migration-v33" ||
+                reason == "fresh-install-pre-v35" ||
+                reason == "migration-v35" ||
+                reason == "fresh-install"
+            )
+            let useV35Shape = (reason == "migration-v35" || reason == "fresh-install")
 
             // Build the canonical-byte input from the to-be-bound values. The
             // three chain columns are excluded by `ChainHasher` — they cannot
@@ -149,7 +188,7 @@ final class TokenEventStore: @unchecked Sendable {
                 columns["connection_id"] = Self.canonical(connectionId)
             }
             if useV33Shape {
-                // Non-wasm_kill rows under v33 anchors hash with the
+                // Non-wasm_kill rows under v33+ anchors hash with the
                 // wasm_* columns as `.null`. Wasm_kill rows go through
                 // `recordWasmKill` which populates the same four keys
                 // with non-null values so the canonical shape stays
@@ -158,6 +197,13 @@ final class TokenEventStore: @unchecked Sendable {
                 columns["wasm_duration_us"] = .null
                 columns["wasm_budget_delta_us"] = .null
                 columns["wasm_tool_id"] = .null
+            }
+            if useV35Shape {
+                columns["cached_prompt_tokens"]      = Self.canonicalInt(cachedPromptTokens)
+                columns["cache_write_tokens"]        = Self.canonicalInt(cacheWriteTokens)
+                columns["cache_read_tokens"]         = Self.canonicalInt(cacheReadTokens)
+                columns["prefill_ms_saved_estimate"] = Self.canonicalInt(prefillMsSavedEstimate)
+                columns["cache_origin"]              = Self.canonical(cacheOriginRaw)
             }
             let entryHash = ChainHasher.entryHash(
                 table: "token_events", columns: columns, prev: prevHash
@@ -168,8 +214,10 @@ final class TokenEventStore: @unchecked Sendable {
                 (timestamp, session_id, pane_id, project_root, source, tool_name, model,
                  input_tokens, output_tokens, saved_tokens, cost_cents, feature, command, model_tier,
                  connection_id,
+                 cached_prompt_tokens, cache_write_tokens, cache_read_tokens,
+                 prefill_ms_saved_estimate, cache_origin,
                  prev_hash, entry_hash, chain_anchor_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -190,9 +238,14 @@ final class TokenEventStore: @unchecked Sendable {
             Self.bindOptionalText(stmt, 13, redactedCommand)
             Self.bindOptionalText(stmt, 14, modelTier)
             Self.bindOptionalText(stmt, 15, connectionId)
-            Self.bindOptionalText(stmt, 16, prevHash)
-            sqlite3_bind_text(stmt, 17, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
-            sqlite3_bind_int64(stmt, 18, anchorId)
+            Self.bindOptionalInt(stmt, 16, cachedPromptTokens)
+            Self.bindOptionalInt(stmt, 17, cacheWriteTokens)
+            Self.bindOptionalInt(stmt, 18, cacheReadTokens)
+            Self.bindOptionalInt(stmt, 19, prefillMsSavedEstimate)
+            Self.bindOptionalText(stmt, 20, cacheOriginRaw)
+            Self.bindOptionalText(stmt, 21, prevHash)
+            sqlite3_bind_text(stmt, 22, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_int64(stmt, 23, anchorId)
 
             if sqlite3_step(stmt) == SQLITE_DONE {
                 // Update cache only on successful insert. parent.queue
@@ -229,7 +282,19 @@ final class TokenEventStore: @unchecked Sendable {
 
             let anchorId = self.chain.resolveAnchorId(db: db)
             let anchorReason = self.chain.anchorReason(db: db, anchorId: anchorId) ?? ""
-            let useV33Shape = (anchorReason == "migration-v33" || anchorReason == "fresh-install")
+            // V.19a-2 (v35): expanded post-v33 anchor set. After v35
+            // migration, the previous post-v33 `fresh-install` was
+            // renamed to `fresh-install-pre-v35`; the rolling
+            // `fresh-install` now means v35 shape (includes wasm_* AND
+            // cached_*). wasm_kill rows under v35 anchors carry cached_*
+            // as `.null` so the canonical shape stays uniform per-anchor.
+            let useV33Shape = (
+                anchorReason == "migration-v33" ||
+                anchorReason == "fresh-install-pre-v35" ||
+                anchorReason == "migration-v35" ||
+                anchorReason == "fresh-install"
+            )
+            let useV35Shape = (anchorReason == "migration-v35" || anchorReason == "fresh-install")
             // Pre-v33 anchors don't carry the wasm_* canonical shape;
             // drop the row rather than write under a hash the verifier
             // cannot reproduce.
@@ -263,7 +328,13 @@ final class TokenEventStore: @unchecked Sendable {
                 "wasm_budget_delta_us": .integer(budgetDeltaUs),
                 "wasm_tool_id":   Self.canonical(toolId),
             ]
-            _ = columns  // silence unused warning under future trimming
+            if useV35Shape {
+                columns["cached_prompt_tokens"]      = .null
+                columns["cache_write_tokens"]        = .null
+                columns["cache_read_tokens"]         = .null
+                columns["prefill_ms_saved_estimate"] = .null
+                columns["cache_origin"]              = .null
+            }
             let entryHash = ChainHasher.entryHash(
                 table: "token_events", columns: columns, prev: prevHash
             )
@@ -317,6 +388,17 @@ final class TokenEventStore: @unchecked Sendable {
     private static func canonical(_ value: String?) -> ChainHasher.CanonicalValue {
         guard let value else { return .null }
         return .text(value)
+    }
+
+    /// Coerce an optional Int to a `ChainHasher.CanonicalValue` — nil
+    /// becomes NULL, populated values become `.integer`. Mirrors the
+    /// SQLite bind path: `bindOptionalInt` binds `NULL` for nil,
+    /// `Int64` for populated. Used by the V.19a-2 (v35) cached-token
+    /// columns so the canonical map matches what the verifier reads
+    /// back from `sqlite3_column_type == SQLITE_NULL`.
+    private static func canonicalInt(_ value: Int?) -> ChainHasher.CanonicalValue {
+        guard let value else { return .null }
+        return .integer(Int64(value))
     }
 
     /// Record a hook event from the senkani-hook binary. Rows land in
@@ -1106,6 +1188,14 @@ final class TokenEventStore: @unchecked Sendable {
     private static func bindOptionalText(_ stmt: OpaquePointer?, _ index: Int32, _ value: String?) {
         if let val = value {
             sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+        } else {
+            sqlite3_bind_null(stmt, index)
+        }
+    }
+
+    private static func bindOptionalInt(_ stmt: OpaquePointer?, _ index: Int32, _ value: Int?) {
+        if let val = value {
+            sqlite3_bind_int64(stmt, index, Int64(val))
         } else {
             sqlite3_bind_null(stmt, index)
         }

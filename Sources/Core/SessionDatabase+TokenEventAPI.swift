@@ -111,7 +111,16 @@ extension SessionDatabase {
         feature: String?,
         command: String?,
         modelTier: String? = nil,
-        connectionId: String? = nil
+        connectionId: String? = nil,
+        // V.19a-2 — cached-token accounting. Defaults preserve all
+        // existing call sites; MCP-layer inference adapters wiring the
+        // V.19a-1 MLXPrefixCache lifecycle hooks pass non-nil values.
+        // See `TokenEventStore.recordTokenEvent` for column semantics.
+        cachedPromptTokens: Int? = nil,
+        cacheWriteTokens: Int? = nil,
+        cacheReadTokens: Int? = nil,
+        prefillMsSavedEstimate: Int? = nil,
+        cacheOrigin: CacheOrigin? = nil
     ) {
         tokenEventStore.recordTokenEvent(
             sessionId: sessionId, paneId: paneId, projectRoot: projectRoot,
@@ -119,7 +128,12 @@ extension SessionDatabase {
             inputTokens: inputTokens, outputTokens: outputTokens,
             savedTokens: savedTokens, costCents: costCents,
             feature: feature, command: command, modelTier: modelTier,
-            connectionId: connectionId
+            connectionId: connectionId,
+            cachedPromptTokens: cachedPromptTokens,
+            cacheWriteTokens: cacheWriteTokens,
+            cacheReadTokens: cacheReadTokens,
+            prefillMsSavedEstimate: prefillMsSavedEstimate,
+            cacheOrigin: cacheOrigin
         )
         OnboardingMilestoneStore.record(.firstTrackedEvent)
         if savedTokens > 0 {

@@ -1850,6 +1850,88 @@ public enum MigrationRegistry {
                     ON sprint_review_snapshots(captured_at);
             """)
         },
+        Migration(version: 35, description: "cached-token accounting columns on token_events for V.19a-2 (cached_prompt_tokens, cache_write_tokens, cache_read_tokens, prefill_ms_saved_estimate, cache_origin)") { db in
+            // V.19a-2 — wire the V.19a-1 MLXPrefixCache wrap's accounting
+            // probes through the existing `token_events` chain with five new
+            // columns. Chain-hash compatibility mirrors the v33 wasm_kill
+            // pattern: pre-v35 rows under `migration-v4`,
+            // `fresh-install-pre-v18`, `migration-v18`, `migration-v33`, or
+            // the previous post-v33 `fresh-install` anchor were hashed
+            // WITHOUT the cached-token columns. Adding the columns to
+            // those anchors' canonical maps would break their entry_hash.
+            // Instead we open a NEW anchor (`migration-v35`) with
+            // `started_at_rowid = MAX(id)` and rename the existing
+            // post-v33 `fresh-install` anchor to `fresh-install-pre-v35`
+            // so the verifier can switch shapes per anchor. Post-v35
+            // writes register the five cached-token columns in the
+            // canonical map (NULL for non-inference rows, populated for
+            // inference rows carrying cache observations) and chain
+            // under the v35 anchor; legacy rows keep their existing
+            // anchor + old canonical shape. Cached-token accounting MUST
+            // stay isolated from `FilterPipeline`-driven `saved_tokens`,
+            // `senkani_bundle` compression savings, and V.18
+            // `RuntimeTelemetryDataset` privacy-redaction savings — each
+            // accounting source writes to its own column; the dashboard
+            // distinguishes them by column, not by inference.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v35", detail: msg)
+            }
+
+            // Self-contained CREATE matches the v18 / v32 / v33 baseline
+            // so v35 can run against a DB dropped in at any later state.
+            try exec("""
+                CREATE TABLE IF NOT EXISTS token_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp REAL NOT NULL,
+                    session_id TEXT NOT NULL,
+                    pane_id TEXT,
+                    project_root TEXT,
+                    source TEXT NOT NULL,
+                    tool_name TEXT,
+                    model TEXT,
+                    input_tokens INTEGER DEFAULT 0,
+                    output_tokens INTEGER DEFAULT 0,
+                    saved_tokens INTEGER DEFAULT 0,
+                    cost_cents INTEGER DEFAULT 0,
+                    feature TEXT,
+                    command TEXT
+                );
+            """)
+            try exec("ALTER TABLE token_events ADD COLUMN cached_prompt_tokens INTEGER;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE token_events ADD COLUMN cache_write_tokens INTEGER;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE token_events ADD COLUMN cache_read_tokens INTEGER;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE token_events ADD COLUMN prefill_ms_saved_estimate INTEGER;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE token_events ADD COLUMN cache_origin TEXT;", allowDuplicateColumn: true)
+            try exec("CREATE INDEX IF NOT EXISTS idx_token_events_cache_origin ON token_events(cache_origin) WHERE cache_origin IS NOT NULL;")
+
+            // Rename the post-v33 `fresh-install` anchor for token_events
+            // to `fresh-install-pre-v35` so writes + verifier can switch
+            // canonical shapes per anchor. Earlier renames produced
+            // `fresh-install-pre-v18` (v18) and `fresh-install-pre-v33`
+            // (v33); those names stay. After this rename, the rolling
+            // `fresh-install` anchor (lazy-created post-v35 by
+            // `ChainState`) means "v35 canonical shape" — includes
+            // wasm_* AND cached_* columns.
+            try exec("""
+                UPDATE chain_anchors
+                   SET reason = 'fresh-install-pre-v35'
+                 WHERE table_name = 'token_events'
+                   AND reason = 'fresh-install';
+            """)
+
+            // Open a `migration-v35` anchor at MAX(id) so post-v35 writes
+            // chain under the new canonical shape. No-op on empty tables
+            // — fresh installs lazy-create a `fresh-install` anchor on
+            // first write that uses the v35 canonical shape from the
+            // start.
+            try openCachedTokenAnchor(db: db)
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)
@@ -1944,6 +2026,54 @@ public enum MigrationRegistry {
             sqlite3_finalize(stmt)
             throw MigrationError.sqlFailed(
                 stage: "v33 anchor step(token_events)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_finalize(stmt)
+    }
+
+    /// Open a `migration-v35` anchor for `token_events` at MAX(id) so
+    /// post-v35 writes that include the cached-token columns
+    /// (`cached_prompt_tokens`, `cache_write_tokens`, `cache_read_tokens`,
+    /// `prefill_ms_saved_estimate`, `cache_origin`) in the canonical map
+    /// chain under the new shape, while pre-v35 rows verify under
+    /// `fresh-install-pre-v35` / `migration-v33` / `migration-v18` /
+    /// `fresh-install-pre-v18` / `migration-v4`. No-op on empty tables —
+    /// fresh installs lazy-create a `fresh-install` anchor on first
+    /// write that uses the v35 canonical shape from the start.
+    private static func openCachedTokenAnchor(db: OpaquePointer) throws {
+        var stmt: OpaquePointer?
+        let countSQL = "SELECT COUNT(*), COALESCE(MAX(id), 0) FROM token_events;"
+        guard sqlite3_prepare_v2(db, countSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(
+                stage: "v35 count(token_events)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        var rowCount: Int64 = 0
+        var maxRowid: Int64 = 0
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            rowCount = sqlite3_column_int64(stmt, 0)
+            maxRowid = sqlite3_column_int64(stmt, 1)
+        }
+        sqlite3_finalize(stmt)
+        guard rowCount > 0 else { return }
+
+        let now = Date().timeIntervalSince1970
+        let insertSQL = """
+            INSERT INTO chain_anchors
+                (table_name, started_at, started_at_rowid, reason, operator_note)
+            VALUES ('token_events', ?, ?, 'migration-v35', NULL);
+        """
+        guard sqlite3_prepare_v2(db, insertSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(
+                stage: "v35 anchor insert(token_events)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_bind_double(stmt, 1, now)
+        sqlite3_bind_int64(stmt, 2, maxRowid)
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            sqlite3_finalize(stmt)
+            throw MigrationError.sqlFailed(
+                stage: "v35 anchor step(token_events)",
                 detail: String(cString: sqlite3_errmsg(db)))
         }
         sqlite3_finalize(stmt)

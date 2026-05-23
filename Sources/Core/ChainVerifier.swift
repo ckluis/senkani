@@ -225,20 +225,34 @@ public enum ChainVerifier {
     ///
     /// Phase B-ii: rows under legacy anchors (`migration-v4`,
     /// `fresh-install-pre-v18`) were hashed without `connection_id`; all
-    /// other anchors include it. T.3a-4 (v33): rows under
-    /// `migration-v33` and the post-v33 `fresh-install` anchor include
-    /// the four wasm_* columns (`.null` for regular token_events,
-    /// populated for `source='wasm_kill'` rows). Pre-v33 anchors hash
-    /// without the wasm_* columns. Mirrors the writer-side switch in
+    /// other anchors include it. T.3a-4 (v33): rows under post-v33
+    /// anchors (`migration-v33`, `fresh-install-pre-v35`,
+    /// `migration-v35`, post-v35 `fresh-install`) include the four
+    /// wasm_* columns (`.null` for regular token_events, populated for
+    /// `source='wasm_kill'` rows). Pre-v33 anchors hash without the
+    /// wasm_* columns. V.19a-2 (v35): rows under v35 anchors
+    /// (`migration-v35`, post-v35 `fresh-install`) additionally include
+    /// the five cached-token columns (`.null` for rows without cache
+    /// observations, populated for inference rows carrying cache
+    /// observations). Pre-v35 anchors hash without the cached-token
+    /// columns. Mirrors the writer-side switch in
     /// `TokenEventStore.recordTokenEvent` + `recordWasmKill`.
     private static func verifyAnchorTokenEvents(db: OpaquePointer, anchor: Anchor) -> Result? {
         let includeConnectionId = !(anchor.reason == "migration-v4" || anchor.reason == "fresh-install-pre-v18")
-        let includeWasmKill = (anchor.reason == "migration-v33" || anchor.reason == "fresh-install")
+        let includeWasmKill = (
+            anchor.reason == "migration-v33" ||
+            anchor.reason == "fresh-install-pre-v35" ||
+            anchor.reason == "migration-v35" ||
+            anchor.reason == "fresh-install"
+        )
+        let includeCachedTokens = (anchor.reason == "migration-v35" || anchor.reason == "fresh-install")
         let sql = """
             SELECT id, timestamp, session_id, pane_id, project_root, source,
                    tool_name, model, input_tokens, output_tokens, saved_tokens,
                    cost_cents, feature, command, model_tier, connection_id,
                    wasm_reason, wasm_duration_us, wasm_budget_delta_us, wasm_tool_id,
+                   cached_prompt_tokens, cache_write_tokens, cache_read_tokens,
+                   prefill_ms_saved_estimate, cache_origin,
                    prev_hash, entry_hash
               FROM token_events
              WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
@@ -275,8 +289,23 @@ public enum ChainVerifier {
                                                     : .integer(sqlite3_column_int64(stmt, 18))
                 columns["wasm_tool_id"]         = textOrNull(stmt, 19)
             }
-            let prev = optionalText(stmt, 20)
-            let stored = sqlite3_column_text(stmt, 21).map { String(cString: $0) } ?? ""
+            if includeCachedTokens {
+                columns["cached_prompt_tokens"]      = sqlite3_column_type(stmt, 20) == SQLITE_NULL
+                                                        ? .null
+                                                        : .integer(sqlite3_column_int64(stmt, 20))
+                columns["cache_write_tokens"]        = sqlite3_column_type(stmt, 21) == SQLITE_NULL
+                                                        ? .null
+                                                        : .integer(sqlite3_column_int64(stmt, 21))
+                columns["cache_read_tokens"]         = sqlite3_column_type(stmt, 22) == SQLITE_NULL
+                                                        ? .null
+                                                        : .integer(sqlite3_column_int64(stmt, 22))
+                columns["prefill_ms_saved_estimate"] = sqlite3_column_type(stmt, 23) == SQLITE_NULL
+                                                        ? .null
+                                                        : .integer(sqlite3_column_int64(stmt, 23))
+                columns["cache_origin"]              = textOrNull(stmt, 24)
+            }
+            let prev = optionalText(stmt, 25)
+            let stored = sqlite3_column_text(stmt, 26).map { String(cString: $0) } ?? ""
             return (rowid, columns, prev, stored)
         }
     }

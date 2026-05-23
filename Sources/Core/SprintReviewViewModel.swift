@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 
 // MARK: - SprintReviewViewModel
 //
@@ -118,13 +119,42 @@ public enum SprintReviewViewModel {
     /// `CompoundLearningReview.quarterlyAuditFlags` default.
     public static let defaultAppliedIdleDays: Int = 60
 
-    /// Assemble a snapshot of staged artifacts + staleness flags. Pure
-    /// read — no writes. Caller owns refresh cadence.
+    /// Default retention window for `sprint_review_snapshots` rows,
+    /// in days. Each `snapshot(db:now:snapshot:)` call deletes rows
+    /// older than `now - retentionDays * 86400 * 1000` ms. Override
+    /// per-call via env `SENKANI_SPRINT_REVIEW_RETENTION_DAYS=<N>`
+    /// (parse-fail / negative → fall back to this default; N=0
+    /// deletes ALL prior snapshots).
+    public static let retentionDays: Int = 30
+
+    public static let retentionEnvVarName = "SENKANI_SPRINT_REVIEW_RETENTION_DAYS"
+
+    static func resolvedRetentionDays(env: [String: String]?) -> Int {
+        let raw: String?
+        if let env {
+            raw = env[retentionEnvVarName]
+        } else {
+            raw = ProcessInfo.processInfo.environment[retentionEnvVarName]
+        }
+        guard let s = raw, let n = Int(s), n >= 0 else { return retentionDays }
+        return n
+    }
+
+    /// Assemble a snapshot of staged artifacts + staleness flags.
+    /// Pure read by default; when `recordSnapshot: true`, the
+    /// assembled snapshot is also persisted to
+    /// `sprint_review_snapshots` for lineage replay
+    /// (V.9a follow-up sub-2). Callers that only want the read —
+    /// tests, programmatic readers — leave `recordSnapshot` at its
+    /// `false` default so they don't pollute history.
     public static func load(
         windowDays: Int = defaultWindowDays,
         appliedIdleDays: Int = defaultAppliedIdleDays,
         liveToolNames: Set<String> = [],
-        now: Date = Date()
+        now: Date = Date(),
+        recordSnapshot: Bool = false,
+        db: SessionDatabase = .shared,
+        env: [String: String]? = nil
     ) -> SprintReviewSnapshot {
         let set = CompoundLearningReview.sprintReviewSet(
             windowDays: windowDays, now: now)
@@ -210,11 +240,79 @@ public enum SprintReviewViewModel {
             )
         }
 
-        return SprintReviewSnapshot(
+        let snap = SprintReviewSnapshot(
             sections: sections,
             stalenessFlags: mappedFlags,
             windowDays: windowDays
         )
+
+        if recordSnapshot {
+            snapshot(db: db, now: now, snapshot: snap, env: env)
+        }
+
+        return snap
+    }
+
+    /// Persist one row per `SprintReviewRow` in `snapshot` to the
+    /// `sprint_review_snapshots` table (migration v34). All rows in
+    /// a single call share `captured_at` (millis since epoch). After
+    /// the batch insert, snapshots older than the resolved retention
+    /// window are pruned. Best-effort: a failed insert or prune is
+    /// logged-via-swallow — the in-memory snapshot the caller will
+    /// render is the authoritative read.
+    public static func snapshot(
+        db: SessionDatabase,
+        now: Date,
+        snapshot: SprintReviewSnapshot,
+        env: [String: String]? = nil
+    ) {
+        let capturedAtMs = Int64(now.timeIntervalSince1970 * 1000)
+        let windowDays = snapshot.windowDays
+        let retentionMs = Int64(resolvedRetentionDays(env: env)) * 86_400 * 1000
+
+        db.queue.sync {
+            guard let handle = db.db else { return }
+
+            let insertSQL = """
+                INSERT INTO sprint_review_snapshots
+                    (snapshot_id, captured_at, kind, row_id, title, subtitle,
+                     recurrence_count, confidence, last_seen_at, window_days)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """
+            for section in snapshot.sections {
+                for row in section.rows {
+                    var stmt: OpaquePointer?
+                    guard sqlite3_prepare_v2(handle, insertSQL, -1, &stmt, nil) == SQLITE_OK else { continue }
+                    var uuid = UUID().uuid
+                    let uuidBytes = withUnsafeBytes(of: &uuid) { Data($0) }
+                    _ = uuidBytes.withUnsafeBytes { rawBuf in
+                        sqlite3_bind_blob(stmt, 1, rawBuf.baseAddress, Int32(rawBuf.count), SQLITE_TRANSIENT_DESTRUCTOR)
+                    }
+                    sqlite3_bind_int64(stmt, 2, capturedAtMs)
+                    sqlite3_bind_text(stmt, 3, (row.kind.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                    sqlite3_bind_text(stmt, 4, (row.id as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                    sqlite3_bind_text(stmt, 5, (row.title as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                    sqlite3_bind_text(stmt, 6, (row.subtitle as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                    sqlite3_bind_int64(stmt, 7, Int64(row.recurrenceCount))
+                    sqlite3_bind_double(stmt, 8, row.confidence)
+                    sqlite3_bind_int64(stmt, 9, Int64(row.lastSeenAt.timeIntervalSince1970 * 1000))
+                    sqlite3_bind_int64(stmt, 10, Int64(windowDays))
+                    _ = sqlite3_step(stmt)
+                    sqlite3_finalize(stmt)
+                }
+            }
+
+            // Retention prune. A retention of 0 deletes every row
+            // (operator power-user knob — disables history entirely).
+            let cutoffMs = capturedAtMs - retentionMs
+            let pruneSQL = "DELETE FROM sprint_review_snapshots WHERE captured_at < ?;"
+            var pruneStmt: OpaquePointer?
+            if sqlite3_prepare_v2(handle, pruneSQL, -1, &pruneStmt, nil) == SQLITE_OK {
+                sqlite3_bind_int64(pruneStmt, 1, cutoffMs)
+                _ = sqlite3_step(pruneStmt)
+            }
+            sqlite3_finalize(pruneStmt)
+        }
     }
 
     /// Accept (promote staged → applied) a row. Filter-rule accept has

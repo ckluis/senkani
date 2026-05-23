@@ -1809,6 +1809,47 @@ public enum MigrationRegistry {
             // start.
             try openWasmKillAnchor(db: db)
         },
+        Migration(version: 34, description: "sprint_review_snapshots auxiliary table (V.9a follow-up sub-2 lineage recording for .sprintReview source pane)") { db in
+            // V.9a follow-up sub-2 — SprintReviewViewModel records one
+            // snapshot batch per pane-open event into this table; the
+            // SprintReviewArtifactProvider walks it for the lineage
+            // chain. NOT a chained table — no entry_hash / prev_hash /
+            // chain_anchor_id; ChainVerifier needs no extension. The
+            // captured_at INTEGER carries unix milliseconds so the
+            // 30-day retention DELETE matches the PaneDiaryStore
+            // sibling's semantic at SQL scale.
+            func exec(_ sql: String) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc != SQLITE_OK {
+                    throw MigrationError.sqlFailed(stage: "v34", detail: msg)
+                }
+            }
+            try exec("""
+                CREATE TABLE IF NOT EXISTS sprint_review_snapshots (
+                    snapshot_id BLOB PRIMARY KEY,
+                    captured_at INTEGER NOT NULL,
+                    kind TEXT NOT NULL,
+                    row_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    subtitle TEXT NOT NULL,
+                    recurrence_count INTEGER NOT NULL,
+                    confidence REAL NOT NULL,
+                    last_seen_at INTEGER NOT NULL,
+                    window_days INTEGER NOT NULL
+                );
+            """)
+            try exec("""
+                CREATE INDEX IF NOT EXISTS idx_sprint_review_snapshots_kind_row
+                    ON sprint_review_snapshots(kind, row_id, captured_at DESC);
+            """)
+            try exec("""
+                CREATE INDEX IF NOT EXISTS idx_sprint_review_snapshots_captured_at
+                    ON sprint_review_snapshots(captured_at);
+            """)
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)

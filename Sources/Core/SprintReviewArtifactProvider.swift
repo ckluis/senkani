@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 
 /// V.9a — SprintReviewArtifactProvider.
 ///
@@ -25,10 +26,19 @@ public struct SprintReviewArtifactProvider: ArtifactSourceProvider {
     /// uses the default `SprintReviewViewModel.load()`.
     public let snapshotLoader: @Sendable () -> SprintReviewSnapshot
 
-    public init(snapshotLoader: @Sendable @escaping () -> SprintReviewSnapshot = {
-        SprintReviewViewModel.load()
-    }) {
+    /// Database the lineage chain reads `sprint_review_snapshots`
+    /// from. Tests inject a per-test DB; production defaults to the
+    /// shared SessionDatabase.
+    public let database: SessionDatabase
+
+    public init(
+        snapshotLoader: @Sendable @escaping () -> SprintReviewSnapshot = {
+            SprintReviewViewModel.load()
+        },
+        database: SessionDatabase = .shared
+    ) {
         self.snapshotLoader = snapshotLoader
+        self.database = database
     }
 
     public func list() -> [ArtifactRecord] {
@@ -71,8 +81,59 @@ public struct SprintReviewArtifactProvider: ArtifactSourceProvider {
         throw ArtifactReadError.notFound(id: id)
     }
 
+    /// Lineage chain for a SprintReview signal. Reads
+    /// `sprint_review_snapshots WHERE kind=? AND row_id=? ORDER BY
+    /// captured_at ASC` and projects each row to an ArtifactRecord
+    /// with `version` = 1-based ordinal in the chain and
+    /// `previousVersion` linked to the prior row. Empty array when
+    /// the signal-id has never been observed by a pane-open event.
     public func versions(of id: ArtifactID) -> [ArtifactRecord] {
-        return []
+        let parts = parse(id)
+        guard !parts.kind.isEmpty, !parts.rowId.isEmpty else { return [] }
+
+        let rows: [(capturedAtMs: Int64, kind: String, rowId: String)] = database.queue.sync {
+            guard let handle = database.db else { return [] }
+            let sql = """
+                SELECT captured_at, kind, row_id
+                  FROM sprint_review_snapshots
+                 WHERE kind = ? AND row_id = ?
+                 ORDER BY captured_at ASC;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(handle, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (parts.kind as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (parts.rowId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            var out: [(Int64, String, String)] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let captured = sqlite3_column_int64(stmt, 0)
+                let k = String(cString: sqlite3_column_text(stmt, 1))
+                let rid = String(cString: sqlite3_column_text(stmt, 2))
+                out.append((captured, k, rid))
+            }
+            return out
+        }
+
+        var chain: [ArtifactRecord] = []
+        var prevID: ArtifactID? = nil
+        for (i, r) in rows.enumerated() {
+            let recordID = ArtifactID(
+                sourcePane: .sprintReview,
+                surfaceKey: r.kind,
+                rowOrPath: r.rowId
+            )
+            chain.append(ArtifactRecord(
+                id: recordID,
+                sourcePane: .sprintReview,
+                tags: [r.kind, r.rowId],
+                version: i + 1,
+                createdAt: Date(timeIntervalSince1970: Double(r.capturedAtMs) / 1000.0),
+                previousVersion: prevID,
+                redactionMarker: nil
+            ))
+            prevID = recordID
+        }
+        return chain
     }
 
     private func parse(_ id: ArtifactID) -> (kind: String, rowId: String) {

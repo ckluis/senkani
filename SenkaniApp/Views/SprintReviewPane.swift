@@ -312,7 +312,12 @@ struct SprintReviewPane: View {
 
     private func reload() {
         LearnedRulesStore.reload()
-        snapshot = SprintReviewViewModel.load(windowDays: windowDays)
+        // recordSnapshot: true captures one snapshot batch per
+        // pane-open event into sprint_review_snapshots (V.9a
+        // follow-up sub-2 lineage recording).
+        snapshot = SprintReviewViewModel.load(
+            windowDays: windowDays,
+            recordSnapshot: true)
     }
 
     private func performAccept(_ row: SprintReviewRow) {

@@ -133,7 +133,7 @@ A horizontal canvas of panes. Each pane is a primitive type; you arrange them ho
 **19 pane types:**
 
 - **Terminal** — SwiftTerm, configurable font size, kill/restart buttons, broadcast mode. The active terminal pane shows a five-chip "Senkani Active" proof strip (PROJECT, MCP, HOOKS, TRACK, EVENTS) that surfaces a runnable next action whenever a setup component is missing — no need to wait for the first intercepted command to know whether Senkani is wired in.
-- **Dashboard** — multi-project portfolio: total savings, project table, feature charts, insights
+- **Dashboard** — multi-project portfolio: total savings, project table, feature charts, insights, Models & Inference tile (MLX prefix-cache hit rate + cached tokens + active tier + memory pressure, JOIN of `cache_lifecycle` spans × `token_events` cache rows with a stale badge on JOIN mismatch)
 - **Code Editor** — tree-sitter syntax highlighting (25 languages, incl. Dart/TOML/GraphQL), symbol navigation, file tree
 - **Browser** — WKWebView embedded, localhost or any URL. Optional click-to-capture Design Mode (env-gate `SENKANI_BROWSER_DESIGN=on`, ⌥⇧D toggles) — click an element, get a fixed-schema Markdown block on the clipboard.
 - **Markdown Preview** — live render from file, updates on save

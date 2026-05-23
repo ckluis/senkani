@@ -22,6 +22,13 @@ struct DashboardView: View {
     @State private var liveTiles: PaneRefreshCoordinator.Snapshot?
     @State private var coordinator: PaneRefreshCoordinator?
 
+    // V.19a-4 — Models/Inference tile snapshot. Built each tick by
+    // joining `cache_lifecycle` spans + cached `token_events` rows via
+    // `MLXInferenceTileCorrelator`. JOIN mismatch surfaces a stale
+    // badge (orphan span or orphan token-event row) instead of silent
+    // dropout.
+    @State private var mlxTileSnapshot: MLXInferenceTileCorrelator.Snapshot?
+
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     // MARK: - Data Models
@@ -56,6 +63,7 @@ struct DashboardView: View {
                     heroSavingsCard
                     summaryCards
                     liveTilesSection
+                    mlxInferenceTileSection
                     projectBreakdownTable
                     chartsSection
                     insightsSection
@@ -68,10 +76,12 @@ struct DashboardView: View {
         .onReceive(timer) { _ in
             refreshData()
             tickLiveTiles()
+            refreshMLXInferenceTile()
         }
         .onAppear {
             refreshData()
             startLiveTiles()
+            refreshMLXInferenceTile()
         }
     }
 
@@ -198,6 +208,144 @@ struct DashboardView: View {
             await coord.tick()
             self.liveTiles = coord.snapshot()
         }
+    }
+
+    // MARK: - V.19a-4 — Models/Inference tile
+
+    private var mlxInferenceTileSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text("Models & Inference")
+                    .font(.system(size: 13, weight: .semibold))
+                if let badge = mlxTileSnapshot?.staleBadge {
+                    mlxStaleBadge(badge)
+                }
+            }
+
+            if let snapshot = mlxTileSnapshot {
+                HStack(spacing: 12) {
+                    mlxMetricCard(
+                        title: "Cache Hit Rate",
+                        value: String(format: "%.0f%%", snapshot.cacheHitRate * 100),
+                        subtitle: cacheStateLabel(snapshot.cacheState),
+                        color: cacheStateColor(snapshot.cacheState)
+                    )
+                    mlxMetricCard(
+                        title: "Cached Tokens",
+                        value: formatTokens(snapshot.cachedTokens),
+                        subtitle: "prefix-cache occupancy",
+                        color: .blue
+                    )
+                    mlxMetricCard(
+                        title: "Active Tier",
+                        value: snapshot.activeModelTier?.capitalized ?? "—",
+                        subtitle: "most recent",
+                        color: .purple
+                    )
+                    mlxMetricCard(
+                        title: "Memory",
+                        value: memoryPressureLabel(snapshot.memoryPressure),
+                        subtitle: "MLX inference",
+                        color: memoryPressureColor(snapshot.memoryPressure)
+                    )
+                }
+            } else {
+                Text("Will populate when MLX inference produces cache events")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(12)
+        .background(Color(.controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func mlxMetricCard(title: String, value: String, subtitle: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(size: 16, weight: .bold, design: .monospaced))
+                .foregroundStyle(color)
+            Text(subtitle)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color(.controlBackgroundColor).opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func mlxStaleBadge(_ reason: MLXInferenceTileCorrelator.StaleReason) -> some View {
+        let text: String
+        switch reason {
+        case .orphanSpan: text = "stale: cache_lifecycle span without token_events row"
+        case .orphanTokenEvent: text = "stale: token_events row without cache_lifecycle span"
+        case .bothDirections: text = "stale: cache and accounting paths disconnected"
+        }
+        return HStack(spacing: 3) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(.yellow)
+            Text(text)
+                .font(.system(size: 9))
+                .foregroundStyle(.yellow)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Color.yellow.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+
+    private func cacheStateLabel(_ s: MLXInferenceTileCorrelator.CacheState) -> String {
+        switch s {
+        case .noActivity: return "no recent activity"
+        case .active: return "active"
+        case .evicted: return "evicted"
+        }
+    }
+
+    private func cacheStateColor(_ s: MLXInferenceTileCorrelator.CacheState) -> Color {
+        switch s {
+        case .noActivity: return .secondary
+        case .active: return SenkaniTheme.savingsGreen
+        case .evicted: return .yellow
+        }
+    }
+
+    private func memoryPressureLabel(_ p: MLXInferenceTileCorrelator.MemoryPressure) -> String {
+        switch p {
+        case .normal: return "normal"
+        case .warning: return "warning"
+        case .critical: return "critical"
+        }
+    }
+
+    private func memoryPressureColor(_ p: MLXInferenceTileCorrelator.MemoryPressure) -> Color {
+        switch p {
+        case .normal: return SenkaniTheme.savingsGreen
+        case .warning: return .yellow
+        case .critical: return .red
+        }
+    }
+
+    private func refreshMLXInferenceTile() {
+        let db = SessionDatabase.shared
+        guard let store = db.runtimeTelemetryStore else { return }
+        let spans = store.recentCacheLifecycleSpans(limit: 500)
+        let rows = db.recentCachedTokenEvents(limit: 200)
+        guard !spans.isEmpty || !rows.isEmpty else {
+            mlxTileSnapshot = nil
+            return
+        }
+        let inputs = MLXInferenceTileCorrelator.Inputs(
+            cacheSpans: spans,
+            tokenEventRows: rows,
+            memoryPressure: .normal
+        )
+        mlxTileSnapshot = MLXInferenceTileCorrelator.build(inputs: inputs)
     }
 
     // MARK: - Header

@@ -196,6 +196,13 @@ extension SessionDatabase {
         tokenEventStore.recentTokenEvents(projectRoot: projectRoot, limit: limit)
     }
 
+    /// V.19a-4 — recent cached-token rows for the Models/Inference
+    /// dashboard tile. Joined against `cache_lifecycle` spans by the
+    /// SwiftUI tile via `MLXInferenceTileCorrelator`.
+    public func recentCachedTokenEvents(limit: Int = 200) -> [MLXInferenceTileCorrelator.TokenEventRow] {
+        tokenEventStore.recentCachedTokenEvents(limit: limit)
+    }
+
     public func recentTokenEventsAllProjects(limit: Int = 100) -> [TimelineEvent] {
         tokenEventStore.recentTokenEventsAllProjects(limit: limit)
     }

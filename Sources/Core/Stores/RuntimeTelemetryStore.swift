@@ -515,6 +515,42 @@ public final class RuntimeTelemetryStore: @unchecked Sendable {
         }
     }
 
+    /// V.19a-4 — fetch recent `cache_lifecycle.*` spans across all
+    /// datasets, newest-first. Used by the Models/Inference dashboard
+    /// tile to JOIN against `token_events` cache rows on `session_id`.
+    /// Walks the `runtime_telemetry_span` table with a `name LIKE`
+    /// filter so the tile renders without a per-session lookup. The
+    /// cap defaults to 500 — recent activity is enough; the
+    /// `CacheLifecycleSpanRecorder` event-rate is bounded by inference
+    /// calls per session.
+    public func recentCacheLifecycleSpans(limit: Int = 500) -> [SpanResult] {
+        guard limit > 0 else { return [] }
+        return parent.queue.sync {
+            guard let db = parent.db else { return [] }
+            let prefix = CacheLifecycleSpanRecorder.spanNamePrefix + "."
+            let pattern = "\(prefix)%"
+            let sql = """
+                SELECT id, dataset_id, trace_id, span_id, parent_span_id, name,
+                       start_unix_ns, end_unix_ns, attributes_json, status_code,
+                       session_id, tool_call_id, validation_run_id
+                  FROM runtime_telemetry_span
+                 WHERE name LIKE ?
+                 ORDER BY end_unix_ns DESC, id DESC
+                 LIMIT ?;
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (pattern as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_int64(stmt, 2, Int64(limit))
+            var out: [SpanResult] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                out.append(Self.decodeSpanRow(stmt))
+            }
+            return out
+        }
+    }
+
     /// V.18a-6 — fetch a single trace's full span tree. Capped at
     /// `maxSpans` (default 10K) to bound memory on pathological
     /// traces. Walks `idx_runtime_telemetry_span_trace`.

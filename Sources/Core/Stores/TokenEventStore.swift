@@ -691,6 +691,53 @@ final class TokenEventStore: @unchecked Sendable {
         }
     }
 
+    /// V.19a-4 — fetch recent token_events rows that carry cached-token
+    /// observations (either `cache_origin IS NOT NULL` or
+    /// `cached_prompt_tokens > 0`). Used by the Models/Inference
+    /// dashboard tile to JOIN against `cache_lifecycle` spans on
+    /// `session_id`. Narrow projection (no command, no feature) per
+    /// V.18 metadata-only privacy default — the tile renders scalars
+    /// + tier strings + enums only.
+    func recentCachedTokenEvents(limit: Int = 200) -> [MLXInferenceTileCorrelator.TokenEventRow] {
+        return parent.queue.sync {
+            guard let db = parent.db else { return [] }
+            let sql = """
+                SELECT timestamp, session_id, cached_prompt_tokens, cache_origin, model_tier
+                FROM token_events
+                WHERE cache_origin IS NOT NULL
+                   OR (cached_prompt_tokens IS NOT NULL AND cached_prompt_tokens > 0)
+                ORDER BY timestamp DESC
+                LIMIT ?;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_int(stmt, 1, Int32(limit))
+            var rows: [MLXInferenceTileCorrelator.TokenEventRow] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let ts = sqlite3_column_double(stmt, 0)
+                let sessionId: String = sqlite3_column_type(stmt, 1) == SQLITE_NULL
+                    ? "" : String(cString: sqlite3_column_text(stmt, 1))
+                guard !sessionId.isEmpty else { continue }
+                let cachedTokens: Int = sqlite3_column_type(stmt, 2) == SQLITE_NULL
+                    ? 0 : Int(sqlite3_column_int64(stmt, 2))
+                let originRaw: String? = sqlite3_column_type(stmt, 3) == SQLITE_NULL
+                    ? nil : String(cString: sqlite3_column_text(stmt, 3))
+                let origin: CacheOrigin? = originRaw.flatMap(CacheOrigin.init(rawValue:))
+                let tier: String? = sqlite3_column_type(stmt, 4) == SQLITE_NULL
+                    ? nil : String(cString: sqlite3_column_text(stmt, 4))
+                rows.append(MLXInferenceTileCorrelator.TokenEventRow(
+                    sessionId: sessionId,
+                    cachedPromptTokens: cachedTokens,
+                    cacheOrigin: origin,
+                    modelTier: tier,
+                    timestamp: Date(timeIntervalSince1970: ts)
+                ))
+            }
+            return rows
+        }
+    }
+
     /// Fetch the most recent token events across ALL projects.
     func recentTokenEventsAllProjects(limit: Int = 100) -> [SessionDatabase.TimelineEvent] {
         return parent.queue.sync {

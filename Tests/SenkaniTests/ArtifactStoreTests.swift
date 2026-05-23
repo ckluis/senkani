@@ -421,9 +421,14 @@ struct PaneDiaryArtifactProviderTests {
             Issue.record("expected ws-A record present")
         }
 
-        // versions() returns empty per V.9a lineage gap (follow-up filed).
+        // versions() returns a single-element chain for a slug pair
+        // that's been written exactly once — primary only, no rotated
+        // siblings yet. (V.9a follow-up sub-1 closes the prior
+        // empty-chain gap.)
         if let r = first {
-            #expect(provider.versions(of: r.id).isEmpty)
+            let chain = provider.versions(of: r.id)
+            #expect(chain.count == 1)
+            #expect(chain.first?.previousVersion == nil)
         }
     }
 }

@@ -24,6 +24,10 @@ Companion frontmatter sanity checks:
     skipped, in_progress} — pre-groom items must not carry the date.
   - `scope_groomable: true` requires `status: manual` (scope-groom
     picks from manual items only) OR a `scope_groomed:` date.
+  - A decomposed parent with `split_into:` may not remain
+    `status: manual_ready` after every child has shipped `status: done`;
+    the parent is then an already-resolved umbrella and should be flipped
+    to `done` so it no longer looks operator-actionable.
 
 Background: `process-gap-cowork-walks-write-invalid-status-2026-05-13`
 (in-spirit; tracked here, no separate backlog item — the validator
@@ -57,6 +61,20 @@ VALID_STATUSES = {
 GROOMED_DATE_VALID_STATUSES = {"manual_ready", "done", "skipped", "in_progress"}
 DECOMPOSED_DATE_VALID_STATUSES = {"manual_ready", "done", "skipped", "in_progress"}
 
+# V.17a-7 / Option-C close-mode auto-stub recognition.
+#
+# Per `process-gap-close-mode-execution-evidence-invariant-vs-decomposed-
+# parent-contract-2026-05-23` (operator chose Option C 2026-05-24):
+# the close-mode sweep auto-appends a one-line evidence stub to
+# decomposed-parent orphans that lack `## Execution evidence`. The
+# stub format is fixed text; this validator recognizes that format
+# so a stubbed parent is not mistaken for missing evidence.
+#
+# Stub-first-line shape: `## Execution evidence <YYYY-MM-DD>` followed
+# by a sentinel sentence naming the operator-confirmed split.
+EVIDENCE_HEADING_RE = re.compile(r"^## Execution evidence\b", re.MULTILINE)
+EVIDENCE_AUTO_STUB_SENTINEL = "Operator confirmed decomposition is correct"
+
 
 def parse_frontmatter(text: str) -> dict[str, str]:
     if not text.startswith("---\n"):
@@ -70,6 +88,16 @@ def parse_frontmatter(text: str) -> dict[str, str]:
         if m:
             fm[m.group(1)] = m.group(2).strip()
     return fm
+
+
+def parse_inline_list(value: str) -> list[str]:
+    value = value.strip()
+    if not (value.startswith("[") and value.endswith("]")):
+        return []
+    inner = value[1:-1].strip()
+    if not inner:
+        return []
+    return [item.strip().strip('"').strip("'") for item in inner.split(",")]
 
 
 def check_file(path: Path) -> list[str]:
@@ -162,6 +190,133 @@ def check_file(path: Path) -> list[str]:
     return findings
 
 
+def iter_item_files(backlog_dir: Path) -> list[Path]:
+    autonomous_dir = backlog_dir.parent
+    files = [path for path in sorted(backlog_dir.glob("*.md")) if path.name != "index.md"]
+    completed_dir = autonomous_dir / "completed"
+    if completed_dir.is_dir():
+        files.extend(path for path in sorted(completed_dir.rglob("*.md")) if path.name != "index.md")
+    return files
+
+
+def classify_evidence_section(text: str) -> str:
+    """Return one of "absent", "auto_stub", "operator".
+
+    "auto_stub" matches the Option-C close-mode auto-stub format (per
+    `process-gap-close-mode-execution-evidence-invariant-vs-decomposed
+    -parent-contract-2026-05-23`); "operator" is any other non-empty
+    evidence section the operator (or a build-mode close) wrote.
+    """
+    m = EVIDENCE_HEADING_RE.search(text)
+    if not m:
+        return "absent"
+    body = text[m.end():]
+    # Look only at the first ~500 chars under the heading — enough to
+    # recognize the auto-stub sentinel without false-matching deeper
+    # content that mentions the sentence in unrelated context.
+    window = body[:500]
+    if EVIDENCE_AUTO_STUB_SENTINEL in window:
+        return "auto_stub"
+    return "operator"
+
+
+def check_decomposed_completed_evidence(backlog_dir: Path) -> dict[Path, list[str]]:
+    """Flag completed decomposed-parent items whose body lacks any
+    `## Execution evidence` section.
+
+    Decompose-mode parent body template historically said evidence was
+    "optional," but the Step 2 close-mode invariant required it. The
+    operator picked Option C (auto-stub in close-mode sweep) on
+    2026-05-24 — so every decomposed parent in `completed/` should now
+    have at minimum an auto-stub. A completed parent with `decomposed:`
+    + `split_into:` and NO evidence section indicates a close-mode
+    sweep that bypassed the auto-stub path (operator close without the
+    SKILL.md edit, or a bug). Data-hygiene flag.
+    """
+    autonomous_dir = backlog_dir.parent
+    completed_dir = autonomous_dir / "completed"
+    if not completed_dir.is_dir():
+        return {}
+    findings: dict[Path, list[str]] = {}
+    for path in sorted(completed_dir.rglob("*.md")):
+        if path.name == "index.md":
+            continue
+        text = path.read_text(encoding="utf-8")
+        fm = parse_frontmatter(text)
+        decomposed = fm.get("decomposed", "").strip()
+        split_into = parse_inline_list(fm.get("split_into", ""))
+        if not decomposed or not split_into:
+            continue
+        kind = classify_evidence_section(text)
+        if kind == "absent":
+            findings.setdefault(path, []).append(
+                "decomposed parent in `completed/` has no `## Execution "
+                "evidence` section. Option-C close-mode auto-stub should "
+                "have appended one — see `process-gap-close-mode-"
+                "execution-evidence-invariant-vs-decomposed-parent-"
+                "contract-2026-05-23`. Append a stub or operator-"
+                "provided evidence and re-validate."
+            )
+    return findings
+
+
+def check_decomposed_parent_closure(backlog_dir: Path) -> dict[Path, list[str]]:
+    """Return repo-wide findings for decomposed parents whose children
+    already shipped.
+
+    Decompose-mode intentionally leaves the parent in backlog/manual_ready
+    until the operator confirms the split. Once every child resolves to
+    `status: done`, the parent is no longer a work item and should flip to
+    `done` for close-mode finalization.
+    """
+    items: dict[str, tuple[Path, dict[str, str]]] = {}
+    for path in iter_item_files(backlog_dir):
+        fm = parse_frontmatter(path.read_text(encoding="utf-8"))
+        item_id = fm.get("id", "").strip().strip('"').strip("'")
+        if item_id:
+            items[item_id] = (path, fm)
+
+    findings: dict[Path, list[str]] = {}
+    for path in sorted(backlog_dir.glob("*.md")):
+        if path.name == "index.md":
+            continue
+        fm = parse_frontmatter(path.read_text(encoding="utf-8"))
+        status = fm.get("status", "").strip().strip('"').strip("'")
+        if status != "manual_ready":
+            continue
+        children = parse_inline_list(fm.get("split_into", ""))
+        if not children:
+            continue
+        child_statuses: list[tuple[str, str]] = []
+        missing: list[str] = []
+        for child in children:
+            record = items.get(child)
+            if record is None:
+                missing.append(child)
+                continue
+            child_statuses.append((child, record[1].get("status", "").strip().strip('"').strip("'")))
+        if missing:
+            findings.setdefault(path, []).append(
+                "`split_into:` references missing child item(s): "
+                + ", ".join(missing)
+            )
+            continue
+        if child_statuses and all(status == "done" for _, status in child_statuses):
+            findings.setdefault(path, []).append(
+                "`status: manual_ready` decomposed parent has all children "
+                "`status: done`; flip parent to `status: done` so the "
+                "umbrella does not remain operator-actionable."
+            )
+    return findings
+
+
+def display_path(path: Path, repo_root: Path) -> str:
+    try:
+        return str(path.relative_to(repo_root))
+    except ValueError:
+        return str(path)
+
+
 def main(argv: list[str]) -> int:
     repo_root = Path(__file__).resolve().parents[2]
     default_dir = repo_root / "spec" / "autonomous" / "backlog"
@@ -180,9 +335,23 @@ def main(argv: list[str]) -> int:
         findings = check_file(path)
         if findings:
             flagged += 1
-            print(f"{path.relative_to(repo_root)}:")
+            print(f"{display_path(path, repo_root)}:")
             for f in findings:
                 print(f"  - {f}")
+
+    closure_findings = check_decomposed_parent_closure(backlog_dir)
+    for path, findings in closure_findings.items():
+        flagged += 1
+        print(f"{display_path(path, repo_root)}:")
+        for f in findings:
+            print(f"  - {f}")
+
+    completed_evidence_findings = check_decomposed_completed_evidence(backlog_dir)
+    for path, findings in completed_evidence_findings.items():
+        flagged += 1
+        print(f"{display_path(path, repo_root)}:")
+        for f in findings:
+            print(f"  - {f}")
 
     if flagged == 0:
         print(f"OK — all {sum(1 for _ in backlog_dir.glob('*.md')) - 1} "

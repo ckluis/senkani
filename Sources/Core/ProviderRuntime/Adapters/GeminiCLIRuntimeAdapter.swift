@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 
 /// Phase V.17a-4 — Gemini CLI runtime adapter. Parses Gemini CLI's
 /// JSONL event stream into `[ProviderRuntimeEvent]` per the V.17a-1
@@ -12,16 +11,15 @@ import CryptoKit
 /// boundary so the SHA-256 `raw_payload_hash` is independent of
 /// CRLF translation in the transport.
 ///
-/// **No reuse seam.** Unlike V.17a-3 (`ClaudeCodeRuntimeAdapter`)
-/// which delegates to `ClaudeSessionReader.parseAssistantUsageLine`,
-/// the codebase has no pre-existing Gemini CLI scaffolding. The
-/// line-buffering + hash pattern intentionally mirrors V.17a-2
-/// (`CodexCLIRuntimeAdapter`) per the operator's implicit answer to
-/// the V.17 decompose-round Q3 ("inline shared shapes into spine;
-/// if they grow past trivial, file a 7th sub-item"). After v17a-5
-/// lands, the line-buffering pattern will exist in three adapters
-/// (codex, gemini, opencode); if duplication crosses the "trivial"
-/// threshold, file a follow-up to lift it into V.17a-1.
+/// **No provider-specific reuse seam.** Unlike V.17a-3
+/// (`ClaudeCodeRuntimeAdapter`) which delegates token extraction
+/// to `ClaudeSessionReader.parseAssistantUsageLine`, the codebase
+/// has no pre-existing Gemini CLI scaffolding. Line-buffer + CRLF
+/// + SHA-256 helpers delegate to V.17a-1's shared
+/// `JSONLLineBuffer` / `ProviderRuntimeHash` (V.17a-7 extraction,
+/// 2026-05-24) per the operator's implicit answer to the V.17
+/// decompose-round Q3 ("if they grow past trivial, file a 7th
+/// sub-item").
 ///
 /// **Fabricated-fixtures contract** (operator's decompose answer to
 /// Q5, 2026-05-23). Wire vocabulary fabricated plausible from the
@@ -29,13 +27,12 @@ import CryptoKit
 public final class GeminiCLIRuntimeAdapter: ProviderRuntimeAdapter, @unchecked Sendable {
     public let providerID: String = "gemini-cli"
 
-    private var pendingBuffer: Data = Data()
-    private let lock = NSLock()
+    private let buffer = JSONLLineBuffer()
 
     public init() {}
 
     public func ingest(_ raw: Data) async throws -> [ProviderRuntimeEvent] {
-        let lines = appendAndSplit(raw)
+        let lines = buffer.append(raw)
         var out: [ProviderRuntimeEvent] = []
         out.reserveCapacity(lines.count)
         for line in lines {
@@ -51,42 +48,10 @@ public final class GeminiCLIRuntimeAdapter: ProviderRuntimeAdapter, @unchecked S
         case unknownEventType(raw: String)
     }
 
-    // MARK: - Buffer plumbing
-
-    private func appendAndSplit(_ raw: Data) -> [Data] {
-        lock.lock()
-        defer { lock.unlock() }
-        pendingBuffer.append(raw)
-        var lines: [Data] = []
-        var lineStart = pendingBuffer.startIndex
-        var idx = pendingBuffer.startIndex
-        while idx < pendingBuffer.endIndex {
-            if pendingBuffer[idx] == 0x0A {
-                let line = pendingBuffer.subdata(in: lineStart..<idx)
-                lines.append(stripCR(line))
-                lineStart = pendingBuffer.index(after: idx)
-            }
-            idx = pendingBuffer.index(after: idx)
-        }
-        if lineStart < pendingBuffer.endIndex {
-            pendingBuffer = pendingBuffer.subdata(in: lineStart..<pendingBuffer.endIndex)
-        } else {
-            pendingBuffer.removeAll(keepingCapacity: true)
-        }
-        return lines.filter { !$0.isEmpty }
-    }
-
-    private func stripCR(_ data: Data) -> Data {
-        if let last = data.last, last == 0x0D {
-            return data.subdata(in: data.startIndex..<data.index(before: data.endIndex))
-        }
-        return data
-    }
-
     // MARK: - JSONL → ProviderRuntimeEvent
 
     private func parseLine(_ line: Data) throws -> ProviderRuntimeEvent {
-        let rawHash = Self.sha256Hex(of: line)
+        let rawHash = ProviderRuntimeHash.sha256Hex(of: line)
         let wire: WireEvent
         do {
             wire = try JSONDecoder().decode(WireEvent.self, from: line)
@@ -171,14 +136,6 @@ public final class GeminiCLIRuntimeAdapter: ProviderRuntimeAdapter, @unchecked S
             projectionStatus: projectionStatus,
             rawPayloadHash: rawHash
         )
-    }
-
-    // MARK: - SHA-256 helper
-
-    static func sha256Hex(of data: Data) -> String {
-        var digest = SHA256()
-        digest.update(data: data)
-        return digest.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - Wire envelope

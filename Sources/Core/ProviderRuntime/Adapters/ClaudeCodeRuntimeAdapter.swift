@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 
 /// Phase V.17a-3 — Claude Code runtime adapter. Parses Claude Code's
 /// `--output-format=stream-json` JSONL stream into
@@ -16,11 +15,13 @@ import CryptoKit
 /// didn't extract `cache_read_input_tokens`) is the durable
 /// motivation; this adapter must not duplicate that parser.
 ///
-/// **Line-buffering pattern** matches V.17a-2 (NSLock-guarded byte
-/// buffer split on `\n`, CRLF normalized) so partial-buffer
-/// carryover across successive `ingest(_:)` calls produces hash-
-/// stable events independent of chunk boundaries. The Claude Code
-/// session-file readers (`ClaudeSessionReader.readFile`,
+/// **Line-buffering pattern** delegates to the shared
+/// `JSONLLineBuffer` helper in V.17a-1's spine (V.17a-7 extraction,
+/// 2026-05-24) — same NSLock-guarded byte buffer split on `\n`,
+/// CRLF normalized at line boundary so partial-buffer carryover
+/// across successive `ingest(_:)` calls produces hash-stable events
+/// independent of chunk boundaries. The Claude Code session-file
+/// readers (`ClaudeSessionReader.readFile`,
 /// `ClaudeSessionTail.tail`) use the same
 /// `text.components(separatedBy: "\n")` discipline at a different
 /// layer (cursor-driven file reads); this adapter sits on the
@@ -36,18 +37,21 @@ import CryptoKit
 public final class ClaudeCodeRuntimeAdapter: ProviderRuntimeAdapter, @unchecked Sendable {
     public let providerID: String = "claude-code"
 
-    private var pendingBuffer: Data = Data()
-    private let lock = NSLock()
+    private let buffer = JSONLLineBuffer()
 
     public init() {}
 
     public func ingest(_ raw: Data) async throws -> [ProviderRuntimeEvent] {
-        let lines = appendAndSplit(raw)
+        let lines = buffer.append(raw)
         var out: [ProviderRuntimeEvent] = []
         out.reserveCapacity(lines.count)
         for line in lines {
-            // Skip blank lines silently — JSONL streams sometimes
-            // emit an empty terminator after the final result.
+            // Empty-line guard preserved for defense-in-depth —
+            // the shared buffer already filters empties, so this
+            // path is unreachable today; kept so a future buffer
+            // refactor that re-introduces empty-line passthrough
+            // doesn't immediately surface as a malformed-JSON
+            // throw on a benign blank terminator.
             if line.isEmpty { continue }
             if let event = try parseLine(line) {
                 out.append(event)
@@ -63,38 +67,6 @@ public final class ClaudeCodeRuntimeAdapter: ProviderRuntimeAdapter, @unchecked 
         case unknownEventShape(typeAndSubtype: String)
     }
 
-    // MARK: - Buffer plumbing (mirrors V.17a-2's discipline)
-
-    private func appendAndSplit(_ raw: Data) -> [Data] {
-        lock.lock()
-        defer { lock.unlock() }
-        pendingBuffer.append(raw)
-        var lines: [Data] = []
-        var lineStart = pendingBuffer.startIndex
-        var idx = pendingBuffer.startIndex
-        while idx < pendingBuffer.endIndex {
-            if pendingBuffer[idx] == 0x0A {
-                let line = pendingBuffer.subdata(in: lineStart..<idx)
-                lines.append(stripCR(line))
-                lineStart = pendingBuffer.index(after: idx)
-            }
-            idx = pendingBuffer.index(after: idx)
-        }
-        if lineStart < pendingBuffer.endIndex {
-            pendingBuffer = pendingBuffer.subdata(in: lineStart..<pendingBuffer.endIndex)
-        } else {
-            pendingBuffer.removeAll(keepingCapacity: true)
-        }
-        return lines
-    }
-
-    private func stripCR(_ data: Data) -> Data {
-        if let last = data.last, last == 0x0D {
-            return data.subdata(in: data.startIndex..<data.index(before: data.endIndex))
-        }
-        return data
-    }
-
     // MARK: - JSONL → ProviderRuntimeEvent
 
     /// Returns nil for lines that are valid JSON but carry no
@@ -102,7 +74,7 @@ public final class ClaudeCodeRuntimeAdapter: ProviderRuntimeAdapter, @unchecked 
     /// metadata). Throws for malformed JSON or unknown shapes so
     /// fixture drift surfaces.
     private func parseLine(_ line: Data) throws -> ProviderRuntimeEvent? {
-        let rawHash = Self.sha256Hex(of: line)
+        let rawHash = ProviderRuntimeHash.sha256Hex(of: line)
         guard let lineString = String(data: line, encoding: .utf8) else {
             throw ParseError.malformedJSON(line: "<non-utf8 \(line.count)B>")
         }
@@ -311,10 +283,4 @@ public final class ClaudeCodeRuntimeAdapter: ProviderRuntimeAdapter, @unchecked 
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f
     }()
-
-    static func sha256Hex(of data: Data) -> String {
-        var digest = SHA256()
-        digest.update(data: data)
-        return digest.finalize().map { String(format: "%02x", $0) }.joined()
-    }
 }

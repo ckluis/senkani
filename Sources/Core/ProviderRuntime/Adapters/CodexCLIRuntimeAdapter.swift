@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 
 /// Phase V.17a-2 — Codex CLI runtime adapter. Parses Codex CLI's
 /// JSONL transcript stream into `[ProviderRuntimeEvent]` per the
@@ -8,17 +7,15 @@ import CryptoKit
 /// **Pure parser.** No network, no auth probe, no provider-side
 /// side-effect. The adapter is reusable: `ingest(_:)` may be called
 /// repeatedly with successive byte chunks; any trailing partial
-/// line (bytes after the last newline) stays in the adapter's
-/// internal buffer and is prepended to the next call. A complete
-/// line is "a JSON object terminated by `\n`."
+/// line (bytes after the last newline) stays in the shared
+/// `JSONLLineBuffer` instance and is prepended to the next call.
 ///
-/// **`raw_payload_hash` derivation.** Hex-encoded SHA-256 of the
-/// canonical JSONL line bytes — terminating newline excluded so the
-/// hash is independent of whether the upstream stream uses `\n` or
-/// `\r\n`. The hash is what V.17a-1's `provider_runtime_event`
-/// table dedupes on; a replay of identical bytes produces an
-/// identical hash and the store's UNIQUE constraint elides the
-/// second insert.
+/// **`raw_payload_hash` derivation.** Delegates to the shared
+/// `ProviderRuntimeHash.sha256Hex(of:)` helper in V.17a-1's spine.
+/// Hex-encoded SHA-256 of the canonical JSONL line bytes
+/// (CR-stripped, terminating newline excluded). A replay of
+/// identical bytes produces an identical hash and the store's
+/// UNIQUE constraint elides the second insert.
 ///
 /// **Fabricated-fixtures contract** (per the operator's decompose
 /// answer to Q5, 2026-05-23). The autonomous loop does not have
@@ -30,15 +27,15 @@ import CryptoKit
 /// vocabulary below is intentionally small — adding a new wire
 /// event-type requires extending both `WireEventType` and the
 /// `convert(_:rawHash:)` mapping in one edit.
+///
+/// **Refactor history (V.17a-7, 2026-05-24).** Line-buffer + CRLF
+/// + SHA-256 helpers extracted into `JSONLLineBuffer` /
+/// `ProviderRuntimeHash`. API-shape-preserving — same input bytes
+/// produce same hashes, same partial-buffer carryover.
 public final class CodexCLIRuntimeAdapter: ProviderRuntimeAdapter, @unchecked Sendable {
     public let providerID: String = "codex-cli"
 
-    /// Trailing partial line carried between successive `ingest`
-    /// calls. Bounded by the upstream's pipe buffer; the adapter
-    /// itself imposes no cap (a 1 MB single-line JSONL is legal,
-    /// rare in practice).
-    private var pendingBuffer: Data = Data()
-    private let lock = NSLock()
+    private let buffer = JSONLLineBuffer()
 
     public init() {}
 
@@ -47,7 +44,7 @@ public final class CodexCLIRuntimeAdapter: ProviderRuntimeAdapter, @unchecked Se
     /// Throws `CodexCLIRuntimeAdapter.ParseError` on a malformed
     /// JSONL line — partial buffers do NOT throw, they wait.
     public func ingest(_ raw: Data) async throws -> [ProviderRuntimeEvent] {
-        let lines = appendAndSplit(raw)
+        let lines = buffer.append(raw)
         var out: [ProviderRuntimeEvent] = []
         out.reserveCapacity(lines.count)
         for line in lines {
@@ -71,51 +68,10 @@ public final class CodexCLIRuntimeAdapter: ProviderRuntimeAdapter, @unchecked Se
         case unknownEventType(raw: String)
     }
 
-    // MARK: - Buffer plumbing
-
-    /// Append `raw` to the pending buffer, split on `\n`, keep any
-    /// trailing partial line in the buffer, and return the complete
-    /// lines (without their newline terminators).
-    private func appendAndSplit(_ raw: Data) -> [Data] {
-        lock.lock()
-        defer { lock.unlock() }
-        pendingBuffer.append(raw)
-        var lines: [Data] = []
-        var lineStart = pendingBuffer.startIndex
-        var idx = pendingBuffer.startIndex
-        while idx < pendingBuffer.endIndex {
-            if pendingBuffer[idx] == 0x0A {  // '\n'
-                let line = pendingBuffer.subdata(in: lineStart..<idx)
-                lines.append(stripCR(line))
-                lineStart = pendingBuffer.index(after: idx)
-            }
-            idx = pendingBuffer.index(after: idx)
-        }
-        // Anything past the last newline stays in the buffer.
-        if lineStart < pendingBuffer.endIndex {
-            pendingBuffer = pendingBuffer.subdata(in: lineStart..<pendingBuffer.endIndex)
-        } else {
-            pendingBuffer.removeAll(keepingCapacity: true)
-        }
-        // Drop empty lines (consecutive newlines, trailing newline
-        // after a flush). The wire format does not use them.
-        return lines.filter { !$0.isEmpty }
-    }
-
-    /// Strip a single trailing `\r` if present (CRLF normalization).
-    /// The hash is computed on the CR-stripped bytes so streams
-    /// crossing a CRLF-translating tty produce identical hashes.
-    private func stripCR(_ data: Data) -> Data {
-        if let last = data.last, last == 0x0D {
-            return data.subdata(in: data.startIndex..<data.index(before: data.endIndex))
-        }
-        return data
-    }
-
     // MARK: - JSONL → ProviderRuntimeEvent
 
     private func parseLine(_ line: Data) throws -> ProviderRuntimeEvent {
-        let rawHash = Self.sha256Hex(of: line)
+        let rawHash = ProviderRuntimeHash.sha256Hex(of: line)
         let wire: WireEvent
         do {
             wire = try JSONDecoder().decode(WireEvent.self, from: line)
@@ -190,17 +146,6 @@ public final class CodexCLIRuntimeAdapter: ProviderRuntimeAdapter, @unchecked Se
             projectionStatus: projectionStatus,
             rawPayloadHash: rawHash
         )
-    }
-
-    // MARK: - SHA-256 helper (hex-encoded)
-
-    /// Hex-encoded SHA-256 of `data`. Stable across Apple platforms;
-    /// matches what `provider_runtime_event.raw_payload_hash` UNIQUE
-    /// constraint dedupes on.
-    static func sha256Hex(of data: Data) -> String {
-        var digest = SHA256()
-        digest.update(data: data)
-        return digest.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - Wire envelope (private — adapters' impl detail)

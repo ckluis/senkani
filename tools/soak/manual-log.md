@@ -18,6 +18,23 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Cowork-runnable test plans (groomed; ready to execute)
 
+### process-gap-close-mode-execution-evidence-invariant-vs-decomposed-parent-contract-2026-05-23 — validate the operator-pasted SKILL.md Option-C edits (Step 2 close-mode auto-stub clause + Decompose-mode `## Operator contract` template update) actually fire on a synthetic decomposed-parent fixture + the in-repo validator recognizes the auto-stub format 2026-05-24
+
+- **Item:** [`spec/autonomous/backlog/process-gap-close-mode-execution-evidence-invariant-vs-decomposed-parent-contract-2026-05-23.md`](../../spec/autonomous/backlog/process-gap-close-mode-execution-evidence-invariant-vs-decomposed-parent-contract-2026-05-23.md)
+- **Parent (in-repo partial-ship 2026-05-24):** the same file's `## Execution evidence 2026-05-24` section — partial-ship landed `classify_evidence_section` + `check_decomposed_completed_evidence` extensions to `tools/autonomous/check-backlog-statuses.py` (commit `89e1239`) along with 4 new tests in `tools/autonomous/test_check_backlog_statuses.py`. This groom round queues the test plan that validates the SKILL.md edit text (preserved verbatim in the same item's `## Build abort note 2026-05-24` for operator copy-paste).
+- **Exec mode:** **cowork or operator — either** (entirely shell-driven; 6 mandatory steps + 1 optional, all `grep` / `printf` / `python3` / `mktemp` / `rm -rf`; no GUI, no TCC, no first-grant). Cowork's Bash subagent runs the whole plan; operator can paste inline too.
+- **Time estimate:** **≤ 5 min operator-supervised** — sub-second validator runs at steps 4 + 6; ~10-30s per other step including scratch tree setup.
+- **What it proves:** (a) operator pasted SKILL.md edit (a) — `## Step 2 — Close-mode sweep` contains "Auto-stub exception" phrase (step 1 grep); (b) operator pasted SKILL.md edit (b) — `### Decompose-mode parent body template` `## Operator contract` contains "Evidence is auto-stubbed by the close-mode sweep" (step 2 grep); (c) validator's `check_decomposed_completed_evidence` correctly flags a decomposed-parent fixture WITHOUT `## Execution evidence` (step 4 — exit 1 + sentinel text); (d) validator accepts the auto-stub format when appended (step 6 — exit 0 + `OK`); (e) optional step 7 confirms operator-written non-stub evidence ALSO passes (Option C accepts either format).
+- **Pre-condition:** `~/.claude/skills/senkani-autonomous/SKILL.md` readable; operator has pasted both edit blocks from the item's `## Build abort note 2026-05-24` section (otherwise steps 1-2 fail and the plan halts with the failure-mode recovery row pointing back to the build-abort-note text). Repo at or past commits `89e1239` (Option-C validator) and `5963e2b` (V.17a-7 shared helper extraction). Python 3.9+ on PATH. The plan uses scratch trees under `mktemp -d /tmp/senkani-v17a7-groom-XXXXXX` so it never touches the live `spec/autonomous/` tree.
+- **Validates:**
+  - **(a) SKILL.md edit (a) applied (step 1)** — `grep -c "Auto-stub exception" ~/.claude/skills/senkani-autonomous/SKILL.md` returns ≥ 1.
+  - **(b) SKILL.md edit (b) applied (step 2)** — `grep -c "Evidence is auto-stubbed by the close-mode sweep" ~/.claude/skills/senkani-autonomous/SKILL.md` returns ≥ 1.
+  - **(c) validator flags missing-evidence decomposed parent (step 4)** — exit 1 + stdout contains both `no \`## Execution evidence\`` AND `Option-C close-mode auto-stub`.
+  - **(d) validator accepts auto-stub format (step 6)** — exit 0 + stdout contains `OK`.
+  - **(e) [optional] validator accepts operator-written evidence (step 7)** — exit 0 + stdout contains `OK` (proves `classify_evidence_section` returns "operator" for non-stub text and the check still passes).
+
+---
+
 ### process-gap-decompose-mode-duplicate-tests-delta-docs-synced-2026-05-22 — validate the operator-pasted SKILL.md edits (groom / decompose / scope-groom close-phase step 1 "Add" → "Set or replace" rewording) actually prevent the duplicate-key class via grep + live-tree roundtrip + synthetic duplicate-key probe 2026-05-23
 
 - **Item:** [`spec/autonomous/backlog/process-gap-decompose-mode-duplicate-tests-delta-docs-synced-2026-05-22.md`](../../spec/autonomous/backlog/process-gap-decompose-mode-duplicate-tests-delta-docs-synced-2026-05-22.md)

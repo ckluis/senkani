@@ -246,17 +246,24 @@ public enum ChainVerifier {
         // only by `source`. The rolling `fresh-install` anchor is NOT
         // renamed by v38, so it continues to mean "post-most-recent-
         // column-migration shape" (today: v35).
+        //
+        // U.11a-1 (v39): `migration-v39` likewise joins both shape sets.
+        // v39 ships no new `token_events` columns — `contract.<event>`
+        // rows reuse the v35 canonical shape, distinguished only by
+        // `source`. Same `fresh-install`-not-renamed posture as v38.
         let includeWasmKill = (
             anchor.reason == "migration-v33" ||
             anchor.reason == "fresh-install-pre-v35" ||
             anchor.reason == "migration-v35" ||
             anchor.reason == "fresh-install" ||
-            anchor.reason == "migration-v38"
+            anchor.reason == "migration-v38" ||
+            anchor.reason == "migration-v39"
         )
         let includeCachedTokens = (
             anchor.reason == "migration-v35" ||
             anchor.reason == "fresh-install" ||
-            anchor.reason == "migration-v38"
+            anchor.reason == "migration-v38" ||
+            anchor.reason == "migration-v39"
         )
         let sql = """
             SELECT id, timestamp, session_id, pane_id, project_root, source,

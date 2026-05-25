@@ -2052,6 +2052,60 @@ public enum MigrationRegistry {
             // v33/v35 rename precedent does not apply).
             try openWorkstreamRowsAnchor(db: db)
         },
+        Migration(version: 39, description: "workstream_contracts table + migration-v39 anchor on token_events for U.11a-1 (WorkstreamTaskContract foundation)") { db in
+            // U.11a-1 — first of four U.11 children per the 2026-05-25
+            // operator-confirmed decomposition. Lands the
+            // `workstream_contracts` SQLite table (11 columns: 9 simple
+            // + `budget`/list fields as JSON TEXT) and opens a new
+            // `migration-v39` anchor on `token_events` so the two new
+            // `contract.<event>` chained-row writers (`contract.attach`,
+            // `contract.advance`) shipped alongside this migration chain
+            // under a stable boundary.
+            //
+            // FK note: the `workstream_id REFERENCES workstreams(id)`
+            // clause is declarative — this codebase does not enable
+            // `PRAGMA foreign_keys = ON`, so SQLite won't enforce at
+            // INSERT time. The clause stays for schema documentation +
+            // for any future caller that opts into FK enforcement.
+            //
+            // Chain-shape note: v39 introduces no new `token_events`
+            // columns — `contract.<event>` rows reuse the v35 canonical
+            // shape (wasm_* + cached_* as .null), distinguished only by
+            // `source`. So `ChainVerifier.verifyAnchorTokenEvents`
+            // adds `migration-v39` to both the `useV33Shape` and
+            // `useV35Shape` sets; writer-side switches in
+            // `TokenEventStore.recordContractEvent` /
+            // `recordWorkstreamEvent` / `recordTokenEvent` /
+            // `recordWasmKill` mirror that. The rolling `fresh-install`
+            // anchor is NOT renamed (canonical shape is unchanged, so
+            // the v33/v35 rename precedent does not apply).
+            func exec(_ sql: String) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc != SQLITE_OK {
+                    throw MigrationError.sqlFailed(stage: "v39", detail: msg)
+                }
+            }
+            try exec("""
+                CREATE TABLE IF NOT EXISTS workstream_contracts (
+                    id BLOB PRIMARY KEY,
+                    workstream_id BLOB NOT NULL REFERENCES workstreams(id),
+                    objective TEXT NOT NULL,
+                    file_scope TEXT NOT NULL DEFAULT '[]',
+                    allowed_tools TEXT NOT NULL DEFAULT '[]',
+                    dependencies TEXT NOT NULL DEFAULT '[]',
+                    stale_spec_at REAL,
+                    budget TEXT NOT NULL,
+                    commands TEXT NOT NULL DEFAULT '[]',
+                    acceptance TEXT NOT NULL DEFAULT '[]',
+                    review_level TEXT NOT NULL
+                );
+            """)
+            try exec("CREATE INDEX IF NOT EXISTS idx_workstream_contracts_workstream_id ON workstream_contracts(workstream_id);")
+            try openContractsAnchor(db: db)
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)
@@ -2208,6 +2262,53 @@ public enum MigrationRegistry {
     /// `feature` and leave wasm_* + cached_* as .null). No `fresh-
     /// install` rename: canonical shape is unchanged, so the v33/v35
     /// rename precedent does not apply.
+    /// Open a `migration-v39` anchor for `token_events` at MAX(id) so
+    /// post-v39 `contract.<event>` writes (and any other writers
+    /// running after the v39 migration) chain under a stable boundary.
+    /// No-op on empty tables — fresh installs lazy-create a
+    /// `fresh-install` anchor on first write that uses the same v35
+    /// canonical shape. No `fresh-install` rename: canonical shape is
+    /// unchanged (v39 ships no new columns), so the v33/v35 rename
+    /// precedent does not apply.
+    private static func openContractsAnchor(db: OpaquePointer) throws {
+        var stmt: OpaquePointer?
+        let countSQL = "SELECT COUNT(*), COALESCE(MAX(id), 0) FROM token_events;"
+        guard sqlite3_prepare_v2(db, countSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(
+                stage: "v39 count(token_events)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        var rowCount: Int64 = 0
+        var maxRowid: Int64 = 0
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            rowCount = sqlite3_column_int64(stmt, 0)
+            maxRowid = sqlite3_column_int64(stmt, 1)
+        }
+        sqlite3_finalize(stmt)
+        guard rowCount > 0 else { return }
+
+        let now = Date().timeIntervalSince1970
+        let insertSQL = """
+            INSERT INTO chain_anchors
+                (table_name, started_at, started_at_rowid, reason, operator_note)
+            VALUES ('token_events', ?, ?, 'migration-v39', NULL);
+        """
+        guard sqlite3_prepare_v2(db, insertSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(
+                stage: "v39 anchor insert(token_events)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_bind_double(stmt, 1, now)
+        sqlite3_bind_int64(stmt, 2, maxRowid)
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            sqlite3_finalize(stmt)
+            throw MigrationError.sqlFailed(
+                stage: "v39 anchor step(token_events)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_finalize(stmt)
+    }
+
     private static func openWorkstreamRowsAnchor(db: OpaquePointer) throws {
         var stmt: OpaquePointer?
         let countSQL = "SELECT COUNT(*), COALESCE(MAX(id), 0) FROM token_events;"

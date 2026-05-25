@@ -161,17 +161,23 @@ final class TokenEventStore: @unchecked Sendable {
             // shape set (no column changes — canonical shape still
             // includes wasm_* + cached_*). Workstream rows route through
             // `recordWorkstreamEvent`; this method's gate stays per-anchor.
+            //
+            // U.11a-1 (v39): `migration-v39` likewise joins the post-v33
+            // + v35 shape sets. Contract rows route through
+            // `recordContractEvent`; this method's gate stays per-anchor.
             let useV33Shape = (
                 reason == "migration-v33" ||
                 reason == "fresh-install-pre-v35" ||
                 reason == "migration-v35" ||
                 reason == "fresh-install" ||
-                reason == "migration-v38"
+                reason == "migration-v38" ||
+                reason == "migration-v39"
             )
             let useV35Shape = (
                 reason == "migration-v35" ||
                 reason == "fresh-install" ||
-                reason == "migration-v38"
+                reason == "migration-v38" ||
+                reason == "migration-v39"
             )
 
             // Build the canonical-byte input from the to-be-bound values. The
@@ -297,17 +303,22 @@ final class TokenEventStore: @unchecked Sendable {
             // `fresh-install` now means v35 shape (includes wasm_* AND
             // cached_*). wasm_kill rows under v35 anchors carry cached_*
             // as `.null` so the canonical shape stays uniform per-anchor.
+            //
+            // U.11a-1 (v39): `migration-v39` joins both post-v33 + v35
+            // shape sets — v39 ships no new `token_events` columns.
             let useV33Shape = (
                 anchorReason == "migration-v33" ||
                 anchorReason == "fresh-install-pre-v35" ||
                 anchorReason == "migration-v35" ||
                 anchorReason == "fresh-install" ||
-                anchorReason == "migration-v38"
+                anchorReason == "migration-v38" ||
+                anchorReason == "migration-v39"
             )
             let useV35Shape = (
                 anchorReason == "migration-v35" ||
                 anchorReason == "fresh-install" ||
-                anchorReason == "migration-v38"
+                anchorReason == "migration-v38" ||
+                anchorReason == "migration-v39"
             )
             // Pre-v33 anchors don't carry the wasm_* canonical shape;
             // drop the row rather than write under a hash the verifier
@@ -421,17 +432,23 @@ final class TokenEventStore: @unchecked Sendable {
 
             let anchorId = self.chain.resolveAnchorId(db: db)
             let anchorReason = self.chain.anchorReason(db: db, anchorId: anchorId) ?? ""
+            // U.11a-1 (v39): `migration-v39` joins both shape sets —
+            // v39 ships no new `token_events` columns. Workstream
+            // rows recorded after the v39 migration anchor still
+            // verify cleanly under the v35 canonical shape.
             let useV33Shape = (
                 anchorReason == "migration-v33" ||
                 anchorReason == "fresh-install-pre-v35" ||
                 anchorReason == "migration-v35" ||
                 anchorReason == "fresh-install" ||
-                anchorReason == "migration-v38"
+                anchorReason == "migration-v38" ||
+                anchorReason == "migration-v39"
             )
             let useV35Shape = (
                 anchorReason == "migration-v35" ||
                 anchorReason == "fresh-install" ||
-                anchorReason == "migration-v38"
+                anchorReason == "migration-v38" ||
+                anchorReason == "migration-v39"
             )
             guard useV33Shape else {
                 Logger.log("workstream_event.drop", fields: [
@@ -505,6 +522,140 @@ final class TokenEventStore: @unchecked Sendable {
             sqlite3_bind_int64(stmt, 10, 0)
             sqlite3_bind_int64(stmt, 11, 0)
             sqlite3_bind_text(stmt, 12, (slug as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)  // feature
+            sqlite3_bind_null(stmt, 13)  // command
+            sqlite3_bind_null(stmt, 14)  // model_tier
+            sqlite3_bind_null(stmt, 15)  // connection_id
+            Self.bindOptionalText(stmt, 16, prevHash)
+            sqlite3_bind_text(stmt, 17, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_int64(stmt, 18, anchorId)
+
+            if sqlite3_step(stmt) == SQLITE_DONE {
+                self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
+            }
+        }
+    }
+
+    /// U.11a-1 — record a `contract.<event>` chained audit row under
+    /// the existing `token_events` chain. The row uses
+    /// `source = "contract.<event>"`, stores the contract UUID string
+    /// in `tool_name`, the workstream UUID string in `feature`, and
+    /// the contract UUID string in `session_id` (matches the
+    /// `recordWorkstreamEvent` identity-packing convention so chain
+    /// queries on `tool_name` find both kinds of rows).
+    ///
+    /// Reuses the v35 canonical shape (wasm_* + cached_* are .null),
+    /// so v39 ships no new columns.
+    ///
+    /// Pre-v33 anchors refuse the write — contract rows can only
+    /// chain under post-v33 anchors so their canonical map matches
+    /// the verifier's. If the table is still anchored to a pre-v33
+    /// anchor (operator hand-migrated, or schema_version stamped
+    /// without running migrations), the row is dropped silently so
+    /// the contract attach/advance path stays non-throwing.
+    func recordContractEvent(
+        contractID: UUID,
+        workstreamID: UUID,
+        event: ContractChainEvent
+    ) {
+        let now = Date().timeIntervalSince1970
+        let contractIDString = contractID.uuidString
+        let workstreamIDString = workstreamID.uuidString
+        let source = event.rawValue
+        parent.queue.async { [weak parent, weak self] in
+            guard let parent, let self, let db = parent.db else { return }
+
+            let anchorId = self.chain.resolveAnchorId(db: db)
+            let anchorReason = self.chain.anchorReason(db: db, anchorId: anchorId) ?? ""
+            let useV33Shape = (
+                anchorReason == "migration-v33" ||
+                anchorReason == "fresh-install-pre-v35" ||
+                anchorReason == "migration-v35" ||
+                anchorReason == "fresh-install" ||
+                anchorReason == "migration-v38" ||
+                anchorReason == "migration-v39"
+            )
+            let useV35Shape = (
+                anchorReason == "migration-v35" ||
+                anchorReason == "fresh-install" ||
+                anchorReason == "migration-v38" ||
+                anchorReason == "migration-v39"
+            )
+            guard useV33Shape else {
+                Logger.log("contract_event.drop", fields: [
+                    "reason": .string("pre_v33_anchor"),
+                    "anchor_reason": .string(anchorReason),
+                    "source": .string(source),
+                    "contract_id": .string(contractIDString),
+                    "workstream_id": .string(workstreamIDString),
+                ])
+                return
+            }
+            let prevHash = self.chain.latestEntryHash(db: db, anchorId: anchorId)
+
+            // Contract rows pack identity in `tool_name` (contract UUID
+            // string), the cross-reference in `feature` (workstream
+            // UUID string), and a stable `session_id` (contract UUID
+            // string) so chain queries that group by session find each
+            // contract's full attach/advance history. All token-
+            // accounting columns are zero; model/command/connection_id/
+            // pane_id/project_root/model_tier are NULL; wasm_* and
+            // cached_* are .null under whichever post-v33 shape applies.
+            var columns: [String: ChainHasher.CanonicalValue] = [
+                "timestamp":      .real(now),
+                "session_id":     .text(contractIDString),
+                "pane_id":        .null,
+                "project_root":   .null,
+                "source":         .text(source),
+                "tool_name":      .text(contractIDString),
+                "model":          .null,
+                "input_tokens":   .integer(0),
+                "output_tokens":  .integer(0),
+                "saved_tokens":   .integer(0),
+                "cost_cents":     .integer(0),
+                "feature":        .text(workstreamIDString),
+                "command":        .null,
+                "model_tier":     .null,
+                "connection_id":  .null,
+                "wasm_reason":    .null,
+                "wasm_duration_us": .null,
+                "wasm_budget_delta_us": .null,
+                "wasm_tool_id":   .null,
+            ]
+            if useV35Shape {
+                columns["cached_prompt_tokens"]      = .null
+                columns["cache_write_tokens"]        = .null
+                columns["cache_read_tokens"]         = .null
+                columns["prefill_ms_saved_estimate"] = .null
+                columns["cache_origin"]              = .null
+            }
+            let entryHash = ChainHasher.entryHash(
+                table: "token_events", columns: columns, prev: prevHash
+            )
+
+            let sql = """
+                INSERT INTO token_events
+                (timestamp, session_id, pane_id, project_root, source, tool_name, model,
+                 input_tokens, output_tokens, saved_tokens, cost_cents, feature, command, model_tier,
+                 connection_id,
+                 prev_hash, entry_hash, chain_anchor_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+
+            sqlite3_bind_double(stmt, 1, now)
+            sqlite3_bind_text(stmt, 2, (contractIDString as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_null(stmt, 3)   // pane_id
+            sqlite3_bind_null(stmt, 4)   // project_root
+            sqlite3_bind_text(stmt, 5, (source as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 6, (contractIDString as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_null(stmt, 7)   // model
+            sqlite3_bind_int64(stmt, 8, 0)
+            sqlite3_bind_int64(stmt, 9, 0)
+            sqlite3_bind_int64(stmt, 10, 0)
+            sqlite3_bind_int64(stmt, 11, 0)
+            sqlite3_bind_text(stmt, 12, (workstreamIDString as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)  // feature
             sqlite3_bind_null(stmt, 13)  // command
             sqlite3_bind_null(stmt, 14)  // model_tier
             sqlite3_bind_null(stmt, 15)  // connection_id

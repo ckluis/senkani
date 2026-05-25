@@ -166,6 +166,22 @@ extension SessionDatabase {
         )
     }
 
+    /// U.11a-1 — record a `contract.<event>` chained audit row for a
+    /// `WorkstreamTaskContract` attach/advance transition. Forwards to
+    /// `TokenEventStore.recordContractEvent`. Pre-v33 anchors silently
+    /// drop the row (the writer logs the drop with `anchor_reason`).
+    public func recordContractEvent(
+        contractID: UUID,
+        workstreamID: UUID,
+        event: ContractChainEvent
+    ) {
+        tokenEventStore.recordContractEvent(
+            contractID: contractID,
+            workstreamID: workstreamID,
+            event: event
+        )
+    }
+
     /// T.3a-4 — record a wasm_kill chained row. Forwards to
     /// `TokenEventStore.recordWasmKill`. Pre-v33 anchors silently drop
     /// the row (see TokenEventStore for the gate).

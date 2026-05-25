@@ -149,6 +149,23 @@ extension SessionDatabase {
         tokenEventStore.tokenEventExists(source: source, feature: feature)
     }
 
+    /// U.11-pre a-3 — record a `workstream.<event>` chained audit row
+    /// for a `PaneSessionDriver` lifecycle transition. Forwards to
+    /// `TokenEventStore.recordWorkstreamEvent`. Pre-v33 anchors
+    /// silently drop the row (the writer logs the drop with
+    /// `anchor_reason`).
+    public func recordWorkstreamEvent(
+        workstreamID: UUID,
+        slug: String,
+        event: WorkstreamChainEvent
+    ) {
+        tokenEventStore.recordWorkstreamEvent(
+            workstreamID: workstreamID,
+            slug: slug,
+            event: event
+        )
+    }
+
     /// T.3a-4 — record a wasm_kill chained row. Forwards to
     /// `TokenEventStore.recordWasmKill`. Pre-v33 anchors silently drop
     /// the row (see TokenEventStore for the gate).

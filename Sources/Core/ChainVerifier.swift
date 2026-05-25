@@ -239,13 +239,25 @@ public enum ChainVerifier {
     /// `TokenEventStore.recordTokenEvent` + `recordWasmKill`.
     private static func verifyAnchorTokenEvents(db: OpaquePointer, anchor: Anchor) -> Result? {
         let includeConnectionId = !(anchor.reason == "migration-v4" || anchor.reason == "fresh-install-pre-v18")
+        // U.11-pre a-3 (v38): `migration-v38` joins the post-v33 + v35
+        // shape sets. v38 introduces no new columns — the
+        // `workstream.<event>` rows shipped under v38 reuse the v35
+        // canonical shape (wasm_* + cached_* as .null), distinguished
+        // only by `source`. The rolling `fresh-install` anchor is NOT
+        // renamed by v38, so it continues to mean "post-most-recent-
+        // column-migration shape" (today: v35).
         let includeWasmKill = (
             anchor.reason == "migration-v33" ||
             anchor.reason == "fresh-install-pre-v35" ||
             anchor.reason == "migration-v35" ||
-            anchor.reason == "fresh-install"
+            anchor.reason == "fresh-install" ||
+            anchor.reason == "migration-v38"
         )
-        let includeCachedTokens = (anchor.reason == "migration-v35" || anchor.reason == "fresh-install")
+        let includeCachedTokens = (
+            anchor.reason == "migration-v35" ||
+            anchor.reason == "fresh-install" ||
+            anchor.reason == "migration-v38"
+        )
         let sql = """
             SELECT id, timestamp, session_id, pane_id, project_root, source,
                    tool_name, model, input_tokens, output_tokens, saved_tokens,

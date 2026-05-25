@@ -58,7 +58,7 @@ public actor PaneSessionDriver {
     /// Throws `WorkstreamStateTransitionError` if the existing row's
     /// state cannot legally move to `.running` (e.g. `archived → running`).
     public func start() throws {
-        try transition(to: .running, allowInitialInsert: true)
+        try transition(to: .running, event: .start, allowInitialInsert: true)
     }
 
     /// Pause the workstream. Requires the row to exist; throws
@@ -66,18 +66,18 @@ public actor PaneSessionDriver {
     /// a workstream that was never started is a programming error,
     /// not a state-machine transition).
     public func pause() throws {
-        try transition(to: .paused, allowInitialInsert: false)
+        try transition(to: .paused, event: .pause, allowInitialInsert: false)
     }
 
     /// Resume a paused workstream. Same not-found semantics as `pause`.
     public func resume() throws {
-        try transition(to: .running, allowInitialInsert: false)
+        try transition(to: .running, event: .resume, allowInitialInsert: false)
     }
 
     /// Archive the workstream. Terminal — no transitions out of
     /// `.archived` per `WorkstreamState.validateTransition`.
     public func archive() throws {
-        try transition(to: .archived, allowInitialInsert: false)
+        try transition(to: .archived, event: .archive, allowInitialInsert: false)
     }
 
     /// Read the current persisted state. Refreshes the cache from
@@ -93,7 +93,11 @@ public actor PaneSessionDriver {
 
     // MARK: - Internal helpers
 
-    private func transition(to next: WorkstreamState, allowInitialInsert: Bool) throws {
+    private func transition(
+        to next: WorkstreamState,
+        event: WorkstreamChainEvent,
+        allowInitialInsert: Bool
+    ) throws {
         let existingOrNil: WorkstreamLifecycle?
         if let cached {
             existingOrNil = cached
@@ -106,9 +110,14 @@ public actor PaneSessionDriver {
             var updated = existing
             updated.state = next
             cached = updated
-            // a-3 hook: emit chained `workstream.<event>` row to
-            // `token_events` referencing this transition. Until then,
-            // the SQL update is the only persisted side effect.
+            // U.11-pre a-3: emit chained `workstream.<event>` row to
+            // `token_events` AFTER successful SQL update. Rejected
+            // transitions throw above before reaching this point — no
+            // chained row is written on rejection.
+            database.recordWorkstreamEvent(
+                workstreamID: workstreamID,
+                slug: slug,
+                event: event)
         } else if allowInitialInsert {
             let now = Date()
             try insertRow(state: next, createdAt: now)
@@ -117,8 +126,15 @@ public actor PaneSessionDriver {
                 slug: slug,
                 state: next,
                 createdAt: now)
-            // a-3 hook: emit chained `workstream.created` row alongside
-            // the initial `workstream.<event>` transition row.
+            // U.11-pre a-3: initial insert emits one chained row
+            // (`workstream.start`) — the same event the operator's
+            // method call requested. No separate "workstream.created"
+            // row, per the 2026-05-25 decompose Q1 split (4 row kinds
+            // total, mapped 1:1 with driver methods).
+            database.recordWorkstreamEvent(
+                workstreamID: workstreamID,
+                slug: slug,
+                event: event)
         } else {
             throw WorkstreamLifecycleError.notFound(id: workstreamID, slug: slug)
         }

@@ -157,13 +157,22 @@ final class TokenEventStore: @unchecked Sendable {
             // `.null` under v35 shape, which hashes deterministically.
             let reason = self.chain.anchorReason(db: db, anchorId: anchorId) ?? ""
             let useLegacyShape = (reason == "migration-v4" || reason == "fresh-install-pre-v18")
+            // U.11-pre a-3 (v38): `migration-v38` joins the post-v33
+            // shape set (no column changes — canonical shape still
+            // includes wasm_* + cached_*). Workstream rows route through
+            // `recordWorkstreamEvent`; this method's gate stays per-anchor.
             let useV33Shape = (
                 reason == "migration-v33" ||
                 reason == "fresh-install-pre-v35" ||
                 reason == "migration-v35" ||
-                reason == "fresh-install"
+                reason == "fresh-install" ||
+                reason == "migration-v38"
             )
-            let useV35Shape = (reason == "migration-v35" || reason == "fresh-install")
+            let useV35Shape = (
+                reason == "migration-v35" ||
+                reason == "fresh-install" ||
+                reason == "migration-v38"
+            )
 
             // Build the canonical-byte input from the to-be-bound values. The
             // three chain columns are excluded by `ChainHasher` — they cannot
@@ -292,9 +301,14 @@ final class TokenEventStore: @unchecked Sendable {
                 anchorReason == "migration-v33" ||
                 anchorReason == "fresh-install-pre-v35" ||
                 anchorReason == "migration-v35" ||
-                anchorReason == "fresh-install"
+                anchorReason == "fresh-install" ||
+                anchorReason == "migration-v38"
             )
-            let useV35Shape = (anchorReason == "migration-v35" || anchorReason == "fresh-install")
+            let useV35Shape = (
+                anchorReason == "migration-v35" ||
+                anchorReason == "fresh-install" ||
+                anchorReason == "migration-v38"
+            )
             // Pre-v33 anchors don't carry the wasm_* canonical shape;
             // drop the row rather than write under a hash the verifier
             // cannot reproduce.
@@ -374,6 +388,129 @@ final class TokenEventStore: @unchecked Sendable {
             Self.bindOptionalText(stmt, 20, prevHash)
             sqlite3_bind_text(stmt, 21, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 22, anchorId)
+
+            if sqlite3_step(stmt) == SQLITE_DONE {
+                self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
+            }
+        }
+    }
+
+    /// U.11-pre a-3 — record a `workstream.<event>` chained audit row
+    /// under the existing `token_events` chain. The row uses
+    /// `source = "workstream.<event>"`, stores the workstream UUID
+    /// string in `tool_name`, and stores the slug in `feature`. Reuses
+    /// the v35 canonical shape (wasm_* + cached_* are .null), so no
+    /// new columns are needed.
+    ///
+    /// Pre-v33 anchors refuse the write — workstream rows can only
+    /// chain under post-v33 anchors so their canonical map matches
+    /// the verifier's. If the table is still anchored to a pre-v33
+    /// anchor (operator hand-migrated, or schema_version stamped
+    /// without running migrations), the row is dropped silently so
+    /// the driver's lifecycle path stays non-throwing.
+    func recordWorkstreamEvent(
+        workstreamID: UUID,
+        slug: String,
+        event: WorkstreamChainEvent
+    ) {
+        let now = Date().timeIntervalSince1970
+        let uuidString = workstreamID.uuidString
+        let source = event.rawValue
+        parent.queue.async { [weak parent, weak self] in
+            guard let parent, let self, let db = parent.db else { return }
+
+            let anchorId = self.chain.resolveAnchorId(db: db)
+            let anchorReason = self.chain.anchorReason(db: db, anchorId: anchorId) ?? ""
+            let useV33Shape = (
+                anchorReason == "migration-v33" ||
+                anchorReason == "fresh-install-pre-v35" ||
+                anchorReason == "migration-v35" ||
+                anchorReason == "fresh-install" ||
+                anchorReason == "migration-v38"
+            )
+            let useV35Shape = (
+                anchorReason == "migration-v35" ||
+                anchorReason == "fresh-install" ||
+                anchorReason == "migration-v38"
+            )
+            guard useV33Shape else {
+                Logger.log("workstream_event.drop", fields: [
+                    "reason": .string("pre_v33_anchor"),
+                    "anchor_reason": .string(anchorReason),
+                    "source": .string(source),
+                    "workstream_id": .string(uuidString),
+                ])
+                return
+            }
+            let prevHash = self.chain.latestEntryHash(db: db, anchorId: anchorId)
+
+            // Workstream rows carry identity in `tool_name` (UUID
+            // string) and `feature` (slug). All token-accounting
+            // columns are zero; model/command/connection_id/pane_id/
+            // project_root/model_tier are NULL; wasm_* and cached_*
+            // are .null under whichever post-v33 shape applies.
+            var columns: [String: ChainHasher.CanonicalValue] = [
+                "timestamp":      .real(now),
+                "session_id":     .text(uuidString),
+                "pane_id":        .null,
+                "project_root":   .null,
+                "source":         .text(source),
+                "tool_name":      .text(uuidString),
+                "model":          .null,
+                "input_tokens":   .integer(0),
+                "output_tokens":  .integer(0),
+                "saved_tokens":   .integer(0),
+                "cost_cents":     .integer(0),
+                "feature":        .text(slug),
+                "command":        .null,
+                "model_tier":     .null,
+                "connection_id":  .null,
+                "wasm_reason":    .null,
+                "wasm_duration_us": .null,
+                "wasm_budget_delta_us": .null,
+                "wasm_tool_id":   .null,
+            ]
+            if useV35Shape {
+                columns["cached_prompt_tokens"]      = .null
+                columns["cache_write_tokens"]        = .null
+                columns["cache_read_tokens"]         = .null
+                columns["prefill_ms_saved_estimate"] = .null
+                columns["cache_origin"]              = .null
+            }
+            let entryHash = ChainHasher.entryHash(
+                table: "token_events", columns: columns, prev: prevHash
+            )
+
+            let sql = """
+                INSERT INTO token_events
+                (timestamp, session_id, pane_id, project_root, source, tool_name, model,
+                 input_tokens, output_tokens, saved_tokens, cost_cents, feature, command, model_tier,
+                 connection_id,
+                 prev_hash, entry_hash, chain_anchor_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+
+            sqlite3_bind_double(stmt, 1, now)
+            sqlite3_bind_text(stmt, 2, (uuidString as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_null(stmt, 3)   // pane_id
+            sqlite3_bind_null(stmt, 4)   // project_root
+            sqlite3_bind_text(stmt, 5, (source as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 6, (uuidString as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_null(stmt, 7)   // model
+            sqlite3_bind_int64(stmt, 8, 0)
+            sqlite3_bind_int64(stmt, 9, 0)
+            sqlite3_bind_int64(stmt, 10, 0)
+            sqlite3_bind_int64(stmt, 11, 0)
+            sqlite3_bind_text(stmt, 12, (slug as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)  // feature
+            sqlite3_bind_null(stmt, 13)  // command
+            sqlite3_bind_null(stmt, 14)  // model_tier
+            sqlite3_bind_null(stmt, 15)  // connection_id
+            Self.bindOptionalText(stmt, 16, prevHash)
+            sqlite3_bind_text(stmt, 17, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_int64(stmt, 18, anchorId)
 
             if sqlite3_step(stmt) == SQLITE_DONE {
                 self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)

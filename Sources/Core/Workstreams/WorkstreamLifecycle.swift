@@ -102,3 +102,19 @@ extension WorkstreamLifecycle {
         state = next
     }
 }
+
+/// The four `token_events.source` strings emitted by
+/// `PaneSessionDriver` lifecycle transitions. Mapped one-to-one with
+/// driver method names — `start()` emits `.start`, `pause()` emits
+/// `.pause`, `resume()` emits `.resume`, `archive()` emits `.archive`.
+///
+/// U.11-pre a-3 introduces this enum + the chained-row writer
+/// (`SessionDatabase.recordWorkstreamEvent`) that consumes it. Rows
+/// chain under the `migration-v38` (or post-v38 `fresh-install`)
+/// `token_events` anchor.
+public enum WorkstreamChainEvent: String, Sendable {
+    case start    = "workstream.start"
+    case pause    = "workstream.pause"
+    case resume   = "workstream.resume"
+    case archive  = "workstream.archive"
+}

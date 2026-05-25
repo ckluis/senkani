@@ -1994,6 +1994,42 @@ public enum MigrationRegistry {
             try exec("CREATE INDEX IF NOT EXISTS idx_provider_runtime_event_tool_call ON provider_runtime_event(tool_call_id) WHERE tool_call_id IS NOT NULL;")
             try exec("CREATE INDEX IF NOT EXISTS idx_provider_runtime_event_projection ON provider_runtime_event(projection_status) WHERE projection_status != 'ineligible';")
         },
+        Migration(version: 37, description: "workstreams lifecycle table for U.11-pre a-1 (WorkstreamLifecycle foundation)") { db in
+            // U.11-pre a-1 — first of three U.11-pre sub-items per the
+            // 2026-05-25 operator-approved decomposition. Lands the
+            // workstream lifecycle table: UUID-keyed identity, UNIQUE
+            // slug for CLI/log/audit-chain lookups, and a TEXT state
+            // column whose values come from `WorkstreamState`'s
+            // RawRepresentable string cases. The `PaneSessionDriver`
+            // actor (a-2) reads/writes this table; the four
+            // `workstream.<event>` chained rows (a-3) reference rows
+            // here by `id`.
+            //
+            // Chain note: `workstreams` itself is NOT in the T.5
+            // audit chain — it stores current state only. The
+            // chained-event audit trail lives in `token_events`
+            // (a-3 writes those rows under a v38 anchor; the
+            // ChainVerifier extension lands there too).
+            func exec(_ sql: String) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc != SQLITE_OK {
+                    throw MigrationError.sqlFailed(stage: "v37", detail: msg)
+                }
+            }
+            try exec("""
+                CREATE TABLE IF NOT EXISTS workstreams (
+                    id BLOB PRIMARY KEY,
+                    slug TEXT NOT NULL UNIQUE,
+                    state TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+            """)
+            try exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_workstreams_slug ON workstreams(slug);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_workstreams_state ON workstreams(state);")
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)

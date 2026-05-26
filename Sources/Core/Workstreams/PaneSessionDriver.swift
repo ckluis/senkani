@@ -42,10 +42,59 @@ public actor PaneSessionDriver {
     /// successful transition.
     private var cached: WorkstreamLifecycle?
 
+    /// U.11a-3 — optional contract attached to this driver. When set,
+    /// the lifecycle methods consult any matching gate before applying
+    /// the transition. When `nil`, lifecycle methods proceed exactly
+    /// as the U.11-pre a-2 baseline (no gate hits, no `gate.evaluate`
+    /// rows). The actor isolates the slot — callers must `await`
+    /// `attach(contract:gates:)` / `detachContract()`.
+    private var attachedContract: WorkstreamTaskContract?
+
+    /// U.11a-3 — gates indexed by the transition point they guard.
+    /// Populated via `attach(contract:gates:)`; cleared by
+    /// `detachContract()`. Indexed-by-kind because each transition
+    /// looks up exactly one gate; multiple gates per kind on the same
+    /// contract is out of scope for a-3 (a later child can switch the
+    /// shape to `[GateKind: [WorkflowGate]]` if needed).
+    private var attachedGatesByKind: [GateKind: WorkflowGate] = [:]
+
     public init(workstreamID: UUID, slug: String, database: SessionDatabase) {
         self.workstreamID = workstreamID
         self.slug = slug
         self.database = database
+    }
+
+    // MARK: - Contract + gate attachment (U.11a-3)
+
+    /// Read-side accessor for the attached contract. `nil` when no
+    /// contract is attached (the U.11-pre baseline behavior path).
+    public func currentContract() -> WorkstreamTaskContract? {
+        attachedContract
+    }
+
+    /// Attach (or replace) the driver's contract + gates. The setter
+    /// is actor-safe — concurrent calls serialize through the actor's
+    /// queue. Passing an empty `gates` array attaches the contract
+    /// with no gate hits, which is observably equivalent to no
+    /// attachment for lifecycle methods (no `gate.evaluate` rows
+    /// emitted) but `currentContract()` will return the contract.
+    public func attach(
+        contract: WorkstreamTaskContract,
+        gates: [WorkflowGate]
+    ) {
+        self.attachedContract = contract
+        var map: [GateKind: WorkflowGate] = [:]
+        for gate in gates {
+            map[gate.kind] = gate
+        }
+        self.attachedGatesByKind = map
+    }
+
+    /// Clear the attached contract + gates. Subsequent lifecycle
+    /// calls fall through to the U.11-pre baseline.
+    public func detachContract() {
+        self.attachedContract = nil
+        self.attachedGatesByKind = [:]
     }
 
     // MARK: - Lifecycle commands
@@ -104,6 +153,13 @@ public actor PaneSessionDriver {
         } else {
             existingOrNil = try loadRow()
         }
+        // U.11a-3: consult any matching gate BEFORE applying the SQL
+        // state update. On `.blocked` outcome the gate.evaluate row is
+        // written, then `GateRefusal` is thrown — state is NOT updated,
+        // matching the acceptance bullet "the state does NOT transition
+        // (currentState unchanged)".
+        try consultGate(for: event, currentState: existingOrNil?.state)
+
         if let existing = existingOrNil {
             try existing.state.validateTransition(to: next)
             try updateState(next)
@@ -138,6 +194,57 @@ public actor PaneSessionDriver {
         } else {
             throw WorkstreamLifecycleError.notFound(id: workstreamID, slug: slug)
         }
+    }
+
+    // MARK: - Gate consultation (U.11a-3)
+
+    /// Map a driver lifecycle event to the gate kind that guards it.
+    /// Per the 2026-05-25 decompose interview the mapping is fixed:
+    ///   - `.start`   → `.preRun`
+    ///   - `.pause`   → `.validation`
+    ///   - `.resume`  → `.preRun` (re-enter from pause respects the same gate)
+    ///   - `.archive` → `.archive`
+    private static func gateKind(for event: WorkstreamChainEvent) -> GateKind {
+        switch event {
+        case .start:   return .preRun
+        case .pause:   return .validation
+        case .resume:  return .preRun
+        case .archive: return .archive
+        }
+    }
+
+    /// Consult the gate for `event`. No-op when no contract is
+    /// attached or when the attached contract has no matching gate
+    /// for the kind. Writes one `gate.evaluate` row on every non-
+    /// `.allow` outcome (so `block` / `warn` / `advisory` all leave
+    /// an audit trail). On `.blocked` outcome, throws `GateRefusal`
+    /// AFTER the audit row is written.
+    private func consultGate(
+        for event: WorkstreamChainEvent,
+        currentState: WorkstreamState?
+    ) throws {
+        guard let contract = attachedContract else { return }
+        let kind = Self.gateKind(for: event)
+        guard let gate = attachedGatesByKind[kind] else { return }
+
+        let outcome = gate.evaluate(
+            currentState: currentState,
+            workstreamID: workstreamID
+        )
+        // `.allow` is a quiet no-op — no audit row, no throw.
+        guard outcome != .allow else { return }
+
+        database.recordGateEvent(
+            gateID: gate.id,
+            contractID: contract.id,
+            outcome: outcome
+        )
+        if case .blocked(let handoff) = outcome {
+            throw GateRefusal(handoff: handoff)
+        }
+        // `.warned` / `.advisory` fall through — driver proceeds to
+        // apply the SQL transition. Operator surfaces still see the
+        // outcome via the persisted gate.evaluate row.
     }
 
     // MARK: - SQL access

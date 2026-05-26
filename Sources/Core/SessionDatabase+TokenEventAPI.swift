@@ -199,6 +199,22 @@ extension SessionDatabase {
         )
     }
 
+    /// U.11a-3 — record a `gate.evaluate` chained audit row for a
+    /// `WorkflowGate` consult. Forwards to
+    /// `TokenEventStore.recordGateEvent`. Pre-v33 anchors silently
+    /// drop the row (the writer logs the drop with `anchor_reason`).
+    public func recordGateEvent(
+        gateID: UUID,
+        contractID: UUID,
+        outcome: GateOutcome
+    ) {
+        tokenEventStore.recordGateEvent(
+            gateID: gateID,
+            contractID: contractID,
+            outcome: outcome
+        )
+    }
+
     /// T.3a-4 — record a wasm_kill chained row. Forwards to
     /// `TokenEventStore.recordWasmKill`. Pre-v33 anchors silently drop
     /// the row (see TokenEventStore for the gate).

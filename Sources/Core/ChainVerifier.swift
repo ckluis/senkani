@@ -74,7 +74,16 @@ public enum ChainVerifier {
                 "pack_audits":        verifyTable(db: db, table: "pack_audits",        verify: verifyAnchorPackAudits),
                 "eval_results":       verifyTable(db: db, table: "eval_results",       verify: verifyAnchorEvalResults),
                 "surrogate_writes":   verifyTable(db: db, table: "surrogate_writes",   verify: verifyAnchorSurrogateWrites),
+                "workstream_handoffs": verifyTable(db: db, table: "workstream_handoffs", verify: verifyAnchorWorkstreamHandoffs),
             ]
+        }
+    }
+
+    /// U.11a-4 — `workstream_handoffs` chained-table verifier.
+    public static func verifyWorkstreamHandoffs(_ database: SessionDatabase) -> Result {
+        return database.queue.sync {
+            guard let db = database.db else { return .noChain }
+            return verifyTable(db: db, table: "workstream_handoffs", verify: verifyAnchorWorkstreamHandoffs)
         }
     }
 
@@ -251,19 +260,27 @@ public enum ChainVerifier {
         // v39 ships no new `token_events` columns — `contract.<event>`
         // rows reuse the v35 canonical shape, distinguished only by
         // `source`. Same `fresh-install`-not-renamed posture as v38.
+        //
+        // U.11a-4 (v40): `migration-v40` joins both shape sets — v40
+        // ships no new `token_events` columns. `handoff.<event>` rows
+        // shipped under v40 reuse the v35 canonical shape,
+        // distinguished only by `source`. Same `fresh-install`-not-
+        // renamed posture as v38/v39.
         let includeWasmKill = (
             anchor.reason == "migration-v33" ||
             anchor.reason == "fresh-install-pre-v35" ||
             anchor.reason == "migration-v35" ||
             anchor.reason == "fresh-install" ||
             anchor.reason == "migration-v38" ||
-            anchor.reason == "migration-v39"
+            anchor.reason == "migration-v39" ||
+            anchor.reason == "migration-v40"
         )
         let includeCachedTokens = (
             anchor.reason == "migration-v35" ||
             anchor.reason == "fresh-install" ||
             anchor.reason == "migration-v38" ||
-            anchor.reason == "migration-v39"
+            anchor.reason == "migration-v39" ||
+            anchor.reason == "migration-v40"
         )
         let sql = """
             SELECT id, timestamp, session_id, pane_id, project_root, source,
@@ -744,6 +761,93 @@ public enum ChainVerifier {
             let stored = sqlite3_column_text(stmt, 9).map { String(cString: $0) } ?? ""
             return (rowid, columns, prev, stored)
         }
+    }
+
+    /// Walk `workstream_handoffs` rows for one anchor. U.11a-4 (v40):
+    /// columns hashed are the eight non-chain payload columns plus
+    /// the row's `id` (BLOB UUID → text uuidString — see the writer
+    /// in `TokenEventStore.recordBlockedHandoff` for the same
+    /// convention). Anchor reason is not shape-switched: v40 is the
+    /// table's birthday so every row has the same canonical shape.
+    /// `entry_hash IS NOT NULL` filter — see
+    /// `verifyAnchorTokenEvents` notes.
+    private static func verifyAnchorWorkstreamHandoffs(db: OpaquePointer, anchor: Anchor) -> Result? {
+        // BLOB primary key — the chain anchor's `started_at_rowid`
+        // refers to SQLite's implicit ROWID, not to `id` (which is a
+        // 16-byte BLOB). Walk via `rowid > ?` and order by rowid so
+        // insertion order matches the writer's chain order.
+        let sql = """
+            SELECT rowid, id, workstream_id, contract_id, gate_id,
+                   blocker_reason, owner, next_action, evidence_bundle,
+                   created_at, prev_hash, entry_hash
+              FROM workstream_handoffs
+             WHERE chain_anchor_id = ? AND rowid > ? AND entry_hash IS NOT NULL
+             ORDER BY rowid ASC;
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, anchor.id)
+        sqlite3_bind_int64(stmt, 2, anchor.startedAtRowid)
+
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let rowid = sqlite3_column_int64(stmt, 0)
+            // Re-derive UUID-as-text for each BLOB id column to match
+            // the writer's canonical-hash payload convention.
+            let idText      = uuidBlobText(stmt, 1) ?? ""
+            let wsText      = uuidBlobText(stmt, 2) ?? ""
+            let contractTxt = uuidBlobText(stmt, 3) ?? ""
+            let gateText    = uuidBlobText(stmt, 4) ?? ""
+            let reasonText  = sqlite3_column_text(stmt, 5).map { String(cString: $0) } ?? ""
+            let ownerText   = sqlite3_column_text(stmt, 6).map { String(cString: $0) } ?? ""
+            let nextText    = sqlite3_column_text(stmt, 7).map { String(cString: $0) } ?? ""
+            let evidenceTxt = sqlite3_column_text(stmt, 8).map { String(cString: $0) } ?? ""
+            let createdAt   = sqlite3_column_int64(stmt, 9)
+            let prev        = optionalText(stmt, 10)
+            let stored      = sqlite3_column_text(stmt, 11).map { String(cString: $0) } ?? ""
+
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "id":              .text(idText),
+                "workstream_id":   .text(wsText),
+                "contract_id":     .text(contractTxt),
+                "gate_id":         .text(gateText),
+                "blocker_reason":  .text(reasonText),
+                "owner":           .text(ownerText),
+                "next_action":     .text(nextText),
+                "evidence_bundle": .text(evidenceTxt),
+                "created_at":      .integer(createdAt),
+            ]
+            let expected = ChainHasher.entryHash(
+                table: "workstream_handoffs", columns: columns, prev: prev
+            )
+            if expected != stored {
+                return .brokenAt(
+                    table: "workstream_handoffs",
+                    rowid: rowid,
+                    expected: expected,
+                    actual: stored)
+            }
+        }
+        return nil
+    }
+
+    /// Decode a 16-byte BLOB UUID column into its RFC-4122 string
+    /// form. Returns nil for NULL columns or wrong-length blobs.
+    /// Mirrors the writer's `UUID.uuidString` payload convention so
+    /// the canonical-hash bytes match across writer + verifier.
+    private static func uuidBlobText(_ stmt: OpaquePointer?, _ index: Int32) -> String? {
+        guard sqlite3_column_type(stmt, index) == SQLITE_BLOB else { return nil }
+        let len = sqlite3_column_bytes(stmt, index)
+        guard len == 16,
+              let raw = sqlite3_column_blob(stmt, index) else { return nil }
+        let bytes = raw.assumingMemoryBound(to: UInt8.self)
+        let uuid = (
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]
+        )
+        return UUID(uuid: uuid).uuidString
     }
 
     // MARK: - Generic helpers

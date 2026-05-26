@@ -215,6 +215,41 @@ extension SessionDatabase {
         )
     }
 
+    /// U.11a-4 — record a `handoff.open` or `handoff.close` chained
+    /// audit row in `token_events`. Forwards to
+    /// `TokenEventStore.recordHandoffEvent`. Pre-v33 anchors silently
+    /// drop the row (the writer logs the drop with `anchor_reason`).
+    public func recordHandoffEvent(
+        handoffID: UUID,
+        workstreamID: UUID,
+        contractID: UUID,
+        gateID: UUID,
+        event: HandoffChainEvent
+    ) {
+        tokenEventStore.recordHandoffEvent(
+            handoffID: handoffID,
+            workstreamID: workstreamID,
+            contractID: contractID,
+            gateID: gateID,
+            event: event
+        )
+    }
+
+    /// U.11a-4 — persist a `BlockedHandoff` to the dedicated
+    /// `workstream_handoffs` chained table. Forwards to
+    /// `TokenEventStore.recordBlockedHandoff`. The table is brand-new
+    /// in migration v40; there is no pre-v40 anchor refusal path —
+    /// callers running on a v40+ schema always land a row.
+    public func recordBlockedHandoff(
+        handoff: BlockedHandoff,
+        contractID: UUID
+    ) {
+        tokenEventStore.recordBlockedHandoff(
+            handoff: handoff,
+            contractID: contractID
+        )
+    }
+
     /// T.3a-4 — record a wasm_kill chained row. Forwards to
     /// `TokenEventStore.recordWasmKill`. Pre-v33 anchors silently drop
     /// the row (see TokenEventStore for the gate).

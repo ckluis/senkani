@@ -21,13 +21,21 @@ final class TokenEventStore: @unchecked Sendable {
     // four chain participants share the same primitive.
     private let chain = ChainState(table: "token_events")
 
+    // U.11a-4 — `workstream_handoffs` is its own T.5-chained table
+    // (migration v40). Owns a separate `ChainState` so anchor lookup
+    // and last-hash cache are independent from `token_events`.
+    private let handoffChain = ChainState(table: "workstream_handoffs")
+
     init(parent: SessionDatabase) {
         self.parent = parent
     }
 
     /// Drop the chain cache after a `--repair-chain` motion. Caller must
     /// be on `parent.queue`.
-    func invalidateChainCache() { chain.invalidate() }
+    func invalidateChainCache() {
+        chain.invalidate()
+        handoffChain.invalidate()
+    }
 
     // MARK: - Schema
 
@@ -171,13 +179,15 @@ final class TokenEventStore: @unchecked Sendable {
                 reason == "migration-v35" ||
                 reason == "fresh-install" ||
                 reason == "migration-v38" ||
-                reason == "migration-v39"
+                reason == "migration-v39" ||
+                reason == "migration-v40"
             )
             let useV35Shape = (
                 reason == "migration-v35" ||
                 reason == "fresh-install" ||
                 reason == "migration-v38" ||
-                reason == "migration-v39"
+                reason == "migration-v39" ||
+                reason == "migration-v40"
             )
 
             // Build the canonical-byte input from the to-be-bound values. The
@@ -312,13 +322,15 @@ final class TokenEventStore: @unchecked Sendable {
                 anchorReason == "migration-v35" ||
                 anchorReason == "fresh-install" ||
                 anchorReason == "migration-v38" ||
-                anchorReason == "migration-v39"
+                anchorReason == "migration-v39" ||
+                anchorReason == "migration-v40"
             )
             let useV35Shape = (
                 anchorReason == "migration-v35" ||
                 anchorReason == "fresh-install" ||
                 anchorReason == "migration-v38" ||
-                anchorReason == "migration-v39"
+                anchorReason == "migration-v39" ||
+                anchorReason == "migration-v40"
             )
             // Pre-v33 anchors don't carry the wasm_* canonical shape;
             // drop the row rather than write under a hash the verifier
@@ -442,13 +454,15 @@ final class TokenEventStore: @unchecked Sendable {
                 anchorReason == "migration-v35" ||
                 anchorReason == "fresh-install" ||
                 anchorReason == "migration-v38" ||
-                anchorReason == "migration-v39"
+                anchorReason == "migration-v39" ||
+                anchorReason == "migration-v40"
             )
             let useV35Shape = (
                 anchorReason == "migration-v35" ||
                 anchorReason == "fresh-install" ||
                 anchorReason == "migration-v38" ||
-                anchorReason == "migration-v39"
+                anchorReason == "migration-v39" ||
+                anchorReason == "migration-v40"
             )
             guard useV33Shape else {
                 Logger.log("workstream_event.drop", fields: [
@@ -572,13 +586,15 @@ final class TokenEventStore: @unchecked Sendable {
                 anchorReason == "migration-v35" ||
                 anchorReason == "fresh-install" ||
                 anchorReason == "migration-v38" ||
-                anchorReason == "migration-v39"
+                anchorReason == "migration-v39" ||
+                anchorReason == "migration-v40"
             )
             let useV35Shape = (
                 anchorReason == "migration-v35" ||
                 anchorReason == "fresh-install" ||
                 anchorReason == "migration-v38" ||
-                anchorReason == "migration-v39"
+                anchorReason == "migration-v39" ||
+                anchorReason == "migration-v40"
             )
             guard useV33Shape else {
                 Logger.log("contract_event.drop", fields: [
@@ -712,13 +728,15 @@ final class TokenEventStore: @unchecked Sendable {
                 anchorReason == "migration-v35" ||
                 anchorReason == "fresh-install" ||
                 anchorReason == "migration-v38" ||
-                anchorReason == "migration-v39"
+                anchorReason == "migration-v39" ||
+                anchorReason == "migration-v40"
             )
             let useV35Shape = (
                 anchorReason == "migration-v35" ||
                 anchorReason == "fresh-install" ||
                 anchorReason == "migration-v38" ||
-                anchorReason == "migration-v39"
+                anchorReason == "migration-v39" ||
+                anchorReason == "migration-v40"
             )
             guard useV33Shape else {
                 Logger.log("assertion_event.drop", fields: [
@@ -845,13 +863,15 @@ final class TokenEventStore: @unchecked Sendable {
                 anchorReason == "migration-v35" ||
                 anchorReason == "fresh-install" ||
                 anchorReason == "migration-v38" ||
-                anchorReason == "migration-v39"
+                anchorReason == "migration-v39" ||
+                anchorReason == "migration-v40"
             )
             let useV35Shape = (
                 anchorReason == "migration-v35" ||
                 anchorReason == "fresh-install" ||
                 anchorReason == "migration-v38" ||
-                anchorReason == "migration-v39"
+                anchorReason == "migration-v39" ||
+                anchorReason == "migration-v40"
             )
             guard useV33Shape else {
                 Logger.log("gate.evaluate.drop", fields: [
@@ -935,6 +955,254 @@ final class TokenEventStore: @unchecked Sendable {
             if sqlite3_step(stmt) == SQLITE_DONE {
                 self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
             }
+        }
+    }
+
+    /// U.11a-4 — record a `handoff.open` or `handoff.close` chained
+    /// audit row for a `BlockedHandoff` lifecycle event. Sibling of
+    /// `recordGateEvent` — same identity-packing convention, same v35
+    /// canonical shape (wasm_* + cached_* are `.null`), same pre-v33
+    /// anchor refusal. v40 ships no new `token_events` columns, so
+    /// this writer carries no extra ledger bookkeeping.
+    ///
+    /// Identity layout:
+    ///   - `source`       = `"handoff.open"` / `"handoff.close"`
+    ///   - `session_id`   = handoff UUID string (chain-group key)
+    ///   - `tool_name`    = handoff UUID string (identity)
+    ///   - `feature`      = contract UUID string (cross-reference;
+    ///                      mirrors gate.evaluate's contract pointer)
+    ///   - `command`      = gate UUID string — audit pointer back to
+    ///                      the refusing gate. Both `.open` and
+    ///                      `.close` carry the same gate id so a
+    ///                      query for "all handoff rows for gate X"
+    ///                      is a single source-LIKE + command match.
+    ///
+    /// Pre-v33 anchors silently drop with a `handoff_event.drop`
+    /// Logger emission carrying `anchor_reason` / `source` /
+    /// `handoff_id` / `contract_id`.
+    func recordHandoffEvent(
+        handoffID: UUID,
+        workstreamID: UUID,
+        contractID: UUID,
+        gateID: UUID,
+        event: HandoffChainEvent
+    ) {
+        let now = Date().timeIntervalSince1970
+        let handoffIDString = handoffID.uuidString
+        let contractIDString = contractID.uuidString
+        let gateIDString = gateID.uuidString
+        let workstreamIDString = workstreamID.uuidString
+        let source = event.rawValue
+        parent.queue.async { [weak parent, weak self] in
+            guard let parent, let self, let db = parent.db else { return }
+
+            let anchorId = self.chain.resolveAnchorId(db: db)
+            let anchorReason = self.chain.anchorReason(db: db, anchorId: anchorId) ?? ""
+            let useV33Shape = (
+                anchorReason == "migration-v33" ||
+                anchorReason == "fresh-install-pre-v35" ||
+                anchorReason == "migration-v35" ||
+                anchorReason == "fresh-install" ||
+                anchorReason == "migration-v38" ||
+                anchorReason == "migration-v39" ||
+                anchorReason == "migration-v40"
+            )
+            let useV35Shape = (
+                anchorReason == "migration-v35" ||
+                anchorReason == "fresh-install" ||
+                anchorReason == "migration-v38" ||
+                anchorReason == "migration-v39" ||
+                anchorReason == "migration-v40"
+            )
+            guard useV33Shape else {
+                Logger.log("handoff_event.drop", fields: [
+                    "reason": .string("pre_v33_anchor"),
+                    "anchor_reason": .string(anchorReason),
+                    "source": .string(source),
+                    "handoff_id": .string(handoffIDString),
+                    "contract_id": .string(contractIDString),
+                    "workstream_id": .string(workstreamIDString),
+                ])
+                return
+            }
+            let prevHash = self.chain.latestEntryHash(db: db, anchorId: anchorId)
+
+            var columns: [String: ChainHasher.CanonicalValue] = [
+                "timestamp":      .real(now),
+                "session_id":     .text(handoffIDString),
+                "pane_id":        .null,
+                "project_root":   .null,
+                "source":         .text(source),
+                "tool_name":      .text(handoffIDString),
+                "model":          .null,
+                "input_tokens":   .integer(0),
+                "output_tokens":  .integer(0),
+                "saved_tokens":   .integer(0),
+                "cost_cents":     .integer(0),
+                "feature":        .text(contractIDString),
+                "command":        .text(gateIDString),
+                "model_tier":     .null,
+                "connection_id":  .null,
+                "wasm_reason":    .null,
+                "wasm_duration_us": .null,
+                "wasm_budget_delta_us": .null,
+                "wasm_tool_id":   .null,
+            ]
+            if useV35Shape {
+                columns["cached_prompt_tokens"]      = .null
+                columns["cache_write_tokens"]        = .null
+                columns["cache_read_tokens"]         = .null
+                columns["prefill_ms_saved_estimate"] = .null
+                columns["cache_origin"]              = .null
+            }
+            let entryHash = ChainHasher.entryHash(
+                table: "token_events", columns: columns, prev: prevHash
+            )
+
+            let sql = """
+                INSERT INTO token_events
+                (timestamp, session_id, pane_id, project_root, source, tool_name, model,
+                 input_tokens, output_tokens, saved_tokens, cost_cents, feature, command, model_tier,
+                 connection_id,
+                 prev_hash, entry_hash, chain_anchor_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+
+            sqlite3_bind_double(stmt, 1, now)
+            sqlite3_bind_text(stmt, 2, (handoffIDString as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_null(stmt, 3)
+            sqlite3_bind_null(stmt, 4)
+            sqlite3_bind_text(stmt, 5, (source as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 6, (handoffIDString as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_null(stmt, 7)
+            sqlite3_bind_int64(stmt, 8, 0)
+            sqlite3_bind_int64(stmt, 9, 0)
+            sqlite3_bind_int64(stmt, 10, 0)
+            sqlite3_bind_int64(stmt, 11, 0)
+            sqlite3_bind_text(stmt, 12, (contractIDString as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 13, (gateIDString as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_null(stmt, 14)
+            sqlite3_bind_null(stmt, 15)
+            Self.bindOptionalText(stmt, 16, prevHash)
+            sqlite3_bind_text(stmt, 17, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_int64(stmt, 18, anchorId)
+
+            if sqlite3_step(stmt) == SQLITE_DONE {
+                self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
+            }
+        }
+    }
+
+    /// U.11a-4 — persist a `BlockedHandoff` to the dedicated
+    /// `workstream_handoffs` chained table. The table is its OWN T.5
+    /// chain (sibling to `token_events` / `trust_audits` /
+    /// `validation_results`), so chain state is tracked on
+    /// `handoffChain` — independent from this writer's `token_events`
+    /// anchor.
+    ///
+    /// The canonical-hash column map encodes each BLOB UUID as the
+    /// UUID's RFC-4122 string form so the verifier can re-derive the
+    /// same payload from `sqlite3_column_blob` → UUID(uuid:) →
+    /// uuid.uuidString. INTEGER `created_at` is bound as seconds-
+    /// since-epoch (consistent with `workstreams.created_at`).
+    ///
+    /// `contract_id` is required (NOT NULL + FK to
+    /// `workstream_contracts.id`) and is passed separately because
+    /// `BlockedHandoff` itself only carries `workstreamID` + `gateID`
+    /// — the driver holds the contract reference via
+    /// `attachedContract` and threads it through to the writer.
+    ///
+    /// `evidenceBundle` serializes to a JSON array TEXT — the
+    /// canonical hash treats it as `.text(jsonString)` so the
+    /// verifier can re-encode the same string deterministically.
+    func recordBlockedHandoff(
+        handoff: BlockedHandoff,
+        contractID: UUID
+    ) {
+        let now = Date().timeIntervalSince1970
+        let createdAt = Int64(now)
+        let handoffIDString = handoff.id.uuidString
+        let workstreamIDString = handoff.workstreamID.uuidString
+        let contractIDString = contractID.uuidString
+        let gateIDString = handoff.gateID.uuidString
+        let ownerString = handoff.owner.rawValue
+        let reason = handoff.blockerReason
+        let nextAction = handoff.nextAction
+        // Stable, sorted-key JSON would be overkill — Swift's default
+        // JSONEncoder preserves the array order we hand in, which is
+        // what we want. Failures fall back to '[]' (matches the column
+        // default). Encoding only string arrays so a failure here is
+        // an out-of-memory event, not a malformed-input event.
+        let evidenceJSON: String = {
+            do {
+                let data = try JSONEncoder().encode(handoff.evidenceBundle)
+                return String(data: data, encoding: .utf8) ?? "[]"
+            } catch {
+                return "[]"
+            }
+        }()
+        parent.queue.async { [weak parent, weak self] in
+            guard let parent, let self, let db = parent.db else { return }
+
+            let anchorId = self.handoffChain.resolveAnchorId(db: db)
+            let prevHash = self.handoffChain.latestEntryHash(db: db, anchorId: anchorId)
+
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "id":              .text(handoffIDString),
+                "workstream_id":   .text(workstreamIDString),
+                "contract_id":     .text(contractIDString),
+                "gate_id":         .text(gateIDString),
+                "blocker_reason":  .text(reason),
+                "owner":           .text(ownerString),
+                "next_action":     .text(nextAction),
+                "evidence_bundle": .text(evidenceJSON),
+                "created_at":      .integer(createdAt),
+            ]
+            let entryHash = ChainHasher.entryHash(
+                table: "workstream_handoffs", columns: columns, prev: prevHash
+            )
+
+            let sql = """
+                INSERT INTO workstream_handoffs
+                    (id, workstream_id, contract_id, gate_id,
+                     blocker_reason, owner, next_action, evidence_bundle,
+                     created_at, prev_hash, entry_hash, chain_anchor_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+
+            Self.bindUUIDBlob(stmt, 1, handoff.id)
+            Self.bindUUIDBlob(stmt, 2, handoff.workstreamID)
+            Self.bindUUIDBlob(stmt, 3, contractID)
+            Self.bindUUIDBlob(stmt, 4, handoff.gateID)
+            sqlite3_bind_text(stmt, 5, (reason as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 6, (ownerString as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 7, (nextAction as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 8, (evidenceJSON as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_int64(stmt, 9, createdAt)
+            Self.bindOptionalText(stmt, 10, prevHash)
+            sqlite3_bind_text(stmt, 11, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_int64(stmt, 12, anchorId)
+
+            if sqlite3_step(stmt) == SQLITE_DONE {
+                self.handoffChain.recordWrite(anchorId: anchorId, entryHash: entryHash)
+            }
+        }
+    }
+
+    /// Bind a 16-byte UUID to a BLOB column. Helper used by U.11a-4
+    /// `workstream_handoffs` writes; sibling helpers in
+    /// `PaneSessionDriver.bindUUID` follow the same withUnsafeBytes
+    /// + SQLITE_TRANSIENT pattern.
+    fileprivate static func bindUUIDBlob(_ stmt: OpaquePointer?, _ idx: Int32, _ uuid: UUID) {
+        var bytes = uuid.uuid
+        withUnsafeBytes(of: &bytes) { raw in
+            _ = sqlite3_bind_blob(stmt, idx, raw.baseAddress, Int32(raw.count), SQLITE_TRANSIENT_DESTRUCTOR)
         }
     }
 

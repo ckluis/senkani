@@ -217,8 +217,18 @@ public actor PaneSessionDriver {
     /// attached or when the attached contract has no matching gate
     /// for the kind. Writes one `gate.evaluate` row on every non-
     /// `.allow` outcome (so `block` / `warn` / `advisory` all leave
-    /// an audit trail). On `.blocked` outcome, throws `GateRefusal`
-    /// AFTER the audit row is written.
+    /// an audit trail). On `.blocked` outcome:
+    ///   1. records `gate.evaluate` (a-3),
+    ///   2. persists the BlockedHandoff to `workstream_handoffs` (a-4),
+    ///   3. writes `handoff.open` chain row in `token_events` (a-4),
+    ///   4. throws `GateRefusal`.
+    ///
+    /// Order matters: the audit-write path runs BEFORE the throw so
+    /// the chain row is always written even if the caller's catch
+    /// short-circuits further work. Persistence + chain-row writes
+    /// dispatch async on the database queue — the throw races them,
+    /// so tests must flush the queue after catching to read the
+    /// `workstream_handoffs` + `handoff.open` artifacts back.
     private func consultGate(
         for event: WorkstreamChainEvent,
         currentState: WorkstreamState?
@@ -240,11 +250,51 @@ public actor PaneSessionDriver {
             outcome: outcome
         )
         if case .blocked(let handoff) = outcome {
+            // U.11a-4 — persist the handoff record + chain-row
+            // before throwing. Each write is dispatched async on the
+            // database queue (same as recordGateEvent above); the
+            // throw races them. Operator Q3 contract: throw AND
+            // persist.
+            database.recordBlockedHandoff(
+                handoff: handoff,
+                contractID: contract.id
+            )
+            database.recordHandoffEvent(
+                handoffID: handoff.id,
+                workstreamID: workstreamID,
+                contractID: contract.id,
+                gateID: gate.id,
+                event: .open
+            )
             throw GateRefusal(handoff: handoff)
         }
         // `.warned` / `.advisory` fall through — driver proceeds to
         // apply the SQL transition. Operator surfaces still see the
         // outcome via the persisted gate.evaluate row.
+    }
+
+    /// U.11a-4 — mark a previously-opened `BlockedHandoff` resolved.
+    /// Emits a `handoff.close` chain row in `token_events`; does NOT
+    /// mutate the `workstream_handoffs` record (the row is the
+    /// immutable record of the refusal; the chain-row pair encodes
+    /// open → close lifecycle).
+    ///
+    /// `contractID` is taken as an argument rather than from
+    /// `attachedContract` so an operator who has since detached the
+    /// contract can still close out an open handoff (the audit chain
+    /// must be closable regardless of current driver state). The
+    /// driver consults nothing — this is a pure writer pass-through.
+    public func markHandoffResolved(
+        _ handoff: BlockedHandoff,
+        contractID: UUID
+    ) {
+        database.recordHandoffEvent(
+            handoffID: handoff.id,
+            workstreamID: handoff.workstreamID,
+            contractID: contractID,
+            gateID: handoff.gateID,
+            event: .close
+        )
     }
 
     // MARK: - SQL access

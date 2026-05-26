@@ -2106,6 +2106,69 @@ public enum MigrationRegistry {
             try exec("CREATE INDEX IF NOT EXISTS idx_workstream_contracts_workstream_id ON workstream_contracts(workstream_id);")
             try openContractsAnchor(db: db)
         },
+        Migration(version: 40, description: "workstream_handoffs table + migration-v40 anchor on token_events for U.11a-4 (BlockedHandoff persistence + handoff.* row kinds)") { db in
+            // U.11a-4 — fourth of four U.11 children per the 2026-05-25
+            // operator-confirmed decomposition. Lands the dedicated
+            // `workstream_handoffs` SQLite table (own T.5 chained table)
+            // and opens a new `migration-v40` anchor on `token_events`
+            // so the two new `handoff.<event>` row kinds (`handoff.open`,
+            // `handoff.close`) shipped alongside this migration chain
+            // under a stable boundary.
+            //
+            // FK note: declarative only — this codebase does not enable
+            // `PRAGMA foreign_keys = ON`, matching the v39 posture.
+            // `workstream_id` references `workstreams.id`; `contract_id`
+            // references `workstream_contracts.id`.
+            //
+            // BLOB-UUID chain shape: the new table stores identity as
+            // BLOB columns but the chain canonical-hash payload uses
+            // each UUID's RFC-4122 string form (textValue path in the
+            // verifier). This keeps the hash bytes ASCII + matches the
+            // writer's convention of constructing UUID strings before
+            // SQLite bind.
+            //
+            // Chain-shape note: v40 introduces no new `token_events`
+            // columns — `handoff.<event>` rows reuse the v35 canonical
+            // shape (wasm_* + cached_* as .null), distinguished only
+            // by `source`. So `ChainVerifier.verifyAnchorTokenEvents`
+            // adds `migration-v40` to both the `useV33Shape` and
+            // `useV35Shape` sets; writer-side switches in
+            // `TokenEventStore.recordHandoffEvent` /
+            // `recordBlockedHandoff` / earlier writers mirror that.
+            // The rolling `fresh-install` anchor is NOT renamed (no
+            // canonical-shape change), so the v33/v35 rename
+            // precedent does not apply.
+            func exec(_ sql: String) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc != SQLITE_OK {
+                    throw MigrationError.sqlFailed(stage: "v40", detail: msg)
+                }
+            }
+            try exec("""
+                CREATE TABLE IF NOT EXISTS workstream_handoffs (
+                    id BLOB PRIMARY KEY,
+                    workstream_id BLOB NOT NULL REFERENCES workstreams(id),
+                    contract_id BLOB NOT NULL REFERENCES workstream_contracts(id),
+                    gate_id BLOB NOT NULL,
+                    blocker_reason TEXT NOT NULL,
+                    owner TEXT NOT NULL,
+                    next_action TEXT NOT NULL,
+                    evidence_bundle TEXT NOT NULL DEFAULT '[]',
+                    created_at INTEGER NOT NULL,
+                    prev_hash TEXT,
+                    entry_hash TEXT NOT NULL,
+                    chain_anchor_id INTEGER NOT NULL
+                );
+            """)
+            try exec("CREATE INDEX IF NOT EXISTS idx_workstream_handoffs_workstream_id ON workstream_handoffs(workstream_id);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_workstream_handoffs_contract_id ON workstream_handoffs(contract_id);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_workstream_handoffs_gate_id ON workstream_handoffs(gate_id);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_workstream_handoffs_anchor ON workstream_handoffs(chain_anchor_id, id);")
+            try openHandoffsAnchorTokenEvents(db: db)
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)
@@ -2304,6 +2367,58 @@ public enum MigrationRegistry {
             sqlite3_finalize(stmt)
             throw MigrationError.sqlFailed(
                 stage: "v39 anchor step(token_events)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_finalize(stmt)
+    }
+
+    /// Open a `migration-v40` anchor for `token_events` at MAX(id) so
+    /// post-v40 `handoff.<event>` writes (and any other writers
+    /// running after the v40 migration) chain under a stable boundary.
+    /// No-op on empty tables — fresh installs lazy-create a
+    /// `fresh-install` anchor on first write that uses the same v35
+    /// canonical shape. No `fresh-install` rename: canonical shape is
+    /// unchanged (v40 ships no new token_events columns), so the
+    /// v33/v35 rename precedent does not apply.
+    ///
+    /// The dedicated `workstream_handoffs` chained table is BRAND NEW
+    /// in v40 — it has no pre-existing rows to anchor, so its anchor
+    /// opens lazily on first write via `ChainState.resolveAnchorId`
+    /// (reason `fresh-install`, started_at_rowid 0).
+    private static func openHandoffsAnchorTokenEvents(db: OpaquePointer) throws {
+        var stmt: OpaquePointer?
+        let countSQL = "SELECT COUNT(*), COALESCE(MAX(id), 0) FROM token_events;"
+        guard sqlite3_prepare_v2(db, countSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(
+                stage: "v40 count(token_events)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        var rowCount: Int64 = 0
+        var maxRowid: Int64 = 0
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            rowCount = sqlite3_column_int64(stmt, 0)
+            maxRowid = sqlite3_column_int64(stmt, 1)
+        }
+        sqlite3_finalize(stmt)
+        guard rowCount > 0 else { return }
+
+        let now = Date().timeIntervalSince1970
+        let insertSQL = """
+            INSERT INTO chain_anchors
+                (table_name, started_at, started_at_rowid, reason, operator_note)
+            VALUES ('token_events', ?, ?, 'migration-v40', NULL);
+        """
+        guard sqlite3_prepare_v2(db, insertSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(
+                stage: "v40 anchor insert(token_events)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_bind_double(stmt, 1, now)
+        sqlite3_bind_int64(stmt, 2, maxRowid)
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            sqlite3_finalize(stmt)
+            throw MigrationError.sqlFailed(
+                stage: "v40 anchor step(token_events)",
                 detail: String(cString: sqlite3_errmsg(db)))
         }
         sqlite3_finalize(stmt)

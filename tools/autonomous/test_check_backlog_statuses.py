@@ -216,5 +216,78 @@ class CompletedDecomposedParentEvidenceTests(unittest.TestCase):
         self.assertEqual(rc, 0, msg=f"stdout={stdout!r} stderr={stderr!r}")
 
 
+class DanglingBlockedByTests(unittest.TestCase):
+    """Dangling `blocked_by` detection tests.
+
+    Per `process-gap-phase-v13-dangling-blocked-by-phase-u1-tier-scorer-
+    2026-05-26`: a `blocked_by` id that resolves to no item anywhere in
+    `backlog/` or `completed/` can never reach `status: done`, so the
+    loop silently wedges the item out of the build queue forever. The
+    validator flags this class so it is caught at validate time.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.backlog = self.root / "backlog"
+        self.completed = self.root / "completed" / "2026"
+        self.backlog.mkdir(parents=True)
+        self.completed.mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_blocked_by_resolving_to_real_items_is_ok(self) -> None:
+        write_item(self.backlog / "consumer.md", "consumer", "open",
+                   "blocked_by: [dep-a, dep-b]\n")
+        write_item(self.completed / "dep-a.md", "dep-a", "done")
+        write_item(self.backlog / "dep-b.md", "dep-b", "open")
+
+        rc, stdout, stderr = run_check(self.backlog)
+
+        self.assertEqual(rc, 0, msg=f"stdout={stdout!r} stderr={stderr!r}")
+
+    def test_dangling_blocked_by_is_flagged(self) -> None:
+        write_item(self.backlog / "consumer.md", "consumer", "open",
+                   "blocked_by: [dep-a, ghost-dependency]\n")
+        write_item(self.completed / "dep-a.md", "dep-a", "done")
+
+        rc, stdout, stderr = run_check(self.backlog)
+
+        self.assertEqual(rc, 1, msg=f"stdout={stdout!r} stderr={stderr!r}")
+        self.assertIn("ghost-dependency", stdout)
+        self.assertIn("resolve to no item", stdout)
+        # The resolvable id must NOT be reported as dangling.
+        self.assertNotIn("dep-a, ", stdout.split("references id(s)")[1])
+
+    def test_empty_blocked_by_is_ok(self) -> None:
+        write_item(self.backlog / "consumer.md", "consumer", "open",
+                   "blocked_by: []\n")
+
+        rc, stdout, stderr = run_check(self.backlog)
+
+        self.assertEqual(rc, 0, msg=f"stdout={stdout!r} stderr={stderr!r}")
+
+    def test_missing_blocked_by_field_is_ok(self) -> None:
+        write_item(self.backlog / "consumer.md", "consumer", "open")
+
+        rc, stdout, stderr = run_check(self.backlog)
+
+        self.assertEqual(rc, 0, msg=f"stdout={stdout!r} stderr={stderr!r}")
+
+    def test_completed_item_contributes_ids_only_backlog_flagged(self) -> None:
+        # A completed item with a dangling blocker is NOT flagged (it is
+        # already done; the stale blocker is harmless), but it DOES
+        # contribute its id to the resolution set.
+        write_item(self.completed / "old.md", "old", "done",
+                   "blocked_by: [vanished-dep]\n")
+        write_item(self.backlog / "consumer.md", "consumer", "open",
+                   "blocked_by: [old]\n")
+
+        rc, stdout, stderr = run_check(self.backlog)
+
+        self.assertEqual(rc, 0, msg=f"stdout={stdout!r} stderr={stderr!r}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

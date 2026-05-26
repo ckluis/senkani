@@ -28,6 +28,11 @@ Companion frontmatter sanity checks:
     `status: manual_ready` after every child has shipped `status: done`;
     the parent is then an already-resolved umbrella and should be flipped
     to `done` so it no longer looks operator-actionable.
+  - A backlog item's `blocked_by:` must reference only ids that resolve
+    to a real item in `backlog/` or `completed/`. A dangling id can never
+    reach `status: done`, so the item is wedged out of the build queue
+    forever (see `process-gap-phase-v13-dangling-blocked-by-phase-u1-
+    tier-scorer-2026-05-26`).
 
 Background: `process-gap-cowork-walks-write-invalid-status-2026-05-13`
 (in-spirit; tracked here, no separate backlog item — the validator
@@ -310,6 +315,58 @@ def check_decomposed_parent_closure(backlog_dir: Path) -> dict[Path, list[str]]:
     return findings
 
 
+def check_dangling_blocked_by(backlog_dir: Path) -> dict[Path, list[str]]:
+    """Flag backlog items whose `blocked_by:` references an id that resolves
+    to no item anywhere in `backlog/` or `completed/`.
+
+    The loop's pick precedence (SKILL.md Step 3) only builds an item when
+    every `blocked_by` id resolves to a real item with `status: done`. A
+    `blocked_by` id that matches NO item can never resolve — the item is
+    silently wedged out of the build queue forever, with nothing flagging
+    the typo-class data error. This is the inverse of the observation-only
+    pre-pick fail-safe: that catches items that *would* be picked but
+    shouldn't; this catches an item that *should* be pickable but never
+    will be.
+
+    Originating finding:
+    `process-gap-phase-v13-dangling-blocked-by-phase-u1-tier-scorer-2026-05-26`
+    — `phase-v13`'s `blocked_by` referenced `phase-u1-tier-scorer`, an
+    envelope id that never existed (the U.1 tier-scorer shipped as three
+    sub-items u1a/u1b/u1c), so the blocker never resolved and phase-v13 sat
+    permanently unbuildable.
+
+    Resolution set = backlog ∪ completed (via `iter_item_files`), matching
+    the loop's actual `blocked_by` lookup. Completed items contribute ids
+    too (a stale blocker on an already-`done` item is harmless), but only
+    backlog items are flagged — they are the ones the loop tries to pick.
+    """
+    known_ids: set[str] = set()
+    for path in iter_item_files(backlog_dir):
+        fm = parse_frontmatter(path.read_text(encoding="utf-8"))
+        item_id = fm.get("id", "").strip().strip('"').strip("'")
+        if item_id:
+            known_ids.add(item_id)
+
+    findings: dict[Path, list[str]] = {}
+    for path in sorted(backlog_dir.glob("*.md")):
+        if path.name == "index.md":
+            continue
+        fm = parse_frontmatter(path.read_text(encoding="utf-8"))
+        blockers = parse_inline_list(fm.get("blocked_by", ""))
+        dangling = [b for b in blockers if b and b not in known_ids]
+        if dangling:
+            findings.setdefault(path, []).append(
+                "`blocked_by:` references id(s) that resolve to no item in "
+                "`backlog/` or `completed/`: "
+                + ", ".join(dangling)
+                + ". A blocker matching no item can never reach "
+                "`status: done`, so the loop will never build this item. "
+                "Correct the id (often a rename after the dependency was "
+                "decomposed into sub-items) or drop the stale entry."
+            )
+    return findings
+
+
 def display_path(path: Path, repo_root: Path) -> str:
     try:
         return str(path.relative_to(repo_root))
@@ -348,6 +405,13 @@ def main(argv: list[str]) -> int:
 
     completed_evidence_findings = check_decomposed_completed_evidence(backlog_dir)
     for path, findings in completed_evidence_findings.items():
+        flagged += 1
+        print(f"{display_path(path, repo_root)}:")
+        for f in findings:
+            print(f"  - {f}")
+
+    dangling_findings = check_dangling_blocked_by(backlog_dir)
+    for path, findings in dangling_findings.items():
         flagged += 1
         print(f"{display_path(path, repo_root)}:")
         for f in findings:

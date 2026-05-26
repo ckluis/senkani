@@ -18,6 +18,25 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ## Cowork-runnable test plans (groomed; ready to execute)
 
+### process-gap-pre-audit-cli-protocol-match-check-2026-05-22 — validate the operator-pasted SKILL.md edits (scope-groom phase 5.7 + build-mode Step 2.5 wiring of `check_external_surfaces.py`) actually land verbatim in `~/.claude/skills/senkani-autonomous/SKILL.md` AND the helper's exit-code contract survives the edits 2026-05-26
+
+- **Item:** [`spec/autonomous/backlog/process-gap-pre-audit-cli-protocol-match-check-2026-05-22.md`](../../spec/autonomous/backlog/process-gap-pre-audit-cli-protocol-match-check-2026-05-22.md)
+- **Parent (in-repo partial-ship 2026-05-26):** the same file's `## Execution evidence` section — partial-ship landed `tools/autonomous/check_external_surfaces.py` (stdlib helper, 484 lines) + `tools/autonomous/test_check_external_surfaces.py` (10 tests, all green) + `spec/autonomous/PROCESS.md` `## Pre-audit external surfaces` schema section + CHANGELOG v0.4.0 entry. This groom round queues the test plan that validates the SKILL.md edit text (preserved verbatim in the same item's `## Build abort note 2026-05-26` for operator copy-paste).
+- **Exec mode:** **operator (or cowork) — either** (mix of `shell` for verification + `gui (human)` for the two text-editor insertions; no TCC, no first-grant). Cowork can drive the editor via screenshot+click, but a careful operator using vim/VS Code/Cursor is the simpler path.
+- **Time estimate:** **8-11 min operator-supervised** — ~3 min shell verification + ~5-8 min text-editor work for the two insertions. Backup + sha-fingerprint capture before edit gives a clean rollback if anything goes sideways.
+- **What it proves:** (a) operator pasted SKILL.md Edit 1 (scope-groom phase 5.7) verbatim into the `### Phase order (scope-groom mode)` block between phases 5 and 6 — step 5 + step 6 awk-scoped grep; (b) operator pasted SKILL.md Edit 2 (build-mode Step 2.5) verbatim into the `### Phase order (build mode)` block between phases 2 and 3 — step 5 + step 6 awk-scoped grep; (c) the diff is purely additive — step 10 confirms zero deletion lines outside diff headers (Torvalds invariant: no accidental removals); (d) helper still 10/10 green post-edit — step 7 (the SKILL.md edits cannot regress the helper, but a pre/post comparison anchors the audit trail); (e) helper's exit-code contract intact — step 8 (clean item → exit 0) + step 9 (wasm-case → exit 1 with `vocabulary_without_surface` reason).
+- **Pre-condition:** `~/.claude/skills/senkani-autonomous/SKILL.md` readable and NOT yet edited (`grep -c check_external_surfaces` returns 0). `tools/autonomous/check_external_surfaces.py` + `tools/autonomous/test_check_external_surfaces.py` present. `spec/autonomous/PROCESS.md` contains `## Pre-audit external surfaces` heading. Pre-edit tests show 10/10 green. No leftover `SKILL.md.bak` from a prior partial-walk (otherwise abort or rollback first). Python 3.9+ on PATH. Working directory `/Users/clank/Desktop/projects/senkani`.
+- **Validates:**
+  - **(a) Both edits present (count + position) (steps 5-6)** — `grep -c "check_external_surfaces" ~/.claude/skills/senkani-autonomous/SKILL.md` returns exactly `2`; `awk '/^### Phase order \(scope-groom mode\)/,/^### Scope-groom-mode close phase/' SKILL.md | grep -c check_external_surfaces` returns `1`; same shape for build-mode phase block returns `1`.
+  - **(b) Diff purely additive (step 10)** — `diff -u SKILL.md.bak SKILL.md` shows exactly 2 hunks, zero deletion lines outside `---` headers; `grep -c '^-[^-]' diff.txt` returns `0`.
+  - **(c) Helper 10/10 post-edit (step 7)** — `python3 tools/autonomous/test_check_external_surfaces.py 2>&1 | tail -3` ends with `OK` AND `Ran 10 tests in <time>s`.
+  - **(d) Clean-item exit 0 (step 8)** — helper on `process-gap-decompose-mode-duplicate-tests-delta-docs-synced-2026-05-22` exits `0` with `"should_fire": false`, empty `reasons`.
+  - **(e) Wasm-case exit 1 (step 9)** — helper on this item exits `1` with `"should_fire": true` and exactly one reason of `kind: "vocabulary_without_surface"`.
+  - **(f) Pre/post fingerprints captured** — `/tmp/skill-md-pre-edit.sha256` + `/tmp/skill-md-post-edit.sha256` differ; line count delta ≥ 30.
+- **Rollback:** `cp ~/.claude/skills/senkani-autonomous/SKILL.md.bak ~/.claude/skills/senkani-autonomous/SKILL.md` if any acceptance check fails; the backup is captured in Setup before any edit.
+
+---
+
 ### process-gap-close-mode-execution-evidence-invariant-vs-decomposed-parent-contract-2026-05-23 — validate the operator-pasted SKILL.md Option-C edits (Step 2 close-mode auto-stub clause + Decompose-mode `## Operator contract` template update) actually fire on a synthetic decomposed-parent fixture + the in-repo validator recognizes the auto-stub format 2026-05-24
 
 - **Item:** [`spec/autonomous/backlog/process-gap-close-mode-execution-evidence-invariant-vs-decomposed-parent-contract-2026-05-23.md`](../../spec/autonomous/backlog/process-gap-close-mode-execution-evidence-invariant-vs-decomposed-parent-contract-2026-05-23.md)

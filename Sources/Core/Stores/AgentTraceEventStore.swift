@@ -169,6 +169,64 @@ final class AgentTraceEventStore: @unchecked Sendable {
         }
     }
 
+    /// U.11a-2 — resolve a batch of `(session_id, tool_call_id)`
+    /// composite refs against `agent_trace_event`. Returns a
+    /// structured `(resolved, unresolved)` partition so callers can
+    /// act on missing evidence without throwing.
+    ///
+    /// Composite keys are matched verbatim: `session_id = ? AND
+    /// tool_call_id = ?`. Both columns are TEXT and may legitimately
+    /// be NULL for pre-v32 rows — those will never match an
+    /// `AgentTraceRef` lookup (NULL ≠ any value), so they remain
+    /// unresolved by design. Duplicates inside `refs` collapse on
+    /// `Hashable` equality.
+    func resolveAgentTraceRefs(_ refs: [AgentTraceRef]) -> AgentTraceEvidenceResolution {
+        guard !refs.isEmpty else {
+            return AgentTraceEvidenceResolution(resolved: [], unresolved: [])
+        }
+        let distinct = Array(Set(refs))
+        return parent.queue.sync {
+            guard let db = parent.db else {
+                return AgentTraceEvidenceResolution(resolved: [], unresolved: distinct)
+            }
+            let sql = """
+                SELECT idempotency_key, result
+                FROM agent_trace_event
+                WHERE session_id = ? AND tool_call_id = ?
+                ORDER BY started_at ASC
+                LIMIT 1;
+            """
+            var byRef: [AgentTraceRef: ResolvedAgentTraceEvidence] = [:]
+            for ref in distinct {
+                var stmt: OpaquePointer?
+                guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { continue }
+                defer { sqlite3_finalize(stmt) }
+                let sessionStr = ref.sessionID.uuidString
+                sqlite3_bind_text(stmt, 1, (sessionStr as NSString).utf8String,
+                                  -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                sqlite3_bind_text(stmt, 2, (ref.toolCallID as NSString).utf8String,
+                                  -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                guard sqlite3_step(stmt) == SQLITE_ROW else { continue }
+                let key = String(cString: sqlite3_column_text(stmt, 0))
+                let resultRaw = String(cString: sqlite3_column_text(stmt, 1))
+                let result = self.decodeResult(resultRaw, idempotencyKey: key)
+                byRef[ref] = ResolvedAgentTraceEvidence(
+                    ref: ref, idempotencyKey: key, result: result
+                )
+            }
+            var resolved: [ResolvedAgentTraceEvidence] = []
+            var unresolved: [AgentTraceRef] = []
+            for ref in distinct {
+                if let row = byRef[ref] {
+                    resolved.append(row)
+                } else {
+                    unresolved.append(ref)
+                }
+            }
+            return AgentTraceEvidenceResolution(resolved: resolved, unresolved: unresolved)
+        }
+    }
+
     // MARK: - Pivots (canonical-first analytics)
 
     /// Pivot 1: per-project rollup (count, total cost, total tokens, mean latency).

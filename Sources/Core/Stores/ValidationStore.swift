@@ -449,6 +449,80 @@ final class ValidationStore: @unchecked Sendable {
         return rows
     }
 
+    /// U.11a-2 — resolve a batch of `validation_run_id` UUIDs against
+    /// `validation_results`. Returns a structured `(resolved,
+    /// unresolved)` partition so callers can act on missing evidence
+    /// without throwing. Unresolved IDs are preserved verbatim;
+    /// resolved rows carry the (run_id, row_id, outcome, exit_code)
+    /// quadruple `ValidationAssertion.deriveState` needs.
+    ///
+    /// Matching is against `validation_run_id = uuid.uuidString` —
+    /// the v22 column is a TEXT free-form id (declared `String?`),
+    /// and the UUIDs an assertion carries are serialized as their
+    /// canonical uuidString form when written by the producer.
+    ///
+    /// Duplicates inside `runIDs` collapse to a single resolution
+    /// attempt (the result set will contain at most one entry per
+    /// distinct ID). The first matching row wins if the producer
+    /// landed multiple `validation_results` rows under the same
+    /// `validation_run_id` — by-design for advisory/clean pairs.
+    func resolveValidationRuns(_ runIDs: [UUID]) -> ValidationEvidenceResolution {
+        guard !runIDs.isEmpty else {
+            return ValidationEvidenceResolution(resolved: [], unresolved: [])
+        }
+        let distinct = Array(Set(runIDs))
+        let idStrings = distinct.map { $0.uuidString }
+
+        return parent.queue.sync {
+            guard let db = parent.db else {
+                return ValidationEvidenceResolution(resolved: [], unresolved: distinct)
+            }
+            let placeholders = idStrings.map { _ in "?" }.joined(separator: ",")
+            let sql = """
+                SELECT id, validation_run_id, outcome, exit_code
+                FROM validation_results
+                WHERE validation_run_id IN (\(placeholders))
+                ORDER BY id ASC;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                return ValidationEvidenceResolution(resolved: [], unresolved: distinct)
+            }
+            defer { sqlite3_finalize(stmt) }
+            for (i, s) in idStrings.enumerated() {
+                sqlite3_bind_text(stmt, Int32(i + 1), (s as NSString).utf8String,
+                                  -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            }
+            // First-row-wins per run_id (input order from `distinct`).
+            var byID: [UUID: ResolvedValidationEvidence] = [:]
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let rowID = sqlite3_column_int64(stmt, 0)
+                let runStr = String(cString: sqlite3_column_text(stmt, 1))
+                guard let runUUID = UUID(uuidString: runStr) else { continue }
+                if byID[runUUID] != nil { continue }
+                let outcome = sqlite3_column_type(stmt, 2) == SQLITE_NULL
+                    ? "" : String(cString: sqlite3_column_text(stmt, 2))
+                let exitCode = sqlite3_column_int(stmt, 3)
+                byID[runUUID] = ResolvedValidationEvidence(
+                    runID: runUUID,
+                    resultRowID: rowID,
+                    outcome: outcome,
+                    exitCode: exitCode
+                )
+            }
+            var resolved: [ResolvedValidationEvidence] = []
+            var unresolved: [UUID] = []
+            for id in distinct {
+                if let row = byID[id] {
+                    resolved.append(row)
+                } else {
+                    unresolved.append(id)
+                }
+            }
+            return ValidationEvidenceResolution(resolved: resolved, unresolved: unresolved)
+        }
+    }
+
     /// Prune validation results older than a given interval.
     @discardableResult
     func pruneValidationResults(olderThanHours: Int = 24) -> Int {

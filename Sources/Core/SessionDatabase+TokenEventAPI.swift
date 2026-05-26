@@ -182,6 +182,23 @@ extension SessionDatabase {
         )
     }
 
+    /// U.11a-2 — record an `assertion.record` chained audit row for a
+    /// `ValidationAssertion` evidence write. Forwards to
+    /// `TokenEventStore.recordAssertionEvent`. Pre-v33 anchors
+    /// silently drop the row (the writer logs the drop with
+    /// `anchor_reason`).
+    public func recordAssertionEvent(
+        assertionID: UUID,
+        contractID: UUID,
+        state: AssertionState
+    ) {
+        tokenEventStore.recordAssertionEvent(
+            assertionID: assertionID,
+            contractID: contractID,
+            state: state
+        )
+    }
+
     /// T.3a-4 — record a wasm_kill chained row. Forwards to
     /// `TokenEventStore.recordWasmKill`. Pre-v33 anchors silently drop
     /// the row (see TokenEventStore for the gate).

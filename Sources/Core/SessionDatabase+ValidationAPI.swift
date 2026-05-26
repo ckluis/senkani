@@ -128,6 +128,14 @@ extension SessionDatabase {
         validationStore.fetchAndMarkDelivered(sessionId: sessionId)
     }
 
+    /// U.11a-2 — resolve a batch of `validation_run_id` UUIDs against
+    /// `validation_results`. Returns a structured `(resolved,
+    /// unresolved)` partition; unresolved IDs are surfaced as data,
+    /// not thrown. Used by `ValidationAssertion` resolution.
+    public func resolveValidationRuns(_ runIDs: [UUID]) -> ValidationEvidenceResolution {
+        validationStore.resolveValidationRuns(runIDs)
+    }
+
     /// Prune old validation results.
     @discardableResult
     public func pruneValidationResults(olderThanHours: Int = 24) -> Int {

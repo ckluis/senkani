@@ -669,6 +669,141 @@ final class TokenEventStore: @unchecked Sendable {
         }
     }
 
+    /// U.11a-2 — record an `assertion.record` chained audit row for a
+    /// `ValidationAssertion` evidence write. Sibling of
+    /// `recordContractEvent` — same identity-packing convention,
+    /// same v35 canonical shape (wasm_* + cached_* are `.null`), same
+    /// pre-v33 anchor refusal. v39 ships no new columns, so this
+    /// writer carries no extra ledger bookkeeping.
+    ///
+    /// Identity layout:
+    ///   - `source`       = `"assertion.record"`
+    ///   - `session_id`   = assertion UUID string (chain-group key)
+    ///   - `tool_name`    = assertion UUID string (identity)
+    ///   - `feature`      = contract UUID string (cross-reference)
+    ///   - `command`      = state raw value (`"pass"` / `"fail"` /
+    ///                      `"partial"`) — the only non-null `command`
+    ///                      among the U.11 chain-row writers; the
+    ///                      column was already in the canonical map
+    ///                      so this is a value change, not a shape
+    ///                      change.
+    ///
+    /// Pre-v33 anchors silently drop with a `assertion_event.drop`
+    /// Logger emission carrying `anchor_reason` / `source` /
+    /// `assertion_id` / `contract_id`.
+    func recordAssertionEvent(
+        assertionID: UUID,
+        contractID: UUID,
+        state: AssertionState
+    ) {
+        let now = Date().timeIntervalSince1970
+        let assertionIDString = assertionID.uuidString
+        let contractIDString = contractID.uuidString
+        let source = AssertionChainEvent.record.rawValue
+        let stateString = state.rawValue
+        parent.queue.async { [weak parent, weak self] in
+            guard let parent, let self, let db = parent.db else { return }
+
+            let anchorId = self.chain.resolveAnchorId(db: db)
+            let anchorReason = self.chain.anchorReason(db: db, anchorId: anchorId) ?? ""
+            let useV33Shape = (
+                anchorReason == "migration-v33" ||
+                anchorReason == "fresh-install-pre-v35" ||
+                anchorReason == "migration-v35" ||
+                anchorReason == "fresh-install" ||
+                anchorReason == "migration-v38" ||
+                anchorReason == "migration-v39"
+            )
+            let useV35Shape = (
+                anchorReason == "migration-v35" ||
+                anchorReason == "fresh-install" ||
+                anchorReason == "migration-v38" ||
+                anchorReason == "migration-v39"
+            )
+            guard useV33Shape else {
+                Logger.log("assertion_event.drop", fields: [
+                    "reason": .string("pre_v33_anchor"),
+                    "anchor_reason": .string(anchorReason),
+                    "source": .string(source),
+                    "assertion_id": .string(assertionIDString),
+                    "contract_id": .string(contractIDString),
+                ])
+                return
+            }
+            let prevHash = self.chain.latestEntryHash(db: db, anchorId: anchorId)
+
+            // Identity layout — see method docstring. `command` carries
+            // the assertion state; all other non-identity columns
+            // either null or zero, matching the v35 canonical shape.
+            var columns: [String: ChainHasher.CanonicalValue] = [
+                "timestamp":      .real(now),
+                "session_id":     .text(assertionIDString),
+                "pane_id":        .null,
+                "project_root":   .null,
+                "source":         .text(source),
+                "tool_name":      .text(assertionIDString),
+                "model":          .null,
+                "input_tokens":   .integer(0),
+                "output_tokens":  .integer(0),
+                "saved_tokens":   .integer(0),
+                "cost_cents":     .integer(0),
+                "feature":        .text(contractIDString),
+                "command":        .text(stateString),
+                "model_tier":     .null,
+                "connection_id":  .null,
+                "wasm_reason":    .null,
+                "wasm_duration_us": .null,
+                "wasm_budget_delta_us": .null,
+                "wasm_tool_id":   .null,
+            ]
+            if useV35Shape {
+                columns["cached_prompt_tokens"]      = .null
+                columns["cache_write_tokens"]        = .null
+                columns["cache_read_tokens"]         = .null
+                columns["prefill_ms_saved_estimate"] = .null
+                columns["cache_origin"]              = .null
+            }
+            let entryHash = ChainHasher.entryHash(
+                table: "token_events", columns: columns, prev: prevHash
+            )
+
+            let sql = """
+                INSERT INTO token_events
+                (timestamp, session_id, pane_id, project_root, source, tool_name, model,
+                 input_tokens, output_tokens, saved_tokens, cost_cents, feature, command, model_tier,
+                 connection_id,
+                 prev_hash, entry_hash, chain_anchor_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+
+            sqlite3_bind_double(stmt, 1, now)
+            sqlite3_bind_text(stmt, 2, (assertionIDString as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_null(stmt, 3)   // pane_id
+            sqlite3_bind_null(stmt, 4)   // project_root
+            sqlite3_bind_text(stmt, 5, (source as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 6, (assertionIDString as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_null(stmt, 7)   // model
+            sqlite3_bind_int64(stmt, 8, 0)
+            sqlite3_bind_int64(stmt, 9, 0)
+            sqlite3_bind_int64(stmt, 10, 0)
+            sqlite3_bind_int64(stmt, 11, 0)
+            sqlite3_bind_text(stmt, 12, (contractIDString as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)  // feature
+            sqlite3_bind_text(stmt, 13, (stateString as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)        // command
+            sqlite3_bind_null(stmt, 14)  // model_tier
+            sqlite3_bind_null(stmt, 15)  // connection_id
+            Self.bindOptionalText(stmt, 16, prevHash)
+            sqlite3_bind_text(stmt, 17, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_int64(stmt, 18, anchorId)
+
+            if sqlite3_step(stmt) == SQLITE_DONE {
+                self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
+            }
+        }
+    }
+
     // MARK: - T.5 chain helpers (round 2; generalised in round 3)
 
     /// Coerce an optional string to a `ChainHasher.CanonicalValue` — empty

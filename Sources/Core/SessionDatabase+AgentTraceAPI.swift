@@ -69,6 +69,15 @@ extension SessionDatabase {
         return agentTraceEventStore.tracesForTier(tier, since: since, limit: limit)
     }
 
+    /// U.11a-2 — resolve a batch of `(session_id, tool_call_id)`
+    /// composite refs against `agent_trace_event`. Returns a
+    /// structured `(resolved, unresolved)` partition; unresolved refs
+    /// are surfaced as data, not thrown. Used by `ValidationAssertion`
+    /// resolution.
+    public func resolveAgentTraceRefs(_ refs: [AgentTraceRef]) -> AgentTraceEvidenceResolution {
+        return agentTraceEventStore.resolveAgentTraceRefs(refs)
+    }
+
     /// Mode 4 — full canonical trace rows for a project window in
     /// chronological order. Reserved for the counterfactual replay
     /// evaluator: it needs every dimension and measure to project a

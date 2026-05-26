@@ -59,7 +59,7 @@ struct ScheduleCommandCounterCadenceTests {
     // MARK: - Behavioral: success writes JSON, skips plist
 
     @Test("--counter-cadence \"every 10 tool_calls\" writes JSON sentinel, no plist")
-    func everyTenToolCallsWritesJsonAndSkipsPlist() throws {
+    func everyTenToolCallsWritesJsonAndSkipsPlist() async throws {
         let tmpBase = NSTemporaryDirectory() + "senkani-counter-\(UUID().uuidString)"
         let tmpLaunch = NSTemporaryDirectory() + "senkani-counter-launch-\(UUID().uuidString)"
         try FileManager.default.createDirectory(atPath: tmpBase, withIntermediateDirectories: true)
@@ -77,9 +77,9 @@ struct ScheduleCommandCounterCadenceTests {
         ])
 
         var thrown: Error?
-        ScheduleStore.withTestDirs(base: tmpBase, launchAgents: tmpLaunch) {
+        await ScheduleStore.withTestDirs(base: tmpBase, launchAgents: tmpLaunch) {
             do {
-                try create.run()
+                try await create.run()
             } catch {
                 thrown = error
             }

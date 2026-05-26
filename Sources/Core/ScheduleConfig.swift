@@ -96,13 +96,20 @@ public enum ScheduleStore {
     //
     // Mirrors the `LearnedRulesStore.withPath` pattern: production reads
     // `baseDir` / `launchAgentsDir` straight out of `$HOME`, tests wrap a
-    // body in `withTestDirs` to redirect both to a temp dir. `withTestDirs`
-    // holds `testLock` for its entire body so concurrent test cases
-    // serialize on the shared override slots instead of racing.
+    // body in `withTestDirs` to redirect both to a temp dir.
+    //
+    // The overrides are `@TaskLocal`, NOT a global mutable slot guarded by a
+    // lock. Each test (and each `await` chain within it) sees its own
+    // override value, so parallel test cases — including `async` CLI run
+    // paths under `AsyncParsableCommand` — never clobber each other's temp
+    // dirs. This replaced an `NSLock`-serialized global pair on
+    // 2026-05-26 when `Schedule.Create` became `AsyncParsableCommand`: an
+    // async `withTestDirs` could not hold `NSLock` across an `await`
+    // (forbidden in Swift 6), and a non-locking variant let a parallel
+    // suite swap the global out from under a running test.
 
-    nonisolated(unsafe) private static var _baseDirOverride: String?
-    nonisolated(unsafe) private static var _launchAgentsDirOverride: String?
-    private static let testLock = NSLock()
+    @TaskLocal static var _baseDirOverride: String?
+    @TaskLocal static var _launchAgentsDirOverride: String?
 
     public static var baseDir: String {
         _baseDirOverride ?? FileManager.default.homeDirectoryForCurrentUser.path + "/.senkani/schedules"
@@ -117,24 +124,34 @@ public enum ScheduleStore {
     }
 
     /// TEST ONLY: redirect `baseDir` + `launchAgentsDir` to `base` /
-    /// `launchAgents` for the duration of `body`, then restore. Holds
-    /// `testLock` so concurrent callers serialize.
+    /// `launchAgents` for the duration of `body`. Per-task (`@TaskLocal`),
+    /// so concurrent test cases are isolated without a lock.
     public static func withTestDirs<T>(
         base: String,
         launchAgents: String,
         _ body: () throws -> T
     ) rethrows -> T {
-        testLock.lock()
-        let priorBase = _baseDirOverride
-        let priorLaunch = _launchAgentsDirOverride
-        _baseDirOverride = base
-        _launchAgentsDirOverride = launchAgents
-        defer {
-            _baseDirOverride = priorBase
-            _launchAgentsDirOverride = priorLaunch
-            testLock.unlock()
+        try $_baseDirOverride.withValue(base) {
+            try $_launchAgentsDirOverride.withValue(launchAgents) {
+                try body()
+            }
         }
-        return try body()
+    }
+
+    /// TEST ONLY (async): same contract as the sync `withTestDirs`, for
+    /// `AsyncParsableCommand` run paths. The `@TaskLocal` binding propagates
+    /// across `await` to child tasks in the structured tree, so the override
+    /// is visible to async `ScheduleStore` work without any lock.
+    public static func withTestDirs<T>(
+        base: String,
+        launchAgents: String,
+        _ body: () async throws -> T
+    ) async rethrows -> T {
+        try await $_baseDirOverride.withValue(base) {
+            try await $_launchAgentsDirOverride.withValue(launchAgents) {
+                try await body()
+            }
+        }
     }
 
     /// Read all .json files from the schedules directory.

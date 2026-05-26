@@ -13,19 +13,35 @@ struct Schedule: ParsableCommand {
 // MARK: - Create
 
 extension Schedule {
-    struct Create: ParsableCommand {
+    struct Create: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             abstract: "Create a new scheduled task."
         )
 
+        /// Test seam: the `--prose` path resolves its compiler through this
+        /// factory. Production wires `RuleBasedProseCadenceCompiler`; tests
+        /// inject a `MockProseCadenceCompiler` and reset to the default in a
+        /// defer. Mirrors `ScheduleStore`'s `nonisolated(unsafe)` override
+        /// pattern; the `--prose` CLI suite is `.serialized` so the global
+        /// is never mutated concurrently.
+        nonisolated(unsafe) static var proseCompilerFactory: @Sendable () -> any ProseCadenceCompiler = {
+            RuleBasedProseCadenceCompiler()
+        }
+
         @Option(name: .long, help: "Task identifier (alphanumeric, dashes, underscores).")
         var name: String
 
-        @Option(name: .long, help: "Cron expression, e.g. \"0 */6 * * *\" for every 6 hours. Mutually exclusive with --counter-cadence.")
+        @Option(name: .long, help: "Cron expression, e.g. \"0 */6 * * *\" for every 6 hours. Mutually exclusive with --counter-cadence and --prose.")
         var cron: String?
 
-        @Option(name: .long, help: "Counter cadence expression, e.g. \"every 10 tool_calls\". Fires from HookRouter post-tool reactions, NOT launchd; no plist is generated. Mutually exclusive with --cron.")
+        @Option(name: .long, help: "Counter cadence expression, e.g. \"every 10 tool_calls\". Fires from HookRouter post-tool reactions, NOT launchd; no plist is generated. Mutually exclusive with --cron and --prose.")
         var counterCadence: String?
+
+        @Option(name: .long, help: "Natural-language cadence, e.g. \"every weekday at 9am\". Compiled to a cron via the rule-based prose compiler (English). Mutually exclusive with --cron and --counter-cadence.")
+        var prose: String?
+
+        @Option(name: .long, help: "BCP-47 locale for --prose parsing (default: the system locale). The rule-based compiler is English-only.")
+        var locale: String = Locale.current.identifier
 
         @Option(name: .long, help: "Shell command to run on schedule.")
         var command: String
@@ -46,17 +62,25 @@ extension Schedule {
                 throw ValidationError("Name cannot be empty.")
             }
 
-            // Cadence: exactly one of --cron / --counter-cadence.
-            switch (cron, counterCadence) {
-            case (nil, nil):
-                throw ValidationError("Provide one of --cron or --counter-cadence.")
-            case (_?, _?):
-                throw ValidationError("--cron and --counter-cadence are mutually exclusive; pick one.")
-            case (let c?, nil):
+            // Cadence: three-way XOR — exactly one of --cron /
+            // --counter-cadence / --prose. (--counter-cadence shipped after
+            // the original two-way {--cron, --prose} mutual exclusivity, so
+            // this is now three-way.)
+            let provided = [cron != nil, counterCadence != nil, prose != nil].filter { $0 }.count
+            switch provided {
+            case 0:
+                throw ValidationError("Provide one of --cron, --counter-cadence, or --prose.")
+            case 1:
+                break
+            default:
+                throw ValidationError("--cron, --counter-cadence, and --prose are mutually exclusive; pick one.")
+            }
+
+            if let c = cron {
                 guard CronToLaunchd.convert(c) != nil else {
                     throw ValidationError("Invalid cron expression: \"\(c)\". Expected 5 fields: minute hour day-of-month month day-of-week.")
                 }
-            case (nil, let expr?):
+            } else if let expr = counterCadence {
                 guard let parsed = CounterCadence.parse(expr) else {
                     throw ValidationError("Invalid counter-cadence expression: \"\(expr)\". Expected `every <N> <event>` (e.g. `every 10 tool_calls`).")
                 }
@@ -64,6 +88,7 @@ extension Schedule {
                     throw ValidationError("Counter cadence N=\(parsed.everyN) is at or below the amplification floor. Pick N ≥ 2 so the schedule doesn't fire on every event.")
                 }
             }
+            // --prose is validated at run() time (compilation is async).
 
             // Validate budget
             if let b = budget, b < 0 {
@@ -71,7 +96,7 @@ extension Schedule {
             }
         }
 
-        func run() throws {
+        func run() async throws {
             // U.8 amplification guard: reject schedules whose effective
             // fire rate sits at or below the rate-limiter floor
             // (default 60s). Refuses BEFORE any disk write so a rejected
@@ -79,14 +104,17 @@ extension Schedule {
             // `schedule-amplification-guard-and-pane-not-wired-2026-05-17`
             // shipped the cron wiring 2026-05-21 (Finding A);
             // `schedule-cli-counter-cadence-flag-2026-05-21` adds the
-            // counter-cadence branch (Finding C-counter).
-            if let expr = counterCadence {
+            // counter-cadence branch (Finding C-counter);
+            // `schedule-cli-prose-flag-2026-05-21` adds --prose (Finding C-prose).
+            if let p = prose {
+                try await runProse(p, locale: locale)
+            } else if let expr = counterCadence {
                 try runCounterCadence(expr)
             } else if let c = cron {
                 try runCron(c)
             } else {
-                // Unreachable — validate() rejects (nil, nil).
-                throw ValidationError("Provide one of --cron or --counter-cadence.")
+                // Unreachable — validate() rejects the zero-cadence case.
+                throw ValidationError("Provide one of --cron, --counter-cadence, or --prose.")
             }
         }
 
@@ -115,6 +143,66 @@ extension Schedule {
                 print("Schedule: \(CronToLaunchd.humanReadable(cron))")
             } catch PresetInstaller.InstallError.invalidCronPattern(let c) {
                 throw ValidationError("Failed to convert cron expression to launchd intervals: \"\(c)\".")
+            } catch PresetInstaller.InstallError.writeFailed(let msg) {
+                throw ValidationError(msg)
+            }
+        }
+
+        // Placed BETWEEN runCron and runCounterCadence on purpose, to keep
+        // two source-grep tests green: (1) ScheduleCommandAmplificationTests
+        // greps for the FIRST `PresetInstaller.install(task: task)` and
+        // requires it to sit after a guard — runCron stays first; (2)
+        // ScheduleCommandCounterCadenceTests slices runCounterCadence's body
+        // to the end of the file and requires no `PresetInstaller.install`
+        // there — runCounterCadence stays the LAST Create method.
+        private func runProse(_ proseText: String, locale: String) async throws {
+            // Compile prose → cron via the (injectable) compiler. Any
+            // compiler error (no model / unrecognized phrase / non-en
+            // locale) surfaces a clear stderr message + non-zero exit and
+            // writes NOTHING.
+            let compiler = Self.proseCompilerFactory()
+            let compiled: ProseCadence
+            do {
+                compiled = try await compiler.compile(prose: proseText, locale: locale)
+            } catch let error as ProseCadenceCompilerError {
+                throw ValidationError(error.userMessage)
+            }
+
+            // Defense-in-depth: the compiler already gated on
+            // CronToLaunchd.convert, but re-validate before any disk write.
+            guard CronToLaunchd.convert(compiled.cron) != nil else {
+                throw ValidationError("Compiled cron \"\(compiled.cron)\" is invalid. Pass an explicit --cron instead.")
+            }
+
+            // Amplification guard — same floor as the --cron path.
+            switch AmplificationGuard.validate(cron: compiled.cron, counter: nil) {
+            case .ok:
+                break
+            case .amplification(let reason, let minSeconds):
+                throw ValidationError(
+                    "Refused: schedule would amplify (\(reason)). The amplification floor is \(minSeconds)s. Pick a prose cadence whose fire interval is above the floor."
+                )
+            }
+
+            let task = ScheduledTask(
+                name: name,
+                cronPattern: compiled.cron,
+                command: command,
+                budgetLimitCents: budget,
+                worktree: worktree,
+                proseCadence: compiled.prose,
+                compiledCadence: compiled.cron,
+                locale: compiled.locale
+            )
+
+            do {
+                _ = try PresetInstaller.install(task: task)
+                print("Saved schedule config: ~/.senkani/schedules/\(name).json")
+                print("Loaded launchd plist: com.senkani.schedule.\(name)")
+                print("Prose \"\(compiled.prose)\" compiled to cron: \(compiled.cron)")
+                print("Schedule: \(CronToLaunchd.humanReadable(compiled.cron))")
+            } catch PresetInstaller.InstallError.invalidCronPattern(let c) {
+                throw ValidationError("Failed to convert compiled cron expression to launchd intervals: \"\(c)\".")
             } catch PresetInstaller.InstallError.writeFailed(let msg) {
                 throw ValidationError(msg)
             }

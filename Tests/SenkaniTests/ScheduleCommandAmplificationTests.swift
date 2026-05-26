@@ -45,7 +45,7 @@ struct ScheduleCommandAmplificationTests {
     // MARK: - Behavioral: fast-firing cron is refused
 
     @Test("schedule create with `* * * * *` is refused; JSON + plist absent")
-    func everyMinuteCronIsRefusedAndLeavesNoDiskTrace() throws {
+    func everyMinuteCronIsRefusedAndLeavesNoDiskTrace() async throws {
         let tmpBase = NSTemporaryDirectory() + "senkani-amplification-\(UUID().uuidString)"
         let tmpLaunch = NSTemporaryDirectory() + "senkani-amplification-launch-\(UUID().uuidString)"
         try FileManager.default.createDirectory(atPath: tmpBase, withIntermediateDirectories: true)
@@ -63,9 +63,9 @@ struct ScheduleCommandAmplificationTests {
         ])
 
         var thrown: Error?
-        ScheduleStore.withTestDirs(base: tmpBase, launchAgents: tmpLaunch) {
+        await ScheduleStore.withTestDirs(base: tmpBase, launchAgents: tmpLaunch) {
             do {
-                try create.run()
+                try await create.run()
             } catch {
                 thrown = error
             }

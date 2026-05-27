@@ -87,6 +87,18 @@ struct Doctor: ParsableCommand {
 
         var results = Results()
 
+        // Numbering note: the inline `// N.` comments below are DISPATCH
+        // RUN-ORDER (the sequence checks execute in), NOT the stable
+        // `// MARK: - Check N` IDs the functions carry. The two schemes
+        // intentionally diverge for checks whose stable ID was assigned in
+        // creation order rather than run order — e.g. Release commitments
+        // runs 15th here but is stable Check 22; Audit chain runs 16th but is
+        // stable Check 15; Session work bus runs 17b but is stable Check 21;
+        // Runtime telemetry runs 21st but is stable Check 23. Do NOT
+        // "reconcile" them by renumbering the MARK headers — the stable IDs
+        // are a durable cross-reference (see doctor-unnumbered-checks-
+        // 2026-05-27). Matching note lives above `// MARK: - Check 15`.
+
         // 1. Settings JSON valid
         checkSettingsJSON(&results)
 
@@ -357,6 +369,15 @@ struct Doctor: ParsableCommand {
             print("\n--force is set — proceeding without typed-string confirms.\n")
         }
     }
+
+    // Numbering note: `// MARK: - Check N` headers are STABLE IDs, assigned
+    // in creation order and never renumbered, so they appear out of order in
+    // this file and deliberately differ from the DISPATCH RUN-ORDER `// N.`
+    // comments in `run()` above (e.g. this check is run-order 16 but stable
+    // Check 15). Neither number reaches operator output — `printStatus`
+    // emits descriptive text and run()'s summary counts by
+    // pass/fail/fixed/skip, not by check number. Do NOT reconcile the two
+    // schemes. Matching note lives at the top of `run()`'s check sequence.
 
     // MARK: - Check 15: Audit chain integrity (Phase T.5)
 

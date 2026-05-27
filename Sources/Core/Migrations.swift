@@ -2169,6 +2169,52 @@ public enum MigrationRegistry {
             try exec("CREATE INDEX IF NOT EXISTS idx_workstream_handoffs_anchor ON workstream_handoffs(chain_anchor_id, id);")
             try openHandoffsAnchorTokenEvents(db: db)
         },
+        Migration(version: 41, description: "openai_request_log chained table (Phase V.13e-1 DB-backed OpenAI request log)") { db in
+            // Phase V.13e-1 — DB-backed persistent request log for the
+            // OpenAI-compatible endpoint, replacing the in-memory
+            // `OpenAIAuditChain` for cross-process telemetry. The in-memory
+            // chain (Sources/Core/OpenAIEndpoint/OpenAIAuditChain.swift)
+            // dies with the process; this table persists one row per served
+            // request so v13e-2's doctor check and v13e-5's burst test can
+            // query trailing-24h request count + 429-rate cross-process.
+            //
+            // Privacy: the raw API key is NEVER persisted — only `key_label`
+            // (the provisioned key's label). There is no request/response
+            // body column here: this telemetry log is metadata-only by
+            // design (count/rate observability), distinct from the
+            // in-memory chain's opt-in `--audit-bodies` shape.
+            //
+            // Same shape as v19 (egress_decisions) / v24 (eval_results):
+            // self-contained CREATE, no migration anchor (table is created
+            // empty — first write opens a 'fresh-install' anchor lazily via
+            // ChainState). `status` is the HTTP status int; `surface` is one
+            // of 'chat' | 'chat_stream' | 'embeddings' | 'tool_use'.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v41", detail: msg)
+            }
+
+            try exec("""
+                CREATE TABLE IF NOT EXISTS openai_request_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts REAL NOT NULL,
+                    surface TEXT NOT NULL,
+                    status INTEGER NOT NULL,
+                    key_label TEXT,
+                    prev_hash TEXT,
+                    entry_hash TEXT,
+                    chain_anchor_id INTEGER
+                );
+            """)
+            try exec("CREATE INDEX IF NOT EXISTS idx_openai_request_log_anchor ON openai_request_log(chain_anchor_id, id);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_openai_request_log_ts ON openai_request_log(ts);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_openai_request_log_status ON openai_request_log(status);")
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)

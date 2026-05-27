@@ -85,6 +85,9 @@ public final class SessionDatabase: @unchecked Sendable {
     internal var egressDecisionStore: EgressDecisionStore!
     public var packAuditStore: PackAuditStore!
     internal var evalResultsStore: EvalResultsStore!
+    /// V.13e-1 — DB-backed OpenAI-endpoint request log (openai_request_log).
+    /// Owned schema lives in migration v41.
+    public var openAIRequestLogStore: OpenAIRequestLogStore!
     public var sessionWorkQueueStore: SessionWorkQueueStore!
     public var sessionEventStreamStore: SessionEventStreamStore!
     public var surrogateWritesStore: SurrogateWritesStore!
@@ -150,6 +153,7 @@ public final class SessionDatabase: @unchecked Sendable {
         egressDecisionStore = EgressDecisionStore(parent: self)
         packAuditStore = PackAuditStore(parent: self)
         evalResultsStore = EvalResultsStore(parent: self)
+        openAIRequestLogStore = OpenAIRequestLogStore(parent: self)
         sessionWorkQueueStore = SessionWorkQueueStore(parent: self)
         sessionEventStreamStore = SessionEventStreamStore(parent: self)
         surrogateWritesStore = SurrogateWritesStore(parent: self)
@@ -197,6 +201,7 @@ public final class SessionDatabase: @unchecked Sendable {
         egressDecisionStore = EgressDecisionStore(parent: self)
         packAuditStore = PackAuditStore(parent: self)
         evalResultsStore = EvalResultsStore(parent: self)
+        openAIRequestLogStore = OpenAIRequestLogStore(parent: self)
         sessionWorkQueueStore = SessionWorkQueueStore(parent: self)
         sessionEventStreamStore = SessionEventStreamStore(parent: self)
         surrogateWritesStore = SurrogateWritesStore(parent: self)

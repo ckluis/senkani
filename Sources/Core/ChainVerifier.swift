@@ -75,6 +75,7 @@ public enum ChainVerifier {
                 "eval_results":       verifyTable(db: db, table: "eval_results",       verify: verifyAnchorEvalResults),
                 "surrogate_writes":   verifyTable(db: db, table: "surrogate_writes",   verify: verifyAnchorSurrogateWrites),
                 "workstream_handoffs": verifyTable(db: db, table: "workstream_handoffs", verify: verifyAnchorWorkstreamHandoffs),
+                "openai_request_log": verifyTable(db: db, table: "openai_request_log", verify: verifyAnchorOpenAIRequestLog),
             ]
         }
     }
@@ -174,8 +175,11 @@ public enum ChainVerifier {
     /// so a fresh process at the same DB path verifies the chain the
     /// previous process wrote (the v13e-5 100-request burst-integrity guard).
     ///
-    /// NOTE: not yet wired into `verifyAll` / `senkani doctor --verify-chain`
-    /// — see the V.13e-5 follow-up filing for that coverage gap.
+    /// Wired into `verifyAll` (keyed `"openai_request_log"`) and the
+    /// `senkani doctor --verify-chain` sweep as of
+    /// `chain-verify-openai-request-log-not-in-verifyall-2026-05-27`; this
+    /// standalone accessor remains for callers that want the single-table
+    /// verdict (e.g. the V.13e-5 burst-integrity guard's cross-process check).
     public static func verifyOpenAIRequestLog(_ database: SessionDatabase) -> Result {
         return database.queue.sync {
             guard let db = database.db else { return .noChain }

@@ -103,4 +103,35 @@ struct OpenAIAuditChainBurstTests {
         let distinctSurfaces = Set(recent.map { $0.surface })
         #expect(distinctSurfaces == Set(Self.surfaces.map { $0.rawValue }))
     }
+
+    /// `chain-verify-openai-request-log-not-in-verifyall-2026-05-27` —
+    /// `openai_request_log` must surface in the aggregate `verifyAll`
+    /// sweep (which `senkani doctor --verify-chain` walks), not just via
+    /// the standalone `verifyOpenAIRequestLog` accessor. Mirrors
+    /// `PolicySnapshotsChainTests.verifyAllIncludesPolicySnapshots`.
+    @Test("verifyAll includes openai_request_log in its per-table output")
+    func verifyAllIncludesOpenAIRequestLog() {
+        let path = Self.tempDBPath()
+        let db = SessionDatabase(path: path)
+        let base = Date(timeIntervalSince1970: 1_900_000_500)
+
+        // Small chained burst so the table has an anchor + linked rows.
+        for i in 0..<3 {
+            _ = db.recordOpenAIRequest(
+                ts: base.addingTimeInterval(Double(i)),
+                surface: Self.surfaces[i % Self.surfaces.count],
+                status: 200, keyLabel: "key-\(i)")
+        }
+        #expect(db.openAIRequestLogCount() == 3)
+
+        let perTable = ChainVerifier.verifyAll(db)
+        let result = perTable["openai_request_log"]
+        #expect(result != nil, "verifyAll must include openai_request_log")
+        if case .ok = result {
+            // pass — the aggregate sweep verifies the chain
+        } else {
+            Issue.record(
+                "expected openai_request_log .ok in verifyAll, got \(String(describing: result))")
+        }
+    }
 }

@@ -122,6 +122,111 @@ struct OpenAIRequestLogStoreTests {
         #expect(raw.contains("key-recent"))
     }
 
+    /// V.13e — gate-refusal recording. The auth gate emits 401 / 403 / 429
+    /// BEFORE any surface handler runs, so refused requests never reach the
+    /// success-path sink; `recordRefusal` is their single producer. Drives
+    /// each refusal kind (the 429 through a REAL `decide` over an exhausted
+    /// rate window, proving the producer wiring) and asserts:
+    ///   - exactly one persisted row per refusal, none for `.ok` (no
+    ///     double-count);
+    ///   - correct status + path-derived surface;
+    ///   - key-label policy: 401 → nil, 403/429 → matched label, raw key
+    ///     never persisted;
+    ///   - trailing-24h stats then report a NON-ZERO count429 / rate429, so
+    ///     the doctor line reflects real rejected traffic.
+    @Test("Gate refusals (401/403/429) record one persisted row each with the right surface + key label")
+    func gateRefusalsRecordPersistedRowsAndDrive429Rate() {
+        let path = Self.tempDBPath()
+        let db = SessionDatabase(path: path)
+        let now = Date(timeIntervalSince1970: 1_900_000_000)
+
+        let rawKey = "sk-RAWSECRET-refusal-path-must-never-touch-disk-7b21"
+        let record = OpenAIKeyRecord(
+            keyHash: OpenAIAuthGate.hash(rawKey),
+            preset: "auto",
+            scope: ["chat"],            // NOT embeddings → embeddings is a 403
+            rateLimit: 1,               // one request per window → 2nd is 429
+            createdAt: now,
+            label: "team-prod"
+        )
+        let records = [record]
+        let bearer = "Bearer \(rawKey)"
+
+        // 401 — missing Authorization header. No matched record → label nil.
+        // Surface derived from the chat path.
+        #expect(OpenAIServedRequestSink.recordRefusal(
+            decision: .unauthorized(reason: "missing or malformed Authorization header"),
+            path: "/v1/chat/completions",
+            authorizationHeader: nil,
+            records: records,
+            db: db, now: now))
+
+        // 403 — valid key, but the embeddings surface is out of scope. The
+        // matched record's label is attributed; surface is embeddings.
+        #expect(OpenAIServedRequestSink.recordRefusal(
+            decision: .forbidden(reason: "key scope does not include surface 'embeddings'"),
+            path: "/v1/embeddings",
+            authorizationHeader: bearer,
+            records: records,
+            db: db, now: now))
+
+        // 429 — driven through the REAL gate: the first decide admits, the
+        // second (same window, limit 1) returns `.rateLimited`. That genuine
+        // refusal decision is what the producer records.
+        let limiter = OpenAIRateLimiter()
+        let admit = OpenAIAuthGate.decide(
+            authorizationHeader: bearer, requestedSurface: "chat",
+            now: now, records: records, rateLimiter: limiter)
+        #expect(admit == .ok(label: "team-prod"))
+        let throttled = OpenAIAuthGate.decide(
+            authorizationHeader: bearer, requestedSurface: "chat",
+            now: now, records: records, rateLimiter: limiter)
+        guard case .rateLimited = throttled else {
+            Issue.record("expected a .rateLimited decision on the 2nd request")
+            return
+        }
+        #expect(OpenAIServedRequestSink.recordRefusal(
+            decision: throttled,
+            path: "/v1/chat/completions",
+            authorizationHeader: bearer,
+            records: records,
+            db: db, now: now))
+
+        // `.ok` is a no-op: the surface handler owns the admit. No row, and
+        // the function reports it did not write.
+        #expect(OpenAIServedRequestSink.recordRefusal(
+            decision: .ok(label: "team-prod"),
+            path: "/v1/chat/completions",
+            authorizationHeader: bearer,
+            records: records,
+            db: db, now: now) == false)
+
+        // Exactly three rows — one per refusal, none for the admit.
+        #expect(db.openAIRequestLogCount() == 3)
+
+        // Per-status assertions (rows come back newest-first; key by status).
+        let byStatus = Dictionary(
+            uniqueKeysWithValues: db.recentOpenAIRequests(limit: 10).map { ($0.status, $0) })
+        #expect(byStatus[401]?.surface == "chat")
+        #expect(byStatus[401]?.keyLabel == nil)          // 401 attributes no label
+        #expect(byStatus[403]?.surface == "embeddings")
+        #expect(byStatus[403]?.keyLabel == "team-prod")  // matched record's label
+        #expect(byStatus[429]?.surface == "chat")
+        #expect(byStatus[429]?.keyLabel == "team-prod")
+
+        // The whole point: trailing-24h 429-rate is now non-zero.
+        let stats = db.openAIRequestTrailing24hStats(now: now)
+        #expect(stats.count24h == 3)
+        #expect(stats.count429 == 1)
+        #expect(abs(stats.rate429 - (1.0 / 3.0)) < 1e-9)
+
+        // The raw key must never reach any persisted column.
+        let raw = scanAllColumnText(path: path, table: "openai_request_log")
+        #expect(!raw.contains(rawKey),
+                "raw API key bytes must never appear in any persisted column")
+        #expect(raw.contains("team-prod"))   // the label IS expected
+    }
+
     /// Read every TEXT/INTEGER/REAL column of every row of `table` into one
     /// concatenated string for substring scanning.
     private func scanAllColumnText(path: String, table: String) -> String {

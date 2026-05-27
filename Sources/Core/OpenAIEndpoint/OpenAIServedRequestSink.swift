@@ -70,4 +70,95 @@ public enum OpenAIServedRequestSink {
             keyLabel: fields.keyLabel
         )
     }
+
+    /// V.13e — record a gate REFUSAL (401 / 403 / 429) to the persisted
+    /// `openai_request_log`. The auth gate emits these responses BEFORE any
+    /// surface handler runs, so refused requests never reach `record(...)`
+    /// above — this is their single producer site. Without it the persisted
+    /// `429-rate` is structurally `0.0%` no matter how much real traffic is
+    /// rate-limited (the v13e doctor line reads this store).
+    ///
+    /// **Deliberate asymmetry with `record`.** Refusals are NOT appended to
+    /// the in-memory `OpenAIAuditChain`: that chain is the per-served-request
+    /// log (its append sites live inside the surface handlers, downstream of
+    /// the gate), while this persisted store is the cross-process
+    /// observability log. Touching the chain here would change the v13e-5
+    /// burst-integrity test's chain semantics. The persisted write is the
+    /// ONLY side effect, and it is best-effort (a SQLite failure must not
+    /// break the listener).
+    ///
+    /// **Key-label policy (privacy + the item's acceptance contract).** The
+    /// raw key is never recorded; only the matched record's `label`:
+    ///   - `.unauthorized` (401) → `keyLabel: nil` — missing / unknown /
+    ///     expired / malformed: no label is attributed. An expired key still
+    ///     records nil so the log never leaks which labelled key expired.
+    ///   - `.forbidden` (403) → the matched key's label (a 403 always matched
+    ///     an in-vault record; the refusal is a scope miss, not identity).
+    ///   - `.rateLimited` (429) → the matched key's label (a 429 is a per-key
+    ///     limit, so a record always matched).
+    ///   - `.ok` → no-op (the surface handler records the admit, with its
+    ///     precise surface, via `record(...)`).
+    ///
+    /// **Surface.** Derived from the request path via
+    /// `OpenAIAuthGate.surface(forPath:)` — `/v1/chat*` → `.chat`,
+    /// `/v1/embeddings` → `.embeddings`. A `/v1/*` path with no specific
+    /// surface (e.g. `/v1/models`) records under `.chat`: the request-log
+    /// `Surface` enum has no general bucket and the doctor 429-rate is
+    /// surface-agnostic (it counts `status = 429` across all rows), so the
+    /// default never skews the metric.
+    ///
+    /// `decide(...)` runs exactly once per `/v1/*` request, so calling this
+    /// once with that decision yields exactly one row per refused request —
+    /// no double-count across retry frames or connection events.
+    ///
+    /// - Returns: `true` iff a row landed; `false` for an `.ok` decision or a
+    ///   best-effort persisted-write failure. Production ignores the result;
+    ///   the unit test asserts it.
+    @discardableResult
+    public static func recordRefusal(
+        decision: OpenAIAuthGate.Decision,
+        path: String,
+        authorizationHeader: String?,
+        records: [OpenAIKeyRecord],
+        db: SessionDatabase,
+        now: Date = Date()
+    ) -> Bool {
+        let status: Int
+        let keyLabel: String?
+        switch decision {
+        case .ok:
+            return false
+        case .unauthorized:
+            status = 401
+            keyLabel = nil
+        case .forbidden:
+            status = 403
+            keyLabel = matchedLabel(authorizationHeader: authorizationHeader, records: records)
+        case .rateLimited:
+            status = 429
+            keyLabel = matchedLabel(authorizationHeader: authorizationHeader, records: records)
+        }
+        let surface: OpenAIRequestLogStore.Surface
+        switch OpenAIAuthGate.surface(forPath: path) {
+        case "embeddings": surface = .embeddings
+        default:           surface = .chat   // "chat" + the nil/other paths
+        }
+        return db.recordOpenAIRequest(
+            ts: now, surface: surface, status: status, keyLabel: keyLabel
+        )
+    }
+
+    /// Re-derive the matched key's label from the presented bearer token, or
+    /// nil when no token is present / no record matched. Mirrors the re-match
+    /// idiom the surface handlers use to fetch the record's label after the
+    /// gate has admitted the request. Never returns the raw key.
+    private static func matchedLabel(
+        authorizationHeader: String?,
+        records: [OpenAIKeyRecord]
+    ) -> String? {
+        guard let token = OpenAIAuthGate.bearerToken(fromHeader: authorizationHeader) else {
+            return nil
+        }
+        return OpenAIAuthGate.matchRecord(presentedKey: token, records: records)?.label
+    }
 }

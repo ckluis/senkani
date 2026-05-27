@@ -85,14 +85,36 @@ struct Serve: AsyncParsableCommand {
         // via the mtime-gated snapshot so mid-serve provisioning/revocation
         // takes effect without a restart.
         let rateLimiter = OpenAIRateLimiter()
+        // V.13e — persisted cross-process request log. Declared before the
+        // authenticator so the gate-refusal recorder (below) can capture it.
+        // The shared session DB is the same handle the rest of senkani uses;
+        // each per-request write is best-effort and microsecond-scale
+        // (queue.sync).
+        let requestLogDB = SessionDatabase.shared
         let authenticator = OpenAIListener.Authenticator { _, path, headers in
-            OpenAIAuthGate.decide(
+            let snapshot = keys.current()
+            let decision = OpenAIAuthGate.decide(
                 authorizationHeader: headers["authorization"],
                 requestedSurface: OpenAIAuthGate.surface(forPath: path),
                 now: Date(),
-                records: keys.current(),
+                records: snapshot,
                 rateLimiter: rateLimiter
             )
+            // V.13e — a 401 / 403 / 429 is emitted here by the gate, BEFORE
+            // any surface handler runs, so refused requests never reach the
+            // success-path sink. Record them to the persisted request log
+            // (metadata-only; the in-memory chain is deliberately untouched)
+            // so doctor's trailing-24h 429-rate reflects real rejected
+            // traffic. `decide` runs exactly once per `/v1/*` request ⇒ one
+            // row per refusal, no double-count.
+            OpenAIServedRequestSink.recordRefusal(
+                decision: decision,
+                path: path,
+                authorizationHeader: headers["authorization"],
+                records: snapshot,
+                db: requestLogDB
+            )
+            return decision
         }
 
         // V.13a-3 — chat-completion surface. The per-request audit chain
@@ -102,13 +124,11 @@ struct Serve: AsyncParsableCommand {
         // record's preset + label for routing/telemetry.
         let auditChain = OpenAIAuditChain()
         let storeBodies = auditBodies
-        // V.13e — persisted cross-process request log. The shared session DB
-        // is the same handle the rest of senkani uses; the per-request write
-        // is best-effort and microsecond-scale (queue.sync). Each served
-        // request is recorded to BOTH the in-memory chain and this store via
-        // `OpenAIServedRequestSink.record`, co-located at the prior
-        // `auditChain.append` sites so the producer side is finally owned.
-        let requestLogDB = SessionDatabase.shared
+        // V.13e — `requestLogDB` (declared above, alongside the authenticator)
+        // is the persisted producer for SUCCESSFUL requests too: each surface
+        // handler records to BOTH the in-memory chain and the persisted store
+        // via `OpenAIServedRequestSink.record`, co-located at the prior
+        // `auditChain.append` sites so the producer side is fully owned.
         let engine = Serve.placeholderChatEngine()
         let chatHandler = OpenAIListener.ChatHandler { _, _, headers, body in
             guard let request = OpenAIChatHandler.decodeRequest(body) else {

@@ -19,7 +19,12 @@ public struct OpenAIKeyRecord: Codable, Sendable, Equatable {
 
     /// Hex SHA-256 of the plaintext key. The verifier — never the secret.
     public let keyHash: String
-    /// Provider preset the key routes to (e.g. `openai`, `anthropic`).
+    /// Routing preset the key uses — a `ModelPreset` raw value
+    /// (`auto`/`build`/`research`/`quick`/`local`) selecting the model tier.
+    /// Validated at provision time (`OpenAIKeyProvisioner.validatePreset`);
+    /// the serve-time reader (`OpenAIChatHandler.preset(forRecordPreset:)`)
+    /// stays lenient and falls back to `.auto` for any legacy/out-of-vocab
+    /// value so a stale record never crashes the listener.
     public let preset: String
     /// Surfaces this key may hit (e.g. `["chat", "embeddings"]`). A key
     /// without `tools` in scope cannot use tool-use even if the request

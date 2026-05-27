@@ -25,7 +25,7 @@ struct VaultAdd: AsyncParsableCommand {
     @Argument(help: "Credential kind. Only `openai-key` is supported today.")
     var kind: String
 
-    @Option(name: .long, help: "Provider preset the key routes to (e.g. openai, anthropic).")
+    @Option(name: .long, help: "Routing preset the key uses (one of: \(ModelPreset.allCases.map(\.rawValue).joined(separator: ", "))).")
     var preset: String
 
     @Option(name: .long, help: "Comma-list of surfaces the key may hit (default: chat,embeddings).")
@@ -43,6 +43,17 @@ struct VaultAdd: AsyncParsableCommand {
     func run() async throws {
         guard kind == "openai-key" else {
             throw ValidationError("unsupported credential kind '\(kind)'. Supported: openai-key.")
+        }
+
+        // `--preset` selects the routing tier (v13a-3). Validate against the
+        // `ModelPreset` vocabulary at provision time so an unrecognized value
+        // is rejected loudly here, not silently degraded to `.auto` at serve
+        // time. The normalized (lowercased) value is what we store.
+        let validatedPreset: String
+        do {
+            validatedPreset = try OpenAIKeyProvisioner.validatePreset(preset)
+        } catch let err as OpenAIKeyProvisioner.InvalidPreset {
+            throw ValidationError(err.description)
         }
 
         let scopes = (scope ?? "chat,embeddings")
@@ -68,7 +79,7 @@ struct VaultAdd: AsyncParsableCommand {
         }
 
         let provisioned = OpenAIKeyProvisioner.provision(
-            preset: preset,
+            preset: validatedPreset,
             scope: scopes,
             rateLimit: rpm,
             expiresAt: expiresAt,
@@ -82,7 +93,7 @@ struct VaultAdd: AsyncParsableCommand {
         // stderr so a `... | pbcopy` captures only the key.
         print(provisioned.plaintextKey)
 
-        var summary = "provisioned openai-key — preset=\(preset), scope=\(scopes.joined(separator: ",")), rate=\(rpm)rpm"
+        var summary = "provisioned openai-key — preset=\(validatedPreset), scope=\(scopes.joined(separator: ",")), rate=\(rpm)rpm"
         if let expires { summary += ", expires=\(expires)" }
         if let label { summary += ", label=\(label)" }
         summary += "\nThis key is shown ONCE — store it now. Only its hash is saved."

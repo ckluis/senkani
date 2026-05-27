@@ -160,6 +160,40 @@ public enum OpenAIKeyProvisioner {
         public let record: OpenAIKeyRecord
     }
 
+    /// Thrown when `senkani vault add openai-key --preset` is handed a value
+    /// that is not a `ModelPreset` raw value. The `--preset` flag selects
+    /// the routing tier (v13a-3: the per-key preset wins over the request
+    /// `model`), so only the `ModelPreset` vocabulary is valid — provider
+    /// names like `openai`/`anthropic` are rejected at provision time rather
+    /// than silently degrading to `.auto` at serve time. Equatable so tests
+    /// can assert the exact rejected value.
+    public struct InvalidPreset: Error, Equatable, CustomStringConvertible {
+        public let provided: String
+        public var description: String {
+            "--preset '\(provided)' is not a routing preset. Valid presets: "
+            + ModelPreset.allCases.map(\.rawValue).joined(separator: ", ")
+            + "."
+        }
+    }
+
+    /// Validate + normalize a `--preset` value against the `ModelPreset`
+    /// vocabulary. Returns the lowercased raw value on success; throws
+    /// `InvalidPreset` (listing every valid case) otherwise.
+    ///
+    /// This is the strict, provision-time counterpart to the serve-time
+    /// `OpenAIChatHandler.preset(forRecordPreset:)`, which stays lenient
+    /// (unknown → `.auto`) so a legacy or hand-edited record never crashes
+    /// the listener. Validating here means an operator-chosen tier is
+    /// honored end-to-end instead of an unrecognized `--preset` silently
+    /// resolving to `.auto`.
+    public static func validatePreset(_ raw: String) throws -> String {
+        let normalized = raw.lowercased()
+        guard ModelPreset(rawValue: normalized) != nil else {
+            throw InvalidPreset(provided: raw)
+        }
+        return normalized
+    }
+
     /// Generate a fresh `sk-senkani-…` key (24 random bytes → 48 hex).
     public static func generateKey() -> String {
         var bytes = [UInt8](repeating: 0, count: 24)

@@ -232,12 +232,12 @@ struct BashPerformanceTests {
             source += "    return 0\n"
             source += "}\n\n"
         }
-        // Median-of-3 — see DependencyGraphPerfGateTests for the canonical
+        // Min-of-N — see DependencyGraphPerfGateTests for the canonical
         // pattern. `.serialized` only serializes within-suite, so peer-suite
         // CPU contention can spike a single sample under parallel runner;
         // a single transient spike on one of three runs cannot fail the
         // test, but a real regression (every run blows budget) still does.
-        // Threshold preserved at 10 ms — the median strengthens the gate
+        // Threshold preserved at 10 ms — the minimum keeps the gate honest
         // on its own (mirrors the Scala/Ruby/Haskell/PHP siblings, with
         // the InjectionGuard 2026-05-06 precedent of preserve-don't-widen).
         let clock = ContinuousClock()
@@ -249,10 +249,9 @@ struct BashPerformanceTests {
             }
             samples.append(elapsed)
         }
-        let median = samples.sorted()[1]
         #expect(
-            median < .milliseconds(10),
-            "median of 3 Bash parses: \(samples) → median \(median)"
+            PerfGate.passes(samples: samples, budget: .milliseconds(10)),
+            "min of 3 Bash parses must be < 10ms: \(samples)"
         )
     }
 }

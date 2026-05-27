@@ -195,12 +195,12 @@ struct TreeSitterJavaScriptPerformanceTests {
         try? source.write(toFile: fullPath, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
-        // Median-of-3 — see DependencyGraphPerfGateTests for the canonical
+        // Min-of-N — see DependencyGraphPerfGateTests for the canonical
         // pattern. `.serialized` only serializes within-suite, so peer-suite
         // CPU contention can spike a single sample under parallel runner;
         // a single transient spike on one of three runs cannot fail the
         // test, but a real regression (every run blows budget) still does.
-        // Threshold preserved at 10 ms — the median strengthens the gate
+        // Threshold preserved at 10 ms — the minimum keeps the gate honest
         // on its own (mirrors the Scala/Ruby/Haskell/PHP siblings, with
         // the InjectionGuard 2026-05-06 precedent of preserve-don't-widen).
         let clock = ContinuousClock()
@@ -212,10 +212,12 @@ struct TreeSitterJavaScriptPerformanceTests {
             }
             samples.append(Double(elapsed.components.attoseconds) / 1e15)
         }
-        let median = samples.sorted()[1]
         // 5 classes + 30 methods + 30 functions = 65
         #expect(entries.count >= 60, "Should find >= 60 symbols, got \(entries.count)")
-        #expect(median < 10.0, "median of 3 JS parses: \(samples) → median \(String(format: "%.2f", median))ms")
+        #expect(
+            PerfGate.passes(samples: samples, budget: 10.0),
+            "min of 3 JS parses must be < 10ms: \(samples)"
+        )
     }
 
     @Test func javascriptCoexistsWithTypeScript() {

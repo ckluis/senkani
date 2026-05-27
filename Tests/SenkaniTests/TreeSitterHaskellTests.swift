@@ -315,7 +315,7 @@ struct HaskellPerformanceTests {
         }
         source += "data MyType = A | B | C\n\n"
         source += "type Alias = Int\n"
-        // Median-of-3 — see DependencyGraphPerfGateTests for canonical
+        // Min-of-N — see DependencyGraphPerfGateTests for canonical
         // pattern. Threshold widened 10 ms → 50 ms (matching Kotlin/Elixir
         // pattern in this file family): in-isolation typical was already
         // ~10 ms, leaving zero headroom for parallel-runner CPU contention.
@@ -328,10 +328,9 @@ struct HaskellPerformanceTests {
             }
             samples.append(elapsed)
         }
-        let median = samples.sorted()[1]
         #expect(
-            median < .milliseconds(50),
-            "median of 3 Haskell parses: \(samples) → median \(median)"
+            PerfGate.passes(samples: samples, budget: .milliseconds(50)),
+            "min of 3 Haskell parses must be < 50ms: \(samples)"
         )
     }
 

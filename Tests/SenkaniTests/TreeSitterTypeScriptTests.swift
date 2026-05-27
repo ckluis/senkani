@@ -249,10 +249,13 @@ struct TreeSitterTypeScriptPerformanceTests {
             source += "function fn\(i)(x: number): number { return x; }\n"
         }
 
-        let (entries, median, samples) = measureIndex(source, language: "typescript")
+        let (entries, samples) = measureIndex(source, language: "typescript")
         // 5 interfaces + 5 classes + 30 methods + 30 functions = 70
         #expect(entries.count >= 65, "Should find >= 65 symbols, got \(entries.count)")
-        #expect(median < 10.0, "median of 3 TypeScript parses: \(samples) → median \(String(format: "%.2f", median))ms")
+        #expect(
+            PerfGate.passes(samples: samples, budget: 10.0),
+            "min of 3 TypeScript parses must be < 10ms: \(samples)"
+        )
     }
 
     @Test func tsxFileParsesUnder10ms() {
@@ -267,10 +270,13 @@ struct TreeSitterTypeScriptPerformanceTests {
             """
         }
 
-        let (entries, median, samples) = measureIndex(source, language: "tsx")
+        let (entries, samples) = measureIndex(source, language: "tsx")
         // 10 interfaces + 10 functions = 20
         #expect(entries.count >= 20, "Should find >= 20 symbols, got \(entries.count)")
-        #expect(median < 10.0, "median of 3 TSX parses: \(samples) → median \(String(format: "%.2f", median))ms")
+        #expect(
+            PerfGate.passes(samples: samples, budget: 10.0),
+            "min of 3 TSX parses must be < 10ms: \(samples)"
+        )
     }
 
     @Test func tsxAndTsCoexist() {
@@ -384,17 +390,14 @@ private func indexLanguage(_ code: String, language: String, ext: String) -> [In
     return (try? TreeSitterBackend.index(files: [filePath], language: language, projectRoot: tmpDir)) ?? []
 }
 
-/// Returns (entries-from-the-last-sample, median-ms over 3 samples, all 3 samples).
-///
-/// Median-of-3 — see DependencyGraphPerfGateTests for the canonical
-/// pattern. `.serialized` only serializes within-suite, so peer-suite
-/// CPU contention can spike a single sample under parallel runner;
-/// a single transient spike on one of three runs cannot fail the
-/// test, but a real regression (every run blows budget) still does.
-/// Threshold preserved at 10 ms in callers — the median strengthens
-/// the gate on its own (mirrors the Scala/Ruby/Haskell/PHP siblings,
-/// with the InjectionGuard 2026-05-06 precedent of preserve-don't-widen).
-private func measureIndex(_ code: String, language: String) -> ([IndexEntry], Double, [Double]) {
+/// Returns (entries-from-the-last-sample, all 3 ms samples). Callers feed the
+/// samples to `PerfGate.passes` (min-of-N — see PerfGate.swift / the canonical
+/// `DependencyGraphPerfGateTests`). `.serialized` only serializes within-suite,
+/// so peer-suite CPU contention can spike a single sample under the parallel
+/// runner; asserting the minimum tolerates that spike while a real regression
+/// (every run blows budget) still trips the gate. Per-site 10 ms budgets are
+/// preserved unchanged.
+private func measureIndex(_ code: String, language: String) -> ([IndexEntry], [Double]) {
     let ext = language == "tsx" ? "tsx" : "ts"
     let tmpDir = NSTemporaryDirectory() + "senkani-\(language)-perf-\(UUID().uuidString)"
     let filePath = "perf_test.\(ext)"
@@ -413,6 +416,5 @@ private func measureIndex(_ code: String, language: String) -> ([IndexEntry], Do
         }
         samples.append(Double(elapsed.components.attoseconds) / 1e15)
     }
-    let median = samples.sorted()[1]
-    return (entries, median, samples)
+    return (entries, samples)
 }

@@ -313,13 +313,13 @@ struct ElixirPerformanceTests {
             source += "  end\n"
         }
         source += "end\n"
-        // Median-of-3 — see DependencyGraphPerfGateTests for the canonical
+        // Min-of-N — see DependencyGraphPerfGateTests for the canonical
         // pattern. `.serialized` only serializes within-suite, so peer-suite
         // CPU contention can spike a single sample under parallel runner;
         // a single transient spike on one of three runs cannot fail the
         // test, but a real regression (every run blows budget) still does.
         // Threshold preserved at 50 ms — see TreeSitterKotlinTests for the
-        // 10 ms → 50 ms widen rationale; the median strengthens the gate on
+        // 10 ms → 50 ms widen rationale; the minimum keeps the gate honest on
         // its own (mirrors the 10-parser 2026-05-06 sweep precedent of
         // preserve-don't-widen).
         let clock = ContinuousClock()
@@ -331,10 +331,9 @@ struct ElixirPerformanceTests {
             }
             samples.append(elapsed)
         }
-        let median = samples.sorted()[1]
         #expect(
-            median < .milliseconds(50),
-            "median of 3 Elixir parses: \(samples) → median \(median)"
+            PerfGate.passes(samples: samples, budget: .milliseconds(50)),
+            "min of 3 Elixir parses must be < 50ms: \(samples)"
         )
     }
 

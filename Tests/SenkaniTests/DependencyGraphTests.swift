@@ -209,14 +209,10 @@ struct GraphConstructionTests {
 @Suite("DependencyGraph — Perf gate")
 struct DependencyGraphPerfGateTests {
 
-    /// Perf-gate decision: PASS iff the least-contended (minimum) sample is
-    /// under budget. Returns `false` for an empty sample set so the gate can
-    /// never be silently disabled. Shared by the live-measurement test and
-    /// `gateFailsOnGenuineRegression` so the robustness semantics are pinned.
-    static func gatePasses(samples: [Duration], budget: Duration) -> Bool {
-        guard let fastest = samples.min() else { return false }
-        return fastest < budget
-    }
+    // Perf-gate decision factored into the shared `PerfGate.passes` helper
+    // (PerfGate.swift) — the canonical min-of-N gate, reused by this suite
+    // and the 19 micro-benchmark sibling gates so the robustness semantics
+    // live in exactly one place.
 
     @Test("Real project graph builds fast")
     func buildGraphFromRealProject() {
@@ -245,7 +241,7 @@ struct DependencyGraphPerfGateTests {
         }
 
         #expect(
-            Self.gatePasses(samples: samples, budget: .seconds(5)),
+            PerfGate.passes(samples: samples, budget: .seconds(5)),
             "min of 5 graph builds must be < 5s: \(samples)"
         )
 
@@ -265,7 +261,7 @@ struct DependencyGraphPerfGateTests {
         // against the robustness change silently disabling the gate.
         let everySampleSlow: [Duration] = [.seconds(6), .seconds(7), .seconds(8)]
         #expect(
-            !Self.gatePasses(samples: everySampleSlow, budget: .seconds(5)),
+            !PerfGate.passes(samples: everySampleSlow, budget: .seconds(5)),
             "every sample over budget must FAIL the gate"
         )
 
@@ -273,14 +269,14 @@ struct DependencyGraphPerfGateTests {
         // ones must PASS, because the minimum reflects the true floor.
         let oneContended: [Duration] = [.seconds(8), .milliseconds(200), .milliseconds(300)]
         #expect(
-            Self.gatePasses(samples: oneContended, budget: .seconds(5)),
+            PerfGate.passes(samples: oneContended, budget: .seconds(5)),
             "one contended sample among fast ones must PASS the gate"
         )
 
         // No samples is treated as failure — the gate can never be silently
         // disabled by an empty measurement set.
         #expect(
-            !Self.gatePasses(samples: [], budget: .seconds(5)),
+            !PerfGate.passes(samples: [Duration](), budget: .seconds(5)),
             "empty sample set must FAIL the gate"
         )
     }

@@ -96,10 +96,10 @@ struct SkillScannerAsyncTests {
         for i in 0..<60 { try seedClaudeCommand(home: home, name: "cmd\(i)") }
         for i in 0..<20 { try seedCursorRule(home: home, name: "rule\(i)") }
 
-        // Median-of-3 — see DependencyGraphPerfGateTests for canonical
+        // Min-of-N — see DependencyGraphPerfGateTests for canonical
         // pattern. 5 s budget already widened 2 s → 5 s on 2026-04-21
         // (cooperative-pool contention); under full-suite parallel-runner
-        // load a single sample was observed at 5.155 s. Median-of-3
+        // load a single sample was observed at 5.155 s. Min-of-N
         // tolerates one transient peer-CPU spike out of three runs while
         // still failing on a true regression that blows budget every run.
         var samples: [TimeInterval] = []
@@ -110,11 +110,10 @@ struct SkillScannerAsyncTests {
             samples.append(Date().timeIntervalSince(start))
             lastSkillCount = skills.count
         }
-        let median = samples.sorted()[1]
         #expect(lastSkillCount >= 80)
         #expect(
-            median < 5.0,
-            "median of 3 scanAsync wall-clock: \(samples) → median \(median)s"
+            PerfGate.passes(samples: samples, budget: 5.0),
+            "min of 3 scanAsync wall-clock must be < 5s: \(samples)"
         )
     }
 

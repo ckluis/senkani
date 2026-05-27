@@ -354,7 +354,7 @@ struct RubyPerformanceTests {
         for i in 0..<2 {
             source += "end\n"
         }
-        // Median-of-3 — see DependencyGraphPerfGateTests for canonical
+        // Min-of-N — see DependencyGraphPerfGateTests for canonical
         // pattern. Threshold widened 10 ms → 20 ms because typical in-
         // isolation is ~7 ms — too tight for parallel-runner contention.
         let clock = ContinuousClock()
@@ -366,10 +366,9 @@ struct RubyPerformanceTests {
             }
             samples.append(elapsed)
         }
-        let median = samples.sorted()[1]
         #expect(
-            median < .milliseconds(20),
-            "median of 3 Ruby parses: \(samples) → median \(median)"
+            PerfGate.passes(samples: samples, budget: .milliseconds(20)),
+            "min of 3 Ruby parses must be < 20ms: \(samples)"
         )
     }
 

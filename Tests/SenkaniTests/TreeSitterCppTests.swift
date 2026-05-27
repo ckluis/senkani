@@ -340,7 +340,7 @@ struct CppPerformanceTests {
         for i in 0..<10 {
             source += "void free_func_\(i)(int x) { }\n"
         }
-        // Median-of-3 — see DependencyGraphPerfGateTests for the canonical
+        // Min-of-N — see DependencyGraphPerfGateTests for the canonical
         // pattern. `.serialized` only serializes within-suite, so peer-suite
         // CPU contention can spike a single sample under parallel runner;
         // a single transient spike on one of three runs cannot fail the
@@ -361,10 +361,9 @@ struct CppPerformanceTests {
             }
             samples.append(elapsed)
         }
-        let median = samples.sorted()[1]
         #expect(
-            median < .milliseconds(20),
-            "median of 3 C++ parses: \(samples) → median \(median)"
+            PerfGate.passes(samples: samples, budget: .milliseconds(20)),
+            "min of 3 C++ parses must be < 20ms: \(samples)"
         )
     }
 

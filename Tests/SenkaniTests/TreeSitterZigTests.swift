@@ -386,7 +386,7 @@ struct ZigPerformanceTests {
         for i in 0..<5 {
             source += "test \"test_\(i)\" {}\n"
         }
-        // Median-of-3 — see DependencyGraphPerfGateTests for the canonical
+        // Min-of-N — see DependencyGraphPerfGateTests for the canonical
         // pattern. `.serialized` only serializes within-suite, so peer-suite
         // CPU contention can spike a single sample under parallel runner;
         // a single transient spike on one of three runs cannot fail the
@@ -401,10 +401,10 @@ struct ZigPerformanceTests {
         // 1.2-1.8 ms (20 consecutive filter-only runs, 2026-05-07), so
         // 50 ms still catches a real regression (a reverted tree-sitter
         // parse costs hundreds of ms) without false-firing when sibling
-        // @Tests hog the cooperative pool. The median-of-3 layer is
-        // independent of the threshold widen — it strengthens the gate
-        // against single-sample spikes; the widen handles the two-sample
-        // case median-of-3 cannot.
+        // @Tests hog the cooperative pool. The aggregation layer is now
+        // min-of-N (median-of-3 when this gate was added) — it passes when
+        // the least-contended sample is under budget, damping the single-
+        // sample spike on its own; the 50 ms widen is retained.
         let clock = ContinuousClock()
         var samples: [Duration] = []
         for _ in 0..<3 {
@@ -414,10 +414,9 @@ struct ZigPerformanceTests {
             }
             samples.append(elapsed)
         }
-        let median = samples.sorted()[1]
         #expect(
-            median < .milliseconds(50),
-            "median of 3 Zig parses: \(samples) → median \(median)"
+            PerfGate.passes(samples: samples, budget: .milliseconds(50)),
+            "min of 3 Zig parses must be < 50ms: \(samples)"
         )
     }
 

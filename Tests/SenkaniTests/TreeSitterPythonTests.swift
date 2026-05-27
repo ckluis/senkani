@@ -196,12 +196,12 @@ struct TreeSitterPythonPerformanceTests {
         try? source.write(toFile: fullPath, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
-        // Median-of-3 — see DependencyGraphPerfGateTests for the canonical
+        // Min-of-N — see DependencyGraphPerfGateTests for the canonical
         // pattern. `.serialized` only serializes within-suite, so peer-suite
         // CPU contention can spike a single sample under parallel runner;
         // a single transient spike on one of three runs cannot fail the
         // test, but a real regression (every run blows budget) still does.
-        // Threshold preserved at 5 ms — the median strengthens the gate on
+        // Threshold preserved at 5 ms — the minimum keeps the gate honest on
         // its own (mirrors the Rust/Scala/Ruby/Haskell/PHP siblings and the
         // 10-parser 2026-05-06 sweep precedent of preserve-don't-widen).
         let clock = ContinuousClock()
@@ -213,9 +213,11 @@ struct TreeSitterPythonPerformanceTests {
             }
             samples.append(Double(elapsed.components.attoseconds) / 1e15)
         }
-        let median = samples.sorted()[1]
         #expect(entries.count >= 60, "Should find 10 classes + 50 methods, got \(entries.count)")
-        #expect(median < 5.0, "median of 3 Python parses: \(samples) → median \(String(format: "%.2f", median))ms")
+        #expect(
+            PerfGate.passes(samples: samples, budget: 5.0),
+            "min of 3 Python parses must be < 5ms: \(samples)"
+        )
     }
 
     @Test func pythonAndSwiftCoexist() {

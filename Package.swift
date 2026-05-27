@@ -464,6 +464,7 @@ let package = Package(
                 .copy("Fixtures/routing-corpus.json"),
                 .copy("Fixtures/context-plan-corpus.json"),
                 .copy("Fixtures/wasm"),
+                .copy("Fixtures/openai-conformance"),
             ]
         ),
     ]

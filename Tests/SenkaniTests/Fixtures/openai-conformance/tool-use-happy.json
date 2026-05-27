@@ -1,0 +1,15 @@
+{
+  "name": "tool-use-happy",
+  "kind": "tool_use",
+  "description": "POST /v1/chat/completions declaring a function tool -> the model calls the tool: finish_reason tool_calls, null content, and tool_calls[].function.arguments encoded as a JSON STRING.",
+  "request_body": "{\"model\":\"gpt-4o\",\"messages\":[{\"role\":\"user\",\"content\":\"weather in SF?\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"description\":\"Get the current weather for a city\",\"parameters\":{\"type\":\"object\",\"properties\":{\"location\":{\"type\":\"string\"}},\"required\":[\"location\"]}}}]}",
+  "expect": {
+    "http_status": "200 OK",
+    "contains": [
+      "\"finish_reason\":\"tool_calls\"",
+      "\"tool_calls\"",
+      "\"name\":\"get_weather\"",
+      "\"arguments\":\"{"
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "chat-nonstream-happy",
+  "kind": "chat",
+  "description": "POST /v1/chat/completions non-streaming happy path -> a well-formed OpenAI chat.completion object with finish_reason stop and a usage block.",
+  "request_body": "{\"model\":\"gpt-4o\",\"messages\":[{\"role\":\"user\",\"content\":\"say hi\"}]}",
+  "expect": {
+    "http_status": "200 OK",
+    "contains": [
+      "\"object\":\"chat.completion\"",
+      "\"role\":\"assistant\"",
+      "\"finish_reason\":\"stop\"",
+      "\"total_tokens\":"
+    ]
+  }
+}

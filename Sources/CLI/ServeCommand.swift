@@ -128,6 +128,36 @@ struct Serve: AsyncParsableCommand {
             return OpenAIChatHandler.encodeResponse(result.response)
         }
 
+        // V.13c — embeddings surface. The embedding model identity is
+        // sourced from `ModelManager` (the single `minilm-l6` registry
+        // entry — no parallel stack); the placeholder engine returns a
+        // deterministic, fixed-dimension vector so a client gets a valid
+        // OpenAI `list` response while real on-device MiniLM inference lands
+        // in the shared V.13 backend child. Each request lands exactly one
+        // audit entry with `surface: "embeddings"`.
+        let embeddingsEngine = Serve.placeholderEmbeddingsEngine()
+        let embeddingsHandler = OpenAIListener.EmbeddingsHandler { _, _, headers, body in
+            guard let request = OpenAIEmbeddingsHandler.decodeRequest(body) else {
+                return OpenAIEmbeddingsHandler.errorResponse(
+                    code: 400, httpMessage: "Bad Request",
+                    message: "invalid embeddings request (expected JSON with a non-empty string or [string] `input`)",
+                    type: "invalid_request_error", errorCode: "invalid_request"
+                )
+            }
+            let token = OpenAIAuthGate.bearerToken(fromHeader: headers["authorization"])
+            let record = token.flatMap { OpenAIAuthGate.matchRecord(presentedKey: $0, records: records) }
+            let result = OpenAIEmbeddingsHandler.handle(
+                request: request,
+                keyLabel: record?.label,
+                engine: embeddingsEngine,
+                now: Date()
+            )
+            auditChain.append(result.auditFields, bodies: storeBodies ? result.auditBodies : nil)
+            let t = result.telemetry
+            print("openai-request surface=\(t.surface) model_logged=\(t.modelLogged) resolved_model=\(t.resolvedModel) inputs=\(t.inputCount)")
+            return OpenAIEmbeddingsHandler.encodeResponse(result.response)
+        }
+
         // V.13b — SSE streaming surface. Returns a plan only when the
         // client asked to stream (`stream: true`); otherwise nil → the
         // non-streaming `chatHandler` above serves the request. Auth + rate
@@ -182,6 +212,7 @@ struct Serve: AsyncParsableCommand {
             config: .init(bind: effective.bind, port: effective.port),
             authenticator: authenticator,
             chatHandler: chatHandler,
+            embeddingsHandler: embeddingsHandler,
             streamHandler: streamHandler
         )
         try listener.start()
@@ -222,6 +253,53 @@ struct Serve: AsyncParsableCommand {
                 completionTokens: OpenAIChatHandler.estimateTokens(content)
             )
         }
+    }
+
+    /// V.13c — placeholder embeddings engine. The model IDENTITY is sourced
+    /// from `ModelManager` by `OpenAIEmbeddingsHandler.handle` (no parallel
+    /// stack); this engine produces the VECTORS. Real on-device MiniLM
+    /// inference is the shared V.13 backend child — until it lands, the
+    /// engine returns a deterministic, L2-normalized `dimension`-wide vector
+    /// per input so a client gets a well-formed OpenAI `list` response. The
+    /// vectors are a placeholder, NOT real embeddings; the serve log + audit
+    /// chain record the request honestly.
+    static func placeholderEmbeddingsEngine() -> OpenAIEmbeddingsHandler.Engine {
+        // MiniLM-L6-v2 is 384-dimensional; match it so downstream clients see
+        // the production dimension.
+        let dimension = 384
+        return OpenAIEmbeddingsHandler.Engine { _, inputs in
+            let vectors: [[Float]] = inputs.map { text in
+                Serve.deterministicVector(for: text, dimension: dimension)
+            }
+            return OpenAIEmbeddingsHandler.Embedding(
+                vectors: vectors,
+                promptTokens: OpenAIEmbeddingsHandler.estimateTokens(inputs)
+            )
+        }
+    }
+
+    /// Deterministic, L2-normalized pseudo-vector from a text seed. Stable
+    /// for a given input so callers/tests get reproducible output; NOT a
+    /// semantic embedding (the real MiniLM path is the deferred backend).
+    static func deterministicVector(for text: String, dimension: Int) -> [Float] {
+        // A tiny SplitMix64-style PRNG seeded by the FNV-1a hash of the text.
+        var state: UInt64 = 1_469_598_103_934_665_603
+        for byte in text.utf8 {
+            state = (state ^ UInt64(byte)) &* 1_099_511_628_211
+        }
+        var raw = [Float](repeating: 0, count: dimension)
+        for i in 0..<dimension {
+            state &+= 0x9E37_79B9_7F4A_7C15
+            var z = state
+            z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+            z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+            z = z ^ (z >> 31)
+            // Map to [-1, 1).
+            raw[i] = Float(Double(z) / Double(UInt64.max)) * 2 - 1
+        }
+        let norm = sqrt(raw.reduce(0) { $0 + $1 * $1 })
+        guard norm > 0 else { return raw }
+        return raw.map { $0 / norm }
     }
 }
 

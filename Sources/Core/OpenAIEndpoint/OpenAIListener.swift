@@ -147,6 +147,19 @@ public final class OpenAIListener: @unchecked Sendable {
         }
     }
 
+    /// V.13c — embeddings surface invoked AFTER the auth gate admits a
+    /// `POST /v1/embeddings` request. Same shape as `ChatHandler`: receives
+    /// the parsed request line, headers, and body; returns a framed HTTP
+    /// response, or nil to fall through to the `501`/`404` `route`. The
+    /// scaffold tests leave it nil; `ServeCommand` builds it.
+    public struct EmbeddingsHandler: Sendable {
+        public let handle: @Sendable (_ method: String, _ path: String, _ headers: [String: String], _ body: Data) -> Data?
+
+        public init(handle: @escaping @Sendable (_ method: String, _ path: String, _ headers: [String: String], _ body: Data) -> Data?) {
+            self.handle = handle
+        }
+    }
+
     /// V.13b — SSE streaming surface for `POST /v1/chat/completions` with
     /// `stream: true`. Consulted AFTER the auth gate admits a `/v1/*`
     /// request and BEFORE the non-streaming `ChatHandler`. Returns an
@@ -170,6 +183,7 @@ public final class OpenAIListener: @unchecked Sendable {
     private let config: Config
     private let authenticator: Authenticator?
     private let chatHandler: ChatHandler?
+    private let embeddingsHandler: EmbeddingsHandler?
     private let streamHandler: StreamHandler?
     private let queue = DispatchQueue(label: "com.senkani.openai-listener", qos: .userInitiated)
     private let lock = NSLock()
@@ -186,11 +200,13 @@ public final class OpenAIListener: @unchecked Sendable {
         config: Config,
         authenticator: Authenticator? = nil,
         chatHandler: ChatHandler? = nil,
+        embeddingsHandler: EmbeddingsHandler? = nil,
         streamHandler: StreamHandler? = nil
     ) {
         self.config = config
         self.authenticator = authenticator
         self.chatHandler = chatHandler
+        self.embeddingsHandler = embeddingsHandler
         self.streamHandler = streamHandler
     }
 
@@ -309,6 +325,7 @@ public final class OpenAIListener: @unchecked Sendable {
     private func receiveRequest(_ conn: NWConnection, accumulated: Data) {
         let authenticator = self.authenticator
         let chatHandler = self.chatHandler
+        let embeddingsHandler = self.embeddingsHandler
         let streamHandler = self.streamHandler
         conn.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
             if error != nil {
@@ -361,7 +378,8 @@ public final class OpenAIListener: @unchecked Sendable {
                 headers: headers,
                 body: body,
                 authenticator: nil,
-                chatHandler: chatHandler
+                chatHandler: chatHandler,
+                embeddingsHandler: embeddingsHandler
             )
             conn.send(content: response, completion: .contentProcessed { _ in
                 conn.cancel()
@@ -451,7 +469,8 @@ public final class OpenAIListener: @unchecked Sendable {
         headers: [String: String],
         body: Data = Data(),
         authenticator: Authenticator?,
-        chatHandler: ChatHandler? = nil
+        chatHandler: ChatHandler? = nil,
+        embeddingsHandler: EmbeddingsHandler? = nil
     ) -> Data {
         let (method, path) = methodAndPath(requestLine)
         if let authenticator {
@@ -471,6 +490,15 @@ public final class OpenAIListener: @unchecked Sendable {
            method.uppercased() == "POST",
            path == "/v1/chat/completions" {
             if let surfaceResponse = chatHandler.handle(method, path, headers, body) {
+                return surfaceResponse
+            }
+        }
+        // V.13c — embeddings surface. Same dispatch shape as chat; a nil
+        // return falls through to the 501/404 route.
+        if let embeddingsHandler,
+           method.uppercased() == "POST",
+           path == "/v1/embeddings" {
+            if let surfaceResponse = embeddingsHandler.handle(method, path, headers, body) {
                 return surfaceResponse
             }
         }

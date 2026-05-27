@@ -28,8 +28,10 @@ actor EmbedEngine {
     private var indexedAt: Date?
     private var unloadHandlerRegistered = false
 
-    /// The model ID used for ModelManager tracking.
-    static let modelId = "minilm-l6"
+    /// The model ID used for ModelManager tracking. Sourced from the
+    /// canonical `ModelManager.embeddingModelID` so the MCP embed tool and
+    /// the OpenAI `/v1/embeddings` surface share one id — no parallel stack.
+    static let modelId = ModelManager.embeddingModelID
 
     /// How long before the index is considered stale and should be rebuilt.
     private static let indexStalenessInterval: TimeInterval = 300  // 5 minutes

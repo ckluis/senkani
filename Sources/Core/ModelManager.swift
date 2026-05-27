@@ -81,6 +81,14 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
 
     public static let shared = ModelManager()
 
+    /// Canonical id of the on-device embedding model — the SAME model the
+    /// MCP `senkani_embed` tool (`EmbedEngine`) and the RRF ranker use.
+    /// Single source of truth so no surface (the V.13c OpenAI
+    /// `/v1/embeddings` endpoint included) introduces a parallel embedding
+    /// stack with a divergent id. Matches the `minilm-l6` registry entry
+    /// below.
+    public static let embeddingModelID = "minilm-l6"
+
     // MARK: - Published State
 
     /// Current state of all managed models. Access under lock.

@@ -119,6 +119,20 @@ public final class OpenAIListener: @unchecked Sendable {
         }
     }
 
+    /// V.13a-2 — bearer-auth binding for a request. Wrapping the pure
+    /// `OpenAIAuthGate` lets `ServeCommand` capture the vault snapshot +
+    /// rate limiter while keeping the listener platform-agnostic. When
+    /// the listener has no authenticator (the v13a-1 scaffold contract,
+    /// and the existing scaffold tests), every `/v1/*` request falls
+    /// straight through to the `501` stub.
+    public struct Authenticator: Sendable {
+        public let decide: @Sendable (_ method: String, _ path: String, _ headers: [String: String]) -> OpenAIAuthGate.Decision
+
+        public init(decide: @escaping @Sendable (_ method: String, _ path: String, _ headers: [String: String]) -> OpenAIAuthGate.Decision) {
+            self.decide = decide
+        }
+    }
+
     public enum ListenError: Error, Equatable {
         case invalidPort(Int)
         case startTimeout
@@ -126,14 +140,16 @@ public final class OpenAIListener: @unchecked Sendable {
     }
 
     private let config: Config
+    private let authenticator: Authenticator?
     private let queue = DispatchQueue(label: "com.senkani.openai-listener", qos: .userInitiated)
     private let lock = NSLock()
     private var listener: NWListener?
     private var boundPort: Int = 0
     private var running = false
 
-    public init(config: Config) {
+    public init(config: Config, authenticator: Authenticator? = nil) {
         self.config = config
+        self.authenticator = authenticator
     }
 
     /// Bound port after `start()` succeeds. Zero before start / after stop.
@@ -231,10 +247,10 @@ public final class OpenAIListener: @unchecked Sendable {
     // MARK: - Connection handling
 
     private func handle(_ conn: NWConnection) {
-        conn.stateUpdateHandler = { state in
+        conn.stateUpdateHandler = { [weak self] state in
             switch state {
             case .ready:
-                OpenAIListener.receiveRequest(conn)
+                self?.receiveRequest(conn)
             case .failed, .cancelled:
                 conn.cancel()
             default:
@@ -244,17 +260,23 @@ public final class OpenAIListener: @unchecked Sendable {
         conn.start(queue: queue)
     }
 
-    private static func receiveRequest(_ conn: NWConnection) {
+    private func receiveRequest(_ conn: NWConnection) {
         // The request line + headers arrive in the first segment for the
-        // small GETs this scaffold serves; the body is irrelevant to the
-        // 501 stub, so a single bounded receive is sufficient.
+        // small requests this endpoint serves; the body is irrelevant to
+        // both the auth gate (which reads only the Authorization header)
+        // and the 501 stub, so a single bounded receive is sufficient.
+        let authenticator = self.authenticator
         conn.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, _, error in
             if error != nil {
                 conn.cancel()
                 return
             }
-            let requestLine = OpenAIListener.firstLine(data ?? Data())
-            let response = OpenAIListener.route(requestLine: requestLine)
+            let bytes = data ?? Data()
+            let response = OpenAIListener.respond(
+                requestLine: OpenAIListener.firstLine(bytes),
+                headers: OpenAIListener.parseHeaders(bytes),
+                authenticator: authenticator
+            )
             conn.send(content: response, completion: .contentProcessed { _ in
                 conn.cancel()
             })
@@ -271,6 +293,59 @@ public final class OpenAIListener: @unchecked Sendable {
         let line = data[data.startIndex..<idx]
         return String(decoding: line, as: UTF8.self)
             .trimmingCharacters(in: CharacterSet(charactersIn: "\r"))
+    }
+
+    /// Parse request headers into a lower-cased-name → value map. Stops
+    /// at the first blank line (the head/body boundary). Header names are
+    /// case-insensitive per RFC 7230, so they are normalized to lower
+    /// case for lookup (`headers["authorization"]`).
+    static func parseHeaders(_ data: Data) -> [String: String] {
+        let text = String(decoding: data, as: UTF8.self)
+        var headers: [String: String] = [:]
+        var isFirst = true
+        for rawLine in text.components(separatedBy: "\n") {
+            let line = rawLine.hasSuffix("\r") ? String(rawLine.dropLast()) : rawLine
+            if isFirst { isFirst = false; continue }   // skip the request line
+            if line.isEmpty { break }                  // end of headers
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let name = line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
+            let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            if !name.isEmpty { headers[name] = value }
+        }
+        return headers
+    }
+
+    /// Split a request line into `(method, path)`. Pure helper.
+    static func methodAndPath(_ requestLine: String) -> (method: String, path: String) {
+        let parts = requestLine.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+        let method = parts.count >= 1 ? String(parts[0]) : "GET"
+        let path = parts.count >= 2 ? String(parts[1]) : "/"
+        return (method, path)
+    }
+
+    /// V.13a-2 — full request resolution: apply the auth gate (when an
+    /// authenticator is configured) on the `/v1/*` prefix BEFORE the
+    /// surface routing, then fall through to `route` for the 501 stub /
+    /// 404. When the decision is non-`ok` the gate's error response
+    /// (401 / 403 / 429 + Retry-After) is returned and `route` is never
+    /// reached — auth is enforced ahead of the surface. Pure + testable.
+    static func respond(
+        requestLine: String,
+        headers: [String: String],
+        authenticator: Authenticator?
+    ) -> Data {
+        if let authenticator {
+            let (method, path) = methodAndPath(requestLine)
+            // Only the `/v1/*` surface is auth-gated; other paths (e.g. a
+            // future health probe) fall straight through.
+            if path == "/v1" || path.hasPrefix("/v1/") {
+                let decision = authenticator.decide(method, path, headers)
+                if let errorResponse = OpenAIAuthGate.errorResponse(for: decision) {
+                    return errorResponse
+                }
+            }
+        }
+        return route(requestLine: requestLine)
     }
 
     /// Route a request line to a canned HTTP/1.1 response. In v13a-1
@@ -293,16 +368,11 @@ public final class OpenAIListener: @unchecked Sendable {
     }
 
     /// Build a well-formed HTTP/1.1 response with `Content-Length` and
-    /// `Connection: close`.
+    /// `Connection: close`. Delegates to the shared, Network-agnostic
+    /// `OpenAIHTTPResponse` builder so the auth path and the surface path
+    /// emit byte-identical framing.
     static func httpResponse(code: Int, message: String, body: String) -> Data {
-        let bodyData = Data(body.utf8)
-        var head = "HTTP/1.1 \(code) \(message)\r\n"
-        head += "Content-Type: application/json\r\n"
-        head += "Content-Length: \(bodyData.count)\r\n"
-        head += "Connection: close\r\n\r\n"
-        var out = Data(head.utf8)
-        out.append(bodyData)
-        return out
+        OpenAIHTTPResponse.render(code: code, message: message, body: body)
     }
 
     /// One-line startup summary: resolved bind + port + key-count.

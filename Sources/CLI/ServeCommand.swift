@@ -51,7 +51,14 @@ struct Serve: AsyncParsableCommand {
             acceptNetworkBind: acceptNetworkBind ? true : nil
         )
 
-        let keyCount = (try? await CredentialVault.shared.list().count) ?? 0
+        // V.13a-2 — load the provisioned key snapshot from the on-disk
+        // OpenAI-endpoint vault. The snapshot is read once at start; a key
+        // provisioned with `senkani vault add openai-key` while the server
+        // is already running is picked up on the next start (live reload is
+        // out of scope for v13a-2).
+        let vault = OpenAIKeyProvisioner.vault()
+        let records = (try? await OpenAIKeyProvisioner.loadAll(vault: vault)) ?? []
+        let keyCount = records.count
 
         let outcome = OpenAIListenerGuard.evaluate(
             bind: effective.bind,
@@ -68,7 +75,23 @@ struct Serve: AsyncParsableCommand {
             throw ExitCode(2)
         }
 
-        let listener = OpenAIListener(config: .init(bind: effective.bind, port: effective.port))
+        // Bearer-auth gate over the `/v1/*` prefix. One rate limiter shared
+        // across all connections; the record snapshot is captured by value.
+        let rateLimiter = OpenAIRateLimiter()
+        let authenticator = OpenAIListener.Authenticator { _, path, headers in
+            OpenAIAuthGate.decide(
+                authorizationHeader: headers["authorization"],
+                requestedSurface: OpenAIAuthGate.surface(forPath: path),
+                now: Date(),
+                records: records,
+                rateLimiter: rateLimiter
+            )
+        }
+
+        let listener = OpenAIListener(
+            config: .init(bind: effective.bind, port: effective.port),
+            authenticator: authenticator
+        )
         try listener.start()
         print(OpenAIListener.startupLog(bind: effective.bind, port: listener.port, keyCount: keyCount))
 

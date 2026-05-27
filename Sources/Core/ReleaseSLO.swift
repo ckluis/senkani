@@ -12,33 +12,36 @@ import Foundation
 /// and runs a regression check against a median-of-5 baseline.
 
 public enum ReleaseSLOName: String, CaseIterable, Sendable {
-    case coldStart      = "cold.start"
-    case idleMemory     = "idle.memory"
-    case installSize    = "install.size"
-    case classifierP95  = "classifier.p95"
+    case coldStart       = "cold.start"
+    case idleMemory      = "idle.memory"
+    case installSize     = "install.size"
+    case classifierP95   = "classifier.p95"
+    case openaiColdStart = "openai.cold.start"
 
     public var thresholdLabel: String {
         switch self {
-        case .coldStart:      return "< 250 ms p95"
-        case .idleMemory:     return "< 75 MB"
-        case .installSize:    return "< 50 MB"
-        case .classifierP95:  return "< 2 ms p95"
+        case .coldStart:       return "< 250 ms p95"
+        case .idleMemory:      return "< 75 MB"
+        case .installSize:     return "< 50 MB"
+        case .classifierP95:   return "< 2 ms p95"
+        case .openaiColdStart: return "< 1500 ms p95"
         }
     }
 
     public var threshold: Double {
         switch self {
-        case .coldStart:      return 250.0
-        case .idleMemory:     return 75.0
-        case .installSize:    return 50.0
-        case .classifierP95:  return 2.0
+        case .coldStart:       return 250.0
+        case .idleMemory:      return 75.0
+        case .installSize:     return 50.0
+        case .classifierP95:   return 2.0
+        case .openaiColdStart: return 1500.0
         }
     }
 
     public var unit: String {
         switch self {
-        case .coldStart, .classifierP95:  return "ms"
-        case .idleMemory, .installSize:   return "MB"
+        case .coldStart, .classifierP95, .openaiColdStart:  return "ms"
+        case .idleMemory, .installSize:                     return "MB"
         }
     }
 }
@@ -54,10 +57,15 @@ public struct ReleaseSLORow: Codable, Sendable, Equatable {
     public let idleMemoryMB: Double?
     public let installSizeMB: Double?
     public let classifierP95Ms: Double?
+    /// `senkani serve --openai` spawn → listener-ready p95 (V.13e-3).
+    /// `nil` on rows written before V.13e-3, or when the endpoint
+    /// never reached "listening on" at measure time.
+    public let openaiColdStartMsP95: Double?
 
     public init(ts: Double, gitSha: String?, version: String?,
                 coldStartMsP95: Double?, idleMemoryMB: Double?,
-                installSizeMB: Double?, classifierP95Ms: Double?) {
+                installSizeMB: Double?, classifierP95Ms: Double?,
+                openaiColdStartMsP95: Double? = nil) {
         self.ts = ts
         self.gitSha = gitSha
         self.version = version
@@ -65,24 +73,27 @@ public struct ReleaseSLORow: Codable, Sendable, Equatable {
         self.idleMemoryMB = idleMemoryMB
         self.installSizeMB = installSizeMB
         self.classifierP95Ms = classifierP95Ms
+        self.openaiColdStartMsP95 = openaiColdStartMsP95
     }
 
     enum CodingKeys: String, CodingKey {
         case ts
-        case gitSha           = "git_sha"
+        case gitSha               = "git_sha"
         case version
-        case coldStartMsP95   = "cold_start_ms_p95"
-        case idleMemoryMB     = "idle_memory_mb"
-        case installSizeMB    = "install_size_mb"
-        case classifierP95Ms  = "classifier_p95_ms"
+        case coldStartMsP95       = "cold_start_ms_p95"
+        case idleMemoryMB         = "idle_memory_mb"
+        case installSizeMB        = "install_size_mb"
+        case classifierP95Ms      = "classifier_p95_ms"
+        case openaiColdStartMsP95 = "openai_cold_start_ms_p95"
     }
 
     public func value(for slo: ReleaseSLOName) -> Double? {
         switch slo {
-        case .coldStart:      return coldStartMsP95
-        case .idleMemory:     return idleMemoryMB
-        case .installSize:    return installSizeMB
-        case .classifierP95:  return classifierP95Ms
+        case .coldStart:       return coldStartMsP95
+        case .idleMemory:      return idleMemoryMB
+        case .installSize:     return installSizeMB
+        case .classifierP95:   return classifierP95Ms
+        case .openaiColdStart: return openaiColdStartMsP95
         }
     }
 }
@@ -229,9 +240,10 @@ public final class ReleaseSLOHistory: @unchecked Sendable {
 
     private func missingReason(for slo: ReleaseSLOName) -> String {
         switch slo {
-        case .classifierP95:  return "pending U.1 TierScorer"
-        case .idleMemory:     return "daemon not running at measure time"
-        default:              return "not captured this run"
+        case .classifierP95:   return "pending U.1 TierScorer"
+        case .idleMemory:      return "daemon not running at measure time"
+        case .openaiColdStart: return "endpoint not reached at measure time"
+        default:               return "not captured this run"
         }
     }
 

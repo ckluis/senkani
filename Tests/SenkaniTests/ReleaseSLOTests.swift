@@ -36,6 +36,57 @@ struct ReleaseSLORowTests {
         #expect(row.value(for: .coldStart) == 142.0)
     }
 
+    @Test("openai.cold.start (V.13e-3): field decodes, backfills nil pre-V.13e-3, and evaluates against threshold")
+    func openaiColdStartRowAppendedAndEvaluated() throws {
+        // 1. A row carrying the V.13e-3 field decodes it + value(for:).
+        let withField = """
+        {"ts": 1714161600.0, "git_sha": "abc1234", "version": "0.4.0",
+         "cold_start_ms_p95": 142.0, "idle_memory_mb": null,
+         "install_size_mb": 21.3, "classifier_p95_ms": null,
+         "openai_cold_start_ms_p95": 412.0}
+        """
+        let row = try JSONDecoder().decode(ReleaseSLORow.self,
+                                           from: Data(withField.utf8))
+        #expect(row.openaiColdStartMsP95 == 412.0)
+        #expect(row.value(for: .openaiColdStart) == 412.0)
+
+        // 2. A pre-V.13e-3 row (no key) backfills to nil — the
+        //    measure-slos.sh schema bump is backward compatible.
+        let withoutField = """
+        {"ts": 1.0, "git_sha": "a", "version": "0.2.0",
+         "cold_start_ms_p95": 100.0, "idle_memory_mb": null,
+         "install_size_mb": 20.0, "classifier_p95_ms": null}
+        """
+        let old = try JSONDecoder().decode(ReleaseSLORow.self,
+                                           from: Data(withoutField.utf8))
+        #expect(old.openaiColdStartMsP95 == nil)
+        #expect(old.value(for: .openaiColdStart) == nil)
+
+        // 3. A measured row under the 1500ms threshold is ok. (History
+        //    is one JSON object per line, so use a single-line row.)
+        let okPath = makeTempHistoryPath()
+        defer { try? FileManager.default.removeItem(atPath: okPath) }
+        writeRows([
+            #"{"ts":1714161600.0,"git_sha":"abc1234","version":"0.4.0","cold_start_ms_p95":142.0,"idle_memory_mb":null,"install_size_mb":21.3,"classifier_p95_ms":null,"openai_cold_start_ms_p95":412.0}"#
+        ], to: okPath)
+        let okHistory = ReleaseSLOHistory(customPath: okPath)
+        let okEval = okHistory.evaluateAll().first { $0.slo == .openaiColdStart }!
+        #expect(okEval.verdict == .ok)
+        #expect(okEval.latest == 412.0)
+        #expect(okHistory.shouldFailGate() == false)
+
+        // 4. A row over the 1500ms threshold fails as overBudget.
+        let badPath = makeTempHistoryPath()
+        defer { try? FileManager.default.removeItem(atPath: badPath) }
+        writeRows([
+            #"{"ts":2.0,"git_sha":"b","version":"0.4.0","cold_start_ms_p95":142.0,"idle_memory_mb":null,"install_size_mb":21.3,"classifier_p95_ms":null,"openai_cold_start_ms_p95":1600.0}"#
+        ], to: badPath)
+        let badHistory = ReleaseSLOHistory(customPath: badPath)
+        let badEval = badHistory.evaluateAll().first { $0.slo == .openaiColdStart }!
+        #expect(badEval.verdict == .overBudget)
+        #expect(badHistory.shouldFailGate() == true)
+    }
+
     @Test("Empty history returns noHistory for every SLO")
     func emptyHistoryNoHistoryVerdict() {
         let path = makeTempHistoryPath()

@@ -42,20 +42,86 @@ public enum OpenAIChatStream {
         public struct Delta: Encodable, Sendable, Equatable {
             public let role: String?
             public let content: String?
-            public init(role: String? = nil, content: String? = nil) {
+            /// V.13d-1 — `tool_calls` delta fragments. Non-nil on a tool-use
+            /// stream's call chunks; nil on the role chunk, content chunks,
+            /// and the terminal chunk.
+            public let toolCalls: [ToolCallFragment]?
+            public init(
+                role: String? = nil,
+                content: String? = nil,
+                toolCalls: [ToolCallFragment]? = nil
+            ) {
                 self.role = role
                 self.content = content
+                self.toolCalls = toolCalls
             }
 
-            enum CodingKeys: String, CodingKey { case role, content }
+            enum CodingKeys: String, CodingKey {
+                case role, content
+                case toolCalls = "tool_calls"
+            }
 
             // Emit only the keys that are set — the final chunk's delta is
-            // an empty object `{}`, the role chunk carries `role`, and a
-            // content chunk carries `content`.
+            // an empty object `{}`, the role chunk carries `role`, a content
+            // chunk carries `content`, and a tool-call chunk carries
+            // `tool_calls`.
             public func encode(to encoder: Encoder) throws {
                 var c = encoder.container(keyedBy: CodingKeys.self)
                 try c.encodeIfPresent(role, forKey: .role)
                 try c.encodeIfPresent(content, forKey: .content)
+                try c.encodeIfPresent(toolCalls, forKey: .toolCalls)
+            }
+        }
+
+        /// V.13d-1 — one streamed `tool_calls` fragment in the OpenAI shape.
+        /// `index` is ALWAYS present (the client keys fragments by array
+        /// index to reassemble the call); `id` / `type` / `function.name`
+        /// appear only on the FIRST fragment for an index, and
+        /// `function.arguments` carries one string slice per fragment.
+        /// Sparse-encoded so a continuation fragment is just
+        /// `{"index":0,"function":{"arguments":"…"}}`.
+        public struct ToolCallFragment: Encodable, Sendable, Equatable {
+            public struct FunctionFragment: Encodable, Sendable, Equatable {
+                public let name: String?
+                public let arguments: String?
+                public init(name: String? = nil, arguments: String? = nil) {
+                    self.name = name
+                    self.arguments = arguments
+                }
+
+                enum CodingKeys: String, CodingKey { case name, arguments }
+
+                public func encode(to encoder: Encoder) throws {
+                    var c = encoder.container(keyedBy: CodingKeys.self)
+                    try c.encodeIfPresent(name, forKey: .name)
+                    try c.encodeIfPresent(arguments, forKey: .arguments)
+                }
+            }
+
+            public let index: Int
+            public let id: String?
+            public let type: String?
+            public let function: FunctionFragment?
+            public init(
+                index: Int,
+                id: String? = nil,
+                type: String? = nil,
+                function: FunctionFragment? = nil
+            ) {
+                self.index = index
+                self.id = id
+                self.type = type
+                self.function = function
+            }
+
+            enum CodingKeys: String, CodingKey { case index, id, type, function }
+
+            public func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                try c.encode(index, forKey: .index)   // ALWAYS present
+                try c.encodeIfPresent(id, forKey: .id)
+                try c.encodeIfPresent(type, forKey: .type)
+                try c.encodeIfPresent(function, forKey: .function)
             }
         }
 
@@ -188,6 +254,68 @@ public enum OpenAIChatStream {
         chunks.append(Chunk(
             id: id, created: created, model: model,
             choices: [.init(index: 0, delta: .init(), finishReason: "stop")]
+        ))
+        return chunks.map { sseEvent(encodeChunk($0)) }
+    }
+
+    /// V.13d-1 — Build the ordered SSE event bytes for a TOOL-CALL
+    /// completion: a leading role chunk (`delta: {role: "assistant"}`),
+    /// then for each tool call a "header" fragment carrying
+    /// `{index, id, type, function: {name, arguments: ""}}` followed by one
+    /// `function.arguments` string fragment per `splitForStreaming` piece,
+    /// and a terminal chunk (`delta: {}`, `finish_reason: "tool_calls"`).
+    /// The `[DONE]` sentinel is sent separately by `run`.
+    ///
+    /// Reuses the same `Chunk` machinery + `splitForStreaming` splitter as
+    /// the content path — no parallel streaming stack. The arguments-
+    /// fragment invariant mirrors the content invariant:
+    /// `header("") + fragments.joined() == call.function.arguments`.
+    /// Multiple tool calls are emitted sequentially by array index (a
+    /// single tool call per turn is the v13d-1 scope; sequential fan-out is
+    /// the natural extension, NOT a parallel-streaming fork).
+    public static func toolCallEvents(
+        id: String, created: Int, model: String, toolCalls: [OpenAIToolCall]
+    ) -> [Data] {
+        var chunks: [Chunk] = []
+        chunks.append(Chunk(
+            id: id, created: created, model: model,
+            choices: [.init(index: 0, delta: .init(role: "assistant"), finishReason: nil)]
+        ))
+        for (i, call) in toolCalls.enumerated() {
+            // Header fragment: id + type + name + empty arguments string.
+            chunks.append(Chunk(
+                id: id, created: created, model: model,
+                choices: [.init(
+                    index: 0,
+                    delta: .init(toolCalls: [
+                        .init(
+                            index: i, id: call.id, type: call.type,
+                            function: .init(name: call.function.name, arguments: "")
+                        )
+                    ]),
+                    finishReason: nil
+                )]
+            ))
+            // Arguments string fragments — concatenate back to the full
+            // arguments JSON string. Empty arguments yields zero fragments
+            // (the header's `arguments: ""` already represents the empty
+            // string).
+            for piece in splitForStreaming(call.function.arguments) {
+                chunks.append(Chunk(
+                    id: id, created: created, model: model,
+                    choices: [.init(
+                        index: 0,
+                        delta: .init(toolCalls: [
+                            .init(index: i, function: .init(arguments: piece))
+                        ]),
+                        finishReason: nil
+                    )]
+                ))
+            }
+        }
+        chunks.append(Chunk(
+            id: id, created: created, model: model,
+            choices: [.init(index: 0, delta: .init(), finishReason: "tool_calls")]
         ))
         return chunks.map { sseEvent(encodeChunk($0)) }
     }

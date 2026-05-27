@@ -42,6 +42,17 @@ struct OpenAIChatStreamTests {
         return delta["content"] as? String
     }
 
+    /// Decode an event payload's `choices[0].delta.tool_calls[]` fragment
+    /// array (V.13d-1), if present. Returns nil for non-tool-call chunks.
+    private static func deltaToolCalls(_ data: Data) -> [[String: Any]]? {
+        let json = payload(data)
+        guard let obj = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
+              let choices = obj["choices"] as? [[String: Any]],
+              let delta = choices.first?["delta"] as? [String: Any],
+              let tcs = delta["tool_calls"] as? [[String: Any]] else { return nil }
+        return tcs
+    }
+
     // MARK: - 1. chunk shape
 
     @Test("events are well-formed chat.completion.chunk objects, SSE-framed")
@@ -273,6 +284,182 @@ struct OpenAIChatStreamTests {
         #expect(chain.verify() == .ok(count: 1))
     }
 
+    // MARK: - V.13d-1 streaming tool_calls deltas
+
+    private static let weatherArgs = #"{"location": "San Francisco", "unit": "celsius"}"#
+
+    // 1. tool-call-delta-shape
+    @Test("a tool-call completion streams OpenAI-shaped tool_calls deltas (id+name on first, arguments after)")
+    func toolCallDeltaShape() throws {
+        let call = OpenAIToolCall(
+            id: "call_abc", function: .init(name: "get_weather", arguments: Self.weatherArgs)
+        )
+        let events = OpenAIChatStream.toolCallEvents(
+            id: "chatcmpl-tc", created: Self.fixedNow, model: Self.model, toolCalls: [call]
+        )
+        // role + header + one fragment per splitter piece + terminal.
+        let fragmentCount = OpenAIChatStream.splitForStreaming(Self.weatherArgs).count
+        #expect(events.count == 3 + fragmentCount)
+
+        // Every event is `data: {chat.completion.chunk}\n\n`.
+        for ev in events {
+            let s = String(decoding: ev, as: UTF8.self)
+            #expect(s.hasPrefix("data: "))
+            #expect(s.hasSuffix("\n\n"))
+            #expect(Self.payload(ev).contains("\"object\":\"chat.completion.chunk\""))
+        }
+
+        // events[0]: the leading role chunk (no tool_calls yet).
+        #expect(Self.payload(events[0]).contains("\"role\":\"assistant\""))
+        #expect(Self.deltaToolCalls(events[0]) == nil)
+
+        // events[1]: the header fragment — index + id + type + function.name
+        // + empty arguments string.
+        let header = try #require(Self.deltaToolCalls(events[1])?.first)
+        #expect(header["index"] as? Int == 0)
+        #expect(header["id"] as? String == "call_abc")
+        #expect(header["type"] as? String == "function")
+        let headerFn = try #require(header["function"] as? [String: Any])
+        #expect(headerFn["name"] as? String == "get_weather")
+        #expect(headerFn["arguments"] as? String == "")
+
+        // events[2]: a continuation fragment — index + function.arguments,
+        // but NOT id/type/name (those land only on the first fragment).
+        let cont = try #require(Self.deltaToolCalls(events[2])?.first)
+        #expect(cont["index"] as? Int == 0)
+        #expect(cont["id"] == nil)
+        #expect(cont["type"] == nil)
+        let contFn = try #require(cont["function"] as? [String: Any])
+        #expect(contFn["name"] == nil)
+        #expect(contFn["arguments"] as? String != nil)
+    }
+
+    // 2. arguments-fragment-concatenation
+    @Test("delta.tool_calls[].function.arguments fragments concatenate to the full JSON arguments string")
+    func argumentsFragmentConcatenation() {
+        let call = OpenAIToolCall(
+            id: "call_1", function: .init(name: "get_weather", arguments: Self.weatherArgs)
+        )
+        let events = OpenAIChatStream.toolCallEvents(
+            id: "x", created: Self.fixedNow, model: Self.model, toolCalls: [call]
+        )
+        let pieces = events
+            .compactMap { Self.deltaToolCalls($0)?.first }
+            .compactMap { ($0["function"] as? [String: Any])?["arguments"] as? String }
+        let reconstructed = pieces.joined()
+        #expect(reconstructed == Self.weatherArgs)
+        // …and the reconstruction is valid JSON.
+        #expect((try? JSONSerialization.jsonObject(with: Data(reconstructed.utf8))) != nil)
+
+        // Empty-arguments edge: the header's `arguments: ""` is the only
+        // fragment; concatenation is the empty string.
+        let emptyCall = OpenAIToolCall(id: "call_2", function: .init(name: "noop", arguments: ""))
+        let emptyEvents = OpenAIChatStream.toolCallEvents(
+            id: "y", created: Self.fixedNow, model: Self.model, toolCalls: [emptyCall]
+        )
+        let emptyPieces = emptyEvents
+            .compactMap { Self.deltaToolCalls($0)?.first }
+            .compactMap { ($0["function"] as? [String: Any])?["arguments"] as? String }
+        #expect(emptyPieces.joined() == "")
+
+        // Compact `{}` arguments (the placeholder-engine shape) round-trips
+        // as a single fragment.
+        let compactCall = OpenAIToolCall(id: "call_3", function: .init(name: "ping", arguments: "{}"))
+        let compactEvents = OpenAIChatStream.toolCallEvents(
+            id: "z", created: Self.fixedNow, model: Self.model, toolCalls: [compactCall]
+        )
+        let compactPieces = compactEvents
+            .compactMap { Self.deltaToolCalls($0)?.first }
+            .compactMap { ($0["function"] as? [String: Any])?["arguments"] as? String }
+        #expect(compactPieces.joined() == "{}")
+    }
+
+    // 3. terminal-finish-reason
+    @Test("the terminal tool-call chunk carries finish_reason tool_calls; non-terminal chunks carry null")
+    func terminalFinishReasonToolCalls() {
+        let call = OpenAIToolCall(id: "call_1", function: .init(name: "f", arguments: "{}"))
+        let events = OpenAIChatStream.toolCallEvents(
+            id: "x", created: Self.fixedNow, model: Self.model, toolCalls: [call]
+        )
+        // Final chunk: empty delta + finish_reason "tool_calls".
+        let last = Self.payload(events[events.count - 1])
+        #expect(last.contains("\"delta\":{}"))
+        #expect(last.contains("\"finish_reason\":\"tool_calls\""))
+
+        // Every non-terminal chunk carries an explicit `null` finish_reason.
+        for ev in events.dropLast() {
+            #expect(Self.payload(ev).contains("\"finish_reason\":null"))
+        }
+
+        // The `[DONE]` sentinel is unchanged and follows (sent by `run`).
+        #expect(String(decoding: OpenAIChatStream.doneSentinel(), as: UTF8.self) == "data: [DONE]\n\n")
+    }
+
+    // 4. no-tools-scope-403-stream
+    @Test("a streaming tool-use request from a key WITHOUT tools scope → 403 insufficient_scope, no SSE bytes")
+    func noToolsScope403Stream() throws {
+        let tool = ChatCompletionRequest.Tool(function: .init(name: "get_weather"))
+        let request = ChatCompletionRequest(
+            model: "gpt-4o",
+            messages: [.init(role: "user", content: "weather?")],
+            stream: true, tools: [tool]
+        )
+        // The streamHandler funnels a `stream: true` tool-use request through
+        // the SAME `toolsPreflightError` as the non-streaming path; an
+        // out-of-scope key yields a framed 403 that the listener returns
+        // BEFORE opening a stream (the plan is nil → no SSE head is written).
+        let preflight = try #require(
+            OpenAIChatHandler.toolsPreflightError(request: request, scope: ["chat", "embeddings"])
+        )
+        let text = String(decoding: preflight, as: UTF8.self)
+        #expect(text.hasPrefix("HTTP/1.1 403 Forbidden"))
+        #expect(text.contains("\"code\":\"insufficient_scope\""))
+        #expect(!text.contains("text/event-stream"))   // never a half-open SSE
+
+        // An in-scope key passes pre-flight → the stream emits tool_calls deltas.
+        #expect(OpenAIChatHandler.toolsPreflightError(request: request, scope: ["chat", "tools"]) == nil)
+    }
+
+    // 5. single-audit-entry
+    @Test("a streamed tool-use request lands exactly one audit-chain entry with status ok")
+    func singleAuditEntryToolCallStream() {
+        let chain = OpenAIAuditChain()
+        let plan = Self.makeToolCallPlan(chain: chain)
+        let rec = Recorder()
+        let status = OpenAIChatStream.run(plan: plan, sink: rec.sink())
+
+        #expect(status == .completed)
+        #expect(chain.count == 1)
+        #expect(chain.entries[0].fields.status == "ok")
+        #expect(chain.verify() == .ok(count: 1))
+    }
+
+    // 6. no-parallel-streaming-stack
+    @Test("tool-call streaming reuses the v13b Chunk + run + splitter machinery (no parallel stack)")
+    func noParallelStreamingStack() {
+        let call = OpenAIToolCall(id: "call_1", function: .init(name: "f", arguments: "{}"))
+        let events = OpenAIChatStream.toolCallEvents(
+            id: "x", created: Self.fixedNow, model: Self.model, toolCalls: [call]
+        )
+        // Same `chat.completion.chunk` object type as the content path — the
+        // tool-call deltas are NOT a forked event shape.
+        for ev in events {
+            #expect(Self.payload(ev).contains("\"object\":\"chat.completion.chunk\""))
+        }
+        // The identical `run` drive + `Sink` contract handles a tool-call
+        // event list: completion returns `.completed` and `close` fires once.
+        let rec = Recorder()
+        let status = OpenAIChatStream.run(
+            head: OpenAIChatStream.head(), events: events,
+            done: OpenAIChatStream.doneSentinel(), sink: rec.sink()
+        )
+        #expect(status == .completed)
+        #expect(rec.closeCount == 1)
+        // The same `splitForStreaming` splitter underlies both content and
+        // arguments fragmentation.
+        #expect(OpenAIChatStream.splitForStreaming("a b").joined() == "a b")
+    }
+
     // MARK: - live listener SSE round-trip (Network)
 
     #if canImport(Network)
@@ -385,6 +572,54 @@ struct OpenAIChatStreamTests {
         return OpenAIChatStream.Plan(
             head: OpenAIChatStream.head(),
             events: OpenAIChatStream.events(id: resp.id, created: resp.created, model: resp.model, content: content),
+            done: OpenAIChatStream.doneSentinel(),
+            onFinish: { status in
+                let fields = OpenAIAuditChain.AuditFields(
+                    ts: base.ts, keyLabel: base.keyLabel, surface: base.surface,
+                    modelLogged: base.modelLogged, presetUsed: base.presetUsed,
+                    resolvedTier: base.resolvedTier,
+                    promptTokenCount: base.promptTokenCount,
+                    completionTokenCount: base.completionTokenCount,
+                    status: status.rawValue
+                )
+                chain.append(fields, bodies: nil)
+            }
+        )
+    }
+
+    /// V.13d-1 — build a tool-call stream plan whose events are
+    /// `toolCallEvents` and whose `onFinish` appends one entry to `chain`.
+    /// Mirrors the live `ServeCommand` wiring: `handle()` resolves the
+    /// tool-call completion, the plan streams its `tool_calls` deltas, and
+    /// the single audit entry is recorded in `onFinish`.
+    private static func makeToolCallPlan(chain: OpenAIAuditChain) -> OpenAIChatStream.Plan {
+        let tool = ChatCompletionRequest.Tool(function: .init(name: "get_weather"))
+        let request = ChatCompletionRequest(
+            model: "gpt-4o",
+            messages: [.init(role: "user", content: "weather?")],
+            stream: true, tools: [tool]
+        )
+        let engine = OpenAIChatHandler.Engine { _, _, tools in
+            let call = OpenAIToolCall(
+                id: "call_x",
+                function: .init(name: tools.first?.function.name ?? "f", arguments: #"{"location":"SF"}"#)
+            )
+            return OpenAIChatHandler.Completion(
+                content: "", toolCalls: [call], promptTokens: 6, completionTokens: 4
+            )
+        }
+        let result = OpenAIChatHandler.handle(
+            request: request, recordPreset: "quick", keyLabel: "ci",
+            engine: engine, now: dateNow, id: "chatcmpl-tcplan"
+        )
+        let resp = result.response
+        let base = result.auditFields
+        let toolCalls = resp.choices.first?.message.toolCalls ?? []
+        return OpenAIChatStream.Plan(
+            head: OpenAIChatStream.head(),
+            events: OpenAIChatStream.toolCallEvents(
+                id: resp.id, created: resp.created, model: resp.model, toolCalls: toolCalls
+            ),
             done: OpenAIChatStream.doneSentinel(),
             onFinish: { status in
                 let fields = OpenAIAuditChain.AuditFields(

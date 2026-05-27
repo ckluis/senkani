@@ -180,9 +180,10 @@ struct Serve: AsyncParsableCommand {
             let record = token.flatMap { OpenAIAuthGate.matchRecord(presentedKey: $0, records: records) }
             // V.13d — a malformed or out-of-scope tool-use stream falls
             // through to the non-streaming handler, which renders the exact
-            // 400/403. (Streaming tool_calls deltas are out of scope — a
-            // valid tool-use stream rides v13b's existing chunk path; the
-            // emitted tool call carries no streamed content.)
+            // 400/403 as a complete framed response BEFORE any SSE byte (the
+            // listener never opens the stream for a nil plan). V.13d-1 makes
+            // a VALID, in-scope tool-use stream emit `tool_calls` deltas
+            // (below) rather than dropping the call into empty content.
             if OpenAIChatHandler.toolsPreflightError(request: request, scope: record?.scope ?? []) != nil {
                 return nil
             }
@@ -195,14 +196,24 @@ struct Serve: AsyncParsableCommand {
                 id: OpenAIChatHandler.generateID()
             )
             let response = result.response
-            // V.13d — message `content` is now optional (null on a tool-call
-            // turn). Flatten the choice + content optionals; a tool-call
-            // stream rides the existing chunk path with empty content.
-            let content = response.choices.first.flatMap { $0.message.content } ?? ""
-            let events = OpenAIChatStream.events(
-                id: response.id, created: response.created,
-                model: response.model, content: content
-            )
+            // V.13d-1 — a tool-call completion streams `tool_calls` deltas
+            // (header fragment + arguments fragments + terminal
+            // `finish_reason: "tool_calls"`); a normal completion streams
+            // content chunks. Both ride the same `Chunk`/`run` machinery.
+            let message = response.choices.first?.message
+            let events: [Data]
+            if let toolCalls = message?.toolCalls, !toolCalls.isEmpty {
+                events = OpenAIChatStream.toolCallEvents(
+                    id: response.id, created: response.created,
+                    model: response.model, toolCalls: toolCalls
+                )
+            } else {
+                let content = message?.content ?? ""
+                events = OpenAIChatStream.events(
+                    id: response.id, created: response.created,
+                    model: response.model, content: content
+                )
+            }
             let base = result.auditFields
             let bodies = storeBodies ? result.auditBodies : nil
             let telemetry = result.telemetry

@@ -54,14 +54,16 @@ struct Serve: AsyncParsableCommand {
             acceptNetworkBind: acceptNetworkBind ? true : nil
         )
 
-        // V.13a-2 — load the provisioned key snapshot from the on-disk
-        // OpenAI-endpoint vault. The snapshot is read once at start; a key
-        // provisioned with `senkani vault add openai-key` while the server
-        // is already running is picked up on the next start (live reload is
-        // out of scope for v13a-2).
-        let vault = OpenAIKeyProvisioner.vault()
-        let records = (try? await OpenAIKeyProvisioner.loadAll(vault: vault)) ?? []
-        let keyCount = records.count
+        // V.13a-2 hardening (process-gap-v13a-2-…-2026-05-27, Finding #1) —
+        // a LIVE, mtime-gated snapshot of the on-disk OpenAI-endpoint key
+        // set. The authenticator + handlers below call `keys.current()` per
+        // request, so a key provisioned (or revoked) with
+        // `senkani vault add/remove openai-key` while the server is already
+        // running is picked up WITHOUT a restart — the file is re-read only
+        // when its (mtime, size) advances. The start-time count feeds the
+        // non-loopback-bind guard.
+        let keys = OpenAIKeyRecordSnapshot()
+        let keyCount = keys.current().count
 
         let outcome = OpenAIListenerGuard.evaluate(
             bind: effective.bind,
@@ -79,14 +81,16 @@ struct Serve: AsyncParsableCommand {
         }
 
         // Bearer-auth gate over the `/v1/*` prefix. One rate limiter shared
-        // across all connections; the record snapshot is captured by value.
+        // across all connections; the record set is read LIVE per request
+        // via the mtime-gated snapshot so mid-serve provisioning/revocation
+        // takes effect without a restart.
         let rateLimiter = OpenAIRateLimiter()
         let authenticator = OpenAIListener.Authenticator { _, path, headers in
             OpenAIAuthGate.decide(
                 authorizationHeader: headers["authorization"],
                 requestedSurface: OpenAIAuthGate.surface(forPath: path),
                 now: Date(),
-                records: records,
+                records: keys.current(),
                 rateLimiter: rateLimiter
             )
         }
@@ -112,7 +116,7 @@ struct Serve: AsyncParsableCommand {
             // stream flag is absent or false (or a tool-use stream bailed
             // here for its precise error rendering).
             let token = OpenAIAuthGate.bearerToken(fromHeader: headers["authorization"])
-            let record = token.flatMap { OpenAIAuthGate.matchRecord(presentedKey: $0, records: records) }
+            let record = token.flatMap { OpenAIAuthGate.matchRecord(presentedKey: $0, records: keys.current()) }
             // V.13d — tool-use pre-flight: malformed tools → 400, a key
             // without the `tools` scope → 403 (insufficient_scope). The
             // `tools` scope is body-derived, so it is enforced here rather
@@ -153,7 +157,7 @@ struct Serve: AsyncParsableCommand {
                 )
             }
             let token = OpenAIAuthGate.bearerToken(fromHeader: headers["authorization"])
-            let record = token.flatMap { OpenAIAuthGate.matchRecord(presentedKey: $0, records: records) }
+            let record = token.flatMap { OpenAIAuthGate.matchRecord(presentedKey: $0, records: keys.current()) }
             let result = OpenAIEmbeddingsHandler.handle(
                 request: request,
                 keyLabel: record?.label,
@@ -177,7 +181,7 @@ struct Serve: AsyncParsableCommand {
                 return nil
             }
             let token = OpenAIAuthGate.bearerToken(fromHeader: headers["authorization"])
-            let record = token.flatMap { OpenAIAuthGate.matchRecord(presentedKey: $0, records: records) }
+            let record = token.flatMap { OpenAIAuthGate.matchRecord(presentedKey: $0, records: keys.current()) }
             // V.13d — a malformed or out-of-scope tool-use stream falls
             // through to the non-streaming handler, which renders the exact
             // 400/403 as a complete framed response BEFORE any SSE byte (the

@@ -19,11 +19,40 @@ import Security
 /// hold only key HASHES (verifiers, not secrets), so a 0600 JSON file is
 /// the right weight today. Values are opaque `Data`; for this scope they
 /// are `OpenAIKeyRecord` JSON — the plaintext key is never written.
+///
+/// V.13a-2 hardening (`process-gap-v13a-2-…-2026-05-27`, Finding #2): the
+/// store is **sealed to a single non-secret scope** (`allowedScope`,
+/// default `openai-endpoint`). Because it persists base64 — NOT encrypted —
+/// to a plaintext-on-disk file, backing a scope that holds actual SECRETS
+/// would silently leak them. Any read/write/delete/list for a different
+/// scope throws `ScopeViolation` so the misuse is LOUD, not silent. Secrets
+/// belong in the macOS Keychain store (T.4c), which is encrypted at rest.
 public actor JSONFileKeychainStore: KeychainStore {
     private let path: String
+    private let allowedScope: String
 
-    public init(path: String) {
+    /// Thrown when a caller addresses any scope other than the one this
+    /// store is sealed to. Equatable so tests can assert the exact pair.
+    public struct ScopeViolation: Error, Equatable, CustomStringConvertible {
+        public let requested: String
+        public let allowed: String
+        public var description: String {
+            "JSONFileKeychainStore is sealed to scope '\(allowed)' (base64-on-disk, not encrypted); refusing scope '\(requested)'. Use the macOS Keychain store (T.4c) for secrets."
+        }
+    }
+
+    public init(path: String, allowedScope: String = OpenAIKeyProvisioner.vaultScope) {
         self.path = path
+        self.allowedScope = allowedScope
+    }
+
+    /// Gate every operation on the sealed scope. A mismatch is a
+    /// programming error (a caller wiring this store for a secret scope),
+    /// so it throws rather than no-ops.
+    private func ensureScope(_ scope: String) throws {
+        guard scope == allowedScope else {
+            throw ScopeViolation(requested: scope, allowed: allowedScope)
+        }
     }
 
     /// On-disk shape: `{ scope: { key: base64(value) } }`.
@@ -73,11 +102,13 @@ public actor JSONFileKeychainStore: KeychainStore {
     }
 
     public func read(key: String, scope: String) async throws -> Data? {
+        try ensureScope(scope)
         guard let b64 = loadRoot()[scope]?[key] else { return nil }
         return Data(base64Encoded: b64)
     }
 
     public func write(key: String, scope: String, value: Data) async throws {
+        try ensureScope(scope)
         var root = loadRoot()
         var bucket = root[scope] ?? [:]
         bucket[key] = value.base64EncodedString()
@@ -86,6 +117,7 @@ public actor JSONFileKeychainStore: KeychainStore {
     }
 
     public func delete(key: String, scope: String) async throws {
+        try ensureScope(scope)
         var root = loadRoot()
         root[scope]?[key] = nil
         if root[scope]?.isEmpty == true { root[scope] = nil }
@@ -93,7 +125,8 @@ public actor JSONFileKeychainStore: KeychainStore {
     }
 
     public func list(scope: String) async throws -> [String] {
-        Array(loadRoot()[scope]?.keys ?? [:].keys).sorted()
+        try ensureScope(scope)
+        return Array(loadRoot()[scope]?.keys ?? [:].keys).sorted()
     }
 }
 
@@ -181,5 +214,86 @@ public enum OpenAIKeyProvisioner {
             records.append(record)
         }
         return records
+    }
+
+    /// Synchronous read of the `openai-endpoint` scope records straight off
+    /// disk, mirroring `JSONFileKeychainStore`'s `{ scope: { key:
+    /// base64(value) } }` shape. Used by `OpenAIKeyRecordSnapshot` so the
+    /// serve-time authenticator (a synchronous `@Sendable` closure) can
+    /// fetch the CURRENT key set per request without hopping onto the
+    /// store actor. Equivalent to `loadAll` for this scope; missing/garbled
+    /// file → `[]`.
+    public static func loadAllSync(path: String = defaultVaultPath()) -> [OpenAIKeyRecord] {
+        guard let data = FileManager.default.contents(atPath: path),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: [String: String]],
+              let bucket = obj[vaultScope]
+        else { return [] }
+        var records: [OpenAIKeyRecord] = []
+        for (_, b64) in bucket {
+            guard let valueData = Data(base64Encoded: b64),
+                  let record = try? JSONDecoder().decode(OpenAIKeyRecord.self, from: valueData)
+            else { continue }
+            records.append(record)
+        }
+        return records
+    }
+}
+
+/// V.13a-2 hardening (`process-gap-v13a-2-…-2026-05-27`, Finding #1): a
+/// live, mtime-gated snapshot of the OpenAI-endpoint key records. The
+/// serve authenticator + chat/embeddings/stream handlers hold ONE instance
+/// and call `current()` synchronously per request, so a key provisioned —
+/// or revoked — with `senkani vault add/remove openai-key` while
+/// `senkani serve --openai` is already running is picked up WITHOUT a
+/// restart.
+///
+/// Cost is bounded: one `stat` per call, and the JSON file is re-read +
+/// re-parsed only when its `(modificationDate, size)` pair advances. The
+/// size is a belt-and-suspenders second key so a same-second rewrite of a
+/// different length is not missed by mtime alone. Thread-safe (`NSLock`) —
+/// `NWListener` connection handlers can fire concurrently.
+public final class OpenAIKeyRecordSnapshot: @unchecked Sendable {
+    private let path: String
+    private let lock = NSLock()
+    private var loaded = false
+    private var cachedKey: CacheKey?
+    private var cachedRecords: [OpenAIKeyRecord] = []
+
+    private struct CacheKey: Equatable {
+        let mtime: TimeInterval
+        let size: Int
+    }
+
+    public init(path: String = OpenAIKeyProvisioner.defaultVaultPath()) {
+        self.path = path
+    }
+
+    /// The current key records, re-reading the file only when it has
+    /// changed since the last call. A missing file yields `[]` and is
+    /// cached as the nil key, so a steady absence costs one `stat` per call
+    /// and zero reads.
+    public func current() -> [OpenAIKeyRecord] {
+        lock.lock(); defer { lock.unlock() }
+        let key = Self.cacheKey(path)
+        // Optional `==` makes nil == nil true, so a steady file ABSENCE
+        // after the first call serves the cached [] (one stat, no read).
+        if loaded && cachedKey == key {
+            return cachedRecords
+        }
+        cachedRecords = OpenAIKeyProvisioner.loadAllSync(path: path)
+        cachedKey = key
+        loaded = true
+        return cachedRecords
+    }
+
+    /// `(mtime, size)` of the file, or nil when it does not exist. Two
+    /// distinct file states never share a key in practice; identical keys
+    /// across calls mean the file is unchanged → serve the cache.
+    private static func cacheKey(_ path: String) -> CacheKey? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970,
+              let size = (attrs[.size] as? NSNumber)?.intValue
+        else { return nil }
+        return CacheKey(mtime: mtime, size: size)
     }
 }

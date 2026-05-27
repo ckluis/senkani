@@ -192,14 +192,31 @@ struct GraphConstructionTests {
 //
 // Wall-clock budget assert against the real project source tree. The
 // regression this rules out (accidentally O(N²) re-parse) costs minutes,
-// not seconds. Under parallel-runner load a single peer-suite CPU spike
-// can push one measurement over a 5s ceiling even when the builder is
-// healthy — `.serialized` only serializes within-suite, not against
-// peer suites. So we take three measurements and assert the median: a
-// transient peer-CPU spike on one of three runs cannot fail the test,
-// but a real regression (every measurement blows budget) still does.
+// not seconds.
+//
+// Robustness (dependency-graph-perf-gate-flake-under-build-load-2026-05-27):
+// the gate previously asserted the MEDIAN of 3 samples. Under the IO/CPU
+// contention of a just-completed cold compile — or a peer-suite CPU spike
+// (`.serialized` only serializes within-suite, not against peer suites) —
+// every one of the 3 samples can inflate past the 5s ceiling, so the
+// median itself blows the budget and the gate flakes on a healthy builder
+// (green on rerun). The fix: take the MINIMUM of N samples. The least-
+// contended sample is the true build-time floor, which is what a perf
+// *floor* should measure. A genuine regression slows EVERY sample, so the
+// minimum still exceeds the budget — the gate stays honest (proven by
+// `gateFailsOnGenuineRegression`). An untimed warm-up build primes FS
+// caches so cold-cache cost is not charged to the first measured sample.
 @Suite("DependencyGraph — Perf gate")
 struct DependencyGraphPerfGateTests {
+
+    /// Perf-gate decision: PASS iff the least-contended (minimum) sample is
+    /// under budget. Returns `false` for an empty sample set so the gate can
+    /// never be silently disabled. Shared by the live-measurement test and
+    /// `gateFailsOnGenuineRegression` so the robustness semantics are pinned.
+    static func gatePasses(samples: [Duration], budget: Duration) -> Bool {
+        guard let fastest = samples.min() else { return false }
+        return fastest < budget
+    }
 
     @Test("Real project graph builds fast")
     func buildGraphFromRealProject() {
@@ -211,20 +228,25 @@ struct DependencyGraphPerfGateTests {
             .path
 
         let clock = ContinuousClock()
+
+        // Untimed warm-up: prime FS caches so a cold first read is not
+        // charged to a measured sample.
+        _ = IndexEngine.buildDependencyGraph(projectRoot: projectRoot)
+
+        // Five measured samples; assert the MINIMUM against the budget
+        // (see suite comment for why min, not median).
         var graph: DependencyGraph?
         var samples: [Duration] = []
-        for _ in 0..<3 {
+        for _ in 0..<5 {
             let elapsed = clock.measure {
                 graph = IndexEngine.buildDependencyGraph(projectRoot: projectRoot)
             }
             samples.append(elapsed)
         }
-        let sorted = samples.sorted()
-        let median = sorted[1]
 
         #expect(
-            median < .seconds(5),
-            "median of 3 graph builds: \(samples) → median \(median)"
+            Self.gatePasses(samples: samples, budget: .seconds(5)),
+            "min of 5 graph builds must be < 5s: \(samples)"
         )
 
         // Sanity: Core should be imported by multiple files
@@ -234,6 +256,33 @@ struct DependencyGraphPerfGateTests {
         // MCPSession.swift should import something
         let mcpDeps = graph!.dependencies(of: "Sources/MCP/Session/MCPSession.swift")
         #expect(!mcpDeps.isEmpty)
+    }
+
+    @Test("Perf gate still fails when every sample blows budget")
+    func gateFailsOnGenuineRegression() {
+        // A real O(N²) regression slows EVERY build, so even the minimum
+        // exceeds budget — the min-based gate must still fail. This guards
+        // against the robustness change silently disabling the gate.
+        let everySampleSlow: [Duration] = [.seconds(6), .seconds(7), .seconds(8)]
+        #expect(
+            !Self.gatePasses(samples: everySampleSlow, budget: .seconds(5)),
+            "every sample over budget must FAIL the gate"
+        )
+
+        // The flake this change fixes: one contended sample among healthy
+        // ones must PASS, because the minimum reflects the true floor.
+        let oneContended: [Duration] = [.seconds(8), .milliseconds(200), .milliseconds(300)]
+        #expect(
+            Self.gatePasses(samples: oneContended, budget: .seconds(5)),
+            "one contended sample among fast ones must PASS the gate"
+        )
+
+        // No samples is treated as failure — the gate can never be silently
+        // disabled by an empty measurement set.
+        #expect(
+            !Self.gatePasses(samples: [], budget: .seconds(5)),
+            "empty sample set must FAIL the gate"
+        )
     }
 }
 

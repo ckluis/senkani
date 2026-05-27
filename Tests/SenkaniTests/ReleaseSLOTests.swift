@@ -103,6 +103,84 @@ struct ReleaseSLORowTests {
 }
 
 @Suite(.serialized)
+struct ReleaseSLOInstallSizeMeasurementTests {
+
+    /// Repo root, resolved from this source file:
+    /// Tests/SenkaniTests/ReleaseSLOTests.swift → up three components.
+    private static var repoRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // SenkaniTests
+            .deletingLastPathComponent()   // Tests
+            .deletingLastPathComponent()   // repo root
+    }
+
+    /// Run `tools/measure-install-size.sh <dir>` and return its trimmed
+    /// stdout. Throws if the binary can't launch.
+    private static func runHelper(_ dir: String) throws -> String {
+        let script = repoRoot.appendingPathComponent("tools/measure-install-size.sh")
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/bash")
+        p.arguments = [script.path, dir]
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = Pipe()
+        try p.run()
+        p.waitUntilExit()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private static func writeRandom(_ bytes: Int, to path: String) {
+        let data = Data((0..<bytes).map { _ in UInt8.random(in: 0...255) })
+        FileManager.default.createFile(atPath: path, contents: data)
+    }
+
+    @Test("measure-install-size.sh resolves a symlinked release dir to a non-zero size and sums only shipped products")
+    func resolvesSymlinkAndExcludesIntermediates() throws {
+        let fm = FileManager.default
+        let root = "/tmp/senkani-install-size-\(UUID().uuidString)"
+        let target = root + "/arm64-apple-macosx/release"
+        let link = root + "/release"          // symlink → target, like SwiftPM
+        defer { try? fm.removeItem(atPath: root) }
+
+        try fm.createDirectory(atPath: target, withIntermediateDirectories: true)
+
+        // Shipped products (≈ 384 KB total) — what install.size counts.
+        Self.writeRandom(256 * 1024, to: target + "/senkani")
+        Self.writeRandom(128 * 1024, to: target + "/senkani-mcp")
+
+        // Build intermediates + a non-product binary (≈ 8 MB) — these
+        // MUST NOT be counted. This is the 1.8 GB-tree problem in
+        // miniature: random (non-compressible) so APFS can't sparse it.
+        try fm.createDirectory(atPath: target + "/Core.build",
+                               withIntermediateDirectories: true)
+        Self.writeRandom(4 * 1024 * 1024, to: target + "/Core.build/junk.o")
+        Self.writeRandom(4 * 1024 * 1024, to: target + "/SenkaniApp") // GUI bundle target — not a CLI product
+
+        // SwiftPM-shaped symlink: `release` → `arm64-apple-macosx/release`.
+        try fm.createSymbolicLink(atPath: link, withDestinationPath: "arm64-apple-macosx/release")
+
+        // The bug: `du -sk <symlink>` reports ~0. The fix must follow
+        // the link AND sum only the products.
+        let out = try Self.runHelper(link)
+        let mb = Double(out)
+        #expect(mb != nil, "helper printed non-numeric output: \(out)")
+        guard let mb else { return }
+
+        // Non-zero → the symlink was followed (the original bug yielded 0.0).
+        #expect(mb > 0.0)
+        // < 1 MB → only the ~384 KB of products counted; the 8 MB of
+        // intermediates / non-products were excluded.
+        #expect(mb < 1.0, "expected products-only (~0.4 MB), got \(mb) MB — intermediates leaked in")
+
+        // A missing dir is a `null` measurement, not an error — the
+        // script's "never abort the run" contract.
+        #expect(try Self.runHelper(root + "/nope") == "null")
+    }
+}
+
+@Suite(.serialized)
 struct ReleaseSLOEvaluationTests {
 
     @Test("Latest row within budget + no baseline yet → ok with no-baseline note")

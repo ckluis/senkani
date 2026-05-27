@@ -5,7 +5,9 @@
 #
 #   cold.start        p95 of `senkani --version` wall-time across N=20 runs
 #   idle.memory       RSS of senkani-mcp after a 10 s settle (null if down)
-#   install.size      du -sk of .build/release (or override path)
+#   install.size      sum of shipped product binaries in the resolved
+#                     release dir (symlink-followed; excludes the ~1.8 GB
+#                     of build intermediates) — see measure-install-size.sh
 #   classifier.p95    null until U.1 TierScorer lands
 #   openai.cold.start p95 of `senkani serve --openai` spawn → listener-ready
 #                     across N=10 runs (V.13e-3; null if binary absent / never ready)
@@ -171,12 +173,14 @@ if [ -n "${MCP_PID}" ]; then
   fi
 fi
 
-# --- install size: du -sk of release dir --------------------------
-INSTALL_SIZE_MB="null"
-if [ -d "${RELEASE_DIR}" ]; then
-  SIZE_KB="$(du -sk "${RELEASE_DIR}" | awk '{print $1}')"
-  INSTALL_SIZE_MB="$(python3 -c "print(round(${SIZE_KB} / 1024.0, 1))")"
-fi
+# --- install size: shipped product binaries -----------------------
+# `du -sk .build/release` is wrong twice over: the path is a symlink
+# (du reports the ~0 KB link, not its target) and the resolved dir is
+# ~1.8 GB of build intermediates, not the shipped artifact. Delegate
+# to the canonical helper, which resolves the symlink and sums the
+# shipped executable products. A measurement miss prints `null`, so
+# this never aborts the run. See spec/slos.md `install.size`.
+INSTALL_SIZE_MB="$(bash tools/measure-install-size.sh "${RELEASE_DIR}" 2>/dev/null || echo null)"
 
 # --- classifier p95: null pending U.1 -----------------------------
 CLASSIFIER_P95_MS="null"

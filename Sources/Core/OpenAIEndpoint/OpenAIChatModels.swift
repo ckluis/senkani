@@ -10,7 +10,8 @@ import Foundation
 /// `content` is modeled as a plain `String`. OpenAI also permits an array
 /// of content parts; v13a-3 supports the string form and returns `400`
 /// for the array form (documented in `OpenAIChatHandler.decodeRequest`).
-/// Streaming (`stream: true`) is rejected with `400` — SSE is v13b.
+/// `stream: true` selects the SSE streaming path (v13b — see
+/// `OpenAIChatStream`); `stream` absent/false uses the non-streaming path.
 public struct ChatCompletionRequest: Codable, Sendable, Equatable {
     public struct Message: Codable, Sendable, Equatable {
         public let role: String
@@ -25,8 +26,8 @@ public struct ChatCompletionRequest: Codable, Sendable, Equatable {
     /// only — the per-key preset WINS for routing (see `OpenAIChatHandler`).
     public let model: String
     public let messages: [Message]
-    /// When `true`, the client asked for an SSE stream. v13a-3 is
-    /// non-streaming only; the handler returns `400`.
+    /// When `true`, the client asked for an SSE stream (v13b routes these
+    /// to `OpenAIChatStream`); absent/false uses the non-streaming path.
     public let stream: Bool?
 
     public init(model: String, messages: [Message], stream: Bool? = nil) {

@@ -107,13 +107,9 @@ struct Serve: AsyncParsableCommand {
                     type: "invalid_request_error", errorCode: "invalid_request"
                 )
             }
-            if request.stream == true {
-                return OpenAIChatHandler.errorResponse(
-                    code: 400, httpMessage: "Bad Request",
-                    message: "streaming is not supported on this endpoint yet (non-streaming only; SSE is V.13b)",
-                    type: "invalid_request_error", errorCode: "streaming_unsupported"
-                )
-            }
+            // V.13b — streaming requests are handled by `streamHandler`
+            // ahead of this non-streaming surface; if one reaches here the
+            // stream flag is absent or false.
             let token = OpenAIAuthGate.bearerToken(fromHeader: headers["authorization"])
             let record = token.flatMap { OpenAIAuthGate.matchRecord(presentedKey: $0, records: records) }
             let result = OpenAIChatHandler.handle(
@@ -132,10 +128,61 @@ struct Serve: AsyncParsableCommand {
             return OpenAIChatHandler.encodeResponse(result.response)
         }
 
+        // V.13b — SSE streaming surface. Returns a plan only when the
+        // client asked to stream (`stream: true`); otherwise nil → the
+        // non-streaming `chatHandler` above serves the request. Auth + rate
+        // limiting are enforced by the gate BEFORE this runs, so a streamed
+        // request that opens here has already cleared the rate window — a
+        // 429 is a complete framed response emitted ahead of any SSE byte.
+        let streamHandler = OpenAIListener.StreamHandler { _, _, headers, body in
+            guard let request = OpenAIChatHandler.decodeRequest(body), request.stream == true else {
+                return nil
+            }
+            let token = OpenAIAuthGate.bearerToken(fromHeader: headers["authorization"])
+            let record = token.flatMap { OpenAIAuthGate.matchRecord(presentedKey: $0, records: records) }
+            let result = OpenAIChatHandler.handle(
+                request: request,
+                recordPreset: record?.preset ?? ModelPreset.auto.rawValue,
+                keyLabel: record?.label,
+                engine: engine,
+                now: Date(),
+                id: OpenAIChatHandler.generateID()
+            )
+            let response = result.response
+            let content = response.choices.first?.message.content ?? ""
+            let events = OpenAIChatStream.events(
+                id: response.id, created: response.created,
+                model: response.model, content: content
+            )
+            let base = result.auditFields
+            let bodies = storeBodies ? result.auditBodies : nil
+            let telemetry = result.telemetry
+            return OpenAIChatStream.Plan(
+                head: OpenAIChatStream.head(),
+                events: events,
+                done: OpenAIChatStream.doneSentinel(),
+                onFinish: { status in
+                    // Exactly one audit entry per streamed request; `status`
+                    // distinguishes completion (`ok`) from client-cancel.
+                    let fields = OpenAIAuditChain.AuditFields(
+                        ts: base.ts, keyLabel: base.keyLabel, surface: base.surface,
+                        modelLogged: base.modelLogged, presetUsed: base.presetUsed,
+                        resolvedTier: base.resolvedTier,
+                        promptTokenCount: base.promptTokenCount,
+                        completionTokenCount: base.completionTokenCount,
+                        status: status.rawValue
+                    )
+                    auditChain.append(fields, bodies: bodies)
+                    print("openai-request surface=\(telemetry.surface) model_logged=\(telemetry.modelLogged) preset=\(telemetry.presetUsed) resolved_tier=\(telemetry.resolvedTier) stream=true status=\(status.rawValue)")
+                }
+            )
+        }
+
         let listener = OpenAIListener(
             config: .init(bind: effective.bind, port: effective.port),
             authenticator: authenticator,
-            chatHandler: chatHandler
+            chatHandler: chatHandler,
+            streamHandler: streamHandler
         )
         try listener.start()
         print(OpenAIListener.startupLog(bind: effective.bind, port: listener.port, keyCount: keyCount))

@@ -147,6 +147,20 @@ public final class OpenAIListener: @unchecked Sendable {
         }
     }
 
+    /// V.13b — SSE streaming surface for `POST /v1/chat/completions` with
+    /// `stream: true`. Consulted AFTER the auth gate admits a `/v1/*`
+    /// request and BEFORE the non-streaming `ChatHandler`. Returns an
+    /// `OpenAIChatStream.Plan` when the request asked to stream, or nil to
+    /// fall through to the non-streaming path (the v13a-3 behavior). The
+    /// listener drives the returned plan over the accepted `NWConnection`.
+    public struct StreamHandler: Sendable {
+        public let plan: @Sendable (_ method: String, _ path: String, _ headers: [String: String], _ body: Data) -> OpenAIChatStream.Plan?
+
+        public init(plan: @escaping @Sendable (_ method: String, _ path: String, _ headers: [String: String], _ body: Data) -> OpenAIChatStream.Plan?) {
+            self.plan = plan
+        }
+    }
+
     public enum ListenError: Error, Equatable {
         case invalidPort(Int)
         case startTimeout
@@ -156,6 +170,7 @@ public final class OpenAIListener: @unchecked Sendable {
     private let config: Config
     private let authenticator: Authenticator?
     private let chatHandler: ChatHandler?
+    private let streamHandler: StreamHandler?
     private let queue = DispatchQueue(label: "com.senkani.openai-listener", qos: .userInitiated)
     private let lock = NSLock()
     private var listener: NWListener?
@@ -167,10 +182,16 @@ public final class OpenAIListener: @unchecked Sendable {
     /// an unbounded body on the accept queue.
     static let maxRequestBytes = 256 * 1024
 
-    public init(config: Config, authenticator: Authenticator? = nil, chatHandler: ChatHandler? = nil) {
+    public init(
+        config: Config,
+        authenticator: Authenticator? = nil,
+        chatHandler: ChatHandler? = nil,
+        streamHandler: StreamHandler? = nil
+    ) {
         self.config = config
         self.authenticator = authenticator
         self.chatHandler = chatHandler
+        self.streamHandler = streamHandler
     }
 
     /// Bound port after `start()` succeeds. Zero before start / after stop.
@@ -288,6 +309,7 @@ public final class OpenAIListener: @unchecked Sendable {
     private func receiveRequest(_ conn: NWConnection, accumulated: Data) {
         let authenticator = self.authenticator
         let chatHandler = self.chatHandler
+        let streamHandler = self.streamHandler
         conn.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
             if error != nil {
                 conn.cancel()
@@ -304,16 +326,77 @@ public final class OpenAIListener: @unchecked Sendable {
                 return
             }
 
+            let requestLine = OpenAIListener.firstLine(buf)
+            let headers = OpenAIListener.parseHeaders(buf)
+            let body = OpenAIListener.bodyBytes(buf)
+            let (method, path) = OpenAIListener.methodAndPath(requestLine)
+
+            // V.13a-2 — auth runs EXACTLY ONCE per `/v1/*` request, here in
+            // the connection path (the rate limiter is stateful; a second
+            // `decide` would double-decrement the window). The non-streaming
+            // `respond` below is therefore invoked with `authenticator: nil`.
+            if let authenticator, path == "/v1" || path.hasPrefix("/v1/") {
+                let decision = authenticator.decide(method, path, headers)
+                if let errorResponse = OpenAIAuthGate.errorResponse(for: decision) {
+                    conn.send(content: errorResponse, completion: .contentProcessed { _ in
+                        conn.cancel()
+                    })
+                    return
+                }
+            }
+
+            // V.13b — streaming branch. The handler returns a plan only when
+            // the request asked to stream; otherwise we fall through to the
+            // non-streaming surface.
+            if let streamHandler,
+               method.uppercased() == "POST",
+               path == "/v1/chat/completions",
+               let plan = streamHandler.plan(method, path, headers, body) {
+                self?.runStream(conn, plan: plan)
+                return
+            }
+
             let response = OpenAIListener.respond(
-                requestLine: OpenAIListener.firstLine(buf),
-                headers: OpenAIListener.parseHeaders(buf),
-                body: OpenAIListener.bodyBytes(buf),
-                authenticator: authenticator,
+                requestLine: requestLine,
+                headers: headers,
+                body: body,
+                authenticator: nil,
                 chatHandler: chatHandler
             )
             conn.send(content: response, completion: .contentProcessed { _ in
                 conn.cancel()
             })
+        }
+    }
+
+    /// V.13b — drive an `OpenAIChatStream.Plan` over the accepted
+    /// connection. The streamer loop runs on a GLOBAL queue, not the
+    /// listener's serial `queue`: each chunk send blocks on a semaphore
+    /// that the send-completion (delivered on `queue`) signals, so running
+    /// the loop on `queue` would deadlock. A closed peer surfaces as a send
+    /// error → the streamer returns `.clientCancel`; `Sink.close` cancels
+    /// the connection exactly once.
+    private func runStream(_ conn: NWConnection, plan: OpenAIChatStream.Plan) {
+        let gone = AtomicBool()
+        let sink = OpenAIChatStream.Sink(
+            write: { chunk in
+                let sem = DispatchSemaphore(value: 0)
+                let errBox = ErrorBox()
+                conn.send(content: chunk, completion: .contentProcessed { sendError in
+                    if let sendError { errBox.set(sendError) }
+                    sem.signal()
+                })
+                sem.wait()
+                if let err = errBox.get() {
+                    gone.set(true)
+                    throw err
+                }
+            },
+            isCancelled: { gone.get() },
+            close: { conn.cancel() }
+        )
+        DispatchQueue.global(qos: .userInitiated).async {
+            OpenAIChatStream.run(plan: plan, sink: sink)
         }
     }
 
@@ -460,6 +543,15 @@ public final class OpenAIListener: @unchecked Sendable {
         private var error: Error?
         func set(_ e: Error) { lock.lock(); error = e; lock.unlock() }
         func get() -> Error? { lock.lock(); defer { lock.unlock() }; return error }
+    }
+
+    /// Thread-safe boolean flag shared between the streamer loop (global
+    /// queue) and the send completions (listener queue).
+    private final class AtomicBool: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = false
+        func set(_ v: Bool) { lock.lock(); value = v; lock.unlock() }
+        func get() -> Bool { lock.lock(); defer { lock.unlock() }; return value }
     }
 }
 #endif

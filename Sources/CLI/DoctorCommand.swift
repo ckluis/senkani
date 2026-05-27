@@ -453,7 +453,7 @@ struct Doctor: ParsableCommand {
         }
     }
 
-    // MARK: - Check 18: Session work bus (Phase U.9a)
+    // MARK: - Check 21: Session work bus (Phase U.9a)
 
     /// Surface the U.9a queue + stream diagnostics: pending/processing/
     /// dead-letter row counts, active leases, retried total, by-kind

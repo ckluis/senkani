@@ -1230,7 +1230,7 @@ struct Doctor: ParsableCommand {
         return String(format: "%.0fms", ms)
     }
 
-    // MARK: - Release commitments (Phase V.14)
+    // MARK: - Check 22: Release commitments (Phase V.14)
 
     private func checkReleaseSLOs(_ results: inout Results) {
         let history = ReleaseSLOHistory.shared
@@ -1609,6 +1609,8 @@ struct Doctor: ParsableCommand {
             results.skipped += 1
         }
     }
+
+    // MARK: - Check 23: Runtime telemetry receiver (Phase V.18a-3)
 
     /// V.18a-3 — surface the runtime-telemetry receiver's last-bound
     /// loopback port + cumulative drop count from the persisted

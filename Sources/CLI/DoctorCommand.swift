@@ -94,7 +94,8 @@ struct Doctor: ParsableCommand {
         // creation order rather than run order — e.g. Release commitments
         // runs 15th here but is stable Check 22; Audit chain runs 16th but is
         // stable Check 15; Session work bus runs 17b but is stable Check 21;
-        // Runtime telemetry runs 21st but is stable Check 23. Do NOT
+        // Runtime telemetry runs 21st but is stable Check 23; OpenAI endpoint
+        // runs 22nd but is stable Check 16. Do NOT
         // "reconcile" them by renumbering the MARK headers — the stable IDs
         // are a durable cross-reference (see doctor-unnumbered-checks-
         // 2026-05-27). Matching note lives above `// MARK: - Check 15`.
@@ -182,6 +183,12 @@ struct Doctor: ParsableCommand {
         //     loopback port + cumulative drops. Loopback boundary is
         //     performative; see spec/architecture.md.
         checkRuntimeTelemetryReceiver(&results)
+
+        // 22. OpenAI-compatible endpoint (Phase V.13e-2) — bind / port /
+        //     key-count + trailing-24h request count + 429-rate. The last
+        //     two read v13e-1's persisted request-log query API, so they
+        //     survive a process restart.
+        checkOpenAIEndpoint(&results)
 
         print("")
         var parts: [String] = []
@@ -1645,5 +1652,59 @@ struct Doctor: ParsableCommand {
         let rateText = "\(cfg.perSourceSpansPerSecond) spans/s/source"
         printStatus(.pass, "Runtime telemetry receiver — \(portText) | drops: \(cfg.totalDrops) | rate cap: \(rateText) | loopback boundary: performative (local-user trust)")
         results.passed += 1
+    }
+
+    // MARK: - Check 16: OpenAI-compatible endpoint (Phase V.13e-2)
+
+    /// Pure formatter for the OpenAI-endpoint check. Returns one
+    /// informational line: bind / port / key-count / trailing-24h request
+    /// count / 429-rate. Lifted out of `checkOpenAIEndpoint` so the
+    /// `doctor-openai-check-render` test asserts on the operator-facing
+    /// surface without dup2-capturing stdout (mirror of
+    /// `formatChainAuditLines` / `formatBundleStalenessLines`).
+    ///
+    /// Always `.pass` — the check is informational (non-blocking), like the
+    /// runtime-telemetry-receiver check. An endpoint that has served zero
+    /// requests is a normal state, not a failure; the config carries
+    /// loopback defaults even when the operator has never run
+    /// `senkani serve --openai`.
+    ///
+    /// Schneier (no-secret-on-stdout): the line surfaces only the key
+    /// COUNT. The raw API key, its hash, and its label never reach this
+    /// formatter — `keyCount` is a plain `Int`. `loadAllSync` returns
+    /// hash-only records, and the caller passes `.count`, so no key
+    /// material can leak through the doctor surface.
+    static func formatOpenAIEndpointLine(
+        config: OpenAIEndpointConfig,
+        keyCount: Int,
+        stats: OpenAIRequestLogStore.TrailingStats
+    ) -> (Status, String) {
+        let rate = String(format: "%.1f%%", stats.rate429 * 100)
+        return (
+            .pass,
+            "OpenAI endpoint — bind: \(config.bind) | port: \(config.port) | keys: \(keyCount) | requests (24h): \(stats.count24h) | 429-rate: \(rate)"
+        )
+    }
+
+    /// Thin wrapper. Reads the persisted endpoint config (bind / port),
+    /// counts the provisioned keys straight off disk, and pulls the
+    /// trailing-24h request count + 429-rate from v13e-1's persisted query
+    /// API on the shared `SessionDatabase` (so the last two fields are
+    /// correct cross-process — they survive a `senkani serve --openai`
+    /// restart because they read the durable rows, not in-memory state).
+    private func checkOpenAIEndpoint(_ results: inout Results) {
+        let config = OpenAIEndpointConfig.load()
+        let keyCount = OpenAIKeyProvisioner.loadAllSync().count
+        let stats = SessionDatabase.shared.openAIRequestTrailing24hStats()
+        let (status, message) = Self.formatOpenAIEndpointLine(
+            config: config, keyCount: keyCount, stats: stats
+        )
+        printStatus(status, message)
+        switch status {
+        case .pass: results.passed += 1
+        case .fixed: results.fixed += 1
+        case .fail: results.failed += 1
+        case .skip: results.skipped += 1
+        }
     }
 }

@@ -133,6 +133,20 @@ public final class OpenAIListener: @unchecked Sendable {
         }
     }
 
+    /// V.13a-3 — surface handler invoked AFTER the auth gate admits a
+    /// `/v1/*` request. Receives the parsed request line, headers, and the
+    /// request body. Returns a framed HTTP response, or nil to fall
+    /// through to the `501`/`404` `route` (the v13a-1/2 behavior when no
+    /// handler is wired). `ServeCommand` builds the chat handler; the
+    /// scaffold tests leave it nil.
+    public struct ChatHandler: Sendable {
+        public let handle: @Sendable (_ method: String, _ path: String, _ headers: [String: String], _ body: Data) -> Data?
+
+        public init(handle: @escaping @Sendable (_ method: String, _ path: String, _ headers: [String: String], _ body: Data) -> Data?) {
+            self.handle = handle
+        }
+    }
+
     public enum ListenError: Error, Equatable {
         case invalidPort(Int)
         case startTimeout
@@ -141,15 +155,22 @@ public final class OpenAIListener: @unchecked Sendable {
 
     private let config: Config
     private let authenticator: Authenticator?
+    private let chatHandler: ChatHandler?
     private let queue = DispatchQueue(label: "com.senkani.openai-listener", qos: .userInitiated)
     private let lock = NSLock()
     private var listener: NWListener?
     private var boundPort: Int = 0
     private var running = false
 
-    public init(config: Config, authenticator: Authenticator? = nil) {
+    /// Cap on accumulated request bytes (head + body). A request larger
+    /// than this is responded to with whatever was read — protects against
+    /// an unbounded body on the accept queue.
+    static let maxRequestBytes = 256 * 1024
+
+    public init(config: Config, authenticator: Authenticator? = nil, chatHandler: ChatHandler? = nil) {
         self.config = config
         self.authenticator = authenticator
+        self.chatHandler = chatHandler
     }
 
     /// Bound port after `start()` succeeds. Zero before start / after stop.
@@ -250,7 +271,7 @@ public final class OpenAIListener: @unchecked Sendable {
         conn.stateUpdateHandler = { [weak self] state in
             switch state {
             case .ready:
-                self?.receiveRequest(conn)
+                self?.receiveRequest(conn, accumulated: Data())
             case .failed, .cancelled:
                 conn.cancel()
             default:
@@ -260,22 +281,35 @@ public final class OpenAIListener: @unchecked Sendable {
         conn.start(queue: queue)
     }
 
-    private func receiveRequest(_ conn: NWConnection) {
-        // The request line + headers arrive in the first segment for the
-        // small requests this endpoint serves; the body is irrelevant to
-        // both the auth gate (which reads only the Authorization header)
-        // and the 501 stub, so a single bounded receive is sufficient.
+    /// Read the request, accumulating segments until the full body (per
+    /// `Content-Length`) has arrived, the peer signals completion, or the
+    /// byte cap is hit. v13a-1/2 needed only the head; v13a-3's chat
+    /// surface needs the body, which may span more than one segment.
+    private func receiveRequest(_ conn: NWConnection, accumulated: Data) {
         let authenticator = self.authenticator
-        conn.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, _, error in
+        let chatHandler = self.chatHandler
+        conn.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
             if error != nil {
                 conn.cancel()
                 return
             }
-            let bytes = data ?? Data()
+            var buf = accumulated
+            if let data { buf.append(data) }
+
+            let done = isComplete
+                || buf.count >= OpenAIListener.maxRequestBytes
+                || OpenAIListener.requestComplete(buf)
+            if !done {
+                self?.receiveRequest(conn, accumulated: buf)
+                return
+            }
+
             let response = OpenAIListener.respond(
-                requestLine: OpenAIListener.firstLine(bytes),
-                headers: OpenAIListener.parseHeaders(bytes),
-                authenticator: authenticator
+                requestLine: OpenAIListener.firstLine(buf),
+                headers: OpenAIListener.parseHeaders(buf),
+                body: OpenAIListener.bodyBytes(buf),
+                authenticator: authenticator,
+                chatHandler: chatHandler
             )
             conn.send(content: response, completion: .contentProcessed { _ in
                 conn.cancel()
@@ -332,10 +366,12 @@ public final class OpenAIListener: @unchecked Sendable {
     static func respond(
         requestLine: String,
         headers: [String: String],
-        authenticator: Authenticator?
+        body: Data = Data(),
+        authenticator: Authenticator?,
+        chatHandler: ChatHandler? = nil
     ) -> Data {
+        let (method, path) = methodAndPath(requestLine)
         if let authenticator {
-            let (method, path) = methodAndPath(requestLine)
             // Only the `/v1/*` surface is auth-gated; other paths (e.g. a
             // future health probe) fall straight through.
             if path == "/v1" || path.hasPrefix("/v1/") {
@@ -345,7 +381,44 @@ public final class OpenAIListener: @unchecked Sendable {
                 }
             }
         }
+        // V.13a-3 — auth has admitted the request; dispatch the chat
+        // surface. A nil return (handler not wired, or path/method it does
+        // not serve) falls through to the 501/404 route.
+        if let chatHandler,
+           method.uppercased() == "POST",
+           path == "/v1/chat/completions" {
+            if let surfaceResponse = chatHandler.handle(method, path, headers, body) {
+                return surfaceResponse
+            }
+        }
         return route(requestLine: requestLine)
+    }
+
+    // MARK: - Body framing (pure, testable)
+
+    /// Byte offset just past the `\r\n\r\n` head/body boundary, or nil if
+    /// the boundary has not been received yet.
+    static func headBodyBoundary(_ data: Data) -> Int? {
+        let sep = Data([0x0D, 0x0A, 0x0D, 0x0A])
+        guard let range = data.range(of: sep) else { return nil }
+        return data.distance(from: data.startIndex, to: range.upperBound)
+    }
+
+    /// Body bytes (everything past the head/body boundary). Empty if the
+    /// boundary is absent.
+    static func bodyBytes(_ data: Data) -> Data {
+        guard let boundary = headBodyBoundary(data) else { return Data() }
+        return Data(data.dropFirst(boundary))
+    }
+
+    /// True once the head boundary is present AND at least `Content-Length`
+    /// body bytes have arrived (0 when the header is absent). Drives the
+    /// accumulation loop in `receiveRequest`.
+    static func requestComplete(_ data: Data) -> Bool {
+        guard let boundary = headBodyBoundary(data) else { return false }
+        let contentLength = parseHeaders(data)["content-length"].flatMap { Int($0) } ?? 0
+        let bodyLen = data.count - boundary
+        return bodyLen >= contentLength
     }
 
     /// Route a request line to a canned HTTP/1.1 response. In v13a-1

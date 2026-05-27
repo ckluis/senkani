@@ -102,6 +102,13 @@ struct Serve: AsyncParsableCommand {
         // record's preset + label for routing/telemetry.
         let auditChain = OpenAIAuditChain()
         let storeBodies = auditBodies
+        // V.13e — persisted cross-process request log. The shared session DB
+        // is the same handle the rest of senkani uses; the per-request write
+        // is best-effort and microsecond-scale (queue.sync). Each served
+        // request is recorded to BOTH the in-memory chain and this store via
+        // `OpenAIServedRequestSink.record`, co-located at the prior
+        // `auditChain.append` sites so the producer side is finally owned.
+        let requestLogDB = SessionDatabase.shared
         let engine = Serve.placeholderChatEngine()
         let chatHandler = OpenAIListener.ChatHandler { _, _, headers, body in
             guard let request = OpenAIChatHandler.decodeRequest(body) else {
@@ -132,7 +139,12 @@ struct Serve: AsyncParsableCommand {
                 now: Date(),
                 id: OpenAIChatHandler.generateID()
             )
-            auditChain.append(result.auditFields, bodies: storeBodies ? result.auditBodies : nil)
+            OpenAIServedRequestSink.record(
+                chain: auditChain,
+                fields: result.auditFields,
+                bodies: storeBodies ? result.auditBodies : nil,
+                db: requestLogDB, surface: .chat, httpStatus: 200
+            )
             // Surface telemetry on the serve log — model_logged is the
             // client's ask, distinct from the resolved tier that ran.
             let t = result.telemetry
@@ -164,7 +176,12 @@ struct Serve: AsyncParsableCommand {
                 engine: embeddingsEngine,
                 now: Date()
             )
-            auditChain.append(result.auditFields, bodies: storeBodies ? result.auditBodies : nil)
+            OpenAIServedRequestSink.record(
+                chain: auditChain,
+                fields: result.auditFields,
+                bodies: storeBodies ? result.auditBodies : nil,
+                db: requestLogDB, surface: .embeddings, httpStatus: 200
+            )
             let t = result.telemetry
             print("openai-request surface=\(t.surface) model_logged=\(t.modelLogged) resolved_model=\(t.resolvedModel) inputs=\(t.inputCount)")
             return OpenAIEmbeddingsHandler.encodeResponse(result.response)
@@ -236,7 +253,14 @@ struct Serve: AsyncParsableCommand {
                         completionTokenCount: base.completionTokenCount,
                         status: status.rawValue
                     )
-                    auditChain.append(fields, bodies: bodies)
+                    // The SSE response head was already sent with HTTP 200;
+                    // `status` (ok/cancel) rides in `fields.status` for the
+                    // in-memory chain, while the persisted row records the
+                    // HTTP 200 that the client actually received.
+                    OpenAIServedRequestSink.record(
+                        chain: auditChain, fields: fields, bodies: bodies,
+                        db: requestLogDB, surface: .chatStream, httpStatus: 200
+                    )
                     print("openai-request surface=\(telemetry.surface) model_logged=\(telemetry.modelLogged) preset=\(telemetry.presetUsed) resolved_tier=\(telemetry.resolvedTier) stream=true status=\(status.rawValue)")
                 }
             )

@@ -362,4 +362,62 @@ struct OpenAIChatRoutingAuditTests {
         #expect(chain.verify() == .ok(count: 1))
     }
     #endif
+
+    // MARK: - V.13e listener → persisted request log wiring
+
+    private static func tempDBPath() -> String {
+        let dir = NSTemporaryDirectory() + "senkani-v13e-listener-wiring-tests/"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        return dir + "openai-request-log-\(UUID().uuidString).db"
+    }
+
+    /// V.13e listener-wiring — the producer side that V.13e-1's store lacked.
+    /// `OpenAIServedRequestSink.record` is the EXACT seam `ServeCommand`'s
+    /// chat closure calls, so this exercises the shipped dual-write rather
+    /// than a replica: one served chat request must (a) append to the
+    /// in-memory chain unchanged AND (b) land exactly one persisted
+    /// `openai_request_log` row with the matching surface + HTTP status +
+    /// key_label — and no raw key (the store has no raw-key column; the only
+    /// label that can reach disk is `fields.keyLabel`).
+    @Test("served request lands a persisted request-log row (surface/status/key_label, no raw key)")
+    func servedRequestLandsPersistedRow() {
+        let db = SessionDatabase(path: Self.tempDBPath())
+        let chain = OpenAIAuditChain()
+
+        // A served chat request, produced exactly as the listener does.
+        let result = OpenAIChatHandler.handle(
+            request: Self.request(model: "gpt-4o"),
+            recordPreset: "quick", keyLabel: "ci-key-label",
+            engine: Self.stubEngine(), now: Self.fixedNow, id: "chatcmpl-persist"
+        )
+
+        let landed = OpenAIServedRequestSink.record(
+            chain: chain, fields: result.auditFields, bodies: nil,
+            db: db, surface: .chat, httpStatus: 200
+        )
+
+        // Persisted write succeeded; in-memory chain append unchanged.
+        #expect(landed)
+        #expect(chain.count == 1)
+        #expect(chain.verify() == .ok(count: 1))
+
+        // Exactly one persisted row, with the wired metadata.
+        let rows = db.recentOpenAIRequests(limit: 10)
+        #expect(rows.count == 1)
+        let row = rows[0]
+        #expect(row.surface == OpenAIRequestLogStore.Surface.chat.rawValue)
+        #expect(row.status == 200)
+        #expect(row.keyLabel == "ci-key-label")
+        // The seam sources the persisted timestamp from the same audit
+        // fields the chain stored, so the two sinks agree on `ts`.
+        #expect(row.ts == result.auditFields.ts)
+        // No raw key reached disk: the only label persisted is the
+        // provisioned label, and the store exposes no raw-key column.
+        #expect(row.keyLabel != "sk-senkani-livechat")
+
+        // The doctor's read path (trailing-24h) now sees real traffic.
+        let stats = db.openAIRequestTrailing24hStats(now: Self.fixedNow.addingTimeInterval(60))
+        #expect(stats.count24h == 1)
+        #expect(stats.count429 == 0)
+    }
 }

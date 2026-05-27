@@ -164,6 +164,25 @@ public enum ChainVerifier {
         }
     }
 
+    /// V.13e-5 — `openai_request_log` chained-table verifier. The DB-backed
+    /// OpenAI request log (migration v41 / `OpenAIRequestLogStore`) chains
+    /// one metadata row per served request; this recomputes each row's
+    /// `entry_hash` from the persisted columns and confirms `prev_hash`
+    /// linkage, exactly as `ChainVerifier` does for the other participants.
+    ///
+    /// Cross-process by construction: it reads the table off a raw handle,
+    /// so a fresh process at the same DB path verifies the chain the
+    /// previous process wrote (the v13e-5 100-request burst-integrity guard).
+    ///
+    /// NOTE: not yet wired into `verifyAll` / `senkani doctor --verify-chain`
+    /// — see the V.13e-5 follow-up filing for that coverage gap.
+    public static func verifyOpenAIRequestLog(_ database: SessionDatabase) -> Result {
+        return database.queue.sync {
+            guard let db = database.db else { return .noChain }
+            return verifyTable(db: db, table: "openai_request_log", verify: verifyAnchorOpenAIRequestLog)
+        }
+    }
+
     /// Generic table walker shared by all four participants.
     private static func verifyTable(
         db: OpaquePointer,
@@ -674,6 +693,34 @@ public enum ChainVerifier {
             }
             let prev = optionalText(stmt, 11)
             let stored = sqlite3_column_text(stmt, 12).map { String(cString: $0) } ?? ""
+            return (rowid, columns, prev, stored)
+        }
+    }
+
+    /// Walk `openai_request_log` rows for one anchor. V.13e-1 ships the
+    /// table + writer (`OpenAIRequestLogStore.record`); the canonical
+    /// column shape mirrors that writer exactly — four metadata columns,
+    /// no body columns, no column evolution since v41 (so no
+    /// anchor-reason shape branching is needed).
+    /// `entry_hash IS NOT NULL` filter — see `verifyAnchorTokenEvents` notes.
+    private static func verifyAnchorOpenAIRequestLog(db: OpaquePointer, anchor: Anchor) -> Result? {
+        let sql = """
+            SELECT id, ts, surface, status, key_label,
+                   prev_hash, entry_hash
+              FROM openai_request_log
+             WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
+             ORDER BY id ASC;
+        """
+        return walkTable(db: db, table: "openai_request_log", anchor: anchor, sql: sql) { stmt in
+            let rowid = sqlite3_column_int64(stmt, 0)
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "ts":        .real(sqlite3_column_double(stmt, 1)),
+                "surface":   textValue(stmt, 2),
+                "status":    .integer(sqlite3_column_int64(stmt, 3)),
+                "key_label": textOrNull(stmt, 4),
+            ]
+            let prev = optionalText(stmt, 5)
+            let stored = sqlite3_column_text(stmt, 6).map { String(cString: $0) } ?? ""
             return (rowid, columns, prev, stored)
         }
     }

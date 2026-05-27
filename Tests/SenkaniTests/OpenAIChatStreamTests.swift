@@ -293,7 +293,7 @@ struct OpenAIChatStreamTests {
             )
         }
         let chain = OpenAIAuditChain()
-        let engine = OpenAIChatHandler.Engine { _, _ in
+        let engine = OpenAIChatHandler.Engine { _, _, _ in
             OpenAIChatHandler.Completion(content: "live stream ok", promptTokens: 5, completionTokens: 3)
         }
         let streamHandler = OpenAIListener.StreamHandler { _, _, headers, body in
@@ -305,7 +305,7 @@ struct OpenAIChatStreamTests {
                 keyLabel: rec?.label, engine: engine, now: Date(), id: "chatcmpl-livestream"
             )
             let resp = result.response
-            let content = resp.choices.first?.message.content ?? ""
+            let content = resp.choices.first.flatMap { $0.message.content } ?? ""
             let base = result.auditFields
             return OpenAIChatStream.Plan(
                 head: OpenAIChatStream.head(),
@@ -373,7 +373,7 @@ struct OpenAIChatStreamTests {
     /// Build a stream plan whose `onFinish` appends one entry to `chain`.
     private static func makePlan(chain: OpenAIAuditChain, content: String) -> OpenAIChatStream.Plan {
         let request = ChatCompletionRequest(model: "gpt-4o", messages: [.init(role: "user", content: "hi")])
-        let engine = OpenAIChatHandler.Engine { _, _ in
+        let engine = OpenAIChatHandler.Engine { _, _, _ in
             OpenAIChatHandler.Completion(content: content, promptTokens: 6, completionTokens: 4)
         }
         let result = OpenAIChatHandler.handle(

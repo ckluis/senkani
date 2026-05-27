@@ -26,10 +26,20 @@ public enum OpenAIChatHandler {
 
     public struct Completion: Sendable, Equatable {
         public let content: String
+        /// V.13d — non-empty when the model called a tool. When set, the
+        /// response message carries `tool_calls` + `content: null` and
+        /// `finish_reason: "tool_calls"`; `content` above is ignored.
+        public let toolCalls: [OpenAIToolCall]
         public let promptTokens: Int
         public let completionTokens: Int
-        public init(content: String, promptTokens: Int, completionTokens: Int) {
+        public init(
+            content: String,
+            toolCalls: [OpenAIToolCall] = [],
+            promptTokens: Int,
+            completionTokens: Int
+        ) {
             self.content = content
+            self.toolCalls = toolCalls
             self.promptTokens = promptTokens
             self.completionTokens = completionTokens
         }
@@ -37,10 +47,11 @@ public enum OpenAIChatHandler {
 
     /// Produces the assistant completion for a routed request. Injected so
     /// tests (and the placeholder serve path) supply a deterministic body
-    /// without a network round-trip.
+    /// without a network round-trip. V.13d adds `tools` so the engine can
+    /// decide to call a declared tool.
     public struct Engine: Sendable {
-        public let complete: @Sendable (_ model: String, _ messages: [ChatCompletionRequest.Message]) -> Completion
-        public init(complete: @escaping @Sendable (_ model: String, _ messages: [ChatCompletionRequest.Message]) -> Completion) {
+        public let complete: @Sendable (_ model: String, _ messages: [ChatCompletionRequest.Message], _ tools: [ChatCompletionRequest.Tool]) -> Completion
+        public init(complete: @escaping @Sendable (_ model: String, _ messages: [ChatCompletionRequest.Message], _ tools: [ChatCompletionRequest.Tool]) -> Completion) {
             self.complete = complete
         }
     }
@@ -106,18 +117,23 @@ public enum OpenAIChatHandler {
         id: String
     ) -> Result {
         let routing = route(request: request, recordPreset: recordPreset)
-        let completion = engine.complete(routing.actualModel, request.messages)
+        let completion = engine.complete(routing.actualModel, request.messages, request.tools ?? [])
+
+        // V.13d — a tool-call completion sets `tool_calls` + `content: null`
+        // + `finish_reason: "tool_calls"`; a normal completion sets the
+        // string content + `finish_reason: "stop"`.
+        let usesTools = !completion.toolCalls.isEmpty
+        let choiceMessage: ChatCompletionResponse.Choice.Message = usesTools
+            ? .init(role: "assistant", content: nil, toolCalls: completion.toolCalls)
+            : .init(role: "assistant", content: completion.content)
+        let finishReason = usesTools ? "tool_calls" : "stop"
 
         let response = ChatCompletionResponse(
             id: id,
             created: Int(now.timeIntervalSince1970),
             model: routing.actualModel,
             choices: [
-                .init(
-                    index: 0,
-                    message: .init(role: "assistant", content: completion.content),
-                    finishReason: "stop"
-                )
+                .init(index: 0, message: choiceMessage, finishReason: finishReason)
             ],
             usage: .init(
                 promptTokens: completion.promptTokens,
@@ -145,9 +161,14 @@ public enum OpenAIChatHandler {
             status: "ok"
         )
 
+        // When the model called a tool the response carries no text — the
+        // audit body names the called tool(s) instead of an empty string.
+        let responseBody = usesTools
+            ? "tool_calls=[" + completion.toolCalls.map(\.function.name).joined(separator: ",") + "]"
+            : completion.content
         let bodies = OpenAIAuditChain.AuditBodies(
             requestBody: requestSummary(request),
-            responseBody: completion.content
+            responseBody: responseBody
         )
 
         return Result(
@@ -214,6 +235,72 @@ public enum OpenAIChatHandler {
     /// body captures the request envelope, not a transcript dump.)
     static func requestSummary(_ request: ChatCompletionRequest) -> String {
         let roles = request.messages.map(\.role).joined(separator: ",")
-        return "model=\(request.model) messages=\(request.messages.count) roles=[\(roles)]"
+        var summary = "model=\(request.model) messages=\(request.messages.count) roles=[\(roles)]"
+        // V.13d — append the declared-tool count ONLY when the request uses
+        // tools, so a non-tool request's summary (and therefore its audit
+        // hash) is byte-identical to the v13a-3 shape.
+        let toolCount = request.tools?.count ?? 0
+        if toolCount > 0 { summary += " tools=\(toolCount)" }
+        return summary
+    }
+
+    // MARK: - V.13d tool-use scope + validation
+
+    /// True when the request declares one or more tools (a tool-use
+    /// round-trip is requested). A nil or empty `tools` array is not a
+    /// tool-use request.
+    public static func requestUsesTools(_ request: ChatCompletionRequest) -> Bool {
+        !(request.tools ?? []).isEmpty
+    }
+
+    /// The `tools` surface scope gate. A key may use tool-use only when its
+    /// scope includes `"tools"`. Path-based `chat`/`embeddings` scope is
+    /// enforced by `OpenAIAuthGate`; the `tools` scope is body-derived (the
+    /// request carries `tools:`), so it is enforced here — see
+    /// `OpenAIAuthGate.surface(forPath:)`.
+    public static func scopeAllowsTools(_ scope: [String]) -> Bool {
+        scope.contains("tools")
+    }
+
+    /// Validate the declared tools' shape. Returns a human-readable reason
+    /// when a tool is malformed (a non-`function` type, or an empty
+    /// function name), or nil when every declared tool is well-formed.
+    /// (A structurally malformed `tools` — missing `function`/`name`, a
+    /// non-array — fails JSON decode upstream and never reaches here.)
+    public static func toolsValidationMessage(_ request: ChatCompletionRequest) -> String? {
+        for tool in request.tools ?? [] {
+            if tool.type != "function" {
+                return "unsupported tool type '\(tool.type)' (only 'function' is supported)"
+            }
+            if tool.function.name.isEmpty {
+                return "tool function name must be non-empty"
+            }
+        }
+        return nil
+    }
+
+    /// Single pre-flight for a tool-use request: a framed `400` when the
+    /// declared tools are malformed, a framed `403` (`insufficient_scope`)
+    /// when the key's scope excludes `tools`, or nil when the request is
+    /// acceptable (no tools, or tools + valid schema + in-scope key). Both
+    /// the non-streaming chat handler and the streaming handler funnel
+    /// through this so the error shape is rendered in exactly one place.
+    public static func toolsPreflightError(request: ChatCompletionRequest, scope: [String]) -> Data? {
+        guard requestUsesTools(request) else { return nil }
+        if let reason = toolsValidationMessage(request) {
+            return errorResponse(
+                code: 400, httpMessage: "Bad Request",
+                message: reason,
+                type: "invalid_request_error", errorCode: "invalid_request"
+            )
+        }
+        if !scopeAllowsTools(scope) {
+            return errorResponse(
+                code: 403, httpMessage: "Forbidden",
+                message: "key scope does not include surface 'tools'",
+                type: "invalid_request_error", errorCode: "insufficient_scope"
+            )
+        }
+        return nil
     }
 }

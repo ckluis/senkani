@@ -109,9 +109,17 @@ struct Serve: AsyncParsableCommand {
             }
             // V.13b — streaming requests are handled by `streamHandler`
             // ahead of this non-streaming surface; if one reaches here the
-            // stream flag is absent or false.
+            // stream flag is absent or false (or a tool-use stream bailed
+            // here for its precise error rendering).
             let token = OpenAIAuthGate.bearerToken(fromHeader: headers["authorization"])
             let record = token.flatMap { OpenAIAuthGate.matchRecord(presentedKey: $0, records: records) }
+            // V.13d — tool-use pre-flight: malformed tools → 400, a key
+            // without the `tools` scope → 403 (insufficient_scope). The
+            // `tools` scope is body-derived, so it is enforced here rather
+            // than in the path-only auth gate.
+            if let preflight = OpenAIChatHandler.toolsPreflightError(request: request, scope: record?.scope ?? []) {
+                return preflight
+            }
             let result = OpenAIChatHandler.handle(
                 request: request,
                 recordPreset: record?.preset ?? ModelPreset.auto.rawValue,
@@ -170,6 +178,14 @@ struct Serve: AsyncParsableCommand {
             }
             let token = OpenAIAuthGate.bearerToken(fromHeader: headers["authorization"])
             let record = token.flatMap { OpenAIAuthGate.matchRecord(presentedKey: $0, records: records) }
+            // V.13d — a malformed or out-of-scope tool-use stream falls
+            // through to the non-streaming handler, which renders the exact
+            // 400/403. (Streaming tool_calls deltas are out of scope — a
+            // valid tool-use stream rides v13b's existing chunk path; the
+            // emitted tool call carries no streamed content.)
+            if OpenAIChatHandler.toolsPreflightError(request: request, scope: record?.scope ?? []) != nil {
+                return nil
+            }
             let result = OpenAIChatHandler.handle(
                 request: request,
                 recordPreset: record?.preset ?? ModelPreset.auto.rawValue,
@@ -179,7 +195,10 @@ struct Serve: AsyncParsableCommand {
                 id: OpenAIChatHandler.generateID()
             )
             let response = result.response
-            let content = response.choices.first?.message.content ?? ""
+            // V.13d — message `content` is now optional (null on a tool-call
+            // turn). Flatten the choice + content optionals; a tool-call
+            // stream rides the existing chunk path with empty content.
+            let content = response.choices.first.flatMap { $0.message.content } ?? ""
             let events = OpenAIChatStream.events(
                 id: response.id, created: response.created,
                 model: response.model, content: content
@@ -244,8 +263,28 @@ struct Serve: AsyncParsableCommand {
     /// model backend is not yet connected. Token counts are estimated from
     /// the real prompt + content.
     static func placeholderChatEngine() -> OpenAIChatHandler.Engine {
-        OpenAIChatHandler.Engine { model, messages in
+        OpenAIChatHandler.Engine { model, messages, tools in
             let prompt = messages.map(\.content).joined(separator: "\n")
+            // V.13d — when the client declares tools AND the conversation
+            // has not yet returned a tool result (no prior `role: "tool"`
+            // message), the placeholder "calls" the first declared tool so
+            // the round-trip is exercised. The called name bridges through
+            // `MCPToolConfig` (OpenAIToolBridge) — no parallel registry. Once
+            // a tool result is in context (multi-turn), it returns text.
+            let hasToolResult = messages.contains { $0.role == "tool" }
+            if let bridged = OpenAIToolBridge.bridge(tools).first, !hasToolResult {
+                let args = "{}"
+                let call = OpenAIToolCall(
+                    id: "call_\(OpenAIChatHandler.generateID().dropFirst("chatcmpl-".count))",
+                    function: .init(name: bridged.name, arguments: args)
+                )
+                return OpenAIChatHandler.Completion(
+                    content: "",
+                    toolCalls: [call],
+                    promptTokens: OpenAIChatHandler.estimateTokens(prompt),
+                    completionTokens: OpenAIChatHandler.estimateTokens(args)
+                )
+            }
             let content = "[senkani serve --openai] Routed to \(model). Live model inference is not yet wired in this build — V.13a-3 ships the OpenAI-compatible routing + audit surface; the real model backend lands in a later V.13 child."
             return OpenAIChatHandler.Completion(
                 content: content,

@@ -24,7 +24,7 @@ struct OpenAIChatRoutingAuditTests {
 
     // A deterministic engine: echoes the routed model + fixed token counts.
     private static func stubEngine(content: String = "hello from the stub") -> OpenAIChatHandler.Engine {
-        OpenAIChatHandler.Engine { _, _ in
+        OpenAIChatHandler.Engine { _, _, _ in
             OpenAIChatHandler.Completion(content: content, promptTokens: 7, completionTokens: 4)
         }
     }

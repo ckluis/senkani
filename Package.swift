@@ -406,6 +406,19 @@ let package = Package(
             ],
             path: "Sources/MCP"
         ),
+        // U.8b-1 — MLX-backed prose→cron compiler. Empty actor
+        // scaffold (throws .unavailable); U.8b-2 fills in the
+        // ensureModel ladder + prompt + JSON parse + cron gate.
+        // CLI does NOT depend on this target until U.8b-4 lands.
+        .target(
+            name: "MLXProseCompiler",
+            dependencies: [
+                "Core",
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "MLXVLM", package: "mlx-swift-lm"),
+            ],
+            path: "Sources/MLXProseCompiler"
+        ),
         .executableTarget(
             name: "SenkaniMCP",
             dependencies: [
@@ -454,6 +467,7 @@ let package = Package(
                 "MCPServer",
                 "CLI",
                 "HookRelay",
+                "MLXProseCompiler",
                 "MonitorTUI",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Testing", package: "swift-testing"),

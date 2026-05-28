@@ -1,7 +1,6 @@
 import ArgumentParser
 import Foundation
 import Core
-import MLXProseCompiler
 
 struct Schedule: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -29,14 +28,23 @@ extension Schedule {
         /// `nonisolated(unsafe)` override pattern; the `--prose` CLI suite
         /// is `.serialized` so the global is never mutated concurrently.
         ///
+        /// The MLX arm is `SubprocessMLXProseCadenceCompiler` — it shells
+        /// out to `senkani-mcp prose` instead of linking MLXLMCommon +
+        /// MLXVLM into the CLI's binary. This is the install-size SLO
+        /// remediation tracked by
+        /// `phase-u8b-mlx-prose-subprocess-delegation-2026-05-28`:
+        /// before the swap, `.build/release/senkani` was ~92 MB (>50 MB
+        /// SLO); after, only the rule arm + subprocess shim live in CLI.
+        ///
         /// Lazy MLX invariant: constructing `CompositeProseCadenceCompiler`
-        /// (and the `MLXProseCadenceCompiler` actor it wraps) does NOT
-        /// load the Gemma model — model load happens lazily on the first
-        /// MLX-fallback call. Verified by `ScheduleCommandProseTests`.
+        /// (and the `SubprocessMLXProseCadenceCompiler` it wraps) does NOT
+        /// spawn a subprocess or load the Gemma model — the subprocess is
+        /// only spawned on the first MLX-fallback `compile()` call.
+        /// Verified by `ScheduleCommandProseTests`.
         nonisolated(unsafe) static var proseCompilerFactory: @Sendable () -> any ProseCadenceCompiler = {
             CompositeProseCadenceCompiler(
                 rule: RuleBasedProseCadenceCompiler(),
-                mlx: MLXProseCadenceCompiler()
+                mlx: SubprocessMLXProseCadenceCompiler()
             )
         }
 

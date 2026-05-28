@@ -188,13 +188,16 @@ struct ScheduleCommandProseTests {
     ///   1. `ModelManager.shared.isReady(...)` disk-state set is
     ///      unchanged across factory invocation (the bullet's
     ///      operator-facing recipe — disk state can't shift from a
-    ///      mere actor `init`, which is the whole point).
+    ///      mere `init`, which is the whole point).
     ///   2. A freshly-constructed `MLXProseCadenceCompiler` actor
-    ///      reports `ensureModelCallCountForTesting == 0` — the
-    ///      direct proof that `ensureModel()` was never entered. This
-    ///      mirrors what the factory does internally and stays
-    ///      meaningful whether or not the test machine has Gemma
-    ///      downloaded.
+    ///      reports `ensureModelCallCountForTesting == 0`. After the
+    ///      subprocess-delegation swap
+    ///      (`phase-u8b-mlx-prose-subprocess-delegation-2026-05-28`)
+    ///      the production composite's MLX arm is a subprocess shim,
+    ///      NOT this actor — but the actor still ships in the
+    ///      MLXProseCompiler target (depended on by SenkaniMCP) and
+    ///      its lazy-load invariant is still independently valuable
+    ///      coverage.
     @Test("constructing the production composite does not load Gemma (U.8b-4 lazy MLX invariant)")
     func compositeConstructionDoesNotLoadGemma() async {
         let prior = Schedule.Create.proseCompilerFactory
@@ -227,7 +230,7 @@ struct ScheduleCommandProseTests {
                 "MLXProseCadenceCompiler.init must not enter ensureModel(); got count=\(count)")
     }
 
-    @Test("--prose with a non-English locale refuses via the real compiler; no disk trace")
+    @Test("--prose with a non-English locale refuses; both arms reject; no disk trace")
     func proseNonEnglishLocaleRefusesNoDiskTrace() async throws {
         let tmpBase = NSTemporaryDirectory() + "senkani-prose-locale-\(UUID().uuidString)"
         let tmpLaunch = NSTemporaryDirectory() + "senkani-prose-locale-launch-\(UUID().uuidString)"
@@ -240,18 +243,35 @@ struct ScheduleCommandProseTests {
 
         let name = "prose-fr-locale-test"
         var thrown: Error?
-        // Real RuleBasedProseCadenceCompiler (default factory).
-        let create = try Schedule.Create.parse([
-            "--name", name,
-            "--prose", "every weekday at 9am",
-            "--locale", "fr-FR",
-            "--command", "senkani learn",
-        ])
-        await ScheduleStore.withTestDirs(base: tmpBase, launchAgents: tmpLaunch) {
-            do {
-                try await create.run()
-            } catch {
-                thrown = error
+        // After the subprocess-delegation swap
+        // (`phase-u8b-mlx-prose-subprocess-delegation-2026-05-28`) the
+        // production factory's MLX arm is `SubprocessMLXProseCadenceCompiler`,
+        // which depends on a built `senkani-mcp` binary — and `swift test`
+        // doesn't build the SenkaniMCP executable target. Inject a
+        // deterministic composite whose MLX arm rejects `fr-FR` with
+        // `.unsupportedLocale("fr-FR")`. That faithfully models the
+        // production composite's "both arms reject locale" contract
+        // without depending on subprocess discoverability.
+        try await withMockCompiler(
+            CompositeProseCadenceCompiler(
+                rule: RuleBasedProseCadenceCompiler(),
+                mlx: MockProseCadenceCompiler(handler: { _, locale in
+                    throw ProseCadenceCompilerError.unsupportedLocale(locale)
+                })
+            )
+        ) {
+            let create = try Schedule.Create.parse([
+                "--name", name,
+                "--prose", "every weekday at 9am",
+                "--locale", "fr-FR",
+                "--command", "senkani learn",
+            ])
+            await ScheduleStore.withTestDirs(base: tmpBase, launchAgents: tmpLaunch) {
+                do {
+                    try await create.run()
+                } catch {
+                    thrown = error
+                }
             }
         }
 

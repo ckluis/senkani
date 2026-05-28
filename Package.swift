@@ -387,12 +387,16 @@ let package = Package(
                 "Bench",
                 "Bundle",
                 "MonitorTUI",
-                // U.8b-4 — CLI gains the MLX-backed prose compiler so
-                // ScheduleCommand's factory default can construct a
-                // CompositeProseCadenceCompiler(rule + mlx). This is the
-                // edit that links MLXLMCommon + MLXVLM into the `senkani`
-                // binary (install-size measurement is U.8b-5's job).
-                "MLXProseCompiler",
+                // U.8b-4 added "MLXProseCompiler" so CLI could construct
+                // a CompositeProseCadenceCompiler(rule + mlx). U.8b-5
+                // measured the cost: the resulting CLI binary was ~92 MB
+                // (> 50 MB install.size SLO). The follow-up
+                // `phase-u8b-mlx-prose-subprocess-delegation-2026-05-28`
+                // moved the MLX arm to `SubprocessMLXProseCadenceCompiler`
+                // which shells out to `senkani-mcp prose` — so CLI no
+                // longer needs to link MLXLMCommon + MLXVLM. The
+                // MLXProseCompiler target itself still ships (depended on
+                // by SenkaniMCP and the test target).
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             path: "Sources/CLI"
@@ -429,6 +433,13 @@ let package = Package(
             name: "SenkaniMCP",
             dependencies: [
                 "MCPServer",
+                // U.8b follow-up — `senkani-mcp prose` is the
+                // subprocess endpoint the CLI talks to so the `senkani`
+                // binary doesn't have to link MLXLMCommon + MLXVLM.
+                // SenkaniMCP already links them via MCPServer's embed +
+                // vision tools, so adding MLXProseCompiler here is
+                // net-zero on senkani-mcp's install size.
+                "MLXProseCompiler",
             ],
             path: "Sources/MCPMain"
         ),

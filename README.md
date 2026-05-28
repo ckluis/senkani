@@ -293,7 +293,7 @@ senkani doctor       # verify grammar and database setup
 > documented deterministic path until the underlying helpers are
 > migrated off cooperative-pool blocking primitives.
 
-The GUI target (`SenkaniApp`) includes SwiftUI, SwiftTerm, and MLX. The CLI (`senkani`) and hook (`senkani-hook`) targets are lean — no MLX, no SwiftUI.
+The GUI target (`SenkaniApp`) includes SwiftUI, SwiftTerm, and MLX. The CLI (`senkani`) links MLX (via `MLXProseCompiler`) for the `schedule create --prose` natural-language cadence path's MLX-fallback arm (U.8b-4); the hook (`senkani-hook`) target stays lean — no MLX, no SwiftUI.
 
 ---
 

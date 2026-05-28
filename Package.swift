@@ -387,6 +387,12 @@ let package = Package(
                 "Bench",
                 "Bundle",
                 "MonitorTUI",
+                // U.8b-4 — CLI gains the MLX-backed prose compiler so
+                // ScheduleCommand's factory default can construct a
+                // CompositeProseCadenceCompiler(rule + mlx). This is the
+                // edit that links MLXLMCommon + MLXVLM into the `senkani`
+                // binary (install-size measurement is U.8b-5's job).
+                "MLXProseCompiler",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             path: "Sources/CLI"

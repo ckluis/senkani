@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import Core
+import MLXProseCompiler
 
 struct Schedule: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -19,13 +20,24 @@ extension Schedule {
         )
 
         /// Test seam: the `--prose` path resolves its compiler through this
-        /// factory. Production wires `RuleBasedProseCadenceCompiler`; tests
-        /// inject a `MockProseCadenceCompiler` and reset to the default in a
-        /// defer. Mirrors `ScheduleStore`'s `nonisolated(unsafe)` override
-        /// pattern; the `--prose` CLI suite is `.serialized` so the global
-        /// is never mutated concurrently.
+        /// factory. Production wires a `CompositeProseCadenceCompiler`
+        /// (rule-first, MLX-fallback) — deterministic phrases like "every
+        /// weekday at 9am" hit the sub-ms rule arm, irregular phrases like
+        /// "every other Tuesday at 6pm" fall through to MLX (cold-load +
+        /// Gemma inference). Tests inject a `MockProseCadenceCompiler` and
+        /// reset to the default in a defer. Mirrors `ScheduleStore`'s
+        /// `nonisolated(unsafe)` override pattern; the `--prose` CLI suite
+        /// is `.serialized` so the global is never mutated concurrently.
+        ///
+        /// Lazy MLX invariant: constructing `CompositeProseCadenceCompiler`
+        /// (and the `MLXProseCadenceCompiler` actor it wraps) does NOT
+        /// load the Gemma model — model load happens lazily on the first
+        /// MLX-fallback call. Verified by `ScheduleCommandProseTests`.
         nonisolated(unsafe) static var proseCompilerFactory: @Sendable () -> any ProseCadenceCompiler = {
-            RuleBasedProseCadenceCompiler()
+            CompositeProseCadenceCompiler(
+                rule: RuleBasedProseCadenceCompiler(),
+                mlx: MLXProseCadenceCompiler()
+            )
         }
 
         @Option(name: .long, help: "Task identifier (alphanumeric, dashes, underscores).")

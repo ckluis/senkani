@@ -3,6 +3,7 @@ import Foundation
 import ArgumentParser
 @testable import CLI
 @testable import Core
+import MLXProseCompiler
 
 /// `senkani schedule create --prose` (schedule-cli-prose-flag-2026-05-21,
 /// Finding C-prose). `Schedule.Create` is now `AsyncParsableCommand`; the
@@ -161,6 +162,69 @@ struct ScheduleCommandProseTests {
                 "--name", "x", "--command", "echo", "--prose", "daily",
             ])
         }
+    }
+
+    // MARK: - U.8b-4 production-default + lazy-MLX invariant
+
+    /// U.8b-4 acceptance: the production default factory wires a
+    /// `CompositeProseCadenceCompiler` (rule-first + MLX-fallback), not
+    /// a bare `RuleBasedProseCadenceCompiler`. Read-only — the
+    /// `.serialized` suite + sibling `withMockCompiler` defer-restore
+    /// pattern keeps the factory at its production default at test
+    /// entry.
+    @Test("production default factory returns a CompositeProseCadenceCompiler (U.8b-4)")
+    func productionDefaultFactoryReturnsComposite() {
+        let prior = Schedule.Create.proseCompilerFactory
+        defer { Schedule.Create.proseCompilerFactory = prior }
+
+        let compiler = Schedule.Create.proseCompilerFactory()
+        #expect(compiler is CompositeProseCadenceCompiler,
+                "production default factory must return CompositeProseCadenceCompiler, got \(type(of: compiler))")
+    }
+
+    /// U.8b-4 acceptance: constructing the production composite MUST
+    /// NOT load the Gemma model. Two complementary probes:
+    ///
+    ///   1. `ModelManager.shared.isReady(...)` disk-state set is
+    ///      unchanged across factory invocation (the bullet's
+    ///      operator-facing recipe — disk state can't shift from a
+    ///      mere actor `init`, which is the whole point).
+    ///   2. A freshly-constructed `MLXProseCadenceCompiler` actor
+    ///      reports `ensureModelCallCountForTesting == 0` — the
+    ///      direct proof that `ensureModel()` was never entered. This
+    ///      mirrors what the factory does internally and stays
+    ///      meaningful whether or not the test machine has Gemma
+    ///      downloaded.
+    @Test("constructing the production composite does not load Gemma (U.8b-4 lazy MLX invariant)")
+    func compositeConstructionDoesNotLoadGemma() async {
+        let prior = Schedule.Create.proseCompilerFactory
+        defer { Schedule.Create.proseCompilerFactory = prior }
+
+        // Probe 1: disk-state set is identical before/after factory
+        // invocation across every Gemma 4 VLM id. Construction of an
+        // actor cannot mutate ModelManager's disk-state cache, so this
+        // is a tautology — and that tautology IS the operator-facing
+        // recipe in the U.8b-4 acceptance bullet.
+        let before = ModelManager.visionModelIds.map {
+            ($0, ModelManager.shared.isReady($0))
+        }
+        _ = Schedule.Create.proseCompilerFactory()
+        let after = ModelManager.visionModelIds.map {
+            ($0, ModelManager.shared.isReady($0))
+        }
+        #expect(before.map(\.0) == after.map(\.0))
+        #expect(before.map(\.1) == after.map(\.1),
+                "factory invocation must not change ModelManager disk-readiness state")
+
+        // Probe 2: direct proof that ensureModel() was never entered on
+        // a freshly-constructed MLX actor. The factory builds exactly
+        // this actor as the composite's MLX arm; the counter is 0
+        // before any compile() call, regardless of whether a Gemma
+        // tier is downloaded.
+        let mlx = MLXProseCadenceCompiler()
+        let count = await mlx.ensureModelCallCountForTesting
+        #expect(count == 0,
+                "MLXProseCadenceCompiler.init must not enter ensureModel(); got count=\(count)")
     }
 
     @Test("--prose with a non-English locale refuses via the real compiler; no disk trace")

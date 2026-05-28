@@ -203,7 +203,13 @@ public struct RuleBasedProseCadenceCompiler: ProseCadenceCompiler {
     /// `-` or `_`. Parsed manually rather than via `Locale` so that both
     /// `en-US` (hyphen, BCP-47) and `en_US` (underscore, ICU) resolve
     /// identically regardless of Foundation's normalization quirks.
-    static func languageCode(of locale: String) -> String {
+    // Public so cross-module compilers (e.g. `MLXProseCadenceCompiler`
+    // in the `MLXProseCompiler` target) can reuse the same parsing
+    // rules and stay in lockstep with the rule-based path on
+    // `en-US`/`en_US` equivalence. See parent
+    // `phase-u8b-prose-compiler-adapter` acceptance bullet on locale
+    // gate reuse.
+    public static func languageCode(of locale: String) -> String {
         let lower = locale.lowercased()
         if let sep = lower.firstIndex(where: { $0 == "-" || $0 == "_" }) {
             return String(lower[..<sep])
@@ -211,7 +217,7 @@ public struct RuleBasedProseCadenceCompiler: ProseCadenceCompiler {
         return lower
     }
 
-    static func isEnglish(_ locale: String) -> Bool {
+    public static func isEnglish(_ locale: String) -> Bool {
         languageCode(of: locale) == "en"
     }
 

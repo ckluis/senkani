@@ -74,12 +74,28 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
     ///   - status: the HTTP status code returned.
     ///   - keyLabel: the provisioned key's label, or nil. NEVER the raw
     ///     API key.
+    ///   - modelLogged: the producer-side model identity. Success-path
+    ///     callers pass the **already-sanitized** value (see
+    ///     `OpenAIServedRequestSink.sanitize(modelLogged:)`); refusal-
+    ///     path callers pass the literal `<refused>`. Pass `nil` to
+    ///     persist SQL NULL (legacy callers that don't have a model
+    ///     identity yet — e.g. the V.13e-5 burst test). Migration v42.
+    ///   - resolvedTier: the routed tier name (e.g. `local`, `cloud`),
+    ///     or nil when no routing decision exists (refusals).
+    ///   - inputTokens: prompt token count, or nil when no count exists
+    ///     (refusals).
+    ///   - outputTokens: completion token count, or nil when no count
+    ///     exists (refusals).
     @discardableResult
     public func record(
         ts: Date = Date(),
         surface: Surface,
         status: Int,
-        keyLabel: String?
+        keyLabel: String?,
+        modelLogged: String? = nil,
+        resolvedTier: String? = nil,
+        inputTokens: Int? = nil,
+        outputTokens: Int? = nil
     ) -> Bool {
         let tsEpoch = ts.timeIntervalSince1970
         return parent.queue.sync { [parent, chain] in
@@ -87,11 +103,22 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
             let anchorId = chain.resolveAnchorId(db: db)
             let prevHash = chain.latestEntryHash(db: db, anchorId: anchorId)
 
+            // Migration v42 — the four producer-metadata columns ride the
+            // tamper-evident chain. NULL handling matches the verifier's
+            // anchor-aware shape branch (see `ChainVerifier
+            // .verifyAnchorOpenAIRequestLog`). The writer is single-shape
+            // post-v42; legacy pre-v42 rows live under
+            // `fresh-install-pre-v42` and the verifier omits these keys
+            // from their canonical map.
             let columns: [String: ChainHasher.CanonicalValue] = [
-                "ts":        .real(tsEpoch),
-                "surface":   .text(surface.rawValue),
-                "status":    .integer(Int64(status)),
-                "key_label": keyLabel.map { .text($0) } ?? .null,
+                "ts":            .real(tsEpoch),
+                "surface":       .text(surface.rawValue),
+                "status":        .integer(Int64(status)),
+                "key_label":     keyLabel.map { .text($0) } ?? .null,
+                "model_logged":  modelLogged.map { .text($0) } ?? .null,
+                "resolved_tier": resolvedTier.map { .text($0) } ?? .null,
+                "input_tokens":  inputTokens.map { .integer(Int64($0)) } ?? .null,
+                "output_tokens": outputTokens.map { .integer(Int64($0)) } ?? .null,
             ]
             let entryHash = ChainHasher.entryHash(
                 table: OpenAIRequestLogStore.table, columns: columns, prev: prevHash
@@ -100,8 +127,9 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
             let sql = """
                 INSERT INTO openai_request_log
                     (ts, surface, status, key_label,
+                     model_logged, resolved_tier, input_tokens, output_tokens,
                      prev_hash, entry_hash, chain_anchor_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?);
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
@@ -114,13 +142,33 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
             } else {
                 sqlite3_bind_null(stmt, 4)
             }
-            if let prevHash {
-                sqlite3_bind_text(stmt, 5, (prevHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            if let modelLogged {
+                sqlite3_bind_text(stmt, 5, (modelLogged as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 5)
             }
-            sqlite3_bind_text(stmt, 6, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
-            sqlite3_bind_int64(stmt, 7, anchorId)
+            if let resolvedTier {
+                sqlite3_bind_text(stmt, 6, (resolvedTier as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            } else {
+                sqlite3_bind_null(stmt, 6)
+            }
+            if let inputTokens {
+                sqlite3_bind_int64(stmt, 7, Int64(inputTokens))
+            } else {
+                sqlite3_bind_null(stmt, 7)
+            }
+            if let outputTokens {
+                sqlite3_bind_int64(stmt, 8, Int64(outputTokens))
+            } else {
+                sqlite3_bind_null(stmt, 8)
+            }
+            if let prevHash {
+                sqlite3_bind_text(stmt, 9, (prevHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            } else {
+                sqlite3_bind_null(stmt, 9)
+            }
+            sqlite3_bind_text(stmt, 10, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_int64(stmt, 11, anchorId)
 
             guard sqlite3_step(stmt) == SQLITE_DONE else { return false }
             chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
@@ -200,12 +248,21 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
     }
 
     /// One row as read back from the table (metadata only — no bodies).
+    ///
+    /// `modelLogged` / `resolvedTier` / `inputTokens` / `outputTokens`
+    /// are the V.13e-7 producer-metadata columns (Migration v42). Pre-
+    /// v42 rows persist NULL in all four; consumers MUST tolerate `nil`
+    /// when surfacing legacy traffic.
     public struct Row: Sendable, Equatable {
         public let id: Int64
         public let ts: Date
         public let surface: String
         public let status: Int
         public let keyLabel: String?
+        public let modelLogged: String?
+        public let resolvedTier: String?
+        public let inputTokens: Int?
+        public let outputTokens: Int?
     }
 
     /// Return the N most recent rows in descending id order.
@@ -213,7 +270,8 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
         return parent.queue.sync {
             guard let db = parent.db else { return [] }
             let sql = """
-                SELECT id, ts, surface, status, key_label
+                SELECT id, ts, surface, status, key_label,
+                       model_logged, resolved_tier, input_tokens, output_tokens
                   FROM openai_request_log
                  ORDER BY id DESC
                  LIMIT ?;
@@ -250,12 +308,22 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
         let surface = sqlite3_column_text(stmt, 2).map { String(cString: $0) } ?? ""
         let status = Int(sqlite3_column_int64(stmt, 3))
         let keyLabel = sqlite3_column_text(stmt, 4).map { String(cString: $0) }
+        let modelLogged = sqlite3_column_text(stmt, 5).map { String(cString: $0) }
+        let resolvedTier = sqlite3_column_text(stmt, 6).map { String(cString: $0) }
+        let inputTokens: Int? = sqlite3_column_type(stmt, 7) == SQLITE_NULL
+            ? nil : Int(sqlite3_column_int64(stmt, 7))
+        let outputTokens: Int? = sqlite3_column_type(stmt, 8) == SQLITE_NULL
+            ? nil : Int(sqlite3_column_int64(stmt, 8))
         return Row(
             id: id,
             ts: Date(timeIntervalSince1970: ts),
             surface: surface,
             status: status,
-            keyLabel: keyLabel
+            keyLabel: keyLabel,
+            modelLogged: modelLogged,
+            resolvedTier: resolvedTier,
+            inputTokens: inputTokens,
+            outputTokens: outputTokens
         )
     }
 }

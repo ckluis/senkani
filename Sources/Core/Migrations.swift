@@ -2215,6 +2215,115 @@ public enum MigrationRegistry {
             try exec("CREATE INDEX IF NOT EXISTS idx_openai_request_log_ts ON openai_request_log(ts);")
             try exec("CREATE INDEX IF NOT EXISTS idx_openai_request_log_status ON openai_request_log(status);")
         },
+        Migration(version: 42, description: "openai_request_log producer-metadata columns (model_logged + resolved_tier + input_tokens + output_tokens) for V.13e-7 GUI consumer enablement") { db in
+            // V.13e-7 — extend the v41 metadata-only request log with the
+            // producer-side metadata the in-memory `OpenAIAuditChain` already
+            // carries (`modelLogged`, `resolvedTier`, `promptTokenCount`,
+            // `completionTokenCount`). v41 sized the persisted log for the
+            // doctor `429-rate` check; the GUI consumer
+            // (`phase-v13-gui-agent-timeline-consumer-2026-05-28`) needs the
+            // richer per-request metadata so the agent-timeline pane can
+            // surface what the client asked for, which tier we routed to,
+            // and how many tokens flowed. Schneier: persist at the producer
+            // once, every downstream consumer (doctor + GUI + future trend
+            // dashboards) reads from the same row.
+            //
+            // Chain-hash compatibility mirrors the v23 egress / v25 trust-
+            // audits / v33 wasm-kill / v35 cached-token pattern: pre-v42
+            // rows under `fresh-install` (the v41 lazy anchor) were hashed
+            // WITHOUT the four new columns. Adding the columns to that
+            // anchor's canonical map would break its entry_hash. Instead we
+            // rename the existing `fresh-install` anchor to
+            // `fresh-install-pre-v42` so the verifier can switch shapes per
+            // anchor; new writes register the four producer-metadata
+            // columns in the canonical map (NULL → `.null`, populated →
+            // typed) and chain under the v42 anchor (or a post-v42
+            // lazy-created `fresh-install`). Legacy rows keep their old
+            // anchor + old canonical shape.
+            //
+            // `presetUsed` (the routing-internal preset name) is
+            // deliberately NOT persisted here — the audit chain carries it
+            // for forensic replay; operator GUIs don't need it. Adding it
+            // later is a one-column ALTER under a `migration-v43` anchor.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v42", detail: msg)
+            }
+
+            // Self-contained CREATE matches v41's baseline so v42 can run
+            // against a DB landed at any later state.
+            try exec("""
+                CREATE TABLE IF NOT EXISTS openai_request_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts REAL NOT NULL,
+                    surface TEXT NOT NULL,
+                    status INTEGER NOT NULL,
+                    key_label TEXT,
+                    prev_hash TEXT,
+                    entry_hash TEXT,
+                    chain_anchor_id INTEGER
+                );
+            """)
+            try exec("ALTER TABLE openai_request_log ADD COLUMN model_logged TEXT;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE openai_request_log ADD COLUMN resolved_tier TEXT;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE openai_request_log ADD COLUMN input_tokens INTEGER;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE openai_request_log ADD COLUMN output_tokens INTEGER;", allowDuplicateColumn: true)
+
+            // Idempotency guard: a prior successful or partial application
+            // of v42 leaves either `fresh-install-pre-v42` (the renamed
+            // legacy lazy anchor) or `migration-v42` (the new anchor at
+            // first-run MAX(id)) in chain_anchors. If either is already
+            // present, skip the rename + anchor-open — re-running them
+            // would mis-classify post-v42 lazy `fresh-install` anchors
+            // (created by writes after v42 first applied) as pre-v42,
+            // breaking entry_hash verification for those rows.
+            var probeStmt: OpaquePointer?
+            let probeSQL = """
+                SELECT EXISTS(SELECT 1 FROM chain_anchors
+                               WHERE table_name = 'openai_request_log'
+                                 AND reason IN ('migration-v42', 'fresh-install-pre-v42'));
+            """
+            guard sqlite3_prepare_v2(db, probeSQL, -1, &probeStmt, nil) == SQLITE_OK else {
+                throw MigrationError.sqlFailed(
+                    stage: "v42 marker probe",
+                    detail: String(cString: sqlite3_errmsg(db)))
+            }
+            var alreadyApplied = false
+            if sqlite3_step(probeStmt) == SQLITE_ROW {
+                alreadyApplied = sqlite3_column_int(probeStmt, 0) == 1
+            }
+            sqlite3_finalize(probeStmt)
+
+            if !alreadyApplied {
+                // Rename the existing post-v41 `fresh-install` anchor for
+                // openai_request_log to `fresh-install-pre-v42` so writes
+                // + verifier can switch canonical shapes per anchor. After
+                // this rename, any rolling `fresh-install` anchor (lazy-
+                // created post-v42 by `ChainState`) means "v42 canonical
+                // shape" — includes the four producer-metadata columns.
+                // Safely no-ops when no `fresh-install` row exists (table
+                // was never written to under v41).
+                try exec("""
+                    UPDATE chain_anchors
+                       SET reason = 'fresh-install-pre-v42'
+                     WHERE table_name = 'openai_request_log'
+                       AND reason = 'fresh-install';
+                """)
+
+                // Open a `migration-v42` anchor at MAX(id) so post-v42
+                // writes chain under the new shape, while pre-v42 rows
+                // verify under `fresh-install-pre-v42`. No-op on empty
+                // tables — fresh installs lazy-create a `fresh-install`
+                // anchor on first write that uses the v42 canonical shape
+                // from the start.
+                try openOpenAIRequestLogV42Anchor(db: db)
+            }
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)
@@ -2465,6 +2574,56 @@ public enum MigrationRegistry {
             sqlite3_finalize(stmt)
             throw MigrationError.sqlFailed(
                 stage: "v40 anchor step(token_events)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_finalize(stmt)
+    }
+
+    /// Open a `migration-v42` anchor for `openai_request_log` at MAX(id)
+    /// so post-v42 writes that include the four producer-metadata columns
+    /// (`model_logged`, `resolved_tier`, `input_tokens`, `output_tokens`)
+    /// in the canonical map chain under the new shape, while pre-v42 rows
+    /// verify under `fresh-install-pre-v42` (renamed by the v42 migration
+    /// body).
+    ///
+    /// Unlike the v23/v25/v33/v35 anchor openers, this one runs even on
+    /// an empty table. The marker matters for idempotency: by always
+    /// laying down `migration-v42`, the migration body's marker-guard
+    /// can reliably distinguish first-run from replay, AND
+    /// `ChainState.resolveAnchorId` finds it on the first post-v42 write
+    /// (no ambiguous lazy `fresh-install` anchor whose timing relative
+    /// to the v42 application is unrecoverable).
+    private static func openOpenAIRequestLogV42Anchor(db: OpaquePointer) throws {
+        var stmt: OpaquePointer?
+        let maxSQL = "SELECT COALESCE(MAX(id), 0) FROM openai_request_log;"
+        guard sqlite3_prepare_v2(db, maxSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(
+                stage: "v42 maxid(openai_request_log)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        var maxRowid: Int64 = 0
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            maxRowid = sqlite3_column_int64(stmt, 0)
+        }
+        sqlite3_finalize(stmt)
+
+        let now = Date().timeIntervalSince1970
+        let insertSQL = """
+            INSERT INTO chain_anchors
+                (table_name, started_at, started_at_rowid, reason, operator_note)
+            VALUES ('openai_request_log', ?, ?, 'migration-v42', NULL);
+        """
+        guard sqlite3_prepare_v2(db, insertSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(
+                stage: "v42 anchor insert(openai_request_log)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_bind_double(stmt, 1, now)
+        sqlite3_bind_int64(stmt, 2, maxRowid)
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            sqlite3_finalize(stmt)
+            throw MigrationError.sqlFailed(
+                stage: "v42 anchor step(openai_request_log)",
                 detail: String(cString: sqlite3_errmsg(db)))
         }
         sqlite3_finalize(stmt)

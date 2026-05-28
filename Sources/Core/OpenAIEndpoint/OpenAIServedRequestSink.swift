@@ -62,13 +62,61 @@ public enum OpenAIServedRequestSink {
         surface: OpenAIRequestLogStore.Surface,
         httpStatus: Int
     ) -> Bool {
+        // The in-memory tamper-evident chain stores the RAW client-asked
+        // model string. The persisted store stores a regex-sanitized copy
+        // (or `<malformed>`). Sanitization happens at the single trust
+        // boundary — this sink — so every downstream consumer can render
+        // the persisted column raw without re-validating. Schneier:
+        // sanitize at the trust boundary, not at every consumer.
         chain.append(fields, bodies: bodies)
+        let sanitizedModel = sanitize(modelLogged: fields.modelLogged)
         return db.recordOpenAIRequest(
             ts: fields.ts,
             surface: surface,
             status: httpStatus,
-            keyLabel: fields.keyLabel
+            keyLabel: fields.keyLabel,
+            modelLogged: sanitizedModel,
+            resolvedTier: fields.resolvedTier,
+            inputTokens: fields.promptTokenCount,
+            outputTokens: fields.completionTokenCount
         )
+    }
+
+    /// V.13e-7 — producer-side `model_logged` sanitization. The OpenAI
+    /// `model` field is attacker-controlled (clients can send arbitrary
+    /// bytes). Strings matching `^[A-Za-z0-9._:/-]{1,64}$` persist as
+    /// themselves; everything else persists as the literal `<malformed>`.
+    /// The in-memory tamper-evident chain still records the raw value
+    /// for forensics — this sentinel is for the persisted column only.
+    ///
+    /// Regex is anchored at both ends so a 65-character or
+    /// out-of-character-class string fails the entire match. The
+    /// allowed character class — alphanumerics plus `.`, `_`, `:`, `/`,
+    /// `-` — covers every model identifier the upstream router
+    /// currently emits (e.g. `gpt-4o-mini`, `claude-3-7-sonnet`,
+    /// `local/gemma-3-2b-it`, namespaced provider:model tuples).
+    static func sanitize(modelLogged: String) -> String {
+        // Hand-coded character check is faster than NSRegularExpression
+        // on the hot serve path and avoids any locale/dotAll trap.
+        guard !modelLogged.isEmpty, modelLogged.utf8.count <= 64 else {
+            return "<malformed>"
+        }
+        for scalar in modelLogged.unicodeScalars {
+            switch scalar.value {
+            case 0x30...0x39,   // 0-9
+                 0x41...0x5A,   // A-Z
+                 0x61...0x7A,   // a-z
+                 0x2E,          // .
+                 0x5F,          // _
+                 0x3A,          // :
+                 0x2F,          // /
+                 0x2D:          // -
+                continue
+            default:
+                return "<malformed>"
+            }
+        }
+        return modelLogged
     }
 
     /// V.13e — record a gate REFUSAL (401 / 403 / 429) to the persisted
@@ -147,8 +195,16 @@ public enum OpenAIServedRequestSink {
         case "chat":       surface = .chat
         default:           surface = .other   // nil / unrecognized paths (e.g. /v1/models)
         }
+        // V.13e-7 — refusals fire BEFORE any surface handler routes, so
+        // there's no resolved tier, no token counts, and no client-asked
+        // model worth persisting raw. `<refused>` is the literal sentinel
+        // for `model_logged` (length-bounded, character-bounded, parses
+        // as text not as a real model id); the other three columns
+        // persist NULL.
         return db.recordOpenAIRequest(
-            ts: now, surface: surface, status: status, keyLabel: keyLabel
+            ts: now, surface: surface, status: status, keyLabel: keyLabel,
+            modelLogged: "<refused>", resolvedTier: nil,
+            inputTokens: nil, outputTokens: nil
         )
     }
 

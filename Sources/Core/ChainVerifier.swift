@@ -701,15 +701,22 @@ public enum ChainVerifier {
         }
     }
 
-    /// Walk `openai_request_log` rows for one anchor. V.13e-1 ships the
-    /// table + writer (`OpenAIRequestLogStore.record`); the canonical
-    /// column shape mirrors that writer exactly — four metadata columns,
-    /// no body columns, no column evolution since v41 (so no
-    /// anchor-reason shape branching is needed).
+    /// Walk `openai_request_log` rows for one anchor.
+    ///
+    /// Anchor-aware canonical shape (v42): rows under
+    /// `fresh-install-pre-v42` (the renamed v41 lazy anchor) were hashed
+    /// without the four V.13e-7 producer-metadata columns
+    /// (`model_logged`, `resolved_tier`, `input_tokens`, `output_tokens`);
+    /// rows under any other anchor — `migration-v42`, post-v42
+    /// `fresh-install` (lazy-created after the v42 rename), future
+    /// `repair-*` rebinds — include those columns. Mirrors the writer-
+    /// side single-shape post-v42 in `OpenAIRequestLogStore.record`.
     /// `entry_hash IS NOT NULL` filter — see `verifyAnchorTokenEvents` notes.
     private static func verifyAnchorOpenAIRequestLog(db: OpaquePointer, anchor: Anchor) -> Result? {
+        let useV42Shape = (anchor.reason != "fresh-install-pre-v42")
         let sql = """
             SELECT id, ts, surface, status, key_label,
+                   model_logged, resolved_tier, input_tokens, output_tokens,
                    prev_hash, entry_hash
               FROM openai_request_log
              WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
@@ -717,14 +724,22 @@ public enum ChainVerifier {
         """
         return walkTable(db: db, table: "openai_request_log", anchor: anchor, sql: sql) { stmt in
             let rowid = sqlite3_column_int64(stmt, 0)
-            let columns: [String: ChainHasher.CanonicalValue] = [
+            var columns: [String: ChainHasher.CanonicalValue] = [
                 "ts":        .real(sqlite3_column_double(stmt, 1)),
                 "surface":   textValue(stmt, 2),
                 "status":    .integer(sqlite3_column_int64(stmt, 3)),
                 "key_label": textOrNull(stmt, 4),
             ]
-            let prev = optionalText(stmt, 5)
-            let stored = sqlite3_column_text(stmt, 6).map { String(cString: $0) } ?? ""
+            if useV42Shape {
+                columns["model_logged"]  = textOrNull(stmt, 5)
+                columns["resolved_tier"] = textOrNull(stmt, 6)
+                columns["input_tokens"]  = sqlite3_column_type(stmt, 7) == SQLITE_NULL
+                                              ? .null : .integer(sqlite3_column_int64(stmt, 7))
+                columns["output_tokens"] = sqlite3_column_type(stmt, 8) == SQLITE_NULL
+                                              ? .null : .integer(sqlite3_column_int64(stmt, 8))
+            }
+            let prev = optionalText(stmt, 9)
+            let stored = sqlite3_column_text(stmt, 10).map { String(cString: $0) } ?? ""
             return (rowid, columns, prev, stored)
         }
     }

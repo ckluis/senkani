@@ -11,15 +11,29 @@ extension SessionDatabase {
     /// write failure does not propagate — the listener must keep serving
     /// even if the audit DB is offline. The raw API key is never written;
     /// pass only `keyLabel`. Returns `true` on a successful chained insert.
+    ///
+    /// The four producer-metadata params (`modelLogged`, `resolvedTier`,
+    /// `inputTokens`, `outputTokens`) ride the Migration v42 columns.
+    /// Default to nil so legacy callers (V.13e-5 burst integrity,
+    /// `OpenAIChatRoutingAuditTests`) continue to compile; the success
+    /// path threads through `OpenAIServedRequestSink.record` which
+    /// applies regex sanitization before this hop. The refusal path
+    /// passes `modelLogged: "<refused>"` + nil for the other three.
     @discardableResult
     public func recordOpenAIRequest(
         ts: Date = Date(),
         surface: OpenAIRequestLogStore.Surface,
         status: Int,
-        keyLabel: String?
+        keyLabel: String?,
+        modelLogged: String? = nil,
+        resolvedTier: String? = nil,
+        inputTokens: Int? = nil,
+        outputTokens: Int? = nil
     ) -> Bool {
         openAIRequestLogStore.record(
-            ts: ts, surface: surface, status: status, keyLabel: keyLabel
+            ts: ts, surface: surface, status: status, keyLabel: keyLabel,
+            modelLogged: modelLogged, resolvedTier: resolvedTier,
+            inputTokens: inputTokens, outputTokens: outputTokens
         )
     }
 

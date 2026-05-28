@@ -139,6 +139,62 @@ extension ProseCadenceCompilerError {
     }
 }
 
+// MARK: - CompositeProseCadenceCompiler
+//
+// Phase U.8b-3 — two-arm composite: rule-based FIRST, MLX fallback ONLY
+// on `.unrecognizedPhrase` / `.unsupportedLocale`. Every other rule-side
+// error (`.invalidCron`, `.unavailable`, `.invalidJSON`, `.cancelled`)
+// re-throws unchanged — those are operator-actionable verdicts and
+// must NOT be hidden behind a silent fallback. MLX-side errors also
+// re-throw unchanged so the operator sees clear messages ("no MLX
+// model installed; pass --cron" / "model output unparseable" / "model
+// emitted invalid cron").
+//
+// The selection seam was chosen at the 2026-05-28 operator interview
+// (Q3 of the `phase-u8b-prose-compiler-adapter` decomposition): rule
+// FIRST + MLX-on-fallback minimizes latency for the common case
+// (deterministic phrases like "every weekday at 9am" hit in <1 ms)
+// while still letting MLX handle irregular language ("every other
+// Tuesday at 6pm") and non-English locales.
+//
+// Composes via `any ProseCadenceCompiler` for both arms so this type
+// lives in Core with no MLX import — the CLI/App wiring picks the
+// concrete arms at construction time.
+
+public struct CompositeProseCadenceCompiler: ProseCadenceCompiler {
+    private let rule: any ProseCadenceCompiler
+    private let mlx: any ProseCadenceCompiler
+
+    public init(rule: any ProseCadenceCompiler, mlx: any ProseCadenceCompiler) {
+        self.rule = rule
+        self.mlx = mlx
+    }
+
+    public func compile(prose: String, locale: String) async throws -> ProseCadence {
+        do {
+            return try await rule.compile(prose: prose, locale: locale)
+        } catch let e as ProseCadenceCompilerError {
+            switch e {
+            case .unrecognizedPhrase, .unsupportedLocale:
+                // Fall through to MLX. MLX-side errors propagate
+                // unchanged so the operator sees the MLX verdict
+                // (.unavailable / .invalidJSON / .invalidCron /
+                // .cancelled / .unsupportedLocale).
+                return try await mlx.compile(prose: prose, locale: locale)
+            case .invalidCron, .unavailable, .invalidJSON, .cancelled:
+                // Operator-actionable — re-throw unchanged. No
+                // fall-through (a rule-side .invalidCron means the
+                // rule emitted a malformed cron, NOT that MLX should
+                // try; calling MLX here would mask a real bug).
+                throw e
+            }
+        }
+        // Any non-ProseCadenceCompilerError thrown by the rule arm
+        // propagates unchanged (defense-in-depth — current taxonomy
+        // is closed, but a future adapter might leak).
+    }
+}
+
 // MARK: - RuleBasedProseCadenceCompiler
 //
 // Deterministic, MLX-free production compiler for `senkani schedule

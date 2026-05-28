@@ -174,12 +174,22 @@ struct Serve: AsyncParsableCommand {
 
         // V.13c — embeddings surface. The embedding model identity is
         // sourced from `ModelManager` (the single `minilm-l6` registry
-        // entry — no parallel stack); the placeholder engine returns a
-        // deterministic, fixed-dimension vector so a client gets a valid
-        // OpenAI `list` response while real on-device MiniLM inference lands
-        // in the shared V.13 backend child. Each request lands exactly one
-        // audit entry with `surface: "embeddings"`.
-        let embeddingsEngine = Serve.placeholderEmbeddingsEngine()
+        // entry — no parallel stack). V.13c-real-engine: if the MCP target
+        // has registered a real `EmbeddingEngine` via
+        // `ModelManager.registerEmbeddingHandler`, the registered handler
+        // produces real on-device MiniLM vectors (+ real tokenizer count
+        // for `usage.prompt_tokens`); otherwise we fall back to the v13c
+        // placeholder and log the unregistered state once at startup. The
+        // readiness gate fires ONLY when a real handler is registered AND
+        // the model is not yet downloaded — the placeholder path stays
+        // available without any model.
+        let placeholderEmbeddingsEngine = Serve.placeholderEmbeddingsEngine()
+        let registeredEmbeddingHandler = ModelManager.shared.resolvedEmbeddingHandler()
+        if registeredEmbeddingHandler == nil {
+            print("openai-serve embeddings_backend=placeholder (no MCP-side EmbeddingEngine registered; vectors are deterministic, not real MiniLM embeddings)")
+        } else {
+            print("openai-serve embeddings_backend=mcp_handler model_id=\(ModelManager.embeddingModelID)")
+        }
         let embeddingsHandler = OpenAIListener.EmbeddingsHandler { _, _, headers, body in
             guard let request = OpenAIEmbeddingsHandler.decodeRequest(body) else {
                 return OpenAIEmbeddingsHandler.errorResponse(
@@ -188,12 +198,29 @@ struct Serve: AsyncParsableCommand {
                     type: "invalid_request_error", errorCode: "invalid_request"
                 )
             }
+            // Readiness gate fires only when a real handler is registered —
+            // the placeholder path doesn't need the model and stays
+            // available without it (Q1+Q2 scope decisions 2026-05-28).
+            let engine: OpenAIEmbeddingsHandler.Engine
+            if let registered = registeredEmbeddingHandler {
+                let modelId = ModelManager.embeddingModelID
+                let ready = ModelManager.shared.isReady(modelId)
+                if let gate = OpenAIEmbeddingsServeBridge.readinessResponse(
+                    modelId: modelId, isReady: ready
+                ) {
+                    print("openai-request surface=embeddings model_logged=\(request.model) resolved_model=\(modelId) status=model_not_available")
+                    return gate
+                }
+                engine = OpenAIEmbeddingsServeBridge.syncEngine(for: registered)
+            } else {
+                engine = placeholderEmbeddingsEngine
+            }
             let token = OpenAIAuthGate.bearerToken(fromHeader: headers["authorization"])
             let record = token.flatMap { OpenAIAuthGate.matchRecord(presentedKey: $0, records: keys.current()) }
             let result = OpenAIEmbeddingsHandler.handle(
                 request: request,
                 keyLabel: record?.label,
-                engine: embeddingsEngine,
+                engine: engine,
                 now: Date()
             )
             OpenAIServedRequestSink.record(

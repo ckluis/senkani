@@ -113,6 +113,15 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
     /// Protected by `lock`.
     private var verificationHandler: ((String) async throws -> Void)?
 
+    /// Registered embedding handler. V.13c real-engine — MCP target
+    /// registers an MLX-backed implementation at startup so `senkani serve
+    /// --openai`'s `POST /v1/embeddings` returns real on-device MiniLM
+    /// vectors instead of the placeholder. Core stays MLX-free; the CLI
+    /// link surface is unchanged. When `nil`, `ServeCommand` falls back to
+    /// `Serve.placeholderEmbeddingsEngine()` and logs the unregistered
+    /// state. Protected by `lock`.
+    private var embeddingHandler: (any EmbeddingEngine)?
+
     /// Register a download handler (called by MCP layer at startup).
     /// Thread-safe: acquires lock before writing.
     public func registerDownloadHandler(_ handler: @escaping (String) async throws -> Void) {
@@ -129,6 +138,28 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
         lock.lock()
         verificationHandler = handler
         lock.unlock()
+    }
+
+    /// Register an embedding handler (called by MCP layer at startup).
+    /// V.13c real-engine — `senkani serve --openai`'s `POST /v1/embeddings`
+    /// resolves this handler at request time; if `nil`, falls back to the
+    /// v13c placeholder. Mirrors `registerDownloadHandler` /
+    /// `registerVerificationHandler` — Core stays MLX-free.
+    /// Thread-safe.
+    public func registerEmbeddingHandler(_ handler: any EmbeddingEngine) {
+        lock.lock()
+        embeddingHandler = handler
+        lock.unlock()
+    }
+
+    /// Resolved embedding handler, if any. `ServeCommand` consults this at
+    /// request time. Returns nil when no MCP-side handler has been
+    /// registered (e.g. `senkani serve` started without the MCP startup
+    /// hook, or a unit test).
+    public func resolvedEmbeddingHandler() -> (any EmbeddingEngine)? {
+        lock.lock()
+        defer { lock.unlock() }
+        return embeddingHandler
     }
 
     // MARK: - HuggingFace Cache Location

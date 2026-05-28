@@ -52,6 +52,14 @@ public struct MCPServerRunner {
             }
         }
 
+        // V.13c real-engine — register the MLX-backed embedding handler so
+        // `senkani serve --openai`'s `POST /v1/embeddings` produces real
+        // on-device MiniLM vectors instead of the placeholder. The adapter
+        // bridges to `EmbedTool.engine` — the same actor `senkani_embed`
+        // uses — under `MLXInferenceLock.shared`; no parallel embedding
+        // stack lands in CLI.
+        EmbeddingHandlerRegistration.register()
+
         // Register verification handler. Running `ensureModel()` loads the
         // freshly-installed model into an MLX ModelContainer — if the weights
         // are corrupt or the config is incompatible this will throw, which

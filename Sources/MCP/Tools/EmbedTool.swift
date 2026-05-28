@@ -220,6 +220,53 @@ actor EmbedEngine {
         guard normA > 0 && normB > 0 else { return 0 }
         return dot / (normA * normB)
     }
+
+    /// V.13c real-engine — embed an arbitrary batch of input strings for
+    /// the OpenAI `/v1/embeddings` surface. Uses the same MLX path as
+    /// `indexProject` (load → tokenize → pad → pool), serialized by
+    /// `MLXInferenceLock.shared`. Returns vectors plus the SUM of real
+    /// tokenizer counts across inputs so `usage.prompt_tokens` reflects
+    /// what the model actually saw (no ~4-chars/token heuristic).
+    func embedStrings(_ inputs: [String]) async throws -> (vectors: [[Float]], promptTokens: Int) {
+        guard !inputs.isEmpty else { return (vectors: [], promptTokens: 0) }
+        let mc = try await ensureModel()
+
+        let captured = inputs
+        return await MLXInferenceLock.shared.run {
+            await mc.perform {
+                (model: EmbeddingModel, tokenizer: Tokenizer, pooling: Pooling) -> (vectors: [[Float]], promptTokens: Int) in
+
+                var results: [[Float]] = []
+                var totalTokens: Int = 0
+                let batchSize = 32
+
+                for batchStart in stride(from: 0, to: captured.count, by: batchSize) {
+                    let batchEnd = min(batchStart + batchSize, captured.count)
+                    let batch = Array(captured[batchStart..<batchEnd])
+
+                    let inputs = batch.map { tokenizer.encode(text: $0, addSpecialTokens: true) }
+                    totalTokens += inputs.reduce(0) { $0 + $1.count }
+                    let maxLength = inputs.reduce(into: 16) { acc, elem in acc = max(acc, elem.count) }
+
+                    let padded = stacked(inputs.map { elem in
+                        MLXArray(elem + Array(repeating: tokenizer.eosTokenId ?? 0,
+                                              count: maxLength - elem.count))
+                    })
+                    let mask = (padded .!= tokenizer.eosTokenId ?? 0)
+                    let tokenTypes = MLXArray.zeros(like: padded)
+
+                    let output = pooling(
+                        model(padded, positionIds: nil, tokenTypeIds: tokenTypes, attentionMask: mask),
+                        normalize: true, applyLayerNorm: true
+                    )
+                    output.eval()
+                    results.append(contentsOf: output.map { $0.asArray(Float.self) })
+                }
+
+                return (vectors: results, promptTokens: totalTokens)
+            }
+        }
+    }
 }
 
 enum EmbedTool {

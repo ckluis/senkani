@@ -10,6 +10,31 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ---
 
+## 2026-05-28 — V.13c real embedding-inference backend (registered-handler real-machine pass)
+
+`phase-v13c-real-embedding-inference-backend-2026-05-27` shipped the
+`EmbeddingEngine` protocol seam + MCP-side MLX registration + sync
+bridge + readiness gate; CI covers the seam shape (6 new tests +
+the unchanged 8 v13c tests) but cannot verify real on-device MiniLM
+inference fidelity. Run this walk when back at a Mac with the
+embedding model state in your control.
+
+- **Item:** [`spec/autonomous/completed/2026/2026-05-28-phase-v13c-real-embedding-inference-backend-2026-05-27.md`](../../spec/autonomous/completed/2026/2026-05-28-phase-v13c-real-embedding-inference-backend-2026-05-27.md) — full surface contract + scope decisions live in the item.
+- **Exec mode:** **either** (Cowork OR operator host Terminal — both have `curl` and can invoke `senkani serve`; no `~/.claude` edits needed).
+- **Time estimate:** ~12 min operator-supervised — ~2 min repo build, ~2 min start serve, ~2 min curl round-trip with model downloaded, ~3 min flip ModelManager to a partial state and verify the 503 path, ~3 min teardown.
+- **What it proves:**
+    1. With `minilm-l6` `.verified` and the MCP-side handler registered, `curl POST /v1/embeddings` returns 384-dim vectors that are **NOT** the placeholder's `deterministicVector` pattern (compare two distinct inputs — placeholder produces FNV-1a-seeded SplitMix64 noise; the real model produces semantically-shaped vectors whose cosine similarity to a fixture string aligns with human judgment).
+    2. `usage.prompt_tokens` matches `Tokenizer.encode(text:, addSpecialTokens:true).count` for a hand-checked input string (e.g. `"hello world"` → check against `EmbedEngine`'s tokenizer in a tiny harness).
+    3. With `minilm-l6` status forced to `.available` (NOT yet downloaded — delete the cached model dir under `~/Documents/huggingface/models/` and restart serve), `POST /v1/embeddings` returns framed `HTTP 503` with `error.type: "model_not_available"` and a body referencing `Models pane` / `senkani doctor`.
+    4. With `senkani serve --openai` started WITHOUT the MCP startup hook (e.g. `senkani serve --openai` directly, no MCP target running), `POST /v1/embeddings` falls back to the placeholder and the startup log shows `openai-serve embeddings_backend=placeholder`.
+    5. `nm $(which senkani) | grep -cE 'MLXLMCommon|MLXVLM|MLXEmbedders'` returns `0` (CLI binary has zero MLX framework symbols — install-size posture preserved).
+- **Pre-condition:** `swift build -c release` succeeds; either MiniLM-L6 downloaded under `~/Documents/huggingface/models/sentence-transformers/all-MiniLM-L6-v2/` (for path 1+2) OR the same dir explicitly removed (for path 3); a provisioned `sk-senkani-…` key with `embeddings` scope (`senkani vault add openai-key --scope embeddings`).
+- **Setup:** see the per-item acceptance bullets for the curl shape.
+- **Teardown:** revert any `~/Documents/huggingface/models/` state you mutated; `kill` the `senkani serve` process.
+- **What lands as evidence:** stdout from each curl (`vectors`, `usage.prompt_tokens`, the 503 body), the `nm` MLX-symbol count, the `openai-serve embeddings_backend=…` startup log line.
+
+---
+
 ## Closed — 2026-05-18 — Release v0.3.0 surface-pass (eight new-feature validations on real machine)
 
 `release-v0-3-0-surface-pass` (`affects: manual_validation_needed`) closed across a three-day operator-driven walk 2026-05-16 / 17 / 18. Acceptance roll-up: 4 of 8 lines green (schema migrations v7+v14, DiffViewerPane V.12 hunks + denial annotations + rate cap, quant-frontier 2026-Q2 report after walk-side recovery to durable location, search_web PASS-with-amendment); 4 of 8 lines SPLIT/FAIL surfacing the same Phase-round gap class (Core library + tests shipped without production wiring): T.6 NotificationRouter + MacOSLocalSink zero production callers; V.5c `senkani authorship backfill` audit-chain row + `endSession` silently lost on every run (100 % reproducible — `parent.queue.async` + CLI-exit-before-drain); U.8 `AmplificationGuard.validate` zero production callers, no Schedules pane in SenkaniApp, no `--prose` flag on CLI; V.16 paired-numbers companion stack reachable end-to-end requires T.6c + operator setup. Five findings filed including a **P0 release-blocker** (`authorship-backfill-audit-row-not-durable-2026-05-17`); promote item `release-v0-3-0-promote-changelog-heading` is no longer blocked by `blocked_by` items but is blocked by the new P0 finding by the audit-chain integrity story. Archived at `spec/autonomous/completed/2026/2026-05-18-release-v0-3-0-surface-pass-eight-new-feature-validations-on-real-machine.md`; evidence at `tools/soak/evidence/surface-pass-2026-05-16/`.

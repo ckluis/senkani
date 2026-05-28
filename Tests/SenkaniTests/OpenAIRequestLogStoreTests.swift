@@ -227,6 +227,41 @@ struct OpenAIRequestLogStoreTests {
         #expect(raw.contains("team-prod"))   // the label IS expected
     }
 
+    /// V.13e — surface-less refusal attribution. A 401 on a `/v1/*` path
+    /// that maps to no specific surface (the canonical example is
+    /// `/v1/models` — an unauthenticated probe of the model list) must
+    /// record under `.other`, NOT under `.chat`. Pre-change behavior
+    /// disguised recon signal as chat traffic and slightly skewed
+    /// per-surface attribution in `recentOpenAIRequests`; post-change the
+    /// row carries honest data. Mirrors the existing 401/403/429
+    /// chat/embeddings path coverage above without modifying it.
+    @Test("Surface-less /v1/* refusal (e.g. /v1/models) records under .other, not .chat")
+    func surfaceLessRefusalRecordsUnderOther() {
+        let path = Self.tempDBPath()
+        let db = SessionDatabase(path: path)
+        let now = Date(timeIntervalSince1970: 1_900_000_000)
+
+        // 401 — missing Authorization header on a surface-less path.
+        // Confirms `surface(forPath:)` returns nil (the path is neither
+        // `/v1/chat*` nor `/v1/embeddings`) and the switch routes to
+        // `.other` instead of falling through to `.chat`.
+        #expect(OpenAIAuthGate.surface(forPath: "/v1/models") == nil)
+        #expect(OpenAIServedRequestSink.recordRefusal(
+            decision: .unauthorized(reason: "missing or malformed Authorization header"),
+            path: "/v1/models",
+            authorizationHeader: nil,
+            records: [],
+            db: db, now: now))
+
+        // Exactly one row; status 401; surface attributed to "other", not "chat".
+        #expect(db.openAIRequestLogCount() == 1)
+        let rows = db.recentOpenAIRequests(limit: 10)
+        #expect(rows.count == 1)
+        #expect(rows.first?.status == 401)
+        #expect(rows.first?.surface == "other")
+        #expect(rows.first?.keyLabel == nil)
+    }
+
     /// Read every TEXT/INTEGER/REAL column of every row of `table` into one
     /// concatenated string for substring scanning.
     private func scanAllColumnText(path: String, table: String) -> String {

@@ -40,11 +40,21 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
     /// The served-request surface. Stored as TEXT; the enum gives
     /// compile-time safety at the call site (mirrors how the egress
     /// store takes `EgressRule.Decision`).
+    ///
+    /// `.other` is the bucket for a `/v1/*` request whose path has no
+    /// specific surface scope (e.g. `/v1/models`, the bare `/v1`).
+    /// Used by `OpenAIServedRequestSink.recordRefusal` so a 401 / 403 /
+    /// 429 on a surface-less path records honestly instead of bucketing
+    /// to `.chat`. Telemetry consumers reading per-surface ratios see
+    /// the real attribution; security analysis can slice
+    /// unauthenticated-probe signal (e.g. enumeration of `/v1/models`)
+    /// off it. The doctor `429-rate` is surface-agnostic and untouched.
     public enum Surface: String, Sendable, CaseIterable {
         case chat
         case chatStream = "chat_stream"
         case embeddings
         case toolUse = "tool_use"
+        case other
     }
 
     /// Drop the chain cache after a `--repair-chain` motion. Caller

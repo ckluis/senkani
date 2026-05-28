@@ -102,10 +102,13 @@ public enum OpenAIServedRequestSink {
     /// **Surface.** Derived from the request path via
     /// `OpenAIAuthGate.surface(forPath:)` — `/v1/chat*` → `.chat`,
     /// `/v1/embeddings` → `.embeddings`. A `/v1/*` path with no specific
-    /// surface (e.g. `/v1/models`) records under `.chat`: the request-log
-    /// `Surface` enum has no general bucket and the doctor 429-rate is
-    /// surface-agnostic (it counts `status = 429` across all rows), so the
-    /// default never skews the metric.
+    /// surface (e.g. `/v1/models`, the bare `/v1`) records under `.other`,
+    /// preserving honest per-surface attribution in
+    /// `recentOpenAIRequests` reads and keeping the recon-signal class
+    /// (an unauthenticated probe of `/v1/models` etc.) sliceable instead
+    /// of disguised as chat traffic. The doctor `429-rate` is
+    /// surface-agnostic (`status = 429` across ALL rows) and unaffected
+    /// regardless of which bucket carries a surface-less refusal.
     ///
     /// `decide(...)` runs exactly once per `/v1/*` request, so calling this
     /// once with that decision yields exactly one row per refused request —
@@ -141,7 +144,8 @@ public enum OpenAIServedRequestSink {
         let surface: OpenAIRequestLogStore.Surface
         switch OpenAIAuthGate.surface(forPath: path) {
         case "embeddings": surface = .embeddings
-        default:           surface = .chat   // "chat" + the nil/other paths
+        case "chat":       surface = .chat
+        default:           surface = .other   // nil / unrecognized paths (e.g. /v1/models)
         }
         return db.recordOpenAIRequest(
             ts: now, surface: surface, status: status, keyLabel: keyLabel

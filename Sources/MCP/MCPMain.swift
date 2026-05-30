@@ -60,6 +60,14 @@ public struct MCPServerRunner {
         // stack lands in CLI.
         EmbeddingHandlerRegistration.register()
 
+        // V.13 real-chat — register the MLX-backed Gemma 4 chat handler so
+        // `senkani serve --openai`'s `POST /v1/chat/completions` produces
+        // real on-device completions instead of the v13a-3 placeholder.
+        // RAM-tier-resolved (gemma4-26b-apex / gemma4-e4b / gemma4-e2b)
+        // under `MLXInferenceLock.shared`; non-streaming surface only (the
+        // SSE streaming path lands in V.13 sub-item 2).
+        ChatHandlerRegistration.register()
+
         // Register verification handler. Running `ensureModel()` loads the
         // freshly-installed model into an MLX ModelContainer — if the weights
         // are corrupt or the config is incompatible this will throw, which

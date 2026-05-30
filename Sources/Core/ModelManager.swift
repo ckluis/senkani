@@ -122,6 +122,14 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
     /// state. Protected by `lock`.
     private var embeddingHandler: (any EmbeddingEngine)?
 
+    /// Registered chat handler. V.13 real-chat — MCP target registers an
+    /// MLX-backed Gemma 4 implementation at startup so `senkani serve
+    /// --openai`'s `POST /v1/chat/completions` returns real on-device
+    /// completions instead of the placeholder. Core stays MLX-free; the
+    /// CLI link surface is unchanged. When `nil`, `ServeCommand` falls
+    /// back to `Serve.placeholderChatEngine()`. Protected by `lock`.
+    private var chatHandler: (any ChatEngine)?
+
     /// Register a download handler (called by MCP layer at startup).
     /// Thread-safe: acquires lock before writing.
     public func registerDownloadHandler(_ handler: @escaping (String) async throws -> Void) {
@@ -160,6 +168,27 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return embeddingHandler
+    }
+
+    /// Register a chat handler (called by MCP layer at startup). V.13
+    /// real-chat — `senkani serve --openai`'s `POST /v1/chat/completions`
+    /// resolves this handler at request time; if `nil`, falls back to the
+    /// v13a-3 placeholder. Mirrors `registerEmbeddingHandler` — Core stays
+    /// MLX-free. Thread-safe; idempotent (last call wins).
+    public func registerChatHandler(_ handler: any ChatEngine) {
+        lock.lock()
+        chatHandler = handler
+        lock.unlock()
+    }
+
+    /// Resolved chat handler, if any. `ServeCommand` consults this at
+    /// request time. Returns nil when no MCP-side handler has been
+    /// registered (e.g. `senkani serve` started without the MCP startup
+    /// hook, or a unit test).
+    public func resolvedChatHandler() -> (any ChatEngine)? {
+        lock.lock()
+        defer { lock.unlock() }
+        return chatHandler
     }
 
     // MARK: - HuggingFace Cache Location

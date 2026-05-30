@@ -129,7 +129,24 @@ struct Serve: AsyncParsableCommand {
         // handler records to BOTH the in-memory chain and the persisted store
         // via `OpenAIServedRequestSink.record`, co-located at the prior
         // `auditChain.append` sites so the producer side is fully owned.
-        let engine = Serve.placeholderChatEngine()
+        //
+        // V.13 real-chat (sub-item 1) — if the MCP target has registered a
+        // real `ChatEngine` via `ModelManager.registerChatHandler`, the
+        // registered handler produces real on-device Gemma 4 completions.
+        // Otherwise we fall back to the v13a-3 placeholder. Non-streaming
+        // surface only; SSE streaming continues to wrap whatever this
+        // engine returns (proper token-by-token streaming lands in
+        // sub-item 2). Readiness 503 + tokenizer-accurate usage land in
+        // sub-item 3.
+        let registeredChatHandler = ModelManager.shared.resolvedChatHandler()
+        if registeredChatHandler == nil {
+            print("openai-serve chat_backend=placeholder (no MCP-side ChatEngine registered; completions are v13a-3 placeholder text)")
+        } else {
+            print("openai-serve chat_backend=mcp_handler (Gemma 4 RAM-tier-resolved)")
+        }
+        let engine = registeredChatHandler
+            .map(OpenAIChatServeBridge.syncEngine)
+            ?? Serve.placeholderChatEngine()
         let chatHandler = OpenAIListener.ChatHandler { _, _, headers, body in
             guard let request = OpenAIChatHandler.decodeRequest(body) else {
                 return OpenAIChatHandler.errorResponse(

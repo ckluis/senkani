@@ -349,13 +349,27 @@ public enum OpenAIChatStream {
         }
     }
 
-    /// Everything the listener needs to stream one response. `head`,
-    /// `events`, and `done` are pre-encoded byte blobs; `onFinish` fires
-    /// once with the terminal status so the caller can append the single
-    /// audit entry.
+    /// Everything the listener needs to stream one response. `head` and
+    /// `done` are pre-encoded byte blobs; `onFinish` fires once with the
+    /// terminal status so the caller can append the single audit entry.
+    ///
+    /// The Plan carries the event sequence in one of two shapes — the v13b
+    /// PRE-BAKED `events: [Data]` (one-shot completion split into SSE
+    /// chunks) or the V.13 sub-item 2 STREAMING `streamingEvents` async
+    /// source (real token-by-token deltas, driven through the sink as MLX
+    /// produces them). The two are mutually exclusive in practice: the
+    /// streaming init leaves `events` empty and the pre-baked init leaves
+    /// `streamingEvents` nil.
     public struct Plan: Sendable {
         public let head: Data
         public let events: [Data]
+        /// V.13 real-chat (sub-item 2) — when non-nil, `run(plan:, sink:)`
+        /// drives each event from this async source instead of iterating
+        /// the pre-baked `events`. The closure is invoked ONCE per `run`;
+        /// returning a fresh `AsyncThrowingStream` per call keeps the
+        /// listener's retry/reconnect semantics composable with future
+        /// hot-path resumption logic.
+        public let streamingEvents: (@Sendable () -> AsyncThrowingStream<Data, Error>)?
         public let done: Data
         public let onFinish: @Sendable (_ status: FinishStatus) -> Void
         public init(
@@ -366,6 +380,24 @@ public enum OpenAIChatStream {
         ) {
             self.head = head
             self.events = events
+            self.streamingEvents = nil
+            self.done = done
+            self.onFinish = onFinish
+        }
+        /// V.13 real-chat (sub-item 2) — streaming variant. `streamingEvents`
+        /// returns a fresh `AsyncThrowingStream<Data, Error>` per `run`
+        /// call. The drive loop iterates it synchronously via a bounded
+        /// channel pump (`driveStreaming` below) so the listener's existing
+        /// sync `Sink` contract is preserved.
+        public init(
+            head: Data,
+            streamingEvents: @escaping @Sendable () -> AsyncThrowingStream<Data, Error>,
+            done: Data,
+            onFinish: @escaping @Sendable (_ status: FinishStatus) -> Void
+        ) {
+            self.head = head
+            self.events = []
+            self.streamingEvents = streamingEvents
             self.done = done
             self.onFinish = onFinish
         }
@@ -414,8 +446,94 @@ public enum OpenAIChatStream {
 
     /// Convenience: drive a `Plan`, firing its `onFinish` with the terminal
     /// status before close. Used by the live listener.
+    ///
+    /// Dispatches on the plan's shape: a `streamingEvents` source goes
+    /// through `driveStreaming` (V.13 sub-item 2 real token-by-token path);
+    /// otherwise the pre-baked `events: [Data]` rides the v13b drive.
     @discardableResult
     public static func run(plan: Plan, sink: Sink) -> FinishStatus {
-        run(head: plan.head, events: plan.events, done: plan.done, sink: sink, onFinish: plan.onFinish)
+        if let source = plan.streamingEvents {
+            let status = driveStreaming(head: plan.head, source: source, done: plan.done, sink: sink)
+            plan.onFinish(status)
+            sink.close()
+            return status
+        }
+        return run(head: plan.head, events: plan.events, done: plan.done, sink: sink, onFinish: plan.onFinish)
+    }
+
+    /// V.13 real-chat (sub-item 2) — drive an async event source through a
+    /// synchronous `Sink`. Bridges the listener's sync write contract to
+    /// the registered `StreamingChatEngine`'s `AsyncThrowingStream<Data,
+    /// Error>` via a bounded channel pump: a producer Task pulls deltas
+    /// from the source and pushes them to a lock-protected queue, while
+    /// this loop drains the queue and writes each event. Cancellation
+    /// propagates either way — a peer disconnect surfaces as a sink-write
+    /// throw which cancels the producer; a producer throw surfaces here as
+    /// a `clientCancel` status so the run loop tears the connection down
+    /// exactly once.
+    ///
+    /// The channel is unbounded because MLX produces tokens slower than the
+    /// loopback network drains them; backpressure beyond this V1 pump is a
+    /// later round if a future engine inverts that asymmetry.
+    private static func driveStreaming(
+        head: Data,
+        source: @Sendable () -> AsyncThrowingStream<Data, Error>,
+        done: Data,
+        sink: Sink
+    ) -> FinishStatus {
+        if sink.isCancelled() { return .clientCancel }
+        do { try sink.write(head) } catch { return .clientCancel }
+
+        final class Channel: @unchecked Sendable {
+            enum Item { case data(Data); case error; case end }
+            var queue: [Item] = []
+            let lock = NSLock()
+            let sem = DispatchSemaphore(value: 0)
+            func push(_ item: Item) {
+                lock.lock(); queue.append(item); lock.unlock()
+                sem.signal()
+            }
+            func pop() -> Item {
+                sem.wait()
+                lock.lock(); let item = queue.removeFirst(); lock.unlock()
+                return item
+            }
+        }
+        let channel = Channel()
+        let stream = source()
+        let producer = Task<Void, Never> {
+            do {
+                for try await data in stream {
+                    if Task.isCancelled { break }
+                    channel.push(.data(data))
+                }
+                channel.push(.end)
+            } catch {
+                channel.push(.error)
+            }
+        }
+
+        loop: while true {
+            if sink.isCancelled() {
+                producer.cancel()
+                return .clientCancel
+            }
+            switch channel.pop() {
+            case .data(let chunk):
+                do { try sink.write(chunk) } catch {
+                    producer.cancel()
+                    return .clientCancel
+                }
+            case .error:
+                producer.cancel()
+                return .clientCancel
+            case .end:
+                break loop
+            }
+        }
+
+        if sink.isCancelled() { return .clientCancel }
+        do { try sink.write(done) } catch { return .clientCancel }
+        return .completed
     }
 }

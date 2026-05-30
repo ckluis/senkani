@@ -130,6 +130,16 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
     /// back to `Serve.placeholderChatEngine()`. Protected by `lock`.
     private var chatHandler: (any ChatEngine)?
 
+    /// Registered streaming chat handler. V.13 real-chat (sub-item 2) —
+    /// MCP target registers an MLX-backed Gemma 4 implementation that
+    /// yields token-by-token deltas as `container.generate` produces them,
+    /// so `senkani serve --openai`'s streaming SSE deltas reflect real
+    /// arrival timing rather than v13b's post-hoc content chunking. Core
+    /// stays MLX-free. When `nil`, `ServeCommand` falls back to the v13b
+    /// collected-then-chunk path through the non-streaming engine.
+    /// Protected by `lock`.
+    private var streamingChatHandler: (any StreamingChatEngine)?
+
     /// Register a download handler (called by MCP layer at startup).
     /// Thread-safe: acquires lock before writing.
     public func registerDownloadHandler(_ handler: @escaping (String) async throws -> Void) {
@@ -189,6 +199,27 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return chatHandler
+    }
+
+    /// Register a streaming chat handler (called by MCP layer at startup).
+    /// V.13 real-chat (sub-item 2) — `senkani serve --openai`'s
+    /// `streamHandler` resolves this at request time when the request
+    /// carries `stream: true`; if `nil`, falls back to the v13b
+    /// collected-then-chunk SSE path. Mirrors `registerChatHandler` — Core
+    /// stays MLX-free. Thread-safe; idempotent (last call wins).
+    public func registerStreamingChatHandler(_ handler: any StreamingChatEngine) {
+        lock.lock()
+        streamingChatHandler = handler
+        lock.unlock()
+    }
+
+    /// Resolved streaming chat handler, if any. `ServeCommand`'s
+    /// `streamHandler` consults this at request time. Returns nil when no
+    /// MCP-side streaming handler has been registered.
+    public func resolvedStreamingChatHandler() -> (any StreamingChatEngine)? {
+        lock.lock()
+        defer { lock.unlock() }
+        return streamingChatHandler
     }
 
     // MARK: - HuggingFace Cache Location

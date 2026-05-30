@@ -233,7 +233,7 @@ public enum OpenAIChatHandler {
     /// column when `--audit-bodies` is on: model + message count + roles.
     /// (The full prompt text is the response engine's input; the audit
     /// body captures the request envelope, not a transcript dump.)
-    static func requestSummary(_ request: ChatCompletionRequest) -> String {
+    public static func requestSummary(_ request: ChatCompletionRequest) -> String {
         let roles = request.messages.map(\.role).joined(separator: ",")
         var summary = "model=\(request.model) messages=\(request.messages.count) roles=[\(roles)]"
         // V.13d — append the declared-tool count ONLY when the request uses

@@ -25,9 +25,7 @@ struct MLXChatEngineAdapter: ChatEngine {
         // approach) loses turn boundaries. Tokenizer-template-accurate
         // assembly lands in sub-item 3; this is the minimum viable
         // role-aware prompt for Gemma 4 instruction-tuned models.
-        let prompt = messages.map { msg -> String in
-            "[\(msg.role)] \(msg.content)"
-        }.joined(separator: "\n") + "\n[assistant] "
+        let prompt = MLXChatPrompt.assemble(messages: messages)
 
         let content = try await MLXChatEngine.shared.complete(prompt: prompt)
         return OpenAIChatHandler.Completion(
@@ -38,12 +36,58 @@ struct MLXChatEngineAdapter: ChatEngine {
     }
 }
 
+/// V.13 real-chat (sub-item 2) — MCP-side adapter wiring `MLXChatEngine`'s
+/// token-stream API into Core's `StreamingChatEngine` seam. Emits one
+/// `TokenDelta` per MLX `Generation.chunk` as the model produces it, so
+/// `senkani serve --openai`'s SSE deltas reflect real arrival timing rather
+/// than v13b's post-hoc content chunking. Sub-item 3 layers
+/// readiness-503 + tokenizer-accurate usage; this child ships the
+/// real-token-arrival surface only.
+struct MLXStreamingChatEngineAdapter: StreamingChatEngine {
+    func stream(
+        model: String,
+        messages: [ChatCompletionRequest.Message],
+        tools: [ChatCompletionRequest.Tool]
+    ) -> AsyncThrowingStream<OpenAIChatHandler.TokenDelta, Error> {
+        let prompt = MLXChatPrompt.assemble(messages: messages)
+        let upstream = MLXChatEngine.shared.stream(prompt: prompt)
+        return AsyncThrowingStream<OpenAIChatHandler.TokenDelta, Error> { continuation in
+            let task = Task {
+                do {
+                    for try await chunk in upstream {
+                        if Task.isCancelled { break }
+                        continuation.yield(OpenAIChatHandler.TokenDelta(content: chunk))
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
+/// Shared prompt assembly used by both the non-streaming and streaming MLX
+/// adapters so the two surfaces send identical bytes to MLX. Tokenizer-
+/// template-accurate assembly lands in sub-item 3 (chat-template path); for
+/// today, role-prefixed flat text matches what Gemma 4 instruction-tuned
+/// models tolerate.
+enum MLXChatPrompt {
+    static func assemble(messages: [ChatCompletionRequest.Message]) -> String {
+        return messages.map { msg -> String in
+            "[\(msg.role)] \(msg.content)"
+        }.joined(separator: "\n") + "\n[assistant] "
+    }
+}
+
 enum ChatHandlerRegistration {
-    /// Register the MLX-backed chat handler with `ModelManager.shared`.
-    /// Called from `MCPServerRunner.run` at startup; idempotent (the
-    /// registration slot replaces on second call).
+    /// Register the MLX-backed chat handlers (non-streaming + streaming)
+    /// with `ModelManager.shared`. Called from `MCPServerRunner.run` at
+    /// startup; idempotent (the registration slots replace on second call).
     static func register() {
         ModelManager.shared.registerChatHandler(MLXChatEngineAdapter())
+        ModelManager.shared.registerStreamingChatHandler(MLXStreamingChatEngineAdapter())
     }
 }
 
@@ -95,6 +139,44 @@ actor MLXChatEngine {
                 }
             }
             return result.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    /// V.13 real-chat (sub-item 2) — yield each MLX `Generation.chunk` as
+    /// the model produces it. Mirrors `complete(prompt:)` byte-for-byte
+    /// except: (1) chunks are yielded to the continuation rather than
+    /// concatenated, (2) no end-of-stream `trimmingCharacters` since the
+    /// caller can't unwrite earlier deltas — clients accumulate the SSE
+    /// `delta.content` verbatim. The whole pipeline runs INSIDE
+    /// `MLXInferenceLock.shared.run` so the actor / lock semantics match
+    /// the non-streaming path; the continuation yields synchronously
+    /// (non-blocking) inside the lock body.
+    nonisolated func stream(prompt: String) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream<String, Error> { continuation in
+            let task = Task { [maxTokens] in
+                do {
+                    try await MLXInferenceLock.shared.run {
+                        let container = try await self.ensureModel()
+                        let userInput = UserInput(prompt: prompt, images: [])
+                        let input = try await container.prepare(input: userInput)
+                        let params = GenerateParameters(maxTokens: maxTokens)
+                        let mlxStream = try await container.generate(input: input, parameters: params)
+                        for await generation in mlxStream {
+                            if Task.isCancelled { break }
+                            switch generation {
+                            case .chunk(let text):
+                                continuation.yield(text)
+                            case .info, .toolCall:
+                                break
+                            }
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 

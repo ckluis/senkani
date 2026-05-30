@@ -251,6 +251,19 @@ struct Serve: AsyncParsableCommand {
             return OpenAIEmbeddingsHandler.encodeResponse(result.response)
         }
 
+        // V.13 real-chat sub-item 2 — registered streaming handler. When
+        // present (MCP target started), a content stream's SSE deltas come
+        // from MLX's `container.generate` `AsyncStream<Generation>` as they
+        // arrive, NOT v13b's post-hoc content chunking. Tool-call streams
+        // continue to ride the v13b collected-then-chunk path so v13d-1's
+        // tool-call contract is preserved.
+        let registeredStreamingChatHandler = ModelManager.shared.resolvedStreamingChatHandler()
+        if registeredStreamingChatHandler == nil {
+            print("openai-serve chat_streaming_backend=collected_then_chunk (no MCP-side StreamingChatEngine registered; SSE content deltas use the v13b post-hoc chunking path)")
+        } else {
+            print("openai-serve chat_streaming_backend=mcp_streaming_handler (real token-by-token Gemma 4 deltas)")
+        }
+
         // V.13b — SSE streaming surface. Returns a plan only when the
         // client asked to stream (`stream: true`); otherwise nil → the
         // non-streaming `chatHandler` above serves the request. Auth + rate
@@ -272,13 +285,112 @@ struct Serve: AsyncParsableCommand {
             if OpenAIChatHandler.toolsPreflightError(request: request, scope: record?.scope ?? []) != nil {
                 return nil
             }
+
+            let routing = OpenAIChatHandler.route(
+                request: request,
+                recordPreset: record?.preset ?? ModelPreset.auto.rawValue
+            )
+            let now = Date()
+            let createdEpoch = Int(now.timeIntervalSince1970)
+            let id = OpenAIChatHandler.generateID()
+            let promptText = request.messages.map(\.content).joined(separator: "\n")
+            let promptTokens = OpenAIChatHandler.estimateTokens(promptText)
+            let modelLogged = routing.modelLogged
+            let resolvedTier = routing.resolvedTier.rawValue
+            let presetUsed = routing.presetUsed.rawValue
+            let requestSummary = OpenAIChatHandler.requestSummary(request)
+
+            // V.13 real-chat sub-item 2 — content-stream path through the
+            // registered streaming handler, ONLY for non-tool-use requests
+            // and when an `MLXStreamingChatEngineAdapter` is registered.
+            // Tool-use requests + unregistered handler fall through to the
+            // v13b collected-then-chunk path below.
+            let usesTools = OpenAIChatHandler.requestUsesTools(request)
+            if !usesTools, let streamingHandler = registeredStreamingChatHandler {
+                // Accumulator captures content as it streams so the audit
+                // entry's `completion_token_count` reflects what was
+                // actually sent. Lock-protected because the producer Task
+                // and the listener's onFinish run on different queues.
+                final class Accumulator: @unchecked Sendable {
+                    private let lock = NSLock()
+                    private var buffer = ""
+                    func append(_ s: String) { lock.lock(); buffer += s; lock.unlock() }
+                    func snapshot() -> String { lock.lock(); defer { lock.unlock() }; return buffer }
+                }
+                let accumulator = Accumulator()
+
+                let messages = request.messages
+                let tools = request.tools ?? []
+                let model = routing.actualModel
+                let sourceProvider: @Sendable () -> AsyncThrowingStream<Data, Error> = {
+                    let upstream = streamingHandler.stream(
+                        model: model, messages: messages, tools: tools
+                    )
+                    // Tee deltas into the accumulator so the audit token
+                    // count reflects what actually streamed.
+                    let teed = AsyncThrowingStream<OpenAIChatHandler.TokenDelta, Error> { continuation in
+                        let task = Task {
+                            do {
+                                for try await delta in upstream {
+                                    if Task.isCancelled { break }
+                                    accumulator.append(delta.content)
+                                    continuation.yield(delta)
+                                }
+                                continuation.finish()
+                            } catch {
+                                continuation.finish(throwing: error)
+                            }
+                        }
+                        continuation.onTermination = { _ in task.cancel() }
+                    }
+                    return OpenAIChatHandler.renderStreamingEvents(
+                        id: id, created: createdEpoch, model: model, source: teed
+                    )
+                }
+
+                let keyLabel = record?.label
+                return OpenAIChatStream.Plan(
+                    head: OpenAIChatStream.head(),
+                    streamingEvents: sourceProvider,
+                    done: OpenAIChatStream.doneSentinel(),
+                    onFinish: { status in
+                        let completion = accumulator.snapshot()
+                        let completionTokens = OpenAIChatHandler.estimateTokens(completion)
+                        let fields = OpenAIAuditChain.AuditFields(
+                            ts: now, keyLabel: keyLabel, surface: "chat",
+                            modelLogged: routing.modelLogged,
+                            presetUsed: routing.presetUsed.rawValue,
+                            resolvedTier: routing.resolvedTier.rawValue,
+                            promptTokenCount: promptTokens,
+                            completionTokenCount: completionTokens,
+                            status: status.rawValue
+                        )
+                        let bodies = storeBodies
+                            ? OpenAIAuditChain.AuditBodies(
+                                requestBody: requestSummary,
+                                responseBody: completion
+                              )
+                            : nil
+                        OpenAIServedRequestSink.record(
+                            chain: auditChain, fields: fields, bodies: bodies,
+                            db: requestLogDB, surface: .chatStream, httpStatus: 200
+                        )
+                        print("openai-request surface=chat model_logged=\(modelLogged) preset=\(presetUsed) resolved_tier=\(resolvedTier) stream=true backend=mcp_streaming status=\(status.rawValue)")
+                    }
+                )
+            }
+
+            // V.13b fallback path: collected-then-chunk. Used for tool-use
+            // streams (v13d-1 contract) and whenever no streaming handler is
+            // registered (e.g. `senkani serve` started without the MCP hook,
+            // unit-test runs).
             let result = OpenAIChatHandler.handle(
                 request: request,
                 recordPreset: record?.preset ?? ModelPreset.auto.rawValue,
                 keyLabel: record?.label,
                 engine: engine,
-                now: Date(),
-                id: OpenAIChatHandler.generateID()
+                now: now,
+                id: id
             )
             let response = result.response
             // V.13d-1 — a tool-call completion streams `tool_calls` deltas
@@ -301,7 +413,7 @@ struct Serve: AsyncParsableCommand {
             }
             let base = result.auditFields
             let bodies = storeBodies ? result.auditBodies : nil
-            let telemetry = result.telemetry
+            let fallbackTelemetry = result.telemetry
             return OpenAIChatStream.Plan(
                 head: OpenAIChatStream.head(),
                 events: events,
@@ -325,7 +437,7 @@ struct Serve: AsyncParsableCommand {
                         chain: auditChain, fields: fields, bodies: bodies,
                         db: requestLogDB, surface: .chatStream, httpStatus: 200
                     )
-                    print("openai-request surface=\(telemetry.surface) model_logged=\(telemetry.modelLogged) preset=\(telemetry.presetUsed) resolved_tier=\(telemetry.resolvedTier) stream=true status=\(status.rawValue)")
+                    print("openai-request surface=\(fallbackTelemetry.surface) model_logged=\(fallbackTelemetry.modelLogged) preset=\(fallbackTelemetry.presetUsed) resolved_tier=\(fallbackTelemetry.resolvedTier) stream=true status=\(status.rawValue)")
                 }
             )
         }

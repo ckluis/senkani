@@ -32,16 +32,32 @@ public enum OpenAIChatHandler {
         public let toolCalls: [OpenAIToolCall]
         public let promptTokens: Int
         public let completionTokens: Int
+        /// V.13 real-chat (sub-item 3) — tokenizer-accurate prompt token
+        /// count when the engine knows it (e.g. the MLX adapter captures
+        /// `Generation.info(GenerateCompletionInfo).promptTokenCount`).
+        /// nil on the placeholder path and any engine that has only a
+        /// heuristic; `handle(...)` propagates this to `usage.prompt_tokens`
+        /// when present, otherwise falls back to `promptTokens` above.
+        public let realPromptTokens: Int?
+        /// V.13 real-chat (sub-item 3) — tokenizer-accurate completion
+        /// token count when the engine knows it (the MLX adapter captures
+        /// `Generation.info(GenerateCompletionInfo).generationTokenCount`).
+        /// Same fallback semantics as `realPromptTokens`.
+        public let realCompletionTokens: Int?
         public init(
             content: String,
             toolCalls: [OpenAIToolCall] = [],
             promptTokens: Int,
-            completionTokens: Int
+            completionTokens: Int,
+            realPromptTokens: Int? = nil,
+            realCompletionTokens: Int? = nil
         ) {
             self.content = content
             self.toolCalls = toolCalls
             self.promptTokens = promptTokens
             self.completionTokens = completionTokens
+            self.realPromptTokens = realPromptTokens
+            self.realCompletionTokens = realCompletionTokens
         }
     }
 
@@ -128,6 +144,13 @@ public enum OpenAIChatHandler {
             : .init(role: "assistant", content: completion.content)
         let finishReason = usesTools ? "tool_calls" : "stop"
 
+        // V.13 real-chat (sub-item 3) — prefer the engine's tokenizer-
+        // accurate count when present; fall back to the heuristic. Both
+        // `usage` and the audit chain see the same numbers so a tokenizer-
+        // aware engine produces tokenizer-aware audit rows.
+        let promptTokens = completion.realPromptTokens ?? completion.promptTokens
+        let completionTokens = completion.realCompletionTokens ?? completion.completionTokens
+
         let response = ChatCompletionResponse(
             id: id,
             created: Int(now.timeIntervalSince1970),
@@ -136,9 +159,9 @@ public enum OpenAIChatHandler {
                 .init(index: 0, message: choiceMessage, finishReason: finishReason)
             ],
             usage: .init(
-                promptTokens: completion.promptTokens,
-                completionTokens: completion.completionTokens,
-                totalTokens: completion.promptTokens + completion.completionTokens
+                promptTokens: promptTokens,
+                completionTokens: completionTokens,
+                totalTokens: promptTokens + completionTokens
             )
         )
 
@@ -156,8 +179,8 @@ public enum OpenAIChatHandler {
             modelLogged: routing.modelLogged,
             presetUsed: routing.presetUsed.rawValue,
             resolvedTier: routing.resolvedTier.rawValue,
-            promptTokenCount: completion.promptTokens,
-            completionTokenCount: completion.completionTokens,
+            promptTokenCount: promptTokens,
+            completionTokenCount: completionTokens,
             status: "ok"
         )
 

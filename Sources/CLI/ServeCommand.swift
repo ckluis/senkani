@@ -168,6 +168,33 @@ struct Serve: AsyncParsableCommand {
             if let preflight = OpenAIChatHandler.toolsPreflightError(request: request, scope: record?.scope ?? []) {
                 return preflight
             }
+            // V.13 real-chat (sub-item 3) — pre-dispatch tier gate. Routing
+            // is pure / cheap; we run it here so the resolved tier drives
+            // the 503 decision BEFORE the (potentially expensive) engine
+            // dispatch. Non-local tiers deny with `backend_not_configured`
+            // until the Claude-API arm ships.
+            let preRouting = OpenAIChatHandler.route(
+                request: request,
+                recordPreset: record?.preset ?? ModelPreset.auto.rawValue
+            )
+            if let tierGate = OpenAIChatServeBridge.backendNotConfiguredResponse(tier: preRouting.resolvedTier) {
+                print("openai-request surface=chat model_logged=\(preRouting.modelLogged) preset=\(preRouting.presetUsed.rawValue) resolved_tier=\(preRouting.resolvedTier.rawValue) status=backend_not_configured")
+                return tierGate
+            }
+            // V.13 real-chat (sub-item 3) — readiness gate fires ONLY when
+            // a real chat handler is registered AND the local Gemma 4
+            // model isn't installed for this machine's RAM. The placeholder
+            // path stays available without any model (matches v13c
+            // embeddings semantics).
+            if registeredChatHandler != nil {
+                let ready = ModelManager.shared.anyGemma4Ready()
+                if let readinessGate = OpenAIChatServeBridge.readinessResponse(
+                    modelTier: preRouting.resolvedTier, isReady: ready
+                ) {
+                    print("openai-request surface=chat model_logged=\(preRouting.modelLogged) resolved_tier=\(preRouting.resolvedTier.rawValue) status=model_not_available")
+                    return readinessGate
+                }
+            }
             let result = OpenAIChatHandler.handle(
                 request: request,
                 recordPreset: record?.preset ?? ModelPreset.auto.rawValue,
@@ -290,6 +317,24 @@ struct Serve: AsyncParsableCommand {
                 request: request,
                 recordPreset: record?.preset ?? ModelPreset.auto.rawValue
             )
+            // V.13 real-chat (sub-item 3) — streaming requests that route
+            // to a non-local tier (Claude-API backend not yet wired) or
+            // to `.local` with no installed Gemma fall through to the
+            // non-streaming chat handler, which renders the precise 503
+            // as a complete framed response BEFORE any SSE byte. The
+            // listener never opens the SSE stream for a nil plan (same
+            // pattern v13d uses for tool-use error rendering above).
+            if OpenAIChatServeBridge.backendNotConfiguredResponse(tier: routing.resolvedTier) != nil {
+                return nil
+            }
+            if registeredChatHandler != nil {
+                let ready = ModelManager.shared.anyGemma4Ready()
+                if OpenAIChatServeBridge.readinessResponse(
+                    modelTier: routing.resolvedTier, isReady: ready
+                ) != nil {
+                    return nil
+                }
+            }
             let now = Date()
             let createdEpoch = Int(now.timeIntervalSince1970)
             let id = OpenAIChatHandler.generateID()

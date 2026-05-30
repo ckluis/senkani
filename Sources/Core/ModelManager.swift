@@ -361,6 +361,20 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
 
     // MARK: - Public API
 
+    /// V.13 real-chat (sub-item 3) — true iff at least one Gemma 4 tier
+    /// is BOTH installed (`.downloaded` / `.verified`) AND fits this
+    /// machine's RAM. Mirrors the SKILL acceptance ("no Gemma 4 tier is
+    /// downloaded OR fits this machine's RAM"). Used by `ServeCommand`'s
+    /// `.local` readiness gate; the gate's per-tier doctor parity test
+    /// is the same `requiredRAM <= availableRAMGB` cut + `isReady`.
+    public func anyGemma4Ready() -> Bool {
+        let ram = Self.availableRAMGB
+        lock.lock()
+        let candidates = _models.filter { $0.id.hasPrefix("gemma4") && $0.requiredRAM <= ram }
+        lock.unlock()
+        return candidates.contains { isReady($0.id) }
+    }
+
     /// Check whether a model is downloaded and ready to use. `.downloaded`
     /// (present on disk, verify not yet run) and `.verified` (verify passed)
     /// both count as ready; `.broken` and `.error` do not.

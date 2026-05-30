@@ -27,11 +27,21 @@ struct MLXChatEngineAdapter: ChatEngine {
         // role-aware prompt for Gemma 4 instruction-tuned models.
         let prompt = MLXChatPrompt.assemble(messages: messages)
 
-        let content = try await MLXChatEngine.shared.complete(prompt: prompt)
+        // V.13 real-chat (sub-item 3) — capture the MLX `.info`
+        // (`GenerateCompletionInfo`) so the OpenAI response's
+        // `usage.prompt_tokens` / `usage.completion_tokens` reflect the
+        // real Gemma tokenizer count, not the ~4-chars/token heuristic.
+        // The heuristic counts are kept as the always-present fallback;
+        // `OpenAIChatHandler.handle(...)` prefers the real fields when set.
+        let outcome = try await MLXChatEngine.shared.completeWithInfo(prompt: prompt)
+        let heuristicPrompt = OpenAIChatHandler.estimateTokens(prompt)
+        let heuristicCompletion = OpenAIChatHandler.estimateTokens(outcome.content)
         return OpenAIChatHandler.Completion(
-            content: content,
-            promptTokens: OpenAIChatHandler.estimateTokens(prompt),
-            completionTokens: OpenAIChatHandler.estimateTokens(content)
+            content: outcome.content,
+            promptTokens: heuristicPrompt,
+            completionTokens: heuristicCompletion,
+            realPromptTokens: outcome.info?.promptTokenCount,
+            realCompletionTokens: outcome.info?.generationTokenCount
         )
     }
 }
@@ -119,6 +129,24 @@ actor MLXChatEngine {
     }
 
     func complete(prompt: String) async throws -> String {
+        return try await completeWithInfo(prompt: prompt).content
+    }
+
+    /// V.13 real-chat (sub-item 3) — same generation loop as
+    /// `complete(prompt:)` but also captures the terminal
+    /// `Generation.info(GenerateCompletionInfo)` so the OpenAI handler
+    /// can surface real tokenizer counts in `usage.prompt_tokens` /
+    /// `usage.completion_tokens`. The `info` is the last event MLX
+    /// emits with the prompt + generation token counts measured by the
+    /// real Gemma tokenizer; if no `.info` is observed (engine drift /
+    /// early cancel), the field is nil and the OpenAI handler falls
+    /// back to the heuristic counts in `Completion.promptTokens` /
+    /// `Completion.completionTokens`.
+    struct CompletionOutcome: Sendable {
+        let content: String
+        let info: GenerateCompletionInfo?
+    }
+    func completeWithInfo(prompt: String) async throws -> CompletionOutcome {
         return try await MLXInferenceLock.shared.run { [maxTokens] in
             let container = try await self.ensureModel()
             // Empty images array is the text-only path for VLMs; Gemma 4
@@ -129,16 +157,22 @@ actor MLXChatEngine {
             let input = try await container.prepare(input: userInput)
             let params = GenerateParameters(maxTokens: maxTokens)
             var result = ""
+            var observedInfo: GenerateCompletionInfo?
             let stream = try await container.generate(input: input, parameters: params)
             for await generation in stream {
                 switch generation {
                 case .chunk(let text):
                     result += text
-                case .info, .toolCall:
+                case .info(let info):
+                    observedInfo = info
+                case .toolCall:
                     break
                 }
             }
-            return result.trimmingCharacters(in: .whitespacesAndNewlines)
+            return CompletionOutcome(
+                content: result.trimmingCharacters(in: .whitespacesAndNewlines),
+                info: observedInfo
+            )
         }
     }
 

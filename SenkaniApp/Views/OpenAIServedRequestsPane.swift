@@ -5,25 +5,31 @@ import Core
 /// persisted `openai_request_log` rows (metadata-only — never request or
 /// completion bodies) via `SessionDatabase.shared.recentOpenAIRequests`.
 ///
-/// V.13 GUI a-1 — pane core: row rendering + empty-state, appear-time
-/// snapshot only. The 500ms poll lifecycle + 100-req burst test land in
-/// a-2; catalog registration + accessibility land in a-3.
+/// V.13 GUI a-2 — pane core (a-1) + the 500ms poll lifecycle. Rows refresh
+/// every 500ms while the pane is visible (`onAppear` start, `onDisappear`
+/// stop), matching `AgentTimelinePane`. Catalog registration + accessibility
+/// land in a-3.
 ///
 /// All presentation logic (status → color category, relative age, raw
 /// `model_logged` pass-through, NULL tolerance) lives in
-/// `Core.OpenAIServedRequestsPresenter` so it is unit-testable from
+/// `Core.OpenAIServedRequestsPresenter`, and the poll lifecycle (cadence,
+/// cancellation, no-drop wholesale read) lives in
+/// `Core.OpenAIServedRequestsPoller` — both so they are unit-testable from
 /// `SenkaniTests` (executable-target views are not importable). This view
-/// is a thin shell: it maps `Presenter.StatusCategory` → a concrete
-/// `Color` (the `AgentTimelinePane` palette, verbatim) and lays out the
-/// row. Privacy: `model_logged` is rendered RAW — the producer sanitized
-/// it at the trust boundary; the persisted schema has no body columns.
+/// is a thin shell: it owns an `@Observable` poller, maps
+/// `Presenter.StatusCategory` → a concrete `Color` (the `AgentTimelinePane`
+/// palette, verbatim), and lays out the row. There is NO reactive
+/// SQLite-change seam — the 500ms poll is the only refresh path (operator
+/// decompose decision 2026-05-30). Privacy: `model_logged` is rendered RAW —
+/// the producer sanitized it at the trust boundary; the persisted schema has
+/// no body columns.
 struct OpenAIServedRequestsPane: View {
     @Bindable var pane: PaneModel
     let workspace: WorkspaceModel?
 
-    @State private var rows: [OpenAIRequestLogStore.Row] = []
+    @State private var poller = OpenAIServedRequestsPoller(store: SessionDatabase.shared, limit: 100)
 
-    private let maxRows: Int = 100
+    private var rows: [OpenAIRequestLogStore.Row] { poller.rows }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -58,7 +64,8 @@ struct OpenAIServedRequestsPane: View {
                 .background(SenkaniTheme.paneBody)
             }
         }
-        .onAppear { refresh() }
+        .onAppear { poller.start() }
+        .onDisappear { poller.stop() }
     }
 
     private var emptyState: some View {
@@ -78,10 +85,6 @@ struct OpenAIServedRequestsPane: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func refresh() {
-        rows = SessionDatabase.shared.recentOpenAIRequests(limit: maxRows)
     }
 }
 

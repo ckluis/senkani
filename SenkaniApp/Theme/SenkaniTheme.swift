@@ -196,6 +196,7 @@ enum SenkaniTheme {
         case .sprintReview: return accentSkillLibrary
         case .artifactGallery: return accentSkillLibrary
         case .ollamaLauncher: return accentOllamaLauncher
+        case .openAIServedRequests: return accentAnalytics
         }
     }
 
@@ -221,6 +222,7 @@ enum SenkaniTheme {
         case .sprintReview: return "sparkles.rectangle.stack"
         case .artifactGallery: return "rectangle.stack.badge.person.crop"
         case .ollamaLauncher: return "cpu.fill"
+        case .openAIServedRequests: return "network"
         }
     }
 
@@ -246,6 +248,7 @@ enum SenkaniTheme {
         case .sprintReview: return "Review staged compound-learning proposals"
         case .artifactGallery: return "Browse diaries, sprint snapshots, and on-disk artifacts"
         case .ollamaLauncher: return "Local LLM chat via Ollama"
+        case .openAIServedRequests: return "Live feed of OpenAI-compatible served requests"
         }
     }
 
@@ -270,6 +273,7 @@ enum SenkaniTheme {
         case .sprintReview: return "Sprint Review"
         case .artifactGallery: return "Artifact Gallery"
         case .ollamaLauncher: return "Ollama"
+        case .openAIServedRequests: return "Served Requests"
         }
     }
 }

@@ -234,6 +234,65 @@ struct OpenAIServedRequestsPaneTests {
         await handle.value
     }
 
+    // MARK: - (a-3) pane catalog registration
+
+    @Test("a-3: the served-requests pane is registered in the Add-Pane catalog")
+    func paneRegisteredInCatalog() {
+        // The Add-Pane sheet renders `PaneGalleryBuilder.allEntries()` (the
+        // catalog truth source; the SwiftUI sheet is a thin presentation
+        // layer over it). A registered entry here is what makes the pane
+        // operator-addable without a rebuild. The command palette derives
+        // from the same source (CommandPaletteTests pins gallery↔palette
+        // parity), so one registration reaches both surfaces.
+        let entries = PaneGalleryBuilder.allEntries()
+        let served = entries.first { $0.id == "openAIServedRequests" }
+        #expect(served != nil,
+                "served-requests pane must appear in the Add-Pane catalog")
+        #expect(served?.category == "Data & Insights",
+                "served-requests is a measurement surface — Data & Insights")
+        #expect(served?.name == "Served Requests")
+        #expect((served?.description.count ?? 99) <= 80,
+                "catalog description must fit the two-line card budget")
+        // No regression: the catalog still renders without duplicate IDs and
+        // keeps every category within the ≤6-cell skimmability budget.
+        let ids = entries.map(\.id)
+        #expect(Set(ids).count == ids.count, "catalog IDs must stay unique")
+        for group in PaneGalleryBuilder.categorized() {
+            #expect(group.entries.count <= 6,
+                    "category '\(group.category)' exceeded the 6-cell cap")
+        }
+    }
+
+    // MARK: - (a-3) per-column accessibility labels
+
+    @Test("a-3: every served-request row column carries an accessibility label")
+    func rowColumnsHaveAccessibilityLabels() {
+        // The row view lives in the non-importable SenkaniApp target, so the
+        // a11y wiring is asserted via a `#filePath` source guard (the same
+        // pattern as `viewSourceGuard`). Each of the seven columns must carry
+        // an `.accessibilityLabel(...)` naming its semantic field, so
+        // VoiceOver reads "Surface chat" rather than a truncated monospace
+        // token.
+        let src = paneViewSource()
+        let expectedLabels = [
+            "Age \\(fields.age)",
+            "Surface \\(fields.surface)",
+            "Model \\(fields.model)",
+            "Resolved tier \\(fields.tier)",
+            "Tokens \\(fields.tokens)",
+            "Key \\(fields.keyLabel)",
+            "Status \\(fields.status)",
+        ]
+        for label in expectedLabels {
+            #expect(src.contains(".accessibilityLabel(Text(\"\(label)\"))"),
+                    "row must label its column: \(label)")
+        }
+        // Exactly one label per rendered column — no column left unlabeled.
+        let labelCount = src.components(separatedBy: ".accessibilityLabel(").count - 1
+        #expect(labelCount >= expectedLabels.count,
+                "every row column must carry an accessibility label (found \(labelCount))")
+    }
+
     // MARK: - (a-2) test fixtures
 
     /// Build a populated row; only the fields a poll test cares about are

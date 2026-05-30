@@ -24,7 +24,7 @@ public struct PaneGalleryEntry: Sendable, Identifiable, Equatable {
 /// Categorized pane gallery for the Add-Pane sheet.
 ///
 /// Categories (Morville + Norman) are mutually-exclusive and collectively-
-/// exhaustive across the 17 pane types. Order is stable for display.
+/// exhaustive across the 20 pane types. Order is stable for display.
 public enum PaneGalleryBuilder {
 
     public static let categoryOrder: [String] = [
@@ -34,7 +34,7 @@ public enum PaneGalleryBuilder {
         "Docs & Code",
     ]
 
-    /// All 17 pane types with category assignments. Adding a new PaneType
+    /// All 20 pane types with category assignments. Adding a new PaneType
     /// requires adding an entry here AND registering it in the app target's
     /// string→PaneType map (see AddPaneSheet + ContentView).
     public static func allEntries() -> [PaneGalleryEntry] {
@@ -96,6 +96,10 @@ public enum PaneGalleryBuilder {
                 description: "Tail and filter log files",
                 icon: "doc.text.magnifyingglass", category: "Data & Insights",
                 defaultTitle: "Log"),
+            PaneGalleryEntry(id: "openAIServedRequests", name: "Served Requests",
+                description: "Live feed of OpenAI-compatible served requests",
+                icon: "network", category: "Data & Insights",
+                defaultTitle: "Served Requests"),
 
             // Docs & Code — where you READ and edit
             PaneGalleryEntry(id: "codeEditor", name: "Code Editor",

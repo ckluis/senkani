@@ -471,6 +471,7 @@ struct ContentView: View {
             "dashboard": .dashboard,
             "sprintReview": .sprintReview,
             "ollamaLauncher": .ollamaLauncher,
+            "openAIServedRequests": .openAIServedRequests,
         ]
         guard let type = typeMap[typeId] else { return }
         addPane(type: type, title: type == .terminal ? "Terminal" : typeId.capitalized, command: "")

@@ -320,6 +320,8 @@ struct PaneContainerView: View {
         case .ollamaLauncher:
             OllamaLauncherPane(pane: pane, isActive: isActive)
                 .onChange(of: pane.features) { _, _ in pane.features.persist(to: pane.configFilePath) }
+        case .openAIServedRequests:
+            OpenAIServedRequestsPane(pane: pane, workspace: workspace)
         }
     }
 
@@ -491,6 +493,8 @@ struct PaneContainerView: View {
             return "artifacts"
         case .ollamaLauncher:
             return pane.ollamaDefaultModel
+        case .openAIServedRequests:
+            return "served"
         }
     }
 

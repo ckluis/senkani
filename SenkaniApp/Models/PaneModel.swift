@@ -22,6 +22,7 @@ enum PaneType: String, CaseIterable {
     case sprintReview
     case artifactGallery
     case ollamaLauncher
+    case openAIServedRequests
 }
 
 /// Budget status for a pane, pushed from the MCP process via IPC.
@@ -174,6 +175,7 @@ final class PaneModel: Identifiable {
         case .dashboard:          self.columnWidth = 600
         case .sprintReview:       self.columnWidth = 500
         case .artifactGallery:    self.columnWidth = 720
+        case .openAIServedRequests: self.columnWidth = 520
         default:                  self.columnWidth = 300
         }
         // Write initial toggle state so the hook script has it from the start

@@ -109,11 +109,13 @@ private struct ServedRequestRow: View {
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundStyle(SenkaniTheme.textTertiary)
                 .frame(width: 38, alignment: .leading)
+                .accessibilityLabel(Text("Age \(fields.age)"))
 
             Text(fields.surface)
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .foregroundStyle(SenkaniTheme.textSecondary)
                 .frame(width: 72, alignment: .leading)
+                .accessibilityLabel(Text("Surface \(fields.surface)"))
 
             Text(fields.model)
                 .font(.system(size: 9, design: .monospaced))
@@ -121,16 +123,19 @@ private struct ServedRequestRow: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel(Text("Model \(fields.model)"))
 
             Text(fields.tier)
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundStyle(SenkaniTheme.textTertiary)
                 .frame(width: 48, alignment: .leading)
+                .accessibilityLabel(Text("Resolved tier \(fields.tier)"))
 
             Text(fields.tokens)
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundStyle(SenkaniTheme.textTertiary)
                 .frame(width: 64, alignment: .trailing)
+                .accessibilityLabel(Text("Tokens \(fields.tokens)"))
 
             Text(fields.keyLabel)
                 .font(.system(size: 9, design: .monospaced))
@@ -138,11 +143,13 @@ private struct ServedRequestRow: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(width: 72, alignment: .leading)
+                .accessibilityLabel(Text("Key \(fields.keyLabel)"))
 
             Text("\(fields.status)")
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .foregroundStyle(statusColor)
                 .frame(width: 32, alignment: .trailing)
+                .accessibilityLabel(Text("Status \(fields.status)"))
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)

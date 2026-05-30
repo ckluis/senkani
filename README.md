@@ -4,7 +4,7 @@
 [![license](https://img.shields.io/github/license/ckluis/senkani)](LICENSE)
 [![release](https://img.shields.io/github/v/release/ckluis/senkani)](https://github.com/ckluis/senkani/releases)
 
-One macOS binary, two jobs: a **native multi-pane workspace** (SwiftUI, sub-3ms renders, 19 pane types) and an **MCP intelligence layer** that cuts 50–90% of the tokens your AI spends on perception. Compression, symbol indexing, secret redaction, local validators, and Layer-3 hook interception run before the request ever leaves your machine. No workflow changes — point Claude Code at it and your session just costs less.
+One macOS binary, two jobs: a **native multi-pane workspace** (SwiftUI, sub-3ms renders, 20 pane types) and an **MCP intelligence layer** that cuts 50–90% of the tokens your AI spends on perception. Compression, symbol indexing, secret redaction, local validators, and Layer-3 hook interception run before the request ever leaves your machine. No workflow changes — point Claude Code at it and your session just costs less.
 
 ## Quick Start
 
@@ -28,7 +28,7 @@ and roadmap.
 The empty-workspace surface is project-first and task-first: pick a project
 folder, then choose one of four verb-led starters — **Ask Claude in &lt;project&gt;**,
 **Use Ollama in &lt;project&gt;**, **Open a tracked shell**, or **Inspect this project**.
-The full 19-pane gallery is one level deeper behind a **Show all panes** link
+The full 20-pane gallery is one level deeper behind a **Show all panes** link
 for advanced users. The first agent launch auto-assembles a witnessed layout —
 **Ask Claude** and **Open a tracked shell** open the terminal next to a live
 **Agent Timeline** pane so optimization events appear as the user works, with
@@ -130,7 +130,7 @@ Gemma 4 optionally enriches rationale strings (H+2a) — contained to a dedicate
 
 A horizontal canvas of panes. Each pane is a primitive type; you arrange them however makes sense for what you're doing right now, and Senkani persists the layout per project.
 
-**19 pane types:**
+**20 pane types:**
 
 - **Terminal** — SwiftTerm, configurable font size, kill/restart buttons, broadcast mode. The active terminal pane shows a five-chip "Senkani Active" proof strip (PROJECT, MCP, HOOKS, TRACK, EVENTS) that surfaces a runnable next action whenever a setup component is missing — no need to wait for the first intercepted command to know whether Senkani is wired in.
 - **Dashboard** — multi-project portfolio: total savings, project table, feature charts, insights, Models & Inference tile (MLX prefix-cache hit rate + cached tokens + active tier + memory pressure, JOIN of `cache_lifecycle` spans × `token_events` cache rows with a stale badge on JOIN mismatch)
@@ -150,6 +150,7 @@ A horizontal canvas of panes. Each pane is a primitive type; you arrange them ho
 - **Sprint Review** — GUI counterpart to `senkani learn review`: accept/reject staged compound-learning proposals (filter rules, context docs, instruction patches, workflow playbooks) plus a stale-applied section mirroring the quarterly audit
 - **Artifact Gallery** — split-pane browser over PaneDiary entries, SprintReview snapshots, and on-disk files under `~/.senkani/artifacts/`. Reads through V.9a's `ArtifactStore` (filter by tag / source-pane / version / since). Single-click selects; double-click navigates to the source pane (paneDiary focus, SprintReview focus, Finder reveal for filesystem). Inline lineage drill-in steps back through `versions(of:)`. Redacted artifacts gate behind a confirmation sheet that writes a chained `artifact.secret.allow` audit row on override.
 - **Ollama** — first-class local-LLM launcher: availability-gated, per-pane default-model selector, same MCP env injection terminal panes get. Header **download** button opens a curated-catalog drawer: pick from 5 LLMs (llama3.1:8b, qwen2.5-coder:7b, deepseek-r1:7b, mistral:7b, gemma2:2b), each row discloses size before the pull click and streams `ollama pull` progress into the UI. Install CTA when the daemon isn't running.
+- **Served Requests** — read-only live feed of `senkani serve --openai`'s OpenAI-compatible requests (metadata only — never request/completion bodies). One row per served `/v1` call: relative-age timestamp, surface, `model_logged` (raw, producer-sanitized), resolved tier, input/output tokens, key label, and HTTP status with semantic color. Refreshes on a 500ms poll while visible; per-column VoiceOver labels.
 
 **⌘K command palette** opens everything: new panes, themes, actions. Search-as-you-type with category grouping.
 

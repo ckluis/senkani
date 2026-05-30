@@ -5,9 +5,9 @@ import Foundation
 @Suite("Pane Gallery")
 struct PaneGalleryTests {
 
-    @Test func allEntriesCoversAll19PaneTypes() {
+    @Test func allEntriesCoversAll20PaneTypes() {
         let entries = PaneGalleryBuilder.allEntries()
-        #expect(entries.count == 19, "Should have 19 pane types, got \(entries.count)")
+        #expect(entries.count == 20, "Should have 20 pane types, got \(entries.count)")
     }
 
     @Test func dashboardIsPresent() {

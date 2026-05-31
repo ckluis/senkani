@@ -310,6 +310,8 @@ Senkani runs locally on a Mac. When the operator wants to drive a headless Mac m
 
 **The closed loop:** a Senkani job finishes → Pushover fires a push to the operator's phone → the notification's `url` field is `screens://<tailnet-host>` → tap → Screens 5 opens that exact Mac's desktop over the tunnel. No Senkani-side daemon ever listened on the public internet.
 
+**Over SSH, skip the GUI:** `senkani monitor --tui` is a read-only operator dashboard that lives entirely in the terminal — a live view over the session database with `q`/`j`/`k`/`r`/`/` keybindings, so you can watch a headless Mac's optimization activity through a plain `ssh` session without VNC. The refresh cadence is tunable with `--poll-interval` (e.g. `--poll-interval=30s`; default `5s`, minimum `1s`), and after the first paint each tick repaints only the changed cells, keeping steady-state updates byte-cheap over the tunnel. (`senkani monitor --single-frame` prints one frame and exits, for scripts.)
+
 Macs go to sleep — set **System Settings → Battery → Power Adapter → Wake for network access** so the headless Mac mini answers when Tailscale pokes it. Tailscale Personal-tier policy and Screens pricing have shifted before; treat the named products as the *current* recommendation and the *pattern* — any WireGuard mesh + any VNC client + any HTTP-API push service — as the durable contract. See [`spec/inspirations/native-app-ux/tailscale-plus-screens-5.md`](spec/inspirations/native-app-ux/tailscale-plus-screens-5.md) for the full design analysis.
 
 ---

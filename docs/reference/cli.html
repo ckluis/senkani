@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CLI commands — reference</title>
-<meta name="description" content="Reference for all 25 senkani CLI commands.">
+<meta name="description" content="Reference for all 31 senkani CLI commands.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -38,7 +38,7 @@
       </ul>
     </div>
     <div class="wiki-nav-group">
-      <h4>CLI commands (25)</h4>
+      <h4>CLI commands (31)</h4>
       <ul>
         <li><a href="../../docs/reference/cli/senkani-exec.html"><code>senkani exec</code></a></li>
         <li><a href="../../docs/reference/cli/senkani-search.html"><code>senkani search</code></a></li>
@@ -69,6 +69,7 @@
         <li><code>senkani prune</code></li>
         <li><code>senkani telemetry</code></li>
         <li><code>senkani serve</code></li>
+        <li><code>senkani monitor</code></li>
         <li><code>senkani vault</code></li>
       </ul>
     </div>
@@ -113,6 +114,7 @@
       <a class="listing-row" href="../../docs/reference/cli/senkani-models.html"><div class="listing-name">senkani models</div><div class="listing-desc">List, pull, or verify Senkani's local ML models (vision, embeddings, Layer-3 PII classifier). Operator-explicit pulls; no auto-download.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
       <div class="listing-row"><div class="listing-name">senkani onboarding milestones</div><div class="listing-desc">Read-only verification surface for <code>~/.senkani/onboarding/milestones.json</code>. Prints the live <code>SENKANI_ONBOARDING_MILESTONES</code> gate state, resolved path, file's JSON, and a derived <code>summary.allComplete</code> line — bypasses the env gate on reads so <code>=off</code> still surfaces on-disk truth.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></div>
       <div class="listing-row"><div class="listing-name">senkani walk rebuild-bundle</div><div class="listing-desc">Rebuild SenkaniApp from current HEAD and refresh the wrapped <code>.app</code> bundle under <code>tools/soak/runner/</code>: <code>swift build --product SenkaniApp</code> → copy debug binary into <code>Contents/MacOS/SenkaniApp</code> → ad-hoc <code>codesign --force --sign -</code> → <code>lsregister -f</code>. Shared callable form used by <code>senkani doctor</code> check #20 and the walk-runner <code>.command</code> scripts (eliminating the inline rebuild dance).</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></div>
+      <div class="listing-row" id="monitor"><div class="listing-name">senkani monitor</div><div class="listing-desc">Read-only operator dashboard in the terminal — a live view over the session database (no mutations). <code>--tui</code> enters the interactive event loop (raw mode; <code>q</code> quit, <code>j</code>/<code>k</code> cursor nav, <code>r</code> refresh, <code>/</code> filter) and restores cooked mode on exit, including the <code>SIGINT</code>/<code>SIGTERM</code> paths. <code>--single-frame</code> prints a single ANSI render and exits — useful for scripts and snapshot tests. <code>--app-version &lt;string&gt;</code> sets the version shown in the header bar (default <code>0.4.0</code>). <code>--poll-interval=&lt;Duration&gt;</code> sets the TUI refresh cadence with an <code>ms</code>/<code>s</code>/<code>m</code>/<code>h</code> suffix (e.g. <code>500ms</code>, <code>5s</code>, <code>30s</code>, <code>5m</code>) — default <code>5s</code>, must be <code>≥ 1s</code> (anything below is rejected with <code>--poll-interval must be ≥ 1s</code>), no upper bound. After the first paint each tick repaints only the changed cells (<code>RenderFrame.diff</code> delta painting), keeping steady-state updates byte-cheap over a remote/SSH session. Plain <code>senkani monitor</code> (no flag) prints <code>use --tui</code> and exits 0.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></div>
     </div>
   </article>
 </main>

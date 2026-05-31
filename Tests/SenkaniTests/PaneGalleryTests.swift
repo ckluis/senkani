@@ -42,6 +42,46 @@ struct PaneGalleryTests {
                 "Launch map references ids not in the gallery: \(launchOnly)")
     }
 
+    @Test func everyLaunchIDResolvesToNonEmptyDefaultTitle() {
+        // The ⌘K command palette (ContentView.addPaneByTypeId) titles a new
+        // pane via PaneGalleryBuilder.defaultTitle(forLaunchID:), matching the
+        // Add-Pane sheet. Every launchMap key MUST resolve to a non-nil,
+        // non-empty title — a nil would fall back to the camelCase id (the
+        // ugly-title defect this guards), and an empty title would render a
+        // blank pane header.
+        for id in PaneGalleryBuilder.launchMap.keys {
+            let title = PaneGalleryBuilder.defaultTitle(forLaunchID: id)
+            #expect(title != nil,
+                    "launchMap key '\(id)' has no gallery entry — would fall back to ugly id.capitalized")
+            #expect(!(title ?? "").isEmpty,
+                    "launchMap key '\(id)' resolves to an empty defaultTitle")
+        }
+    }
+
+    @Test func camelCaseLaunchIDsResolveToCleanTitles() {
+        // Regression pin: the ⌘K palette shipped `typeId.capitalized`, so a
+        // camelCase gallery id collapsed to one mangled word
+        // (`artifactGallery` → "Artifactgallery") while the Add-Pane sheet
+        // showed the clean `defaultTitle`. Both surfaces must now agree.
+        let expected: [String: String] = [
+            "artifactGallery": "Artifacts",
+            "openAIServedRequests": "Served Requests",
+            "skillLibrary": "Skills",
+            "agentTimeline": "Timeline",
+            "knowledgeBase": "Knowledge",
+            "sprintReview": "Sprint Review",
+        ]
+        for (id, title) in expected {
+            #expect(PaneGalleryBuilder.defaultTitle(forLaunchID: id) == title,
+                    "Launch id '\(id)' should title to '\(title)', not id.capitalized")
+        }
+    }
+
+    @Test func unknownLaunchIDResolvesToNil() {
+        #expect(PaneGalleryBuilder.defaultTitle(forLaunchID: "nonexistentPaneId") == nil,
+                "An id with no gallery entry must return nil so the caller can fall back")
+    }
+
     @Test func everyCategoryHasAtMostSixEntries() {
         // Acceptance bullet: ≤6 cells per category so the gallery stays
         // skimmable.

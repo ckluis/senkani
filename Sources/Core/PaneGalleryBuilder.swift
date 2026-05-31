@@ -170,6 +170,24 @@ public enum PaneGalleryBuilder {
         "scratchpad": "scratchpad",
     ]
 
+    /// Display title for a launch id (a `launchMap` key / gallery `id`).
+    ///
+    /// Both launch surfaces resolve the new pane's title through the gallery's
+    /// `defaultTitle` so the SAME pane gets the SAME title regardless of where
+    /// it was launched: the Add-Pane sheet (`AddPaneSheet`, which holds the
+    /// entry directly) and the ⌘K command palette
+    /// (`ContentView.addPaneByTypeId`, which resolves through this helper).
+    /// The bug this closes: the palette used `id.capitalized`, which mangles
+    /// camelCase ids (`artifactGallery` → "Artifactgallery") while the sheet
+    /// showed the clean `defaultTitle` ("Artifacts") — one pane, two names.
+    ///
+    /// Returns nil if no entry matches; `launchMapMatchesGallery` guarantees
+    /// every `launchMap` key has a matching gallery entry, so callers using a
+    /// `launchMap` key always get a non-nil title.
+    public static func defaultTitle(forLaunchID id: String) -> String? {
+        return allEntries().first(where: { $0.id == id })?.defaultTitle
+    }
+
     /// Entries grouped by category, in `categoryOrder`. Empty categories
     /// are omitted. Within a category, entries preserve `allEntries()` order.
     public static func categorized(_ entries: [PaneGalleryEntry] = allEntries())

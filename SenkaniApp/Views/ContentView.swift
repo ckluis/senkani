@@ -464,9 +464,16 @@ struct ContentView: View {
     /// a launch-map row launches — no silent dead clicks. Parity between the
     /// gallery and the launch map is enforced by
     /// `PaneGalleryTests.launchMapMatchesGallery`.
+    ///
+    /// The pane's title comes from the gallery entry's `defaultTitle` (via
+    /// `PaneGalleryBuilder.defaultTitle(forLaunchID:)`), matching the title the
+    /// Add-Pane sheet gives the same pane. The old `typeId.capitalized` fallback
+    /// mangled camelCase ids ("artifactGallery" → "Artifactgallery"); it remains
+    /// only as a never-reached safety net (parity guarantees a gallery match).
     private func addPaneByTypeId(_ typeId: String) {
         guard let rawValue = PaneGalleryBuilder.launchMap[typeId],
               let type = PaneType(rawValue: rawValue) else { return }
-        addPane(type: type, title: type == .terminal ? "Terminal" : typeId.capitalized, command: "")
+        let title = PaneGalleryBuilder.defaultTitle(forLaunchID: typeId) ?? typeId.capitalized
+        addPane(type: type, title: title, command: "")
     }
 }

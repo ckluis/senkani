@@ -10,6 +10,22 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ---
 
+## 2026-05-31 — Schedules pane a-2 (edit-in-place / drag-reorder / validation tooltips real-machine walk)
+
+`schedule-senkaniapp-pane-2026-05-21-a-2` shipped edit-in-place, drag-reorder, and
+inline validation tooltips on the Schedules pane. CI covers only the SwiftUI sub-view
+declarations (`#filePath` source-scan guards); it cannot prove the live launchd behavior
+or the SwiftUI body composition. Run this walk when back at a Mac with launchd in your
+control. **This item is `groomable: true`** — a groom round will write the full
+Cowork-runnable plan; this is the pointer entry.
+
+- **Item:** [`spec/autonomous/completed/2026/2026-05-31-schedule-senkaniapp-pane-2026-05-21-a-2.md`](../../spec/autonomous/completed/2026/2026-05-31-schedule-senkaniapp-pane-2026-05-21-a-2.md)
+- **Exec mode:** **either** (Cowork OR operator host — needs the real SenkaniApp running + `launchctl` visibility).
+- **Time estimate:** ~12 min operator-supervised.
+- **What it proves:** prose round-trip (compose → compiled cron → next-fires → create); amplification banner turns red on `.amplification`; **edit-in-place** of an existing schedule (compose surface reopens prefilled); **drag-reorder persistence across relaunch**; toggle/disable; delete.
+- **⚠ Two filed P1 launchd defects to verify here (NOT yet fixed):**
+  `schedule-edit-in-place-launchd-rearm-2026-05-31` — edit a cron/prose schedule's cadence, then confirm whether the **live launchd job actually re-fires on the new cadence** (current code does not unload-then-reload, so it likely keeps the OLD cadence until logout/login). And `schedule-edit-mode-switch-stale-plist-2026-05-31` — edit a cron/prose schedule down to **counter** mode and confirm the old cron plist is gone from `~/Library/LaunchAgents/` (current code leaves it → ghost double-fire). Capture observed behavior to drive those fixes.
+
 ## 2026-05-28 — V.13c real embedding-inference backend (registered-handler real-machine pass)
 
 `phase-v13c-real-embedding-inference-backend-2026-05-27` shipped the

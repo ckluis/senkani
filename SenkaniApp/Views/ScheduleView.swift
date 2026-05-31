@@ -39,6 +39,14 @@ struct ScheduleView: View {
     /// the Create gate (the operator accepts the risk).
     @State private var overrideAmplification = false
 
+    // U.x a-2 — edit-in-place. When the operator picks an existing row the
+    // compose surface opens PREFILLED with that schedule's current cadence;
+    // saving UPDATES the same JSON file (the name is the id, so a re-save
+    // overwrites it) through the exact same compile + AmplificationGuard +
+    // gating path the create flow uses. `editingName` non-nil means the
+    // form is editing rather than creating.
+    @State private var editingName: String?
+
     /// Three ways to compose a new schedule's cadence.
     private enum ComposeMode: String, CaseIterable, Identifiable {
         case prose = "Prose"
@@ -112,6 +120,34 @@ struct ScheduleView: View {
         return CronPreview.nextFires(cron: cron, after: Date(), count: 5)
     }
 
+    /// Inline validation tooltip for the active compose field (a-2): the
+    /// live AmplificationGuard rationale and any compile/parse error,
+    /// surfaced as a hover `.help()` on the cadence field so the operator
+    /// sees WHY Create is blocked without leaving the field. nil when the
+    /// cadence is valid and above the amplification floor.
+    private var cadenceValidationTooltip: String? {
+        var lines: [String] = []
+        // Compile / parse error for the active mode.
+        switch composeMode {
+        case .prose:
+            if let err = proseError { lines.append(err) }
+        case .counter:
+            if effectiveCounter == nil,
+               !newCounter.trimmingCharacters(in: .whitespaces).isEmpty {
+                lines.append("Expected `every <N> <event>` (e.g. \"every 10 tool_calls\").")
+            }
+        case .cron:
+            if let cron = effectiveCron, CronToLaunchd.convert(cron) == nil {
+                lines.append("Invalid cron expression: \"\(cron)\".")
+            }
+        }
+        // AmplificationGuard rationale.
+        if case .amplification(let reason, _)? = amplificationVerdict {
+            lines.append("Amplification risk: \(reason)" + (overrideAmplification ? " (overridden)" : ""))
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
     /// Whether the Create button may submit. Requires name + command,
     /// a resolvable cadence for the active mode, and an `.ok`
     /// AmplificationGuard verdict (unless the operator overrode it).
@@ -178,6 +214,55 @@ struct ScheduleView: View {
         proseError = nil
         overrideAmplification = false
         proseCompileTask?.cancel()
+        editingName = nil
+    }
+
+    // MARK: - Edit-in-place (a-2)
+
+    /// Whether the compose surface is editing an existing schedule rather
+    /// than creating a new one. Drives the submit-button label/icon and the
+    /// save vs. create persistence branch.
+    private var isEditing: Bool { editingName != nil }
+
+    /// Open the compose surface PREFILLED with `task`'s current cadence so
+    /// the operator can edit it in place. The compose-mode is inferred from
+    /// which cadence field the task was registered with (prose / counter /
+    /// cron); the same field that surfaces in `taskRow`. Saving re-runs the
+    /// identical compile + AmplificationGuard + gating path as create.
+    private func beginEdit(_ task: ScheduledTask) {
+        resetForm()
+        editingName = task.name
+        newName = task.name
+        newCommand = task.command
+        newBudgetLimit = task.budgetLimitCents.map(String.init) ?? ""
+
+        if let prose = task.proseCadence, !prose.isEmpty {
+            composeMode = .prose
+            newProse = prose
+            // Seed the compiled cron from the stored compiledCadence so the
+            // Create gate is satisfied immediately; the live recompile on
+            // edit refreshes it if the operator changes the phrase.
+            compiledProseCron = task.compiledCadence ?? task.cronPattern
+            recompileProse(prose)
+        } else if let counter = task.eventCounterCadence, !counter.isEmpty {
+            composeMode = .counter
+            newCounter = counter
+        } else {
+            composeMode = .cron
+            // Map the stored cron back onto a preset when it matches one of
+            // the built-ins, else fall through to the Custom field.
+            let cron = task.cronPattern
+            if let preset = schedulePresets.first(where: { $0 != "Custom" && cronForPreset($0) == cron }) {
+                newSchedulePreset = preset
+            } else {
+                newSchedulePreset = "Custom"
+                newCustomCron = cron
+            }
+        }
+
+        withAnimation(.easeInOut(duration: 0.2)) {
+            showNewScheduleForm = true
+        }
     }
 
     var body: some View {
@@ -286,6 +371,9 @@ struct ScheduleView: View {
             ForEach(tasks) { task in
                 taskRow(task)
             }
+            .onMove { indices, newOffset in
+                moveTasks(from: indices, to: newOffset)
+            }
         }
         .listStyle(.inset(alternatesRowBackgrounds: true))
     }
@@ -358,6 +446,17 @@ struct ScheduleView: View {
             .controlSize(.small)
             .help(task.enabled ? "Disable this schedule" : "Enable this schedule")
 
+            // Edit button — opens the compose surface prefilled (a-2).
+            Button {
+                beginEdit(task)
+            } label: {
+                Image(systemName: "pencil")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Edit this schedule's cadence")
+
             // Delete button
             Button {
                 taskToDelete = task
@@ -370,6 +469,8 @@ struct ScheduleView: View {
             .help("Remove this schedule")
         }
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) { beginEdit(task) }
     }
 
     private func statusBadge(_ task: ScheduledTask) -> some View {
@@ -398,7 +499,7 @@ struct ScheduleView: View {
 
     private var newScheduleFormView: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Create New Schedule")
+            Text(isEditing ? "Edit Schedule" : "Create New Schedule")
                 .font(.system(size: 14, weight: .semibold))
 
             // Compose-mode toggle — prose / counter / cron, mirroring the
@@ -420,10 +521,20 @@ struct ScheduleView: View {
                     TextField("e.g. daily-review", text: $newName)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 12))
+                        // The name is the schedule's file id — locked while
+                        // editing so a re-save overwrites the same JSON in
+                        // place rather than orphaning the old file (a-2).
+                        .disabled(isEditing)
+                        .help(isEditing ? "Schedule name is the file id and can't be renamed in place." : "")
                 }
                 .frame(maxWidth: 200)
 
                 cadenceFields
+                    // Inline validation tooltip (a-2): surfaces the compile
+                    // error and AmplificationGuard rationale on hover so the
+                    // operator sees why Create is gated without leaving the
+                    // field.
+                    .help(cadenceValidationTooltip ?? "")
             }
 
             HStack(spacing: 12) {
@@ -459,12 +570,14 @@ struct ScheduleView: View {
                 Button {
                     createSchedule()
                 } label: {
-                    Label("Create", systemImage: "checkmark.circle")
+                    Label(isEditing ? "Save Changes" : "Create",
+                          systemImage: isEditing ? "square.and.arrow.down" : "checkmark.circle")
                         .font(.system(size: 12, weight: .medium))
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
                 .disabled(!canCreate)
+                .help(canCreate ? "" : (cadenceValidationTooltip ?? "Fill in a name, command, and a valid cadence."))
 
                 if let error = createError {
                     Text(error)
@@ -586,6 +699,9 @@ struct ScheduleView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.red.opacity(0.12))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
+                // Inline validation tooltip (a-2): the full AmplificationGuard
+                // rationale on hover, mirroring the cadence-field tooltip.
+                .help("Amplification risk: \(reason)")
             }
         }
     }
@@ -672,6 +788,28 @@ struct ScheduleView: View {
         loadTasks()
     }
 
+    /// Drag-reorder the schedule list and PERSIST the new order via
+    /// ScheduleStore (a-2). `ScheduleStore.list()` orders rows by
+    /// `createdAt`, so to make a reorder durable we re-stamp each row's
+    /// `createdAt` to a strictly increasing sequence matching the new
+    /// visual order and re-save it — keeping the existing store + existing
+    /// sort, without touching Core. Names (the file id) are unchanged, so
+    /// each save overwrites the same JSON file in place.
+    private func moveTasks(from source: IndexSet, to destination: Int) {
+        var reordered = tasks
+        reordered.move(fromOffsets: source, toOffset: destination)
+
+        // Re-stamp createdAt onto a monotonically increasing sequence so the
+        // createdAt-sort in ScheduleStore.list() reproduces the new order.
+        let base = Date(timeIntervalSince1970: 0)
+        for (index, task) in reordered.enumerated() {
+            var updated = task
+            updated.createdAt = base.addingTimeInterval(Double(index))
+            try? ScheduleStore.save(updated)
+        }
+        loadTasks()
+    }
+
     private func removeTask(_ task: ScheduledTask) {
         try? ScheduleStore.remove(task.name)
         taskToDelete = nil
@@ -695,11 +833,18 @@ struct ScheduleView: View {
 
         let budget: Int? = newBudgetLimit.isEmpty ? nil : Int(newBudgetLimit)
 
+        // When editing in place, the row already exists under this name —
+        // load it so we can preserve fields the cadence edit must NOT reset
+        // (enabled state, createdAt → list position, and run history). The
+        // name is locked while editing, so `name` equals the existing id and
+        // a re-save overwrites the same JSON file (a-2).
+        let original: ScheduledTask? = isEditing ? ScheduleStore.load(name) : nil
+
         // Build the per-mode task and run the same AmplificationGuard
         // gate the CLI's `senkani schedule create` applies — refusing a
         // schedule at or below the amplification floor unless the
         // operator explicitly overrode it.
-        let task: ScheduledTask
+        var task: ScheduledTask
         switch composeMode {
         case .cron:
             let cron = cronForPreset(newSchedulePreset)
@@ -754,6 +899,16 @@ struct ScheduleView: View {
                 budgetLimitCents: budget, enabled: true,
                 eventCounterCadence: newCounter.trimmingCharacters(in: .whitespacesAndNewlines)
             )
+        }
+
+        // Preserve the existing row's lifecycle fields when editing so a
+        // cadence edit doesn't silently re-enable a disabled schedule,
+        // bump it to the bottom of the list, or wipe its run history.
+        if let original {
+            task.enabled = original.enabled
+            task.createdAt = original.createdAt
+            task.lastRunAt = original.lastRunAt
+            task.lastRunResult = original.lastRunResult
         }
 
         do {

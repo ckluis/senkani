@@ -129,6 +129,47 @@ public enum PaneGalleryBuilder {
         ]
     }
 
+    /// Canonical launch map: gallery entry `id` → `PaneType` raw value.
+    ///
+    /// Single source of truth for the string→PaneType binding the app target
+    /// resolves via `PaneType(rawValue:)`. It lives in Core (not the
+    /// non-importable `SenkaniApp` executable target) so the
+    /// gallery-id ⇄ launch-path parity is unit-testable — the defect class
+    /// this guards is "a gallery id with no launch path" (a dead ⌘K row),
+    /// which `PaneGalleryTests.launchMapMatchesGallery` now fails CI on.
+    ///
+    /// The app target's command palette (`ContentView.addPaneByTypeId`) and
+    /// Add-Pane sheet (`AddPaneSheet.idToType`) DERIVE their
+    /// `[String: PaneType]` launchers from this map rather than hand-mirroring
+    /// it, so the two app surfaces can no longer drift from each other or from
+    /// the gallery.
+    ///
+    /// Almost every id maps to the identically-named `PaneType` case; the sole
+    /// exception is `schedules` → `scheduleManager`. Adding a pane type: add an
+    /// entry in `allEntries()` AND a row here — the parity test enforces both.
+    public static let launchMap: [String: String] = [
+        "terminal": "terminal",
+        "agentTimeline": "agentTimeline",
+        "skillLibrary": "skillLibrary",
+        "knowledgeBase": "knowledgeBase",
+        "modelManager": "modelManager",
+        "sprintReview": "sprintReview",
+        "artifactGallery": "artifactGallery",
+        "ollamaLauncher": "ollamaLauncher",
+        "dashboard": "dashboard",
+        "analytics": "analytics",
+        "savingsTest": "savingsTest",
+        "schedules": "scheduleManager",
+        "logViewer": "logViewer",
+        "openAIServedRequests": "openAIServedRequests",
+        "codeEditor": "codeEditor",
+        "markdownPreview": "markdownPreview",
+        "htmlPreview": "htmlPreview",
+        "browser": "browser",
+        "diffViewer": "diffViewer",
+        "scratchpad": "scratchpad",
+    ]
+
     /// Entries grouped by category, in `categoryOrder`. Empty categories
     /// are omitted. Within a category, entries preserve `allEntries()` order.
     public static func categorized(_ entries: [PaneGalleryEntry] = allEntries())

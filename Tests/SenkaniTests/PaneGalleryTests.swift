@@ -24,6 +24,24 @@ struct PaneGalleryTests {
         #expect(Set(ids).count == ids.count, "IDs must be unique")
     }
 
+    @Test func launchMapMatchesGallery() {
+        // Regression pin: `artifactGallery` shipped in the gallery (and so in
+        // the ⌘K palette rows) but was missing from the command palette's
+        // launch map, making "New Artifact Gallery" a silent dead click. The
+        // app-target launchers (ContentView.addPaneByTypeId + AddPaneSheet)
+        // now derive from PaneGalleryBuilder.launchMap, so this Core test is
+        // the single guard that every gallery id has a launch path and that
+        // the launch map advertises no id the gallery doesn't ship.
+        let galleryIDs = Set(PaneGalleryBuilder.allEntries().map(\.id))
+        let launchIDs = Set(PaneGalleryBuilder.launchMap.keys)
+        let galleryOnly = galleryIDs.subtracting(launchIDs)
+        let launchOnly = launchIDs.subtracting(galleryIDs)
+        #expect(galleryOnly.isEmpty,
+                "Gallery ships panes with no launch path (dead ⌘K rows): \(galleryOnly)")
+        #expect(launchOnly.isEmpty,
+                "Launch map references ids not in the gallery: \(launchOnly)")
+    }
+
     @Test func everyCategoryHasAtMostSixEntries() {
         // Acceptance bullet: ≤6 cells per category so the gallery stays
         // skimmable.

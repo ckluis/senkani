@@ -458,22 +458,15 @@ struct ContentView: View {
     }
 
     /// Add a pane by type ID string (from command palette).
+    ///
+    /// Resolves through `PaneGalleryBuilder.launchMap` (the Core single source
+    /// of truth) rather than a hand-maintained mirror, so every gallery id with
+    /// a launch-map row launches — no silent dead clicks. Parity between the
+    /// gallery and the launch map is enforced by
+    /// `PaneGalleryTests.launchMapMatchesGallery`.
     private func addPaneByTypeId(_ typeId: String) {
-        let typeMap: [String: PaneType] = [
-            "terminal": .terminal, "browser": .browser,
-            "markdownPreview": .markdownPreview, "htmlPreview": .htmlPreview,
-            "scratchpad": .scratchpad, "logViewer": .logViewer,
-            "diffViewer": .diffViewer, "analytics": .analytics,
-            "skillLibrary": .skillLibrary, "knowledgeBase": .knowledgeBase,
-            "modelManager": .modelManager, "schedules": .scheduleManager,
-            "savingsTest": .savingsTest, "codeEditor": .codeEditor,
-            "agentTimeline": .agentTimeline,
-            "dashboard": .dashboard,
-            "sprintReview": .sprintReview,
-            "ollamaLauncher": .ollamaLauncher,
-            "openAIServedRequests": .openAIServedRequests,
-        ]
-        guard let type = typeMap[typeId] else { return }
+        guard let rawValue = PaneGalleryBuilder.launchMap[typeId],
+              let type = PaneType(rawValue: rawValue) else { return }
         addPane(type: type, title: type == .terminal ? "Terminal" : typeId.capitalized, command: "")
     }
 }

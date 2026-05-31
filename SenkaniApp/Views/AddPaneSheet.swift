@@ -11,30 +11,21 @@ struct AddPaneSheet: View {
     @State private var hoveredEntryID: String?
 
     /// Map the gallery's string IDs back to the app-target PaneType enum.
-    /// Mirrors the command-palette mapping in ContentView. Keep in sync
-    /// when adding a new pane type.
-    private let idToType: [String: PaneType] = [
-        "terminal": .terminal,
-        "agentTimeline": .agentTimeline,
-        "skillLibrary": .skillLibrary,
-        "knowledgeBase": .knowledgeBase,
-        "modelManager": .modelManager,
-        "sprintReview": .sprintReview,
-        "artifactGallery": .artifactGallery,
-        "dashboard": .dashboard,
-        "analytics": .analytics,
-        "savingsTest": .savingsTest,
-        "schedules": .scheduleManager,
-        "logViewer": .logViewer,
-        "codeEditor": .codeEditor,
-        "markdownPreview": .markdownPreview,
-        "htmlPreview": .htmlPreview,
-        "browser": .browser,
-        "diffViewer": .diffViewer,
-        "scratchpad": .scratchpad,
-        "ollamaLauncher": .ollamaLauncher,
-        "openAIServedRequests": .openAIServedRequests,
-    ]
+    ///
+    /// Derived from `PaneGalleryBuilder.launchMap` (the Core single source of
+    /// truth) rather than hand-mirrored, so this sheet and the command palette
+    /// (`ContentView.addPaneByTypeId`) can never drift from each other or from
+    /// the gallery. The DEBUG assert catches a launch-map row whose raw value
+    /// doesn't resolve to a real `PaneType` case — the one residual invariant
+    /// the Core parity test can't see (Core can't import `PaneType`).
+    private let idToType: [String: PaneType] = {
+        let resolved = PaneGalleryBuilder.launchMap.compactMapValues {
+            PaneType(rawValue: $0)
+        }
+        assert(resolved.count == PaneGalleryBuilder.launchMap.count,
+               "PaneGalleryBuilder.launchMap has a raw value with no matching PaneType case")
+        return resolved
+    }()
 
     private var filteredGroups: [(category: String, entries: [PaneGalleryEntry])] {
         let filtered = PaneGalleryBuilder.filter(PaneGalleryBuilder.allEntries(), query: searchText)

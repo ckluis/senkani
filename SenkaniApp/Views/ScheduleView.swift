@@ -789,22 +789,23 @@ struct ScheduleView: View {
     }
 
     /// Drag-reorder the schedule list and PERSIST the new order via
-    /// ScheduleStore (a-2). `ScheduleStore.list()` orders rows by
-    /// `createdAt`, so to make a reorder durable we re-stamp each row's
-    /// `createdAt` to a strictly increasing sequence matching the new
-    /// visual order and re-save it — keeping the existing store + existing
-    /// sort, without touching Core. Names (the file id) are unchanged, so
-    /// each save overwrites the same JSON file in place.
+    /// ScheduleStore (a-2). `ScheduleStore.list()` orders rows by the
+    /// dedicated `sortIndex` field (createdAt fallback for legacy rows), so
+    /// to make a reorder durable we write each row a dense 0-based
+    /// `sortIndex` matching the new visual order and re-save it — WITHOUT
+    /// touching `createdAt`, which keeps the genuine creation timestamp
+    /// intact. Names (the file id) are unchanged, so each save overwrites
+    /// the same JSON file in place.
     private func moveTasks(from source: IndexSet, to destination: Int) {
         var reordered = tasks
         reordered.move(fromOffsets: source, toOffset: destination)
 
-        // Re-stamp createdAt onto a monotonically increasing sequence so the
-        // createdAt-sort in ScheduleStore.list() reproduces the new order.
-        let base = Date(timeIntervalSince1970: 0)
+        // Stamp a dense 0-based sortIndex matching the new visual order so
+        // the sortIndex-sort in ScheduleStore.list() reproduces it across
+        // relaunch. createdAt is preserved.
         for (index, task) in reordered.enumerated() {
             var updated = task
-            updated.createdAt = base.addingTimeInterval(Double(index))
+            updated.sortIndex = index
             try? ScheduleStore.save(updated)
         }
         loadTasks()
@@ -911,6 +912,11 @@ struct ScheduleView: View {
             task.lastRunResult = original.lastRunResult
         }
 
+        // Was the row (before this edit) backed by a launchd plist? A
+        // cron/prose schedule installs one; a counter cadence does not.
+        // This drives the mode-switch teardown below.
+        let originalWasLaunchdBacked = original.map { $0.eventCounterCadence?.isEmpty ?? true } ?? false
+
         do {
             switch composeMode {
             case .cron, .prose:
@@ -919,12 +925,23 @@ struct ScheduleView: View {
                 // to ~/Library/LaunchAgents/, then load it with launchctl.
                 // `ScheduleStore.save` alone (the old path) only wrote the
                 // JSON, so a GUI-created cron/prose schedule was recorded but
-                // never fired.
+                // never fired. On an edit-in-place `install` re-arms the live
+                // job (unload-then-load) so the edited cadence fires without a
+                // relaunch — see PresetInstaller.install / reload.
                 _ = try PresetInstaller.install(task: task)
             case .counter:
                 // Counter cadences fire from HookRouter post-tool reactions,
                 // not launchd — persist the COUNTER: sentinel cron with NO
                 // plist (matches `ScheduleCommand.runCounterCadence`).
+                //
+                // Mode-switch teardown: if this row WAS a cron/prose schedule
+                // (launchd-backed) and is being edited DOWN to counter mode,
+                // its previously-installed plist must be unloaded + removed —
+                // otherwise the old launchd job stays loaded and keeps firing
+                // (a ghost double-fire alongside the new counter cadence).
+                if isEditing && originalWasLaunchdBacked {
+                    ScheduleStore.removePlist(name)
+                }
                 try ScheduleStore.save(task)
             }
             withAnimation(.easeInOut(duration: 0.2)) {

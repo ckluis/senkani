@@ -34,6 +34,13 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
     public var eventCounterCadence: String?
     public var locale: String?
 
+    // Drag-reorder order key. Optional so pre-field JSON on disk decodes
+    // unchanged (migrate-on-read: a nil `sortIndex` falls back to
+    // `createdAt` in `ScheduleStore.list()`). The Schedules pane writes a
+    // dense 0-based `sortIndex` on drag-reorder instead of overloading
+    // `createdAt`, so the genuine creation timestamp is preserved.
+    public var sortIndex: Int?
+
     public init(
         name: String,
         cronPattern: String,
@@ -47,7 +54,8 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
         proseCadence: String? = nil,
         compiledCadence: String? = nil,
         eventCounterCadence: String? = nil,
-        locale: String? = nil
+        locale: String? = nil,
+        sortIndex: Int? = nil
     ) {
         self.name = name
         self.cronPattern = cronPattern
@@ -62,6 +70,7 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
         self.compiledCadence = compiledCadence
         self.eventCounterCadence = eventCounterCadence
         self.locale = locale
+        self.sortIndex = sortIndex
     }
 
     // Explicit Codable so a missing key (pre-field JSON files already on
@@ -70,6 +79,7 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
         case name, cronPattern, command, budgetLimitCents, enabled
         case createdAt, lastRunAt, lastRunResult, worktree
         case proseCadence, compiledCadence, eventCounterCadence, locale
+        case sortIndex
     }
 
     public init(from decoder: Decoder) throws {
@@ -87,6 +97,7 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
         self.compiledCadence = try c.decodeIfPresent(String.self, forKey: .compiledCadence)
         self.eventCounterCadence = try c.decodeIfPresent(String.self, forKey: .eventCounterCadence)
         self.locale = try c.decodeIfPresent(String.self, forKey: .locale)
+        self.sortIndex = try c.decodeIfPresent(Int.self, forKey: .sortIndex)
     }
 }
 
@@ -110,6 +121,76 @@ public enum ScheduleStore {
 
     @TaskLocal static var _baseDirOverride: String?
     @TaskLocal static var _launchAgentsDirOverride: String?
+
+    // MARK: - launchctl seam
+    //
+    // `remove` / `removePlist` and `PresetInstaller.install` / `reload`
+    // all run `launchctl load|unload <plist>` to (de)activate the live
+    // launchd job. In production this spawns `/bin/launchctl`; tests inject
+    // a recorder via `withLaunchctlRecorder` so they can assert the
+    // unload-then-load (re-arm) and unload-on-mode-switch invocations
+    // WITHOUT touching the real launchd (and without depending on a real
+    // machine). `@TaskLocal` so concurrent test cases stay isolated,
+    // matching the `_baseDirOverride` pattern.
+
+    /// A single `launchctl` verb + plist path the seam was asked to run.
+    public struct LaunchctlInvocation: Sendable, Equatable {
+        public let verb: String        // "load" or "unload"
+        public let plistPath: String
+        public init(verb: String, plistPath: String) {
+            self.verb = verb
+            self.plistPath = plistPath
+        }
+    }
+
+    /// Thread-safe recorder of `launchctl` invocations for tests.
+    public final class LaunchctlRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _invocations: [LaunchctlInvocation] = []
+        public init() {}
+        func record(_ inv: LaunchctlInvocation) {
+            lock.lock(); defer { lock.unlock() }
+            _invocations.append(inv)
+        }
+        public var invocations: [LaunchctlInvocation] {
+            lock.lock(); defer { lock.unlock() }
+            return _invocations
+        }
+        public var verbs: [String] { invocations.map(\.verb) }
+    }
+
+    @TaskLocal static var _launchctlRecorder: LaunchctlRecorder?
+
+    /// TEST ONLY: route every `launchctl load|unload` through `recorder`
+    /// instead of spawning `/bin/launchctl`, for the duration of `body`.
+    public static func withLaunchctlRecorder<T>(
+        _ recorder: LaunchctlRecorder,
+        _ body: () throws -> T
+    ) rethrows -> T {
+        try $_launchctlRecorder.withValue(recorder) { try body() }
+    }
+
+    /// Run `launchctl <verb> <plistPath>`. When a recorder is installed
+    /// (tests) the invocation is captured and `/bin/launchctl` is NOT
+    /// spawned; otherwise it runs the real process. Returns `true` on a
+    /// zero exit status (recorder always "succeeds").
+    @discardableResult
+    static func runLaunchctl(verb: String, plistPath: String) -> Bool {
+        if let recorder = _launchctlRecorder {
+            recorder.record(LaunchctlInvocation(verb: verb, plistPath: plistPath))
+            return true
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = [verb, plistPath]
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
+        }
+    }
 
     public static var baseDir: String {
         _baseDirOverride ?? FileManager.default.homeDirectoryForCurrentUser.path + "/.senkani/schedules"
@@ -169,7 +250,29 @@ public enum ScheduleStore {
                 guard let data = fm.contents(atPath: path) else { return nil }
                 return try? decoder.decode(ScheduledTask.self, from: data)
             }
-            .sorted { $0.createdAt < $1.createdAt }
+            .sorted(by: orderBefore)
+    }
+
+    /// Stable list ordering: rows carrying an explicit drag-reorder
+    /// `sortIndex` come first in `sortIndex` order; rows without one (pre-
+    /// `sortIndex` JSON, or never-reordered) fall back to `createdAt`, and
+    /// sort AFTER any explicitly-ordered row. `name` is the final tiebreak
+    /// so the order is deterministic. This migrates legacy schedules
+    /// gracefully — a store with no `sortIndex` anywhere reproduces the old
+    /// pure-`createdAt` order.
+    static func orderBefore(_ a: ScheduledTask, _ b: ScheduledTask) -> Bool {
+        switch (a.sortIndex, b.sortIndex) {
+        case let (ai?, bi?):
+            if ai != bi { return ai < bi }
+            return a.createdAt < b.createdAt
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        case (.none, .none):
+            if a.createdAt != b.createdAt { return a.createdAt < b.createdAt }
+            return a.name < b.name
+        }
     }
 
     /// Save a task to {name}.json.
@@ -197,20 +300,28 @@ public enum ScheduleStore {
         return try? decoder.decode(ScheduledTask.self, from: data)
     }
 
+    /// Unload (if loaded) and delete the launchd plist for `name`, leaving
+    /// the JSON config in place. Used by the edit lifecycle when a schedule
+    /// is edited from a cron/prose cadence down to a counter cadence — the
+    /// counter row stays (with its sentinel cron) but its prior launchd job
+    /// must be torn down so it can't keep firing the old cadence (ghost
+    /// double-fire). Idempotent: a no-op when no plist exists.
+    @discardableResult
+    public static func removePlist(_ name: String) -> Bool {
+        let fm = FileManager.default
+        let plistPath = launchAgentsDir + "/com.senkani.schedule.\(name).plist"
+        guard fm.fileExists(atPath: plistPath) else { return false }
+        runLaunchctl(verb: "unload", plistPath: plistPath)
+        try? fm.removeItem(atPath: plistPath)
+        return true
+    }
+
     /// Remove a task's JSON file and unload+delete its launchd plist.
     public static func remove(_ name: String) throws {
         let fm = FileManager.default
 
         // Unload and remove launchd plist
-        let plistPath = launchAgentsDir + "/com.senkani.schedule.\(name).plist"
-        if fm.fileExists(atPath: plistPath) {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            process.arguments = ["unload", plistPath]
-            try? process.run()
-            process.waitUntilExit()
-            try? fm.removeItem(atPath: plistPath)
-        }
+        _ = removePlist(name)
 
         // Remove JSON config
         let jsonPath = baseDir + "/\(name).json"

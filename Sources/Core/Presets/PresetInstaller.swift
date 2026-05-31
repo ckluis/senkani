@@ -73,30 +73,32 @@ public enum PresetInstaller {
         if !fm.fileExists(atPath: launchAgentsDir) {
             try? fm.createDirectory(atPath: launchAgentsDir, withIntermediateDirectories: true)
         }
+
+        // Re-arm: if a plist for this label is ALREADY on disk (an
+        // edit-in-place of an existing cron/prose schedule), `launchctl
+        // load` alone is a no-op on the already-loaded label — the live
+        // job would keep firing the OLD cadence. So unload the existing
+        // job BEFORE overwriting the plist + (re)loading. On a fresh
+        // install (no prior plist) this is skipped, so the create path is
+        // unchanged with no spurious unload.
+        let priorPlistExisted = fm.fileExists(atPath: plistPath)
+        if loadWithLaunchctl && priorPlistExisted {
+            ScheduleStore.runLaunchctl(verb: "unload", plistPath: plistPath)
+        }
+
         do {
             try xml.write(toFile: plistPath, atomically: true, encoding: .utf8)
         } catch {
             throw InstallError.writeFailed("plist write failed: \(error)")
         }
 
-        // 5. Optionally run launchctl load
+        // 5. Optionally run launchctl load (re-arming the new cadence).
         var loaded = false
         if loadWithLaunchctl {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            process.arguments = ["load", plistPath]
-            do {
-                try process.run()
-                process.waitUntilExit()
-                loaded = process.terminationStatus == 0
-                if !loaded {
-                    FileHandle.standardError.write(
-                        Data("Warning: launchctl load exited with status \(process.terminationStatus)\n".utf8)
-                    )
-                }
-            } catch {
+            loaded = ScheduleStore.runLaunchctl(verb: "load", plistPath: plistPath)
+            if !loaded {
                 FileHandle.standardError.write(
-                    Data("Warning: launchctl load threw: \(error)\n".utf8)
+                    Data("Warning: launchctl load failed for \(plistPath)\n".utf8)
                 )
             }
         }
@@ -107,6 +109,21 @@ public enum PresetInstaller {
             plistXML: xml,
             launchctlLoaded: loaded
         )
+    }
+
+    /// Idempotently re-arm the live launchd job for an already-installed
+    /// `task` — unload the existing label (if loaded) then (re)load the
+    /// regenerated plist so an edited cadence fires WITHOUT a logout/login
+    /// or manual `launchctl`. Thin alias over `install`, which already
+    /// performs the unload-then-load when a prior plist is present; exposed
+    /// as an explicit verb the edit path can call to express intent.
+    @discardableResult
+    public static func reload(
+        task: ScheduledTask,
+        binaryPath: String? = nil,
+        loadWithLaunchctl: Bool = true
+    ) throws -> InstallResult {
+        try install(task: task, binaryPath: binaryPath, loadWithLaunchctl: loadWithLaunchctl)
     }
 
     /// Pure plist XML builder — no side effects. Exposed so tests can

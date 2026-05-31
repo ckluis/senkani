@@ -85,6 +85,15 @@
       <li><strong>Counter cadence</strong> — fires every Nth event ("every 10 tool_calls") rather than on a wall-clock schedule. Counter rows fire from <code>HookRouter</code> post-tool reactions and are clamped by <code>CounterCadenceRateLimiter</code> to ≤ 1 fire / minute, defending against amplification when a power user produces many sessions in a day.</li>
     </ul>
 
+    <h2>Creating a schedule</h2>
+    <p>The <strong>New Schedule</strong> form composes any of the three cadence kinds, mirroring the <code>senkani schedule create</code> CLI flags. A segmented toggle picks the compose mode:</p>
+    <ul>
+      <li><strong>Prose</strong> — type a phrase ("every weekday at 9am"); it compiles to cron live as you type and the form shows the resolved human-readable cron. Common phrases resolve in-process with no model; a phrase that needs the MLX fallback shows an inline message when no model is available.</li>
+      <li><strong>Counter</strong> — type <code>every N event_name</code> (e.g. <code>every 10 tool_calls</code>); the form confirms the parsed cadence.</li>
+      <li><strong>Cron</strong> — pick a preset (Every hour / 6 hours / Daily / Weekly) or choose Custom and enter a 5-field cron string.</li>
+    </ul>
+    <p>As you compose, the form surfaces a live <strong>amplification verdict banner</strong> from <code>AmplificationGuard</code> — green when the schedule fires above the 60-second floor, red with the reason when it would amplify — plus a <strong>next-fires preview</strong> (the upcoming five fire times from <code>CronPreview</code>, for cron and prose). The <strong>Create</strong> button is gated on an OK verdict: an amplifying schedule cannot be submitted unless you tick the explicit <em>Override and create anyway</em> checkbox.</p>
+
     <h2>Keyboard</h2>
     <p>Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas).</p>
 

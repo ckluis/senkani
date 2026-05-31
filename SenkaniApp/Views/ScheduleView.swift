@@ -17,6 +17,46 @@ struct ScheduleView: View {
     @State private var newBudgetLimit = ""
     @State private var createError: String?
 
+    // U.x a-1 — compose modes. The create-form supports three ways to
+    // express a cadence, mirroring the `senkani schedule create` CLI
+    // (`--cron` / `--prose` / `--counter-cadence`). Each mode resolves
+    // to either a cron string (cron + prose) or a CounterCadence
+    // (counter); the AmplificationGuard verdict + CronPreview next-fires
+    // + Create gating are all derived live from the composed cadence.
+    @State private var composeMode: ComposeMode = .cron
+    @State private var newProse = ""
+    @State private var newCounter = ""
+    /// Cron compiled from `newProse` by the async prose compiler. nil
+    /// until a compile succeeds; the only resolvable-cron source in
+    /// prose mode, so Create stays disabled while nil.
+    @State private var compiledProseCron: String?
+    /// Operator-facing inline error when a prose phrase needs the MLX
+    /// fallback and it is unavailable (rule-arm handles the common case).
+    @State private var proseError: String?
+    /// Cancellable handle for the in-flight prose compile.
+    @State private var proseCompileTask: Task<Void, Never>?
+    /// Explicit override allowing an `.amplification` schedule through
+    /// the Create gate (the operator accepts the risk).
+    @State private var overrideAmplification = false
+
+    /// Three ways to compose a new schedule's cadence.
+    private enum ComposeMode: String, CaseIterable, Identifiable {
+        case prose = "Prose"
+        case counter = "Counter"
+        case cron = "Cron"
+        var id: String { rawValue }
+    }
+
+    /// App-side prose compiler: deterministic rule arm + Null MLX arm.
+    /// The rule arm resolves common phrases ("every weekday at 9am") in
+    /// process with no model; phrases that would need MLX throw
+    /// `.unavailable`, which surfaces as an inline error (the app does
+    /// not link the CLI's subprocess MLX arm).
+    private let proseCompiler: any ProseCadenceCompiler = CompositeProseCadenceCompiler(
+        rule: RuleBasedProseCadenceCompiler(),
+        mlx: NullProseCadenceCompiler()
+    )
+
     private let schedulePresets = ["Every hour", "Every 6 hours", "Daily", "Weekly", "Custom"]
     private func cronForPreset(_ preset: String) -> String {
         switch preset {
@@ -27,6 +67,117 @@ struct ScheduleView: View {
         case "Custom": return newCustomCron
         default: return "0 9 * * *"
         }
+    }
+
+    // MARK: - Composed-cadence derivation (live)
+
+    /// The cron string the composed schedule resolves to, or nil if not
+    /// yet resolvable. Counter mode has no cron (fires from events).
+    private var effectiveCron: String? {
+        switch composeMode {
+        case .cron:
+            let c = cronForPreset(newSchedulePreset)
+            return c.isEmpty ? nil : c
+        case .prose:
+            return compiledProseCron
+        case .counter:
+            return nil
+        }
+    }
+
+    /// The parsed counter cadence (counter mode only), or nil if the
+    /// expression doesn't parse.
+    private var effectiveCounter: CounterCadence? {
+        guard composeMode == .counter else { return nil }
+        return CounterCadence.parse(newCounter)
+    }
+
+    /// Live AmplificationGuard verdict for the composed cadence, or nil
+    /// when nothing resolvable has been composed yet.
+    private var amplificationVerdict: AmplificationGuard.Verdict? {
+        switch composeMode {
+        case .counter:
+            guard let counter = effectiveCounter else { return nil }
+            return AmplificationGuard.validate(cron: nil, counter: counter)
+        case .cron, .prose:
+            guard let cron = effectiveCron else { return nil }
+            return AmplificationGuard.validate(cron: cron, counter: nil)
+        }
+    }
+
+    /// Next fire times for the composed cron (cron + prose modes).
+    /// Empty in counter mode (no launchd fires) or before a cron resolves.
+    private var nextFires: [Date] {
+        guard let cron = effectiveCron else { return [] }
+        return CronPreview.nextFires(cron: cron, after: Date(), count: 5)
+    }
+
+    /// Whether the Create button may submit. Requires name + command,
+    /// a resolvable cadence for the active mode, and an `.ok`
+    /// AmplificationGuard verdict (unless the operator overrode it).
+    private var canCreate: Bool {
+        guard !newName.trimmingCharacters(in: .whitespaces).isEmpty,
+              !newCommand.trimmingCharacters(in: .whitespaces).isEmpty else {
+            return false
+        }
+        switch composeMode {
+        case .counter: guard effectiveCounter != nil else { return false }
+        case .prose:   guard compiledProseCron != nil else { return false }
+        case .cron:    guard effectiveCron != nil else { return false }
+        }
+        switch amplificationVerdict {
+        case .some(.amplification):
+            if !overrideAmplification { return false }
+        case .some(.ok), .none:
+            break
+        }
+        return true
+    }
+
+    /// Recompile `prose` → cron off the main actor, then publish the
+    /// result (or an inline error) back to the form. Cancels any prior
+    /// in-flight compile so fast typing doesn't race.
+    private func recompileProse(_ prose: String) {
+        proseCompileTask?.cancel()
+        let trimmed = prose.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            compiledProseCron = nil
+            proseError = nil
+            return
+        }
+        proseCompileTask = Task {
+            do {
+                let result = try await proseCompiler.compile(prose: trimmed, locale: "en-US")
+                if Task.isCancelled { return }
+                compiledProseCron = result.cron
+                proseError = nil
+            } catch let e as ProseCadenceCompilerError {
+                if Task.isCancelled { return }
+                compiledProseCron = nil
+                proseError = e.userMessage
+            } catch {
+                if Task.isCancelled { return }
+                compiledProseCron = nil
+                proseError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Reset every create-form field back to defaults.
+    private func resetForm() {
+        newName = ""
+        newSchedulePreset = "Daily"
+        newCustomCron = ""
+        newCommand = ""
+        newBudgetLimit = ""
+        createError = nil
+        composeMode = .cron
+        newProse = ""
+        newCounter = ""
+        compiledProseCron = nil
+        proseError = nil
+        overrideAmplification = false
+        proseCompileTask?.cancel()
     }
 
     var body: some View {
@@ -102,13 +253,7 @@ struct ScheduleView: View {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     showNewScheduleForm.toggle()
                     if showNewScheduleForm {
-                        // Reset form fields
-                        newName = ""
-                        newSchedulePreset = "Daily"
-                        newCustomCron = ""
-                        newCommand = ""
-                        newBudgetLimit = ""
-                        createError = nil
+                        resetForm()
                     }
                 }
             } label: {
@@ -256,7 +401,18 @@ struct ScheduleView: View {
             Text("Create New Schedule")
                 .font(.system(size: 14, weight: .semibold))
 
-            HStack(spacing: 12) {
+            // Compose-mode toggle — prose / counter / cron, mirroring the
+            // `senkani schedule create` --prose / --counter-cadence / --cron flags.
+            Picker("Compose mode", selection: $composeMode) {
+                ForEach(ComposeMode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 280)
+
+            HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Name")
                         .font(.system(size: 10, weight: .medium))
@@ -267,28 +423,7 @@ struct ScheduleView: View {
                 }
                 .frame(maxWidth: 200)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Schedule")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.secondary)
-                    Picker("", selection: $newSchedulePreset) {
-                        ForEach(schedulePresets, id: \.self) { Text($0) }
-                    }
-                    .labelsHidden()
-                    .frame(maxWidth: 160)
-                }
-
-                if newSchedulePreset == "Custom" {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Cron Expression")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.secondary)
-                        TextField("0 9 * * 1-5", text: $newCustomCron)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 12, design: .monospaced))
-                    }
-                    .frame(maxWidth: 160)
-                }
+                cadenceFields
             }
 
             HStack(spacing: 12) {
@@ -312,6 +447,14 @@ struct ScheduleView: View {
                 .frame(maxWidth: 180)
             }
 
+            // Live AmplificationGuard verdict — red on .amplification
+            // (with an explicit override), green on .ok. Shown for all
+            // three compose modes as the operator composes.
+            amplificationBanner
+
+            // Next-fires preview from CronPreview.nextFires (cron + prose).
+            nextFiresPreview
+
             HStack(spacing: 8) {
                 Button {
                     createSchedule()
@@ -321,8 +464,7 @@ struct ScheduleView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
-                .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty
-                          || newCommand.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(!canCreate)
 
                 if let error = createError {
                     Text(error)
@@ -331,22 +473,145 @@ struct ScheduleView: View {
                 }
 
                 Spacer()
-
-                // Preview the resolved cron
-                let cron = cronForPreset(newSchedulePreset)
-                if !cron.isEmpty {
-                    Text(CronToLaunchd.humanReadable(cron))
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Color(.controlBackgroundColor))
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                }
             }
         }
         .padding(16)
         .background(Color(.controlBackgroundColor).opacity(0.5))
+        .onChange(of: newProse) { _, newValue in recompileProse(newValue) }
+        .onChange(of: composeMode) { _, _ in createError = nil }
+    }
+
+    // MARK: - Compose-mode cadence fields
+
+    @ViewBuilder
+    private var cadenceFields: some View {
+        switch composeMode {
+        case .prose:
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Prose cadence")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                TextField("e.g. every weekday at 9am", text: $newProse)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
+                if let cron = compiledProseCron {
+                    Text("Compiles to \(CronToLaunchd.humanReadable(cron))  ·  \(cron)")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                } else if let err = proseError {
+                    Text(err)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.red)
+                }
+            }
+            .frame(maxWidth: 340)
+        case .counter:
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Counter cadence")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                TextField("every N event_name (e.g. every 10 tool_calls)", text: $newCounter)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
+                if let counter = effectiveCounter {
+                    Text("Fires every \(counter.everyN) \(counter.eventName) event\(counter.everyN == 1 ? "" : "s") — dispatched by HookRouter, no launchd plist.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                } else if !newCounter.trimmingCharacters(in: .whitespaces).isEmpty {
+                    Text("Expected `every <N> <event>` (e.g. \"every 10 tool_calls\").")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.orange)
+                }
+            }
+            .frame(maxWidth: 340)
+        case .cron:
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Schedule")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Picker("", selection: $newSchedulePreset) {
+                    ForEach(schedulePresets, id: \.self) { Text($0) }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 160)
+            }
+            if newSchedulePreset == "Custom" {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Cron Expression")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    TextField("0 9 * * 1-5", text: $newCustomCron)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12, design: .monospaced))
+                }
+                .frame(maxWidth: 160)
+            }
+        }
+    }
+
+    // MARK: - Amplification verdict banner
+
+    @ViewBuilder
+    private var amplificationBanner: some View {
+        if let verdict = amplificationVerdict {
+            switch verdict {
+            case .ok:
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Text("Schedule looks good — fires above the amplification floor.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.green.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            case .amplification(let reason, _):
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                        Text("Amplification risk: \(reason)")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.red)
+                    }
+                    Toggle("Override and create anyway", isOn: $overrideAmplification)
+                        .toggleStyle(.checkbox)
+                        .font(.system(size: 11))
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.red.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+        }
+    }
+
+    // MARK: - Next-fires preview
+
+    @ViewBuilder
+    private var nextFiresPreview: some View {
+        if composeMode == .counter {
+            // Counter cadences fire on events, not a clock — no cron preview.
+            EmptyView()
+        } else {
+            let fires = nextFires
+            if !fires.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Next fires")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    ForEach(Array(fires.enumerated()), id: \.offset) { _, date in
+                        Text(date.formatted(date: .abbreviated, time: .shortened))
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - States
@@ -418,7 +683,6 @@ struct ScheduleView: View {
             .replacingOccurrences(of: " ", with: "-")
             .lowercased()
         let command = newCommand.trimmingCharacters(in: .whitespaces)
-        let cron = cronForPreset(newSchedulePreset)
 
         guard !name.isEmpty else {
             createError = "Name is required"
@@ -428,26 +692,69 @@ struct ScheduleView: View {
             createError = "Command is required"
             return
         }
-        guard !cron.isEmpty else {
-            createError = "Schedule is required"
-            return
-        }
-        if newSchedulePreset == "Custom" {
-            guard CronToLaunchd.convert(cron) != nil else {
-                createError = "Invalid cron expression"
-                return
-            }
-        }
 
         let budget: Int? = newBudgetLimit.isEmpty ? nil : Int(newBudgetLimit)
 
-        let task = ScheduledTask(
-            name: name,
-            cronPattern: cron,
-            command: command,
-            budgetLimitCents: budget,
-            enabled: true
-        )
+        // Build the per-mode task and run the same AmplificationGuard
+        // gate the CLI's `senkani schedule create` applies — refusing a
+        // schedule at or below the amplification floor unless the
+        // operator explicitly overrode it.
+        let task: ScheduledTask
+        switch composeMode {
+        case .cron:
+            let cron = cronForPreset(newSchedulePreset)
+            guard !cron.isEmpty else { createError = "Schedule is required"; return }
+            guard CronToLaunchd.convert(cron) != nil else {
+                createError = "Invalid cron expression: \"\(cron)\""
+                return
+            }
+            if case .amplification(let reason, _) = AmplificationGuard.validate(cron: cron, counter: nil),
+               !overrideAmplification {
+                createError = "Refused (amplification): \(reason)"
+                return
+            }
+            task = ScheduledTask(
+                name: name, cronPattern: cron, command: command,
+                budgetLimitCents: budget, enabled: true
+            )
+        case .prose:
+            guard let cron = compiledProseCron else {
+                createError = proseError ?? "Prose cadence has not compiled to a cron yet."
+                return
+            }
+            guard CronToLaunchd.convert(cron) != nil else {
+                createError = "Compiled cron \"\(cron)\" is invalid."
+                return
+            }
+            if case .amplification(let reason, _) = AmplificationGuard.validate(cron: cron, counter: nil),
+               !overrideAmplification {
+                createError = "Refused (amplification): \(reason)"
+                return
+            }
+            task = ScheduledTask(
+                name: name, cronPattern: cron, command: command,
+                budgetLimitCents: budget, enabled: true,
+                proseCadence: newProse.trimmingCharacters(in: .whitespacesAndNewlines),
+                compiledCadence: cron, locale: "en-US"
+            )
+        case .counter:
+            guard let counter = effectiveCounter else {
+                createError = "Counter cadence must be `every <N> <event>` (e.g. every 10 tool_calls)."
+                return
+            }
+            if case .amplification(let reason, _) = AmplificationGuard.validate(cron: nil, counter: counter),
+               !overrideAmplification {
+                createError = "Refused (amplification): \(reason)"
+                return
+            }
+            // Counter cadences fire from HookRouter, not launchd — store
+            // the COUNTER: sentinel cron + the original expression.
+            task = ScheduledTask(
+                name: name, cronPattern: counter.sentinelCronPattern, command: command,
+                budgetLimitCents: budget, enabled: true,
+                eventCounterCadence: newCounter.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
 
         do {
             try ScheduleStore.save(task)

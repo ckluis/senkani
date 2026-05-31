@@ -957,6 +957,12 @@ struct ScheduleView: View {
                 createError = "Invalid cron expression: \"\(pattern)\""
             case .writeFailed(let detail):
                 createError = "Install failed: \(detail)"
+            case .loadFailed:
+                // The new plist is written but `launchctl load` failed (after a
+                // retry). On an edit the prior job was already unloaded, so the
+                // schedule is now DISARMED — tell the operator instead of
+                // silently leaving it down.
+                createError = "Schedule saved but not armed: launchctl load failed. The schedule will not fire until reloaded (try Log Out → Log In, or re-save)."
             }
         } catch {
             createError = error.localizedDescription

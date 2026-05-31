@@ -26,7 +26,12 @@ struct ScheduleLifecycleLaunchdTests {
 
     /// Run `body` inside a fresh temp schedules+LaunchAgents dir pair, with a
     /// `launchctl` recorder installed. Cleans up the temp dirs afterward.
+    /// `failVerbs` injects per-verb launchctl FAILURE into the recorder (e.g.
+    /// `["load"]` makes a recorded `load` return false) so the disarm-after-
+    /// unload scenario can be exercised; default empty preserves the prior
+    /// always-succeed behavior.
     private func withTempStore(
+        failVerbs: Set<String> = [],
         _ body: (_ base: String, _ launch: String, _ rec: ScheduleStore.LaunchctlRecorder) throws -> Void
     ) throws {
         let tmp = FileManager.default.temporaryDirectory
@@ -37,7 +42,7 @@ struct ScheduleLifecycleLaunchdTests {
         try? FileManager.default.createDirectory(atPath: launch, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
 
-        let rec = ScheduleStore.LaunchctlRecorder()
+        let rec = ScheduleStore.LaunchctlRecorder(failVerbs: failVerbs)
         try ScheduleStore.withTestDirs(base: base, launchAgents: launch) {
             try ScheduleStore.withLaunchctlRecorder(rec) {
                 try body(base, launch, rec)
@@ -104,6 +109,78 @@ struct ScheduleLifecycleLaunchdTests {
                 task: task, binaryPath: "/opt/senkani/senkani", loadWithLaunchctl: false)
             #expect(rec.verbs.isEmpty,
                     "loadWithLaunchctl:false must not touch launchctl")
+        }
+    }
+
+    // MARK: - load-failure-after-unload disarm
+
+    @Test("Edit whose launchctl load FAILS after the unload surfaces InstallError.loadFailed (not a silent stderr warning); the unload still ran (job torn down)")
+    func editLoadFailureAfterUnloadIsSurfaced() throws {
+        // Inject a `load` failure: every recorded `load` returns false. On an
+        // EDIT the prior plist is present, so the unload runs and succeeds, then
+        // the (retried) load fails — the disarm case.
+        try withTempStore(failVerbs: ["load"]) { _, launch, rec in
+            // 1. Seed a prior plist on disk WITHOUT launchctl (render mode) so a
+            //    prior job is "present" but the recorder has no load failure to
+            //    trip over during setup — the failure must fire on the EDIT below.
+            let original = cronTask("disarm-edit", cron: "0 9 * * *")
+            _ = try PresetInstaller.install(
+                task: original, binaryPath: "/opt/senkani/senkani", loadWithLaunchctl: false)
+            let plistPath = launch + "/com.senkani.schedule.disarm-edit.plist"
+            #expect(FileManager.default.fileExists(atPath: plistPath))
+
+            // 2. Edit-in-place with launchctl ON: prior plist present → unload
+            //    succeeds, then `load` fails (twice — original + retry). The
+            //    operator-visible signal is the thrown InstallError.loadFailed,
+            //    NOT a stderr-only warning + silent launchctlLoaded:false return.
+            let edited = cronTask("disarm-edit", cron: "0 18 * * *")
+            #expect(throws: PresetInstaller.InstallError.loadFailed(plistPath: plistPath)) {
+                _ = try PresetInstaller.reload(
+                    task: edited, binaryPath: "/opt/senkani/senkani", loadWithLaunchctl: true)
+            }
+
+            // The unload WAS recorded — the prior job was torn down, which is
+            // exactly why a failed load leaves the schedule DISARMED. Plus the
+            // load was attempted twice (one retry before throwing).
+            #expect(rec.verbs == ["unload", "load", "load"],
+                    "disarm path must unload the prior job then attempt load twice (retry) before failing; got \(rec.verbs)")
+        }
+    }
+
+    @Test("A NORMAL successful edit still loads fine (no error) — success path unchanged")
+    func normalSuccessfulEditStillLoads() throws {
+        try withTempStore { _, launch, rec in
+            let original = cronTask("disarm-ok", cron: "0 9 * * *")
+            _ = try PresetInstaller.install(
+                task: original, binaryPath: "/opt/senkani/senkani", loadWithLaunchctl: true)
+
+            // No injected failure → the edit re-arms cleanly and returns a
+            // result with launchctlLoaded == true, no throw.
+            let edited = cronTask("disarm-ok", cron: "0 18 * * *")
+            let result = try PresetInstaller.reload(
+                task: edited, binaryPath: "/opt/senkani/senkani", loadWithLaunchctl: true)
+            #expect(result.launchctlLoaded == true,
+                    "a successful edit must report launchctlLoaded == true")
+            // Single load on the edit (no retry, since the first load succeeded).
+            #expect(rec.verbs == ["load", "unload", "load"],
+                    "successful edit re-arms with a single unload+load; got \(rec.verbs)")
+            let xml = try String(
+                contentsOfFile: launch + "/com.senkani.schedule.disarm-ok.plist", encoding: .utf8)
+            #expect(xml.contains("<integer>18</integer>"))
+        }
+    }
+
+    @Test("Fresh install whose load fails surfaces InstallError.loadFailed (no prior unload — fresh path still must not be silent)")
+    func freshInstallLoadFailureIsSurfaced() throws {
+        try withTempStore(failVerbs: ["load"]) { _, _, rec in
+            let task = cronTask("disarm-fresh", cron: "0 9 * * *")
+            #expect(throws: PresetInstaller.InstallError.self) {
+                _ = try PresetInstaller.install(
+                    task: task, binaryPath: "/opt/senkani/senkani", loadWithLaunchctl: true)
+            }
+            // No prior plist → no unload; load attempted twice (retry) then throws.
+            #expect(rec.verbs == ["load", "load"],
+                    "fresh-install load failure: no unload, load attempted twice (retry); got \(rec.verbs)")
         }
     }
 

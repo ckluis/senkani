@@ -165,6 +165,8 @@ extension Schedule {
                 throw ValidationError("Failed to convert cron expression to launchd intervals: \"\(c)\".")
             } catch PresetInstaller.InstallError.writeFailed(let msg) {
                 throw ValidationError(msg)
+            } catch PresetInstaller.InstallError.loadFailed(let plistPath) {
+                throw ValidationError("Schedule config written but `launchctl load \(plistPath)` failed — the schedule is NOT armed and will not fire until reloaded.")
             }
         }
 
@@ -225,6 +227,8 @@ extension Schedule {
                 throw ValidationError("Failed to convert compiled cron expression to launchd intervals: \"\(c)\".")
             } catch PresetInstaller.InstallError.writeFailed(let msg) {
                 throw ValidationError(msg)
+            } catch PresetInstaller.InstallError.loadFailed(let plistPath) {
+                throw ValidationError("Schedule config written but `launchctl load \(plistPath)` failed — the schedule is NOT armed and will not fire until reloaded.")
             }
         }
 
@@ -652,6 +656,8 @@ extension Schedule.Preset {
                 throw ValidationError("Preset `\(name)` has an invalid cron pattern: \"\(c)\".")
             } catch PresetInstaller.InstallError.writeFailed(let msg) {
                 throw ValidationError("Preset `\(name)` install failed: \(msg)")
+            } catch PresetInstaller.InstallError.loadFailed(let plistPath) {
+                throw ValidationError("Preset `\(name)` config written but `launchctl load \(plistPath)` failed — the schedule is NOT armed and will not fire until reloaded.")
             }
 
             print("Installed preset `\(name)` as schedule `\(task.name)` (cron: \(CronToLaunchd.humanReadable(task.cronPattern))).")

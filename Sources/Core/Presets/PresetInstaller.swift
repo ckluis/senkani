@@ -25,6 +25,13 @@ public enum PresetInstaller {
     public enum InstallError: Error, Equatable {
         case invalidCronPattern(String)
         case writeFailed(String)
+        /// `launchctl load` returned a non-zero exit (after one retry). On an
+        /// edit-in-place this is the DISARMED case: the prior job was already
+        /// unloaded and the new plist is on disk, but the (re)load failed — so
+        /// the schedule will NOT fire until reloaded. Surfaced (instead of the
+        /// old stderr-only warning) so the GUI/CLI tell the operator the
+        /// schedule is not armed rather than silently leaving it down.
+        case loadFailed(plistPath: String)
     }
 
     /// Write the `ScheduledTask` JSON + generate the launchd plist +
@@ -98,13 +105,27 @@ public enum PresetInstaller {
         }
 
         // 5. Optionally run launchctl load (re-arming the new cadence).
+        //
+        // Disarm hardening: on an edit-in-place the prior job was unloaded
+        // just above, so a failed `load` here would leave the schedule
+        // DISARMED (new plist on disk, job DOWN). The old code only logged a
+        // stderr warning and returned `launchctlLoaded: false`, so the
+        // operator was never told the schedule wasn't armed. Now we retry the
+        // load ONCE (covers a transient launchctl hiccup) and, if it still
+        // fails, throw a typed `InstallError.loadFailed` — which both the GUI
+        // edit path (`catch let error as InstallError`) and the CLI
+        // `schedule create` paths surface to the operator. A successful load
+        // (fresh install or edit) behaves exactly as before: no error.
         var loaded = false
         if loadWithLaunchctl {
             loaded = ScheduleStore.runLaunchctl(verb: "load", plistPath: plistPath)
             if !loaded {
-                FileHandle.standardError.write(
-                    Data("Warning: launchctl load failed for \(plistPath)\n".utf8)
-                )
+                // One retry before surfacing — guards against a transient
+                // launchctl failure without masking a genuine disarm.
+                loaded = ScheduleStore.runLaunchctl(verb: "load", plistPath: plistPath)
+            }
+            if !loaded {
+                throw InstallError.loadFailed(plistPath: plistPath)
             }
         }
 

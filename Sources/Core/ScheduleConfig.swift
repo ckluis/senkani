@@ -154,10 +154,20 @@ public enum ScheduleStore {
     }
 
     /// Thread-safe recorder of `launchctl` invocations for tests.
+    ///
+    /// `failVerbs` injects per-verb FAILURE: any verb in the set makes
+    /// `runLaunchctl` return `false` for that invocation (simulating a real
+    /// `/bin/launchctl` non-zero exit) while STILL recording it, so a test can
+    /// drive the `load`-failed-after-unload disarm scenario and assert the
+    /// teardown happened. Default empty → every recorded verb "succeeds",
+    /// preserving the prior always-true behavior for existing tests.
     public final class LaunchctlRecorder: @unchecked Sendable {
         private let lock = NSLock()
         private var _invocations: [LaunchctlInvocation] = []
-        public init() {}
+        let failVerbs: Set<String>
+        public init(failVerbs: Set<String> = []) {
+            self.failVerbs = failVerbs
+        }
         func record(_ inv: LaunchctlInvocation) {
             lock.lock(); defer { lock.unlock() }
             _invocations.append(inv)
@@ -183,12 +193,14 @@ public enum ScheduleStore {
     /// Run `launchctl <verb> <plistPath>`. When a recorder is installed
     /// (tests) the invocation is captured and `/bin/launchctl` is NOT
     /// spawned; otherwise it runs the real process. Returns `true` on a
-    /// zero exit status (recorder always "succeeds").
+    /// zero exit status. The recorder "succeeds" unless `verb` is in its
+    /// injected `failVerbs`, in which case it records the invocation and
+    /// returns `false` (simulating a launchctl failure for that verb).
     @discardableResult
     static func runLaunchctl(verb: String, plistPath: String) -> Bool {
         if let recorder = _launchctlRecorder {
             recorder.record(LaunchctlInvocation(verb: verb, plistPath: plistPath))
-            return true
+            return !recorder.failVerbs.contains(verb)
         }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/launchctl")

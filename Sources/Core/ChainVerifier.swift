@@ -76,7 +76,18 @@ public enum ChainVerifier {
                 "surrogate_writes":   verifyTable(db: db, table: "surrogate_writes",   verify: verifyAnchorSurrogateWrites),
                 "workstream_handoffs": verifyTable(db: db, table: "workstream_handoffs", verify: verifyAnchorWorkstreamHandoffs),
                 "openai_request_log": verifyTable(db: db, table: "openai_request_log", verify: verifyAnchorOpenAIRequestLog),
+                "thread_handoff_event": verifyTable(db: db, table: "thread_handoff_event", verify: verifyAnchorThreadHandoffEvent),
             ]
+        }
+    }
+
+    /// V.17c — `thread_handoff_event` chained-table verifier. Standalone
+    /// accessor for callers (and the burst-integrity guard) that want the
+    /// single-table verdict.
+    public static func verifyThreadHandoffs(_ database: SessionDatabase) -> Result {
+        return database.queue.sync {
+            guard let db = database.db else { return .noChain }
+            return verifyTable(db: db, table: "thread_handoff_event", verify: verifyAnchorThreadHandoffEvent)
         }
     }
 
@@ -895,6 +906,44 @@ public enum ChainVerifier {
             }
         }
         return nil
+    }
+
+    /// Walk `thread_handoff_event` rows for one anchor. V.17c (v43):
+    /// columns hashed are the eight non-chain payload columns. The PK is
+    /// an INTEGER AUTOINCREMENT id (like `openai_request_log`), so the
+    /// generic integer-keyed `walkTable` path applies. No per-anchor
+    /// shape switch: v43 is the table's birthday, so every row hashes
+    /// the same canonical shape. The canonical map MUST match the
+    /// writer in `TokenEventStore.recordThreadHandoff` exactly —
+    /// `override_reason` is NULL for a normal handoff and TEXT for an
+    /// operator override.
+    /// `entry_hash IS NOT NULL` filter — see `verifyAnchorTokenEvents` notes.
+    private static func verifyAnchorThreadHandoffEvent(db: OpaquePointer, anchor: Anchor) -> Result? {
+        let sql = """
+            SELECT id, created_at, from_provider, to_provider, thread_id,
+                   accepted_by, pre_handoff_event_count, post_handoff_event_count,
+                   override_reason,
+                   prev_hash, entry_hash
+              FROM thread_handoff_event
+             WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
+             ORDER BY id ASC;
+        """
+        return walkTable(db: db, table: "thread_handoff_event", anchor: anchor, sql: sql) { stmt in
+            let rowid = sqlite3_column_int64(stmt, 0)
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "created_at":               .real(sqlite3_column_double(stmt, 1)),
+                "from_provider":            textValue(stmt, 2),
+                "to_provider":              textValue(stmt, 3),
+                "thread_id":                textValue(stmt, 4),
+                "accepted_by":              textValue(stmt, 5),
+                "pre_handoff_event_count":  .integer(sqlite3_column_int64(stmt, 6)),
+                "post_handoff_event_count": .integer(sqlite3_column_int64(stmt, 7)),
+                "override_reason":          textOrNull(stmt, 8),
+            ]
+            let prev = optionalText(stmt, 9)
+            let stored = sqlite3_column_text(stmt, 10).map { String(cString: $0) } ?? ""
+            return (rowid, columns, prev, stored)
+        }
     }
 
     /// Decode a 16-byte BLOB UUID column into its RFC-4122 string

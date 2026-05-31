@@ -397,7 +397,8 @@ struct Doctor: ParsableCommand {
         "commands", "pane_refresh_state", "policy_snapshots",
         "confirmations", "trust_audits", "egress_decisions",
         "pack_audits", "eval_results", "surrogate_writes",
-        "workstream_handoffs", "openai_request_log"
+        "workstream_handoffs", "openai_request_log",
+        "thread_handoff_event"
     ]
 
     private static let chainAuditSummaryNames: String =

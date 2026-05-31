@@ -2324,6 +2324,75 @@ public enum MigrationRegistry {
                 try openOpenAIRequestLogV42Anchor(db: db)
             }
         },
+        Migration(version: 43, description: "thread_handoff_event chained table (Phase V.17c thread-handoff guardrails: provider-event handoff predicate audit rows)") { db in
+            // Phase V.17c — the most invasive V.17 sub-feature. When the
+            // operator imports a provider thread from one adapter into
+            // another, `ThreadHandoffGuard` (over `provider_runtime_event`)
+            // decides whether the thread is importable (last event is
+            // `turn_completed`) or blocked (pending approval / input / tool
+            // call / aborted / no completed turn). Every ACCEPTED handoff
+            // writes one T.5-chained row capturing the pre/post event counts
+            // so the import is forensically reconstructable.
+            //
+            // Dedicated chained table (NOT a `token_events` extension):
+            // mirrors the `workstream_handoffs` precedent (migration v40)
+            // — its own `ChainState` on `TokenEventStore`, its own
+            // `ChainVerifier.verifyThreadHandoffs`, and clean typed columns.
+            // Unlike `workstream_handoffs` (BLOB-UUID PK), this table uses an
+            // INTEGER AUTOINCREMENT PK like `openai_request_log` (v41), so
+            // the verifier reuses the generic integer-keyed `walkTable`
+            // path. There is no per-anchor shape switch: v43 is the table's
+            // birthday so every row hashes the same canonical shape.
+            //
+            // `override_reason` is NULLABLE: a normal (non-override)
+            // accepted handoff stores NULL; an operator force-import past a
+            // BLOCKED predicate MUST supply a free-text justification, which
+            // lands here (a force-import without a reason is rejected by the
+            // writer and never lands a row).
+            //
+            // No migration anchor opener: the table is brand-new and empty,
+            // so its anchor opens lazily on first write via
+            // `ChainState.resolveAnchorId` (reason `fresh-install`,
+            // started_at_rowid 0), exactly like v41's `openai_request_log`.
+            // The lazy anchor pattern means a fresh install and an upgrade
+            // both verify identically — there are no pre-v43 rows to
+            // backfill.
+            func exec(_ sql: String) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc != SQLITE_OK {
+                    throw MigrationError.sqlFailed(stage: "v43", detail: msg)
+                }
+            }
+            try exec("""
+                CREATE TABLE IF NOT EXISTS thread_handoff_event (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at REAL NOT NULL,
+                    from_provider TEXT NOT NULL,
+                    to_provider TEXT NOT NULL,
+                    thread_id TEXT NOT NULL,
+                    accepted_by TEXT NOT NULL,
+                    pre_handoff_event_count INTEGER NOT NULL,
+                    post_handoff_event_count INTEGER NOT NULL,
+                    override_reason TEXT,
+                    prev_hash TEXT,
+                    entry_hash TEXT NOT NULL,
+                    chain_anchor_id INTEGER NOT NULL
+                );
+            """)
+            // Dedup index: one accepted handoff row per (thread_id,
+            // to_provider). A re-import of the same thread into the same
+            // target adapter is idempotent — the writer probes this before
+            // inserting and returns `.idempotencyHit` without a second row.
+            try exec("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_handoff_event_dedup
+                    ON thread_handoff_event(thread_id, to_provider);
+            """)
+            try exec("CREATE INDEX IF NOT EXISTS idx_thread_handoff_event_anchor ON thread_handoff_event(chain_anchor_id, id);")
+            try exec("CREATE INDEX IF NOT EXISTS idx_thread_handoff_event_thread ON thread_handoff_event(thread_id);")
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)

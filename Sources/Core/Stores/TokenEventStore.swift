@@ -26,6 +26,12 @@ final class TokenEventStore: @unchecked Sendable {
     // and last-hash cache are independent from `token_events`.
     private let handoffChain = ChainState(table: "workstream_handoffs")
 
+    // V.17c — `thread_handoff_event` is its own T.5-chained table
+    // (migration v43). Owns a separate `ChainState` so its anchor
+    // lookup + last-hash cache are independent from both `token_events`
+    // and `workstream_handoffs`.
+    private let threadHandoffChain = ChainState(table: "thread_handoff_event")
+
     init(parent: SessionDatabase) {
         self.parent = parent
     }
@@ -35,6 +41,7 @@ final class TokenEventStore: @unchecked Sendable {
     func invalidateChainCache() {
         chain.invalidate()
         handoffChain.invalidate()
+        threadHandoffChain.invalidate()
     }
 
     // MARK: - Schema
@@ -1192,6 +1199,131 @@ final class TokenEventStore: @unchecked Sendable {
             if sqlite3_step(stmt) == SQLITE_DONE {
                 self.handoffChain.recordWrite(anchorId: anchorId, entryHash: entryHash)
             }
+        }
+    }
+
+    /// V.17c — persist an accepted thread handoff to the dedicated
+    /// `thread_handoff_event` chained table. Synchronous so the accept
+    /// path gets a typed outcome (recorded / dedup / rejected) and the
+    /// caller can act on it without a `sqlite3_changes` re-read.
+    ///
+    /// Override discipline (acceptance §4): a force-import past a BLOCKED
+    /// predicate MUST carry a non-empty `overrideReason`. The writer
+    /// rejects a whitespace-only / empty override reason and returns
+    /// `.rejectedMissingOverrideReason` WITHOUT writing — overrides
+    /// never silently land. A normal (non-override) accepted handoff
+    /// passes `overrideReason == nil`, stored as a NULL column.
+    ///
+    /// Dedup (acceptance §"double-handoff"): a UNIQUE index on
+    /// `(thread_id, to_provider)` makes a re-import of the same thread
+    /// into the same target provider idempotent — the second call
+    /// returns `.idempotencyHit` and no second row lands. The chain is
+    /// not advanced on a dedup hit (no `recordWrite`), so its integrity
+    /// is unaffected.
+    @discardableResult
+    func recordThreadHandoff(_ handoff: ThreadHandoff) -> ThreadHandoffOutcome {
+        // Override-without-justification is rejected at the door —
+        // before any DB work — so the rejection is total: no anchor is
+        // opened, no row is attempted.
+        if let reason = handoff.overrideReason,
+           reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .rejectedMissingOverrideReason
+        }
+
+        let now = Date().timeIntervalSince1970
+        return parent.queue.sync { [weak parent, weak self] in
+            guard let parent, let self, let db = parent.db else { return .idempotencyHit }
+
+            let anchorId = self.threadHandoffChain.resolveAnchorId(db: db)
+            let prevHash = self.threadHandoffChain.latestEntryHash(db: db, anchorId: anchorId)
+
+            // Canonical-hash column map mirrors the verifier's
+            // `verifyAnchorThreadHandoffEvent` exactly. `override_reason`
+            // is `.null` for a normal handoff, `.text` for an override.
+            let columns: [String: ChainHasher.CanonicalValue] = [
+                "created_at":               .real(now),
+                "from_provider":            .text(handoff.fromProvider),
+                "to_provider":              .text(handoff.toProvider),
+                "thread_id":                .text(handoff.threadID),
+                "accepted_by":              .text(handoff.acceptedBy),
+                "pre_handoff_event_count":  .integer(Int64(handoff.preHandoffEventCount)),
+                "post_handoff_event_count": .integer(Int64(handoff.postHandoffEventCount)),
+                "override_reason":          handoff.overrideReason.map { .text($0) } ?? .null,
+            ]
+            let entryHash = ChainHasher.entryHash(
+                table: "thread_handoff_event", columns: columns, prev: prevHash
+            )
+
+            // `INSERT OR IGNORE` against the (thread_id, to_provider)
+            // UNIQUE index gives at-SQL dedup. sqlite3_changes == 0 after
+            // a DONE step means the dedup index refused the row.
+            let sql = """
+                INSERT OR IGNORE INTO thread_handoff_event
+                    (created_at, from_provider, to_provider, thread_id, accepted_by,
+                     pre_handoff_event_count, post_handoff_event_count, override_reason,
+                     prev_hash, entry_hash, chain_anchor_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return .idempotencyHit }
+            defer { sqlite3_finalize(stmt) }
+
+            sqlite3_bind_double(stmt, 1, now)
+            sqlite3_bind_text(stmt, 2, (handoff.fromProvider as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 3, (handoff.toProvider as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 4, (handoff.threadID as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 5, (handoff.acceptedBy as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_int64(stmt, 6, Int64(handoff.preHandoffEventCount))
+            sqlite3_bind_int64(stmt, 7, Int64(handoff.postHandoffEventCount))
+            Self.bindOptionalText(stmt, 8, handoff.overrideReason)
+            Self.bindOptionalText(stmt, 9, prevHash)
+            sqlite3_bind_text(stmt, 10, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_int64(stmt, 11, anchorId)
+
+            guard sqlite3_step(stmt) == SQLITE_DONE else { return .idempotencyHit }
+            if sqlite3_changes(db) > 0 {
+                self.threadHandoffChain.recordWrite(anchorId: anchorId, entryHash: entryHash)
+                return .recorded
+            }
+            return .idempotencyHit
+        }
+    }
+
+    /// V.17c — count of `thread_handoff_event` rows. Test affordance +
+    /// dedup verification.
+    func threadHandoffCount() -> Int {
+        return parent.queue.sync {
+            guard let db = parent.db else { return 0 }
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM thread_handoff_event;", -1, &stmt, nil) == SQLITE_OK else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            return sqlite3_step(stmt) == SQLITE_ROW ? Int(sqlite3_column_int64(stmt, 0)) : 0
+        }
+    }
+
+    /// V.17c — read back the (pre, post, override_reason) of the latest
+    /// `thread_handoff_event` row for a thread. Test affordance so the
+    /// audit-row assertions don't re-implement a SELECT.
+    func latestThreadHandoff(threadID: String) -> (pre: Int, post: Int, overrideReason: String?)? {
+        return parent.queue.sync {
+            guard let db = parent.db else { return nil }
+            let sql = """
+                SELECT pre_handoff_event_count, post_handoff_event_count, override_reason
+                  FROM thread_handoff_event
+                 WHERE thread_id = ?
+                 ORDER BY id DESC LIMIT 1;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (threadID as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+            let pre = Int(sqlite3_column_int64(stmt, 0))
+            let post = Int(sqlite3_column_int64(stmt, 1))
+            let override: String? = sqlite3_column_type(stmt, 2) == SQLITE_NULL
+                ? nil
+                : sqlite3_column_text(stmt, 2).map { String(cString: $0) }
+            return (pre, post, override)
         }
     }
 

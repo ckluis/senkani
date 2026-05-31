@@ -250,6 +250,32 @@ extension SessionDatabase {
         )
     }
 
+    /// V.17c — accept a thread handoff and persist a chained
+    /// `thread_handoff_event` audit row. Forwards to
+    /// `TokenEventStore.recordThreadHandoff`.
+    ///
+    /// Returns `.recorded` on a fresh accept, `.idempotencyHit` when the
+    /// thread was already imported into the same target provider (dedup),
+    /// and `.rejectedMissingOverrideReason` when an override was
+    /// attempted with an empty/whitespace justification (no row written).
+    /// The table is brand-new in migration v43; there is no pre-v43
+    /// anchor refusal path.
+    @discardableResult
+    public func recordThreadHandoff(_ handoff: ThreadHandoff) -> ThreadHandoffOutcome {
+        tokenEventStore.recordThreadHandoff(handoff)
+    }
+
+    /// V.17c — `thread_handoff_event` row count. Test affordance.
+    public func threadHandoffCount() -> Int {
+        tokenEventStore.threadHandoffCount()
+    }
+
+    /// V.17c — latest `(pre, post, override_reason)` for a handed-off
+    /// thread. Test affordance for the audit-row assertions.
+    public func latestThreadHandoff(threadID: String) -> (pre: Int, post: Int, overrideReason: String?)? {
+        tokenEventStore.latestThreadHandoff(threadID: threadID)
+    }
+
     /// T.3a-4 — record a wasm_kill chained row. Forwards to
     /// `TokenEventStore.recordWasmKill`. Pre-v33 anchors silently drop
     /// the row (see TokenEventStore for the gate).

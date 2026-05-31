@@ -209,6 +209,71 @@ public final class ProviderRuntimeEventStore: @unchecked Sendable {
         }
     }
 
+    // MARK: - V.17c thread-handoff reads
+
+    /// Total `provider_runtime_event` rows for one thread (optionally
+    /// scoped to a provider). The V.17c handoff audit row captures this
+    /// as the pre/post event count so an import is forensically
+    /// reconstructable. Returns 0 when the thread has no events.
+    public func eventCount(threadID: String, providerID: String? = nil) -> Int {
+        return parent.queue.sync {
+            guard let db = parent.db else { return 0 }
+            let sql: String
+            if providerID != nil {
+                sql = "SELECT COUNT(*) FROM provider_runtime_event WHERE thread_id = ? AND provider_id = ?;"
+            } else {
+                sql = "SELECT COUNT(*) FROM provider_runtime_event WHERE thread_id = ?;"
+            }
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (threadID as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            if let providerID {
+                sqlite3_bind_text(stmt, 2, (providerID as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            }
+            return sqlite3_step(stmt) == SQLITE_ROW ? Int(sqlite3_column_int64(stmt, 0)) : 0
+        }
+    }
+
+    /// The `EventType` of the LAST event for one thread, ordered by
+    /// `observed_at` then `rowid` (the rowid tiebreak makes the answer
+    /// deterministic when two events share an `observed_at`). Optionally
+    /// scoped to a provider. Returns nil when the thread has no events.
+    ///
+    /// This is the read `ThreadHandoffGuard` keys its importable
+    /// predicate off: a thread is importable ONLY when its last event is
+    /// `.turnCompleted`; any other terminal state is a pending /
+    /// aborted block.
+    public func lastEventType(threadID: String, providerID: String? = nil) -> ProviderRuntimeEvent.EventType? {
+        return parent.queue.sync {
+            guard let db = parent.db else { return nil }
+            let sql: String
+            if providerID != nil {
+                sql = """
+                    SELECT event_type FROM provider_runtime_event
+                     WHERE thread_id = ? AND provider_id = ?
+                     ORDER BY observed_at DESC, rowid DESC LIMIT 1;
+                """
+            } else {
+                sql = """
+                    SELECT event_type FROM provider_runtime_event
+                     WHERE thread_id = ?
+                     ORDER BY observed_at DESC, rowid DESC LIMIT 1;
+                """
+            }
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (threadID as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            if let providerID {
+                sqlite3_bind_text(stmt, 2, (providerID as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            }
+            guard sqlite3_step(stmt) == SQLITE_ROW,
+                  let cstr = sqlite3_column_text(stmt, 0) else { return nil }
+            return ProviderRuntimeEvent.EventType(rawValue: String(cString: cstr))
+        }
+    }
+
     // MARK: - Internal helpers
 
     private func updateProjectionStatus(rawPayloadHash: String, status: ProviderRuntimeEvent.ProjectionStatus) {

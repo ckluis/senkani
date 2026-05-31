@@ -1048,12 +1048,12 @@ struct ProductionPollEventSourceSuite {
     /// contract is present + matches the spec. The self-pipe tests above cover
     /// the real drain/classify path that EINTR would re-enter.
     @Test func eintrMapsToTickContract() {
-        // Boundary check on the classification the source promises: EINTR is a
-        // transient interruption, so the source must treat it like a timeout
-        // tick. (Asserted as a spec invariant; see method doc for the
-        // documented residual on injecting a live EINTR.)
-        #expect(TUIEvent.tick == TUIEvent.tick) // .tick is the EINTR mapping
-        // And the timeout path (rc == 0) is also .tick — drive a real timeout
+        // Classification the source promises: EINTR is a transient interruption,
+        // so the source treats it like a timeout tick (.tick). We can't fault-
+        // inject a live in-poll EINTR without a new seam (documented residual —
+        // see method doc), so this test exercises the equivalent rc == 0 timeout
+        // path, which returns the SAME .tick value EINTR maps to.
+        // Drive a real timeout
         // with a tiny (≥1ms, CI-fast) interval and a NON-readable stdin fd.
         let source = PollEventSource(stdinFD: dummyStdinFD(), pollInterval: .milliseconds(20))
         // With nothing on stdin and no signal, an idle poll cycle MUST be a

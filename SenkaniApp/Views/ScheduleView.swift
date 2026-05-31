@@ -757,12 +757,35 @@ struct ScheduleView: View {
         }
 
         do {
-            try ScheduleStore.save(task)
+            switch composeMode {
+            case .cron, .prose:
+                // Match the CLI's `runCron` / `runProse` (ScheduleCommand):
+                // write the JSON config AND render + write the launchd plist
+                // to ~/Library/LaunchAgents/, then load it with launchctl.
+                // `ScheduleStore.save` alone (the old path) only wrote the
+                // JSON, so a GUI-created cron/prose schedule was recorded but
+                // never fired.
+                _ = try PresetInstaller.install(task: task)
+            case .counter:
+                // Counter cadences fire from HookRouter post-tool reactions,
+                // not launchd — persist the COUNTER: sentinel cron with NO
+                // plist (matches `ScheduleCommand.runCounterCadence`).
+                try ScheduleStore.save(task)
+            }
             withAnimation(.easeInOut(duration: 0.2)) {
                 showNewScheduleForm = false
                 createError = nil
             }
             loadTasks()
+        } catch let error as PresetInstaller.InstallError {
+            // Surface install failures inline instead of silently dropping
+            // the schedule.
+            switch error {
+            case .invalidCronPattern(let pattern):
+                createError = "Invalid cron expression: \"\(pattern)\""
+            case .writeFailed(let detail):
+                createError = "Install failed: \(detail)"
+            }
         } catch {
             createError = error.localizedDescription
         }

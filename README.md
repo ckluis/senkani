@@ -272,7 +272,7 @@ The full caveat — including the action item, owner, and the `tools/check-multi
 | **Bundle** | Core, Filter, Indexer | `BundleComposer` — budget-bounded repo-snapshot composition for `senkani_bundle` |
 | **HookRelay** | — | Zero-dep hook relay library shared by senkani-hook binary and app's --hook mode |
 | **CLI** | Core, Filter, Indexer, Bench | 24 commands: exec, search, bench, doctor, grammars, kb, eval, learn, init, authorship, models, … |
-| **SenkaniApp** | All + SwiftTerm | SwiftUI workspace: 19 pane types, multi-project, ⌘K palette, dashboard, menu bar |
+| **SenkaniApp** | All + SwiftTerm | SwiftUI workspace: 20 pane types, multi-project, ⌘K palette, dashboard, menu bar |
 
 ---
 

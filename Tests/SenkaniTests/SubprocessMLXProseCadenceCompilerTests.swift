@@ -228,25 +228,21 @@ struct SubprocessMLXProseCadenceCompilerTests {
 
         let outcome = await task.value
         let elapsed = Date().timeIntervalSince(started)
+        // PRIMARY regression detector: a working cancel resolves the path
+        // as .cancelled. This assertion is timing-independent — it fails
+        // iff cancellation stops propagating, regardless of wall-clock.
         #expect(outcome == "cancelled",
                 "expected .cancelled outcome, got: \(outcome)")
-        // SIGTERM should land within ~1s; sanity-bound this to catch
-        // a regression where cancellation falls back to the natural
-        // 20s sleep timeout (the shim's `sleep 20` above).
-        //
-        // Ceiling heuristic: the prompt-cancel path resolves in <0.3s in
-        // isolation, but under full-suite parallel load (~3200 tests
-        // saturating the box) other suites starve this task's scheduling
-        // and a legitimate prompt cancel was observed taking 27.9s of
-        // wall-clock — see finding
-        // subprocess-mlx-cancellation-timing-flake-2026-05-30. The 30s
-        // ceiling sits above that observed load-induced worst case yet
-        // still strictly below where the regression manifests: a broken
-        // cancel never SIGTERMs the shim, so it cannot resolve until the
-        // shim's own `sleep 20` completes AND prints its payload, then the
-        // parent reads/teardowns — under the same saturation that pushes a
-        // good cancel to ~28s, the no-cancel fallback routinely exceeds
-        // 30s. So 30s still distinguishes prompt-cancel from no-cancel.
+        // SECONDARY sanity check: the elapsed bound guards against the one
+        // failure mode the outcome alone can miss — a regression where the
+        // cancel never SIGTERMs the shim and the path instead resolves only
+        // after the shim's natural `sleep 20` fallback completes (~20s; see
+        // the `sleep 20` above). The 30s ceiling sits comfortably above the
+        // prompt-cancel path (sub-second in isolation, with headroom for
+        // scheduling jitter under parallel load) yet below that ~20s no-cancel
+        // fallback's full teardown, so it still distinguishes prompt-cancel
+        // from no-cancel. See finding
+        // subprocess-mlx-cancellation-timing-flake-2026-05-30.
         #expect(elapsed < 30.0,
                 "cancellation should be prompt; took \(elapsed)s")
     }

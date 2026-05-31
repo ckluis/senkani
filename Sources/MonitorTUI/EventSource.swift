@@ -67,6 +67,14 @@ public final class PollEventSource: TUIEventSource {
     private let stdinFD: Int32
     private let pollTimeoutMS: Int32
 
+    /// TEST-ONLY fault-injection seam. When `true`, the next `pollSyscall(...)`
+    /// short-circuits BEFORE invoking the real `poll(2)`: it consumes the flag
+    /// (one-shot), sets `errno = EINTR`, and returns `-1` — deterministically
+    /// reproducing an in-poll signal interruption. Production never sets this
+    /// (it defaults to `false` and is mutated only by same-module `@testable`
+    /// tests), so the production EINTR path is byte-for-byte unchanged.
+    var injectEINTROnce = false
+
     public init(stdinFD: Int32, pollInterval: Duration) {
         self.stdinFD = stdinFD
         // Duration → milliseconds, clamped to Int32 and ≥ 1ms.
@@ -74,6 +82,20 @@ public final class PollEventSource: TUIEventSource {
         let millis = comps.seconds * 1000 + comps.attoseconds / 1_000_000_000_000_000
         self.pollTimeoutMS = Int32(clamping: max(millis, 1))
         PollEventSource.installSignalSelfPipe()
+    }
+
+    /// Thin wrapper over `poll(2)` so the EINTR fault-injection seam can sit on
+    /// exactly one line that the real syscall flows through. In production this
+    /// is a transparent pass-through to `poll`; under test, an armed
+    /// `injectEINTROnce` forces a single `-1`/`EINTR` return without ever
+    /// touching the kernel, then disarms itself.
+    private func pollSyscall(_ fds: inout [pollfd]) -> Int32 {
+        if injectEINTROnce {
+            injectEINTROnce = false      // one-shot — disarm immediately
+            errno = EINTR
+            return -1
+        }
+        return poll(&fds, nfds_t(fds.count), pollTimeoutMS)
     }
 
     public func nextEvent() -> TUIEvent? {
@@ -84,7 +106,7 @@ public final class PollEventSource: TUIEventSource {
             fds.append(pollfd(fd: sigReadFD, events: Int16(POLLIN), revents: 0))
         }
 
-        let rc = poll(&fds, nfds_t(fds.count), pollTimeoutMS)
+        let rc = pollSyscall(&fds)
         if rc == 0 {
             return .tick // timeout — poll-interval elapsed
         }

@@ -1038,21 +1038,21 @@ struct ProductionPollEventSourceSuite {
     }
 
     /// EINTR resilience: poll(2) returning -1 with errno==EINTR is mapped to
-    /// `.tick` (re-render), never `nil` (which would tear the loop down). We
-    /// can't force a real EINTR deterministically, so we assert the documented
-    /// contract directly against the branch's specification. The branch lives
-    /// at `if errno == EINTR { return .tick }`.
+    /// `.tick` (re-render), never `nil` (which would tear the loop down). The
+    /// branch lives at `if errno == EINTR { return .tick }`.
     ///
-    /// RESIDUAL (documented): a *real* in-poll EINTR can't be injected without
-    /// a seam on PollEventSource; rather than add one, this asserts the mapping
-    /// contract is present + matches the spec. The self-pipe tests above cover
-    /// the real drain/classify path that EINTR would re-enter.
+    /// This is the SECONDARY (belt-and-suspenders) check: it exercises the
+    /// equivalent rc==0 idle-timeout path, which returns the SAME `.tick` value.
+    /// The PRIMARY coverage is `injectedInPollEINTRMapsToTickNotNil()` below,
+    /// which fault-injects a real `-1`/`errno==EINTR` through the production
+    /// path via the one-shot `injectEINTROnce` seam (added 2026-05-31). The
+    /// self-pipe tests above cover the real drain/classify path EINTR re-enters.
     @Test func eintrMapsToTickContract() {
         // Classification the source promises: EINTR is a transient interruption,
-        // so the source treats it like a timeout tick (.tick). We can't fault-
-        // inject a live in-poll EINTR without a new seam (documented residual —
-        // see method doc), so this test exercises the equivalent rc == 0 timeout
-        // path, which returns the SAME .tick value EINTR maps to.
+        // so the source treats it like a timeout tick (.tick). This test
+        // exercises the equivalent rc == 0 timeout path (same `.tick` value);
+        // the genuine in-poll EINTR is fault-injected in
+        // injectedInPollEINTRMapsToTickNotNil() below.
         // Drive a real timeout
         // with a tiny (≥1ms, CI-fast) interval and a NON-readable stdin fd.
         let source = PollEventSource(stdinFD: dummyStdinFD(), pollInterval: .milliseconds(20))
@@ -1070,6 +1070,64 @@ struct ProductionPollEventSourceSuite {
             drainPipeIfReadable()
         }
         #expect(event == .tick, "idle poll cycle must tick, got \(String(describing: event))")
+    }
+
+    /// FAULT-INJECTED in-poll EINTR (the TRUE branch, not equivalence).
+    ///
+    /// `eintrMapsToTickContract` (above) asserts the EINTR→`.tick` mapping by
+    /// equivalence with the timeout path and documents a RESIDUAL: a *real*
+    /// in-poll EINTR couldn't be injected without a seam. This test uses the
+    /// `injectEINTROnce` seam to force `poll(2)` to return `-1`/`EINTR` exactly
+    /// once, then asserts `nextEvent()` honours its real contract: it maps the
+    /// transient interruption to `.tick` (re-render) and NEVER `nil` (which
+    /// would tear the loop down). Deterministic because the seam short-circuits
+    /// BEFORE the real syscall — no kernel, no signal, no timing window.
+    @Test func injectedInPollEINTRMapsToTickNotNil() {
+        let source = PollEventSource(stdinFD: dummyStdinFD(), pollInterval: .seconds(30))
+        // Process-global self-pipe: drain any sibling residue first so the
+        // assertion can't be confused by a stray tag (the injected call never
+        // touches the pipe, but a later real call in this test would).
+        drainPipeIfReadable()
+
+        // Arm the one-shot seam: the very next poll inside nextEvent() returns
+        // -1/EINTR without blocking on the 30s timeout.
+        source.injectEINTROnce = true
+        let event = source.nextEvent()
+        #expect(event == .tick,
+            "in-poll EINTR must map to .tick (re-render), got \(String(describing: event))")
+        // Contract guard: EINTR must NOT be treated as fatal (nil) — that would
+        // tear down the event loop on a benign signal interruption.
+        #expect(event != nil, "in-poll EINTR must never surface as nil (loop teardown)")
+    }
+
+    /// The seam is strictly ONE-SHOT and self-disarming: after a single forced
+    /// EINTR, the immediately-following poll cycle is a GENUINE syscall again
+    /// and behaves normally — an idle cycle on a never-readable stdin times out
+    /// to `.tick` (no dropped/duplicated/lingering injected interruption). This
+    /// proves the fault injection doesn't leak across calls and the source
+    /// resumes its real contract after recovering from the interruption.
+    @Test func injectedEINTRIsOneShotThenRealPollResumes() {
+        let source = PollEventSource(stdinFD: dummyStdinFD(), pollInterval: .milliseconds(20))
+        drainPipeIfReadable()
+
+        // 1) Forced EINTR → .tick (the interruption).
+        source.injectEINTROnce = true
+        #expect(source.nextEvent() == .tick, "forced EINTR cycle must tick")
+
+        // 2) Seam disarmed itself — the next cycle is a REAL poll(2). With a
+        //    never-readable stdin and no signal, it must idle-timeout to .tick
+        //    (the same value EINTR produced), proving the source recovered and
+        //    is back on the real syscall. Bounded retries absorb any stray
+        //    process-global self-pipe tag a sibling left.
+        var resumed: TUIEvent? = nil
+        for _ in 0..<8 {
+            drainPipeIfReadable()
+            resumed = source.nextEvent()
+            if resumed == .tick { break }
+            drainPipeIfReadable()
+        }
+        #expect(resumed == .tick,
+            "after the one-shot EINTR, a real idle poll must tick, got \(String(describing: resumed))")
     }
 
     // MARK: helpers

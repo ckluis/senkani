@@ -54,6 +54,22 @@ public final class TUIReadOnlyGuard: @unchecked Sendable {
         _violations.append(methodName)
     }
 
+    /// Clear the violation ledger so `shouldAbortKeystrokeLoop` returns
+    /// to `false`. The operator dismisses the rendered diagnostic and the
+    /// loop resumes — that abort → recovery EDGE is what the runner's
+    /// `paint()` watches via `sawGuardAbort && !aborted` to force a FULL
+    /// repaint (one of the four operator-locked full-repaint triggers).
+    ///
+    /// Production currently has no UI affordance to dismiss the abort, so
+    /// this is exercised primarily by the recovery test; keeping it on the
+    /// guard (rather than poking private state from the test) makes the
+    /// recovery path a first-class, documented capability instead of a
+    /// dead branch.
+    public func clearViolations() {
+        lock.lock(); defer { lock.unlock() }
+        _violations.removeAll()
+    }
+
     public var violations: [String] {
         lock.lock(); defer { lock.unlock() }
         return _violations

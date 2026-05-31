@@ -915,7 +915,7 @@ struct ScheduleView: View {
         // Was the row (before this edit) backed by a launchd plist? A
         // cron/prose schedule installs one; a counter cadence does not.
         // This drives the mode-switch teardown below.
-        let originalWasLaunchdBacked = original.map { $0.eventCounterCadence?.isEmpty ?? true } ?? false
+        let originalWasLaunchdBacked = original?.isLaunchdBacked ?? false
 
         do {
             switch composeMode {

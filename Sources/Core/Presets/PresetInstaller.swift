@@ -74,22 +74,27 @@ public enum PresetInstaller {
             try? fm.createDirectory(atPath: launchAgentsDir, withIntermediateDirectories: true)
         }
 
-        // Re-arm: if a plist for this label is ALREADY on disk (an
-        // edit-in-place of an existing cron/prose schedule), `launchctl
-        // load` alone is a no-op on the already-loaded label — the live
-        // job would keep firing the OLD cadence. So unload the existing
-        // job BEFORE overwriting the plist + (re)loading. On a fresh
-        // install (no prior plist) this is skipped, so the create path is
-        // unchanged with no spurious unload.
+        // Transactional ordering (edit-in-place hardening): write the NEW
+        // plist BEFORE unloading the prior job. `atomically: true` writes to a
+        // temp file and renames over the destination, so a thrown write leaves
+        // the prior plist — and thus the live launchd job — fully intact. The
+        // old ordering (unload → write) left an inconsistent triple
+        // (JSON=new, plist=old, job=DOWN) with no rollback if the write threw.
         let priorPlistExisted = fm.fileExists(atPath: plistPath)
-        if loadWithLaunchctl && priorPlistExisted {
-            ScheduleStore.runLaunchctl(verb: "unload", plistPath: plistPath)
-        }
 
         do {
             try xml.write(toFile: plistPath, atomically: true, encoding: .utf8)
         } catch {
             throw InstallError.writeFailed("plist write failed: \(error)")
+        }
+
+        // Re-arm: with the new plist already on disk, unload the prior job then
+        // (re)load below. Both cadences carry the SAME launchd Label, so
+        // unloading the just-written file unloads the live job, and the reload
+        // arms the new cadence. A fresh install (no prior plist) skips the
+        // unload, leaving the create path unchanged.
+        if loadWithLaunchctl && priorPlistExisted {
+            ScheduleStore.runLaunchctl(verb: "unload", plistPath: plistPath)
         }
 
         // 5. Optionally run launchctl load (re-arming the new cadence).

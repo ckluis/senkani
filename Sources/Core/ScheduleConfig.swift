@@ -99,6 +99,16 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
         self.locale = try c.decodeIfPresent(String.self, forKey: .locale)
         self.sortIndex = try c.decodeIfPresent(Int.self, forKey: .sortIndex)
     }
+
+    /// Whether this row is backed by a launchd plist. A cron/prose schedule
+    /// installs one; a counter cadence fires from HookRouter and does not. A
+    /// counter row is identified by a NON-nil `eventCounterCadence` — even a
+    /// malformed empty-string cadence ("" vs a number) is still a counter row,
+    /// NOT launchd-backed. This keeps a counter→counter edit from spuriously
+    /// tearing down a plist that was never installed.
+    public var isLaunchdBacked: Bool {
+        eventCounterCadence == nil
+    }
 }
 
 /// File-based store for scheduled tasks under ~/.senkani/schedules/.
@@ -309,7 +319,7 @@ public enum ScheduleStore {
     @discardableResult
     public static func removePlist(_ name: String) -> Bool {
         let fm = FileManager.default
-        let plistPath = launchAgentsDir + "/com.senkani.schedule.\(name).plist"
+        let plistPath = launchAgentsDir + "/\(plistLabel(for: name)).plist"
         guard fm.fileExists(atPath: plistPath) else { return false }
         runLaunchctl(verb: "unload", plistPath: plistPath)
         try? fm.removeItem(atPath: plistPath)

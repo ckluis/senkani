@@ -262,4 +262,61 @@ struct ScheduleLifecycleLaunchdTests {
         #expect(legacy.sortIndex == nil)
         #expect(legacy.name == "old")
     }
+
+    // MARK: - transactional plist write + isLaunchdBacked edge
+
+    @Test("Transactional edit: a thrown plist write does NOT unload the live job")
+    func transactionalWriteFailureKeepsPriorJobLoaded() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("senkani-tx-\(UUID().uuidString)")
+        let base = tmp.appendingPathComponent("schedules").path
+        let launch = tmp.appendingPathComponent("LaunchAgents").path
+        try FileManager.default.createDirectory(atPath: launch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let rec = ScheduleStore.LaunchctlRecorder()
+        let task = ScheduledTask(name: "txtest", cronPattern: "0 9 * * *", command: "echo hi")
+        // Block the write: a directory where the plist file would go. fileExists
+        // → true (so priorPlistExisted is true) but `write` over a directory
+        // throws, exercising the failure branch.
+        let plistPath = launch + "/\(ScheduleStore.plistLabel(for: task.name)).plist"
+        try FileManager.default.createDirectory(atPath: plistPath, withIntermediateDirectories: true)
+        try ScheduleStore.withTestDirs(base: base, launchAgents: launch) {
+            try ScheduleStore.withLaunchctlRecorder(rec) {
+                #expect(throws: PresetInstaller.InstallError.self) {
+                    _ = try PresetInstaller.install(
+                        task: task, binaryPath: "/usr/local/bin/senkani", loadWithLaunchctl: true)
+                }
+            }
+        }
+        #expect(rec.verbs.isEmpty,
+                "a failed plist write must not unload the live job; verbs=\(rec.verbs)")
+    }
+
+    @Test("removePlist operates on the path plistLabel(for:) produces")
+    func removePlistUsesPlistLabelPath() throws {
+        try withTempStore { _, launch, _ in
+            let task = cronTask("labelparity", cron: "0 9 * * *")
+            // Install the plist WITHOUT touching launchctl (render mode) so the
+            // file lands at exactly plistLabel(for:)'s path.
+            _ = try PresetInstaller.install(
+                task: task, binaryPath: "/opt/senkani/senkani", loadWithLaunchctl: false)
+            let expectedPath = launch + "/\(ScheduleStore.plistLabel(for: "labelparity")).plist"
+            #expect(FileManager.default.fileExists(atPath: expectedPath))
+
+            let removed = ScheduleStore.removePlist("labelparity")
+            #expect(removed, "removePlist must report it removed the existing plist")
+            #expect(!FileManager.default.fileExists(atPath: expectedPath),
+                    "removePlist must delete the file at plistLabel(for:)'s path")
+        }
+    }
+
+    @Test("isLaunchdBacked: nil cadence is launchd-backed; empty-string and populated counter are not")
+    func isLaunchdBackedEmptyStringEdge() {
+        #expect(ScheduledTask(name: "a", cronPattern: "0 9 * * *", command: "c")
+            .isLaunchdBacked == true)
+        #expect(ScheduledTask(name: "b", cronPattern: "@counter", command: "c",
+                              eventCounterCadence: "").isLaunchdBacked == false)
+        #expect(ScheduledTask(name: "c", cronPattern: "@counter", command: "c",
+                              eventCounterCadence: "5").isLaunchdBacked == false)
+    }
 }

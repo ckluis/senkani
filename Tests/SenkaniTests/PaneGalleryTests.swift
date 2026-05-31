@@ -5,9 +5,48 @@ import Foundation
 @Suite("Pane Gallery")
 struct PaneGalleryTests {
 
-    @Test func allEntriesCoversAll20PaneTypes() {
+    @Test func allEntriesCoversEveryPaneType() throws {
+        // Count is DERIVED from the shipped `PaneType` enum (parsed off disk,
+        // since the SenkaniApp exe target is not importable) rather than a
+        // hardcoded literal — a literal re-staled at 18 once already and is
+        // what this finding fixes. The gallery must carry exactly one entry
+        // per pane type, so its count equals the enum case count.
+        let source = try PanesReferenceDriftTests.readFile(
+            PanesReferenceDriftTests.paneTypeRelPath)
+        let enumCaseCount = PanesReferenceDriftTests.paneTypeRawValues(in: source).count
+        #expect(enumCaseCount > 0,
+                "Failed to parse PaneType cases — parser or enum changed shape")
         let entries = PaneGalleryBuilder.allEntries()
-        #expect(entries.count == 20, "Should have 20 pane types, got \(entries.count)")
+        #expect(entries.count == enumCaseCount,
+                "Gallery has \(entries.count) entries but PaneType has \(enumCaseCount) cases")
+    }
+
+    @Test func galleryIDsMatchPanesReferenceSlugs() throws {
+        // Parity pin against the website. `allEntries()` ids must equal the
+        // `docs/reference/panes.html` card slug set, modulo the documented
+        // slug↔camelCase mapping and `scheduleManager`→`schedules`. This is the
+        // CI catch for the drift class that previously surfaced only by manual
+        // audit (e.g. artifactGallery / openAIServedRequests / schedules added
+        // to the enum + gallery but the reference page left stale).
+        let html = try PanesReferenceDriftTests.readFile(
+            PanesReferenceDriftTests.panesHTMLRelPath)
+        let slugs = PanesReferenceDriftTests.cardSlugs(in: html)
+        #expect(!slugs.isEmpty, "Parsed no card slugs from panes.html")
+
+        // slug → PaneType rawValue → gallery id. Gallery id equals the rawValue
+        // for every pane except `scheduleManager`, whose gallery id is `schedules`.
+        let slugGalleryIDs = Set(slugs.map { slug -> String in
+            let raw = PanesReferenceDriftTests.expectedRawValue(forSlug: slug)
+            return raw == "scheduleManager" ? "schedules" : raw
+        })
+        let galleryIDs = Set(PaneGalleryBuilder.allEntries().map(\.id))
+
+        let galleryOnly = galleryIDs.subtracting(slugGalleryIDs).sorted()
+        let docsOnly = slugGalleryIDs.subtracting(galleryIDs).sorted()
+        #expect(galleryOnly.isEmpty,
+                "Gallery ships panes the reference page omits: \(galleryOnly)")
+        #expect(docsOnly.isEmpty,
+                "Reference page documents panes the gallery omits: \(docsOnly)")
     }
 
     @Test func dashboardIsPresent() {

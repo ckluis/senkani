@@ -22,6 +22,13 @@ public enum ANSI {
         return "\(csi)\(row);\(col)H"
     }
 
+    /// `ESC[K` — erase from cursor to end of the current line. Used by
+    /// the delta encoder so an overwrite of a now-shorter line does not
+    /// leave stale glyphs from the previous paint trailing on the row.
+    public static func clearLine() -> String {
+        return "\(csi)K"
+    }
+
     /// `ESC[<value>m` — set graphics attribute (color, intensity).
     /// 30..37 = foreground, 40..47 = background, 1 = bold.
     public static func color(_ value: Int) -> String {

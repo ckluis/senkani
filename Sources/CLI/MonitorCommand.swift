@@ -28,10 +28,27 @@ struct Monitor: ParsableCommand {
     @Option(name: .long, help: "App version string shown in the header bar.")
     var appVersion: String = "0.4.0"
 
+    @Option(
+        name: .long,
+        help: "TUI poll interval (ms/s/m/h suffix, e.g. 500ms, 1s, 5s, 30s, 5m, 10m). Must be ≥ 1s. Default 5s."
+    )
+    var pollInterval: String = "5s"
+
     func run() throws {
         guard tui || singleFrame else {
             print("use --tui")
             return
+        }
+
+        // Parse + validate the poll interval up front. PollInterval's
+        // errors carry the operator-facing message (incl. the "≥ 1s"
+        // documented string); surface them via ValidationError so
+        // ArgumentParser writes to stderr and exits non-zero.
+        let interval: Duration
+        do {
+            interval = try PollInterval.parse(pollInterval)
+        } catch let error as PollInterval.ParseError {
+            throw ValidationError(error.description)
         }
 
         let database = SessionDatabase.shared
@@ -51,7 +68,7 @@ struct Monitor: ParsableCommand {
             return
         }
 
-        let runner = MonitorTUIRunner(api: adapter, appVersion: appVersion)
+        let runner = MonitorTUIRunner(api: adapter, appVersion: appVersion, pollInterval: interval)
         try Termios.withRawMode {
             try runner.run()
         }

@@ -44,10 +44,34 @@ public final class MonitorTUIRunner {
     public let guardedAPI: TUIReadOnlyGuard
     public private(set) var state: State
     public let appVersion: String
+    public let pollInterval: Duration
 
-    public init(api: MonitorReadOnlyAPI, appVersion: String = "0.4.0", initialRowCount: Int = 0) {
+    /// The frame most recently PAINTED to the terminal. `nil` before the
+    /// first paint. Subsequent paints diff against this so the steady
+    /// state never re-emits `ESC[2J`.
+    public private(set) var lastPaintedFrame: RenderFrame?
+
+    /// Set whenever the next paint MUST be a full clear-and-paint rather
+    /// than a delta. The four operator-locked triggers: (a) initial
+    /// frame [lastPaintedFrame == nil covers it], (b) `r` keystroke,
+    /// (c) SIGWINCH resize, (d) TUIReadOnlyGuard recovery from a logged
+    /// abort.
+    private var forceFullRepaint = false
+
+    /// True once we have observed the guard in the aborted state; used
+    /// to detect the recovery edge (abort → clear) so we full-repaint
+    /// when the operator dismisses the diagnostic.
+    private var sawGuardAbort = false
+
+    public init(
+        api: MonitorReadOnlyAPI,
+        appVersion: String = "0.4.0",
+        initialRowCount: Int = 0,
+        pollInterval: Duration = PollInterval.default
+    ) {
         self.guardedAPI = TUIReadOnlyGuard(api: api)
         self.appVersion = appVersion
+        self.pollInterval = pollInterval
         self.state = State(rowCount: initialRowCount)
     }
 
@@ -88,6 +112,8 @@ public final class MonitorTUIRunner {
             return false
         case 0x72: // 'r'
             state.refreshCount += 1
+            // `r` is an operator-locked FULL-repaint trigger.
+            forceFullRepaint = true
             // Force a re-query via the guard; ignore results — the
             // value of `r` is the refresh tick, not the data carry.
             _ = try? guardedAPI.snapshot()
@@ -166,28 +192,107 @@ public final class MonitorTUIRunner {
         return Region(id: DashboardRender.footerRegionId, lines: lines)
     }
 
-    /// Production entry point — drives the event loop until exit.
-    /// Each iteration reads one byte from stdin (already in raw mode
-    /// by the caller's `Termios.withRawMode`), dispatches, re-renders.
+    /// Production entry point — drives the poll+key event loop until
+    /// exit. Builds a `PollEventSource` over the real stdin fd (poll(2)
+    /// timeout = `pollInterval`, signal self-pipe for SIGWINCH /
+    /// SIGINT / SIGTERM) and runs the injectable core loop.
+    ///
+    /// Assumes the caller has already entered raw mode via
+    /// `Termios.withRawMode`.
     public func run(stdin: FileHandle = FileHandle.standardInput, stdout: FileHandle = FileHandle.standardOutput) throws {
+        #if canImport(Darwin)
+        let source = PollEventSource(stdinFD: stdin.fileDescriptor, pollInterval: pollInterval)
+        try runLoop(source: source, stdout: stdout)
+        #else
+        // Non-Darwin fallback: original blocking byte loop (no poll(2)).
         let initialFrame = try buildFrame()
-        try writeFrameANSI(initialFrame, to: stdout)
+        try paint(initialFrame, to: stdout)
         while !state.shouldExit {
             let data = stdin.availableData
-            if data.isEmpty { break } // EOF
+            if data.isEmpty { break }
             for byte in data {
+                if handleKey(byte) { try paint(try buildFrame(), to: stdout) }
+                if state.shouldExit { break }
+            }
+        }
+        #endif
+    }
+
+    /// Injectable, TTY-free core loop. Tests drive it with a
+    /// `ScriptedEventSource` (no real fds, no sleeps) so poll ticks,
+    /// keys, resize, signals, and EOF are fully deterministic.
+    ///
+    /// Painting policy:
+    ///   • First paint (lastPaintedFrame == nil) → full clear+paint.
+    ///   • `r` / SIGWINCH / guard-abort recovery → full clear+paint.
+    ///   • Every other re-render → `RenderFrame.diff` delta payload.
+    public func runLoop(source: TUIEventSource, stdout: FileHandle) throws {
+        // Initial full paint.
+        let initialFrame = try buildFrame()
+        try paint(initialFrame, to: stdout)
+
+        loop: while !state.shouldExit {
+            guard let event = source.nextEvent() else { break }
+            switch event {
+            case .eof:
+                break loop
+
+            case .signal:
+                // SIGINT/SIGTERM under poll: flush a final delta of the
+                // current state, then exit 0. Termios restoration is
+                // owned by withRawMode's handler chain / the defer.
+                let frame = try buildFrame()
+                try paint(frame, to: stdout)
+                state.shouldExit = true
+                break loop
+
+            case .resize:
+                // SIGWINCH: discard any in-flight delta assumption and
+                // emit a FULL repaint at the (new) size.
+                forceFullRepaint = true
+                let frame = try buildFrame()
+                try paint(frame, to: stdout)
+
+            case .tick:
+                // Poll tick: re-run buildFrame (re-applies the persisted
+                // filter) and emit a delta against the last paint.
+                let frame = try buildFrame()
+                try paint(frame, to: stdout)
+
+            case .key(let byte):
                 let changed = handleKey(byte)
+                if state.shouldExit {
+                    // Honor q / guard-abort exit; no trailing paint.
+                    break loop
+                }
                 if changed {
                     let frame = try buildFrame()
-                    try writeFrameANSI(frame, to: stdout)
+                    try paint(frame, to: stdout)
                 }
-                if state.shouldExit { break }
             }
         }
     }
 
-    private func writeFrameANSI(_ frame: RenderFrame, to fh: FileHandle) throws {
-        if let data = frame.toANSI().data(using: .utf8) {
+    /// Paint a frame. Full clear+paint on the first frame or when a
+    /// full-repaint trigger fired; otherwise emit the delta against the
+    /// previously painted frame. Updates `lastPaintedFrame`.
+    public func paint(_ frame: RenderFrame, to fh: FileHandle) throws {
+        // Guard-abort recovery edge → force full repaint.
+        let aborted = guardedAPI.shouldAbortKeystrokeLoop
+        if sawGuardAbort && !aborted {
+            forceFullRepaint = true
+        }
+        sawGuardAbort = aborted
+
+        let payload: String
+        if lastPaintedFrame == nil || forceFullRepaint {
+            payload = frame.toANSI()
+        } else {
+            payload = RenderFrame.diff(prior: lastPaintedFrame!, next: frame).payload
+        }
+        forceFullRepaint = false
+        lastPaintedFrame = frame
+        if !payload.isEmpty, let data = payload.data(using: .utf8) {
             try fh.write(contentsOf: data)
         }
     }

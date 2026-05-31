@@ -235,18 +235,28 @@ struct MonitorTUIReadOnlyGuardSuite {
     }
 }
 
-// MARK: - (6) RenderFrame.diff seam (V.15b stub)
+// MARK: - (6) RenderFrame.diff seam (V.15b real encoder)
 
 @Suite("MonitorTUI — RenderFrame.diff seam")
 struct MonitorTUIRenderFrameDiffSuite {
-    @Test func diffReturnsNoopForV15aStub() {
+    @Test func diffReturnsNoopForIdenticalFrames() {
         let r1 = Region(id: "header", lines: ["a"])
-        let r2 = Region(id: "header", lines: ["b"])
         let f1 = RenderFrame(regions: [r1])
-        let f2 = RenderFrame(regions: [r2])
+        let f2 = RenderFrame(regions: [Region(id: "header", lines: ["a"])])
         let delta = f2.diff(against: f1)
         #expect(delta == ANSIDelta.noop)
         #expect(delta.payload.isEmpty)
+    }
+
+    @Test func diffEmitsRealDeltaForChangedFrames() {
+        // V.15b: the encoder is no longer a stub. A changed region emits a
+        // positioned overwrite (no full ESC[2J).
+        let f1 = RenderFrame(regions: [Region(id: "header", lines: ["a"])])
+        let f2 = RenderFrame(regions: [Region(id: "header", lines: ["b"])])
+        let delta = f2.diff(against: f1)
+        #expect(!delta.payload.isEmpty)
+        #expect(delta.payload.contains("b"))
+        #expect(!delta.payload.contains("\u{1B}[2J")) // no full clear
     }
 }
 

@@ -10,6 +10,29 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ---
 
+## 2026-05-31 — V.13e-4b real-completion OpenAI conformance — model-present validation
+
+`phase-v13e-4b-real-completion-conformance` shipped 4 REAL-model conformance
+cases (`Tests/SenkaniTests/OpenAIRealCompletionConformanceTests.swift`) for the
+OpenAI-compatible endpoint — chat non-stream, chat stream/SSE, embeddings,
+tool-use — that register the real MLX adapters in-process, gate on model
+presence, and assert range/shape content sanity. In CI (model-absent) all four
+SKIP green; the live-model assertions only EXECUTE on a machine with the models
+downloaded. Run this walk when back at a Mac with a Gemma 4 tier + `minilm-l6`
+installed to prove the cases actually run (not skip) and pass.
+
+- **Item:** `phase-v13e-4b-real-completion-conformance` (real-completion OpenAI conformance, all four surfaces).
+- **Exec mode:** **either (shell)** (Cowork OR operator host Terminal — both can build the repo and run `swift test`; no `~/.claude` edits needed).
+- **Time estimate:** ~15–40 min (model download dominates: ~2 min build, the rest is download + first-load).
+- **Steps:**
+    1. Download a Gemma 4 tier (e.g. `gemma4-e2b`) AND `minilm-l6` via the **SenkaniApp Models pane** (CLI `models pull` is NOT wired for the VLM tiers — see `ModelsCommand.swift:175`; the embedding model can come via either path, but the Models pane is the reliable route for both).
+    2. Confirm readiness: the Gemma tier shows `.downloaded`/`.verified` and `minilm-l6` shows `.downloaded`/`.verified` in the Models pane (this is what `ModelManager.isReady` reads).
+    3. Run `swift test --filter OpenAIRealCompletionConformance`.
+    4. Confirm the 4 cases **EXECUTE rather than skip** — each should take meaningfully longer than the ~0.006s model-absent skip (real MLX load + inference), and the run transcript should show real content flowing (chat non-stream non-empty + valid `finish_reason`; SSE deltas accumulate; embedding vector is 384-dim with variance; tool-use either elicits a well-formed `tool_calls` OR logs a `[v13e-4b-finding]` decline, both of which PASS).
+    5. Grep stderr for `[v13e-4b-finding]` — any finding (empty content, degenerate embedding, tool-call decline) is captured as round evidence, not a failure.
+- **What it proves:** the real on-device Gemma 4 + MiniLM-L6 inference satisfies the range/shape content-sanity assertions through the production OpenAI serve seams (sync bridge + `renderStreamingEvents` SSE + the embedding adapter), end-to-end, on a model-present machine.
+- **What lands as evidence:** the `swift test --filter OpenAIRealCompletionConformance` transcript (per-case durations proving execution-not-skip) + any `[v13e-4b-finding]` stderr lines.
+
 ## 2026-05-31 — Schedules pane a-2 (edit-in-place / drag-reorder / validation tooltips real-machine walk)
 
 `schedule-senkaniapp-pane-2026-05-21-a-2` shipped edit-in-place, drag-reorder, and

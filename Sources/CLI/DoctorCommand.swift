@@ -198,6 +198,15 @@ struct Doctor: ParsableCommand {
         //      authorized in egress-policy.json (deny-on-miss preserved).
         checkAnthropicEgressAllowRule(&results)
 
+        // 18c. Anthropic vault labels (V.13b-5) — list provisioned upstream
+        //      anthropic-key labels (label only, NEVER plaintext). Together
+        //      with 18b this forms the operator-facing "anthropic arm
+        //      readiness" surface: 18b proves the egress allow rule is
+        //      authorized, 18c proves at least one upstream key is
+        //      provisioned so `senkani serve --openai` can serve a
+        //      non-local tier.
+        checkAnthropicVaultLabels(&results)
+
         // 19. FileProvider eviction risk on .build/ checkouts
         //     (build-env-swiftpm-checkout-corruption-icloud-eviction-2026-05-09 Phase A).
         checkFileProviderEviction(&results)
@@ -1926,6 +1935,83 @@ struct Doctor: ParsableCommand {
         } else {
             printStatus(.pass, "Anthropic serve egress: api.anthropic.com allowed under serve (general) mode")
             results.passed += 1
+        }
+    }
+
+    /// V.13b-5 — pure formatter for the Anthropic vault-labels check.
+    /// Returns `(Status, message)` for the doctor surface. Lifted out of
+    /// `checkAnthropicVaultLabels` so the unit test can assert on the
+    /// operator-facing line directly (mirror of `formatOpenAIEndpointLine`
+    /// / `formatChainAuditLines`).
+    ///
+    /// **Schneier (no-secret-on-stdout):** input is `[String]` of LABELS
+    /// — there is no parameter shape by which a raw API key could reach
+    /// this formatter. The vault layer (`CredentialVault.list(scope:)`)
+    /// returns label keys only; the raw key material lives in the value
+    /// payload that this formatter never sees.
+    ///
+    /// - Zero labels → `.skip` with the operator-actionable
+    ///   `senkani vault add anthropic-key --label <name>` pointer.
+    /// - One or more labels → `.pass` listing every label in the order
+    ///   the vault returned them.
+    static func formatAnthropicVaultLabelsLine(_ labels: [String]) -> (Status, String) {
+        if labels.isEmpty {
+            return (
+                .skip,
+                "Anthropic vault: no labels provisioned. Run `senkani vault add anthropic-key --label <name>` to seed the upstream key."
+            )
+        }
+        let listed = labels.joined(separator: ", ")
+        return (
+            .pass,
+            "Anthropic vault: \(labels.count) label(s) provisioned (\(listed))"
+        )
+    }
+
+    /// V.13b-5 — synchronously list provisioned Anthropic vault labels.
+    /// Bridges the async `CredentialVault.list` actor call onto doctor's
+    /// sync execution path via a bounded-timeout semaphore. The list call
+    /// is bounded by the underlying store's single Keychain query; no
+    /// network I/O. Extracted so the unit test can drive the bridge with
+    /// an injected `InMemoryKeychainStore`-backed vault and assert the
+    /// label list (label-only — the raw key never reaches this surface).
+    static func listAnthropicVaultLabels(vault: CredentialVault) -> [String] {
+        let sem = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var labels: [String] = []
+        Task {
+            labels = (try? await vault.list(scope: AnthropicKeyProvisioner.vaultScope)) ?? []
+            sem.signal()
+        }
+        _ = sem.wait(timeout: .now() + .seconds(3))
+        return labels
+    }
+
+    /// V.13b-5 — surface provisioned upstream Anthropic vault labels.
+    /// Production reads via `AnthropicKeyProvisioner.vault()` (the real
+    /// macOS Keychain). The test path drives the pure formatter
+    /// (`formatAnthropicVaultLabelsLine`) + the bridge
+    /// (`listAnthropicVaultLabels`) directly with an
+    /// `InMemoryKeychainStore`-backed vault so CI never touches the live
+    /// Keychain. Mirror of the egress-policy file-path injection pattern
+    /// used by `checkAnthropicEgressAllowRule` above (line 1920) — there
+    /// the seam was a path argument, here the seam is the static helpers
+    /// because the vault is an async-capable actor rather than a flat
+    /// file.
+    ///
+    /// The check is non-blocking (.skip on missing labels — not .fail) so
+    /// a fresh install without an Anthropic key still passes `doctor`
+    /// overall; the absence of an upstream key is an operator
+    /// configuration choice (the local-only tiers still serve), not a
+    /// broken state.
+    private func checkAnthropicVaultLabels(_ results: inout Results) {
+        let labels = Self.listAnthropicVaultLabels(vault: AnthropicKeyProvisioner.vault())
+        let (status, message) = Self.formatAnthropicVaultLabelsLine(labels)
+        printStatus(status, message)
+        switch status {
+        case .pass: results.passed += 1
+        case .fixed: results.fixed += 1
+        case .fail: results.failed += 1
+        case .skip: results.skipped += 1
         }
     }
 

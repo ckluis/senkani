@@ -388,6 +388,56 @@ public final class ClaudeAPIChatEngine: ChatEngine {
         )
     }
 
+    /// V.13b-4c — single static mapper from every `ClaudeAPIChatEngineError`
+    /// variant to its OpenAI-shaped (httpStatus, wire bytes) pair. The serve
+    /// arm calls this once per error so the wire shape is rendered in
+    /// EXACTLY ONE place (and audit-row status mirrors the same table). The
+    /// info-leak guard from the engine's throw site (no raw body, no
+    /// `String(describing:)`) is preserved here — every message string is
+    /// hand-assembled from short fixed identifiers and small integers.
+    public static func openAIWireResponse(_ error: ClaudeAPIChatEngineError) -> (httpStatus: Int, data: Data) {
+        switch error {
+        case .rateLimited(let retryAfter):
+            return (429, openAIRateLimitResponse(retryAfter: retryAfter))
+        case .upstreamError(let status, let type):
+            if status == 401 {
+                return (502, OpenAIChatHandler.errorResponse(
+                    code: 502, httpMessage: "Bad Gateway",
+                    message: "upstream authentication failed; the operator-provided anthropic-key was rejected by api.anthropic.com — rotate the key with `senkani vault add anthropic-key`",
+                    type: "upstream_auth_error",
+                    errorCode: "upstream_auth_error"
+                ))
+            }
+            return (502, OpenAIChatHandler.errorResponse(
+                code: 502, httpMessage: "Bad Gateway",
+                message: "upstream error \(status) \(type ?? "unknown")",
+                type: "upstream_error",
+                errorCode: "upstream_error"
+            ))
+        case .decodeError(let reason):
+            return (502, OpenAIChatHandler.errorResponse(
+                code: 502, httpMessage: "Bad Gateway",
+                message: "upstream response decode failed: \(reason)",
+                type: "upstream_decode_error",
+                errorCode: "upstream_decode_error"
+            ))
+        case .networkError(let code):
+            return (502, OpenAIChatHandler.errorResponse(
+                code: 502, httpMessage: "Bad Gateway",
+                message: "upstream network error (URLError code \(code)); check the egress daemon via `senkani egress`",
+                type: "upstream_network_error",
+                errorCode: "upstream_network_error"
+            ))
+        case .upstreamModelUnavailable(let model):
+            return (400, OpenAIChatHandler.errorResponse(
+                code: 400, httpMessage: "Bad Request",
+                message: "model `\(model)` is not in the senkani Anthropic accept-list",
+                type: "invalid_request_error",
+                errorCode: "model_not_found"
+            ))
+        }
+    }
+
     // MARK: - Translation helpers
 
     /// Senkani-side shortname → canonical Anthropic API model ID. The

@@ -39,6 +39,13 @@ struct Serve: AsyncParsableCommand {
     @Flag(name: .long, help: "Store request/response bodies in the audit chain. Default off — only the request envelope + token counts are audited.")
     var auditBodies = false
 
+    /// V.13b-4c — disambiguator for single-key-per-serve-process anthropic
+    /// resolution. Required only when the vault has ≥2 anthropic-key labels
+    /// (zero or one label resolve without a flag). Per-request key
+    /// selection is deferred to the v13b-1 propagation child.
+    @Option(name: .long, help: "Disambiguator when the vault has multiple anthropic-key labels (single-key-per-serve-process).")
+    var anthropicKeyLabel: String?
+
     func run() async throws {
         guard openai else {
             print("use --openai (the only serve surface today)")
@@ -124,6 +131,65 @@ struct Serve: AsyncParsableCommand {
         // record's preset + label for routing/telemetry.
         let auditChain = OpenAIAuditChain()
         let storeBodies = auditBodies
+
+        // V.13b-4c — single-key-per-serve-process anthropic key resolution.
+        // 0 labels in the vault: the today's 503 `backend_not_configured`
+        // stub continues to fire for non-local tiers.
+        // ≥1 label + present egress daemon: build the live engine via the
+        // b-4a factory. The factory's `make` throws when the egress port
+        // file is absent (a structural refusal — never a direct bypass).
+        // The HARD enforcement gate from the b-4a re-audit: when the
+        // operator has provisioned at least one anthropic key AND the
+        // egress daemon's port file is absent at serve start, fail-fast
+        // with stderr + ExitCode(2) (mirror lines 77-81). When no key is
+        // provisioned, log a warning and keep today's 503 stub semantics.
+        let anthropicVault = AnthropicKeyProvisioner.vault()
+        let resolvedAnthropic: AnthropicKeyRecord?
+        do {
+            resolvedAnthropic = try await AnthropicKeyProvisioner.loadSingle(
+                vault: anthropicVault, explicitLabel: anthropicKeyLabel
+            )
+        } catch let err as AnthropicKeyProvisioner.ProvisionError {
+            FileHandle.standardError.write(Data(("error: anthropic-key resolution: \(err)\n").utf8))
+            throw ExitCode(2)
+        }
+
+        let claudeEngine: ClaudeAPIChatEngine?
+        let anthropicArmStatus: String
+        if let record = resolvedAnthropic {
+            do {
+                // P2: 15s per-request deadline on the serve path (factory
+                // default 30s is too high for the listener thread).
+                claudeEngine = try ClaudeAPIServeEngineFactory.make(
+                    apiKey: record.key,
+                    requestTimeout: 15
+                )
+                // Log the label ONLY — never the raw key.
+                anthropicArmStatus = "ready label=\(record.label)"
+            } catch let err as ClaudeAPIServeEngineFactoryError {
+                // Egress daemon absent AND at least one anthropic key
+                // provisioned ⇒ structural refusal at startup (b-4a HARD
+                // enforcement gate: no direct fallback to URLSession.shared).
+                FileHandle.standardError.write(Data(("error: \(err)\n").utf8))
+                throw ExitCode(2)
+            }
+        } else {
+            claudeEngine = nil
+            anthropicArmStatus = "unavailable reason=no_anthropic_key_in_vault"
+        }
+        print("openai-serve anthropic_arm=\(anthropicArmStatus)")
+
+        // V.13b-4b — operator-actionable hint when api.anthropic.com lacks
+        // an allow rule. NOTE: `serveEgressAllowHint(host:)` checks only
+        // the host dimension; the live daemon gate uses `evaluate(request:)`
+        // (host + method + scheme + body-class). A host-only allow that
+        // silences this hint is also an allow on the live gate's host
+        // dimension — directionally safe.
+        let egressPolicyPath = NSHomeDirectory() + "/.senkani/egress-policy.json"
+        let (egressPolicy, _) = EgressPolicy.load(from: egressPolicyPath)
+        if let hint = egressPolicy.serveEgressAllowHint() {
+            print("openai-serve egress-hint: \(hint)")
+        }
         // V.13e — `requestLogDB` (declared above, alongside the authenticator)
         // is the persisted producer for SUCCESSFUL requests too: each surface
         // handler records to BOTH the in-memory chain and the persisted store
@@ -170,17 +236,82 @@ struct Serve: AsyncParsableCommand {
             }
             // V.13 real-chat (sub-item 3) — pre-dispatch tier gate. Routing
             // is pure / cheap; we run it here so the resolved tier drives
-            // the 503 decision BEFORE the (potentially expensive) engine
-            // dispatch. Non-local tiers deny with `backend_not_configured`
-            // until the Claude-API arm ships.
+            // the dispatch decision BEFORE the (potentially expensive)
+            // engine call. Non-local tiers route to the LIVE Claude arm
+            // (b-4c) when configured, else to today's 503 stub.
             let preRouting = OpenAIChatHandler.route(
                 request: request,
                 recordPreset: record?.preset ?? ModelPreset.auto.rawValue
             )
-            if let tierGate = OpenAIChatServeBridge.backendNotConfiguredResponse(tier: preRouting.resolvedTier) {
-                print("openai-request surface=chat model_logged=\(preRouting.modelLogged) preset=\(preRouting.presetUsed.rawValue) resolved_tier=\(preRouting.resolvedTier.rawValue) status=backend_not_configured")
-                return tierGate
+            let now = Date()
+            let chatId = OpenAIChatHandler.generateID()
+            let anthropicKeyLabelForAudit = resolvedAnthropic?.label
+
+            // V.13b-4c — non-local tiers route to the Claude arm.
+            if preRouting.resolvedTier != .local {
+                // stream:true non-local: complete framed 501 BEFORE any
+                // SSE byte; the streamHandler returns nil for this case so
+                // the listener never opens the stream. Single audit row.
+                // Priority note (Karpathy re-audit FOLD): stream:true is
+                // checked BEFORE the claudeEngine-nil guard, so an operator
+                // with no anthropic key + stream:true on a non-local tier
+                // gets 501 stream_not_supported_yet (more durable refusal —
+                // streaming non-local will still be unsupported once a key
+                // is provisioned) rather than 503 backend_not_configured.
+                if request.stream == true {
+                    let outcome = ClaudeAPIServeDispatch.streamNotSupportedOutcome(
+                        request: request,
+                        routing: preRouting,
+                        keyLabel: anthropicKeyLabelForAudit,
+                        now: now
+                    )
+                    OpenAIServedRequestSink.record(
+                        chain: auditChain,
+                        fields: outcome.auditFields,
+                        bodies: storeBodies ? outcome.auditBodies : nil,
+                        db: requestLogDB, surface: .chat, httpStatus: outcome.httpStatus
+                    )
+                    print("openai-request surface=chat model_logged=\(preRouting.modelLogged) preset=\(preRouting.presetUsed.rawValue) resolved_tier=\(preRouting.resolvedTier.rawValue) status=stream_not_supported_yet")
+                    return outcome.data
+                }
+                guard let claudeEngine else {
+                    // Zero anthropic keys in the vault ⇒ preserve today's
+                    // 503 backend_not_configured stub semantics.
+                    let outcome = ClaudeAPIServeDispatch.backendNotConfiguredOutcome(
+                        request: request, routing: preRouting,
+                        keyLabel: anthropicKeyLabelForAudit, now: now
+                    )
+                    OpenAIServedRequestSink.record(
+                        chain: auditChain,
+                        fields: outcome.auditFields,
+                        bodies: storeBodies ? outcome.auditBodies : nil,
+                        db: requestLogDB, surface: .chat, httpStatus: outcome.httpStatus
+                    )
+                    print("openai-request surface=chat model_logged=\(preRouting.modelLogged) preset=\(preRouting.presetUsed.rawValue) resolved_tier=\(preRouting.resolvedTier.rawValue) status=backend_not_configured")
+                    return outcome.data
+                }
+                // Live dispatch through the Claude engine. The dispatch
+                // helper runs chat() OFF the listener thread + catches the
+                // typed `ClaudeAPIChatEngineError` so the wire shape + real
+                // httpStatus land in EXACTLY ONE place (no `try?` swallow).
+                let outcome = ClaudeAPIServeDispatch.dispatch(
+                    engine: claudeEngine,
+                    request: request,
+                    routing: preRouting,
+                    keyLabel: anthropicKeyLabelForAudit,
+                    now: now,
+                    id: chatId
+                )
+                OpenAIServedRequestSink.record(
+                    chain: auditChain,
+                    fields: outcome.auditFields,
+                    bodies: storeBodies ? outcome.auditBodies : nil,
+                    db: requestLogDB, surface: .chat, httpStatus: outcome.httpStatus
+                )
+                print("openai-request surface=chat model_logged=\(preRouting.modelLogged) preset=\(preRouting.presetUsed.rawValue) resolved_tier=\(preRouting.resolvedTier.rawValue) status=\(outcome.auditFields.status) http_status=\(outcome.httpStatus)")
+                return outcome.data
             }
+
             // V.13 real-chat (sub-item 3) — readiness gate fires ONLY when
             // a real chat handler is registered AND the local Gemma 4
             // model isn't installed for this machine's RAM. The placeholder
@@ -200,8 +331,8 @@ struct Serve: AsyncParsableCommand {
                 recordPreset: record?.preset ?? ModelPreset.auto.rawValue,
                 keyLabel: record?.label,
                 engine: engine,
-                now: Date(),
-                id: OpenAIChatHandler.generateID()
+                now: now,
+                id: chatId
             )
             OpenAIServedRequestSink.record(
                 chain: auditChain,
@@ -317,14 +448,15 @@ struct Serve: AsyncParsableCommand {
                 request: request,
                 recordPreset: record?.preset ?? ModelPreset.auto.rawValue
             )
-            // V.13 real-chat (sub-item 3) — streaming requests that route
-            // to a non-local tier (Claude-API backend not yet wired) or
-            // to `.local` with no installed Gemma fall through to the
-            // non-streaming chat handler, which renders the precise 503
-            // as a complete framed response BEFORE any SSE byte. The
-            // listener never opens the SSE stream for a nil plan (same
-            // pattern v13d uses for tool-use error rendering above).
-            if OpenAIChatServeBridge.backendNotConfiguredResponse(tier: routing.resolvedTier) != nil {
+            // V.13b-4c — streaming requests on non-local tiers fall through
+            // to the non-streaming chatHandler, which renders the complete
+            // framed 501 `stream_not_supported_yet` BEFORE any SSE byte.
+            // The listener never opens the SSE stream for a nil plan (same
+            // pattern v13d uses for tool-use error rendering above). This
+            // also covers the `claudeEngine == nil` + non-local-tier case
+            // (today's 503 backend_not_configured) — both render through
+            // the chatHandler.
+            if routing.resolvedTier != .local {
                 return nil
             }
             if registeredChatHandler != nil {

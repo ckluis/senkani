@@ -81,6 +81,18 @@ public enum OpenAIChatHandler {
         public let actualModel: String
         /// The client-requested model — telemetry only.
         public let modelLogged: String
+
+        public init(
+            presetUsed: ModelPreset,
+            resolvedTier: ModelTier,
+            actualModel: String,
+            modelLogged: String
+        ) {
+            self.presetUsed = presetUsed
+            self.resolvedTier = resolvedTier
+            self.actualModel = actualModel
+            self.modelLogged = modelLogged
+        }
     }
 
     /// Telemetry surfaced per request — `modelLogged` (the client's ask)

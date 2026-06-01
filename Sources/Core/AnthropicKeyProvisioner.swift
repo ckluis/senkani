@@ -12,6 +12,13 @@ import Foundation
 /// audit-chain `key_label` column once the Anthropic record path is built
 /// (v13b-2). Storing it here means the label is captured at provision time
 /// and is retrievable without re-prompting the operator.
+///
+/// **Codable-leaks-by-design (Schneier b-4c re-audit P3):** `Codable` here
+/// is reserved for vault persistence — `try JSONEncoder().encode(record)`
+/// SERIALIZES the raw `key`. NEVER encode an `AnthropicKeyRecord` into a
+/// log, response body, or stderr stream — only `vault.write` and
+/// `vault.read` may. `description` / `debugDescription` are redacted to the
+/// label only, so `print(record)` / `"\(record)"` is safe.
 public struct AnthropicKeyRecord: Codable, Sendable, Equatable {
     /// The upstream Anthropic API key (the secret, replayed verbatim).
     public let key: String
@@ -23,6 +30,17 @@ public struct AnthropicKeyRecord: Codable, Sendable, Equatable {
         self.key = key
         self.label = label
     }
+}
+
+/// V.13b-4c — redacted `CustomStringConvertible` so an accidental
+/// `print(record)` / `"\(record)"` / `String(reflecting: record)` cannot
+/// leak the raw upstream key. Both `description` and `debugDescription`
+/// surface only the operator-facing `label`. The `key` field still
+/// round-trips through `Codable` (where it must, for vault writes) but is
+/// structurally unreachable from any log-side string interpolation.
+extension AnthropicKeyRecord: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String { "AnthropicKeyRecord(label: \"\(label)\")" }
+    public var debugDescription: String { description }
 }
 
 /// V.13b-1 — provisions upstream Anthropic API keys into the credential
@@ -66,6 +84,14 @@ public enum AnthropicKeyProvisioner {
     public enum ProvisionError: Error, Equatable, CustomStringConvertible {
         case emptyKey
         case missingLabel
+        /// V.13b-4c — N>1 labels in the vault and no `--anthropic-key-label`
+        /// disambiguation provided. Carries the sorted available labels so
+        /// the operator sees exactly what to pick. Single-key-per-serve-process
+        /// policy until per-request key selection lands (filed v13b-1 child).
+        case ambiguousLabel(available: [String])
+        /// V.13b-4c — explicit `--anthropic-key-label` does not match any
+        /// label currently in the vault.
+        case labelNotFound(label: String, available: [String])
 
         public var description: String {
             switch self {
@@ -73,8 +99,41 @@ public enum AnthropicKeyProvisioner {
                 return "no API key was read from STDIN. Pipe the key in, e.g. `pbpaste | senkani vault add anthropic-key --label work`."
             case .missingLabel:
                 return "--label is required for anthropic-key (it later sources the audit-chain key_label)."
+            case .ambiguousLabel(let labels):
+                return "multiple anthropic-key labels in the vault (\(labels.joined(separator: ", "))) — pass `--anthropic-key-label <label>` to disambiguate (single-key-per-serve-process is the v13b minimal policy)."
+            case .labelNotFound(let label, let available):
+                if available.isEmpty {
+                    return "no anthropic-key labeled '\(label)' in the vault (vault is empty); provision with `senkani vault add anthropic-key --label \(label)`."
+                }
+                return "no anthropic-key labeled '\(label)' in the vault. Available labels: \(available.joined(separator: ", "))."
             }
         }
+    }
+
+    /// V.13b-4c — single-key-per-serve-process resolution. Returns nil when
+    /// the vault has zero anthropic-key labels (the caller wires the today's
+    /// 503 `backend_not_configured` stub path); returns the single record
+    /// when exactly one label is present; with N>1 labels requires the
+    /// caller to pass `explicitLabel` and throws `.ambiguousLabel` otherwise.
+    /// An `explicitLabel` that is not present in the vault throws
+    /// `.labelNotFound`.
+    public static func loadSingle(
+        vault: CredentialVault,
+        explicitLabel: String? = nil
+    ) async throws -> AnthropicKeyRecord? {
+        let labels = try await vault.list(scope: vaultScope).sorted()
+        if labels.isEmpty { return nil }
+        if let explicit = explicitLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !explicit.isEmpty {
+            guard labels.contains(explicit) else {
+                throw ProvisionError.labelNotFound(label: explicit, available: labels)
+            }
+            return try await load(label: explicit, vault: vault)
+        }
+        if labels.count > 1 {
+            throw ProvisionError.ambiguousLabel(available: labels)
+        }
+        return try await load(label: labels[0], vault: vault)
     }
 
     /// Store an upstream Anthropic key (already STDIN-normalized) under the

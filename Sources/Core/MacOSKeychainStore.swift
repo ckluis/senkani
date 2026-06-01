@@ -47,6 +47,27 @@ public struct MacOSKeychainStore: KeychainStore {
         "\(MacOSKeychainStore.servicePrefix).\(scope)"
     }
 
+    /// Pure builder for the `SecItemAdd` attribute dictionary used by `write`.
+    ///
+    /// Extracted as a side-effect-free `static` seam so the security-relevant
+    /// accessibility posture documented above (`kSecAttrAccessibleAfterFirstUnlock`,
+    /// and NEVER device-synced) can be pinned by a regression test that inspects
+    /// the dictionary WITHOUT constructing a live `SecItemAdd` or touching the
+    /// real login Keychain. `write` MUST build its add query through this
+    /// function — that is what makes the test's assertions cover production.
+    /// Covered by `MacOSKeychainStorePostureTests`.
+    static func addAttributes(service: String, account: String, value: Data) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecValueData as String: value,
+            // Readable after first unlock (survives screen-lock for a long-running
+            // serve); never device-synced (no kSecAttrSynchronizable key at all).
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+        ]
+    }
+
     public func read(key: String, scope: String) async throws -> Data? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -70,14 +91,13 @@ public struct MacOSKeychainStore: KeychainStore {
     }
 
     public func write(key: String, scope: String, value: Data) async throws {
+        let svc = service(for: scope)
         let baseQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service(for: scope),
+            kSecAttrService as String: svc,
             kSecAttrAccount as String: key,
         ]
-        var addQuery = baseQuery
-        addQuery[kSecValueData as String] = value
-        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        let addQuery = MacOSKeychainStore.addAttributes(service: svc, account: key, value: value)
 
         let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
         switch addStatus {

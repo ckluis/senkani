@@ -393,6 +393,82 @@ import Security
         #expect(ok)
     }
 
+    // MARK: - 6b. Persist failure must NOT cache an in-memory root (regression)
+
+    /// Regression lock for the stale-cache bug fixed in phase-t1d-6: the
+    /// instance `generateRoot()` assigns `self.root` ONLY AFTER
+    /// `Self.generateRootCore(...)` (which mints + persists) returns. The OLD
+    /// code assigned `self.root` BEFORE `persist(...)`, so a persist failure
+    /// left the actor caching an in-memory `Root` whose disk files were never
+    /// written — and a later `ensureRoot()` would hand back that cached,
+    /// disk-less root WITHOUT throwing.
+    ///
+    /// We can't read the private `self.root` directly, so we observe it
+    /// INDIRECTLY through `ensureRoot()`'s `if let root { return root }`
+    /// short-circuit:
+    ///   1. `generateRoot()` must THROW (persist fails before any cache write).
+    ///   2. `ensureRoot()` must THROW AGAIN — with the fix, `self.root` is nil,
+    ///      so ensureRoot re-runs generate (persist fails again → throws). With
+    ///      the OLD bug, `self.root` would be the cached disk-less root and
+    ///      ensureRoot would return it with NO throw. So "throws the SECOND
+    ///      time too" is the discriminating assertion.
+    ///
+    /// Persist-failure mechanism: we point the public-cert path at a child of
+    /// an existing REGULAR FILE (`<tempfile>/egress-ca.pem`). `write(...)`'s
+    /// first step is `FileManager.createDirectory(atPath: dir,
+    /// withIntermediateDirectories: true)`, which fails when `dir`'s own parent
+    /// is a non-directory (the OS returns ENOTDIR for a path component that is a
+    /// regular file). That makes `persist` — and therefore `generateRootCore`
+    /// — throw deterministically, with no filesystem race and without touching
+    /// `~/.senkani` or any real path.
+    @Test func persistFailureDoesNotCacheInMemoryRoot() async throws {
+        // A real temp directory we own + clean up; inside it, a REGULAR FILE
+        // that we then (illegally) treat as a directory parent.
+        let baseDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("senkani-mitm-persistfail-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: baseDir) }
+
+        let regularFile = baseDir.appendingPathComponent("not-a-directory")
+        try Data("x".utf8).write(to: regularFile)
+
+        // `write`'s createDirectory(atPath: <regularFile>/sub) fails ENOTDIR
+        // because `regularFile` is a file, not a directory → persist throws.
+        let badParent = regularFile.appendingPathComponent("sub")
+        let paths = MITMCertificateAuthority.Paths(
+            publicCertPEM: badParent.appendingPathComponent("egress-ca.pem").path,
+            privateKeyPEM: badParent.appendingPathComponent("egress-ca.key").path
+        )
+        let ca = MITMCertificateAuthority(paths: paths, keyBits: 2048)
+
+        // 1. generateRoot() throws (persist fails inside generateRootCore,
+        //    BEFORE any `self.root = root` cache write).
+        await #expect(throws: (any Error).self) {
+            try await ca.generateRoot()
+        }
+
+        // 2. ensureRoot() throws AGAIN — proving NO disk-less root was cached.
+        //    With the OLD pre-persist cache write this would return the stale
+        //    cached root and NOT throw, failing this assertion.
+        await #expect(throws: (any Error).self) {
+            try await ca.ensureRoot()
+        }
+
+        // And nothing was written to disk (persist failed before any file).
+        #expect(!FileManager.default.fileExists(atPath: paths.publicCertPEM))
+        #expect(!FileManager.default.fileExists(atPath: paths.privateKeyPEM))
+
+        // Positive control: with GOOD writable temp paths, generateRoot()
+        // succeeds and both files land on disk — confirms the throw above is
+        // the persist failure, not some unrelated breakage of the happy path.
+        let (goodPaths, goodDir) = tempPaths()
+        defer { cleanup(goodDir) }
+        let goodCA = MITMCertificateAuthority(paths: goodPaths, keyBits: 2048)
+        _ = try await goodCA.generateRoot()
+        #expect(FileManager.default.fileExists(atPath: goodPaths.publicCertPEM))
+        #expect(FileManager.default.fileExists(atPath: goodPaths.privateKeyPEM))
+    }
+
     // MARK: - 7. Leaf carries SKI + AKI; AKI matches the CA's SKI
 
     /// Find `needle` in `der` and return the `count` bytes immediately

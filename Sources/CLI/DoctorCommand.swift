@@ -193,6 +193,11 @@ struct Doctor: ParsableCommand {
         // 18. Egress proxy — T.1a daemon scaffold + decision audit log
         checkEgressProxy(&results)
 
+        // 18b. Anthropic serve egress allow rule (V.13b-4b, Option B) —
+        //      surface the one-line hint when api.anthropic.com is not yet
+        //      authorized in egress-policy.json (deny-on-miss preserved).
+        checkAnthropicEgressAllowRule(&results)
+
         // 19. FileProvider eviction risk on .build/ checkouts
         //     (build-env-swiftpm-checkout-corruption-icloud-eviction-2026-05-09 Phase A).
         checkFileProviderEviction(&results)
@@ -1902,6 +1907,25 @@ struct Doctor: ParsableCommand {
         } else {
             printStatus(.skip, "Egress proxy: down (decisions: \(count))")
             results.skipped += 1
+        }
+    }
+
+    /// V.13b-4b (Option B) — surface whether the operator has authorized
+    /// `api.anthropic.com` egress (required to serve the Claude-API arm).
+    /// Informational only: deny-on-miss is the default and senkani never
+    /// auto-adds the rule — this points the operator at the one-line
+    /// `egress-policy.json` edit when it is absent, and confirms it when
+    /// present. Reuses the same `EgressPolicy.serveEgressAllowHint` seam
+    /// the serve-startup hint (b-4c) will use.
+    private func checkAnthropicEgressAllowRule(_ results: inout Results) {
+        let policyPath = NSHomeDirectory() + "/.senkani/egress-policy.json"
+        let (policy, _) = EgressPolicy.load(from: policyPath)
+        if let hint = policy.serveEgressAllowHint() {
+            printStatus(.skip, "Anthropic serve egress: \(hint)")
+            results.skipped += 1
+        } else {
+            printStatus(.pass, "Anthropic serve egress: api.anthropic.com allowed under serve (general) mode")
+            results.passed += 1
         }
     }
 

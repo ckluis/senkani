@@ -31,11 +31,14 @@ public struct EgressRule: Sendable, Equatable {
 
     /// Header matcher (T.1d.3). Header NAME comparison is
     /// case-INSENSITIVE per RFC 7230 §3.2 (field-name is case-insensitive);
-    /// we lowercase both sides. `valueContains`, when present, is a
-    /// case-SENSITIVE substring test against the header value AFTER the
-    /// leading/trailing OWS (optional whitespace — spaces and tabs) is
-    /// trimmed. When `valueContains` is nil, the matcher is satisfied by
-    /// mere presence of any header with the (case-insensitive) name.
+    /// we lowercase both sides AND strip CR/LF + OWS from both names before
+    /// the compare (T.1d.3 hardening — a CRLF/whitespace-laced request
+    /// header name must not silently fail-open past the deny matcher).
+    /// `valueContains`, when present, is a case-SENSITIVE substring test
+    /// against the header value AFTER the leading/trailing OWS (optional
+    /// whitespace — spaces and tabs) is trimmed. When `valueContains` is
+    /// nil, the matcher is satisfied by mere presence of any header with
+    /// the (normalized, case-insensitive) name.
     public struct HeaderMatch: Sendable, Equatable {
         public let name: String
         public let valueContains: String?
@@ -236,9 +239,16 @@ public struct EgressRule: Sendable, Equatable {
         }
 
         if let hm = header {
-            let wantName = hm.name.lowercased()
+            // T.1d.3 hardening: normalize the NAME on BOTH sides (strip
+            // CR/LF + OWS, then lowercase) before the case-insensitive
+            // compare. A CRLF/whitespace-laced request header name (e.g.
+            // "Authorization\r\n" or " authorization\t") previously caused
+            // a clean deny MISS — a silent fail-open. Stripping makes the
+            // deny still fire. Value behavior is UNCHANGED (OWS-trim +
+            // case-SENSITIVE substring).
+            let wantName = Self.normalizeHeaderName(hm.name)
             let found = request.headers.contains { h in
-                guard h.name.lowercased() == wantName else { return false }
+                guard Self.normalizeHeaderName(h.name) == wantName else { return false }
                 guard let wantValue = hm.valueContains else {
                     return true // name-presence-only
                 }
@@ -270,31 +280,91 @@ public struct EgressRule: Sendable, Equatable {
         s.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
     }
 
-    /// Canonicalize a request path so a `/admin` deny is not bypassed by
-    /// `/./admin`, `/a/../admin`, `//admin`, `%61dmin`, or `/admin/`.
-    /// Committed policy (CASE-SENSITIVE — paths are case-sensitive):
-    ///   1. Single percent-decode (one pass only — no recursive decoding,
-    ///      which would itself be an over-aggressive surface).
-    ///   2. Strip any query / fragment (`?`, `#`) — path only.
-    ///   3. Ensure a single leading slash.
-    ///   4. Collapse duplicate slashes (`//` → `/`).
-    ///   5. Collapse `.` / `..` dot-segments (RFC 3986 remove_dot_segments,
-    ///      bounded — `..` never escapes the root).
-    ///   6. Drop a trailing slash (except for the root `/`).
-    ///
-    // residual gap: this is OUR normalization. `URL(string:).path`,
-    // the upstream origin server, and intermediary proxies may each
-    // canonicalize differently (e.g. unicode/UTF-8 overlong forms,
-    // backslash handling, case-folding on some filesystems, double
-    // percent-encoding). Those divergences are a known limitation and are
-    // NOT closed here — a path deny is best-effort, not a boundary.
-    static func normalizePath(_ raw: String) -> String {
-        // 1. Single percent-decode pass. removingPercentEncoding can fail
-        //    on invalid sequences; fall back to the raw string in that case
-        //    (fail-safe: we still normalize slashes/dot-segments).
-        var s = raw.removingPercentEncoding ?? raw
+    /// Normalize a header NAME for the case-insensitive compare (T.1d.3
+    /// hardening): remove ALL CR/LF and OWS (spaces / tabs) characters,
+    /// then lowercase. A field-name has no legal interior whitespace or
+    /// line breaks (RFC 7230 §3.2: `token`), so removing them entirely
+    /// canonicalizes a CRLF/whitespace-laced name to the same key on both
+    /// the rule and request side — closing the silent fail-open where a
+    /// "Authorization\r\n" request name slipped past an "authorization"
+    /// deny matcher.
+    private static func normalizeHeaderName(_ s: String) -> String {
+        // Operate on Unicode SCALARS, not Characters: Swift folds a CRLF
+        // ("\r\n") into a SINGLE extended grapheme cluster, so iterating
+        // `Character`s would never see a standalone "\r"/"\n" to strip. The
+        // scalar view sees each of CR (U+000D) and LF (U+000A) individually.
+        var scalars = String.UnicodeScalarView()
+        for u in s.unicodeScalars {
+            switch u {
+            case "\r", "\n", " ", "\t":
+                continue
+            default:
+                scalars.append(u)
+            }
+        }
+        return String(scalars).lowercased()
+    }
 
-        // 2. Strip query / fragment.
+    /// Upper bound on percent-decode passes (T.1d.3 hardening). Decoding to
+    /// a fixed point lets `%2561dmin` (double-encoded `a`) resolve to
+    /// `/admin`, but an attacker-supplied string could in principle keep
+    /// shrinking; we cap iterations and use the last result if still
+    /// changing at the cap. 5 passes covers any realistic nesting depth.
+    private static let maxPercentDecodePasses = 5
+
+    /// Canonicalize a request path so a `/admin` deny is not bypassed by
+    /// `/./admin`, `/a/../admin`, `//admin`, `%61dmin`, `%2561dmin`,
+    /// `\admin`, `/admin;x=1`, `/admin%00`, or `/admin/`.
+    /// Committed policy (CASE-SENSITIVE — paths are case-sensitive):
+    ///   1. Strip NUL (`\0`) bytes outright (a `/admin%00.txt` truncation
+    ///      trick must not let an extension slip past a `/admin` matcher;
+    ///      the cleaned path is what every dimension compares against).
+    ///   2. Iterated percent-decode to a FIXED POINT, BOUNDED at
+    ///      `maxPercentDecodePasses` passes (so `%2561dmin` → `%61dmin` →
+    ///      `admin`). If decoding still changes at the cap, the last result
+    ///      is used — no unbounded loop. NUL is re-stripped after each pass
+    ///      (a `%00` only decodes mid-loop).
+    ///   3. Convert backslashes (`\`) to forward slashes BEFORE splitting —
+    ///      many servers treat `\` as a path separator, so `\admin` and
+    ///      `/a\..\admin` must normalize like their `/` forms.
+    ///   4. Strip any query / fragment (`?`, `#`) — path only.
+    ///   5. Strip `;`-matrix-params per segment (`/admin;x=1` → `/admin`).
+    ///   6. Ensure a single leading slash.
+    ///   7. Collapse duplicate slashes (`//` → `/`).
+    ///   8. Collapse `.` / `..` dot-segments (RFC 3986 remove_dot_segments,
+    ///      bounded — `..` never escapes the root).
+    ///   9. Drop a trailing slash (except for the root `/`).
+    ///
+    // residual gap (narrowed): this is OUR normalization, and after the
+    // T.1d.3 hardening it closes backslash, NUL, matrix-param, and
+    // (bounded) double-percent-encoding bypasses on top of the original
+    // slash/dot-segment/single-decode set. A NON-ZERO divergence from
+    // arbitrary upstream-server canonicalization remains and is NOT closed
+    // here: unicode/UTF-8 overlong forms, case-folding on case-insensitive
+    // filesystems, and decode nestings DEEPER than the iteration cap. A
+    // path deny is best-effort defense-in-depth, NOT the boundary — the
+    // host allowlist + deny-on-miss default is the boundary.
+    static func normalizePath(_ raw: String) -> String {
+        // 1 + 2. Strip NUL, then iterated bounded percent-decode to a fixed
+        //        point. removingPercentEncoding can fail on invalid
+        //        sequences; in that case we keep the current string (still
+        //        normalize slashes/dot-segments). NUL is stripped both up
+        //        front and after each decode pass (a `%00` decodes mid-loop).
+        var s = Self.stripNUL(raw)
+        for _ in 0..<Self.maxPercentDecodePasses {
+            guard let decoded = s.removingPercentEncoding else { break }
+            let cleaned = Self.stripNUL(decoded)
+            if cleaned == s { break } // fixed point reached
+            s = cleaned
+        }
+
+        // 3. Treat backslash as a path separator (server-canonicalization
+        //    parity) BEFORE splitting on "/".
+        if s.contains("\\") {
+            s = s.replacingOccurrences(of: "\\", with: "/")
+        }
+
+        // 4. Strip query / fragment.
         if let q = s.firstIndex(of: "?") {
             s = String(s[..<q])
         }
@@ -303,11 +373,24 @@ public struct EgressRule: Sendable, Equatable {
         }
 
         // Split on "/", dropping empties (this collapses `//` and handles
-        // a leading slash uniformly). Then resolve dot-segments.
+        // a leading slash uniformly). Then strip matrix-params + resolve
+        // dot-segments.
         let rawSegments = s.split(separator: "/", omittingEmptySubsequences: true)
         var stack: [Substring] = []
-        for seg in rawSegments {
-            if seg == "." {
+        for rawSeg in rawSegments {
+            // 5. Strip `;`-matrix-params: keep only the text before the
+            //    first `;` in the segment (`admin;x=1` → `admin`).
+            let seg: Substring
+            if let semi = rawSeg.firstIndex(of: ";") {
+                seg = rawSeg[..<semi]
+            } else {
+                seg = rawSeg
+            }
+            if seg.isEmpty {
+                // A segment that was nothing but matrix-params (`;x=1`) or
+                // empty collapses away like a duplicate slash.
+                continue
+            } else if seg == "." {
                 continue
             } else if seg == ".." {
                 if !stack.isEmpty { stack.removeLast() }
@@ -317,10 +400,18 @@ public struct EgressRule: Sendable, Equatable {
             }
         }
 
-        // 3 + 4 + 6: rebuild with a single leading slash, no duplicate
+        // 6 + 7 + 9: rebuild with a single leading slash, no duplicate
         // slashes, no trailing slash (root stays "/").
         if stack.isEmpty { return "/" }
         return "/" + stack.joined(separator: "/")
+    }
+
+    /// Strip NUL (`\0`) bytes from a string. Used by `normalizePath` so a
+    /// `%00` truncation/extension trick cannot slip a payload past a
+    /// substring/exact path matcher.
+    private static func stripNUL(_ s: String) -> String {
+        guard s.contains("\0") else { return s }
+        return s.replacingOccurrences(of: "\0", with: "")
     }
 }
 

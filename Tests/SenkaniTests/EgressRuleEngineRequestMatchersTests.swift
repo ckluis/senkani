@@ -183,6 +183,60 @@ struct EgressRuleEngineRequestMatchersTests {
         #expect(rule.matches(request: req))
     }
 
+    @Test("Header NAME match survives CRLF/whitespace-laced request names (no silent fail-open)")
+    func headerNameNoCRLFFailOpen() {
+        let rule = EgressRule(
+            id: "deny-auth",
+            pattern: "api.example.com",
+            mode: .suffix,
+            decision: .deny,
+            bodyContains: nil,
+            header: EgressRule.HeaderMatch(name: "authorization", valueContains: nil),
+            path: nil
+        )
+        // Baseline (unchanged): clean mixed-case name still fires.
+        #expect(rule.matches(request: EgressRequest(
+            host: "api.example.com",
+            headers: [("Authorization", "Bearer x")]
+        )))
+
+        // CRLF / whitespace-laced request header NAME must NOT slip past
+        // the deny — the matcher strips CR/LF + OWS from both sides.
+        let lacedNames = [
+            "Authorization\r\n",
+            "\r\nAuthorization",
+            " authorization\t",
+            "Auth\torization",      // interior tab
+            "AUTHORIZATION\r",
+            "\tAuthorization "
+        ]
+        for name in lacedNames {
+            let req = EgressRequest(host: "api.example.com", headers: [(name, "Bearer x")])
+            #expect(rule.matches(request: req), "expected deny to fire on laced header name \(name.debugDescription)")
+        }
+
+        // And the same robustness when the laced name is on the RULE side.
+        let lacedRule = EgressRule(
+            id: "deny-auth-laced",
+            pattern: "api.example.com",
+            mode: .suffix,
+            decision: .deny,
+            bodyContains: nil,
+            header: EgressRule.HeaderMatch(name: " Authorization\r\n", valueContains: nil),
+            path: nil
+        )
+        #expect(lacedRule.matches(request: EgressRequest(
+            host: "api.example.com",
+            headers: [("authorization", "Bearer x")]
+        )))
+
+        // A genuinely DIFFERENT name still does not match (no over-broadening).
+        #expect(!rule.matches(request: EgressRequest(
+            host: "api.example.com",
+            headers: [("X-Auth\r\n", "Bearer x")]
+        )))
+    }
+
     // MARK: - Path + normalization bypass
 
     @Test("Path DENY catches normalization-bypass variants of /admin")
@@ -206,7 +260,15 @@ struct EgressRuleEngineRequestMatchersTests {
             "/%61dmin",
             "/admin/",       // trailing slash dropped
             "/admin?x=1",    // query stripped
-            "/./a/../admin/"
+            "/./a/../admin/",
+            // T.1d.3 hardening: newly-closed evasion forms.
+            "\\admin",        // backslash leading separator
+            "/a\\..\\admin",  // backslash dot-segment
+            "//admin\\",      // mixed slash + trailing backslash
+            "/admin;x=1",     // matrix-param stripped
+            "/admin%00",      // NUL stripped ⇒ "/admin" exactly (no extension)
+            "%2561dmin",      // DOUBLE percent-encoded 'a' (%25 → %, then %61 → a)
+            "/%2561dmin"
         ]
         for p in bypasses {
             let req = EgressRequest(host: "api.example.com", path: p)
@@ -216,6 +278,15 @@ struct EgressRuleEngineRequestMatchersTests {
         // A genuinely different path is NOT caught.
         let other = EgressRequest(host: "api.example.com", path: "/administrator")
         #expect(!rule.matches(request: other))
+        // NUL is STRIPPED (not truncated): `/admin%00.txt` → "/admin.txt",
+        // a DIFFERENT resource ⇒ an exact /admin deny correctly does NOT
+        // fire (and the attacker did NOT reach /admin). A `contains`-mode
+        // /admin matcher would still catch it; here the cleaned path stands.
+        let nulExt = EgressRequest(host: "api.example.com", path: "/admin%00.txt")
+        #expect(!rule.matches(request: nulExt))
+        // Case stays distinct: /Admin must NOT trip a /admin deny.
+        let cased = EgressRequest(host: "api.example.com", path: "/Admin")
+        #expect(!rule.matches(request: cased))
         // Nil path ⇒ path dimension unsatisfiable ⇒ no match.
         let noPath = EgressRequest(host: "api.example.com", path: nil)
         #expect(!rule.matches(request: noPath))
@@ -237,6 +308,33 @@ struct EgressRuleEngineRequestMatchersTests {
         #expect(EgressRule.normalizePath("/a//b///c") == "/a/b/c")
         // Case-sensitive: /Admin is distinct from /admin.
         #expect(EgressRule.normalizePath("/Admin") == "/Admin")
+
+        // --- T.1d.3 hardening: newly-closed evasion forms ---
+        // Backslash treated as a path separator.
+        #expect(EgressRule.normalizePath("\\admin") == "/admin")
+        #expect(EgressRule.normalizePath("/a\\..\\admin") == "/admin")
+        #expect(EgressRule.normalizePath("//admin\\") == "/admin")
+        // .. via backslash still never escapes root.
+        #expect(EgressRule.normalizePath("\\..\\..\\etc\\passwd") == "/etc/passwd")
+        // Matrix-params stripped per segment.
+        #expect(EgressRule.normalizePath("/admin;x=1") == "/admin")
+        #expect(EgressRule.normalizePath("/a;p=1/admin;q=2") == "/a/admin")
+        // A segment that is ONLY matrix-params collapses away.
+        #expect(EgressRule.normalizePath("/;x=1/admin") == "/admin")
+        // NUL is STRIPPED (not truncated): the bytes around it concatenate,
+        // so no extension/truncation trick slips a payload past a matcher.
+        #expect(EgressRule.normalizePath("/admin\u{0000}") == "/admin")
+        #expect(EgressRule.normalizePath("/admin%00") == "/admin")
+        #expect(EgressRule.normalizePath("/admin%00.txt") == "/admin.txt") // stripped, not truncated
+        #expect(EgressRule.normalizePath("/ad%00min") == "/admin")        // interior NUL collapses
+        // Iterated (bounded) percent-decode reaches the fixed point.
+        #expect(EgressRule.normalizePath("%2561dmin") == "/admin")     // double-encoded 'a'
+        #expect(EgressRule.normalizePath("/%2561dmin") == "/admin")
+        #expect(EgressRule.normalizePath("/%252561dmin") == "/admin")  // triple-encoded 'a'
+        // Bounded: the decode loop terminates (no hang) even on a string
+        // crafted to keep decoding — assert it returns SOME finite value.
+        let pathological = EgressRule.normalizePath(String(repeating: "%25", count: 20) + "61dmin")
+        #expect(!pathological.isEmpty)
     }
 
     @Test("Path prefix + contains modes")
@@ -411,6 +509,33 @@ struct EgressRuleEngineRequestMatchersTests {
         let hostResult = fullEngine.evaluate(host: "api.example.com")
         #expect(hostResult.decision == .allow)
         #expect(hostResult.ruleId == "allow-host")
+    }
+
+    @Test("Host-allowlist boundary is UNCHANGED by the T.1d.3 path/header hardening (golden)")
+    func hostAllowlistBoundaryGolden() {
+        // Host-ONLY rule set spanning every host mode. The path/header
+        // matcher hardening must leave evaluate(host:) byte-identical, so
+        // these golden expectations encode the boundary behavior directly.
+        let engine = EgressRuleEngine(rules: [
+            EgressRule(id: "allow-suffix", pattern: "example.com", mode: .suffix, decision: .allow),
+            EgressRule(id: "deny-exact-evil", pattern: "evil.example.com", mode: .exact, decision: .deny),
+            EgressRule(id: "allow-glob", pattern: "*.glob.test", mode: .glob, decision: .allow)
+        ])
+        let cases: [(host: String, decision: EgressRule.Decision, ruleId: String)] = [
+            ("example.com", .allow, "allow-suffix"),
+            ("api.example.com", .allow, "allow-suffix"),
+            ("deep.api.example.com", .allow, "allow-suffix"),
+            ("Example.COM:443", .allow, "allow-suffix"),   // host normalizer lowercases + strips port
+            ("evil.example.com", .deny, "deny-exact-evil"), // exact deny wins over suffix allow
+            ("notexample.com", .deny, "default-deny"),      // no label boundary ⇒ no suffix match
+            ("a.glob.test", .allow, "allow-glob"),
+            ("unknown.host", .deny, "default-deny")
+        ]
+        for c in cases {
+            let r = engine.evaluate(host: c.host)
+            #expect(r.decision == c.decision, "decision drift for host \(c.host)")
+            #expect(r.ruleId == c.ruleId, "ruleId drift for host \(c.host)")
+        }
     }
 
     @Test("matches(host:) returns false for any rule carrying a request dimension")

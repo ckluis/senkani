@@ -417,8 +417,8 @@ public actor MITMCertificateAuthority {
     /// non-deprecated, no-keychain `SecPKCS12Import` path on the macOS-14
     /// floor. The keychain is a throwaway: UUID-unique per call, defer-cleaned
     /// on BOTH success and error, and never the login/System keychain.
-    static func loadIdentityViaEphemeralKeychain(from p12: Data) throws -> SecIdentity {
-        let (keychain, path) = try makeEphemeralKeychain()
+    static func loadIdentityViaEphemeralKeychain(from p12: Data, keychainDir: String? = nil) throws -> SecIdentity {
+        let (keychain, path) = try makeEphemeralKeychain(directory: keychainDir)
         defer {
             SecKeychainDelete(keychain) // deprecated since 10.10; see makeEphemeralKeychain
             unlink(path)
@@ -563,11 +563,11 @@ public actor MITMCertificateAuthority {
     /// `SecPKCS12Import` loads as a `SecIdentity`. We assemble a transient
     /// `SecIdentity` via an EPHEMERAL keychain, then export it, then
     /// delete the keychain — the System/login Keychain is never touched.
-    static func exportPKCS12(certDER: Data, privateKey: SecKey, passphrase: String) throws -> Data {
+    static func exportPKCS12(certDER: Data, privateKey: SecKey, passphrase: String, keychainDir: String? = nil) throws -> Data {
         guard let cert = SecCertificateCreateWithData(nil, certDER as CFData) else {
             throw CAError.certificateDecode
         }
-        let (keychain, path) = try makeEphemeralKeychain()
+        let (keychain, path) = try makeEphemeralKeychain(directory: keychainDir)
         defer {
             SecKeychainDelete(keychain) // deprecated since 10.10; see makeEphemeralKeychain
             unlink(path)
@@ -624,8 +624,16 @@ public actor MITMCertificateAuthority {
 
     /// Create a throwaway file-backed keychain with a random path + unique
     /// password. Caller deletes it (see `defer` in `exportPKCS12`).
-    private static func makeEphemeralKeychain() throws -> (SecKeychain, String) {
-        let dir = NSTemporaryDirectory()
+    ///
+    /// `directory` defaults to `NSTemporaryDirectory()` — the production
+    /// path that all default-callable entry points use. Tests may pass a
+    /// per-test-unique directory so the `defer { unlink }` no-leak
+    /// guarantee can be asserted without racing on the SHARED temp dir's
+    /// `senkani-mitm-*.keychain` count (the racy global-count assertion
+    /// removed during phase-t1d-2a is restored here via per-call dir
+    /// isolation rather than shared-mutable-state inspection).
+    static func makeEphemeralKeychain(directory: String? = nil) throws -> (SecKeychain, String) {
+        let dir = directory ?? NSTemporaryDirectory()
         let name = "senkani-mitm-\(UUID().uuidString).keychain"
         let path = (dir as NSString).appendingPathComponent(name)
         let password = UUID().uuidString

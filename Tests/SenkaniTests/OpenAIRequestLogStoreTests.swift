@@ -542,6 +542,110 @@ struct OpenAIRequestLogStoreTests {
         }
     }
 
+    // MARK: - V.13b-3 — upstream_response_id column (Migration v44)
+
+    /// V.13b-3 — the chain entry_hash MUST cover `upstream_response_id` for
+    /// rows under a v44+ anchor. A tamper that flips the upstream id post-write
+    /// is caught by `ChainVerifier.verifyOpenAIRequestLog`. Also pins the
+    /// local-arm contract: a NULL upstream id (the OpenAI-compatible arm) still
+    /// rides the chain — the writer hashes `.null` and the verifier includes the
+    /// column, so a clean chain verifies and any later flip is detected.
+    @Test("Tampered upstream_response_id is caught by verifyOpenAIRequestLog (entry_hash covers the v44 column)")
+    func chainEntryHashCoversUpstreamResponseId() {
+        let path = Self.tempDBPath()
+        let db = SessionDatabase(path: path)
+        let now = Date(timeIntervalSince1970: 1_900_000_700)
+
+        // Row 1 — Anthropic arm: a populated upstream id (the Anthropic-Request-Id
+        // the v13b-2/b-4 serve path will thread). Row 2 — local arm: NULL upstream.
+        // Both chain under the post-v44 anchor (migrations ran through v44 on init).
+        #expect(db.recordOpenAIRequest(
+            ts: now.addingTimeInterval(0), surface: .chat, status: 200,
+            keyLabel: "anthropic-key", modelLogged: "claude-opus-4", resolvedTier: "cloud",
+            inputTokens: 11, outputTokens: 22, upstreamResponseId: "req_anthropic_abc123"))
+        #expect(db.recordOpenAIRequest(
+            ts: now.addingTimeInterval(1), surface: .chat, status: 200,
+            keyLabel: "openai-key", modelLogged: "gpt-4o-mini", resolvedTier: "cloud",
+            inputTokens: 3, outputTokens: 4, upstreamResponseId: nil))
+
+        // Clean chain (both the populated and the NULL row) verifies.
+        if case .ok = ChainVerifier.verifyOpenAIRequestLog(db) {} else {
+            Issue.record("pre-tamper chain (populated + NULL upstream) must verify .ok")
+        }
+
+        // Tamper directly: flip the populated upstream_response_id on row 1
+        // without recomputing its entry_hash. v44 made this column
+        // attacker-relevant; verification MUST detect the flip.
+        var rawDB: OpaquePointer?
+        #expect(sqlite3_open(path, &rawDB) == SQLITE_OK)
+        defer { sqlite3_close(rawDB) }
+        let tamperSQL = """
+            UPDATE openai_request_log
+               SET upstream_response_id = 'req_forged_by_attacker'
+             WHERE id = 1;
+        """
+        var err: UnsafeMutablePointer<CChar>?
+        #expect(sqlite3_exec(rawDB!, tamperSQL, nil, nil, &err) == SQLITE_OK)
+        if let err { sqlite3_free(err) }
+
+        // Fresh handle (bust ChainState cache), re-verify — must be `.brokenAt`.
+        let db2 = SessionDatabase(path: path)
+        let result = ChainVerifier.verifyOpenAIRequestLog(db2)
+        switch result {
+        case .brokenAt:
+            break  // expected — entry_hash covers upstream_response_id post-v44
+        default:
+            Issue.record(
+                "expected .brokenAt after tampering upstream_response_id, got \(result)")
+        }
+    }
+
+    /// V.13b-3 — flipping a NULL upstream id to a populated value (forging an
+    /// upstream provenance onto a local-arm row) is ALSO caught: the writer
+    /// hashed `.null`, so any non-NULL value diverges from the stored entry_hash.
+    @Test("Forging upstream_response_id onto a NULL local-arm row is caught by verifyOpenAIRequestLog")
+    func chainCatchesForgedUpstreamOnNullRow() {
+        let path = Self.tempDBPath()
+        let db = SessionDatabase(path: path)
+        let now = Date(timeIntervalSince1970: 1_900_000_800)
+        #expect(db.recordOpenAIRequest(
+            ts: now, surface: .chat, status: 200,
+            keyLabel: "openai-key", modelLogged: "gpt-4o", resolvedTier: "cloud",
+            inputTokens: 1, outputTokens: 2, upstreamResponseId: nil))
+        if case .ok = ChainVerifier.verifyOpenAIRequestLog(db) {} else {
+            Issue.record("pre-tamper NULL-upstream chain must verify .ok")
+        }
+
+        var rawDB: OpaquePointer?
+        #expect(sqlite3_open(path, &rawDB) == SQLITE_OK)
+        defer { sqlite3_close(rawDB) }
+        var err: UnsafeMutablePointer<CChar>?
+        #expect(sqlite3_exec(rawDB!,
+            "UPDATE openai_request_log SET upstream_response_id = 'forged' WHERE id = 1;",
+            nil, nil, &err) == SQLITE_OK)
+        if let err { sqlite3_free(err) }
+
+        let db2 = SessionDatabase(path: path)
+        if case .brokenAt = ChainVerifier.verifyOpenAIRequestLog(db2) {} else {
+            Issue.record("expected .brokenAt after forging upstream onto a NULL row")
+        }
+    }
+
+    /// V.13b-3 forward-compat pin (re-audit P2). `verifyAnchorOpenAIRequestLog`'s
+    /// `useV44Shape` is EXCLUSION-form, so any future `repair-*` anchor inherits
+    /// the v44 shape (includes `upstream_response_id`). That is correct ONLY while
+    /// `openai_request_log` is NOT repair-supported — if it is later added to
+    /// `ChainRepairer.supportedTables`, the repair path's canonical shape must be
+    /// re-confirmed against the writer/verifier (a repaired row re-hashed WITHOUT
+    /// the column would falsely verify as tampered). This assertion fails the day
+    /// the table gains repair support, forcing that re-confirmation rather than
+    /// leaving the coupling implicit.
+    @Test("openai_request_log is not repair-supported (pins the v44 exclusion-form useV44Shape coupling)")
+    func openAIRequestLogNotRepairSupportedPinsV44Shape() {
+        #expect(!ChainRepairer.supportedTables.contains("openai_request_log"),
+                "openai_request_log was added to ChainRepairer.supportedTables — re-confirm the v44 useV44Shape canonical shape covers the repair-* anchor path (see ChainVerifier.verifyAnchorOpenAIRequestLog).")
+    }
+
     /// V.13e-7 #6 — `trailing24hStats` reads `ts` + `status` only and
     /// must remain correct against rows that carry NULL in the four
     /// new producer-metadata columns (the legacy pre-v42 shape, plus

@@ -28,12 +28,14 @@ extension SessionDatabase {
         modelLogged: String? = nil,
         resolvedTier: String? = nil,
         inputTokens: Int? = nil,
-        outputTokens: Int? = nil
+        outputTokens: Int? = nil,
+        upstreamResponseId: String? = nil
     ) -> Bool {
         openAIRequestLogStore.record(
             ts: ts, surface: surface, status: status, keyLabel: keyLabel,
             modelLogged: modelLogged, resolvedTier: resolvedTier,
-            inputTokens: inputTokens, outputTokens: outputTokens
+            inputTokens: inputTokens, outputTokens: outputTokens,
+            upstreamResponseId: upstreamResponseId
         )
     }
 

@@ -2393,6 +2393,101 @@ public enum MigrationRegistry {
             try exec("CREATE INDEX IF NOT EXISTS idx_thread_handoff_event_anchor ON thread_handoff_event(chain_anchor_id, id);")
             try exec("CREATE INDEX IF NOT EXISTS idx_thread_handoff_event_thread ON thread_handoff_event(thread_id);")
         },
+        Migration(version: 44, description: "openai_request_log.upstream_response_id column (Phase V.13b-3 Anthropic upstream-response-id audit anchor)") { db in
+            // V.13b-3 — add `upstream_response_id` to the openai_request_log
+            // chained table so the Anthropic serve arm (v13b-2/b-4) can record
+            // the upstream `Anthropic-Request-Id` response header per row;
+            // local-arm (OpenAI-compatible) rows write NULL.
+            //
+            // RE-PIN: the parent spec stale-pinned this to Migration(version:43),
+            // but v43 ALREADY SHIPPED as `thread_handoff_event` (Phase V.17c,
+            // landed after the 2026-05-28 scope-groom). A second v43 is a hard
+            // duplicate-version fault. The genuinely-next-free slot is v44.
+            //
+            // Chain-hash compatibility — THIRD canonical-shape tier, mirroring the
+            // v42 producer-metadata precedent exactly:
+            //   • pre-v42 rows  (`fresh-install-pre-v42`): no producer cols, no upstream.
+            //   • v42..pre-v44  (`migration-v42`, `fresh-install-pre-v44`): 4 producer
+            //     cols, NO upstream.
+            //   • v44+          (`migration-v44`, post-v44 `fresh-install`): + upstream.
+            // Adding the column to an existing anchor's canonical map would break
+            // its entry_hash, so we rename the rolling post-v42 `fresh-install`
+            // anchor to `fresh-install-pre-v44` (any later bare `fresh-install`
+            // means "v44 shape") and open a `migration-v44` anchor at MAX(id) for
+            // post-v44 writes. The `migration-v42`/`fresh-install-pre-v42` anchors
+            // are left untouched — their rows keep their no-upstream shape.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v44", detail: msg)
+            }
+
+            // Self-contained CREATE matches the v41/v42 baseline so v44 can run
+            // against a DB landed at any prior state.
+            try exec("""
+                CREATE TABLE IF NOT EXISTS openai_request_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts REAL NOT NULL,
+                    surface TEXT NOT NULL,
+                    status INTEGER NOT NULL,
+                    key_label TEXT,
+                    prev_hash TEXT,
+                    entry_hash TEXT,
+                    chain_anchor_id INTEGER
+                );
+            """)
+            try exec("ALTER TABLE openai_request_log ADD COLUMN upstream_response_id TEXT;", allowDuplicateColumn: true)
+
+            // Idempotency guard (mirrors v42): a prior full/partial v44 leaves
+            // either `migration-v44` or `fresh-install-pre-v44` in chain_anchors.
+            // If either is present, skip the rename + anchor-open — re-running
+            // them would mis-classify post-v44 lazy `fresh-install` anchors as
+            // pre-v44, breaking entry_hash verification for those rows.
+            var probeStmt: OpaquePointer?
+            let probeSQL = """
+                SELECT EXISTS(SELECT 1 FROM chain_anchors
+                               WHERE table_name = 'openai_request_log'
+                                 AND reason IN ('migration-v44', 'fresh-install-pre-v44'));
+            """
+            guard sqlite3_prepare_v2(db, probeSQL, -1, &probeStmt, nil) == SQLITE_OK else {
+                throw MigrationError.sqlFailed(
+                    stage: "v44 marker probe",
+                    detail: String(cString: sqlite3_errmsg(db)))
+            }
+            var alreadyApplied = false
+            if sqlite3_step(probeStmt) == SQLITE_ROW {
+                alreadyApplied = sqlite3_column_int(probeStmt, 0) == 1
+            }
+            sqlite3_finalize(probeStmt)
+
+            if !alreadyApplied {
+                // Rename the rolling post-v42 `fresh-install` anchor to
+                // `fresh-install-pre-v44`. After this, any lazily-created
+                // `fresh-install` (post-v44) means "v44 canonical shape" —
+                // includes upstream_response_id. No-op when no `fresh-install`
+                // row exists (fresh install: first post-v44 write lazy-creates a
+                // `fresh-install` that uses the v44 shape from the start).
+                try exec("""
+                    UPDATE chain_anchors
+                       SET reason = 'fresh-install-pre-v44'
+                     WHERE table_name = 'openai_request_log'
+                       AND reason = 'fresh-install';
+                """)
+
+                // Open a `migration-v44` anchor at MAX(id) so post-v44 writes
+                // chain under the new shape; pre-v44 rows verify under their
+                // existing anchors. Like the v42 opener this inserts the anchor
+                // UNCONDITIONALLY (even on an empty table at MAX(id)=0) — so a
+                // fresh DB's first write lands on `migration-v44`, NOT a lazy
+                // `fresh-install`. Both are useV44Shape=true, so either way the
+                // first row hashes with `upstream_response_id`.
+                try openOpenAIRequestLogV44Anchor(db: db)
+            }
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)
@@ -2693,6 +2788,49 @@ public enum MigrationRegistry {
             sqlite3_finalize(stmt)
             throw MigrationError.sqlFailed(
                 stage: "v42 anchor step(openai_request_log)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_finalize(stmt)
+    }
+
+    /// V.13b-3 — open a `migration-v44` anchor at the current MAX(id) of
+    /// `openai_request_log` so post-v44 writes (which carry the new
+    /// `upstream_response_id` column in their canonical hash) chain under the
+    /// v44 shape, while pre-v44 rows verify under their existing anchors.
+    /// Mirrors `openOpenAIRequestLogV42Anchor`. No-op semantics on empty tables
+    /// (MAX(id)→0); fresh installs lazy-create a post-v44 `fresh-install` anchor
+    /// that uses the v44 shape from the start.
+    private static func openOpenAIRequestLogV44Anchor(db: OpaquePointer) throws {
+        var stmt: OpaquePointer?
+        let maxSQL = "SELECT COALESCE(MAX(id), 0) FROM openai_request_log;"
+        guard sqlite3_prepare_v2(db, maxSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(
+                stage: "v44 maxid(openai_request_log)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        var maxRowid: Int64 = 0
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            maxRowid = sqlite3_column_int64(stmt, 0)
+        }
+        sqlite3_finalize(stmt)
+
+        let now = Date().timeIntervalSince1970
+        let insertSQL = """
+            INSERT INTO chain_anchors
+                (table_name, started_at, started_at_rowid, reason, operator_note)
+            VALUES ('openai_request_log', ?, ?, 'migration-v44', NULL);
+        """
+        guard sqlite3_prepare_v2(db, insertSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(
+                stage: "v44 anchor insert(openai_request_log)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_bind_double(stmt, 1, now)
+        sqlite3_bind_int64(stmt, 2, maxRowid)
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            sqlite3_finalize(stmt)
+            throw MigrationError.sqlFailed(
+                stage: "v44 anchor step(openai_request_log)",
                 detail: String(cString: sqlite3_errmsg(db)))
         }
         sqlite3_finalize(stmt)

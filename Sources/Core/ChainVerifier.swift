@@ -725,9 +725,20 @@ public enum ChainVerifier {
     /// `entry_hash IS NOT NULL` filter — see `verifyAnchorTokenEvents` notes.
     private static func verifyAnchorOpenAIRequestLog(db: OpaquePointer, anchor: Anchor) -> Result? {
         let useV42Shape = (anchor.reason != "fresh-install-pre-v42")
+        // V.13b-3 — rows under a v44+ anchor carry `upstream_response_id` in
+        // their canonical hash. EXCLUSION-form (not an allowlist) so a future
+        // `repair-*` rebind inherits the current (v44) shape, matching the v42
+        // predicate's philosophy and the writer (single-shape post-v44). The
+        // three pre-v44 anchor reasons omit the column. (If `openai_request_log`
+        // is ever added to `ChainRepairer.supportedTables`, this exclusion-form
+        // already classifies its `repair-*` rows as v44-shape — no change needed.)
+        let useV44Shape = ![
+            "fresh-install-pre-v42", "migration-v42", "fresh-install-pre-v44",
+        ].contains(anchor.reason)
         let sql = """
             SELECT id, ts, surface, status, key_label,
                    model_logged, resolved_tier, input_tokens, output_tokens,
+                   upstream_response_id,
                    prev_hash, entry_hash
               FROM openai_request_log
              WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
@@ -749,8 +760,11 @@ public enum ChainVerifier {
                 columns["output_tokens"] = sqlite3_column_type(stmt, 8) == SQLITE_NULL
                                               ? .null : .integer(sqlite3_column_int64(stmt, 8))
             }
-            let prev = optionalText(stmt, 9)
-            let stored = sqlite3_column_text(stmt, 10).map { String(cString: $0) } ?? ""
+            if useV44Shape {
+                columns["upstream_response_id"] = textOrNull(stmt, 9)
+            }
+            let prev = optionalText(stmt, 10)
+            let stored = sqlite3_column_text(stmt, 11).map { String(cString: $0) } ?? ""
             return (rowid, columns, prev, stored)
         }
     }

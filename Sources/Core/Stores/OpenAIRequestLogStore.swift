@@ -95,7 +95,8 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
         modelLogged: String? = nil,
         resolvedTier: String? = nil,
         inputTokens: Int? = nil,
-        outputTokens: Int? = nil
+        outputTokens: Int? = nil,
+        upstreamResponseId: String? = nil
     ) -> Bool {
         let tsEpoch = ts.timeIntervalSince1970
         return parent.queue.sync { [parent, chain] in
@@ -110,6 +111,10 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
             // post-v42; legacy pre-v42 rows live under
             // `fresh-install-pre-v42` and the verifier omits these keys
             // from their canonical map.
+            // V.13b-3 — `upstream_response_id` rides the chain single-shape
+            // post-v44 (always present, .null for local-arm rows). The v44
+            // migration guarantees every new write chains under a v44+ anchor,
+            // so the verifier's anchor-aware shape includes this column to match.
             let columns: [String: ChainHasher.CanonicalValue] = [
                 "ts":            .real(tsEpoch),
                 "surface":       .text(surface.rawValue),
@@ -119,6 +124,7 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
                 "resolved_tier": resolvedTier.map { .text($0) } ?? .null,
                 "input_tokens":  inputTokens.map { .integer(Int64($0)) } ?? .null,
                 "output_tokens": outputTokens.map { .integer(Int64($0)) } ?? .null,
+                "upstream_response_id": upstreamResponseId.map { .text($0) } ?? .null,
             ]
             let entryHash = ChainHasher.entryHash(
                 table: OpenAIRequestLogStore.table, columns: columns, prev: prevHash
@@ -128,8 +134,9 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
                 INSERT INTO openai_request_log
                     (ts, surface, status, key_label,
                      model_logged, resolved_tier, input_tokens, output_tokens,
+                     upstream_response_id,
                      prev_hash, entry_hash, chain_anchor_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
@@ -162,13 +169,18 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
             } else {
                 sqlite3_bind_null(stmt, 8)
             }
-            if let prevHash {
-                sqlite3_bind_text(stmt, 9, (prevHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            if let upstreamResponseId {
+                sqlite3_bind_text(stmt, 9, (upstreamResponseId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 9)
             }
-            sqlite3_bind_text(stmt, 10, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
-            sqlite3_bind_int64(stmt, 11, anchorId)
+            if let prevHash {
+                sqlite3_bind_text(stmt, 10, (prevHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            } else {
+                sqlite3_bind_null(stmt, 10)
+            }
+            sqlite3_bind_text(stmt, 11, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_int64(stmt, 12, anchorId)
 
             guard sqlite3_step(stmt) == SQLITE_DONE else { return false }
             chain.recordWrite(anchorId: anchorId, entryHash: entryHash)

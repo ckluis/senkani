@@ -120,11 +120,21 @@ const lensFor = (m) => (a.lenses && a.lenses[m]) || DEFAULT_LENS[m] || 'correctn
 
 const what = stage === 'reaudit' ? 'SHIPPED change (diff + test output)' : 'PLAN'
 
+// Stage semantics — keep audit-stage members from grading the (unbuilt) code.
+// At stage=audit the implementation does NOT exist yet: its absence is the build
+// round's OUTPUT, NOT a finding. Members were FAILing/BLOCKing on "grep returns
+// zero hits / empty git diff / no commit" — auditing code that was never the
+// subject. (process-gap-audit-panel-stage-confusion-grades-unbuilt-code-2026-06-01)
+const stageGuidance = stage === 'reaudit'
+  ? 'This is a RE-AUDIT of the SHIPPED change: audit the actual diff + test output below — verify what was built.'
+  : 'This is a PLAN / design / envelope audit. The implementation does NOT exist yet, and its absence is NOT a finding: do NOT grep for, or FAIL / flag / BLOCK on, unbuilt or uncommitted code, an empty `git diff`, a missing commit/branch/worktree, or a missing file/symbol — those are the build round\'s OUTPUT, not a defect in the plan. Evaluate the PROPOSED design itself: its correctness and security properties, failure modes, and whether it fits the stated envelope.'
+
 phase('Panel')
 const verdicts = await parallel(
   roster.map((member) => () =>
     agent(
       `You are ${member}, auditing autonomous item "${a.itemId}" (mode: ${a.mode}, stage: ${stage}).\n` +
+        `${stageGuidance}\n` +
         `Audit ONLY through your lens: ${lensFor(member)}.\n` +
         `Do not hedge; if it ships clean say PASS.\n\n` +
         `Emit a JSON object of EXACTLY this shape as the LAST thing in your reply. ` +
@@ -140,6 +150,8 @@ const panel = verdicts.filter(Boolean)
 phase('Synthesis')
 const synthesisTxt = await agent(
   `Synthesize this ${panel.length}-member ${stage} panel for item "${a.itemId}" into one decision.\n` +
+    `${stageGuidance}` +
+    `${stage === 'audit' ? ' A member red flag that reduces to "no code exists / empty diff / file or symbol missing" is NOT a real P0 and must NOT drive gate=BLOCK — discount it and gate on PLAN/design defects only.' : ''}\n` +
     `Resolve every redFlag via steelman + rebuttal. gate = BLOCK only if a real P0 correctness/security/data ` +
     `flag is unresolved; PASS_WITH_GAPS if concerns are genuine but acceptable-as-documented-risk; PASS_CLEAN otherwise. ` +
     `P2 items become mandatory follow-up filings.\n\n` +

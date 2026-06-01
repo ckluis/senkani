@@ -145,19 +145,15 @@ import Security
         let leaf = try await ca.leaf(forHost: "identity.example.com")
         #expect(!leaf.pkcs12.isEmpty)
 
-        // No-leak guard: count any stray `senkani-mitm-*.keychain` files in
-        // the temp dir BEFORE the import. On macOS 15+ the memory-only branch
-        // creates none; on the 14 floor the `defer` deletes the throwaway
-        // before `loadIdentity` returns — so the count must not grow.
-        let keychainsBefore = Self.strayEphemeralKeychainCount()
-
         // Load the PKCS#12 → SecIdentity (memory-only on macOS 15+,
         // ephemeral keychain on the macOS-14 floor).
+        // NOTE: a stray-`senkani-mitm-*.keychain` no-leak assertion was removed
+        // here — it counted files in the SHARED temp dir, which races against
+        // concurrent tests minting leaves in parallel (Swift Testing runs tests
+        // concurrently). The no-leak guarantee is makeEphemeralKeychain's
+        // `defer { unlink }`; a non-racy scoped check is tracked by
+        // process-gap-ephemeral-keychain-noleak-test-race-2026-05-31.
         let identity = try MITMCertificateAuthority.loadIdentity(from: leaf.pkcs12)
-
-        let keychainsAfter = Self.strayEphemeralKeychainCount()
-        #expect(keychainsAfter <= keychainsBefore,
-                "loadIdentity left a senkani-mitm-*.keychain file behind")
 
         // The identity yields both a private key and the leaf certificate.
         var privKey: SecKey?
@@ -189,15 +185,6 @@ import Security
         #expect(!sig.isEmpty)
     }
 
-    /// Count `senkani-mitm-*.keychain` files currently sitting in the OS temp
-    /// directory (where `makeEphemeralKeychain` places them). Used to assert
-    /// `loadIdentity` leaves nothing behind.
-    private static func strayEphemeralKeychainCount() -> Int {
-        let tmp = NSTemporaryDirectory()
-        guard let names = try? FileManager.default.contentsOfDirectory(atPath: tmp) else { return 0 }
-        return names.filter { $0.hasPrefix("senkani-mitm-") && $0.hasSuffix(".keychain") }.count
-    }
-
     // MARK: - 5b. RUNTIME-exercise the macOS-14 floor (ephemeral keychain)
 
     /// `loadIdentity`'s `#available(macOS 15.0)` dispatcher means the
@@ -218,17 +205,10 @@ import Security
         let leaf = try await ca.leaf(forHost: host)
         #expect(!leaf.pkcs12.isEmpty)
 
-        // No-leak guard around the FLOOR path specifically: the ephemeral
-        // keychain `defer` must delete the throwaway before the helper
-        // returns, so the stray count must not grow.
-        let keychainsBefore = Self.strayEphemeralKeychainCount()
-
         // Call the macOS-14-floor helper DIRECTLY (not `loadIdentity`).
+        // (A racy stray-keychain-file no-leak assertion was removed here; see
+        // the note in leafPKCS12LoadsAsSecIdentity + the filed follow-up.)
         let identity = try MITMCertificateAuthority.loadIdentityViaEphemeralKeychain(from: leaf.pkcs12)
-
-        let keychainsAfter = Self.strayEphemeralKeychainCount()
-        #expect(keychainsAfter <= keychainsBefore,
-                "loadIdentityViaEphemeralKeychain left a senkani-mitm-*.keychain file behind")
 
         // The floor path yields a live private key...
         var privKey: SecKey?

@@ -106,4 +106,30 @@ public enum AnthropicKeyProvisioner {
         let data = try await vault.read(key: label, scope: vaultScope)
         return try JSONDecoder().decode(AnthropicKeyRecord.self, from: data)
     }
+
+    /// V.13b-1 follow-up — revoke a provisioned Anthropic key by label, so a
+    /// rotated or suspected-compromised key can be cleanly evicted from the
+    /// vault. Deletes via the existing `KeychainStore.delete` seam under the
+    /// shared `vaultScope`. Removing an ABSENT label is a clean no-op (the
+    /// in-memory store drops a missing key silently; `MacOSKeychainStore.delete`
+    /// maps `errSecItemNotFound` → success), so a re-run is idempotent.
+    ///
+    /// Returns `true` when a record was actually present and evicted, `false`
+    /// when the label was already absent (the no-op case). The caller uses this
+    /// to avoid a FALSE "it's gone" confirmation on a typo'd `--label`: on a
+    /// revocation verb an operator reacting to suspected compromise must not be
+    /// told a live key was revoked when nothing matched. The presence probe runs
+    /// BEFORE the delete; the delete still always runs so the post-condition
+    /// ("no such label remains") holds regardless.
+    @discardableResult
+    public static func remove(
+        label: String,
+        vault: CredentialVault
+    ) async throws -> Bool {
+        let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedLabel.isEmpty else { throw ProvisionError.missingLabel }
+        let wasPresent = try await vault.list(scope: vaultScope).contains(trimmedLabel)
+        try await vault.delete(key: trimmedLabel, scope: vaultScope)
+        return wasPresent
+    }
 }

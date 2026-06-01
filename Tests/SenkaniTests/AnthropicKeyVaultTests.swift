@@ -139,4 +139,88 @@ struct AnthropicKeyVaultTests {
         #expect(cmd.label == nil)
         #expect(cmd.preset == "auto")
     }
+
+    // MARK: - 3. remove (V.13b-1 follow-up): revoke by label via the delete seam
+
+    @Test("store → remove evicts the key: load throws and list no longer contains the label")
+    func removeEvictsKey() async throws {
+        let store = InMemoryKeychainStore()
+        let vault = CredentialVault(store: store)
+        try await AnthropicKeyProvisioner.store(key: "sk-ant-evict-me", label: "work", vault: vault)
+        // Provisioned and listed before removal.
+        var labels = try await vault.list(scope: AnthropicKeyProvisioner.vaultScope)
+        #expect(labels == ["work"])
+
+        // A present key reports `true` (an actual eviction happened) — this is
+        // what lets the CLI emit a truthful "removed" confirmation.
+        let evicted = try await AnthropicKeyProvisioner.remove(label: "work", vault: vault)
+        #expect(evicted == true)
+
+        // load now fails (the record is gone)…
+        await #expect(throws: (any Error).self) {
+            _ = try await AnthropicKeyProvisioner.load(label: "work", vault: vault)
+        }
+        // …and the scope no longer enumerates the label.
+        labels = try await vault.list(scope: AnthropicKeyProvisioner.vaultScope)
+        #expect(labels == [])
+    }
+
+    @Test("removing an absent label is a clean no-op reporting false (no false 'it's gone' signal)")
+    func removeAbsentLabelIsNoOp() async throws {
+        let vault = CredentialVault(store: InMemoryKeychainStore())
+        // No store first — removing a never-provisioned label must not throw,
+        // and must report `false` so the CLI does NOT print a false "removed".
+        let firstWasPresent = try await AnthropicKeyProvisioner.remove(label: "never-existed", vault: vault)
+        #expect(firstWasPresent == false)
+        // And a second remove of the same label is still a false no-op.
+        let secondWasPresent = try await AnthropicKeyProvisioner.remove(label: "never-existed", vault: vault)
+        #expect(secondWasPresent == false)
+        let labels = try await vault.list(scope: AnthropicKeyProvisioner.vaultScope)
+        #expect(labels == [])
+    }
+
+    @Test("remove only evicts the targeted label, leaving siblings intact")
+    func removeIsLabelScoped() async throws {
+        let vault = CredentialVault(store: InMemoryKeychainStore())
+        try await AnthropicKeyProvisioner.store(key: "sk-ant-a", label: "work", vault: vault)
+        try await AnthropicKeyProvisioner.store(key: "sk-ant-b", label: "ci", vault: vault)
+
+        try await AnthropicKeyProvisioner.remove(label: "work", vault: vault)
+
+        let labels = try await vault.list(scope: AnthropicKeyProvisioner.vaultScope)
+        #expect(labels == ["ci"])               // sibling survives
+        let survivor = try await AnthropicKeyProvisioner.load(label: "ci", vault: vault)
+        #expect(survivor.key == "sk-ant-b")     // and is unchanged
+    }
+
+    @Test("an empty/whitespace label is rejected at the remove seam")
+    func removeEmptyLabelRejected() async throws {
+        let vault = CredentialVault(store: InMemoryKeychainStore())
+        await #expect(throws: AnthropicKeyProvisioner.ProvisionError.missingLabel) {
+            try await AnthropicKeyProvisioner.remove(label: "   ", vault: vault)
+        }
+    }
+
+    @Test("`vault remove anthropic-key` with no --label throws ValidationError before any store/Keychain touch")
+    func removeMissingLabelThrowsValidationError() async throws {
+        var cmd = try VaultRemove.parse(["anthropic-key"])
+        await #expect(throws: ValidationError.self) {
+            try await cmd.run()
+        }
+    }
+
+    @Test("`vault remove` rejects an unsupported credential kind")
+    func removeRejectsUnsupportedKind() async throws {
+        var cmd = try VaultRemove.parse(["openai-key", "--label", "x"])
+        await #expect(throws: ValidationError.self) {
+            try await cmd.run()
+        }
+    }
+
+    @Test("vault remove parses anthropic-key with --label")
+    func removeParsesWithLabel() throws {
+        let cmd = try VaultRemove.parse(["anthropic-key", "--label", "work"])
+        #expect(cmd.kind == "anthropic-key")
+        #expect(cmd.label == "work")
+    }
 }

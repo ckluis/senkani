@@ -21,7 +21,7 @@ struct Vault: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "vault",
         abstract: "Manage credential-vault entries.",
-        subcommands: [VaultAdd.self]
+        subcommands: [VaultAdd.self, VaultRemove.self]
     )
 }
 
@@ -197,4 +197,74 @@ struct VaultAdd: AsyncParsableCommand {
         return body()
     }
     #endif
+}
+
+/// `senkani vault remove …` — revoke a provisioned credential.
+///
+/// V.13b-1 follow-up: `vault add anthropic-key` provisions an upstream secret
+/// into the login Keychain, but exposed no first-class REVOCATION path. This
+/// verb reaches the existing `KeychainStore.delete` seam so an operator who
+/// rotates or suspects compromise of a key can cleanly evict it.
+///
+/// Revocation is intentionally NON-interactive (no typed-confirm prompt): the
+/// urgent case is reacting to a suspected compromise from a script, which a
+/// forced prompt would block. The operation is recoverable (re-add the key) and
+/// idempotent (removing an absent label is a clean no-op), so the safety cost of
+/// no prompt is bounded; a clear stderr confirmation states exactly what was
+/// evicted. (See `AnthropicKeyVaultTests` "remove" coverage — `InMemoryKeychainStore`
+/// only; the real login Keychain is never touched in CI.)
+struct VaultRemove: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "remove",
+        abstract: "Revoke a provisioned credential (e.g. an upstream-provider key)."
+    )
+
+    // Help text deliberately does NOT name the provider (mirrors `VaultAdd`):
+    // the upstream-provider key kind's `--label` contract is surfaced via the
+    // runtime validation error, not the static help, to keep the help-vocabulary
+    // surface tests stable.
+    @Argument(help: "Credential kind to revoke. The upstream-provider key kind requires --label.")
+    var kind: String
+
+    @Option(name: .long, help: "Operator-facing label of the key to revoke. Required for the upstream-provider key kind.")
+    var label: String?
+
+    func run() async throws {
+        switch kind {
+        case "anthropic-key":
+            try await runRemoveAnthropicKey()
+        default:
+            throw ValidationError("unsupported credential kind '\(kind)'. Supported: anthropic-key.")
+        }
+    }
+
+    private func runRemoveAnthropicKey() async throws {
+        // Guard --label FIRST, so a missing label throws before constructing
+        // MacOSKeychainStore — safe to drive in CI without touching the Keychain.
+        guard let label, !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ValidationError("--label is required for anthropic-key (the label identifies which key to revoke).")
+        }
+
+        let evicted: Bool
+        do {
+            evicted = try await AnthropicKeyProvisioner.remove(
+                label: label,
+                vault: AnthropicKeyProvisioner.vault()
+            )
+        } catch let err as AnthropicKeyProvisioner.ProvisionError {
+            throw ValidationError(err.description)
+        }
+
+        // Human-facing confirmation (no secret) → stderr. DISTINGUISH a real
+        // eviction from an absent-label no-op: on a revocation verb a typo'd
+        // --label must NOT yield a false "it's gone" signal (an operator
+        // reacting to suspected compromise could otherwise believe a live key
+        // was revoked when nothing matched). Both paths leave the
+        // post-condition "no such label remains" true.
+        let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = evicted
+            ? "removed anthropic-key — label=\(trimmedLabel) (evicted from the macOS Keychain; re-add to restore).\n"
+            : "no anthropic-key found for label=\(trimmedLabel) — nothing to revoke (the vault is unchanged).\n"
+        FileHandle.standardError.write(Data(message.utf8))
+    }
 }

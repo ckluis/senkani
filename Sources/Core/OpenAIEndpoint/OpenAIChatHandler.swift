@@ -223,7 +223,19 @@ public enum OpenAIChatHandler {
     }
 
     /// Render an OpenAI-shaped error as a framed HTTP response.
-    public static func errorResponse(code: Int, httpMessage: String, message: String, type: String, errorCode: String?) -> Data {
+    ///
+    /// `extraHeaders` (V.13b-2b) lets a caller attach response headers such
+    /// as `Retry-After` on a `429`. Defaulted to `[:]` so the shipped
+    /// call sites stay source-compatible; `OpenAIHTTPResponse.render`
+    /// emits them in deterministic sorted order.
+    public static func errorResponse(
+        code: Int,
+        httpMessage: String,
+        message: String,
+        type: String,
+        errorCode: String?,
+        extraHeaders: [String: String] = [:]
+    ) -> Data {
         let escaped = message
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
@@ -233,7 +245,7 @@ public enum OpenAIChatHandler {
         } else {
             body = "{\"error\":{\"message\":\"\(escaped)\",\"type\":\"\(type)\"}}"
         }
-        return OpenAIHTTPResponse.render(code: code, message: httpMessage, body: body)
+        return OpenAIHTTPResponse.render(code: code, message: httpMessage, body: body, extraHeaders: extraHeaders)
     }
 
     // MARK: - Helpers

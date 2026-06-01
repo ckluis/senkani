@@ -6,10 +6,27 @@ import Foundation
 /// translation, and Anthropic↔OpenAI shape mapping live here.
 ///
 /// Scope carves (parent v13b-2 spec):
-///   - Retry / backoff / 429 rate-limit translation → b-2b (separate item).
+///   - Retry / backoff / 429+529 rate-limit translation → V.13b-2b, landed
+///     HERE: bounded backoff honoring `Retry-After`, exhaustion surfaced as
+///     `.rateLimited(retryAfter:)` + the `openAIRateLimitResponse` renderer.
 ///   - EgressProxy routing (allowlist / connectionProxyDictionary /
 ///     direct-HTTPS-bypass) → b-4. Today's calls egress directly.
 ///   - Streaming `/v1/messages` (`stream:true`) → later sub-item.
+///
+/// Retry safety (V.13b-2b): only `429` (rate limit) and `529` (overloaded)
+/// are retried — both signal the upstream did NOT process the request, so
+/// retrying a non-idempotent billable POST is safe. `500/502/503` and 4xx
+/// are NOT retried (ambiguous side-effect state; no idempotency key). The
+/// backoff `await`s in-band; `RetryPolicy.default`'s 30s ceiling bounds the
+/// CUMULATIVE BACKOFF SLEEP (the parent spec's "max 30s total" budget) —
+/// NOT end-to-end wall-clock: the per-attempt upstream round-trips are
+/// additional and are bounded only by the URLRequest/URLSession timeout,
+/// which the serve consumer (b-4) MUST set as a real per-request deadline.
+/// `OpenAIChatServeBridge` calls chat() SYNCHRONOUSLY via
+/// `ServeBridge.runBlocking` on the listener thread, so b-4 MUST also
+/// inject `RetryPolicy.serveSafe` (8s) AND run this off the listener thread
+/// — otherwise one rate-limited request head-of-line-blocks every other
+/// chat request. See the b-4 blocking note.
 ///
 /// Info-leak guard (Schneier): on Anthropic non-200, only the HTTP status
 /// + the Anthropic `error.type` short identifier surface. The raw body —
@@ -46,9 +63,43 @@ public enum ClaudeAPIChatEngineError: Error, Sendable, Equatable {
     /// `overloaded_error`, `invalid_request_error`, …); nil when the body
     /// is missing, non-JSON, or malformed. The body itself is discarded.
     case upstreamError(status: Int, type: String?)
+    /// V.13b-2b — bounded retry of `429`/`529` was exhausted (retry count
+    /// or total-wait budget). `retryAfter` is the VALIDATED upstream
+    /// `Retry-After` delta-seconds from the last rate-limit response
+    /// (non-negative integer; nil when absent/unparseable). Carries only a
+    /// small integer — no upstream body, so `String(describing:)` cannot
+    /// echo prompt/guidance content (same info-leak guard as
+    /// `upstreamError`). Render to the OpenAI wire shape via
+    /// `ClaudeAPIChatEngine.openAIRateLimitResponse(retryAfter:)`.
+    case rateLimited(retryAfter: Int?)
 }
 
 public final class ClaudeAPIChatEngine: ChatEngine {
+
+    /// V.13b-2b — bounded-backoff policy for `429`/`529` retries.
+    /// `maxRetries` retries follow the initial attempt (so up to
+    /// `maxRetries + 1` total upstream requests). `maxTotalWait` caps the
+    /// CUMULATIVE backoff sleep (sum of per-attempt delays); when the next
+    /// delay would push the accumulated sleep past it, the delay is clamped
+    /// and the budget exhausts. `baseDelay` is the exponential base for the
+    /// no-`Retry-After` path (`baseDelay * 2^attempt`, full-jittered).
+    public struct RetryPolicy: Sendable {
+        public let maxRetries: Int
+        public let maxTotalWait: Duration
+        public let baseDelay: Duration
+        public init(maxRetries: Int, maxTotalWait: Duration, baseDelay: Duration) {
+            self.maxRetries = maxRetries
+            self.maxTotalWait = maxTotalWait
+            self.baseDelay = baseDelay
+        }
+        /// Spec default (parent v13b-2b acceptance): max 3 retries, max 30s
+        /// total wall-clock. Suitable for the DIRECT/CLI caller.
+        public static let `default` = RetryPolicy(maxRetries: 3, maxTotalWait: .seconds(30), baseDelay: .seconds(1))
+        /// Serve-path preset (b-4): tighter 8s ceiling so a rate-limited
+        /// upstream can't park the synchronous listener thread for 30s.
+        /// b-4 MUST also run chat() off the listener thread.
+        public static let serveSafe = RetryPolicy(maxRetries: 3, maxTotalWait: .seconds(8), baseDelay: .seconds(1))
+    }
 
     private let apiKey: String
     private let session: URLSession
@@ -63,19 +114,30 @@ public final class ClaudeAPIChatEngine: ChatEngine {
     /// itself from `toolCalls.isEmpty`, so a structural channel would mean
     /// a wider refactor; see follow-up filing).
     private let maxTokens: Int
+    /// V.13b-2b — retry/backoff policy for rate-limit responses.
+    private let retryPolicy: RetryPolicy
+    /// V.13b-2b — backoff sleeper seam. Defaults to `Task.sleep(for:)`;
+    /// TEST-ONLY override so suites inject a recording no-op (instant, and
+    /// asserts the sleep count + summed wait). Production callers must NOT
+    /// override this. Propagates `CancellationError` like `Task.sleep`.
+    private let sleeper: @Sendable (Duration) async throws -> Void
 
     public init(
         apiKey: String,
         session: URLSession = .shared,
         endpoint: URL = URL(string: "https://api.anthropic.com/v1/messages")!,
         anthropicVersion: String = "2023-06-01",
-        maxTokens: Int = 4096
+        maxTokens: Int = 4096,
+        retryPolicy: RetryPolicy = .default,
+        sleeper: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {
         self.apiKey = apiKey
         self.session = session
         self.endpoint = endpoint
         self.anthropicVersion = anthropicVersion
         self.maxTokens = maxTokens
+        self.retryPolicy = retryPolicy
+        self.sleeper = sleeper
     }
 
     public func chat(
@@ -110,7 +172,10 @@ public final class ClaudeAPIChatEngine: ChatEngine {
             throw ClaudeAPIChatEngineError.decodeError(reason: "request-encode")
         }
 
-        // 3. Wire request.
+        // 3. Wire request. Built ONCE; re-sent verbatim on each retry —
+        //    `URLRequest` is a value type and `httpBody` is `Data`, so
+        //    every `session.data(for:)` resends the same bytes (no body
+        //    consumption across retries).
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
@@ -118,28 +183,11 @@ public final class ClaudeAPIChatEngine: ChatEngine {
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = bodyData
 
-        // 4. Fire. Narrow URLError to .code.rawValue only.
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await session.data(for: request)
-        } catch let urlError as URLError {
-            throw ClaudeAPIChatEngineError.networkError(code: urlError.code.rawValue)
-        } catch {
-            // Any other Error is collapsed to a fixed sentinel — never
-            // `String(describing:)` since that could echo userInfo.
-            throw ClaudeAPIChatEngineError.networkError(code: -1)
-        }
-
-        guard let http = response as? HTTPURLResponse else {
-            throw ClaudeAPIChatEngineError.decodeError(reason: "non-http-response")
-        }
-
-        // 5. Non-200 → discard body, surface only status + parsed error.type.
-        guard http.statusCode == 200 else {
-            let parsedType: String? = ClaudeAPIChatEngine.extractAnthropicErrorType(from: data)
-            throw ClaudeAPIChatEngineError.upstreamError(status: http.statusCode, type: parsedType)
-        }
+        // 4 & 5. Fire with bounded backoff on 429/529 (V.13b-2b). Returns
+        //    the 200 body; throws `.networkError` / `.upstreamError`
+        //    (non-retryable non-200) / `.rateLimited` (retries exhausted) /
+        //    `CancellationError` (task cancelled mid-backoff).
+        let data = try await fireWithRetry(request)
 
         // 6. Decode 200 body → Anthropic Messages response.
         let decoded: AnthropicMessagesResponse
@@ -193,6 +241,139 @@ public final class ClaudeAPIChatEngine: ChatEngine {
             completionTokens: heuristicCompletion,
             realPromptTokens: decoded.usage?.input_tokens,
             realCompletionTokens: decoded.usage?.output_tokens
+        )
+    }
+
+    // MARK: - Retry / backoff (V.13b-2b)
+
+    /// Issue `request`, retrying ONLY `429`/`529` with bounded backoff per
+    /// `retryPolicy`. Returns the `200` body data. Throws `.networkError`
+    /// (URLSession), `.decodeError("non-http-response")`, `.upstreamError`
+    /// (non-retryable non-200, body discarded), `.rateLimited` (retry count
+    /// or wait budget exhausted on a rate-limit status), or
+    /// `CancellationError` (hosting task cancelled mid-backoff).
+    private func fireWithRetry(_ request: URLRequest) async throws -> Data {
+        let capSeconds = Int(retryPolicy.maxTotalWait.components.seconds)
+        var attempt = 0
+        var accumulated: Duration = .zero
+        while true {
+            // Cooperative cancellation: stop before firing another upstream
+            // call if the hosting task was cancelled mid-backoff. Propagates
+            // `CancellationError`, NOT a `ClaudeAPIChatEngineError`.
+            try Task.checkCancellation()
+
+            let data: Data
+            let response: URLResponse
+            do {
+                (data, response) = try await session.data(for: request)
+            } catch let urlError as URLError {
+                // Transient URLError (connection drop / timeout) is NOT
+                // retried in this item — single-shot, as before. Connection-
+                // level retry is out of scope for V.13b-2b.
+                throw ClaudeAPIChatEngineError.networkError(code: urlError.code.rawValue)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Any other Error is collapsed to a fixed sentinel — never
+                // `String(describing:)` since that could echo userInfo.
+                throw ClaudeAPIChatEngineError.networkError(code: -1)
+            }
+
+            guard let http = response as? HTTPURLResponse else {
+                throw ClaudeAPIChatEngineError.decodeError(reason: "non-http-response")
+            }
+
+            if http.statusCode == 200 { return data }
+
+            guard Self.isRetryableStatus(http.statusCode) else {
+                // Non-retryable non-200 → discard body, surface status + type.
+                let parsedType = Self.extractAnthropicErrorType(from: data)
+                throw ClaudeAPIChatEngineError.upstreamError(status: http.statusCode, type: parsedType)
+            }
+
+            // Retryable (429/529). Parse + validate + clamp Retry-After.
+            let retryAfter = Self.parseRetryAfterSeconds(http, capSeconds: capSeconds)
+
+            // Exhaustion guards (BEFORE sleeping): retry count, then budget.
+            if attempt >= retryPolicy.maxRetries {
+                throw ClaudeAPIChatEngineError.rateLimited(retryAfter: retryAfter)
+            }
+            let remaining = retryPolicy.maxTotalWait - accumulated
+            if remaining <= .zero {
+                throw ClaudeAPIChatEngineError.rateLimited(retryAfter: retryAfter)
+            }
+            let delay = Self.backoffDelay(attempt: attempt, retryAfter: retryAfter, base: retryPolicy.baseDelay)
+            let clamped = min(delay, remaining)
+            try await sleeper(clamped)
+            accumulated += clamped
+            attempt += 1
+        }
+    }
+
+    /// Retryable upstream statuses (V.13b-2b): `429` (rate_limit) and `529`
+    /// (overloaded) ONLY — both mean the request was NOT processed, so
+    /// retrying a non-idempotent billable POST is safe. Everything else
+    /// (`500/502/503`, other 4xx) is surfaced immediately as
+    /// `.upstreamError` (ambiguous side-effect state; no idempotency key).
+    static func isRetryableStatus(_ status: Int) -> Bool {
+        status == 429 || status == 529
+    }
+
+    /// Parse + HARDEN the `Retry-After` RESPONSE header. Accepts ONLY a
+    /// non-negative base-10 integer of delta-seconds; the legitimate RFC
+    /// 7231 HTTP-date form, floats, negatives, signs, and any other garbage
+    /// resolve to `nil` (caller falls back to exponential backoff). The
+    /// header is fully attacker/MITM-controllable (the engine egresses
+    /// directly until b-4 wires the EgressProxy), so the value is CLAMPED
+    /// into `[0, capSeconds]` before it can drive a sleep or be surfaced on
+    /// `.rateLimited` — a hostile `Retry-After: 999999` can neither hang
+    /// the thread past the wall budget nor be re-emitted unbounded into
+    /// senkani's own `Retry-After` response header by b-4.
+    static func parseRetryAfterSeconds(_ http: HTTPURLResponse, capSeconds: Int) -> Int? {
+        guard let raw = http.value(forHTTPHeaderField: "Retry-After")?
+            .trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
+        // Strict: digits only — rejects "-5", "1.5", "1e9", "0x10", and the
+        // HTTP-date form ("Wed, 21 Oct 2025 07:28:00 GMT").
+        guard raw.allSatisfy(\.isNumber), let parsed = Int(raw) else { return nil }
+        return max(0, min(parsed, max(0, capSeconds)))
+    }
+
+    /// Backoff delay for `attempt` (0-indexed). Honors a validated
+    /// `Retry-After` verbatim (the server's explicit instruction); else
+    /// FULL-JITTERED exponential `base * 2^attempt` — uniformly random in
+    /// `[0, base*2^attempt]` to break the synchronized retry-storm that
+    /// lock-step backoff produces against an already-overloaded upstream.
+    /// A validated `Retry-After` of `0` floors to `base` so the loop cannot
+    /// tight-spin.
+    static func backoffDelay(attempt: Int, retryAfter: Int?, base: Duration) -> Duration {
+        if let retryAfter {
+            return retryAfter == 0 ? base : .seconds(retryAfter)
+        }
+        // `min(attempt, 30)` guards a pathological custom `RetryPolicy`
+        // (maxRetries ≳ 63) from overflowing the `Int` shift; shipped
+        // presets cap `attempt` at 2 (1<<2 = 4), so this never bites them.
+        let exp = base * Double(1 << min(attempt, 30))
+        return exp * Double.random(in: 0...1)
+    }
+
+    /// Render an exhausted-rate-limit (`.rateLimited`) as the OpenAI wire
+    /// shape: HTTP `429` with
+    /// `{"error":{…,"type":"rate_limit_error","code":"rate_limit_exceeded"}}`
+    /// plus a `Retry-After` header when a validated upstream hint is
+    /// present. The machine-readable `{type,code}` tokens are byte-identical
+    /// to `OpenAIAuthGate`'s LOCAL rate-limit `429`, so an OpenAI client
+    /// sees ONE rate-limit contract whether the limit tripped locally or
+    /// upstream. b-4 wires this into the serve error path; `.rateLimited`
+    /// is the structured signal it translates.
+    public static func openAIRateLimitResponse(retryAfter: Int?) -> Data {
+        let headers = retryAfter.map { ["Retry-After": "\($0)"] } ?? [:]
+        return OpenAIChatHandler.errorResponse(
+            code: 429,
+            httpMessage: "Too Many Requests",
+            message: "upstream rate limit exceeded",
+            type: "rate_limit_error",
+            errorCode: "rate_limit_exceeded",
+            extraHeaders: headers
         )
     }
 

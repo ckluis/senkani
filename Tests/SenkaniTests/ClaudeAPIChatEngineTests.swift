@@ -13,7 +13,9 @@ private func makeEngine(apiKey: String = "test-anthropic-key-XYZ") -> (ClaudeAPI
     config.protocolClasses = [MockURLProtocol.self]
     let session = URLSession(configuration: config)
     let url = URL(string: "https://api.anthropic.com/v1/messages")!
-    let engine = ClaudeAPIChatEngine(apiKey: apiKey, session: session, endpoint: url)
+    // V.13b-2b: inject an instant no-op sleeper so any 429/529 path (which
+    // now retries) stays fast in the suite; non-retryable tests never sleep.
+    let engine = ClaudeAPIChatEngine(apiKey: apiKey, session: session, endpoint: url, sleeper: { _ in })
     return (engine, session)
 }
 
@@ -107,11 +109,17 @@ struct ClaudeAPIChatEngineWireTests {
     }
 
     @Test func frontierUpstreamErrorOmitsBody() async throws {
+        // V.13b-2b: 529 is now RETRYABLE (exhausts to `.rateLimited`), so
+        // the single-shot info-leak guard moved to a NON-retryable 400 —
+        // `.upstreamError` still carries a parsed `type` AND a discarded
+        // body, keeping the meaningful "body must not leak" assertion on a
+        // status that fires exactly once. The 529→exhaustion no-leak path
+        // is covered separately in `ClaudeAPIChatEngineRetryTests`.
         MockURLProtocol.reset(); defer { MockURLProtocol.reset() }
         let body = """
-        {"type":"error","error":{"type":"overloaded_error","message":"DETAILED ANTHROPIC MESSAGE WITH PROMPT BLEED"}}
+        {"type":"error","error":{"type":"invalid_request_error","message":"DETAILED ANTHROPIC MESSAGE WITH PROMPT BLEED"}}
         """
-        MockURLProtocol.register(url: anthropicURL, status: 529, body: Data(body.utf8))
+        MockURLProtocol.register(url: anthropicURL, status: 400, body: Data(body.utf8))
         let (engine, _) = makeEngine()
 
         var caught: ClaudeAPIChatEngineError?
@@ -125,7 +133,7 @@ struct ClaudeAPIChatEngineWireTests {
         } catch let e as ClaudeAPIChatEngineError {
             caught = e
         }
-        #expect(caught == .upstreamError(status: 529, type: "overloaded_error"))
+        #expect(caught == .upstreamError(status: 400, type: "invalid_request_error"))
 
         // Info-leak guard: the error's debug rendering must NOT carry the
         // upstream message body. We render the error via String(describing:)
@@ -432,5 +440,272 @@ struct ClaudeAPIChatEngineNetworkErrorTests {
             #expect(!rendered.contains("x-api-key"))
             #expect(!rendered.contains("api.anthropic.com"))
         }
+    }
+}
+
+// MARK: - V.13b-2b — retry / backoff / rate-limit translation
+
+/// Records each backoff `Duration` the engine asks to sleep. Thread-safe:
+/// the sleeper closure runs in the engine's async context (may hop threads)
+/// while assertions read `delays`/`total` after `chat()` returns.
+final class SleepRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [Duration] = []
+    func record(_ d: Duration) { lock.lock(); storage.append(d); lock.unlock() }
+    var delays: [Duration] { lock.lock(); defer { lock.unlock() }; return storage }
+    var count: Int { delays.count }
+    var total: Duration { delays.reduce(.zero, +) }
+}
+
+/// Thread-safe holder so a sleeper closure can cancel its own hosting task.
+final class TaskBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _task: Task<Void, Error>?
+    var task: Task<Void, Error>? {
+        get { lock.lock(); defer { lock.unlock() }; return _task }
+        set { lock.lock(); _task = newValue; lock.unlock() }
+    }
+}
+
+/// A `URLProtocol` that returns a SCRIPTED sequence of responses (the
+/// `MockURLProtocol` returns one stub per URL — no sequencing). The last
+/// frame repeats for any request beyond the script, so "429 indefinitely"
+/// is a single 429 frame. All shared state is `NSLock`-guarded because
+/// `startLoading` runs on URLSession's loader thread while the test thread
+/// reads `requestCount`; assertions read it only AFTER `chat()` returns
+/// (the `await` is a full barrier for the loader work).
+final class RateLimitSequenceProtocol: URLProtocol, @unchecked Sendable {
+    struct Frame: Sendable { let status: Int; let headers: [String: String]; let body: Data }
+
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var script: [Frame] = []
+    nonisolated(unsafe) private static var index = 0
+    nonisolated(unsafe) private static var requestCountStorage = 0
+
+    static func configure(_ frames: [Frame]) {
+        lock.lock(); defer { lock.unlock() }
+        script = frames; index = 0; requestCountStorage = 0
+    }
+    static func reset() {
+        lock.lock(); defer { lock.unlock() }
+        script = []; index = 0; requestCountStorage = 0
+    }
+    static var requestCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return requestCountStorage
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let frame: Frame = {
+            Self.lock.lock(); defer { Self.lock.unlock() }
+            Self.requestCountStorage += 1
+            guard !Self.script.isEmpty else {
+                return Frame(status: 500, headers: [:], body: Data())
+            }
+            let i = min(Self.index, Self.script.count - 1)
+            Self.index += 1
+            return Self.script[i]
+        }()
+        guard let url = request.url else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL)); return
+        }
+        let response = HTTPURLResponse(
+            url: url, statusCode: frame.status,
+            httpVersion: "HTTP/1.1", headerFields: frame.headers)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: frame.body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+private func makeSeqEngine(
+    policy: ClaudeAPIChatEngine.RetryPolicy = .default,
+    sleeper: @escaping @Sendable (Duration) async throws -> Void
+) -> ClaudeAPIChatEngine {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [RateLimitSequenceProtocol.self]
+    let session = URLSession(configuration: config)
+    return ClaudeAPIChatEngine(
+        apiKey: "ak", session: session, endpoint: anthropicURL,
+        retryPolicy: policy, sleeper: sleeper)
+}
+
+@Suite("ClaudeAPIChatEngine — retry / backoff (V.13b-2b)", .serialized, .urlProtocolGate)
+struct ClaudeAPIChatEngineRetryTests {
+
+    // Acceptance Test A: 429 + Retry-After:1 twice, then 200 → succeeds.
+    @Test func rateLimit429TwiceThenSucceedsAfterBackoff() async throws {
+        RateLimitSequenceProtocol.reset(); defer { RateLimitSequenceProtocol.reset() }
+        let ok = """
+        {"id":"x","type":"message","role":"assistant","content":[{"type":"text","text":"recovered"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}
+        """
+        RateLimitSequenceProtocol.configure([
+            .init(status: 429, headers: ["Retry-After": "1"], body: Data("{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\"}}".utf8)),
+            .init(status: 429, headers: ["Retry-After": "1"], body: Data()),
+            .init(status: 200, headers: [:], body: Data(ok.utf8)),
+        ])
+        let rec = SleepRecorder()
+        let engine = makeSeqEngine(sleeper: { rec.record($0) })
+        let completion = try await engine.chat(
+            model: "claude-haiku-3.5",
+            messages: [.init(role: "user", content: "hi")],
+            tools: [])
+        #expect(completion.content == "recovered")
+        #expect(RateLimitSequenceProtocol.requestCount == 3)   // 1 initial + 2 retries
+        #expect(rec.count == 2)                                 // 2 backoff sleeps
+        #expect(rec.delays == [.seconds(1), .seconds(1)])       // honored Retry-After:1
+    }
+
+    // Acceptance Test B: 429 indefinitely → exhaustion. Asserts retry count,
+    // total-wait cap, OpenAI-shaped translation, and the info-leak guard.
+    @Test func rateLimitExhaustionThrowsRateLimitedWithCountCapAndNoLeak() async throws {
+        RateLimitSequenceProtocol.reset(); defer { RateLimitSequenceProtocol.reset() }
+        // Body carries a sentinel that must NOT surface via the error.
+        let body = Data("{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"PROMPT BLEED SECRET\"}}".utf8)
+        RateLimitSequenceProtocol.configure([.init(status: 429, headers: ["Retry-After": "2"], body: body)])
+        let rec = SleepRecorder()
+        let engine = makeSeqEngine(sleeper: { rec.record($0) })
+
+        var caught: ClaudeAPIChatEngineError?
+        do {
+            _ = try await engine.chat(model: "claude-opus-4", messages: [.init(role: "user", content: "x")], tools: [])
+            Issue.record("expected rateLimited")
+        } catch let e as ClaudeAPIChatEngineError { caught = e }
+
+        guard case .rateLimited(let ra) = caught else { Issue.record("expected .rateLimited, got \(String(describing: caught))"); return }
+        #expect(ra == 2)
+        #expect(RateLimitSequenceProtocol.requestCount == 4)   // 1 initial + 3 retries
+        #expect(rec.count == 3)                                 // 3 sleeps
+        #expect(rec.total <= .seconds(30))                      // wall-clock cap honored
+        #expect(rec.total == .seconds(6))                       // 2+2+2
+
+        // Info-leak guard on the exhaustion path: no upstream body echo.
+        let rendered = String(describing: caught!)
+        #expect(!rendered.contains("PROMPT BLEED"))
+
+        // OpenAI-shaped rate_limit translation.
+        let resp = String(data: ClaudeAPIChatEngine.openAIRateLimitResponse(retryAfter: ra), encoding: .utf8)!
+        #expect(resp.hasPrefix("HTTP/1.1 429 Too Many Requests"))
+        #expect(resp.contains("\"type\":\"rate_limit_error\""))
+        #expect(resp.contains("\"code\":\"rate_limit_exceeded\""))
+        #expect(resp.contains("Retry-After: 2"))
+    }
+
+    // Schneier: a hostile huge Retry-After is clamped to the wall budget and
+    // exhausts via the budget branch (not just the retry-count branch).
+    @Test func hostileRetryAfterClampedToCapExhaustsBudget() async throws {
+        RateLimitSequenceProtocol.reset(); defer { RateLimitSequenceProtocol.reset() }
+        RateLimitSequenceProtocol.configure([.init(status: 429, headers: ["Retry-After": "100000"], body: Data())])
+        let rec = SleepRecorder()
+        let engine = makeSeqEngine(policy: .default, sleeper: { rec.record($0) })
+
+        var caught: ClaudeAPIChatEngineError?
+        do { _ = try await engine.chat(model: "claude-sonnet-4", messages: [.init(role: "user", content: "x")], tools: []) }
+        catch let e as ClaudeAPIChatEngineError { caught = e }
+
+        guard case .rateLimited(let ra) = caught else { Issue.record("expected .rateLimited, got \(String(describing: caught))"); return }
+        #expect(ra == 30)                                       // clamped to the 30s cap
+        #expect(RateLimitSequenceProtocol.requestCount == 2)    // 1 fire, 30s sleep, 1 fire, budget=0 → throw
+        #expect(rec.count == 1)                                 // single clamped sleep
+        #expect(rec.total == .seconds(30))                      // exactly the cap, never over
+    }
+
+    // 529 (overloaded) is retryable; no Retry-After → full-jittered
+    // exponential under the serveSafe 8s cap. Upper-bound assertions
+    // tolerate the jitter (which only ever reduces the delay).
+    @Test func overloaded529JitteredExponentialUnderServeSafeCap() async throws {
+        RateLimitSequenceProtocol.reset(); defer { RateLimitSequenceProtocol.reset() }
+        RateLimitSequenceProtocol.configure([.init(status: 529, headers: [:],
+            body: Data("{\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\"}}".utf8))])
+        let rec = SleepRecorder()
+        let engine = makeSeqEngine(policy: .serveSafe, sleeper: { rec.record($0) })
+
+        var caught: ClaudeAPIChatEngineError?
+        do { _ = try await engine.chat(model: "claude-opus-4", messages: [.init(role: "user", content: "x")], tools: []) }
+        catch let e as ClaudeAPIChatEngineError { caught = e }
+
+        guard case .rateLimited(let ra) = caught else { Issue.record("expected .rateLimited, got \(String(describing: caught))"); return }
+        #expect(ra == nil)                                      // no Retry-After present
+        #expect(RateLimitSequenceProtocol.requestCount == 4)    // 1 initial + 3 retries
+        #expect(rec.count == 3)
+        #expect(rec.total <= .seconds(8))                       // jittered 1+2+4 ladder under cap
+        for d in rec.delays { #expect(d >= .zero) }
+    }
+
+    // Cancellation mid-backoff propagates CancellationError (NOT a
+    // ClaudeAPIChatEngineError) and fires no further upstream request —
+    // sleeper-throws entry point.
+    @Test func cancelledDuringBackoffStopsWithoutAnotherRequest() async throws {
+        RateLimitSequenceProtocol.reset(); defer { RateLimitSequenceProtocol.reset() }
+        RateLimitSequenceProtocol.configure([.init(status: 429, headers: ["Retry-After": "1"], body: Data())])
+        let engine = makeSeqEngine(sleeper: { _ in throw CancellationError() })
+
+        var cancelled = false
+        do {
+            _ = try await engine.chat(model: "claude-haiku-3.5", messages: [.init(role: "user", content: "x")], tools: [])
+            Issue.record("expected cancellation")
+        } catch is CancellationError {
+            cancelled = true
+        } catch let e as ClaudeAPIChatEngineError {
+            Issue.record("cancellation must NOT surface as ClaudeAPIChatEngineError: \(e)")
+        }
+        #expect(cancelled)
+        #expect(RateLimitSequenceProtocol.requestCount == 1)    // only the initial fire
+    }
+
+    // Exercises the REAL `Task.checkCancellation()` guard at the loop top
+    // (distinct from the sleeper-throws path): the sleeper returns NORMALLY
+    // but cancels the hosting task, so the NEXT iteration's checkCancellation
+    // fires before another upstream request.
+    @Test func cancelledViaCheckCancellationGuardStopsLoop() async {
+        RateLimitSequenceProtocol.reset(); defer { RateLimitSequenceProtocol.reset() }
+        RateLimitSequenceProtocol.configure([.init(status: 429, headers: ["Retry-After": "1"], body: Data())])
+        let box = TaskBox()
+        let engine = makeSeqEngine(sleeper: { _ in box.task?.cancel() })   // returns normally; cancels host
+        box.task = Task {
+            _ = try await engine.chat(model: "claude-haiku-3.5", messages: [.init(role: "user", content: "x")], tools: [])
+        }
+        var cancelled = false
+        do { try await box.task!.value }
+        catch is CancellationError { cancelled = true }
+        catch { Issue.record("expected CancellationError, got \(error)") }
+        #expect(cancelled)
+        #expect(RateLimitSequenceProtocol.requestCount == 1)    // checkCancellation fired before fire #2
+    }
+
+    // Direct translator shape + header, decoupled from chat().
+    @Test func openAIRateLimitResponseShapeAndHeader() {
+        let withHint = String(data: ClaudeAPIChatEngine.openAIRateLimitResponse(retryAfter: 5), encoding: .utf8)!
+        #expect(withHint.hasPrefix("HTTP/1.1 429 Too Many Requests"))
+        #expect(withHint.contains("\"type\":\"rate_limit_error\""))
+        #expect(withHint.contains("\"code\":\"rate_limit_exceeded\""))
+        #expect(withHint.contains("Retry-After: 5"))
+        let noHint = String(data: ClaudeAPIChatEngine.openAIRateLimitResponse(retryAfter: nil), encoding: .utf8)!
+        #expect(!noHint.contains("Retry-After:"))
+        #expect(noHint.contains("\"code\":\"rate_limit_exceeded\""))
+    }
+
+    // Retry-After parse hardening matrix (Schneier/Karpathy): only a
+    // non-negative integer of delta-seconds is honored; everything else
+    // (negative, float, garbage, HTTP-date, absent) → nil; values clamp to
+    // [0, cap].
+    @Test func retryAfterParsingHardening() {
+        func http(_ headers: [String: String]) -> HTTPURLResponse {
+            HTTPURLResponse(url: anthropicURL, statusCode: 429, httpVersion: "HTTP/1.1", headerFields: headers)!
+        }
+        let cap = 30
+        #expect(ClaudeAPIChatEngine.parseRetryAfterSeconds(http(["Retry-After": "5"]), capSeconds: cap) == 5)
+        #expect(ClaudeAPIChatEngine.parseRetryAfterSeconds(http(["Retry-After": "  7  "]), capSeconds: cap) == 7)
+        #expect(ClaudeAPIChatEngine.parseRetryAfterSeconds(http(["Retry-After": "100000"]), capSeconds: cap) == 30)
+        #expect(ClaudeAPIChatEngine.parseRetryAfterSeconds(http(["Retry-After": "0"]), capSeconds: cap) == 0)
+        #expect(ClaudeAPIChatEngine.parseRetryAfterSeconds(http(["Retry-After": "-5"]), capSeconds: cap) == nil)
+        #expect(ClaudeAPIChatEngine.parseRetryAfterSeconds(http(["Retry-After": "1.5"]), capSeconds: cap) == nil)
+        #expect(ClaudeAPIChatEngine.parseRetryAfterSeconds(http(["Retry-After": "soon"]), capSeconds: cap) == nil)
+        #expect(ClaudeAPIChatEngine.parseRetryAfterSeconds(http(["Retry-After": "Wed, 21 Oct 2025 07:28:00 GMT"]), capSeconds: cap) == nil)
+        #expect(ClaudeAPIChatEngine.parseRetryAfterSeconds(http([:]), capSeconds: cap) == nil)
     }
 }

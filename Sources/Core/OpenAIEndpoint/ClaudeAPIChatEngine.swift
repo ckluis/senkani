@@ -121,6 +121,13 @@ public final class ClaudeAPIChatEngine: ChatEngine {
     /// asserts the sleep count + summed wait). Production callers must NOT
     /// override this. Propagates `CancellationError` like `Task.sleep`.
     private let sleeper: @Sendable (Duration) async throws -> Void
+    /// V.13b-4a — per-request wall-clock deadline applied to EACH upstream
+    /// attempt's `URLRequest.timeoutInterval`. `retryPolicy.maxTotalWait`
+    /// bounds only the backoff SLEEP between attempts — NOT a per-attempt
+    /// round-trip — so the serve consumer (b-4c) sets this to keep a slow /
+    /// hung upstream from parking the listener thread past a real deadline.
+    /// nil = URLSession's default (60s).
+    private let requestTimeout: TimeInterval?
 
     public init(
         apiKey: String,
@@ -129,7 +136,8 @@ public final class ClaudeAPIChatEngine: ChatEngine {
         anthropicVersion: String = "2023-06-01",
         maxTokens: Int = 4096,
         retryPolicy: RetryPolicy = .default,
-        sleeper: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+        sleeper: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        requestTimeout: TimeInterval? = nil
     ) {
         self.apiKey = apiKey
         self.session = session
@@ -138,6 +146,7 @@ public final class ClaudeAPIChatEngine: ChatEngine {
         self.maxTokens = maxTokens
         self.retryPolicy = retryPolicy
         self.sleeper = sleeper
+        self.requestTimeout = requestTimeout
     }
 
     public func chat(
@@ -182,6 +191,8 @@ public final class ClaudeAPIChatEngine: ChatEngine {
         request.setValue(anthropicVersion, forHTTPHeaderField: "anthropic-version")
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = bodyData
+        // V.13b-4a — per-attempt wall-clock deadline (serve consumer sets it).
+        if let requestTimeout { request.timeoutInterval = requestTimeout }
 
         // 4 & 5. Fire with bounded backoff on 429/529 (V.13b-2b). Returns
         //    the 200 body; throws `.networkError` / `.upstreamError`

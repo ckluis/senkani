@@ -5,7 +5,8 @@ import Foundation
 /// UTCTime / GeneralizedTime / BIT STRING / OCTET STRING / BOOLEAN /
 /// PrintableString / UTF8String / context tags, plus the assembled
 /// TBSCertificate + Certificate + the BasicConstraints / KeyUsage /
-/// ExtKeyUsage / SubjectAltName / SubjectKeyIdentifier extensions.
+/// ExtKeyUsage / SubjectAltName / SubjectKeyIdentifier /
+/// AuthorityKeyIdentifier extensions.
 ///
 /// We hand-roll this (rather than pull in swift-asn1) because adding a
 /// SwiftPM dependency mutates `Package.resolved`. DER is canonical (one
@@ -296,6 +297,21 @@ enum DEREncoder {
     /// SubjectKeyIdentifier (2.5.29.14) = OCTET STRING of the key id.
     static func subjectKeyIdentifier(_ keyID: Data) -> Data {
         makeExtension(oidArcs: [2, 5, 29, 14], critical: false, value: octetString(keyID))
+    }
+
+    /// AuthorityKeyIdentifier (2.5.29.35), keyIdentifier form (RFC 5280
+    /// §4.2.1.1):
+    ///   AuthorityKeyIdentifier ::= SEQUENCE { keyIdentifier [0] IMPLICIT
+    ///                                          KeyIdentifier OPTIONAL, ... }
+    /// `KeyIdentifier ::= OCTET STRING`, so the [0] field is context-PRIMITIVE
+    /// (0x80) and carries the key-id bytes directly (no nested OCTET STRING).
+    /// Non-critical per RFC 5280. `keyID` is the issuer (CA) Subject Key
+    /// Identifier — strict verifiers (OpenSSL `-x509_strict`, BoringSSL)
+    /// reject a non-self-issued leaf that omits this.
+    static func authorityKeyIdentifier(_ keyID: Data) -> Data {
+        let keyIDField = contextPrimitive(0, keyID) // [0] IMPLICIT OCTET STRING
+        let aki = sequence([keyIDField])
+        return makeExtension(oidArcs: [2, 5, 29, 35], critical: false, value: aki)
     }
 
     // MARK: - TBSCertificate + Certificate

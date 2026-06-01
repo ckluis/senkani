@@ -191,7 +191,134 @@ import Security
         #expect(ok)
     }
 
+    // MARK: - 7. Leaf carries SKI + AKI; AKI matches the CA's SKI
+
+    /// Find `needle` in `der` and return the `count` bytes immediately
+    /// following it (nil if absent / truncated). The SKI/AKI extension DER
+    /// prefix is fixed-width for a 20-byte SHA-1 key id, so this pulls the
+    /// key id out without a full ASN.1 parser.
+    private func bytesFollowing(_ needle: [UInt8], in der: Data, count: Int) -> Data? {
+        let hay = [UInt8](der)
+        guard needle.count > 0, needle.count <= hay.count else { return nil }
+        var i = 0
+        while i + needle.count <= hay.count {
+            if Array(hay[i..<(i + needle.count)]) == needle {
+                let s = i + needle.count
+                guard s + count <= hay.count else { return nil }
+                return Data(hay[s..<(s + count)])
+            }
+            i += 1
+        }
+        return nil
+    }
+
+    @Test func leafCarriesSKIAndAKIMatchingCASubjectKeyId() async throws {
+        let (paths, dir) = tempPaths()
+        defer { cleanup(dir) }
+        let ca = MITMCertificateAuthority(paths: paths, keyBits: 2048)
+        _ = try await ca.generateRoot()
+
+        let host = "strict.example.com"
+        let leaf = try await ca.leaf(forHost: host)
+        let caCert = try await ca.caCertificate()
+        let caDER = SecCertificateCopyData(caCert) as Data
+
+        // SHA-1 key id is 20 bytes, so the extension DER prefixes are fixed.
+        //   SKI ext: 06 03 55 1D 0E  04 16  04 14  <20-byte keyID>
+        //   AKI ext: 06 03 55 1D 23  04 18  30 16  80 14  <20-byte keyID>
+        let skiPrefix: [UInt8] = [0x06, 0x03, 0x55, 0x1D, 0x0E, 0x04, 0x16, 0x04, 0x14]
+        let akiPrefix: [UInt8] = [0x06, 0x03, 0x55, 0x1D, 0x23, 0x04, 0x18, 0x30, 0x16, 0x80, 0x14]
+
+        // CA root has an SKI (shipped with the cert-minting round).
+        let caSKI = try #require(
+            bytesFollowing(skiPrefix, in: caDER, count: 20),
+            "CA root cert is missing a Subject Key Identifier extension"
+        )
+        // Leaf has its OWN SKI...
+        let leafSKI = try #require(
+            bytesFollowing(skiPrefix, in: leaf.certificateDER, count: 20),
+            "leaf cert is missing a Subject Key Identifier extension"
+        )
+        // ...and an AKI whose keyIdentifier equals the CA's SKI (RFC 5280
+        // §4.2.1.1) — this is what fixes OpenSSL strict error 85.
+        let leafAKI = try #require(
+            bytesFollowing(akiPrefix, in: leaf.certificateDER, count: 20),
+            "leaf cert is missing an Authority Key Identifier extension"
+        )
+        #expect(leafAKI == caSKI, "leaf AKI must point at the CA's SKI")
+        #expect(leafSKI != caSKI, "leaf SKI is its own key id, distinct from the CA's")
+
+        // No regression: the leaf still decodes as a real X.509 cert.
+        #expect(SecCertificateCreateWithData(nil, leaf.certificateDER as CFData) != nil)
+
+        // Best-effort cross-check: if a REAL OpenSSL (>= 3, not LibreSSL) is
+        // on the box, `openssl verify -x509_strict` must ACCEPT the leaf with
+        // the test CA as -CAfile (no error 85). LibreSSL / absence → skipped;
+        // the in-process DER assertions above are the authoritative check.
+        if let openssl = Self.realOpenSSLPath() {
+            let leafPEM = MITMCertificateAuthority.pemEncode(leaf.certificateDER, label: "CERTIFICATE")
+            let leafPath = (dir as NSString).appendingPathComponent("leaf.pem")
+            try leafPEM.write(toFile: leafPath, atomically: true, encoding: .utf8)
+
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: openssl)
+            proc.arguments = ["verify", "-x509_strict", "-CAfile", paths.publicCertPEM, leafPath]
+            let out = Pipe(); let err = Pipe()
+            proc.standardOutput = out
+            proc.standardError = err
+            try proc.run()
+            proc.waitUntilExit()
+            let stdout = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            let stderr = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            if proc.terminationStatus != 0 {
+                Issue.record("openssl -x509_strict rejected the leaf: status=\(proc.terminationStatus) stdout=\(stdout) stderr=\(stderr)")
+            }
+            #expect(proc.terminationStatus == 0)
+            #expect(stdout.contains("OK") || stdout.contains("\(leafPath): OK"))
+        }
+    }
+
+    /// Locate a genuine OpenSSL (>= 3) on PATH-ish candidate locations. macOS
+    /// ships LibreSSL as `/usr/bin/openssl`, whose `-x509_strict` semantics
+    /// differ and do NOT emit error 85, so we deliberately skip it. Returns
+    /// nil if no real OpenSSL is found (test then relies on DER assertions).
+    private static func realOpenSSLPath() -> String? {
+        let candidates = [
+            "/opt/homebrew/opt/openssl@3/bin/openssl",
+            "/opt/homebrew/bin/openssl",
+            "/usr/local/opt/openssl@3/bin/openssl",
+            "/usr/local/bin/openssl",
+        ]
+        for path in candidates {
+            guard FileManager.default.isExecutableFile(atPath: path) else { continue }
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: path)
+            proc.arguments = ["version"]
+            let pipe = Pipe()
+            proc.standardOutput = pipe
+            proc.standardError = Pipe()
+            guard (try? proc.run()) != nil else { continue }
+            proc.waitUntilExit()
+            let version = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            if version.hasPrefix("OpenSSL ") { return path } // not "LibreSSL "
+        }
+        return nil
+    }
+
     // MARK: - DER encoder unit checks (deterministic, no Security calls)
+
+    @Test func derAuthorityKeyIdentifierEncodesKeyIdForm() {
+        // 20-byte stand-in key id → exact AKI extension DER:
+        //   SEQUENCE { OID 2.5.29.35, OCTET STRING { SEQUENCE { [0] keyID } } }
+        // outer content = OID(5) + OCTET STRING(2 + 24) = 31 bytes (0x1F):
+        //   30 1F 06 03 55 1D 23 04 18 30 16 80 14 <20 bytes>
+        let keyID = Data(repeating: 0xAB, count: 20)
+        let enc = [UInt8](DEREncoder.authorityKeyIdentifier(keyID))
+        let expected: [UInt8] =
+            [0x30, 0x1F, 0x06, 0x03, 0x55, 0x1D, 0x23, 0x04, 0x18, 0x30, 0x16, 0x80, 0x14]
+            + [UInt8](repeating: 0xAB, count: 20)
+        #expect(enc == expected)
+    }
 
     @Test func derLengthEncodingShortAndLong() {
         #expect(DEREncoder.encodeLength(0) == [0x00])

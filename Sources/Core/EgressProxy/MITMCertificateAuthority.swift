@@ -139,10 +139,9 @@ public actor MITMCertificateAuthority {
         let serial = Self.randomSerial()
 
         // Subject Key Identifier = SHA-1 of the BIT STRING contents
-        // (RFC 5280 §4.2.1.2 method (1)). We compute it over the raw
-        // public-key bytes (the PKCS#1 RSAPublicKey DER).
-        let rawPub = try Self.exportPublicKeyBits(pub)
-        let ski = Data(Insecure.SHA1.hash(data: rawPub))
+        // (RFC 5280 §4.2.1.2 method (1)), over the raw public-key bytes
+        // (the PKCS#1 RSAPublicKey DER). Same helper the leaf's AKI uses.
+        let ski = try Self.keyIdentifier(forPublicKey: pub)
 
         let extensions = DEREncoder.extensions([
             DEREncoder.basicConstraintsCA(critical: true, isCA: true),
@@ -242,11 +241,26 @@ public actor MITMCertificateAuthority {
         let notAfter = now.addingTimeInterval(TimeInterval(validityDays) * 86_400)
         let serial = Self.randomSerial()
 
+        // RFC 5280 §4.2.1.1/§4.2.1.2 completeness (t1d-1 follow-up): the leaf
+        // carries its own Subject Key Identifier AND an Authority Key
+        // Identifier equal to the CA's SKI. Without the AKI, strict verifiers
+        // (`openssl verify -x509_strict`, BoringSSL) reject the chain
+        // (OpenSSL error 85). The CA's SKI is recomputed from the CA public
+        // key via the same helper that minted it, so the two match byte-for-
+        // byte even when the root was loaded from disk.
+        let leafSKI = try Self.keyIdentifier(forPublicKey: leafPub)
+        guard let caPub = SecKeyCopyPublicKey(root.privateKey) else {
+            throw CAError.publicKeyExport("CA SecKeyCopyPublicKey returned nil")
+        }
+        let caSKI = try Self.keyIdentifier(forPublicKey: caPub)
+
         let extensions = DEREncoder.extensions([
             DEREncoder.basicConstraintsCA(critical: false, isCA: false),
             DEREncoder.keyUsage(bits: [.digitalSignature, .keyEncipherment], critical: true),
             DEREncoder.extendedKeyUsageServerAuth(),
             DEREncoder.subjectAltNameDNS(host),
+            DEREncoder.subjectKeyIdentifier(leafSKI),
+            DEREncoder.authorityKeyIdentifier(caSKI),
         ])
 
         let tbs = DEREncoder.tbsCertificate(
@@ -354,6 +368,17 @@ public actor MITMCertificateAuthority {
             throw CAError.publicKeyExport(cfErrorString(error))
         }
         return data
+    }
+
+    /// RFC 5280 §4.2.1.2 method (1): key identifier = SHA-1 of the
+    /// subjectPublicKey BIT STRING contents. For RSA that is the PKCS#1
+    /// `RSAPublicKey` DER from `SecKeyCopyExternalRepresentation`. This one
+    /// helper backs BOTH the CA Subject Key Identifier and the leaf's
+    /// Authority Key Identifier (= the CA's SKI, per §4.2.1.1), so the two
+    /// are byte-identical by construction and cannot drift.
+    static func keyIdentifier(forPublicKey pub: SecKey) throws -> Data {
+        let rawPub = try exportPublicKeyBits(pub)
+        return Data(Insecure.SHA1.hash(data: rawPub))
     }
 
     /// Private-key DER. For RSA this is the PKCS#1 `RSAPrivateKey` DER,

@@ -198,6 +198,190 @@ import Security
         return names.filter { $0.hasPrefix("senkani-mitm-") && $0.hasSuffix(".keychain") }.count
     }
 
+    // MARK: - 5b. RUNTIME-exercise the macOS-14 floor (ephemeral keychain)
+
+    /// `loadIdentity`'s `#available(macOS 15.0)` dispatcher means the
+    /// macOS-14 `else` branch can NEVER run on this 15+ build host through
+    /// the public entry point. This test calls the extracted floor helper
+    /// `loadIdentityViaEphemeralKeychain` DIRECTLY (it is NOT
+    /// `@available`-gated, since `SecKeychainCreate/Delete` are
+    /// deprecated-but-available on macOS 15+), so the exact v14-floor logic
+    /// is RUNTIME-exercised here — not merely type-checked. It proves the
+    /// floor path yields a usable, signing identity and leaks no keychain.
+    @Test func leafPKCS12LoadsViaEphemeralKeychainPathDirectly() async throws {
+        let (paths, dir) = tempPaths()
+        defer { cleanup(dir) }
+        let ca = MITMCertificateAuthority(paths: paths, keyBits: 2048)
+        _ = try await ca.generateRoot()
+
+        let host = "floor.example.com"
+        let leaf = try await ca.leaf(forHost: host)
+        #expect(!leaf.pkcs12.isEmpty)
+
+        // No-leak guard around the FLOOR path specifically: the ephemeral
+        // keychain `defer` must delete the throwaway before the helper
+        // returns, so the stray count must not grow.
+        let keychainsBefore = Self.strayEphemeralKeychainCount()
+
+        // Call the macOS-14-floor helper DIRECTLY (not `loadIdentity`).
+        let identity = try MITMCertificateAuthority.loadIdentityViaEphemeralKeychain(from: leaf.pkcs12)
+
+        let keychainsAfter = Self.strayEphemeralKeychainCount()
+        #expect(keychainsAfter <= keychainsBefore,
+                "loadIdentityViaEphemeralKeychain left a senkani-mitm-*.keychain file behind")
+
+        // The floor path yields a live private key...
+        var privKey: SecKey?
+        #expect(SecIdentityCopyPrivateKey(identity, &privKey) == errSecSuccess)
+        let key = try #require(privKey)
+
+        // ...that actually SIGNS after the helper returns (no retaining
+        // keychain) — proving the floor identity is usable, not merely present.
+        let message = Data("senkani-mitm-floor-liveness-probe".utf8)
+        var signErr: Unmanaged<CFError>?
+        let signature = SecKeyCreateSignature(
+            key,
+            .rsaSignatureMessagePKCS1v15SHA256,
+            message as CFData,
+            &signErr
+        ) as Data?
+        if signature == nil {
+            Issue.record("floor-path private key signing failed: \(MITMCertificateAuthority.cfErrorString(signErr))")
+        }
+        let sig = try #require(signature, "floor-path identity's private key must sign after the helper returns")
+        #expect(!sig.isEmpty)
+
+        // The identity carries the leaf certificate (CN == host).
+        var certOut: SecCertificate?
+        #expect(SecIdentityCopyCertificate(identity, &certOut) == errSecSuccess)
+        let idCert = try #require(certOut)
+        let cn = SecCertificateCopySubjectSummary(idCert) as String?
+        #expect(cn == host)
+    }
+
+    // MARK: - 5c. Source guard: no UNGUARDED macOS-15+ Security symbol
+
+    /// Lexically scan the MITMCertificateAuthority source and assert every
+    /// occurrence of each macOS-15+-gated Security symbol in the SEED LIST
+    /// sits inside an availability-guarded region: either within a function
+    /// whose declaration carries `@available(macOS 15.0`, or inside an
+    /// `if #available(macOS 15.0` brace scope. This FAILS the build's tests
+    /// if someone later adds an unguarded `kSecImportToMemoryOnly` (or any
+    /// future seed symbol) at top level / in an ungated function.
+    @Test func macOS15SecuritySymbolsAreAvailabilityGuarded() throws {
+        // Adding a newly-gated symbol is a one-line array edit.
+        let seedSymbols = ["kSecImportToMemoryOnly"]
+
+        let source = try Self.mitmSourceText()
+        let lines = source.components(separatedBy: "\n")
+
+        // Track two nested guard contexts as we scan:
+        //  1. brace depth of any `if #available(macOS 15.0` block we entered,
+        //  2. whether the enclosing func decl was `@available(macOS 15.0`.
+        // We approximate brace scope with a running brace-balance stack of
+        // markers. A symbol occurrence is "guarded" iff it is inside an
+        // available-15 func OR inside an available-15 `if` block.
+        var braceDepth = 0
+        // brace depth at which the current `if #available(15)` block opened,
+        // or nil if not inside one. (Single-level is sufficient for this file;
+        // we re-arm on each such `if`.)
+        var availableIfDepth: Int? = nil
+        // brace depth at which the current @available(15) func body opened.
+        var availableFuncDepth: Int? = nil
+        // Set when the previous non-blank line carried @available(macOS 15.0
+        // (the annotation precedes the func/decl it guards).
+        var pendingAvailableAnnotation = false
+
+        func stripComment(_ line: String) -> String {
+            // Drop // line comments so a symbol named only in a comment does
+            // not count as an unguarded occurrence (and cannot false-positive
+            // on doc comments). Good enough for this source (no "//" appears
+            // inside string literals on symbol-bearing lines here).
+            if let r = line.range(of: "//") { return String(line[line.startIndex..<r.lowerBound]) }
+            return line
+        }
+
+        for rawLine in lines {
+            let code = stripComment(rawLine)
+            let trimmed = code.trimmingCharacters(in: .whitespaces)
+
+            let isAvailableAnnotationLine = trimmed.contains("@available(macOS 15.0")
+            let hasAvailableIf = code.contains("if #available(macOS 15.0")
+
+            // Count braces on this (comment-stripped) line.
+            let opens = code.filter { $0 == "{" }.count
+            let closes = code.filter { $0 == "}" }.count
+
+            // A symbol is guarded on this line if we're already inside an
+            // available-15 region OR this very line opens one.
+            let insideGuardedRegion =
+                availableFuncDepth != nil || availableIfDepth != nil || hasAvailableIf
+
+            // Check seed symbols on the comment-stripped code.
+            for symbol in seedSymbols where code.contains(symbol) {
+                #expect(insideGuardedRegion,
+                        "macOS-15+ symbol `\(symbol)` appears OUTSIDE an availability guard: \(trimmed)")
+            }
+
+            // --- update scopes for subsequent lines ---
+
+            // If the previous line was an @available(15) annotation and this
+            // line opens a brace, that's the guarded func/decl body.
+            if pendingAvailableAnnotation && opens > 0 && availableFuncDepth == nil {
+                availableFuncDepth = braceDepth // depth BEFORE this line's opens
+            }
+            // The annotation applies to the next declaration; clear it once a
+            // real (non-annotation, non-blank) line is seen.
+            if isAvailableAnnotationLine {
+                pendingAvailableAnnotation = true
+            } else if !trimmed.isEmpty {
+                pendingAvailableAnnotation = false
+            }
+
+            // Entering an `if #available(15)` block: arm at the depth its body
+            // opens (depth BEFORE this line's opens).
+            if hasAvailableIf && availableIfDepth == nil {
+                availableIfDepth = braceDepth
+            }
+
+            // Apply brace deltas.
+            braceDepth += opens
+            braceDepth -= closes
+            if braceDepth < 0 { braceDepth = 0 }
+
+            // Closing back out of an armed region disarms it.
+            if let d = availableIfDepth, braceDepth <= d { availableIfDepth = nil }
+            if let d = availableFuncDepth, braceDepth <= d { availableFuncDepth = nil }
+        }
+    }
+
+    /// Robustly resolve + read the MITMCertificateAuthority source. Walks up
+    /// from this test file's `#filePath` to the repo root (the dir holding
+    /// `Package.swift`), then reads `Sources/Core/EgressProxy/...`. No
+    /// hardcoded absolute machine path.
+    private static func mitmSourceText(file: StaticString = #filePath) throws -> String {
+        let rel = "Sources/Core/EgressProxy/MITMCertificateAuthority.swift"
+        var dir = URL(fileURLWithPath: "\(file)").deletingLastPathComponent()
+        // Walk upward looking for Package.swift (repo root marker).
+        for _ in 0..<12 {
+            let candidate = dir.appendingPathComponent(rel)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return try String(contentsOf: candidate, encoding: .utf8)
+            }
+            let pkg = dir.appendingPathComponent("Package.swift")
+            if FileManager.default.fileExists(atPath: pkg.path) {
+                let atRoot = dir.appendingPathComponent(rel)
+                return try String(contentsOf: atRoot, encoding: .utf8)
+            }
+            let parent = dir.deletingLastPathComponent()
+            if parent.path == dir.path { break }
+            dir = parent
+        }
+        throw NSError(domain: "MITMSourceGuard", code: 1,
+                      userInfo: [NSLocalizedDescriptionKey:
+                        "could not locate \(rel) walking up from \(file)"])
+    }
+
     // MARK: - 6. ensureRoot persists once, reloads from disk
 
     @Test func ensureRootReloadsExistingCAFromDisk() async throws {

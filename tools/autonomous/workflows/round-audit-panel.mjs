@@ -37,21 +37,72 @@ export const meta = {
   ],
 }
 
-// --- inlined parseAgentJSON (canonical copy at ./_json.mjs) ---------------------
+// --- inlined parseAgentJSON (canonical copy at ./_json.mjs — keep behaviour-identical; ---
+// --- _json.test.mjs has a parity test that fails on drift) ---
+// PARITY:json-extract-start  (do not remove — _json.test.mjs evals between these markers)
+// ONE O(n) string-aware brace-stack pass records every OUTERMOST balanced {...}
+// object (robust to an unbalanced leading brace in prose; no O(n^2) rescan), then
+// pick the object owning the MOST expected fallback keys (full-shape verdict beats
+// a fenced schema example or a 1-key sign-off; ties → later = reconsideration).
+// Keyless stray objects never stand in for a verdict. AMBIGUITY GUARD: two distinct
+// top-score objects, or a dangling `{` after the last complete object (truncated
+// trailing verdict), attach _raw + _ambiguous so a verdict is never returned as
+// definitive when another may have been intended. See ./_json.mjs for the full contract.
+function scanObjects(s) {
+  const spans = []
+  const stack = []
+  let inStr = false, esc = false
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (inStr) {
+      if (esc) esc = false
+      else if (c === '\\') esc = true
+      else if (c === '"') inStr = false
+      continue
+    }
+    if (c === '"') inStr = true
+    else if (c === '{') stack.push(i)
+    else if (c === '}') { if (stack.length) spans.push([stack.pop(), i]) }
+  }
+  spans.sort((a, b) => a[0] - b[0])
+  const outer = []
+  let maxEnd = -1
+  for (const span of spans) {
+    if (span[1] > maxEnd) { outer.push(span); maxEnd = span[1] }
+  }
+  const danglingPos = stack.length ? stack[stack.length - 1] : -1
+  return { objects: outer.map(([i, j]) => s.slice(i, j + 1)), spans: outer, danglingPos }
+}
+function balancedObjects(s) { return scanObjects(s).objects }
 function parseAgentJSON(text, fallback) {
   if (text == null) return { ...fallback, _parseError: 'empty' }
-  let s = String(text).trim()
-  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i)
-  if (fence) s = fence[1].trim()
-  const start = s.indexOf('{')
-  const end = s.lastIndexOf('}')
-  if (start >= 0 && end > start) s = s.slice(start, end + 1)
-  try {
-    return JSON.parse(s)
-  } catch (e) {
-    return { ...fallback, _parseError: String((e && e.message) || e), _raw: String(text).slice(0, 400) }
+  const original = String(text)
+  const expectedKeys = (fallback && typeof fallback === 'object') ? Object.keys(fallback) : []
+  const isObject = (v) => v && typeof v === 'object' && !Array.isArray(v)
+  const score = (v) => (expectedKeys.length === 0
+    ? 1
+    : expectedKeys.reduce((n, k) => n + (Object.prototype.hasOwnProperty.call(v, k) ? 1 : 0), 0))
+  const { objects, spans, danglingPos } = scanObjects(original)
+  let best = null, bestScore = -1, lastError = 'no JSON object found'
+  let lastObjectEnd = -1
+  const topAtBest = new Set()
+  objects.forEach((slice, idx) => {
+    if (spans[idx]) lastObjectEnd = Math.max(lastObjectEnd, spans[idx][1])
+    let v
+    try { v = JSON.parse(slice) } catch (e) { lastError = String((e && e.message) || e); return }
+    if (!isObject(v)) return
+    const sc = score(v)
+    if (sc > bestScore) { best = v; bestScore = sc; topAtBest.clear(); topAtBest.add(JSON.stringify(v)) }
+    else if (sc === bestScore) { best = v; topAtBest.add(JSON.stringify(v)) }
+  })
+  if (best && (expectedKeys.length === 0 || bestScore >= 1)) {
+    const truncatedTail = danglingPos > lastObjectEnd
+    if (topAtBest.size > 1 || truncatedTail) return { ...best, _ambiguous: true, _raw: original }
+    return best
   }
+  return { ...fallback, _parseError: best ? 'no object carried an expected key' : lastError, _raw: original }
 }
+// PARITY:json-extract-end
 
 // The Workflow runtime may deliver `args` as a JSON-encoded STRING rather than a
 // parsed object (observed 2026-05-30). Normalize defensively so both forms work.
@@ -76,7 +127,8 @@ const verdicts = await parallel(
       `You are ${member}, auditing autonomous item "${a.itemId}" (mode: ${a.mode}, stage: ${stage}).\n` +
         `Audit ONLY through your lens: ${lensFor(member)}.\n` +
         `Do not hedge; if it ships clean say PASS.\n\n` +
-        `Respond with ONLY a JSON object (no prose, no code fence) of exactly this shape:\n` +
+        `Emit a JSON object of EXACTLY this shape as the LAST thing in your reply. ` +
+        `Any reasoning MUST come BEFORE the JSON; the object must be the final token so it parses even if you think out loud first:\n` +
         `{"verdict":"PASS|CONCERNS|FAIL","redFlags":["genuine blockers only — empty if none"],"concerns":["..."],"oneLine":"one-sentence rationale"}\n\n` +
         `=== ${what} ===\n${a.target || '(no target supplied)'}`,
       { label: `${stage}:${member}`, phase: 'Panel' },
@@ -91,7 +143,8 @@ const synthesisTxt = await agent(
     `Resolve every redFlag via steelman + rebuttal. gate = BLOCK only if a real P0 correctness/security/data ` +
     `flag is unresolved; PASS_WITH_GAPS if concerns are genuine but acceptable-as-documented-risk; PASS_CLEAN otherwise. ` +
     `P2 items become mandatory follow-up filings.\n\n` +
-    `Respond with ONLY a JSON object (no prose, no code fence) of exactly this shape:\n` +
+    `Emit a JSON object of EXACTLY this shape as the LAST thing in your reply. ` +
+    `Any reasoning MUST come BEFORE the JSON; the object must be the final token so it parses even if you think out loud first:\n` +
     `{"gate":"PASS_CLEAN|PASS_WITH_GAPS|BLOCK","p0":["..."],"p1":["..."],"p2":["..."],"clashResolutions":["steelman+rebuttal per red flag"],"summary":"..."}\n\n` +
     `PANEL JSON:\n${JSON.stringify(panel, null, 2)}`,
   { label: 'synthesis', phase: 'Synthesis' },

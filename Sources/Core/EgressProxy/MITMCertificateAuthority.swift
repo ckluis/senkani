@@ -28,8 +28,9 @@ import Security
 ///     default `~/.senkani/egress-ca.pem`),
 ///   • the CA private key persists to a SEPARATE `0600` owner-only file,
 ///   • leaf SecIdentity artifacts are emitted as in-memory PKCS#12 blobs
-///     that the consumer loads with `SecPKCS12Import` into an EPHEMERAL
-///     keychain it creates and deletes (see `loadIdentity`).
+///     that the consumer loads with `SecPKCS12Import` — memory-only on
+///     macOS 15+, or into an EPHEMERAL keychain it creates and deletes on
+///     the macOS-14 floor (see `loadIdentity`).
 /// The real trust install (adding the CA to the System trust store) is a
 /// separate gui-human item (t1d-7); doing it here would be the wrong
 /// blast radius for an autonomous round.
@@ -300,29 +301,70 @@ public actor MITMCertificateAuthority {
 
     // MARK: - SecIdentity load (ephemeral, never the System Keychain)
 
-    /// Load a minted leaf's PKCS#12 into an EPHEMERAL keychain and return
-    /// the resulting `SecIdentity`. The temp keychain is created and
-    /// deleted inside this call — the System/login Keychain is never
-    /// touched. The consumer (TLS-termination) calls this to obtain the
-    /// identity it hands to `sec_protocol_options_set_local_identity`.
+    /// Load a minted leaf's PKCS#12 and return the resulting `SecIdentity`.
+    /// The System/login Keychain is NEVER touched on any macOS version. The
+    /// consumer (TLS-termination) calls this to obtain the identity it hands
+    /// to `sec_protocol_options_set_local_identity`.
     ///
-    /// We pass `kSecImportExportKeychain` an explicit throwaway keychain so
-    /// `SecPKCS12Import` cannot fall back to the user's default keychain on
-    /// macOS. The keychain is deleted before returning; the `SecIdentity`
-    /// stays valid because it retains its key reference independently.
+    /// macOS 15+ (`if #available`): a MEMORY-ONLY import
+    /// (`kSecImportToMemoryOnly: true`, NO `kSecImportExportKeychain`). No
+    /// keychain is created or deleted — there is nothing to clean up, and
+    /// `SecPKCS12Import` cannot fall back to the default login keychain
+    /// because the memory-only flag is set. The returned `SecIdentity`'s key
+    /// is held in memory and survives the call return. On the local build
+    /// machine (macOS ≥ 15) THIS branch is the one exercised at runtime.
+    ///
+    /// macOS 14 floor (`else`): the pre-migration behavior, verbatim — an
+    /// explicit throwaway file-backed `SecKeychain` is passed via
+    /// `kSecImportExportKeychain` so `SecPKCS12Import` cannot fall back to
+    /// the user's default keychain, and it is deleted before returning. The
+    /// `SecIdentity` stays valid because it retains its key reference
+    /// independently.
     public static func loadIdentity(from p12: Data) throws -> SecIdentity {
-        let (keychain, path) = try makeEphemeralKeychain()
-        defer {
-            SecKeychainDelete(keychain) // deprecated since 10.10; see makeEphemeralKeychain
-            unlink(path)
+        if #available(macOS 15.0, *) {
+            // Memory-only: no keychain is created, so nothing is created in,
+            // written to, or deleted from any keychain. `kSecImportToMemoryOnly`
+            // is macOS 15+ API and is referenced ONLY inside this guarded
+            // branch (the macOS-14 floor cannot see it). With this flag set
+            // and NO `kSecImportExportKeychain`, the import stays entirely in
+            // process memory and CANNOT fall back to the login keychain.
+            let options: [String: Any] = [
+                kSecImportExportPassphrase as String: p12Passphrase,
+                kSecImportToMemoryOnly as String: true,
+            ]
+            var items: CFArray?
+            let status = SecPKCS12Import(p12 as CFData, options as CFDictionary, &items)
+            guard status == errSecSuccess else { throw CAError.pkcs12Import(status) }
+            return try identity(fromImportedItems: items)
+        } else {
+            // macOS 14 floor fallback. The deprecated
+            // `SecKeychainCreate`/`SecKeychainDelete` pair is retained ONLY
+            // here (item phase-t1d-1-seckeychain-deprecation-migration-2026-05-31)
+            // because `kSecImportToMemoryOnly` is macOS 15+ and there is NO
+            // non-deprecated, no-keychain `SecPKCS12Import` path on the
+            // macOS-14 floor. The keychain is a throwaway: UUID-unique per
+            // call, defer-cleaned on BOTH success and error, and never the
+            // login/System keychain.
+            let (keychain, path) = try makeEphemeralKeychain()
+            defer {
+                SecKeychainDelete(keychain) // deprecated since 10.10; see makeEphemeralKeychain
+                unlink(path)
+            }
+            let options: [String: Any] = [
+                kSecImportExportPassphrase as String: p12Passphrase,
+                kSecImportExportKeychain as String: keychain,
+            ]
+            var items: CFArray?
+            let status = SecPKCS12Import(p12 as CFData, options as CFDictionary, &items)
+            guard status == errSecSuccess else { throw CAError.pkcs12Import(status) }
+            return try identity(fromImportedItems: items)
         }
-        let options: [String: Any] = [
-            kSecImportExportPassphrase as String: p12Passphrase,
-            kSecImportExportKeychain as String: keychain,
-        ]
-        var items: CFArray?
-        let status = SecPKCS12Import(p12 as CFData, options as CFDictionary, &items)
-        guard status == errSecSuccess else { throw CAError.pkcs12Import(status) }
+    }
+
+    /// Extract the first `SecIdentity` from a `SecPKCS12Import` result array.
+    /// Shared by both the memory-only (macOS 15+) and ephemeral-keychain
+    /// (macOS 14 floor) branches of `loadIdentity`.
+    private static func identity(fromImportedItems items: CFArray?) throws -> SecIdentity {
         guard let array = items as? [[String: Any]],
               let first = array.first,
               let identityAny = first[kSecImportItemIdentity as String]
@@ -514,12 +556,19 @@ public actor MITMCertificateAuthority {
         var keychain: SecKeychain?
         let status = password.withCString { pw -> OSStatus in
             // `SecKeychainCreate` is deprecated since macOS 10.10, but the
-            // file-backed `SecKeychain` API is still the only way on macOS
-            // to assemble a `SecIdentity` for PKCS#12 export / import
-            // WITHOUT touching the user's default keychain — the
-            // data-protection keychain has no SecIdentity export path. The
-            // keychain is a throwaway temp file deleted in the same call,
-            // so the deprecation is a deliberate, contained choice.
+            // file-backed `SecKeychain` API is still the only floor-safe way
+            // to ASSEMBLE a `SecIdentity` from a separate cert + key for
+            // PKCS#12 export (`exportPKCS12`): there is no public no-keychain
+            // SecIdentity assembly/export path — the data-protection keychain
+            // has no SecIdentity assembly or export route on any macOS
+            // version. (Item phase-t1d-1-seckeychain-deprecation-migration-2026-05-31:
+            // the LOAD path migrated to a macOS-15 memory-only import, but
+            // this EXPORT helper deliberately retains the throwaway keychain.)
+            // This keychain is contained, UUID-unique per call, and
+            // defer-cleaned on both success and error by every caller — it
+            // never touches the System/login keychain. The deprecation is a
+            // deliberate, contained choice retained until a no-keychain
+            // SecIdentity-assembly API exists.
             SecKeychainCreate(path, UInt32(strlen(pw)), pw, false, nil, &keychain)
         }
         guard status == errSecSuccess, let kc = keychain else {

@@ -145,19 +145,57 @@ import Security
         let leaf = try await ca.leaf(forHost: "identity.example.com")
         #expect(!leaf.pkcs12.isEmpty)
 
-        // Load the PKCS#12 into an ephemeral keychain → SecIdentity.
+        // No-leak guard: count any stray `senkani-mitm-*.keychain` files in
+        // the temp dir BEFORE the import. On macOS 15+ the memory-only branch
+        // creates none; on the 14 floor the `defer` deletes the throwaway
+        // before `loadIdentity` returns — so the count must not grow.
+        let keychainsBefore = Self.strayEphemeralKeychainCount()
+
+        // Load the PKCS#12 → SecIdentity (memory-only on macOS 15+,
+        // ephemeral keychain on the macOS-14 floor).
         let identity = try MITMCertificateAuthority.loadIdentity(from: leaf.pkcs12)
+
+        let keychainsAfter = Self.strayEphemeralKeychainCount()
+        #expect(keychainsAfter <= keychainsBefore,
+                "loadIdentity left a senkani-mitm-*.keychain file behind")
 
         // The identity yields both a private key and the leaf certificate.
         var privKey: SecKey?
         #expect(SecIdentityCopyPrivateKey(identity, &privKey) == errSecSuccess)
-        #expect(privKey != nil)
+        let key = try #require(privKey)
 
         var certOut: SecCertificate?
         #expect(SecIdentityCopyCertificate(identity, &certOut) == errSecSuccess)
         let idCert = try #require(certOut)
         let cn = SecCertificateCopySubjectSummary(idCert) as String?
         #expect(cn == "identity.example.com")
+
+        // Central migration guarantee: the identity's private key must be
+        // LIVE after `loadIdentity` returns — i.e. it survives the call with
+        // no retaining keychain. Prove it by actually USING the key to sign,
+        // not merely by checking it is non-nil.
+        let message = Data("senkani-mitm-key-liveness-probe".utf8)
+        var signErr: Unmanaged<CFError>?
+        let signature = SecKeyCreateSignature(
+            key,
+            .rsaSignatureMessagePKCS1v15SHA256,
+            message as CFData,
+            &signErr
+        ) as Data?
+        if signature == nil {
+            Issue.record("private key signing failed: \(MITMCertificateAuthority.cfErrorString(signErr))")
+        }
+        let sig = try #require(signature, "imported identity's private key must sign after loadIdentity returns")
+        #expect(!sig.isEmpty)
+    }
+
+    /// Count `senkani-mitm-*.keychain` files currently sitting in the OS temp
+    /// directory (where `makeEphemeralKeychain` places them). Used to assert
+    /// `loadIdentity` leaves nothing behind.
+    private static func strayEphemeralKeychainCount() -> Int {
+        let tmp = NSTemporaryDirectory()
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: tmp) else { return 0 }
+        return names.filter { $0.hasPrefix("senkani-mitm-") && $0.hasSuffix(".keychain") }.count
     }
 
     // MARK: - 6. ensureRoot persists once, reloads from disk

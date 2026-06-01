@@ -182,9 +182,11 @@ struct TLSTerminationSpikeTests {
         // background server thread, and `wait()` is unavailable from an async
         // context — so the blocking orchestration lives here, off the async
         // test body. The async body only does the actor-isolated minting above.
+        // Positive path: the client anchors on the SAME CA that issued the
+        // server leaf, so the server leaf chains → trust eval ACCEPTS.
         let result = Self.runHandshakeSeam(
             serverIdentity: serverIdentity,
-            caCert: caCert,
+            clientAnchorCA: caCert,
             host: host)
 
         // --- MUST-PASS assertions (panel P1) ---
@@ -232,6 +234,71 @@ struct TLSTerminationSpikeTests {
         //    defer-unlink. Non-racy scoped check tracked by the filed follow-up.)
     }
 
+    // MARK: - Negative seam: anchor-pinning is load-bearing (T.1d-2b)
+
+    /// The CONVERSE the t1d-2a happy path never proved: a server presenting a
+    /// leaf minted under a CA the client does NOT anchor on is REJECTED.
+    ///
+    /// Two INDEPENDENT test CAs in separate temp dirs:
+    ///   • CA-A — the client's trusted anchor (`clientAnchorCA`),
+    ///   • CA-B — an untrusted CA the client never anchors on.
+    /// The server presents a leaf minted under CA-B (via the same
+    /// `loadIdentity` SecIdentity path as the positive test). The client
+    /// anchors trust ONLY on CA-A (`SecTrustSetAnchorCertificates([caA])` +
+    /// `SecTrustSetAnchorCertificatesOnly(true)`) and evaluates with
+    /// `SecTrustEvaluateWithError`. Because the CA-B leaf does NOT chain to
+    /// CA-A, the evaluation FAILS → `clientTrustEvaluated == false`.
+    ///
+    /// This proves the anchor-pinning the positive test exercises is actually
+    /// ENFORCED: a non-chaining server cert is refused, not silently accepted.
+    @Test("server leaf from an untrusted CA is rejected by the client's anchor pin")
+    func serverLeafFromUntrustedCAIsRejected() async throws {
+        // --- CA-A: the client's TRUSTED anchor (its leaf is never presented). ---
+        let (pathsA, dirA) = tempPaths()
+        defer { cleanup(dirA) }
+        let caA = MITMCertificateAuthority(paths: pathsA, keyBits: 2048)
+        _ = try await caA.generateRoot(commonName: "senkani TEST CA-A (trusted anchor)")
+        let caACert = try await caA.caCertificate()
+
+        // --- CA-B: an INDEPENDENT, UNTRUSTED CA. The server's leaf is minted
+        //     under THIS root, which the client never anchors on. ---
+        let (pathsB, dirB) = tempPaths()
+        defer { cleanup(dirB) }
+        let caB = MITMCertificateAuthority(paths: pathsB, keyBits: 2048)
+        _ = try await caB.generateRoot(commonName: "senkani TEST CA-B (untrusted)")
+        let host = "untrusted.example.com"
+        let leafB = try await caB.leaf(forHost: host)
+
+        // Same load path as the positive test: the server identity comes from
+        // loadIdentity (memory-only PKCS#12 import on this macOS-15+ host).
+        let serverIdentity = try MITMCertificateAuthority.loadIdentity(from: leafB.pkcs12)
+
+        // Run the SAME generalized seam: server presents the CA-B leaf, client
+        // anchors ONLY on CA-A. Trust eval must REJECT (no chain to CA-A).
+        let result = Self.runHandshakeSeam(
+            serverIdentity: serverIdentity,
+            clientAnchorCA: caACert,
+            host: host)
+
+        // Server thread must have joined (the 10s timeout guard means a
+        // non-completing handshake FAILS fast rather than hanging forever).
+        #expect(result.serverJoined,
+                "server handshake did not complete within 10s (possible hang)")
+
+        // We must have actually reached the server-auth break and run a trust
+        // evaluation against CA-A — otherwise the assertion below is vacuous.
+        let peerLeaf = try #require(result.peerLeafDER,
+                                    "client never extracted the peer leaf — the server-auth break / trust eval was not reached")
+        #expect(peerLeaf == leafB.certificateDER,
+                "the server presented the CA-B leaf (sanity: we are rejecting the RIGHT cert, not a stale one)")
+
+        // THE load-bearing assertion: a server leaf chaining to CA-B is
+        // REJECTED when the client anchors ONLY on CA-A. This is the converse
+        // the positive-only spike never proved — anchor-pinning is enforced.
+        #expect(result.clientTrustEvaluated == false,
+                "client trust eval ACCEPTED a server leaf from CA-B while anchored only on CA-A — anchor-pinning is NOT load-bearing")
+    }
+
     // MARK: - Synchronous handshake driver
 
     /// Stand up the server + client SSLContexts over a `socketpair(2)`, run the
@@ -240,7 +307,7 @@ struct TLSTerminationSpikeTests {
     /// the `DispatchSemaphore` join is legal (it is unavailable from async).
     private static func runHandshakeSeam(
         serverIdentity: SecIdentity,
-        caCert: SecCertificate,
+        clientAnchorCA: SecCertificate,
         host: String
     ) -> SeamResult {
         // Connected socket pair: one fd server-side, the other client-side.
@@ -284,8 +351,12 @@ struct TLSTerminationSpikeTests {
         }
 
         // --- CLIENT seam: SSLContext on the other fd. Break on server auth and
-        //     evaluate the peer trust manually against the TEST CA anchor (so
-        //     we never touch the System trust store). ---
+        //     evaluate the peer trust manually against the CLIENT'S anchor CA
+        //     (so we never touch the System trust store). This anchor is
+        //     INDEPENDENT of the server's identity: the positive test passes
+        //     the CA that issued the server leaf (chains → accepted); the
+        //     negative test passes a DIFFERENT CA the server leaf does NOT
+        //     chain to (no chain → rejected). ---
         var clientTrustEvaluated = false
         var peerLeafDER: Data?
         guard let clientSSL = SSLCreateContext(nil, .clientSide, .streamType) else {
@@ -305,16 +376,15 @@ struct TLSTerminationSpikeTests {
         var cstatus = SSLHandshake(clientSSL)
         while cstatus == errSSLWouldBlock || cstatus == errSSLPeerAuthCompleted {
             if cstatus == errSSLPeerAuthCompleted {
-                // Pull the peer trust, anchor it ONLY on the test CA, evaluate.
+                // Pull the peer trust, anchor it ONLY on the client's anchor
+                // CA, evaluate. `clientTrustEvaluated` is the load-bearing
+                // result: true iff the server leaf chains to `clientAnchorCA`.
                 var peerTrust: SecTrust?
                 if SSLCopyPeerTrust(clientSSL, &peerTrust) == errSecSuccess, let trust = peerTrust {
-                    _ = SecTrustSetAnchorCertificates(trust, [caCert] as CFArray)
+                    _ = SecTrustSetAnchorCertificates(trust, [clientAnchorCA] as CFArray)
                     _ = SecTrustSetAnchorCertificatesOnly(trust, true)
                     var trustErr: CFError?
                     clientTrustEvaluated = SecTrustEvaluateWithError(trust, &trustErr)
-                    if !clientTrustEvaluated {
-                        Issue.record("client peer-trust eval against test CA failed: \(String(describing: trustErr))")
-                    }
                     // Byte-identity oracle: leaf SecCertificate at index 0.
                     if let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
                        let leafCert = chain.first {

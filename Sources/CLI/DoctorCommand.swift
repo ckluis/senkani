@@ -40,6 +40,12 @@ struct Doctor: ParsableCommand {
     @Flag(name: .long, help: "Walk the EgressProxy 5-scenario adversarial smoke subset (T.1c). Reports per-scenario pass/fail with rule_id; exits non-zero on any miss. Engine-level — does not spin the live listener.")
     var checkEgress = false
 
+    @Flag(name: .long, help: "Generate the MITM egress CA pem and PRINT the operator-runnable `security add-trusted-cert ...` command to add it as a System trust root (T.1d-6). DRY-RUN scaffolding only: NEVER runs `security`, never sudo, never mutates the System Keychain (that is t1d-7, gui-human). Requires a typed-string confirm.")
+    var installEgressCA = false
+
+    @Flag(name: .long, help: "Reversible counterpart to --install-egress-ca: remove the local CA pem (if present) and PRINT the operator-runnable `security remove-trusted-cert ...` command (T.1d-6). DRY-RUN scaffolding only — never runs `security`, never touches the System Keychain.")
+    var uninstallEgressCA = false
+
     // MARK: - Counters
 
     private struct Results {
@@ -79,6 +85,24 @@ struct Doctor: ParsableCommand {
         // print per-scenario verdicts, exit non-zero on any miss.
         if checkEgress {
             try runCheckEgress()
+            return
+        }
+
+        // T.1d-6 focused install motion — generate the CA pem and PRINT
+        // (never run) the `security add-trusted-cert ...` command, gated
+        // behind a typed-string confirm. Routes through the dry-run
+        // executor so no `security` process is ever spawned here (the real
+        // trust install + sudo is t1d-7, gui-human).
+        if installEgressCA {
+            try runInstallEgressCA()
+            return
+        }
+
+        // T.1d-6 reversible counterpart — remove the local CA pem and
+        // PRINT (never run) the `security remove-trusted-cert ...` command
+        // through the same dry-run executor.
+        if uninstallEgressCA {
+            try runUninstallEgressCA()
             return
         }
 
@@ -261,6 +285,253 @@ struct Doctor: ParsableCommand {
 
         print("Playwright Chromium already installed at:")
         print("  \(cachePath)")
+    }
+
+    // MARK: - --install-egress-ca / --uninstall-egress-ca (Phase T.1d-6)
+
+    /// Injectable trust-install executor seam.
+    ///
+    /// SECURITY INVARIANT (Schneier): this leg ships NO real-exec
+    /// implementation. The ONLY conforming type below is
+    /// `DryRunTrustInstallExecutor`, which PRINTS the `security ...`
+    /// invocation and RECORDS it but NEVER spawns a process. There is no
+    /// code path in this build — not in the CLI, not in tests, not in the
+    /// autonomous loop — that runs `security add-trusted-cert` /
+    /// `remove-trusted-cert`, sudo, or any mutation of the System Keychain.
+    /// The real trust install is a separate gui-human item (t1d-7).
+    ///
+    /// Default polarity is INVERTED from `ScheduleConfig`'s launchctl seam
+    /// (which defaults to real exec): the install/uninstall motions default
+    /// to the dry-run recorder, so a caller that forgets to inject simply
+    /// gets the print/record executor and CANNOT reach a real `security`
+    /// spawn. "Never mutate the System Keychain" is therefore structurally
+    /// guaranteed, not merely a convention.
+    protocol TrustInstallExecutor: AnyObject {
+        /// Print + record the invocation. Implementations MUST NOT spawn a
+        /// process.
+        func run(_ invocation: [String])
+    }
+
+    /// The only executor in this leg: a print-and-record sink. NEVER spawns
+    /// `security`. The recorded `invocations` array is the sole place a
+    /// trust-install command "goes" — tests assert against it to prove no
+    /// process was launched (there is no process-spawn code to reach).
+    final class DryRunTrustInstallExecutor: TrustInstallExecutor {
+        private(set) var invocations: [[String]] = []
+        let silent: Bool
+        init(silent: Bool = false) { self.silent = silent }
+
+        func run(_ invocation: [String]) {
+            invocations.append(invocation)
+            if !silent {
+                print("  [dry-run] would run (operator's job, t1d-7 — NOT executed here):")
+                print("    " + invocation.joined(separator: " "))
+            }
+        }
+    }
+
+    /// The System trust-store keychain path the operator targets. PRINTED
+    /// only — never opened, never written.
+    static let systemKeychainPath = "/Library/Keychains/System.keychain"
+
+    /// Build the EXACT `security add-trusted-cert` invocation the operator
+    /// would run (with sudo) to add the CA pem as a System trust root. Pure
+    /// + static so tests assert the argv without side effects. PRINTED, not
+    /// run.
+    static func addTrustedCertInvocation(pemPath: String) -> [String] {
+        [
+            "security", "add-trusted-cert", "-d",
+            "-r", "trustRoot",
+            "-k", systemKeychainPath,
+            pemPath,
+        ]
+    }
+
+    /// Build the EXACT `security remove-trusted-cert` invocation. PRINTED,
+    /// not run.
+    static func removeTrustedCertInvocation(pemPath: String) -> [String] {
+        ["security", "remove-trusted-cert", "-d", pemPath]
+    }
+
+    /// Pure typed-confirm comparison. Extracted so the accept/reject logic
+    /// is unit-testable without a tty. Exact-match only (no trim, no
+    /// case-fold): the operator must type the expected phrase verbatim.
+    static func confirmMatches(input: String?, expected: String) -> Bool {
+        input == expected
+    }
+
+    /// The fixed confirmation phrase the operator types to authorize the
+    /// install motion. A fixed phrase (not a y/N) so muscle-memory can't
+    /// bypass the gate — same rationale as `--repair-chain`'s typed asks.
+    static let installConfirmPhrase = "INSTALL-EGRESS-CA"
+
+    /// Resolve the CA pem path. Real default is `~/.senkani/egress-ca.pem`
+    /// via `MITMCertificateAuthority.Paths.defaultPaths()`; tests inject a
+    /// temp-dir path so they NEVER touch `~/.senkani` or the System
+    /// Keychain.
+    private func defaultCAPaths() -> MITMCertificateAuthority.Paths {
+        .defaultPaths()
+    }
+
+    /// CLI dispatch wrapper. Generates the CA (real default path) and runs
+    /// the testable install motion with the default dry-run executor and a
+    /// `readLine`-backed confirm reader.
+    private func runInstallEgressCA() throws {
+        try Self.installEgressCAMotion(
+            caPaths: defaultCAPaths(),
+            executor: DryRunTrustInstallExecutor(),
+            confirmReader: { readLine() },
+            recordAudit: { Self.recordEgressCAInstallAudit() }
+        )
+    }
+
+    /// CLI dispatch wrapper for the reversible counterpart.
+    private func runUninstallEgressCA() throws {
+        try Self.uninstallEgressCAMotion(
+            caPaths: defaultCAPaths(),
+            executor: DryRunTrustInstallExecutor()
+        )
+    }
+
+    /// Testable install motion (mirrors `runInstallValidationBrowser`'s
+    /// PRINT-DON'T-EXECUTE shape). Generates the CA pem via
+    /// `MITMCertificateAuthority`, requires the typed-string confirm
+    /// (MISMATCH hard-aborts BEFORE any invocation is built or recorded),
+    /// then routes the `security add-trusted-cert ...` invocation through
+    /// the injected dry-run executor (prints + records, never spawns).
+    ///
+    /// Returns nothing; the executor's `invocations` is the observable
+    /// outcome. `recordAudit` is an optional hook so the CLI can write one
+    /// chained `egress.ca.install` audit row while tests pass a no-op.
+    static func installEgressCAMotion(
+        caPaths: MITMCertificateAuthority.Paths,
+        executor: DryRunTrustInstallExecutor,
+        confirmReader: () -> String?,
+        recordAudit: () -> Void = {}
+    ) throws {
+        print("Senkani Doctor — install egress CA (DRY RUN scaffolding)")
+        print("=======================================================")
+        print("")
+        print("This will:")
+        print("  1. Generate the local MITM egress root CA pem at:")
+        print("       \(caPaths.publicCertPEM)")
+        print("     (private key, 0600, at \(caPaths.privateKeyPEM))")
+        print("  2. PRINT the `security add-trusted-cert ...` command you")
+        print("     would run (with sudo) to trust it as a System root.")
+        print("")
+        print("It will NOT run `security`, NOT sudo, and NOT mutate the")
+        print("System Keychain. The real trust install is the operator's")
+        print("job (t1d-7, gui-human).")
+        print("")
+
+        // Typed-string gate. MISMATCH hard-aborts here — BEFORE the CA is
+        // generated and BEFORE any invocation is built or recorded, so a
+        // rejected confirm leaves the executor's `invocations` EMPTY.
+        print("Type '\(installConfirmPhrase)' to confirm, or anything else to abort:")
+        print("> ", terminator: "")
+        let typed = confirmReader()
+        guard confirmMatches(input: typed, expected: installConfirmPhrase) else {
+            print("Aborted (input did not match '\(installConfirmPhrase)'). No CA generated, no command recorded.")
+            throw ExitCode.failure
+        }
+
+        // Confirm matched — generate the CA pem (writes the public pem +
+        // 0600 key to the configured paths; tests pass a temp dir).
+        try generateCASync(paths: caPaths)
+        print("Generated CA pem at \(caPaths.publicCertPEM)")
+        print("")
+
+        // Build + route the invocation through the dry-run executor. This
+        // PRINTS and RECORDS — it does not spawn `security`.
+        let invocation = addTrustedCertInvocation(pemPath: caPaths.publicCertPEM)
+        print("Operator-runnable trust-install command (run yourself, t1d-7):")
+        print("  sudo " + invocation.joined(separator: " "))
+        print("")
+        executor.run(invocation)
+
+        recordAudit()
+        print("Done. The CA pem is on disk; the System trust install is NOT")
+        print("done — run the command above yourself (t1d-7).")
+    }
+
+    /// Testable uninstall motion. Removes the CA pem (if present) and routes
+    /// the `security remove-trusted-cert ...` invocation through the dry-run
+    /// executor (prints + records, never spawns). No typed-confirm: this is
+    /// the safe/reversible direction (it only deletes a local pem and prints
+    /// a command).
+    static func uninstallEgressCAMotion(
+        caPaths: MITMCertificateAuthority.Paths,
+        executor: DryRunTrustInstallExecutor
+    ) throws {
+        print("Senkani Doctor — uninstall egress CA (DRY RUN scaffolding)")
+        print("=========================================================")
+        print("")
+
+        let fm = FileManager.default
+        var removedAny = false
+        for path in [caPaths.publicCertPEM, caPaths.privateKeyPEM] {
+            if fm.fileExists(atPath: path) {
+                try? fm.removeItem(atPath: path)
+                print("Removed local CA file: \(path)")
+                removedAny = true
+            }
+        }
+        if !removedAny {
+            print("No local CA files at \(caPaths.publicCertPEM) — nothing to remove.")
+        }
+        print("")
+
+        let invocation = removeTrustedCertInvocation(pemPath: caPaths.publicCertPEM)
+        print("Operator-runnable trust-removal command (run yourself, t1d-7):")
+        print("  sudo " + invocation.joined(separator: " "))
+        print("")
+        executor.run(invocation)
+
+        print("Done. Local CA files cleared; the System trust REMOVAL is NOT")
+        print("done — run the command above yourself (t1d-7).")
+    }
+
+    /// Synchronously generate (or load) the CA at `paths` from the sync
+    /// `ParsableCommand.run()`. Mirrors `GrammarsCommand`'s
+    /// `DispatchSemaphore` bridge: the `MITMCertificateAuthority` actor is
+    /// constructed INSIDE the `Task` so no actor-isolated value crosses the
+    /// closure boundary. Rethrows the authority's error.
+    static func generateCASync(paths: MITMCertificateAuthority.Paths) throws {
+        let semaphore = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var caught: Error?
+        Task {
+            do {
+                let authority = MITMCertificateAuthority(paths: paths)
+                try await authority.ensureRoot()
+            } catch {
+                caught = error
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+        if let caught { throw caught }
+    }
+
+    /// Optionally write one chained `egress.ca.install` audit row (mirrors
+    /// `runInstallValidationBrowser`'s single-row write). Idempotency is not
+    /// required for this leg — re-running install regenerates the CA, so a
+    /// fresh row per invocation is acceptable.
+    private static func recordEgressCAInstallAudit() {
+        SessionDatabase.shared.recordTokenEvent(
+            sessionId: "doctor",
+            paneId: nil,
+            projectRoot: nil,
+            source: "doctor",
+            toolName: nil,
+            model: nil,
+            inputTokens: 0,
+            outputTokens: 0,
+            savedTokens: 0,
+            costCents: 0,
+            feature: "egress.ca.install",
+            command: nil
+        )
+        SessionDatabase.shared.flushWrites()
     }
 
     // MARK: - --repair-chain (Phase T.5 round 4)

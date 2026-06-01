@@ -25,7 +25,8 @@ def main() -> int:
 
     items_by_status: dict[str, list[dict]] = {
         "open": [], "blocked": [], "manual": [],
-        "manual_ready": [], "in_progress": [],
+        "manual_ready": [], "queued_for_console": [],
+        "in_progress": [], "retired": [],
     }
     completed_records: list[dict] = []
 

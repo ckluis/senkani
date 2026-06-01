@@ -475,6 +475,32 @@ public enum OpenAIChatStream {
     /// The channel is unbounded because MLX produces tokens slower than the
     /// loopback network drains them; backpressure beyond this V1 pump is a
     /// later round if a future engine inverts that asymmetry.
+    ///
+    /// Cooperative-pool sweep (2026-06-01, sibling fix of phase-t1d-6 P0):
+    /// the producer `Task` is hosted on `ServeBridge.executor` (the dedicated
+    /// `TaskExecutor` whose threads are OUTSIDE Swift Concurrency's
+    /// cooperative pool) on macOS 15+; the macOS-14 `else` branch falls to
+    /// the legacy default `Task` (v14 production callers block a GCD/NWListener
+    /// thread, never a cooperative thread, so cannot self-starve there).
+    /// This is the SAME shape as `ServeBridge.runBlocking`'s fix — the
+    /// channel's consumer below blocks the calling sink thread on an
+    /// unbounded `sem.wait()`, and under `swift test`'s parallel runner that
+    /// calling thread is a cooperative-pool thread; hosting the producer
+    /// off-pool lets it START to push items + `.end` regardless of pool
+    /// saturation.
+    ///
+    /// Scope of the guarantee (mirrors the documented scope on
+    /// `ServeBridge.runBlocking`): the `executorPreference` keeps the
+    /// producer's nonisolated entry/exit hops on the dedicated executor.
+    /// The UNDERLYING `AsyncThrowingStream`'s source-side Task — created
+    /// by whoever constructed the stream (MLX adapter, test stub) — runs
+    /// wherever its constructor placed it. `continuation.yield(_:)` itself
+    /// is synchronous and non-blocking, so the source Task only needs a
+    /// thread to do its OWN work between yields; in production the source
+    /// is the MLX actor (its own executor, not the cooperative pool), and
+    /// in tests stubs may inline-yield without ever suspending. Neither
+    /// path needs a free cooperative thread to RUN, so this consumer-side
+    /// fix alone closes the deadlock class.
     private static func driveStreaming(
         head: Data,
         source: @Sendable () -> AsyncThrowingStream<Data, Error>,
@@ -501,7 +527,7 @@ public enum OpenAIChatStream {
         }
         let channel = Channel()
         let stream = source()
-        let producer = Task<Void, Never> {
+        let producerBody: @Sendable () async -> Void = {
             do {
                 for try await data in stream {
                     if Task.isCancelled { break }
@@ -511,6 +537,12 @@ public enum OpenAIChatStream {
             } catch {
                 channel.push(.error)
             }
+        }
+        let producer: Task<Void, Never>
+        if #available(macOS 15.0, *) {
+            producer = Task(executorPreference: ServeBridge.executor, operation: producerBody)
+        } else {
+            producer = Task(operation: producerBody)
         }
 
         loop: while true {

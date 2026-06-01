@@ -127,6 +127,27 @@ public actor MITMCertificateAuthority {
         commonName: String = "senkani Egress MITM Root CA",
         validityDays: Int = 3650
     ) throws -> Root {
+        let root = try Self.generateRootCore(
+            paths: paths, keyBits: keyBits,
+            commonName: commonName, validityDays: validityDays
+        )
+        self.root = root
+        return root
+    }
+
+    /// Actor-nonisolated core: mint + persist the root from value params only
+    /// (NO `self.root` cache write). The synchronous CLI path
+    /// (`ensureRootOnDisk`) and the instance `generateRoot()` both call this;
+    /// only the instance method assigns the actor cache. Running entirely on
+    /// the caller's thread with no `Task`/semaphore/actor hop is what makes
+    /// CLI CA-generation immune to cooperative-pool self-starvation
+    /// (phase-t1d-6 P0 fix).
+    static func generateRootCore(
+        paths: Paths,
+        keyBits: Int,
+        commonName: String = "senkani Egress MITM Root CA",
+        validityDays: Int = 3650
+    ) throws -> Root {
         let key = try Self.makeRSAKey(bits: keyBits)
         guard let pub = SecKeyCopyPublicKey(key) else {
             throw CAError.publicKeyExport("SecKeyCopyPublicKey returned nil")
@@ -168,8 +189,7 @@ public actor MITMCertificateAuthority {
         }
 
         let root = Root(certificateDER: certDER, privateKey: key, subject: commonName)
-        self.root = root
-        try persist(root: root)
+        try Self.persist(root: root, paths: paths)
         return root
     }
 
@@ -177,6 +197,15 @@ public actor MITMCertificateAuthority {
     /// PEM). Returns the `Root` and caches it for minting.
     @discardableResult
     public func loadRoot() throws -> Root {
+        let root = try Self.loadRootCore(paths: paths, keyBits: keyBits)
+        self.root = root
+        return root
+    }
+
+    /// Actor-nonisolated core: load + validate the root from disk (value
+    /// params only, NO `self.root` cache write). Mirrors `loadRoot()`'s parse/
+    /// validate behavior for the synchronous CLI path (`ensureRootOnDisk`).
+    static func loadRootCore(paths: Paths, keyBits: Int) throws -> Root {
         guard let certData = FileManager.default.contents(atPath: paths.publicCertPEM) else {
             throw CAError.loadFailed("no CA cert at \(paths.publicCertPEM)")
         }
@@ -199,7 +228,6 @@ public actor MITMCertificateAuthority {
             throw CAError.loadFailed("SecKeyCreateWithData: \(Self.cfErrorString(error))")
         }
         let root = Root(certificateDER: certDER, privateKey: key, subject: "loaded")
-        self.root = root
         return root
     }
 
@@ -212,6 +240,26 @@ public actor MITMCertificateAuthority {
             return try loadRoot()
         }
         return try generateRoot()
+    }
+
+    /// Synchronous, actor-isolation-FREE "ensure the CA exists on disk", used
+    /// by the CLI (`senkani doctor --install/--uninstall-egress-ca`). Mirrors
+    /// `ensureRoot()`'s on-disk semantics — generate-if-missing, else
+    /// load+validate — but runs entirely on the CALLING thread with no `Task`,
+    /// no `DispatchSemaphore`, and no actor hop, so it CANNOT self-starve the
+    /// Swift cooperative thread pool the way the old generateCASync bridge did
+    /// (phase-t1d-6 P0 deadlock). The minted/loaded `Root` is intentionally
+    /// discarded: the CLI only needs the persisted public pem + 0600 key on
+    /// disk. `keyBits` defaults to 2048 to match `init`'s default (the CLI
+    /// constructs the authority with the default key size).
+    public static func ensureRootOnDisk(paths: Paths, keyBits: Int = 2048) throws {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: paths.publicCertPEM),
+           fm.fileExists(atPath: paths.privateKeyPEM) {
+            _ = try loadRootCore(paths: paths, keyBits: keyBits)    // validate; discard
+        } else {
+            _ = try generateRootCore(paths: paths, keyBits: keyBits) // generate + persist
+        }
     }
 
     // MARK: - Leaf minting
@@ -400,7 +448,11 @@ public actor MITMCertificateAuthority {
 
     // MARK: - Persistence
 
-    private func persist(root: Root) throws {
+    /// Persist a root's public cert (0644) + SEPARATE private key (0600) to
+    /// `paths`. `static` (actor-nonisolated) so the synchronous CLI path
+    /// (`ensureRootOnDisk`) can reuse it with no actor hop. The 0600 key mode
+    /// is load-bearing — never co-locate or relax it.
+    static func persist(root: Root, paths: Paths) throws {
         let certPEM = Self.pemEncode(root.certificateDER, label: "CERTIFICATE")
         try Self.write(string: certPEM, to: paths.publicCertPEM, mode: 0o644)
 

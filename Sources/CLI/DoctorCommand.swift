@@ -491,25 +491,20 @@ struct Doctor: ParsableCommand {
         print("done — run the command above yourself (t1d-7).")
     }
 
-    /// Synchronously generate (or load) the CA at `paths` from the sync
-    /// `ParsableCommand.run()`. Mirrors `GrammarsCommand`'s
-    /// `DispatchSemaphore` bridge: the `MITMCertificateAuthority` actor is
-    /// constructed INSIDE the `Task` so no actor-isolated value crosses the
-    /// closure boundary. Rethrows the authority's error.
+    /// Synchronously ensure the CA at `paths` exists on disk (generate if
+    /// missing, else load + validate) from the sync `ParsableCommand.run()`.
+    ///
+    /// phase-t1d-6 P0 fix: this no longer bridges through a
+    /// `DispatchSemaphore`-over-`Task`. `MITMCertificateAuthority.ensureRoot()`
+    /// is genuinely synchronous (its `await` was a pure actor-isolation hop, no
+    /// suspension point), so the CA is now minted/persisted by an actor-
+    /// nonisolated static (`ensureRootOnDisk`) entirely on the calling thread —
+    /// no Task, no semaphore, no cooperative-pool dependency. The old bridge
+    /// deadlocked a full `swift test` run under cooperative-pool saturation
+    /// (stack-sampled to dispatch_semaphore_wait at
+    /// DoctorEgressCACommandTests.swift:93). Rethrows the authority's error.
     static func generateCASync(paths: MITMCertificateAuthority.Paths) throws {
-        let semaphore = DispatchSemaphore(value: 0)
-        nonisolated(unsafe) var caught: Error?
-        Task {
-            do {
-                let authority = MITMCertificateAuthority(paths: paths)
-                try await authority.ensureRoot()
-            } catch {
-                caught = error
-            }
-            semaphore.signal()
-        }
-        semaphore.wait()
-        if let caught { throw caught }
+        try MITMCertificateAuthority.ensureRootOnDisk(paths: paths)
     }
 
     /// Optionally write one chained `egress.ca.install` audit row (mirrors

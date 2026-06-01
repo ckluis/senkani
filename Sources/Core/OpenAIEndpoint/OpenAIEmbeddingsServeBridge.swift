@@ -14,8 +14,8 @@ import Foundation
 public enum OpenAIEmbeddingsServeBridge {
 
     /// Wrap a registered `EmbeddingEngine` as a sync
-    /// `OpenAIEmbeddingsHandler.Engine`. Uses a `DispatchSemaphore` to
-    /// bridge the async embed call — the listener thread waits while the
+    /// `OpenAIEmbeddingsHandler.Engine`. Bridges the async embed call via
+    /// `ServeBridge.runBlocking` — the listener thread waits while the
     /// MLX task runs under `MLXInferenceLock.shared`. On thrown error,
     /// returns an empty embedding so the caller can decide how to render
     /// (the production caller — `ServeCommand` — gates on
@@ -23,22 +23,10 @@ public enum OpenAIEmbeddingsServeBridge {
     /// unreachable in shipped builds).
     public static func syncEngine(for handler: any EmbeddingEngine) -> OpenAIEmbeddingsHandler.Engine {
         OpenAIEmbeddingsHandler.Engine { model, inputs in
-            let semaphore = DispatchSemaphore(value: 0)
-            // Use a class wrapper so the inner Task can store the result
-            // and signal even though closures are non-escaping-by-default.
-            final class Box: @unchecked Sendable {
-                var value: OpenAIEmbeddingsHandler.Embedding?
+            let embedding = ServeBridge.runBlocking {
+                try? await handler.embed(model: model, inputs: inputs)
             }
-            let box = Box()
-            Task {
-                box.value = try? await handler.embed(model: model, inputs: inputs)
-                semaphore.signal()
-            }
-            semaphore.wait()
-            return box.value ?? OpenAIEmbeddingsHandler.Embedding(
-                vectors: [],
-                promptTokens: 0
-            )
+            return embedding ?? OpenAIEmbeddingsHandler.Embedding(vectors: [], promptTokens: 0)
         }
     }
 

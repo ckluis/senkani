@@ -23,8 +23,8 @@ import Foundation
 public enum OpenAIChatServeBridge {
 
     /// Wrap a registered `ChatEngine` as a sync
-    /// `OpenAIChatHandler.Engine`. Uses a `DispatchSemaphore` to bridge
-    /// the async chat call — the listener thread waits while the MLX
+    /// `OpenAIChatHandler.Engine`. Bridges the async chat call via
+    /// `ServeBridge.runBlocking` — the listener thread waits while the MLX
     /// task runs under `MLXInferenceLock.shared`. On thrown error,
     /// returns an empty completion so the caller can decide how to
     /// render (the production caller — `ServeCommand` — will gate on
@@ -32,27 +32,10 @@ public enum OpenAIChatServeBridge {
     /// then this matches v13c's pre-readiness-gate semantics).
     public static func syncEngine(for handler: any ChatEngine) -> OpenAIChatHandler.Engine {
         OpenAIChatHandler.Engine { model, messages, tools in
-            let semaphore = DispatchSemaphore(value: 0)
-            // Use a class wrapper so the inner Task can store the result
-            // and signal even though closures are non-escaping-by-default.
-            final class Box: @unchecked Sendable {
-                var value: OpenAIChatHandler.Completion?
+            let completion = ServeBridge.runBlocking {
+                try? await handler.chat(model: model, messages: messages, tools: tools)
             }
-            let box = Box()
-            Task {
-                box.value = try? await handler.chat(
-                    model: model,
-                    messages: messages,
-                    tools: tools
-                )
-                semaphore.signal()
-            }
-            semaphore.wait()
-            return box.value ?? OpenAIChatHandler.Completion(
-                content: "",
-                promptTokens: 0,
-                completionTokens: 0
-            )
+            return completion ?? OpenAIChatHandler.Completion(content: "", promptTokens: 0, completionTokens: 0)
         }
     }
 

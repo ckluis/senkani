@@ -731,3 +731,274 @@ struct AnthropicUsage: Codable {
     let input_tokens: Int
     let output_tokens: Int
 }
+
+// MARK: - V.13b-sse-a — typed streaming events (Child A)
+
+/// Typed event yielded by `ClaudeAPIChatEngine.chatStream(...)` (Child A of
+/// the v13b-sse decomposition). The parser
+/// (`AnthropicSSEFrameParser`) is the single authority that lifts
+/// SSE frame bytes into one of these variants. Children B and C
+/// translate this into the OpenAI SSE wire shape (`OpenAIChatStream`) and
+/// the listener wire respectively; this Child carries ONLY the engine-side
+/// primitive.
+///
+/// Info-leak guard (Schneier r10): the `.error(type:)` payload is the
+/// short `error.type` identifier ONLY — never `error.message`, which can
+/// echo prompt content / key fragments / upstream guidance. The parser
+/// enforces this redaction at the SSE-frame boundary.
+public enum AnthropicStreamEvent: Sendable, Equatable {
+    case messageStart(id: String, inputTokens: Int?)
+    case contentBlockStart(index: Int, block: AnthropicStreamBlockStart)
+    case contentBlockDelta(index: Int, delta: AnthropicStreamBlockDelta)
+    case contentBlockStop(index: Int)
+    case messageDelta(stopReason: String?, outputTokens: Int?)
+    case messageStop
+    /// Anthropic `event: error` frame — short identifier ONLY
+    /// (`overloaded_error`, `rate_limit_error`, …). `error.message` is
+    /// dropped at the parser boundary.
+    case error(type: String)
+}
+
+public enum AnthropicStreamBlockStart: Sendable, Equatable {
+    case text
+    case toolUse(id: String, name: String)
+}
+
+public enum AnthropicStreamBlockDelta: Sendable, Equatable {
+    case textDelta(String)
+    case inputJsonDelta(String)
+}
+
+// MARK: - V.13b-sse-a — chatStream entrypoint (Child A)
+
+extension ClaudeAPIChatEngine {
+
+    /// Streaming counterpart of `chat(...)`: opens `POST /v1/messages` with
+    /// `stream: true`, drives `URLSession.bytes(for:)` AsyncBytes through
+    /// `AnthropicSSEFrameParser`, and yields typed
+    /// `AnthropicStreamEvent`s.
+    ///
+    /// Scope carves (Child A of the v13b-sse decomposition):
+    ///   - This file ONLY exposes the engine-side primitive. Translator
+    ///     (chunk-deltas → OpenAI SSE wire), listener wiring, and the
+    ///     `surface=.chatStream` 501-lift are children B / C / D.
+    ///   - No retry MID-STREAM. `RetryPolicy.serveSafe` governs the OPEN-
+    ///     side decision only: if the upstream returns `429` / `529` BEFORE
+    ///     any bytes flow, `fireStreamOpenWithRetry` honors the same
+    ///     bounded backoff as `chat()`. Once the stream has begun yielding
+    ///     events, a mid-stream URLError is surfaced verbatim — translator
+    ///     B handles in-flight rollback.
+    ///
+    /// `requestTimeout` semantics for streams: when set, the per-attempt
+    /// `URLRequest.timeoutInterval` acts as the IDLE timeout (inter-byte),
+    /// NOT end-to-end. The session will fire `URLError.timedOut` if no
+    /// bytes arrive within the interval. End-to-end deadlines must be
+    /// enforced by the listener (Child C).
+    ///
+    /// Cancellation: the returned `AsyncThrowingStream`'s `onTermination`
+    /// cancels the producer Task, which cancels the URLSession AsyncBytes
+    /// iterator. URLSession.bytes(for:)'s native cancellation propagates to
+    /// the underlying data task — see
+    /// `AnthropicSSEFrameParserTests.cancelPropagatesToURLProtocolStopLoading`
+    /// for the observable contract.
+    public func chatStream(
+        model: String,
+        messages: [ChatCompletionRequest.Message],
+        tools: [ChatCompletionRequest.Tool]
+    ) -> AsyncThrowingStream<AnthropicStreamEvent, Error> {
+        // Shared mutable handle on the in-flight URLSessionDataTask. The
+        // stream's `onTermination` reaches into this box to call
+        // `dataTask.cancel()` directly — `URLSession.bytes(for:)`'s native
+        // cancellation propagation through the AsyncBytes iterator alone
+        // proved too slow to meet the v13b-sse-a cancel-propagation SLA
+        // (Karpathy r10 P1). Explicit dataTask.cancel() is the documented
+        // teardown seam and surfaces as `stopLoading()` on the URLProtocol.
+        let cancelBox = CancelBox()
+
+        return AsyncThrowingStream { continuation in
+            let task = Task { [self] in
+                do {
+                    // 1. Accept-list gate BEFORE any I/O.
+                    guard ClaudeAPIChatEngine_AcceptList.models.contains(model) else {
+                        throw ClaudeAPIChatEngineError.upstreamModelUnavailable(model: model)
+                    }
+
+                    // 2. Build request body (mirror chat() EXCEPT stream:true).
+                    let wireModel = ClaudeAPIChatEngine.wireModelID(for: model)
+                    let (system, anthropicMessages) = try ClaudeAPIChatEngine.splitMessages(messages)
+                    let anthropicTools = tools.isEmpty ? nil : tools.map(ClaudeAPIChatEngine.mapTool(_:))
+
+                    let bodyData: Data
+                    do {
+                        let req = AnthropicMessagesRequest(
+                            model: wireModel,
+                            max_tokens: self.maxTokens,
+                            system: system,
+                            messages: anthropicMessages,
+                            tools: anthropicTools,
+                            stream: true
+                        )
+                        let encoder = JSONEncoder()
+                        encoder.outputFormatting = [.sortedKeys]
+                        bodyData = try encoder.encode(req)
+                    } catch {
+                        throw ClaudeAPIChatEngineError.decodeError(reason: "request-encode")
+                    }
+
+                    // 3. Wire request.
+                    var request = URLRequest(url: self.endpoint)
+                    request.httpMethod = "POST"
+                    request.setValue(self.apiKey, forHTTPHeaderField: "x-api-key")
+                    request.setValue(self.anthropicVersion, forHTTPHeaderField: "anthropic-version")
+                    request.setValue("application/json", forHTTPHeaderField: "content-type")
+                    request.setValue("text/event-stream", forHTTPHeaderField: "accept")
+                    request.httpBody = bodyData
+                    // Per-attempt IDLE timeout for streams (doc-noted above).
+                    if let t = self.requestTimeout { request.timeoutInterval = t }
+
+                    // 4. Open with bounded backoff on 429/529. Returns the
+                    //    open AsyncBytes; throws upstreamError / rateLimited /
+                    //    networkError just like chat()'s pre-stream path.
+                    let bytes = try await fireStreamOpenWithRetry(request)
+
+                    // Stash the underlying data task so onTermination can
+                    // cancel it directly.
+                    cancelBox.set(bytes.task)
+
+                    // 5. Pipe AsyncBytes through the parser, yielding events.
+                    for try await event in AnthropicSSEFrameParser.parseFrames(bytes) {
+                        continuation.yield(event)
+                        if Task.isCancelled { break }
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish(throwing: CancellationError())
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in
+                // Two-pronged teardown:
+                //   (a) cancel the consumer-loop Task so any subsequent
+                //       `for try await` iteration of the parser exits.
+                //   (b) cancel the URLSessionDataTask directly so the
+                //       URLProtocol observes `stopLoading()` immediately —
+                //       AsyncBytes' iterator alone can stall on a pending
+                //       chunk read for too long to satisfy the SLA.
+                cancelBox.cancel()
+                task.cancel()
+            }
+        }
+    }
+
+    // MARK: - Private streaming-open backoff loop
+
+    /// Open the streaming POST, retrying ONLY `429`/`529` with bounded
+    /// backoff per `retryPolicy`. The body bytes (AsyncBytes) of the first
+    /// `200` response are returned to the caller. NO retry mid-stream once
+    /// bytes are flowing.
+    private func fireStreamOpenWithRetry(_ request: URLRequest) async throws -> URLSession.AsyncBytes {
+        let capSeconds = Int(self.retryPolicy.maxTotalWait.components.seconds)
+        var attempt = 0
+        var accumulated: Duration = .zero
+        while true {
+            try Task.checkCancellation()
+
+            let bytes: URLSession.AsyncBytes
+            let response: URLResponse
+            do {
+                (bytes, response) = try await self.session.bytes(for: request)
+            } catch let urlError as URLError {
+                throw ClaudeAPIChatEngineError.networkError(code: urlError.code.rawValue)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw ClaudeAPIChatEngineError.networkError(code: -1)
+            }
+
+            guard let http = response as? HTTPURLResponse else {
+                throw ClaudeAPIChatEngineError.decodeError(reason: "non-http-response")
+            }
+
+            if http.statusCode == 200 { return bytes }
+
+            // Non-200: drain bytes (but never echo them) and discard.
+            // We do NOT await drain — the connection will be torn down by
+            // ARC when `bytes` goes out of scope. Anthropic non-200s carry
+            // small JSON envelopes; the next attempt opens a fresh
+            // connection regardless.
+
+            guard ClaudeAPIChatEngine.isRetryableStatus(http.statusCode) else {
+                // Pull a small bounded prefix of body bytes to feed the
+                // existing error-type extractor. Cap at 8 KiB.
+                let bodyData = (try? await Self.drainBounded(bytes, max: 8 * 1024)) ?? Data()
+                let parsedType = ClaudeAPIChatEngine.extractAnthropicErrorType(from: bodyData)
+                throw ClaudeAPIChatEngineError.upstreamError(status: http.statusCode, type: parsedType)
+            }
+
+            // Retryable.
+            let retryAfter = ClaudeAPIChatEngine.parseRetryAfterSeconds(http, capSeconds: capSeconds)
+            if attempt >= self.retryPolicy.maxRetries {
+                throw ClaudeAPIChatEngineError.rateLimited(retryAfter: retryAfter)
+            }
+            let remaining = self.retryPolicy.maxTotalWait - accumulated
+            if remaining <= .zero {
+                throw ClaudeAPIChatEngineError.rateLimited(retryAfter: retryAfter)
+            }
+            let delay = ClaudeAPIChatEngine.backoffDelay(
+                attempt: attempt,
+                retryAfter: retryAfter,
+                base: self.retryPolicy.baseDelay
+            )
+            let clamped = min(delay, remaining)
+            try await self.sleeper(clamped)
+            accumulated += clamped
+            attempt += 1
+        }
+    }
+
+    /// Drain at most `max` bytes from an AsyncBytes; return Data. Never
+    /// throws — best-effort body capture for the non-200 error path.
+    private static func drainBounded(_ bytes: URLSession.AsyncBytes, max: Int) async throws -> Data {
+        var out = Data()
+        out.reserveCapacity(min(max, 1024))
+        for try await b in bytes {
+            out.append(b)
+            if out.count >= max { break }
+        }
+        return out
+    }
+
+}
+
+/// Sendable holder for the in-flight `URLSessionDataTask`. The
+/// `chatStream(...)` Task fills it once the stream opens; the
+/// `onTermination` handler reads it and calls `.cancel()` directly to
+/// force the URLProtocol's `stopLoading()` immediately.
+///
+/// `URLSession.bytes(for:)`'s native cancellation propagation through the
+/// AsyncBytes iterator alone is too slow to satisfy the v13b-sse-a
+/// cancel-propagation SLA (Karpathy r10 P1 — observable contract on
+/// `MockSSEStreamProtocol.observedStopLoading`). Explicit
+/// `dataTask.cancel()` is the documented teardown seam.
+private final class CancelBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: URLSessionDataTask?
+    private var cancelled: Bool = false
+    func set(_ t: URLSessionDataTask) {
+        lock.lock(); defer { lock.unlock() }
+        if cancelled {
+            t.cancel()
+            return
+        }
+        task = t
+    }
+    func cancel() {
+        lock.lock()
+        let t = task
+        cancelled = true
+        lock.unlock()
+        t?.cancel()
+    }
+}
+

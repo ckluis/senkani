@@ -497,7 +497,7 @@ struct Serve: AsyncParsableCommand {
                             chain: auditChain, fields: fields, bodies: bodies,
                             db: requestLogDB, surface: .chatStream, httpStatus: 200
                         )
-                        print("openai-request surface=chat model_logged=\(modelLoggedStr) preset=\(presetUsedStr) resolved_tier=\(resolvedTierStr) stream=true backend=claude_api status=\(status.rawValue)")
+                        print("openai-request surface=chat model_logged=\(modelLoggedStr) preset=\(presetUsedStr) resolved_tier=\(resolvedTierStr) stream=true backend=claude_api status=\(status.auditStatus)")
                     }
                 )
             }
@@ -582,7 +582,7 @@ struct Serve: AsyncParsableCommand {
                             resolvedTier: routing.resolvedTier.rawValue,
                             promptTokenCount: promptTokens,
                             completionTokenCount: completionTokens,
-                            status: status.rawValue
+                            status: status.auditStatus
                         )
                         let bodies = storeBodies
                             ? OpenAIAuditChain.AuditBodies(
@@ -594,7 +594,7 @@ struct Serve: AsyncParsableCommand {
                             chain: auditChain, fields: fields, bodies: bodies,
                             db: requestLogDB, surface: .chatStream, httpStatus: 200
                         )
-                        print("openai-request surface=chat model_logged=\(modelLogged) preset=\(presetUsed) resolved_tier=\(resolvedTier) stream=true backend=mcp_streaming status=\(status.rawValue)")
+                        print("openai-request surface=chat model_logged=\(modelLogged) preset=\(presetUsed) resolved_tier=\(resolvedTier) stream=true backend=mcp_streaming status=\(status.auditStatus)")
                     }
                 )
             }
@@ -646,7 +646,7 @@ struct Serve: AsyncParsableCommand {
                         resolvedTier: base.resolvedTier,
                         promptTokenCount: base.promptTokenCount,
                         completionTokenCount: base.completionTokenCount,
-                        status: status.rawValue
+                        status: status.auditStatus
                     )
                     // The SSE response head was already sent with HTTP 200;
                     // `status` (ok/cancel) rides in `fields.status` for the
@@ -656,7 +656,7 @@ struct Serve: AsyncParsableCommand {
                         chain: auditChain, fields: fields, bodies: bodies,
                         db: requestLogDB, surface: .chatStream, httpStatus: 200
                     )
-                    print("openai-request surface=\(fallbackTelemetry.surface) model_logged=\(fallbackTelemetry.modelLogged) preset=\(fallbackTelemetry.presetUsed) resolved_tier=\(fallbackTelemetry.resolvedTier) stream=true status=\(status.rawValue)")
+                    print("openai-request surface=\(fallbackTelemetry.surface) model_logged=\(fallbackTelemetry.modelLogged) preset=\(fallbackTelemetry.presetUsed) resolved_tier=\(fallbackTelemetry.resolvedTier) stream=true status=\(status.auditStatus)")
                 }
             )
         }

@@ -291,7 +291,8 @@ public enum ClaudeAPIServeDispatch {
     /// The caller (ServeCommand streamHandler closure) wires `plan` into the
     /// listener's SSE drive, and wires `auditFieldsBuilder` into Plan.onFinish
     /// to record EXACTLY ONE audit row per streamed request — surface =
-    /// `.chatStream`, httpStatus = 200, status = the FinishStatus rawValue.
+    /// `.chatStream`, httpStatus = 200, status = the FinishStatus `auditStatus`
+    /// (V.13b-sse-d: `ok` / `client_cancel` / `upstream_error:<code>`).
     ///
     /// Shape choice (Karpathy r10): we expose the `auditFieldsBuilder` on the
     /// outcome rather than baking it into the Plan's existing `onFinish` so
@@ -613,6 +614,17 @@ public enum ClaudeAPIServeDispatch {
             }
         }
 
+        // V.13b-sse-d — extractor maps a producer-thrown error to the
+        // short upstream code carried on the wire + audit row. Used by
+        // OpenAIChatStream.driveStreaming to surface `.upstreamError(code:)`
+        // instead of collapsing to `.clientCancel`.
+        let extractor: @Sendable (Error) -> String? = { error in
+            if let typed = error as? ClaudeAPIChatEngineError,
+               case .upstreamError(_, let type) = typed {
+                return type ?? "unknown"
+            }
+            return nil
+        }
         let plan = OpenAIChatStream.Plan(
             head: OpenAIChatStream.head(),
             streamingEvents: producer,
@@ -622,7 +634,9 @@ public enum ClaudeAPIServeDispatch {
                 // onFinish to call OpenAIServedRequestSink.record(...) via
                 // the auditFieldsBuilder. This factory's caller wires the
                 // SINGLE audit-row site — we just supply the builder.
-            }
+            },
+            errorTypeExtractor: extractor,
+            errorTerminatorBuilder: ClaudeAPIServeDispatch.streamErrorLine(code:)
         )
 
         let auditFieldsBuilder: @Sendable (OpenAIChatStream.FinishStatus) -> OpenAIAuditChain.AuditFields = { status in
@@ -639,7 +653,7 @@ public enum ClaudeAPIServeDispatch {
                 resolvedTier: routing.resolvedTier.rawValue,
                 promptTokenCount: promptTokenCount,
                 completionTokenCount: completionTokenCount,
-                status: status.rawValue
+                status: status.auditStatus
             )
         }
 
@@ -710,5 +724,27 @@ public enum ClaudeAPIServeDispatch {
             auditFields: fields,
             auditBodies: bodies
         )
+    }
+
+    // MARK: - V.13b-sse-d — wire-level error terminator (Child D)
+
+    /// V.13b-sse-d — wire-level error terminator. ONE OpenAI SSE error
+    /// line then close — NO `[DONE]` after (Schneier r10 P0 — OpenAI's
+    /// real behavior; the error line is terminal). The body carries
+    /// ONLY the short Anthropic `error.type` identifier (e.g.
+    /// `overloaded_error`), NEVER `error.message` (info-leak guard).
+    ///
+    /// The `code` parameter is STRICTLY sanitized to `[A-Za-z0-9_]` —
+    /// even if a future upstream parsing path returns a string with
+    /// JSON-injection characters (quotes, braces, newlines), the
+    /// sanitizer drops every byte that isn't an identifier character so
+    /// the emitted SSE wire bytes cannot be smuggled into a fake event.
+    public static func streamErrorLine(code: String) -> Data {
+        // Schneier sse-D re-audit P3 FOLD: route through the single-source-
+        // of-truth `FinishStatus.sanitizeCode` so the wire AND the audit-row
+        // status are sanitized identically (whitelist + unknown fallback).
+        let safe = OpenAIChatStream.FinishStatus.sanitizeCode(code)
+        let envelope = #"{"error":{"type":"upstream_error","code":"\#(safe)"}}"#
+        return Data("data: \(envelope)\n\n".utf8)
     }
 }

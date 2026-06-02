@@ -505,7 +505,7 @@ struct OpenAIChatStreamTests {
                         resolvedTier: base.resolvedTier,
                         promptTokenCount: base.promptTokenCount,
                         completionTokenCount: base.completionTokenCount,
-                        status: status.rawValue
+                        status: status.auditStatus
                     )
                     chain.append(fields, bodies: nil)
                 }
@@ -580,7 +580,7 @@ struct OpenAIChatStreamTests {
                     resolvedTier: base.resolvedTier,
                     promptTokenCount: base.promptTokenCount,
                     completionTokenCount: base.completionTokenCount,
-                    status: status.rawValue
+                    status: status.auditStatus
                 )
                 chain.append(fields, bodies: nil)
             }
@@ -628,7 +628,7 @@ struct OpenAIChatStreamTests {
                     resolvedTier: base.resolvedTier,
                     promptTokenCount: base.promptTokenCount,
                     completionTokenCount: base.completionTokenCount,
-                    status: status.rawValue
+                    status: status.auditStatus
                 )
                 chain.append(fields, bodies: nil)
             }

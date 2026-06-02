@@ -322,12 +322,59 @@ public enum OpenAIChatStream {
 
     // MARK: - Drive
 
-    /// Terminal state of a streamed response. The raw values are the audit
-    /// `status` strings: a completed stream reuses the non-streaming `ok`,
-    /// a client-cancelled one is `client_cancel`.
-    public enum FinishStatus: String, Sendable, Equatable {
-        case completed = "ok"
-        case clientCancel = "client_cancel"
+    /// Terminal state of a streamed response. The `auditStatus` computed
+    /// property gives the stable audit-row `status` string: a completed
+    /// stream reuses the non-streaming `ok`, a client-cancelled one is
+    /// `client_cancel`, and an upstream-error termination is
+    /// `upstream_error:<code>` carrying ONLY the short Anthropic
+    /// `error.type` identifier (Schneier sse-d r10 P0 info-leak guard —
+    /// no upstream message bytes ever land here).
+    ///
+    /// V.13b-sse-d FOLD: was a `String`-raw enum; converted to a regular
+    /// enum so the `.upstreamError(code:)` case can carry the short type
+    /// identifier. Equatable is preserved so existing `==` comparisons in
+    /// tests against `.completed` / `.clientCancel` continue to work.
+    public enum FinishStatus: Sendable, Equatable {
+        case completed
+        case clientCancel
+        case upstreamError(code: String)
+
+        /// V.13b-sse-d Schneier re-audit P3 FOLD: SINGLE-SOURCE-OF-TRUTH
+        /// sanitizer applied to upstream-controlled error codes BEFORE they
+        /// reach the wire OR the audit-row `status` column. The wire path
+        /// (`ClaudeAPIServeDispatch.streamErrorLine`) also calls this, so a
+        /// hostile / MITM upstream cannot inject control chars, quotes, or
+        /// newlines into EITHER surface — defense-in-depth against
+        /// log-injection in audit-DB readers + JSON-injection on the wire.
+        /// Whitelist: ASCII letter / number / underscore only. Anthropic's
+        /// documented error vocabulary uses underscores (`overloaded_error`,
+        /// `rate_limit_error`, `authentication_error`, `invalid_request_error`)
+        /// so the strict filter passes all known shapes; an empty result
+        /// falls back to `"unknown"` matching the parser's existing
+        /// `extractErrorTypeOrUnknown` sentinel.
+        public static func sanitizeCode(_ code: String) -> String {
+            let safe = code.filter { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") }
+            return safe.isEmpty ? "unknown" : safe
+        }
+
+        /// Audit-row `status` string. Stable across versions.
+        ///   - `.completed` → `"ok"`
+        ///   - `.clientCancel` → `"client_cancel"`
+        ///   - `.upstreamError(code: X)` → `"upstream_error:<sanitized(X)>"`
+        ///     — the short Anthropic `error.type` identifier with the
+        ///     same `sanitizeCode` whitelist the wire applies; NEVER
+        ///     `error.message` (Schneier r10 P0 info-leak guard) and
+        ///     NEVER raw upstream bytes (Schneier sse-D re-audit P3
+        ///     defense-in-depth — protects audit-DB readers from log-
+        ///     injection on a hostile / MITM upstream).
+        public var auditStatus: String {
+            switch self {
+            case .completed: return "ok"
+            case .clientCancel: return "client_cancel"
+            case .upstreamError(let code):
+                return "upstream_error:\(Self.sanitizeCode(code))"
+            }
+        }
     }
 
     /// Byte sink for the streamer. `write` throws when the peer is gone
@@ -372,6 +419,19 @@ public enum OpenAIChatStream {
         public let streamingEvents: (@Sendable () -> AsyncThrowingStream<Data, Error>)?
         public let done: Data
         public let onFinish: @Sendable (_ status: FinishStatus) -> Void
+        /// V.13b-sse-d — when set, classifies a producer-thrown error into
+        /// a stable short identifier (e.g. `"overloaded_error"`,
+        /// `"tool_arguments_malformed"`). nil means "not an upstream
+        /// error" and the drive collapses to `.clientCancel` as before.
+        /// The local-MLX streaming path leaves this nil (the MLX adapter
+        /// has no upstream channel).
+        public let errorTypeExtractor: (@Sendable (Error) -> String?)?
+        /// V.13b-sse-d — when set, builds the wire-level error terminator
+        /// `Data` for a given short code; written best-effort to the sink
+        /// before close on the `.upstreamError(code:)` path. NO `[DONE]`
+        /// is written after (Schneier r10 P0 — the OpenAI error line is
+        /// terminal; `[DONE]` after error confuses SDK clients).
+        public let errorTerminatorBuilder: (@Sendable (String) -> Data)?
         public init(
             head: Data,
             events: [Data],
@@ -383,23 +443,36 @@ public enum OpenAIChatStream {
             self.streamingEvents = nil
             self.done = done
             self.onFinish = onFinish
+            self.errorTypeExtractor = nil
+            self.errorTerminatorBuilder = nil
         }
         /// V.13 real-chat (sub-item 2) — streaming variant. `streamingEvents`
         /// returns a fresh `AsyncThrowingStream<Data, Error>` per `run`
         /// call. The drive loop iterates it synchronously via a bounded
         /// channel pump (`driveStreaming` below) so the listener's existing
         /// sync `Sink` contract is preserved.
+        ///
+        /// V.13b-sse-d — adds optional `errorTypeExtractor` +
+        /// `errorTerminatorBuilder` so the Anthropic serve-path can
+        /// surface a typed upstream error as `.upstreamError(code:)`
+        /// + write an OpenAI-shaped error line on the wire. Both nil
+        /// preserves the pre-sse-d behavior (any producer throw collapses
+        /// to `.clientCancel`).
         public init(
             head: Data,
             streamingEvents: @escaping @Sendable () -> AsyncThrowingStream<Data, Error>,
             done: Data,
-            onFinish: @escaping @Sendable (_ status: FinishStatus) -> Void
+            onFinish: @escaping @Sendable (_ status: FinishStatus) -> Void,
+            errorTypeExtractor: (@Sendable (Error) -> String?)? = nil,
+            errorTerminatorBuilder: (@Sendable (String) -> Data)? = nil
         ) {
             self.head = head
             self.events = []
             self.streamingEvents = streamingEvents
             self.done = done
             self.onFinish = onFinish
+            self.errorTypeExtractor = errorTypeExtractor
+            self.errorTerminatorBuilder = errorTerminatorBuilder
         }
     }
 
@@ -453,7 +526,14 @@ public enum OpenAIChatStream {
     @discardableResult
     public static func run(plan: Plan, sink: Sink) -> FinishStatus {
         if let source = plan.streamingEvents {
-            let status = driveStreaming(head: plan.head, source: source, done: plan.done, sink: sink)
+            let status = driveStreaming(
+                head: plan.head,
+                source: source,
+                done: plan.done,
+                sink: sink,
+                errorTypeExtractor: plan.errorTypeExtractor,
+                errorTerminatorBuilder: plan.errorTerminatorBuilder
+            )
             plan.onFinish(status)
             sink.close()
             return status
@@ -505,13 +585,15 @@ public enum OpenAIChatStream {
         head: Data,
         source: @Sendable () -> AsyncThrowingStream<Data, Error>,
         done: Data,
-        sink: Sink
+        sink: Sink,
+        errorTypeExtractor: (@Sendable (Error) -> String?)? = nil,
+        errorTerminatorBuilder: (@Sendable (String) -> Data)? = nil
     ) -> FinishStatus {
         if sink.isCancelled() { return .clientCancel }
         do { try sink.write(head) } catch { return .clientCancel }
 
         final class Channel: @unchecked Sendable {
-            enum Item { case data(Data); case error; case end }
+            enum Item { case data(Data); case error(Error); case end }
             var queue: [Item] = []
             let lock = NSLock()
             let sem = DispatchSemaphore(value: 0)
@@ -535,7 +617,7 @@ public enum OpenAIChatStream {
                 }
                 channel.push(.end)
             } catch {
-                channel.push(.error)
+                channel.push(.error(error))
             }
         }
         let producer: Task<Void, Never>
@@ -556,8 +638,24 @@ public enum OpenAIChatStream {
                     producer.cancel()
                     return .clientCancel
                 }
-            case .error:
+            case .error(let err):
                 producer.cancel()
+                // V.13b-sse-d — typed upstream-error path. When the Plan
+                // provides an `errorTypeExtractor` and the thrown error
+                // resolves to a non-nil short code, write the wire-level
+                // error terminator (best-effort — if the peer is gone the
+                // write throws and we still return .upstreamError so the
+                // audit row reflects the upstream cause, not a peer-close
+                // false-positive `.clientCancel`) and return
+                // `.upstreamError(code:)`. No `[DONE]` follows — Schneier
+                // r10 P0 (OpenAI's real behavior; `[DONE]` after error
+                // confuses SDK clients).
+                if let extractor = errorTypeExtractor, let code = extractor(err) {
+                    if let builder = errorTerminatorBuilder {
+                        try? sink.write(builder(code))
+                    }
+                    return .upstreamError(code: code)
+                }
                 return .clientCancel
             case .end:
                 break loop

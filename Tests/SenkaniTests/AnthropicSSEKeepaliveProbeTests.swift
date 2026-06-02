@@ -100,10 +100,20 @@ private func _kpSlowEmitChunks() -> [Data] {
 
 
     """
-    let tail = """
+    // Karpathy r19 P2 re-audit — tail-split for gap-before-finish_reason.
+    // The mock fixture used to coalesce `message_delta` + `message_stop`
+    // into a single tail chunk. Splitting them into TWO emissions with an
+    // inter-chunk gap exercises the path where the OpenAI translator
+    // emits the `finish_reason` terminal AFTER a real upstream gap (i.e.
+    // the translator must hold its terminal chunk until `message_stop`
+    // arrives, not flush on `message_delta` alone).
+    let messageDelta = """
     event: message_delta
     data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}
 
+
+    """
+    let messageStop = """
     event: message_stop
     data: {"type":"message_stop"}
 
@@ -115,8 +125,28 @@ private func _kpSlowEmitChunks() -> [Data] {
         Data(delta1.utf8),
         Data(delta2.utf8),
         Data(contentBlockStop.utf8),
-        Data(tail.utf8),
+        Data(messageDelta.utf8),
+        Data(messageStop.utf8),
     ]
+}
+
+/// Decoder type for wire-frame JSON-decode parity assertion. Each `data:`
+/// chunk on the OpenAI SSE wire JSON-decodes into this struct.
+private struct _KPDecodedChunk: Decodable {
+    struct Choice: Decodable {
+        struct Delta: Decodable {
+            let role: String?
+            let content: String?
+        }
+        let index: Int
+        let delta: Delta
+        let finish_reason: String?
+    }
+    let id: String
+    let object: String
+    let created: Int
+    let model: String
+    let choices: [Choice]
 }
 
 private final class _KPCapturedSink: @unchecked Sendable {
@@ -137,8 +167,10 @@ struct AnthropicSSEKeepaliveProbeTests {
     @Test func slowEmitStreamSurvivesMultiSecondGapsAndAuditsOk() async throws {
         MockSSEStreamProtocol.reset(); defer { MockSSEStreamProtocol.reset() }
 
-        // N = 1s between events × 5 gaps = ~5s total upstream lifetime.
-        // The translator must consume the slow stream without
+        // N = 1s between events × 6 gaps = ~6s total upstream lifetime.
+        // (Karpathy r19 tail-split: message_delta and message_stop are
+        // now two separate chunks, exercising the gap-before-finish_reason
+        // path.) The translator must consume the slow stream without
         // prematurely closing, raising .upstreamError, or writing a
         // non-"ok" audit row.
         MockSSEStreamProtocol.register(
@@ -201,12 +233,47 @@ struct AnthropicSSEKeepaliveProbeTests {
             close: { captured.close() }
         )
 
-        // Run with an overall budget well above the expected ~5s upstream
+        // Run with an overall budget well above the expected ~6s upstream
         // lifetime. If the consumer were to drop/timeout mid-stream this
         // would surface as an .upstreamError or .completed-with-partial.
+        //
+        // Karpathy r19 P2 — HANG-GUARD: wrap the sync `OpenAIChatStream.run`
+        // call in a `withTaskGroup` race against a `Task.sleep(.seconds(15))`
+        // racer. If the run-task hangs indefinitely (translator bug,
+        // upstream contract violation, AsyncBytes iterator livelock,
+        // ...), the racer wins after ~15s and we surface an `Issue.record`
+        // — instead of hanging the entire test suite. On the happy path
+        // (run-task wins in ~6s) the racer task is cancelled cleanly.
         let startedAt = Date()
-        let result = OpenAIChatStream.run(plan: wrapped, sink: sink)
+        enum _RaceOutcome { case ran(OpenAIChatStream.FinishStatus); case hung }
+        let raceOutcome: _RaceOutcome = await withTaskGroup(of: _RaceOutcome.self) { group in
+            group.addTask {
+                // Run the synchronous driver inside an async task so it can
+                // be raced against the sleeper. The driver fully owns the
+                // sink + onFinish callbacks (single-audit-row invariant
+                // preserved).
+                let status = OpenAIChatStream.run(plan: wrapped, sink: sink)
+                return .ran(status)
+            }
+            group.addTask {
+                // 15s racer: if the run-task hangs the racer wins and we
+                // bail with an Issue.record rather than parking the suite.
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                return .hung
+            }
+            let first = await group.next()!
+            group.cancelAll()
+            return first
+        }
         let elapsed = Date().timeIntervalSince(startedAt)
+        let result: OpenAIChatStream.FinishStatus
+        switch raceOutcome {
+        case .ran(let s):
+            result = s
+        case .hung:
+            Issue.record("hang-guard fired: OpenAIChatStream.run did not return within 15s on the slow-emit fixture — possible translator / AsyncBytes hang")
+            return
+        }
 
         // Acceptance: stream completed cleanly.
         #expect(result == .completed,
@@ -247,6 +314,71 @@ struct AnthropicSSEKeepaliveProbeTests {
         let dataLines = wire.components(separatedBy: "data: ").count - 1
         #expect(dataLines >= 5,
                 "expected ≥5 SSE data: frames on the wire; counted \(dataLines). wire: \(wire)")
+
+        // Karpathy r19 P2 — wire-frame JSON-decode parity. Split the wire
+        // body on `data: ` boundaries and JSON-decode each non-[DONE]
+        // chunk into `_KPDecodedChunk`. Assert delta.role / delta.content
+        // / finish_reason on the expected frame indices. This replaces
+        // brittle substring sniffing with a contract-level check on the
+        // OpenAI chunk envelope.
+        //
+        // Split strategy: find the SSE body (after the blank-line head
+        // terminator) and break it at `data: ` markers. Skip the leading
+        // empty fragment, decode JSON for non-[DONE] entries, and stash
+        // the terminal [DONE] separately.
+        let bodyStartRange = wire.range(of: "\r\n\r\n") ?? wire.range(of: "\n\n")
+        let body = bodyStartRange.map { String(wire[$0.upperBound...]) } ?? wire
+        // Each chunk is `data: <payload>\n\n` — split on `data: ` and
+        // strip the trailing `\n\n` from each non-empty fragment.
+        let rawFragments = body.components(separatedBy: "data: ")
+            .dropFirst()  // leading empty before first `data: `
+            .map { fragment -> String in
+                if let nn = fragment.range(of: "\n\n") {
+                    return String(fragment[..<nn.lowerBound])
+                }
+                return fragment.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        var decoded: [_KPDecodedChunk] = []
+        var sawDone = false
+        for frag in rawFragments {
+            if frag == "[DONE]" { sawDone = true; continue }
+            guard let data = frag.data(using: .utf8) else {
+                Issue.record("non-UTF8 SSE fragment: \(frag)"); continue
+            }
+            do {
+                decoded.append(try JSONDecoder().decode(_KPDecodedChunk.self, from: data))
+            } catch {
+                Issue.record("could not JSON-decode SSE fragment as chunk envelope: \(frag) — \(error)")
+            }
+        }
+        #expect(sawDone, "terminal [DONE] sentinel missing from wire JSON-decode pass")
+        #expect(decoded.count >= 4,
+                "expected ≥4 JSON-decodable chunks (role + 2 content + terminal); got \(decoded.count)")
+
+        // Frame[0] = role chunk: delta.role == "assistant", no content,
+        // no finish_reason.
+        if let role = decoded.first {
+            #expect(role.object == "chat.completion.chunk")
+            #expect(role.choices.first?.delta.role == "assistant")
+            #expect(role.choices.first?.delta.content == nil)
+            #expect(role.choices.first?.finish_reason == nil)
+        }
+        // Frame[1] + Frame[2] = content chunks: delta.content set, no
+        // role, no finish_reason.
+        if decoded.count >= 3 {
+            #expect(decoded[1].choices.first?.delta.content == "hello ")
+            #expect(decoded[1].choices.first?.delta.role == nil)
+            #expect(decoded[1].choices.first?.finish_reason == nil)
+            #expect(decoded[2].choices.first?.delta.content == "world")
+            #expect(decoded[2].choices.first?.delta.role == nil)
+            #expect(decoded[2].choices.first?.finish_reason == nil)
+        }
+        // Terminal frame: finish_reason == "stop", no content, no role.
+        if let terminal = decoded.last {
+            #expect(terminal.choices.first?.finish_reason == "stop")
+            #expect(terminal.choices.first?.delta.content == nil)
+            #expect(terminal.choices.first?.delta.role == nil)
+        }
 
         // Audit row: status == "ok"; exactly one row.
         let rows = db.recentOpenAIRequests(limit: 10)

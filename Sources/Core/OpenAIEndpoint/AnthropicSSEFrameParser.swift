@@ -19,7 +19,16 @@ import Foundation
 ///   memory on a single oversized frame.
 /// * **`event: ping` skip** — the SSE keepalive frame's data body is
 ///   dropped UNPARSED. We never JSON-decode a ping body, defending against
-///   a malformed-body upstream poisoning the event stream.
+///   a malformed-body upstream poisoning the event stream. Note however
+///   that line-level UTF-8 decoding runs BEFORE event-name classification
+///   (`String(bytes:encoding:.utf8)` on every non-empty line — see the
+///   field-classification switch below). A non-UTF-8 byte in a `data:`
+///   line of a `ping` frame will therefore throw `FrameError.invalidUTF8`
+///   rather than being silently skipped. This is the safer default (we
+///   surface byte-level corruption regardless of which event the frame
+///   carries); moving UTF-8 decoding inside the field-classification
+///   switch would be a real behavior change requiring its own audit and
+///   is NOT done here (Schneier r11 re-audit P3 — sse-A ping UTF-8 doc).
 /// * **`event: error` redaction** — only the short `error.type` identifier
 ///   is surfaced (`overloaded_error`, `rate_limit_error`, …). The
 ///   `error.message` field — which can echo prompt content, key fragments,

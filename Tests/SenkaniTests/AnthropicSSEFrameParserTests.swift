@@ -271,6 +271,51 @@ struct AnthropicSSEFrameParserTests {
         ])
     }
 
+    // Schneier r11 re-audit P3 — sse-A adversarial gap (a): a `data:`
+    // frame with NO `event:` line AND a JSON body that lacks the `type`
+    // field. The `TypeSniff try?` path in `decodeEvent(from:eventName:)`
+    // must drop it silently — and the surrounding valid frames must
+    // continue to flow.
+    @Test func dataFrameWithoutEventAndWithoutTypeFieldIsSilentlyDropped() async throws {
+        let wire = """
+        event: message_start
+        data: {"type":"message_start","message":{"id":"msg_q","usage":{"input_tokens":1}}}
+
+        data: {"not_type":"orphan","payload":"ignored"}
+
+        event: message_stop
+        data: {"type":"message_stop"}
+
+
+        """
+        let events = try await collect(
+            AnthropicSSEFrameParser.parseFrames(feed(wire))
+        )
+        // The orphan frame (no event:, no type:) is dropped silently;
+        // the surrounding valid frames are unaffected.
+        #expect(events == [
+            .messageStart(id: "msg_q", inputTokens: 1),
+            .messageStop,
+        ])
+    }
+
+    // Schneier r11 re-audit P3 — sse-A adversarial gap (b): mixed `\n`
+    // and `\r\n` line endings WITHIN A SINGLE FRAME. The parser strips
+    // trailing CR on line finalize, so both terminations are tolerated
+    // and the frame still decodes correctly.
+    @Test func mixedLfAndCrlfLineEndingsWithinSingleFrameParseCorrectly() async throws {
+        // Hand-craft the bytes: event line ends in \r\n, data line ends
+        // in \n, then \r\n\r\n frame terminator (mixed within the frame).
+        let bytes: [UInt8] =
+            Array("event: message_start\r\n".utf8) +
+            Array("data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_mix\",\"usage\":{\"input_tokens\":3}}}\n".utf8) +
+            Array("\r\n".utf8)
+        let events = try await collect(
+            AnthropicSSEFrameParser.parseFrames(ByteFeed(bytes))
+        )
+        #expect(events == [.messageStart(id: "msg_mix", inputTokens: 3)])
+    }
+
     @Test func toolUseBlockAndInputJsonDelta() async throws {
         let wire = """
         event: content_block_start

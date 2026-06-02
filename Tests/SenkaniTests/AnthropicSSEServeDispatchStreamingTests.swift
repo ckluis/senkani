@@ -120,6 +120,27 @@ private func _decodeChunk(_ event: Data) throws -> _DecodedChunk {
     return try JSONDecoder().decode(_DecodedChunk.self, from: Data(jsonPart.utf8))
 }
 
+/// Lauret r12 re-audit P2 — sse-B envelope key-set introspection. Returns
+/// the top-level JSON object and the `choices[0].delta` sub-object so a
+/// test can assert "delta keys present match EXACTLY" (no extra keys
+/// silently shipping over the wire).
+private func _rawChunk(_ event: Data) throws -> (top: [String: Any], delta: [String: Any]) {
+    guard let s = String(data: event, encoding: .utf8),
+          s.hasPrefix("data: ") else {
+        Issue.record("event missing data: prefix")
+        throw CocoaError(.coderInvalidValue)
+    }
+    let jsonPart = s.dropFirst("data: ".count)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let top = try JSONSerialization.jsonObject(with: Data(jsonPart.utf8)) as? [String: Any] else {
+        Issue.record("event JSON is not a top-level object")
+        throw CocoaError(.coderInvalidValue)
+    }
+    let choices = top["choices"] as? [[String: Any]] ?? []
+    let delta = choices.first?["delta"] as? [String: Any] ?? [:]
+    return (top, delta)
+}
+
 // MARK: - 1. Translator unit (mock engine seam)
 
 @Suite("ClaudeAPIServeDispatch.streamingPlan — translator + wire", .serialized, .urlProtocolGate)
@@ -161,6 +182,19 @@ struct AnthropicSSEServeDispatchStreamingTests {
         #expect(role.choices.first?.delta.content == nil)
         #expect(role.choices.first?.finish_reason == nil)
 
+        // Lauret r12 re-audit P2 — sse-B envelope JSON-decode parity:
+        // top-level chunk envelope MUST carry exactly
+        // {id, object, created, model, choices} — no extras leaking — and
+        // `object == "chat.completion.chunk"`. The role chunk's delta MUST
+        // carry exactly {role} — no `content`, no `tool_calls`, no
+        // `finish_reason` (finish_reason lives on the Choice, not the delta).
+        let roleRaw = try _rawChunk(emitted[0])
+        #expect(Set(roleRaw.top.keys) == Set(["id", "object", "created", "model", "choices"]),
+                "top envelope keys must be exactly {id,object,created,model,choices}; got \(roleRaw.top.keys.sorted())")
+        #expect((roleRaw.top["object"] as? String) == "chat.completion.chunk")
+        #expect(Set(roleRaw.delta.keys) == Set(["role"]),
+                "role-chunk delta keys must be exactly {role}; got \(roleRaw.delta.keys.sorted())")
+
         // chunk[1] + chunk[2]: content chunks
         let c1 = try _decodeChunk(emitted[1])
         #expect(c1.choices.first?.delta.role == nil)
@@ -170,11 +204,26 @@ struct AnthropicSSEServeDispatchStreamingTests {
         #expect(c2.choices.first?.delta.content == "world")
         #expect(c2.choices.first?.finish_reason == nil)
 
+        // Lauret r12 re-audit P2 — content-chunk delta must carry EXACTLY
+        // {content}; no role, no tool_calls keys leak.
+        let c1Raw = try _rawChunk(emitted[1])
+        #expect(Set(c1Raw.delta.keys) == Set(["content"]),
+                "content-chunk delta keys must be exactly {content}; got \(c1Raw.delta.keys.sorted())")
+        let c2Raw = try _rawChunk(emitted[2])
+        #expect(Set(c2Raw.delta.keys) == Set(["content"]),
+                "content-chunk delta keys must be exactly {content}; got \(c2Raw.delta.keys.sorted())")
+
         // chunk[3]: terminal stop chunk
         let term = try _decodeChunk(emitted[3])
         #expect(term.choices.first?.delta.role == nil)
         #expect(term.choices.first?.delta.content == nil)
         #expect(term.choices.first?.finish_reason == "stop")
+
+        // Terminal delta must be EXACTLY empty {} per the OpenAI contract
+        // (finish_reason rides on the Choice; no delta keys).
+        let termRaw = try _rawChunk(emitted[3])
+        #expect(termRaw.delta.isEmpty,
+                "terminal-chunk delta must be empty {}; got keys \(termRaw.delta.keys.sorted())")
 
         // emitted[4]: [DONE] sentinel
         #expect(emitted[4] == OpenAIChatStream.doneSentinel())
@@ -276,6 +325,11 @@ struct AnthropicSSEServeDispatchStreamingTests {
         #expect(wire.contains("\"content\":\"world\""))
         #expect(wire.contains("\"finish_reason\":\"stop\""))
         #expect(wire.contains("data: [DONE]\n\n"))
+        // Lauret r12 re-audit P3 — sse-B role-chunk exactly-once: lock
+        // "role chunk emitted exactly once" per the OpenAI contract.
+        // One occurrence of "role":"assistant" → split yields 2 components.
+        #expect(wire.components(separatedBy: "\"role\":\"assistant\"").count == 2,
+                "role chunk must be emitted EXACTLY once; wire: \(wire)")
         // Order: role chunk precedes content chunks precedes terminal stop
         // precedes DONE sentinel.
         let roleIdx = wire.range(of: "\"role\":\"assistant\"")!.lowerBound

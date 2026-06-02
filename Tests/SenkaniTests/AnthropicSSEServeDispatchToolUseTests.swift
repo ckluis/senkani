@@ -41,6 +41,22 @@ private func _makeStreamingEngine(apiKey: String = "ak-sse-c-test") -> ClaudeAPI
     )
 }
 
+/// Lauret r13 re-audit P2 — paired-id-verbatim sibling factory. Builds a
+/// `ClaudeAPIChatEngine` wired to `MockURLProtocol` (non-stream POST body)
+/// for the chat() side of the paired-id-verbatim test.
+private func _makeNonStreamingEngine(apiKey: String = "ak-sse-c-test-ns") -> ClaudeAPIChatEngine {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [MockURLProtocol.self]
+    let session = URLSession(configuration: config)
+    return ClaudeAPIChatEngine(
+        apiKey: apiKey,
+        session: session,
+        endpoint: _anthropicURL,
+        sleeper: { _ in },
+        requestTimeout: 5.0
+    )
+}
+
 private func _routing() -> OpenAIChatHandler.Routing {
     OpenAIChatHandler.Routing(
         presetUsed: .auto,
@@ -425,6 +441,101 @@ struct AnthropicSSEServeDispatchToolUseTests {
         // is mechanically pinned by the same id string flowing through
         // both paths' tool_use mappings.
         #expect(hCall?.id == "toolu_01")
+    }
+
+    // Lauret r13 re-audit P2 — sse-C paired non-stream + stream tool_call
+    // id verbatim. Runs the SAME Anthropic fixture (tool_use.id =
+    // "toolu_paired_test") through BOTH `chat()` (non-stream — produces
+    // `OpenAIToolCall.id`) AND `streamingPlan(...)` (stream — produces the
+    // header fragment's `id` field), then asserts the two ids are
+    // byte-equal strings. Pins the verbatim invariant mechanically across
+    // both wire paths.
+    @Test func pairedNonStreamAndStreamToolCallIdVerbatim() async throws {
+        MockURLProtocol.reset(); defer { MockURLProtocol.reset() }
+        MockSSEStreamProtocol.reset(); defer { MockSSEStreamProtocol.reset() }
+
+        let pairedID = "toolu_paired_test"
+
+        // Non-stream side: register the Anthropic Messages JSON envelope
+        // with tool_use.id = pairedID. `chat()` is a single POST that
+        // reads the full JSON body.
+        let nonStreamBody = """
+        {"id":"msg_paired","type":"message","role":"assistant","content":[{"type":"tool_use","id":"\(pairedID)","name":"get_weather","input":{"location":"SF"}}],"stop_reason":"tool_use","usage":{"input_tokens":7,"output_tokens":5}}
+        """
+        MockURLProtocol.register(url: _anthropicURL, status: 200, body: Data(nonStreamBody.utf8))
+
+        let nonStreamEngine = _makeNonStreamingEngine()
+        let completion = try await nonStreamEngine.chat(
+            model: "claude-haiku-3.5",
+            messages: [.init(role: "user", content: "weather?")],
+            tools: []
+        )
+        #expect(completion.toolCalls.count == 1)
+        let nonStreamID = completion.toolCalls.first?.id ?? "<missing>"
+        #expect(nonStreamID == pairedID, "non-stream chat() must carry id verbatim; got \(nonStreamID)")
+
+        // Stream side: register an equivalent SSE fixture with the same
+        // tool_use.id = pairedID. Drive through streamingPlan(...) and
+        // inspect the HEADER fragment's id field.
+        let streamFrame = """
+        event: message_start
+        data: {"type":"message_start","message":{"id":"msg_paired_s","usage":{"input_tokens":7}}}
+
+        event: content_block_start
+        data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"\(pairedID)","name":"get_weather"}}
+
+        event: content_block_delta
+        data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"location\\":\\"SF\\"}"}}
+
+        event: content_block_stop
+        data: {"type":"content_block_stop","index":0}
+
+        event: message_delta
+        data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":5}}
+
+        event: message_stop
+        data: {"type":"message_stop"}
+
+
+        """
+        MockSSEStreamProtocol.register(
+            url: _anthropicURL,
+            chunks: [Data(streamFrame.utf8)]
+        )
+        let streamEngine = _makeStreamingEngine()
+        let outcome = ClaudeAPIServeDispatch.streamingPlan(
+            engine: streamEngine,
+            request: _request(),
+            routing: _routing(),
+            keyLabel: "anthropic-paired",
+            now: Date(timeIntervalSince1970: 1_700_000_000),
+            id: "chatcmpl-paired"
+        )
+        guard let source = outcome.plan.streamingEvents else {
+            Issue.record("streamingEvents source missing"); return
+        }
+        var emitted: [Data] = []
+        for try await chunk in source() { emitted.append(chunk) }
+
+        // Layout: [role, header, c1, terminal] — find the header (first
+        // chunk carrying a tool_calls fragment with non-nil id).
+        var streamID: String?
+        for data in emitted {
+            if let decoded = try? _decodeChunk(data),
+               let frag = decoded.choices.first?.delta.tool_calls?.first,
+               let id = frag.id {
+                streamID = id
+                break
+            }
+        }
+        guard let streamID else {
+            Issue.record("stream path emitted no tool_calls header with non-nil id"); return
+        }
+        #expect(streamID == pairedID, "stream streamingPlan must carry id verbatim; got \(streamID)")
+
+        // The load-bearing assertion: BYTE-equal across both paths.
+        #expect(nonStreamID == streamID,
+                "non-stream id \(nonStreamID) and stream id \(streamID) must be byte-equal — Anthropic's tool_use.id flows verbatim through both wire paths")
     }
 
     @Test func defensiveConcatenationValidationThrowsOnMalformedArgs() async throws {

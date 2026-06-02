@@ -88,31 +88,41 @@ final class MockSSEStreamProtocol: URLProtocol, @unchecked Sendable {
             httpVersion: "HTTP/1.1", headerFields: stream.headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
 
-        // Push chunks with optional inter-chunk delay. We run on a
-        // background queue so we don't block the URLSession's protocol
-        // thread for the entire duration; this also makes the
-        // `stopLoading()` cancellation observable promptly.
+        // Push chunks with optional inter-chunk delay. Each chunk is
+        // emitted on a background queue, and inter-chunk delays are
+        // scheduled via `DispatchQueue.asyncAfter(...)` so we never park
+        // a global-QoS thread on `Thread.sleep` (Karpathy r19 P3 — sse-E
+        // mock-slow-emit async delay). The cancel latch is polled at the
+        // head of each scheduled hop, so `stopLoading()` observation
+        // remains prompt.
         let chunks = stream.chunks
         let delayMs = stream.delayBetweenMs
         let terminal = stream.terminalError
-        let protoSelf = self
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak protoSelf] in
-            guard let s = protoSelf else { return }
-            for (i, chunk) in chunks.enumerated() {
-                if s.cancelled { return }
-                s.client?.urlProtocol(s, didLoad: chunk)
-                if i < chunks.count - 1, delayMs > 0 {
-                    Thread.sleep(forTimeInterval: Double(delayMs) / 1000.0)
-                }
-            }
+        let queue = DispatchQueue.global(qos: .userInitiated)
+        weak var weakSelf = self
+
+        func emit(_ i: Int) {
+            guard let s = weakSelf else { return }
             if s.cancelled { return }
-            if let err = terminal {
-                s.client?.urlProtocol(s, didFailWithError: err)
+            if i >= chunks.count {
+                if let err = terminal {
+                    s.client?.urlProtocol(s, didFailWithError: err)
+                } else {
+                    s.client?.urlProtocolDidFinishLoading(s)
+                }
+                return
+            }
+            s.client?.urlProtocol(s, didLoad: chunks[i])
+            let isLast = (i == chunks.count - 1)
+            if !isLast && delayMs > 0 {
+                let deadline: DispatchTime = .now() + .milliseconds(delayMs)
+                queue.asyncAfter(deadline: deadline) { emit(i + 1) }
             } else {
-                s.client?.urlProtocolDidFinishLoading(s)
+                queue.async { emit(i + 1) }
             }
         }
+        queue.async { emit(0) }
     }
 
     override func stopLoading() {

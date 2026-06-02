@@ -1114,7 +1114,14 @@ extension ClaudeAPIChatEngine {
     /// `URLRequest.timeoutInterval` acts as the IDLE timeout (inter-byte),
     /// NOT end-to-end. The session will fire `URLError.timedOut` if no
     /// bytes arrive within the interval. End-to-end deadlines must be
-    /// enforced by the listener (Child C).
+    /// enforced by the listener (Child C). Contract corollary (Schneier
+    /// r11 re-audit P3 — sse-A): an upstream that opens the stream, emits
+    /// `message_start` + content blocks, but NEVER sends `message_stop`
+    /// will hang indefinitely from this engine's perspective — the
+    /// idle-timeout never fires (bytes keep arriving via content_block
+    /// frames or keepalive pings) and there is no engine-side end-to-end
+    /// deadline. Child C's listener-side wall-clock deadline owns
+    /// enforcement of the no-`message_stop` hang case.
     ///
     /// Cancellation: the returned `AsyncThrowingStream`'s `onTermination`
     /// cancels the producer Task, which cancels the URLSession AsyncBytes

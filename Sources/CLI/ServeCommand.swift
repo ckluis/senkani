@@ -448,16 +448,58 @@ struct Serve: AsyncParsableCommand {
                 request: request,
                 recordPreset: record?.preset ?? ModelPreset.auto.rawValue
             )
-            // V.13b-4c — streaming requests on non-local tiers fall through
-            // to the non-streaming chatHandler, which renders the complete
-            // framed 501 `stream_not_supported_yet` BEFORE any SSE byte.
-            // The listener never opens the SSE stream for a nil plan (same
-            // pattern v13d uses for tool-use error rendering above). This
-            // also covers the `claudeEngine == nil` + non-local-tier case
-            // (today's 503 backend_not_configured) — both render through
-            // the chatHandler.
+            // V.13b-sse-b — streaming requests on non-local tiers route to
+            // the LIVE Anthropic SSE arm when an anthropic key is configured.
+            // The `claudeEngine == nil` case STAYS as nil here, so the
+            // chatHandler still renders today's 501 `stream_not_supported_yet`
+            // BEFORE any SSE byte (preserves the operator-actionable hint for
+            // unconfigured systems). The configured-engine case is handled
+            // below via `ClaudeAPIServeDispatch.streamingPlan(...)`.
             if routing.resolvedTier != .local {
-                return nil
+                guard let claudeEngine else { return nil }
+                let now = Date()
+                let chatId = OpenAIChatHandler.generateID()
+                let keyLabel = record?.label
+                let outcome = ClaudeAPIServeDispatch.streamingPlan(
+                    engine: claudeEngine,
+                    request: request,
+                    routing: routing,
+                    keyLabel: keyLabel,
+                    now: now,
+                    id: chatId
+                )
+                // Wrap the Plan's onFinish so the SINGLE audit-row site is
+                // owned here (mirror of the non-streaming chatHandler's
+                // OpenAIServedRequestSink.record(...) call).
+                let resolvedTierStr = routing.resolvedTier.rawValue
+                let presetUsedStr = routing.presetUsed.rawValue
+                let modelLoggedStr = routing.modelLogged
+                let basePlan = outcome.plan
+                let auditFieldsBuilder = outcome.auditFieldsBuilder
+                let auditBodiesBuilder = outcome.auditBodiesBuilder
+                let storeBodiesLocal = storeBodies
+                // Lauret sse-B re-audit P3 defensive guard: streamingPlan()
+                // currently always constructs via the streaming Plan init, so
+                // `streamingEvents` is never nil — but a future StreamingOutcome
+                // variant (e.g. error-early-render in Child D) could surface a
+                // non-streaming Plan. Guard against that future-developer
+                // footgun by falling through to the chatHandler-rendered 501
+                // path rather than crashing the listener on a force-unwrap.
+                guard let events = basePlan.streamingEvents else { return nil }
+                return OpenAIChatStream.Plan(
+                    head: basePlan.head,
+                    streamingEvents: events,
+                    done: basePlan.done,
+                    onFinish: { status in
+                        let fields = auditFieldsBuilder(status)
+                        let bodies = storeBodiesLocal ? auditBodiesBuilder() : nil
+                        OpenAIServedRequestSink.record(
+                            chain: auditChain, fields: fields, bodies: bodies,
+                            db: requestLogDB, surface: .chatStream, httpStatus: 200
+                        )
+                        print("openai-request surface=chat model_logged=\(modelLoggedStr) preset=\(presetUsedStr) resolved_tier=\(resolvedTierStr) stream=true backend=claude_api status=\(status.rawValue)")
+                    }
+                )
             }
             if registeredChatHandler != nil {
                 let ready = ModelManager.shared.anyGemma4Ready()

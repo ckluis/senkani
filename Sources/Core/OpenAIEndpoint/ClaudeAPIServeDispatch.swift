@@ -285,6 +285,279 @@ public enum ClaudeAPIServeDispatch {
         )
     }
 
+    // MARK: - V.13b-sse-b — streaming dispatch (Child B)
+
+    /// V.13b-sse-b — outcome of a streaming dispatch through the Claude arm.
+    /// The caller (ServeCommand streamHandler closure) wires `plan` into the
+    /// listener's SSE drive, and wires `auditFieldsBuilder` into Plan.onFinish
+    /// to record EXACTLY ONE audit row per streamed request — surface =
+    /// `.chatStream`, httpStatus = 200, status = the FinishStatus rawValue.
+    ///
+    /// Shape choice (Karpathy r10): we expose the `auditFieldsBuilder` on the
+    /// outcome rather than baking it into the Plan's existing `onFinish` so
+    /// the caller controls the SINGLE audit-row site (same shape as the
+    /// non-streaming `Outcome`, where `auditFields` is a public field).
+    /// `Plan.onFinish` is set to a NO-OP here; ServeCommand wraps it.
+    public struct StreamingOutcome: Sendable {
+        public let plan: OpenAIChatStream.Plan
+        public let auditFieldsBuilder: @Sendable (OpenAIChatStream.FinishStatus) -> OpenAIAuditChain.AuditFields
+        public let auditBodiesBuilder: @Sendable () -> OpenAIAuditChain.AuditBodies
+
+        public init(
+            plan: OpenAIChatStream.Plan,
+            auditFieldsBuilder: @escaping @Sendable (OpenAIChatStream.FinishStatus) -> OpenAIAuditChain.AuditFields,
+            auditBodiesBuilder: @escaping @Sendable () -> OpenAIAuditChain.AuditBodies
+        ) {
+            self.plan = plan
+            self.auditFieldsBuilder = auditFieldsBuilder
+            self.auditBodiesBuilder = auditBodiesBuilder
+        }
+    }
+
+    /// Sendable box for the terminal usage observed during a streamed
+    /// response. `realPromptTokens` is captured at `.messageStart`;
+    /// `realCompletionTokens` + `stopReason` are captured at `.messageDelta`.
+    /// The `auditFieldsBuilder` closes over this box; readers race with the
+    /// producer body but the writes are monotonic (one assignment per
+    /// quantity) and the lock keeps reads consistent.
+    private final class UsageBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _promptTokens: Int?
+        private var _completionTokens: Int?
+        private var _stopReason: String?
+        private var _accumulated = ""
+        func setPrompt(_ v: Int?) { lock.lock(); _promptTokens = v; lock.unlock() }
+        func setCompletion(_ v: Int?) { lock.lock(); _completionTokens = v; lock.unlock() }
+        func setStopReason(_ v: String?) { lock.lock(); _stopReason = v; lock.unlock() }
+        func appendText(_ s: String) { lock.lock(); _accumulated += s; lock.unlock() }
+        var promptTokens: Int? { lock.lock(); defer { lock.unlock() }; return _promptTokens }
+        var completionTokens: Int? { lock.lock(); defer { lock.unlock() }; return _completionTokens }
+        var stopReason: String? { lock.lock(); defer { lock.unlock() }; return _stopReason }
+        var accumulated: String { lock.lock(); defer { lock.unlock() }; return _accumulated }
+    }
+
+    /// V.13b-sse-b — translator: build a `StreamingOutcome` whose Plan opens
+    /// `engine.chatStream(...)` lazily inside its `streamingEvents` producer
+    /// body and translates each `AnthropicStreamEvent` into a pre-encoded
+    /// `OpenAIChatStream.Chunk` data event (text-only this child; Child C
+    /// wires tool_use).
+    ///
+    /// PURE-SYNC at construction (Karpathy P1) — runs on the listener
+    /// queue. The upstream OPEN happens INSIDE the AsyncThrowingStream
+    /// producer closure, which is invoked later on `ServeBridge.executor`.
+    ///
+    /// Frame mapping (text-only):
+    ///   - `.messageStart(_, inputTokens)`: emit chunk with `delta:{role:"assistant"}`,
+    ///     `finish_reason: null`. CAPTURE inputTokens.
+    ///   - `.contentBlockStart(.text)` / `.contentBlockStop`: NO-OP at wire level.
+    ///   - `.contentBlockDelta(_, .textDelta(text))`: emit chunk with
+    ///     `delta:{content: text}`, `finish_reason: null`. ACCUMULATE text
+    ///     for audit-row body capture.
+    ///   - `.contentBlockStart(.toolUse(...))` / `.contentBlockDelta(.inputJsonDelta(...))`:
+    ///     IGNORED (Child C will wire).
+    ///   - `.messageDelta(stopReason, outputTokens)`: CAPTURE outputTokens +
+    ///     stopReason. No wire emission.
+    ///   - `.messageStop`: emit terminal chunk with `delta:{}` + mapped
+    ///     `finish_reason` (`end_turn`/`stop_sequence` → "stop",
+    ///     `max_tokens` → "length", default → "stop").
+    ///   - `.error(type)`: THROW from producer body (propagates as a
+    ///     clientCancel terminator via OpenAIChatStream.driveStreaming).
+    ///
+    /// `usage` is NOT emitted on the wire (Lauret P1 — envelope parity).
+    public static func streamingPlan(
+        engine: ClaudeAPIChatEngine,
+        request: ChatCompletionRequest,
+        routing: OpenAIChatHandler.Routing,
+        keyLabel: String?,
+        now: Date,
+        id: String
+    ) -> StreamingOutcome {
+        // Capture immutable request metadata for audit-row builder. The
+        // heuristic prompt-token count is computed up front and serves as
+        // the fallback for the realPromptTokens-nil case.
+        let promptText = request.messages.map(\.content).joined(separator: "\n")
+        let heuristicPrompt = OpenAIChatHandler.estimateTokens(promptText)
+        let createdEpoch = Int(now.timeIntervalSince1970)
+        let usage = UsageBox()
+        let model = routing.actualModel
+        let messages = request.messages
+        let tools = request.tools ?? []
+        let requestSummary = OpenAIChatHandler.requestSummary(request)
+
+        // Producer closure — invoked once per `OpenAIChatStream.run`.
+        let producer: @Sendable () -> AsyncThrowingStream<Data, Error> = {
+            AsyncThrowingStream<Data, Error> { continuation in
+                let task = Task {
+                    do {
+                        // Lazy open: this is where `engine.chatStream(...)`
+                        // is invoked, on the producer Task (which the
+                        // listener hosts on ServeBridge.executor on
+                        // macOS-15+).
+                        let upstream = engine.chatStream(
+                            model: model, messages: messages, tools: tools
+                        )
+                        for try await event in upstream {
+                            if Task.isCancelled { break }
+                            switch event {
+                            case .messageStart(_, let inputTokens):
+                                usage.setPrompt(inputTokens)
+                                let chunk = OpenAIChatStream.Chunk(
+                                    id: id, created: createdEpoch, model: model,
+                                    choices: [.init(
+                                        index: 0,
+                                        delta: .init(role: "assistant"),
+                                        finishReason: nil
+                                    )]
+                                )
+                                continuation.yield(
+                                    OpenAIChatStream.sseEvent(OpenAIChatStream.encodeChunk(chunk))
+                                )
+
+                            case .contentBlockStart(_, let block):
+                                // Text block: NO-OP wire. tool_use: IGNORED
+                                // (Child C territory).
+                                _ = block
+
+                            case .contentBlockDelta(_, let delta):
+                                switch delta {
+                                case .textDelta(let text):
+                                    // Lauret sse-B re-audit P3 FOLD: skip empty
+                                    // text_delta to mirror the local-MLX peer
+                                    // (Sources/Core/OpenAIEndpoint/StreamingChat
+                                    // Engine renderStreamingEvents guards
+                                    // `guard !delta.content.isEmpty`). Anthropic
+                                    // does not emit empty text_deltas in
+                                    // practice, but cross-engine wire-shape
+                                    // consistency is a Lauret invariant — OpenAI
+                                    // clients shouldn't see empty content
+                                    // chunks from one engine and not the other.
+                                    guard !text.isEmpty else { continue }
+                                    usage.appendText(text)
+                                    let chunk = OpenAIChatStream.Chunk(
+                                        id: id, created: createdEpoch, model: model,
+                                        choices: [.init(
+                                            index: 0,
+                                            delta: .init(content: text),
+                                            finishReason: nil
+                                        )]
+                                    )
+                                    continuation.yield(
+                                        OpenAIChatStream.sseEvent(OpenAIChatStream.encodeChunk(chunk))
+                                    )
+                                case .inputJsonDelta:
+                                    // Child C: tool-use input fragments.
+                                    continue
+                                }
+
+                            case .contentBlockStop:
+                                // Text block boundary: NO-OP wire.
+                                continue
+
+                            case .messageDelta(let stopReason, let outputTokens):
+                                usage.setCompletion(outputTokens)
+                                usage.setStopReason(stopReason)
+
+                            case .messageStop:
+                                let finishReason = mapStopReason(usage.stopReason)
+                                let chunk = OpenAIChatStream.Chunk(
+                                    id: id, created: createdEpoch, model: model,
+                                    choices: [.init(
+                                        index: 0,
+                                        delta: .init(),
+                                        finishReason: finishReason
+                                    )]
+                                )
+                                continuation.yield(
+                                    OpenAIChatStream.sseEvent(OpenAIChatStream.encodeChunk(chunk))
+                                )
+
+                            case .error(let type):
+                                // Propagate as a producer throw — collapses
+                                // to clientCancel at the drive layer.
+                                //
+                                // Lauret sse-B re-audit P3 boundary note:
+                                // Child D wires the real upstream-error → OpenAI
+                                // error-envelope translation + distinct audit
+                                // status. For Child B today, an `.error` event
+                                // arriving BEFORE `.messageStart` collapses to
+                                // clientCancel with httpStatus=200 even when no
+                                // prior chunk was emitted (OpenAI clients see an
+                                // SSE stream that opens then dies silently). This
+                                // is the documented Karpathy r10 P1 carve.
+                                throw ClaudeAPIChatEngineError.upstreamError(
+                                    status: 502, type: type
+                                )
+                            }
+                        }
+                        continuation.finish()
+                    } catch is CancellationError {
+                        continuation.finish(throwing: CancellationError())
+                    } catch {
+                        continuation.finish(throwing: error)
+                    }
+                }
+                continuation.onTermination = { _ in task.cancel() }
+            }
+        }
+
+        let plan = OpenAIChatStream.Plan(
+            head: OpenAIChatStream.head(),
+            streamingEvents: producer,
+            done: OpenAIChatStream.doneSentinel(),
+            onFinish: { _ in
+                // No-op: the caller (ServeCommand) wraps this Plan's
+                // onFinish to call OpenAIServedRequestSink.record(...) via
+                // the auditFieldsBuilder. This factory's caller wires the
+                // SINGLE audit-row site — we just supply the builder.
+            }
+        )
+
+        let auditFieldsBuilder: @Sendable (OpenAIChatStream.FinishStatus) -> OpenAIAuditChain.AuditFields = { status in
+            let realPrompt = usage.promptTokens
+            let realCompletion = usage.completionTokens
+            let promptTokenCount = realPrompt ?? heuristicPrompt
+            let completionTokenCount = realCompletion ?? OpenAIChatHandler.estimateTokens(usage.accumulated)
+            return OpenAIAuditChain.AuditFields(
+                ts: now,
+                keyLabel: keyLabel,
+                surface: "chat",
+                modelLogged: routing.modelLogged,
+                presetUsed: routing.presetUsed.rawValue,
+                resolvedTier: routing.resolvedTier.rawValue,
+                promptTokenCount: promptTokenCount,
+                completionTokenCount: completionTokenCount,
+                status: status.rawValue
+            )
+        }
+
+        let auditBodiesBuilder: @Sendable () -> OpenAIAuditChain.AuditBodies = {
+            OpenAIAuditChain.AuditBodies(
+                requestBody: requestSummary,
+                responseBody: usage.accumulated
+            )
+        }
+
+        return StreamingOutcome(
+            plan: plan,
+            auditFieldsBuilder: auditFieldsBuilder,
+            auditBodiesBuilder: auditBodiesBuilder
+        )
+    }
+
+    /// Map Anthropic `stop_reason` to OpenAI `finish_reason` for the
+    /// terminal chunk. Text-only path: tool_use is dropped silently by the
+    /// translator, so a tool_use stop_reason collapses to "stop" (the wire
+    /// will be incomplete for tool-use clients in Child B — Child C wires
+    /// the real handling). Unknown / nil → "stop".
+    static func mapStopReason(_ stopReason: String?) -> String {
+        switch stopReason {
+        case "end_turn", "stop_sequence", "stop", nil: return "stop"
+        case "max_tokens": return "length"
+        case "tool_use": return "stop"   // text-only Child B
+        default: return "stop"
+        }
+    }
+
     /// V.13b-4c — `backend_not_configured` rendering when no anthropic
     /// key was loaded at serve start (zero labels in the vault). The 503
     /// preserves today's stub text verbatim so existing operator tooling

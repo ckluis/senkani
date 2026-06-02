@@ -388,6 +388,16 @@ public enum ClaudeAPIServeDispatch {
         let producer: @Sendable () -> AsyncThrowingStream<Data, Error> = {
             AsyncThrowingStream<Data, Error> { continuation in
                 let task = Task {
+                    // V.13b-sse-c — per-block tool-use args accumulator.
+                    // Local to the producer's Task scope (not UsageBox)
+                    // because the args buffer is ONLY consulted by the
+                    // defensive-concatenation validator at .messageDelta
+                    // time and the messageStart input-token capture in
+                    // UsageBox — never read from outside this Task body.
+                    // Holding it on the stack avoids a needless lock and
+                    // keeps the UsageBox surface focused on values the
+                    // auditFieldsBuilder closure reads from outside.
+                    var toolUseArgsByIndex: [Int: String] = [:]
                     do {
                         // Lazy open: this is where `engine.chatStream(...)`
                         // is invoked, on the producer Task (which the
@@ -413,12 +423,38 @@ public enum ClaudeAPIServeDispatch {
                                     OpenAIChatStream.sseEvent(OpenAIChatStream.encodeChunk(chunk))
                                 )
 
-                            case .contentBlockStart(_, let block):
-                                // Text block: NO-OP wire. tool_use: IGNORED
-                                // (Child C territory).
-                                _ = block
+                            case .contentBlockStart(let index, let block):
+                                // Text block: NO-OP wire. tool_use: emit
+                                // a HEADER fragment carrying Anthropic's
+                                // id VERBATIM (Lauret P0 — tool_call id
+                                // stability mirrors the non-stream
+                                // round-trip in ClaudeAPIChatEngine.chat).
+                                switch block {
+                                case .text:
+                                    continue
+                                case .toolUse(let toolUseID, let name):
+                                    toolUseArgsByIndex[index] = ""
+                                    let chunk = OpenAIChatStream.Chunk(
+                                        id: id, created: createdEpoch, model: model,
+                                        choices: [.init(
+                                            index: 0,
+                                            delta: .init(toolCalls: [
+                                                .init(
+                                                    index: index,
+                                                    id: toolUseID,
+                                                    type: "function",
+                                                    function: .init(name: name, arguments: "")
+                                                )
+                                            ]),
+                                            finishReason: nil
+                                        )]
+                                    )
+                                    continuation.yield(
+                                        OpenAIChatStream.sseEvent(OpenAIChatStream.encodeChunk(chunk))
+                                    )
+                                }
 
-                            case .contentBlockDelta(_, let delta):
+                            case .contentBlockDelta(let index, let delta):
                                 switch delta {
                                 case .textDelta(let text):
                                     // Lauret sse-B re-audit P3 FOLD: skip empty
@@ -444,18 +480,95 @@ public enum ClaudeAPIServeDispatch {
                                     continuation.yield(
                                         OpenAIChatStream.sseEvent(OpenAIChatStream.encodeChunk(chunk))
                                     )
-                                case .inputJsonDelta:
-                                    // Child C: tool-use input fragments.
-                                    continue
+                                case .inputJsonDelta(let partial):
+                                    // V.13b-sse-c — tool-use input fragments.
+                                    // Accumulate per-block for the defensive
+                                    // concatenation validation at messageDelta
+                                    // time, and emit a CONTINUATION fragment
+                                    // carrying ONLY `arguments` (sparse-encoded
+                                    // via ToolCallFragment + FunctionFragment
+                                    // encodeIfPresent — no id, no type, no
+                                    // function.name).
+                                    toolUseArgsByIndex[index, default: ""] += partial
+                                    let chunk = OpenAIChatStream.Chunk(
+                                        id: id, created: createdEpoch, model: model,
+                                        choices: [.init(
+                                            index: 0,
+                                            delta: .init(toolCalls: [
+                                                .init(
+                                                    index: index,
+                                                    function: .init(arguments: partial)
+                                                )
+                                            ]),
+                                            finishReason: nil
+                                        )]
+                                    )
+                                    continuation.yield(
+                                        OpenAIChatStream.sseEvent(OpenAIChatStream.encodeChunk(chunk))
+                                    )
                                 }
 
                             case .contentBlockStop:
                                 // Text block boundary: NO-OP wire.
+                                // Tool_use block boundary: NO-OP wire (the
+                                // terminal finish_reason chunk handles
+                                // stream end). The args buffer remains
+                                // intact for messageDelta validation.
                                 continue
 
                             case .messageDelta(let stopReason, let outputTokens):
                                 usage.setCompletion(outputTokens)
                                 usage.setStopReason(stopReason)
+                                // V.13b-sse-c — Schneier P1 defensive
+                                // concatenation validation. If the upstream
+                                // terminates with stop_reason="tool_use",
+                                // each accumulated args buffer MUST parse as
+                                // valid JSON; otherwise THROW a typed
+                                // upstream error. The wire-level rendering
+                                // of this throw is Child D's scope; here we
+                                // surface the throw so the producer body's
+                                // catch propagates it to the drive loop.
+                                if stopReason == "tool_use" {
+                                    // Lauret sse-C re-audit P3 FIX-NOW: a
+                                    // stop_reason of "tool_use" with NO
+                                    // tool_use blocks buffered is an upstream
+                                    // protocol violation — the wire would
+                                    // emit `finish_reason: "tool_calls"` with
+                                    // no tool_calls header/continuation
+                                    // anywhere, which is malformed OpenAI SSE.
+                                    // Surface as a typed upstream error
+                                    // (Child D renders the wire envelope).
+                                    if toolUseArgsByIndex.isEmpty {
+                                        throw ClaudeAPIChatEngineError.upstreamError(
+                                            status: 502,
+                                            type: "upstream_protocol_violation"
+                                        )
+                                    }
+                                    // Lauret sse-C re-audit P3 FIX-NOW: use
+                                    // `.allowFragments` so a legal-JSON
+                                    // primitive (string/number/bool/null) at
+                                    // the top level — unusual but RFC-valid
+                                    // — doesn't trigger a false-positive
+                                    // tool_arguments_malformed. Anthropic's
+                                    // documented schema is `type: object` but
+                                    // the validator stays aligned with raw
+                                    // JSON. Deterministic iteration via
+                                    // sorted keys so future error payloads
+                                    // can surface the offending index.
+                                    for index in toolUseArgsByIndex.keys.sorted() {
+                                        let args = toolUseArgsByIndex[index] ?? ""
+                                        let bytes = Data(args.utf8)
+                                        if (try? JSONSerialization.jsonObject(
+                                            with: bytes,
+                                            options: [.allowFragments]
+                                        )) == nil {
+                                            throw ClaudeAPIChatEngineError.upstreamError(
+                                                status: 502,
+                                                type: "tool_arguments_malformed"
+                                            )
+                                        }
+                                    }
+                                }
 
                             case .messageStop:
                                 let finishReason = mapStopReason(usage.stopReason)
@@ -545,15 +658,15 @@ public enum ClaudeAPIServeDispatch {
     }
 
     /// Map Anthropic `stop_reason` to OpenAI `finish_reason` for the
-    /// terminal chunk. Text-only path: tool_use is dropped silently by the
-    /// translator, so a tool_use stop_reason collapses to "stop" (the wire
-    /// will be incomplete for tool-use clients in Child B — Child C wires
-    /// the real handling). Unknown / nil → "stop".
+    /// terminal chunk. V.13b-sse-c wires the tool_use → tool_calls
+    /// mapping so the translator's terminal chunk carries
+    /// `finish_reason: "tool_calls"` when Anthropic ended on a tool_use
+    /// block. Unknown / nil → "stop".
     static func mapStopReason(_ stopReason: String?) -> String {
         switch stopReason {
         case "end_turn", "stop_sequence", "stop", nil: return "stop"
         case "max_tokens": return "length"
-        case "tool_use": return "stop"   // text-only Child B
+        case "tool_use": return "tool_calls"
         default: return "stop"
         }
     }

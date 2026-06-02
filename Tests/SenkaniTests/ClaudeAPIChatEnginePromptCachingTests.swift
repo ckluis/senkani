@@ -1,7 +1,34 @@
 import Testing
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import SQLite3
 @testable import Core
+
+// MARK: - V.13b-4c follow-up — test hardening
+//
+// Round 24 (2026-06-02) — Lauret/Schneier P2 hardening:
+//
+//   * `warningFiresOnlyOncePerProcessLifetime` now performs a real
+//     `dup2`-backed stderr-pipe swap and counts the warning marker in the
+//     captured bytes. Replaces the lock-flag-only assertion that could not
+//     prove the helper short-circuits the WRITE (only that the flag was set
+//     once). The test must run with the once-per-process flag reset both
+//     BEFORE and AFTER — the existing `resetCacheTokenAbsenceWarningForTesting`
+//     hook makes this deterministic regardless of suite ordering.
+//
+//   * The chatStream wire-shape tests (opt-in OFF / opt-in ON) now compare
+//     the captured request body Data byte-for-byte against a fixture built
+//     by encoding the SAME `AnthropicMessagesRequest` shape with the SAME
+//     `JSONEncoder(outputFormatting: [.sortedKeys])` config used by
+//     production code. Pins the wire bytes against silent JSONEncoder
+//     drift / re-ordering / format changes.
+//
+// The new stderr-capture helper restores the original `stderr` file
+// descriptor in a `defer` so a thrown body cannot leak the fd swap.
 
 /// V.13b prompt-caching A — wire-side cache_control + opt-in flag tests
 /// (Lauret P0 sum-type round-trip; Lauret P0 header-IFF-body; Lauret P0
@@ -82,6 +109,69 @@ private func capturedStreamBody() -> String {
         out.append(buf, count: n)
     }
     return String(data: out, encoding: .utf8) ?? ""
+}
+
+/// V.13b-4c follow-up (Schneier P2) — capture everything written to
+/// `stderr` by `body` and return it as raw bytes.
+///
+/// Implementation: `dup` the current `STDERR_FILENO`, `dup2` the write end
+/// of a fresh `Pipe` into `STDERR_FILENO`, run `body`, flush + close the
+/// pipe's write end, restore the saved fd via `dup2`, then drain the
+/// pipe's read end to EOF. The restore is in a `defer` so even if `body`
+/// throws the original stderr fd is reinstated and the saved descriptor
+/// is closed (no fd leak).
+///
+/// Notes:
+/// - Closing the write end is what unblocks `readDataToEndOfFile()` on
+///   the read end; without it the read would hang.
+/// - The Swift runtime's `print(...)` uses the underlying STDERR_FILENO
+///   when writing diagnostics, so `dup2` at the fd level (not just
+///   `FileHandle.standardError`) is sufficient for `FileHandle
+///   .standardError.write(...)` paths used by the engine.
+@discardableResult
+private func captureStandardError(_ body: () async throws -> Void) async throws -> Data {
+    fflush(stderr)
+    let savedFd = dup(fileno(stderr))
+    #expect(savedFd >= 0, "dup(stderr) should succeed")
+
+    let pipe = Pipe()
+    let writeFd = pipe.fileHandleForWriting.fileDescriptor
+    let dupResult = dup2(writeFd, fileno(stderr))
+    #expect(dupResult >= 0, "dup2 of pipe write end into stderr should succeed")
+
+    // Ensure we always restore the original stderr fd, even on throw, and
+    // close the saved descriptor so the test cannot leak file descriptors.
+    var restored = false
+    func restore() {
+        guard !restored else { return }
+        restored = true
+        fflush(stderr)
+        _ = dup2(savedFd, fileno(stderr))
+        close(savedFd)
+    }
+    defer { restore() }
+
+    var thrown: Error?
+    do {
+        try await body()
+    } catch {
+        thrown = error
+    }
+
+    // Flush the engine's writes through the pipe, then close the write
+    // end so the read side hits EOF.
+    fflush(stderr)
+    try? pipe.fileHandleForWriting.close()
+
+    // Restore stderr BEFORE reading, so any diagnostics from the drain
+    // path go to the real terminal.
+    restore()
+
+    let captured = pipe.fileHandleForReading.readDataToEndOfFile()
+    try? pipe.fileHandleForReading.close()
+
+    if let thrown { throw thrown }
+    return captured
 }
 
 /// Minimal SSE body that drives chatStream() to completion without yielding
@@ -222,6 +312,52 @@ struct ClaudeAPIChatEnginePromptCachingChatWireTests {
 @Suite("ClaudeAPIChatEngine — prompt-caching wire shape (chatStream)", .serialized, .urlProtocolGate)
 struct ClaudeAPIChatEnginePromptCachingStreamWireTests {
 
+    /// V.13b-4c follow-up (Lauret P2) — capture the actual wire-bytes from
+    /// the MockSSEStreamProtocol intercept. Returns `Data` (not `String`)
+    /// so byte-exact equality is meaningful.
+    private static func capturedStreamBodyData() -> Data {
+        guard let req = MockSSEStreamProtocol.lastRequest else { return Data() }
+        if let body = req.httpBody { return body }
+        guard let stream = req.httpBodyStream else { return Data() }
+        stream.open(); defer { stream.close() }
+        var out = Data()
+        var buf = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let n = stream.read(&buf, maxLength: buf.count)
+            if n <= 0 { break }
+            out.append(buf, count: n)
+        }
+        return out
+    }
+
+    /// Build the EXPECTED byte fixture by encoding the same
+    /// `AnthropicMessagesRequest` shape with the SAME `JSONEncoder`
+    /// config used by production (`outputFormatting: [.sortedKeys]`).
+    /// Pins JSONEncoder's per-key emission order + field set against
+    /// silent drift. If production adds a new wire field that the
+    /// fixture omits (or vice versa), this test fails LOUDLY — which is
+    /// the entire point.
+    private static func expectedStreamBody(
+        wireModel: String,
+        maxTokens: Int,
+        systemField: AnthropicSystem?,
+        userText: String
+    ) throws -> Data {
+        let req = AnthropicMessagesRequest(
+            model: wireModel,
+            max_tokens: maxTokens,
+            system: systemField,
+            messages: [
+                .init(role: "user", content: .text(userText))
+            ],
+            tools: nil,
+            stream: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(req)
+    }
+
     @Test func chatStreamOptInOffEmitsLegacyBareStringAndOmitsBetaHeader() async throws {
         MockSSEStreamProtocol.reset(); defer { MockSSEStreamProtocol.reset() }
         MockSSEStreamProtocol.register(url: promptCachingAnthropicURL, chunks: [Data(minimalSSE.utf8)])
@@ -238,10 +374,20 @@ struct ClaudeAPIChatEnginePromptCachingStreamWireTests {
         )
         for try await _ in stream { /* drain */ }
 
-        let bodyStr = capturedStreamBody()
-        #expect(bodyStr.contains("\"system\":\"be concise\""))
-        #expect(!bodyStr.contains("\"cache_control\""))
-        #expect(!bodyStr.contains("\"system\":["))
+        // V.13b-4c follow-up (Lauret P2): BYTE-EXACT wire-shape fixture.
+        // Expected: legacy bare-string system field, no cache_control, no
+        // tools array, stream:true. The previous `.contains(...)` asserts
+        // could miss reordering, an unexpected new field, or a format
+        // drift; equality on `Data` cannot.
+        let expectedBody = try Self.expectedStreamBody(
+            wireModel: "claude-3-5-haiku-latest",
+            maxTokens: 4096,
+            systemField: .legacy("be concise"),
+            userText: "yo"
+        )
+        let actualBody = Self.capturedStreamBodyData()
+        #expect(actualBody == expectedBody,
+                "opt-in OFF wire bytes drifted from the pinned fixture")
 
         let req = MockSSEStreamProtocol.lastRequest
         #expect(req?.value(forHTTPHeaderField: "anthropic-beta") == nil)
@@ -263,11 +409,26 @@ struct ClaudeAPIChatEnginePromptCachingStreamWireTests {
         )
         for try await _ in stream { /* drain */ }
 
-        let bodyStr = capturedStreamBody()
-        #expect(bodyStr.contains("\"system\":["))
-        #expect(bodyStr.contains("\"cache_control\":{\"type\":\"ephemeral\"}"))
-        #expect(bodyStr.contains("\"text\":\"project-instructions\""))
-        #expect(!bodyStr.contains("\"system\":\"project-instructions\""))
+        // V.13b-4c follow-up (Lauret P2): BYTE-EXACT wire-shape fixture.
+        // Expected: typed-block system array carrying a single
+        // {type:"text", text:..., cache_control:{type:"ephemeral"}} block.
+        // The `AnthropicCacheControl` rename (r22) must NOT change wire
+        // bytes; this fixture pins the post-rename shape.
+        let expectedBody = try Self.expectedStreamBody(
+            wireModel: "claude-3-5-haiku-latest",
+            maxTokens: 4096,
+            systemField: .blocks([
+                AnthropicSystemBlock(
+                    type: "text",
+                    text: "project-instructions",
+                    cache_control: AnthropicCacheControl(type: "ephemeral")
+                )
+            ]),
+            userText: "yo"
+        )
+        let actualBody = Self.capturedStreamBodyData()
+        #expect(actualBody == expectedBody,
+                "opt-in ON wire bytes drifted from the pinned fixture")
 
         let req = MockSSEStreamProtocol.lastRequest
         #expect(req?.value(forHTTPHeaderField: "anthropic-beta") == ClaudeAPIChatEngine.promptCachingBetaHeader)
@@ -387,6 +548,12 @@ struct ClaudeAPIChatEnginePromptCachingResponseTests {
 
     @Test func warningFiresOnlyOncePerProcessLifetime() async throws {
         MockURLProtocol.reset(); defer { MockURLProtocol.reset() }
+        // V.13b-4c follow-up (Schneier P2): the once-per-process flag is
+        // shared with every other test that fires the warning. We MUST
+        // reset it before AND after so the captured stderr observation is
+        // deterministic regardless of suite ordering (`.serialized` at the
+        // suite level pairs with this reset to also block intra-suite
+        // races on stderr).
         ClaudeAPIChatEngine.resetCacheTokenAbsenceWarningForTesting()
         defer { ClaudeAPIChatEngine.resetCacheTokenAbsenceWarningForTesting() }
 
@@ -397,26 +564,44 @@ struct ClaudeAPIChatEnginePromptCachingResponseTests {
 
         let engine = makePromptCachingEngine()
 
-        // First call flips the flag.
-        _ = try await engine.chat(
-            model: "claude-haiku-3.5",
-            messages: [.init(role: "user", content: "hi")],
-            tools: [],
-            cacheControl: .ephemeral
-        )
-        #expect(ClaudeAPIChatEngine.hasWarnedAboutCacheTokenAbsenceForTesting() == true)
+        // V.13b-4c follow-up (Schneier P2): capture REAL stderr bytes via a
+        // dup2-backed Pipe swap. Run N=3 opt-in calls whose responses are
+        // missing both cache_* fields; the once-per-process helper must
+        // emit the warning marker EXACTLY ONCE across those N calls (the
+        // first call writes; calls 2 and 3 short-circuit on the lock-
+        // guarded flag and write NOTHING).
+        // Note: a system message is REQUIRED for caching to be `enabled` on
+        // the wire (the `(.ephemeral, .some)` arm). Without it,
+        // `buildSystemField` takes the `(.ephemeral, .none)` arm, returns
+        // nil, and the missing-cache-tokens warning never even has a chance
+        // to fire because `cachingEnabled` is false. So we include a real
+        // system message — this exercises the `cachingEnabled = true` +
+        // `realCacheCreation == nil` + `realCacheRead == nil` arm that
+        // triggers `warnAboutMissingCacheTokensOnceIfNeeded()`.
+        let captured = try await captureStandardError {
+            for _ in 0..<3 {
+                _ = try await engine.chat(
+                    model: "claude-haiku-3.5",
+                    messages: [
+                        .init(role: "system", content: "project-instructions"),
+                        .init(role: "user", content: "hi"),
+                    ],
+                    tools: [],
+                    cacheControl: .ephemeral
+                )
+            }
+        }
 
-        // Second call sees the flag already set and is a no-op for the
-        // warning side — verified by the helper's once-per-process guard.
-        // (We can't observe "did NOT print to stderr" structurally here,
-        // but the lock-guarded helper has only one branch that prints, and
-        // it short-circuits when the flag is already true.)
-        _ = try await engine.chat(
-            model: "claude-haiku-3.5",
-            messages: [.init(role: "user", content: "hi again")],
-            tools: [],
-            cacheControl: .ephemeral
-        )
+        let capturedString = String(data: captured, encoding: .utf8) ?? ""
+        let warningMarker = "warning: prompt-caching beta header may be deprecated"
+
+        // 1 occurrence ⇒ exactly 2 components on a split.
+        let parts = capturedString.components(separatedBy: warningMarker)
+        #expect(parts.count == 2,
+                "expected warning marker exactly ONCE in captured stderr; got \(parts.count - 1) occurrence(s). Captured bytes: \(capturedString.debugDescription)")
+
+        // Flag stays set across all N calls (regression on the existing
+        // lock-flag invariant).
         #expect(ClaudeAPIChatEngine.hasWarnedAboutCacheTokenAbsenceForTesting() == true)
     }
 

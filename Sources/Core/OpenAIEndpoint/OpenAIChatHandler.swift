@@ -77,6 +77,18 @@ public enum OpenAIChatHandler {
             self.realCacheCreationTokens = realCacheCreationTokens
             self.realCacheReadTokens = realCacheReadTokens
         }
+
+        /// V.13b-4c follow-up (Karpathy P3) — single source of truth for the
+        /// "prefer the tokenizer-accurate count when present; fall back to
+        /// the heuristic" resolution. Both the local-arm `OpenAIChatHandler
+        /// .handle(...)` and the serve-arm `ClaudeAPIServeDispatch
+        /// .successOutcome(...)` route through this property so a future
+        /// engine that populates only one of the real-* fields has exactly
+        /// one resolution rule. Audit-row + `Usage` wire stay in lockstep.
+        public var resolvedTokenCounts: (prompt: Int, completion: Int) {
+            (realPromptTokens ?? promptTokens,
+             realCompletionTokens ?? completionTokens)
+        }
     }
 
     /// Produces the assistant completion for a routed request. Injected so
@@ -165,6 +177,64 @@ public enum OpenAIChatHandler {
         let routing = route(request: request, recordPreset: recordPreset)
         let completion = engine.complete(routing.actualModel, request.messages, request.tools ?? [])
 
+        // V.13b-4c follow-up (Lauret P3 — option B) — both the local-arm
+        // (here) and the serve-arm (`ClaudeAPIServeDispatch.successOutcome`)
+        // now route through the single `buildSuccessOutcome(...)` builder so
+        // future fields wired on one path land on the other automatically —
+        // structural divergence guard.
+        let built = buildSuccessOutcome(
+            completion: completion,
+            request: request,
+            routing: routing,
+            keyLabel: keyLabel,
+            now: now,
+            id: id
+        )
+
+        let telemetry = TelemetryEvent(
+            surface: "chat",
+            modelLogged: routing.modelLogged,
+            resolvedTier: routing.resolvedTier.rawValue,
+            presetUsed: routing.presetUsed.rawValue
+        )
+
+        return Result(
+            response: built.response,
+            routing: routing,
+            telemetry: telemetry,
+            auditFields: built.fields,
+            auditBodies: built.bodies
+        )
+    }
+
+    // MARK: - Shared success builder (Lauret P3 — option B)
+
+    /// V.13b-4c follow-up (Lauret P3 — option B) — shared success-shape
+    /// builder used by BOTH `handle(...)` (local-arm) and
+    /// `ClaudeAPIServeDispatch.successOutcome(...)` (serve-arm Claude API
+    /// path). Returns the OpenAI `ChatCompletionResponse` + the matching
+    /// `AuditFields` (status `"ok"`) + the `AuditBodies` summary. Routing,
+    /// `now`, and `id` are injected for determinism.
+    ///
+    /// Centralizing the shape here STRUCTURALLY eliminates the prior risk
+    /// of the two callers drifting (e.g. one wiring a new completion
+    /// field, the other forgetting). Token counts go through
+    /// `completion.resolvedTokenCounts` so the `usage` block and the audit
+    /// row's `prompt_token_count`/`completion_token_count` stay in lockstep.
+    ///
+    /// `internal` visibility — `ClaudeAPIServeDispatch` is in the same
+    /// `Core` module; the helper is not part of the public API surface
+    /// (Schneier — minimize the public footprint).
+    static func buildSuccessOutcome(
+        completion: Completion,
+        request: ChatCompletionRequest,
+        routing: Routing,
+        keyLabel: String?,
+        now: Date,
+        id: String
+    ) -> (response: ChatCompletionResponse,
+          fields: OpenAIAuditChain.AuditFields,
+          bodies: OpenAIAuditChain.AuditBodies) {
         // V.13d — a tool-call completion sets `tool_calls` + `content: null`
         // + `finish_reason: "tool_calls"`; a normal completion sets the
         // string content + `finish_reason: "stop"`.
@@ -174,12 +244,11 @@ public enum OpenAIChatHandler {
             : .init(role: "assistant", content: completion.content)
         let finishReason = usesTools ? "tool_calls" : "stop"
 
-        // V.13 real-chat (sub-item 3) — prefer the engine's tokenizer-
-        // accurate count when present; fall back to the heuristic. Both
-        // `usage` and the audit chain see the same numbers so a tokenizer-
-        // aware engine produces tokenizer-aware audit rows.
-        let promptTokens = completion.realPromptTokens ?? completion.promptTokens
-        let completionTokens = completion.realCompletionTokens ?? completion.completionTokens
+        // V.13b-4c follow-up (Karpathy P3) — single source of truth for
+        // tokenizer-accurate vs heuristic count resolution. Both `usage` and
+        // the audit chain see the same numbers via the `Completion`
+        // computed property.
+        let (promptTokens, completionTokens) = completion.resolvedTokenCounts
 
         let response = ChatCompletionResponse(
             id: id,
@@ -195,13 +264,6 @@ public enum OpenAIChatHandler {
             )
         )
 
-        let telemetry = TelemetryEvent(
-            surface: "chat",
-            modelLogged: routing.modelLogged,
-            resolvedTier: routing.resolvedTier.rawValue,
-            presetUsed: routing.presetUsed.rawValue
-        )
-
         let fields = OpenAIAuditChain.AuditFields(
             ts: now,
             keyLabel: keyLabel,
@@ -213,11 +275,13 @@ public enum OpenAIChatHandler {
             completionTokenCount: completionTokens,
             status: "ok",
             // V.13b prompt-caching B — propagate Anthropic-decoded cache
-            // token counts from the engine. Always nil in Child B (no
-            // engine populates these yet); Child A wires them when an
-            // opt-in request invokes Anthropic prompt caching. The values
-            // ride to the persisted store via AuditFields (Lauret P2 — the
-            // sink positional signature stays unchanged).
+            // token counts from the engine. The values ride to the persisted
+            // store via AuditFields (Lauret P2 — the sink positional
+            // signature stays unchanged); they are AUDIT-ONLY and never
+            // surface on the OpenAI response wire (Lauret P2 wire-stability
+            // invariant). The local-arm path's engine reports nil here; the
+            // serve-arm's `ClaudeAPIChatEngine.chat(...)` populates these
+            // when an opt-in request invokes Anthropic prompt caching.
             cacheCreationInputTokens: completion.realCacheCreationTokens,
             cacheReadInputTokens: completion.realCacheReadTokens
         )
@@ -232,13 +296,7 @@ public enum OpenAIChatHandler {
             responseBody: responseBody
         )
 
-        return Result(
-            response: response,
-            routing: routing,
-            telemetry: telemetry,
-            auditFields: fields,
-            auditBodies: bodies
-        )
+        return (response, fields, bodies)
     }
 
     // MARK: - Decode / encode (JSON + HTTP framing)

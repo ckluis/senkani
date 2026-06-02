@@ -304,52 +304,26 @@ public enum ClaudeAPIServeDispatch {
         now: Date,
         id: String
     ) -> Outcome {
-        let usesTools = !completion.toolCalls.isEmpty
-        let choiceMessage: ChatCompletionResponse.Choice.Message = usesTools
-            ? .init(role: "assistant", content: nil, toolCalls: completion.toolCalls)
-            : .init(role: "assistant", content: completion.content)
-        let finishReason = usesTools ? "tool_calls" : "stop"
-
-        let resolvedPromptTokens = completion.realPromptTokens ?? completion.promptTokens
-        let resolvedCompletionTokens = completion.realCompletionTokens ?? completion.completionTokens
-
-        let response = ChatCompletionResponse(
-            id: id,
-            created: Int(now.timeIntervalSince1970),
-            model: routing.actualModel,
-            choices: [
-                .init(index: 0, message: choiceMessage, finishReason: finishReason)
-            ],
-            usage: .init(
-                promptTokens: resolvedPromptTokens,
-                completionTokens: resolvedCompletionTokens,
-                totalTokens: resolvedPromptTokens + resolvedCompletionTokens
-            )
-        )
-
-        let fields = OpenAIAuditChain.AuditFields(
-            ts: now,
+        // V.13b-4c follow-up (Lauret P3 — option B) — route through the
+        // shared `OpenAIChatHandler.buildSuccessOutcome(...)` helper that
+        // the local-arm `OpenAIChatHandler.handle(...)` also uses. Token
+        // counts resolve via `completion.resolvedTokenCounts` (Karpathy P3,
+        // single source of truth). Future success-shape fields wired on
+        // either caller's path now land on the other automatically — no
+        // structural drift between local-arm + serve-arm.
+        let built = OpenAIChatHandler.buildSuccessOutcome(
+            completion: completion,
+            request: request,
+            routing: routing,
             keyLabel: keyLabel,
-            surface: "chat",
-            modelLogged: routing.modelLogged,
-            presetUsed: routing.presetUsed.rawValue,
-            resolvedTier: routing.resolvedTier.rawValue,
-            promptTokenCount: resolvedPromptTokens,
-            completionTokenCount: resolvedCompletionTokens,
-            status: "ok"
-        )
-        let responseBody = usesTools
-            ? "tool_calls=[" + completion.toolCalls.map(\.function.name).joined(separator: ",") + "]"
-            : completion.content
-        let bodies = OpenAIAuditChain.AuditBodies(
-            requestBody: OpenAIChatHandler.requestSummary(request),
-            responseBody: responseBody
+            now: now,
+            id: id
         )
         return Outcome(
             httpStatus: 200,
-            data: OpenAIChatHandler.encodeResponse(response),
-            auditFields: fields,
-            auditBodies: bodies
+            data: OpenAIChatHandler.encodeResponse(built.response),
+            auditFields: built.fields,
+            auditBodies: built.bodies
         )
     }
 

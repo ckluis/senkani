@@ -74,6 +74,11 @@ public final class EgressListener: @unchecked Sendable {
     private let judge: JudgeAdapter?
     private let database: SessionDatabase
     private let config: Config
+    /// Upstream-connect seam (V.13b-4d-ii). Defaults to the production
+    /// `DefaultEgressUpstreamConnector` adopter. Tests inject a
+    /// `LoopbackStubConnector` to redirect ALLOW-arm CONNECTs at a
+    /// fixture loopback port without dialing the real upstream.
+    private let upstreamConnector: EgressUpstreamConnecting
     private let queue = DispatchQueue(label: "com.senkani.egress-listener", qos: .userInitiated)
     private let connectionQueue = DispatchQueue(label: "com.senkani.egress-conn", qos: .userInitiated, attributes: .concurrent)
     private let lock = NSLock()
@@ -89,22 +94,35 @@ public final class EgressListener: @unchecked Sendable {
         policy: EgressPolicy,
         judge: JudgeAdapter? = nil,
         database: SessionDatabase = .shared,
-        config: Config = Config()
+        config: Config = Config(),
+        upstreamConnector: EgressUpstreamConnecting = DefaultEgressUpstreamConnector()
     ) {
         self.policy = policy
         self.judge = judge
         self.database = database
         self.config = config
+        self.upstreamConnector = upstreamConnector
     }
 
     /// Back-compat init for T.1a callers. Wraps the flat rule engine in
     /// an `EgressPolicy` covering every `PaneMode`. No judge adapter
     /// (static-only behavior — matches T.1a semantics exactly).
-    public convenience init(rules: EgressRuleEngine, database: SessionDatabase = .shared, config: Config = Config()) {
+    public convenience init(
+        rules: EgressRuleEngine,
+        database: SessionDatabase = .shared,
+        config: Config = Config(),
+        upstreamConnector: EgressUpstreamConnecting = DefaultEgressUpstreamConnector()
+    ) {
         var engines: [PaneMode: EgressRuleEngine] = [:]
         for mode in PaneMode.allCases { engines[mode] = rules }
         let policy = EgressPolicy(engines: engines)
-        self.init(policy: policy, judge: nil, database: database, config: config)
+        self.init(
+            policy: policy,
+            judge: nil,
+            database: database,
+            config: config,
+            upstreamConnector: upstreamConnector
+        )
     }
 
     /// Bound port after `start()` succeeds. Zero before start / after stop.
@@ -246,7 +264,8 @@ public final class EgressListener: @unchecked Sendable {
             policy: policy,
             judge: judge,
             database: database,
-            clientFD: clientFD
+            clientFD: clientFD,
+            upstreamConnector: upstreamConnector
         )
         connectionQueue.async {
             handler.run()

@@ -30,6 +30,11 @@ final class EgressConnectionHandler: @unchecked Sendable {
     private let database: SessionDatabase
     private let clientFD: Int32
     private let startTime: DispatchTime
+    /// Upstream-connect seam (V.13b-4d-ii). Defaults to the production
+    /// `DefaultEgressUpstreamConnector` adopter so existing callers
+    /// compile and behave unchanged. Tests inject `LoopbackStubConnector`
+    /// to redirect ALLOW-arm CONNECTs at a fixture loopback port.
+    private let upstreamConnector: EgressUpstreamConnecting
     /// Resolved during request-head parsing (PaneMode.default if no
     /// `X-Senkani-Pane-Mode` header is present). Used by the decision
     /// recorder so audit rows carry the framing for the dispatched
@@ -55,13 +60,15 @@ final class EgressConnectionHandler: @unchecked Sendable {
         policy: EgressPolicy,
         judge: JudgeAdapter? = nil,
         database: SessionDatabase,
-        clientFD: Int32
+        clientFD: Int32,
+        upstreamConnector: EgressUpstreamConnecting = DefaultEgressUpstreamConnector()
     ) {
         self.policy = policy
         self.judge = judge
         self.database = database
         self.clientFD = clientFD
         self.startTime = DispatchTime.now()
+        self.upstreamConnector = upstreamConnector
     }
 
     /// Back-compat init that wraps a flat rule engine in an EgressPolicy
@@ -218,7 +225,7 @@ final class EgressConnectionHandler: @unchecked Sendable {
         // `GET http://host:port/path HTTP/1.1` → `GET /path HTTP/1.1`.
         let path = parsed.path ?? "/"
         let rewrittenLine = "\(parsed.method) \(path) \(parsed.httpVersion)\r\n"
-        guard let upstreamFD = EgressUpstreamConnector.connect(host: parsed.host, port: parsed.port) else {
+        guard let upstreamFD = upstreamConnector.connect(host: parsed.host, port: parsed.port) else {
             recordDecision(host: normalizedHost, method: parsed.method, decision: .deny, ruleId: "upstream_unreachable", paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
             sendStatus(502, message: "Bad Gateway")
             return
@@ -278,7 +285,7 @@ final class EgressConnectionHandler: @unchecked Sendable {
         }
 
         // SNI matches CONNECT line. Open upstream and tunnel.
-        guard let upstreamFD = EgressUpstreamConnector.connect(host: parsed.host, port: parsed.port) else {
+        guard let upstreamFD = upstreamConnector.connect(host: parsed.host, port: parsed.port) else {
             recordDecision(host: normalizedHost, method: parsed.method, decision: .deny, ruleId: "upstream_unreachable", paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
             return
         }

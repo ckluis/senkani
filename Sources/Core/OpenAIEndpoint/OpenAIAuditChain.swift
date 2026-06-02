@@ -29,6 +29,14 @@ public final class OpenAIAuditChain: @unchecked Sendable {
 
     /// The documented per-request audit shape. No prompt/response text —
     /// see `AuditBodies` for the opt-in body columns.
+    ///
+    /// V.13b prompt-caching B — `cacheCreationInputTokens` and
+    /// `cacheReadInputTokens` ride INSIDE `AuditFields` (Lauret P2 — the sink
+    /// signature `OpenAIServedRequestSink.record(...)` stays unchanged; the
+    /// new values get added to the persisted store via `AuditFields`, not via
+    /// new positional args, so every caller continues compiling without
+    /// churn). Always `nil` in Child B; Child A wires them through `Completion`
+    /// when an opt-in request actually invokes prompt caching.
     public struct AuditFields: Sendable, Equatable {
         public let ts: Date
         public let keyLabel: String?
@@ -39,6 +47,16 @@ public final class OpenAIAuditChain: @unchecked Sendable {
         public let promptTokenCount: Int
         public let completionTokenCount: Int
         public let status: String
+        /// Anthropic cache_creation_input_tokens decoded from the upstream
+        /// usage block (Child A) — audit-only; NEVER surfaces on the
+        /// `ChatCompletionResponse.Usage` wire (Lauret P2 wire-stability
+        /// invariant).
+        public let cacheCreationInputTokens: Int?
+        /// Anthropic cache_read_input_tokens decoded from the upstream
+        /// usage block (Child A) — audit-only; NEVER surfaces on the
+        /// `ChatCompletionResponse.Usage` wire (Lauret P2 wire-stability
+        /// invariant).
+        public let cacheReadInputTokens: Int?
 
         public init(
             ts: Date,
@@ -49,7 +67,9 @@ public final class OpenAIAuditChain: @unchecked Sendable {
             resolvedTier: String,
             promptTokenCount: Int,
             completionTokenCount: Int,
-            status: String
+            status: String,
+            cacheCreationInputTokens: Int? = nil,
+            cacheReadInputTokens: Int? = nil
         ) {
             self.ts = ts
             self.keyLabel = keyLabel
@@ -60,6 +80,8 @@ public final class OpenAIAuditChain: @unchecked Sendable {
             self.promptTokenCount = promptTokenCount
             self.completionTokenCount = completionTokenCount
             self.status = status
+            self.cacheCreationInputTokens = cacheCreationInputTokens
+            self.cacheReadInputTokens = cacheReadInputTokens
         }
     }
 
@@ -123,6 +145,19 @@ public final class OpenAIAuditChain: @unchecked Sendable {
         if let bodies {
             columns["request_body"] = .text(bodies.requestBody)
             columns["response_body"] = .text(bodies.responseBody)
+        }
+        // V.13b prompt-caching B — cache token columns appear in the in-memory
+        // canonical map ONLY when present. This preserves the existing chain
+        // hash for every entry where the engine does not populate cache
+        // counts (Child B's universe), so the v13e-5 burst test + the legacy
+        // OpenAIAuditChain tests continue to produce identical bytes. When
+        // Child A wires non-nil values for opt-in cache requests, those
+        // entries will be tamper-evident over the cache token counts too.
+        if let v = fields.cacheCreationInputTokens {
+            columns["cache_creation_input_tokens"] = .integer(Int64(v))
+        }
+        if let v = fields.cacheReadInputTokens {
+            columns["cache_read_input_tokens"] = .integer(Int64(v))
         }
         return columns
     }

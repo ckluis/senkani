@@ -96,7 +96,51 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
         resolvedTier: String? = nil,
         inputTokens: Int? = nil,
         outputTokens: Int? = nil,
-        upstreamResponseId: String? = nil
+        upstreamResponseId: String? = nil,
+        cacheCreationInputTokens: Int? = nil,
+        cacheReadInputTokens: Int? = nil
+    ) -> Bool {
+        // V.13b prompt-caching B — Schneier P1: NULL-vs-zero normalize at
+        // the writer trust boundary. A semantically-identical "no warm" cache
+        // miss MUST hash identically regardless of whether Anthropic's payload
+        // emits `cache_read_input_tokens: 0` / `cache_creation_input_tokens: 0`
+        // or omits the field. Collapsing `.some(0) → nil` BEFORE both SQLite
+        // bind AND canonical-map insertion pins this contract so future writer
+        // changes can't accidentally let `.some(0)` flow through and produce
+        // divergent hashes for the same underlying event. The lower-level
+        // path `recordChainedAllowingZeroForTesting` deliberately BYPASSES
+        // this normalization so a regression test can pin the policy.
+        let normalizedCacheCreation = cacheCreationInputTokens == 0 ? nil : cacheCreationInputTokens
+        let normalizedCacheRead = cacheReadInputTokens == 0 ? nil : cacheReadInputTokens
+        return recordChainedAllowingZeroForTesting(
+            ts: ts, surface: surface, status: status, keyLabel: keyLabel,
+            modelLogged: modelLogged, resolvedTier: resolvedTier,
+            inputTokens: inputTokens, outputTokens: outputTokens,
+            upstreamResponseId: upstreamResponseId,
+            cacheCreationInputTokens: normalizedCacheCreation,
+            cacheReadInputTokens: normalizedCacheRead
+        )
+    }
+
+    /// V.13b prompt-caching B — direct chained-write path that does NOT
+    /// apply the Schneier P1 NULL-vs-zero normalization. Production code
+    /// MUST call `record(...)` above; this method exists so the regression
+    /// test for NULL-vs-zero canonical hash distinction can write a row
+    /// with explicit `.some(0)` and prove the canonical map distinguishes
+    /// it from `nil`.
+    @discardableResult
+    func recordChainedAllowingZeroForTesting(
+        ts: Date,
+        surface: Surface,
+        status: Int,
+        keyLabel: String?,
+        modelLogged: String?,
+        resolvedTier: String?,
+        inputTokens: Int?,
+        outputTokens: Int?,
+        upstreamResponseId: String?,
+        cacheCreationInputTokens: Int?,
+        cacheReadInputTokens: Int?
     ) -> Bool {
         let tsEpoch = ts.timeIntervalSince1970
         return parent.queue.sync { [parent, chain] in
@@ -115,6 +159,12 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
             // post-v44 (always present, .null for local-arm rows). The v44
             // migration guarantees every new write chains under a v44+ anchor,
             // so the verifier's anchor-aware shape includes this column to match.
+            // V.13b prompt-caching B — `cache_creation_input_tokens` +
+            // `cache_read_input_tokens` ride the chain single-shape post-v45
+            // (always present, .null on non-cache requests). The v45 migration
+            // guarantees every new write chains under a v45+ anchor; legacy
+            // v44/v42/pre-v42 rows verify under their pre-v45 anchors and the
+            // verifier omits these columns from their canonical map.
             let columns: [String: ChainHasher.CanonicalValue] = [
                 "ts":            .real(tsEpoch),
                 "surface":       .text(surface.rawValue),
@@ -125,6 +175,8 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
                 "input_tokens":  inputTokens.map { .integer(Int64($0)) } ?? .null,
                 "output_tokens": outputTokens.map { .integer(Int64($0)) } ?? .null,
                 "upstream_response_id": upstreamResponseId.map { .text($0) } ?? .null,
+                "cache_creation_input_tokens": cacheCreationInputTokens.map { .integer(Int64($0)) } ?? .null,
+                "cache_read_input_tokens":     cacheReadInputTokens.map { .integer(Int64($0)) } ?? .null,
             ]
             let entryHash = ChainHasher.entryHash(
                 table: OpenAIRequestLogStore.table, columns: columns, prev: prevHash
@@ -135,8 +187,9 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
                     (ts, surface, status, key_label,
                      model_logged, resolved_tier, input_tokens, output_tokens,
                      upstream_response_id,
+                     cache_creation_input_tokens, cache_read_input_tokens,
                      prev_hash, entry_hash, chain_anchor_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
@@ -174,13 +227,23 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
             } else {
                 sqlite3_bind_null(stmt, 9)
             }
-            if let prevHash {
-                sqlite3_bind_text(stmt, 10, (prevHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            if let cacheCreationInputTokens {
+                sqlite3_bind_int64(stmt, 10, Int64(cacheCreationInputTokens))
             } else {
                 sqlite3_bind_null(stmt, 10)
             }
-            sqlite3_bind_text(stmt, 11, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
-            sqlite3_bind_int64(stmt, 12, anchorId)
+            if let cacheReadInputTokens {
+                sqlite3_bind_int64(stmt, 11, Int64(cacheReadInputTokens))
+            } else {
+                sqlite3_bind_null(stmt, 11)
+            }
+            if let prevHash {
+                sqlite3_bind_text(stmt, 12, (prevHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            } else {
+                sqlite3_bind_null(stmt, 12)
+            }
+            sqlite3_bind_text(stmt, 13, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_int64(stmt, 14, anchorId)
 
             guard sqlite3_step(stmt) == SQLITE_DONE else { return false }
             chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
@@ -275,6 +338,44 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
         public let resolvedTier: String?
         public let inputTokens: Int?
         public let outputTokens: Int?
+        /// V.13b prompt-caching B — Anthropic-side cache creation token count.
+        /// Always nil in Child B; Child A populates on Anthropic opt-in cache
+        /// requests. Pre-v45 rows persist NULL.
+        public let cacheCreationInputTokens: Int?
+        /// V.13b prompt-caching B — Anthropic-side cache read token count.
+        /// Always nil in Child B; Child A populates on Anthropic opt-in cache
+        /// requests. Pre-v45 rows persist NULL.
+        public let cacheReadInputTokens: Int?
+
+        /// V.13b prompt-caching B — explicit init so the two new cache token
+        /// fields default to nil. Keeps every pre-v45 caller / test that
+        /// constructs a `Row` literal compiling without churn while still
+        /// allowing post-v45 code to pass non-nil values.
+        public init(
+            id: Int64,
+            ts: Date,
+            surface: String,
+            status: Int,
+            keyLabel: String?,
+            modelLogged: String?,
+            resolvedTier: String?,
+            inputTokens: Int?,
+            outputTokens: Int?,
+            cacheCreationInputTokens: Int? = nil,
+            cacheReadInputTokens: Int? = nil
+        ) {
+            self.id = id
+            self.ts = ts
+            self.surface = surface
+            self.status = status
+            self.keyLabel = keyLabel
+            self.modelLogged = modelLogged
+            self.resolvedTier = resolvedTier
+            self.inputTokens = inputTokens
+            self.outputTokens = outputTokens
+            self.cacheCreationInputTokens = cacheCreationInputTokens
+            self.cacheReadInputTokens = cacheReadInputTokens
+        }
     }
 
     /// Return the N most recent rows in descending id order.
@@ -283,7 +384,8 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
             guard let db = parent.db else { return [] }
             let sql = """
                 SELECT id, ts, surface, status, key_label,
-                       model_logged, resolved_tier, input_tokens, output_tokens
+                       model_logged, resolved_tier, input_tokens, output_tokens,
+                       cache_creation_input_tokens, cache_read_input_tokens
                   FROM openai_request_log
                  ORDER BY id DESC
                  LIMIT ?;
@@ -326,6 +428,10 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
             ? nil : Int(sqlite3_column_int64(stmt, 7))
         let outputTokens: Int? = sqlite3_column_type(stmt, 8) == SQLITE_NULL
             ? nil : Int(sqlite3_column_int64(stmt, 8))
+        let cacheCreation: Int? = sqlite3_column_type(stmt, 9) == SQLITE_NULL
+            ? nil : Int(sqlite3_column_int64(stmt, 9))
+        let cacheRead: Int? = sqlite3_column_type(stmt, 10) == SQLITE_NULL
+            ? nil : Int(sqlite3_column_int64(stmt, 10))
         return Row(
             id: id,
             ts: Date(timeIntervalSince1970: ts),
@@ -335,7 +441,9 @@ public final class OpenAIRequestLogStore: @unchecked Sendable {
             modelLogged: modelLogged,
             resolvedTier: resolvedTier,
             inputTokens: inputTokens,
-            outputTokens: outputTokens
+            outputTokens: outputTokens,
+            cacheCreationInputTokens: cacheCreation,
+            cacheReadInputTokens: cacheRead
         )
     }
 }

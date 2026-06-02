@@ -44,13 +44,29 @@ public enum OpenAIChatHandler {
         /// `Generation.info(GenerateCompletionInfo).generationTokenCount`).
         /// Same fallback semantics as `realPromptTokens`.
         public let realCompletionTokens: Int?
+        /// V.13b prompt-caching B — Anthropic-decoded
+        /// `cache_creation_input_tokens` from the upstream usage block.
+        /// Always nil in Child B (no engine populates this yet); Child A
+        /// wires the value through when an opt-in request invokes Anthropic
+        /// prompt caching. **Audit-only** — `ChatCompletionResponse.Usage`
+        /// stays at `{prompt_tokens, completion_tokens, total_tokens}` and
+        /// NEVER surfaces cache token fields on the OpenAI response wire
+        /// (Lauret P2 wire-stability invariant).
+        public let realCacheCreationTokens: Int?
+        /// V.13b prompt-caching B — Anthropic-decoded
+        /// `cache_read_input_tokens` from the upstream usage block. Same
+        /// semantics as `realCacheCreationTokens` — audit-only, never on the
+        /// OpenAI response wire (Lauret P2).
+        public let realCacheReadTokens: Int?
         public init(
             content: String,
             toolCalls: [OpenAIToolCall] = [],
             promptTokens: Int,
             completionTokens: Int,
             realPromptTokens: Int? = nil,
-            realCompletionTokens: Int? = nil
+            realCompletionTokens: Int? = nil,
+            realCacheCreationTokens: Int? = nil,
+            realCacheReadTokens: Int? = nil
         ) {
             self.content = content
             self.toolCalls = toolCalls
@@ -58,6 +74,8 @@ public enum OpenAIChatHandler {
             self.completionTokens = completionTokens
             self.realPromptTokens = realPromptTokens
             self.realCompletionTokens = realCompletionTokens
+            self.realCacheCreationTokens = realCacheCreationTokens
+            self.realCacheReadTokens = realCacheReadTokens
         }
     }
 
@@ -193,7 +211,15 @@ public enum OpenAIChatHandler {
             resolvedTier: routing.resolvedTier.rawValue,
             promptTokenCount: promptTokens,
             completionTokenCount: completionTokens,
-            status: "ok"
+            status: "ok",
+            // V.13b prompt-caching B — propagate Anthropic-decoded cache
+            // token counts from the engine. Always nil in Child B (no
+            // engine populates these yet); Child A wires them when an
+            // opt-in request invokes Anthropic prompt caching. The values
+            // ride to the persisted store via AuditFields (Lauret P2 — the
+            // sink positional signature stays unchanged).
+            cacheCreationInputTokens: completion.realCacheCreationTokens,
+            cacheReadInputTokens: completion.realCacheReadTokens
         )
 
         // When the model called a tool the response carries no text — the

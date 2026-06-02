@@ -70,6 +70,10 @@ public enum OpenAIServedRequestSink {
         // sanitize at the trust boundary, not at every consumer.
         chain.append(fields, bodies: bodies)
         let sanitizedModel = sanitize(modelLogged: fields.modelLogged)
+        // V.13b prompt-caching B — cache token counts ride INSIDE AuditFields
+        // (Lauret P2 — sink positional signature unchanged). Child B always
+        // sees these as nil; Child A wires non-nil values from the engine
+        // when an opt-in request invokes prompt caching.
         return db.recordOpenAIRequest(
             ts: fields.ts,
             surface: surface,
@@ -78,7 +82,9 @@ public enum OpenAIServedRequestSink {
             modelLogged: sanitizedModel,
             resolvedTier: fields.resolvedTier,
             inputTokens: fields.promptTokenCount,
-            outputTokens: fields.completionTokenCount
+            outputTokens: fields.completionTokenCount,
+            cacheCreationInputTokens: fields.cacheCreationInputTokens,
+            cacheReadInputTokens: fields.cacheReadInputTokens
         )
     }
 

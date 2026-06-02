@@ -735,10 +735,21 @@ public enum ChainVerifier {
         let useV44Shape = ![
             "fresh-install-pre-v42", "migration-v42", "fresh-install-pre-v44",
         ].contains(anchor.reason)
+        // V.13b prompt-caching B — rows under a v45+ anchor carry
+        // `cache_creation_input_tokens` + `cache_read_input_tokens` in their
+        // canonical hash. EXCLUSION-form mirrors the v44 predicate. The FIVE
+        // pre-v45 anchor reasons omit the columns — crucially `migration-v44`
+        // is here (Schneier P0): those rows were hashed under the v44 shape
+        // and stay v44 forever. A future `repair-*` rebind inherits v45.
+        let useV45Shape = ![
+            "fresh-install-pre-v42", "migration-v42", "fresh-install-pre-v44",
+            "migration-v44", "fresh-install-pre-v45",
+        ].contains(anchor.reason)
         let sql = """
             SELECT id, ts, surface, status, key_label,
                    model_logged, resolved_tier, input_tokens, output_tokens,
                    upstream_response_id,
+                   cache_creation_input_tokens, cache_read_input_tokens,
                    prev_hash, entry_hash
               FROM openai_request_log
              WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
@@ -763,8 +774,16 @@ public enum ChainVerifier {
             if useV44Shape {
                 columns["upstream_response_id"] = textOrNull(stmt, 9)
             }
-            let prev = optionalText(stmt, 10)
-            let stored = sqlite3_column_text(stmt, 11).map { String(cString: $0) } ?? ""
+            if useV45Shape {
+                columns["cache_creation_input_tokens"] =
+                    sqlite3_column_type(stmt, 10) == SQLITE_NULL
+                        ? .null : .integer(sqlite3_column_int64(stmt, 10))
+                columns["cache_read_input_tokens"] =
+                    sqlite3_column_type(stmt, 11) == SQLITE_NULL
+                        ? .null : .integer(sqlite3_column_int64(stmt, 11))
+            }
+            let prev = optionalText(stmt, 12)
+            let stored = sqlite3_column_text(stmt, 13).map { String(cString: $0) } ?? ""
             return (rowid, columns, prev, stored)
         }
     }

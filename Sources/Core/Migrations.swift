@@ -2488,6 +2488,125 @@ public enum MigrationRegistry {
                 try openOpenAIRequestLogV44Anchor(db: db)
             }
         },
+        Migration(version: 45, description: "openai_request_log.cache_creation_input_tokens + cache_read_input_tokens columns (Phase V.13b prompt-caching B — audit-side widening)") { db in
+            // V.13b prompt-caching B — add `cache_creation_input_tokens` and
+            // `cache_read_input_tokens` to the openai_request_log chained
+            // table so the Anthropic serve arm (Child A) can record per-row
+            // cache token counts decoded from the Anthropic upstream usage
+            // block; local-arm (OpenAI-compatible) rows and any non-cache
+            // Anthropic request write NULL.
+            //
+            // Chain-hash compatibility — FOURTH canonical-shape tier, mirroring
+            // the v42/v44 producer-metadata precedents exactly:
+            //   • pre-v42 rows  (`fresh-install-pre-v42`): no producer cols,
+            //     no upstream, no cache cols.
+            //   • v42..pre-v44  (`migration-v42`, `fresh-install-pre-v44`): 4
+            //     producer cols, NO upstream, NO cache cols.
+            //   • v44..pre-v45  (`migration-v44`, `fresh-install-pre-v45`):
+            //     + upstream, NO cache cols. (Schneier P0 — these rows stay v44
+            //     shape FOREVER; their entry_hash bytes were computed without
+            //     the cache columns and can never be retroactively widened.)
+            //   • v45+          (`migration-v45`, post-v45 `fresh-install`):
+            //     + cache_creation_input_tokens, cache_read_input_tokens.
+            // Adding the columns to an existing anchor's canonical map would
+            // break its entry_hash, so we rename the rolling post-v44
+            // `fresh-install` anchor to `fresh-install-pre-v45` (any later
+            // bare `fresh-install` means "v45 shape") and open a
+            // `migration-v45` anchor at MAX(id) for post-v45 writes.
+            //
+            // REVIEWER CHECKLIST — copy-paste hazard from v42→v44→v45:
+            //   - grep the v45 probe SQL for any literal v44 string — must be
+            //     zero matches (the probe MUST look for `migration-v45` and
+            //     `fresh-install-pre-v45`, NEVER `migration-v44`; leaving a
+            //     v44 literal silently makes v45's rename+open run twice on a
+            //     re-migration).
+            //   - the exclusion list in ChainVerifier MUST include
+            //     `migration-v44` (the v44-shape rows stay v44 forever).
+            //   - the writer NULL-normalizes `.some(0) → nil` for cache token
+            //     fields before SQLite bind AND before canonical-map insertion
+            //     so a semantically-identical "no warm" cache miss hashes the
+            //     same regardless of whether Anthropic emits the field as 0
+            //     or omits it.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v45", detail: msg)
+            }
+
+            // Self-contained CREATE matches the v41/v42/v44 baseline so v45
+            // can run against a DB landed at any prior state.
+            try exec("""
+                CREATE TABLE IF NOT EXISTS openai_request_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts REAL NOT NULL,
+                    surface TEXT NOT NULL,
+                    status INTEGER NOT NULL,
+                    key_label TEXT,
+                    prev_hash TEXT,
+                    entry_hash TEXT,
+                    chain_anchor_id INTEGER
+                );
+            """)
+            try exec("ALTER TABLE openai_request_log ADD COLUMN cache_creation_input_tokens INTEGER;", allowDuplicateColumn: true)
+            try exec("ALTER TABLE openai_request_log ADD COLUMN cache_read_input_tokens INTEGER;", allowDuplicateColumn: true)
+
+            // Idempotency guard (mirrors v42/v44): a prior full/partial v45
+            // leaves either `migration-v45` or `fresh-install-pre-v45` in
+            // chain_anchors. If either is present, skip the rename + anchor-
+            // open — re-running them would mis-classify post-v45 lazy
+            // `fresh-install` anchors as pre-v45, breaking entry_hash
+            // verification for those rows.
+            //
+            // REVIEWER PIN: this probe MUST reference `migration-v45` and
+            // `fresh-install-pre-v45` ONLY. A literal `v44` here is the
+            // copy-paste hazard called out in the header doc-comment.
+            var probeStmt: OpaquePointer?
+            let probeSQL = """
+                SELECT EXISTS(SELECT 1 FROM chain_anchors
+                               WHERE table_name = 'openai_request_log'
+                                 AND reason IN ('migration-v45', 'fresh-install-pre-v45'));
+            """
+            guard sqlite3_prepare_v2(db, probeSQL, -1, &probeStmt, nil) == SQLITE_OK else {
+                throw MigrationError.sqlFailed(
+                    stage: "v45 marker probe",
+                    detail: String(cString: sqlite3_errmsg(db)))
+            }
+            var alreadyApplied = false
+            if sqlite3_step(probeStmt) == SQLITE_ROW {
+                alreadyApplied = sqlite3_column_int(probeStmt, 0) == 1
+            }
+            sqlite3_finalize(probeStmt)
+
+            if !alreadyApplied {
+                // Rename the rolling post-v44 `fresh-install` anchor to
+                // `fresh-install-pre-v45`. After this, any lazily-created
+                // `fresh-install` (post-v45) means "v45 canonical shape" —
+                // includes the two cache token columns. No-op when no
+                // `fresh-install` row exists (fresh install: first post-v45
+                // write lazy-creates a `fresh-install` that uses the v45
+                // shape from the start).
+                try exec("""
+                    UPDATE chain_anchors
+                       SET reason = 'fresh-install-pre-v45'
+                     WHERE table_name = 'openai_request_log'
+                       AND reason = 'fresh-install';
+                """)
+
+                // Open a `migration-v45` anchor at MAX(id) so post-v45 writes
+                // chain under the new shape; pre-v45 rows verify under their
+                // existing anchors. Like the v42/v44 openers this inserts
+                // the anchor UNCONDITIONALLY (even on an empty table at
+                // MAX(id)=0) — so a fresh DB's first write lands on
+                // `migration-v45`, NOT a lazy `fresh-install`. Both are
+                // useV45Shape=true, so either way the first row hashes with
+                // the cache token columns.
+                try openOpenAIRequestLogV45Anchor(db: db)
+            }
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)
@@ -2831,6 +2950,51 @@ public enum MigrationRegistry {
             sqlite3_finalize(stmt)
             throw MigrationError.sqlFailed(
                 stage: "v44 anchor step(openai_request_log)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_finalize(stmt)
+    }
+
+    /// V.13b prompt-caching B — open a `migration-v45` anchor at the current
+    /// MAX(id) of `openai_request_log` so post-v45 writes (which carry the
+    /// new `cache_creation_input_tokens` + `cache_read_input_tokens` columns
+    /// in their canonical hash) chain under the v45 shape, while pre-v45
+    /// rows verify under their existing anchors (`migration-v44`,
+    /// `fresh-install-pre-v44`, `migration-v42`, `fresh-install-pre-v42`).
+    /// Mirrors `openOpenAIRequestLogV44Anchor`. No-op semantics on empty
+    /// tables (MAX(id)→0); fresh installs lazy-create a post-v45
+    /// `fresh-install` anchor that uses the v45 shape from the start.
+    private static func openOpenAIRequestLogV45Anchor(db: OpaquePointer) throws {
+        var stmt: OpaquePointer?
+        let maxSQL = "SELECT COALESCE(MAX(id), 0) FROM openai_request_log;"
+        guard sqlite3_prepare_v2(db, maxSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(
+                stage: "v45 maxid(openai_request_log)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        var maxRowid: Int64 = 0
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            maxRowid = sqlite3_column_int64(stmt, 0)
+        }
+        sqlite3_finalize(stmt)
+
+        let now = Date().timeIntervalSince1970
+        let insertSQL = """
+            INSERT INTO chain_anchors
+                (table_name, started_at, started_at_rowid, reason, operator_note)
+            VALUES ('openai_request_log', ?, ?, 'migration-v45', NULL);
+        """
+        guard sqlite3_prepare_v2(db, insertSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(
+                stage: "v45 anchor insert(openai_request_log)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_bind_double(stmt, 1, now)
+        sqlite3_bind_int64(stmt, 2, maxRowid)
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            sqlite3_finalize(stmt)
+            throw MigrationError.sqlFailed(
+                stage: "v45 anchor step(openai_request_log)",
                 detail: String(cString: sqlite3_errmsg(db)))
         }
         sqlite3_finalize(stmt)

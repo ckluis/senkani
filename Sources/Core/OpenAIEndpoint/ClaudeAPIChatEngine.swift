@@ -136,6 +136,47 @@ public final class ClaudeAPIChatEngine: ChatEngine {
         return v
     }
 
+    /// V.13b-4c follow-up — Schneier P2 silent-opt-in-drop notice
+    /// (once-per-process). Fires when the operator requests
+    /// `cacheControl == .ephemeral` but supplies NO system message —
+    /// caching is a no-op for the request (the typed-block system field is
+    /// omitted entirely on the wire), so the opt-in is silently dropped.
+    /// Separate flag from the beta-deprecation warning; lock-guarded so
+    /// concurrent first-emission races resolve to a single stderr line.
+    nonisolated(unsafe) private static var hasWarnedAboutSilentOptInDrop: Bool = false
+    private static let silentOptInDropWarningLock = NSLock()
+
+    /// Fire the once-per-process silent-opt-in-drop notice. Called from
+    /// `buildSystemField` at the `(.ephemeral, .none)` arm before the nil
+    /// return (no system content → nothing to cache).
+    static func warnAboutSilentOptInDropOnceIfNeeded() {
+        silentOptInDropWarningLock.lock()
+        let alreadyWarned = hasWarnedAboutSilentOptInDrop
+        if !alreadyWarned { hasWarnedAboutSilentOptInDrop = true }
+        silentOptInDropWarningLock.unlock()
+        if alreadyWarned { return }
+        FileHandle.standardError.write(Data(
+            "warning: cacheControl: .ephemeral requested but no system message — caching is a no-op for this request\n".utf8
+        ))
+    }
+
+    /// TEST-ONLY — reset the silent-opt-in-drop warning flag. Production
+    /// code MUST NOT call this.
+    static func resetSilentOptInDropWarningForTesting() {
+        silentOptInDropWarningLock.lock()
+        hasWarnedAboutSilentOptInDrop = false
+        silentOptInDropWarningLock.unlock()
+    }
+
+    /// TEST-ONLY — observe the silent-opt-in-drop warning flag state.
+    /// Production code MUST NOT call this.
+    static func hasWarnedAboutSilentOptInDropForTesting() -> Bool {
+        silentOptInDropWarningLock.lock()
+        let v = hasWarnedAboutSilentOptInDrop
+        silentOptInDropWarningLock.unlock()
+        return v
+    }
+
     /// V.13b-2b — bounded-backoff policy for `429`/`529` retries.
     /// `maxRetries` retries follow the initial attempt (so up to
     /// `maxRetries + 1` total upstream requests). `maxTotalWait` caps the
@@ -381,10 +422,17 @@ public final class ClaudeAPIChatEngine: ChatEngine {
                 AnthropicSystemBlock(
                     type: "text",
                     text: s,
-                    cache_control: CacheControl(type: "ephemeral")
+                    cache_control: AnthropicCacheControl(type: "ephemeral")
                 )
             ])
         case (.ephemeral, .none):
+            // V.13b-4c follow-up — Schneier P2 silent-opt-in-drop notice.
+            // Opt-in requested but no system content → the typed-block
+            // system field is omitted entirely on the wire, so caching is
+            // a no-op for this request. Surface a once-per-process stderr
+            // notice so operators learn the opt-in was silently dropped
+            // (separate lock + flag from beta-deprecation warning).
+            warnAboutSilentOptInDropOnceIfNeeded()
             return nil
         case (nil, .some(let s)):
             return .legacy(s)
@@ -755,18 +803,34 @@ public enum AnthropicSystem: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         if let s = try? c.decode(String.self) { self = .legacy(s); return }
-        let arr = try c.decode([AnthropicSystemBlock].self)
-        self = .blocks(arr)
+        // V.13b-4c follow-up — clarified decoder error so a malformed
+        // input that is NEITHER a bare JSON string NOR a JSON array
+        // surfaces a debug-friendly message rather than the inner
+        // typeMismatch from `[AnthropicSystemBlock].self`.
+        if let arr = try? c.decode([AnthropicSystemBlock].self) {
+            self = .blocks(arr)
+            return
+        }
+        throw DecodingError.dataCorruptedError(
+            in: c,
+            debugDescription: "AnthropicSystem: expected bare JSON string or JSON array of system blocks"
+        )
     }
 
     /// Convenience: pull the text content regardless of variant. Used by
     /// audit / debug surfaces that want a plain string view.
+    ///
+    /// V.13b-4c follow-up (Schneier P3) — multi-block join uses `"\n\n"`
+    /// instead of empty separator so the assembled text matches what
+    /// `splitMessages` produces when multiple system turns are joined
+    /// (which uses `"\n\n"` at line 670). Audit/debug surfaces that read
+    /// `systemText` see the same paragraph boundary either way.
     public var systemText: String? {
         switch self {
         case .legacy(let s): return s
         case .blocks(let arr):
             let texts = arr.map(\.text)
-            return texts.isEmpty ? nil : texts.joined()
+            return texts.isEmpty ? nil : texts.joined(separator: "\n\n")
         }
     }
 }
@@ -778,8 +842,8 @@ public enum AnthropicSystem: Codable, Sendable, Equatable {
 public struct AnthropicSystemBlock: Codable, Sendable, Equatable {
     public let type: String         // always "text" today
     public let text: String
-    public let cache_control: CacheControl?
-    public init(type: String, text: String, cache_control: CacheControl? = nil) {
+    public let cache_control: AnthropicCacheControl?
+    public init(type: String, text: String, cache_control: AnthropicCacheControl? = nil) {
         self.type = type
         self.text = text
         self.cache_control = cache_control
@@ -789,7 +853,15 @@ public struct AnthropicSystemBlock: Codable, Sendable, Equatable {
 /// V.13b prompt-caching A — typed `cache_control` discriminator
 /// (Anthropic's `{"type":"ephemeral"}`). Only `ephemeral` is modeled
 /// today.
-public struct CacheControl: Codable, Sendable, Equatable {
+///
+/// V.13b-4c follow-up (Schneier P2 namespace rename) — renamed from
+/// `CacheControl` to `AnthropicCacheControl` to match the
+/// `AnthropicSystem` / `AnthropicSystemBlock` naming convention in the
+/// same file. The `Codable` synthesis depends only on field names + types
+/// (not the Swift type name), so the JSON wire shape
+/// `{"type":"ephemeral"}` is byte-identical with the prior `CacheControl`
+/// emission. Lauret P0 wire-byte invariant preserved.
+public struct AnthropicCacheControl: Codable, Sendable, Equatable {
     public let type: String         // always "ephemeral" today
     public init(type: String) {
         self.type = type
@@ -1140,6 +1212,20 @@ extension ClaudeAPIChatEngine {
                     for try await event in AnthropicSSEFrameParser.parseFrames(bytes) {
                         continuation.yield(event)
                         if Task.isCancelled { break }
+                    }
+                    // V.13b-4c follow-up — Schneier P2 warning-symmetry
+                    // chatStream hook. Mirror the chat() non-stream guard:
+                    // if opt-in was requested but the stream completed with
+                    // NEITHER cache_creation_input_tokens NOR
+                    // cache_read_input_tokens observed (the SSE parser does
+                    // not currently surface either field via
+                    // `AnthropicStreamEvent`, so the stream-side observation
+                    // is always "both nil"), fire the once-per-process
+                    // beta-deprecation warning. Same lock-guarded flag as
+                    // chat() — a single emission per process across BOTH
+                    // entry points.
+                    if cachingEnabled {
+                        Self.warnAboutMissingCacheTokensOnceIfNeeded()
                     }
                     continuation.finish()
                 } catch is CancellationError {

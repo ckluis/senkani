@@ -131,7 +131,7 @@ struct AnthropicSystemRoundTripTests {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let blocks = AnthropicSystem.blocks([
-            AnthropicSystemBlock(type: "text", text: "ctx", cache_control: CacheControl(type: "ephemeral"))
+            AnthropicSystemBlock(type: "text", text: "ctx", cache_control: AnthropicCacheControl(type: "ephemeral"))
         ])
         let data = try encoder.encode(blocks)
         let s = String(data: data, encoding: .utf8) ?? ""
@@ -142,7 +142,7 @@ struct AnthropicSystemRoundTripTests {
         let json = "[{\"type\":\"text\",\"text\":\"ctx\",\"cache_control\":{\"type\":\"ephemeral\"}}]"
         let decoded = try JSONDecoder().decode(AnthropicSystem.self, from: Data(json.utf8))
         #expect(decoded == .blocks([
-            AnthropicSystemBlock(type: "text", text: "ctx", cache_control: CacheControl(type: "ephemeral"))
+            AnthropicSystemBlock(type: "text", text: "ctx", cache_control: AnthropicCacheControl(type: "ephemeral"))
         ]))
     }
 }
@@ -441,5 +441,194 @@ struct ClaudeAPIChatEnginePromptCachingResponseTests {
         // Schneier P2: warning is gated on the OPT-IN side. If the operator
         // never opted in, an absent cache_* field carries no information.
         #expect(ClaudeAPIChatEngine.hasWarnedAboutCacheTokenAbsenceForTesting() == false)
+    }
+}
+
+// MARK: - V.13b-4c follow-up — production fixes (Schneier P2/P3, Lauret P0)
+
+/// V.13b-4c follow-up — production-code regression tests for the
+/// prompt-caching engine surface:
+///   (a) warning-symmetry chatStream hook fires once across chat() +
+///       chatStream() opt-in calls (lock-guarded shared flag);
+///   (b) silent-opt-in-drop notice fires when `.ephemeral` is requested
+///       with no system message; gated to opt-in only;
+///   (c) `AnthropicCacheControl` rename — wire-byte parity with the prior
+///       `CacheControl` JSON shape `{"type":"ephemeral"}`;
+///   (d) `AnthropicSystem.blocks([])` empty-array round-trip pin;
+///   (e) `AnthropicSystem.systemText` multi-block join uses `"\n\n"`.
+
+@Suite("ClaudeAPIChatEngine — V.13b-4c follow-up production fixes", .serialized, .urlProtocolGate)
+struct ClaudeAPIChatEnginePromptCachingFollowupTests {
+
+    @Test func warningSymmetryChatStreamHookFiresOnceAcrossBothEntryPoints() async throws {
+        MockURLProtocol.reset(); defer { MockURLProtocol.reset() }
+        MockSSEStreamProtocol.reset(); defer { MockSSEStreamProtocol.reset() }
+        ClaudeAPIChatEngine.resetCacheTokenAbsenceWarningForTesting()
+        defer { ClaudeAPIChatEngine.resetCacheTokenAbsenceWarningForTesting() }
+
+        // Streaming response carries NO cache_* fields anywhere (the parser
+        // doesn't surface them today regardless). chatStream() opt-in path
+        // should flip the once-per-process flag at producer completion.
+        MockSSEStreamProtocol.register(url: promptCachingAnthropicURL, chunks: [Data(minimalSSE.utf8)])
+        let streamEngine = makePromptCachingStreamingEngine()
+        let stream = streamEngine.chatStream(
+            model: "claude-haiku-3.5",
+            messages: [
+                .init(role: "system", content: "project-instructions"),
+                .init(role: "user", content: "yo"),
+            ],
+            tools: [],
+            cacheControl: .ephemeral
+        )
+        for try await _ in stream { /* drain */ }
+
+        // The chatStream() entry point flipped the SAME flag chat() uses.
+        #expect(ClaudeAPIChatEngine.hasWarnedAboutCacheTokenAbsenceForTesting() == true)
+
+        // Now drive chat() — opt-in with response missing cache_* fields.
+        // The lock-guarded helper must observe the flag is ALREADY set and
+        // short-circuit (no second emission). We cannot structurally
+        // observe "did not print to stderr", but the helper has a single
+        // emit branch and that branch is gated by the flag.
+        let body = """
+        {"id":"x","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}
+        """
+        MockURLProtocol.register(url: promptCachingAnthropicURL, status: 200, body: Data(body.utf8))
+        let chatEngine = makePromptCachingEngine()
+        _ = try await chatEngine.chat(
+            model: "claude-haiku-3.5",
+            messages: [
+                .init(role: "system", content: "project-instructions"),
+                .init(role: "user", content: "hi"),
+            ],
+            tools: [],
+            cacheControl: .ephemeral
+        )
+
+        // Flag remains true — the same shared lock-guarded boolean keeps
+        // the emission once-per-process across BOTH entry points.
+        #expect(ClaudeAPIChatEngine.hasWarnedAboutCacheTokenAbsenceForTesting() == true)
+    }
+
+    @Test func chatStreamOptInOffDoesNotFireWarning() async throws {
+        MockSSEStreamProtocol.reset(); defer { MockSSEStreamProtocol.reset() }
+        ClaudeAPIChatEngine.resetCacheTokenAbsenceWarningForTesting()
+        defer { ClaudeAPIChatEngine.resetCacheTokenAbsenceWarningForTesting() }
+
+        MockSSEStreamProtocol.register(url: promptCachingAnthropicURL, chunks: [Data(minimalSSE.utf8)])
+        let engine = makePromptCachingStreamingEngine()
+        let stream = engine.chatStream(
+            model: "claude-haiku-3.5",
+            messages: [
+                .init(role: "system", content: "be concise"),
+                .init(role: "user", content: "yo"),
+            ],
+            tools: [],
+            cacheControl: nil   // opt-in OFF
+        )
+        for try await _ in stream { /* drain */ }
+
+        // Opt-in OFF: the warning is gated to the opt-in side ONLY (same
+        // privacy posture as chat()). Flag must remain false.
+        #expect(ClaudeAPIChatEngine.hasWarnedAboutCacheTokenAbsenceForTesting() == false)
+    }
+
+    @Test func silentOptInDropNoticeFiresWhenEphemeralRequestedWithNoSystem() async throws {
+        MockURLProtocol.reset(); defer { MockURLProtocol.reset() }
+        ClaudeAPIChatEngine.resetSilentOptInDropWarningForTesting()
+        defer { ClaudeAPIChatEngine.resetSilentOptInDropWarningForTesting() }
+
+        let body = """
+        {"id":"x","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}
+        """
+        MockURLProtocol.register(url: promptCachingAnthropicURL, status: 200, body: Data(body.utf8))
+
+        // Sanity precondition.
+        #expect(ClaudeAPIChatEngine.hasWarnedAboutSilentOptInDropForTesting() == false)
+
+        let engine = makePromptCachingEngine()
+        _ = try await engine.chat(
+            model: "claude-haiku-3.5",
+            messages: [.init(role: "user", content: "hi")],   // NO system message
+            tools: [],
+            cacheControl: .ephemeral
+        )
+
+        // The (.ephemeral, .none) arm of buildSystemField should have fired
+        // the once-per-process silent-opt-in-drop notice.
+        #expect(ClaudeAPIChatEngine.hasWarnedAboutSilentOptInDropForTesting() == true)
+    }
+
+    @Test func silentOptInDropNoticeDoesNotFireWhenOptInOff() async throws {
+        MockURLProtocol.reset(); defer { MockURLProtocol.reset() }
+        ClaudeAPIChatEngine.resetSilentOptInDropWarningForTesting()
+        defer { ClaudeAPIChatEngine.resetSilentOptInDropWarningForTesting() }
+
+        let body = """
+        {"id":"x","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}
+        """
+        MockURLProtocol.register(url: promptCachingAnthropicURL, status: 200, body: Data(body.utf8))
+
+        let engine = makePromptCachingEngine()
+        _ = try await engine.chat(
+            model: "claude-haiku-3.5",
+            messages: [.init(role: "user", content: "hi")],   // NO system message
+            tools: [],
+            cacheControl: nil                                  // opt-in OFF
+        )
+
+        // Opt-in OFF: silent-opt-in-drop notice is gated on the opt-in
+        // path. (nil, .none) is the existing zero-system path and must not
+        // emit anything new.
+        #expect(ClaudeAPIChatEngine.hasWarnedAboutSilentOptInDropForTesting() == false)
+    }
+
+    @Test func anthropicCacheControlRenamePreservesWireByteShape() throws {
+        // Lauret P0 invariant: the `CacheControl` → `AnthropicCacheControl`
+        // rename MUST NOT change the JSON wire shape. Codable synthesis
+        // depends only on field names + types, not the Swift type name.
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(AnthropicCacheControl(type: "ephemeral"))
+        let s = String(data: data, encoding: .utf8) ?? ""
+        #expect(s == "{\"type\":\"ephemeral\"}")
+
+        // Round-trip parity: decoder still accepts the legacy wire shape.
+        let decoded = try JSONDecoder().decode(AnthropicCacheControl.self, from: data)
+        #expect(decoded == AnthropicCacheControl(type: "ephemeral"))
+    }
+
+    @Test func anthropicSystemBlocksEmptyArrayRoundTrip() throws {
+        // V.13b-4c follow-up (Schneier P2) — `.blocks([])` must encode as
+        // an EMPTY JSON array `[]` and decode back as `.blocks([])`, NOT
+        // collapse to `.legacy("")` or any other variant.
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(AnthropicSystem.blocks([]))
+        let s = String(data: data, encoding: .utf8) ?? ""
+        #expect(s == "[]", "expected EMPTY JSON array, got \(s)")
+
+        let decoded = try JSONDecoder().decode(AnthropicSystem.self, from: data)
+        #expect(decoded == .blocks([]),
+                "expected .blocks([]) preserved on decode, got \(decoded)")
+    }
+
+    @Test func anthropicSystemTextMultiBlockJoinUsesParagraphSeparator() {
+        // V.13b-4c follow-up (Schneier P3) — multi-block `systemText`
+        // joins with `"\n\n"` to match `splitMessages` join behavior.
+        let sys = AnthropicSystem.blocks([
+            AnthropicSystemBlock(type: "text", text: "alpha", cache_control: nil),
+            AnthropicSystemBlock(type: "text", text: "beta", cache_control: nil),
+        ])
+        #expect(sys.systemText == "alpha\n\nbeta")
+
+        // Single-block path stays unchanged: no separator inserted.
+        let single = AnthropicSystem.blocks([
+            AnthropicSystemBlock(type: "text", text: "only", cache_control: nil),
+        ])
+        #expect(single.systemText == "only")
+
+        // Empty `.blocks([])` returns nil (no text content to expose).
+        let empty = AnthropicSystem.blocks([])
+        #expect(empty.systemText == nil)
     }
 }

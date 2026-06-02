@@ -80,7 +80,8 @@ public enum ClaudeAPIServeDispatch {
         let captured: Captured = ServeBridge.runBlocking {
             do {
                 let completion = try await engine.chat(
-                    model: model, messages: messages, tools: tools
+                    model: model, messages: messages, tools: tools,
+                    cacheControl: request.cacheControl
                 )
                 return Captured.success(completion)
             } catch let e as ClaudeAPIChatEngineError {
@@ -383,6 +384,7 @@ public enum ClaudeAPIServeDispatch {
         let model = routing.actualModel
         let messages = request.messages
         let tools = request.tools ?? []
+        let cacheControl = request.cacheControl
         let requestSummary = OpenAIChatHandler.requestSummary(request)
 
         // Producer closure — invoked once per `OpenAIChatStream.run`.
@@ -405,7 +407,8 @@ public enum ClaudeAPIServeDispatch {
                         // listener hosts on ServeBridge.executor on
                         // macOS-15+).
                         let upstream = engine.chatStream(
-                            model: model, messages: messages, tools: tools
+                            model: model, messages: messages, tools: tools,
+                            cacheControl: cacheControl
                         )
                         for try await event in upstream {
                             if Task.isCancelled { break }

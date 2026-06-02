@@ -165,16 +165,68 @@ public struct ChatCompletionRequest: Codable, Sendable, Equatable {
     /// request; a non-empty array gates on the key's `tools` scope.
     public let tools: [Tool]?
 
-    public init(model: String, messages: [Message], stream: Bool? = nil, tools: [Tool]? = nil) {
+    /// V.13b prompt-caching A — OPT-IN flag for Anthropic prompt caching.
+    /// Default-OFF (Schneier P1 privacy posture). When `.ephemeral` and the
+    /// engine routes this request to the Anthropic arm, the request body
+    /// wraps the system text in a typed `cache_control: ephemeral` block AND
+    /// sets the `anthropic-beta: prompt-caching-2024-07-31` header. When
+    /// nil, the engine emits the legacy bare-string `system` wire form
+    /// (byte-identical with pre-prompt-caching wire) and OMITS the beta
+    /// header. NO heuristic auto-injection — even multi-thousand-token
+    /// system messages stay un-cached unless the operator opts in
+    /// explicitly. Trade-off: caching at Anthropic's edge shifts the trust
+    /// boundary (operator content becomes cache-resident for the TTL);
+    /// opt-in lets operators make that decision with eyes open. Engines
+    /// that don't model caching (MLX, OpenAI proxy) ignore this field.
+    public let cacheControl: CacheControlMode?
+
+    public init(
+        model: String,
+        messages: [Message],
+        stream: Bool? = nil,
+        tools: [Tool]? = nil,
+        cacheControl: CacheControlMode? = nil
+    ) {
         self.model = model
         self.messages = messages
         self.stream = stream
         self.tools = tools
+        self.cacheControl = cacheControl
     }
 
     enum CodingKeys: String, CodingKey {
         case model, messages, stream, tools
+        case cacheControl = "cache_control"
     }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        model = try c.decode(String.self, forKey: .model)
+        messages = try c.decode([Message].self, forKey: .messages)
+        stream = try c.decodeIfPresent(Bool.self, forKey: .stream)
+        tools = try c.decodeIfPresent([Tool].self, forKey: .tools)
+        cacheControl = try c.decodeIfPresent(CacheControlMode.self, forKey: .cacheControl)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(model, forKey: .model)
+        try c.encode(messages, forKey: .messages)
+        try c.encodeIfPresent(stream, forKey: .stream)
+        try c.encodeIfPresent(tools, forKey: .tools)
+        try c.encodeIfPresent(cacheControl, forKey: .cacheControl)
+    }
+}
+
+/// V.13b prompt-caching A — opt-in flag for Anthropic prompt caching.
+///
+/// `.ephemeral` opts the request into Anthropic's `cache_control:
+/// {type: "ephemeral"}` beta. nil = NO caching (default; Schneier P1
+/// default-OFF privacy posture). Currently only `.ephemeral` is modeled;
+/// future Anthropic cache tiers (e.g. a hypothetical `.persistent`) would
+/// extend this enum.
+public enum CacheControlMode: String, Codable, Sendable, Equatable {
+    case ephemeral
 }
 
 /// OpenAI `chat.completion` response object (non-streaming).

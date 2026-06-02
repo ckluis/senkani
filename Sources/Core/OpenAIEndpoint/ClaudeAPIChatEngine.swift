@@ -76,6 +76,66 @@ public enum ClaudeAPIChatEngineError: Error, Sendable, Equatable {
 
 public final class ClaudeAPIChatEngine: ChatEngine {
 
+    /// V.13b prompt-caching A — pinned beta header value.
+    ///
+    /// Anthropic gates prompt-caching behind a per-request beta header. We
+    /// pin the exact token here so:
+    ///   (a) the request-builder rule "header IFF body carries
+    ///       cache_control" lives in ONE place,
+    ///   (b) grep for `prompt-caching` finds every emission site when
+    ///       Anthropic GA's the feature and retires this beta token, and
+    ///   (c) a future-day operator can audit "is senkani still on the beta
+    ///       header?" with one `git grep`.
+    ///
+    /// TODO(prompt-caching-GA): when Anthropic moves prompt caching out of
+    /// beta, remove this constant + the header emission AND drop the
+    /// once-per-process deprecation warning.
+    ///
+    /// Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+    public static let promptCachingBetaHeader = "prompt-caching-2024-07-31"
+
+    /// V.13b prompt-caching A — Schneier P2: once-per-process-lifetime
+    /// stderr warning when the opt-in flag is set but the upstream response
+    /// carries NEITHER `cache_creation_input_tokens` NOR
+    /// `cache_read_input_tokens`. Defensive signal that the beta header may
+    /// have been deprecated / rejected by Anthropic. Capped to once per
+    /// process so log spam is bounded. Lock-guarded via the static `nslock`
+    /// so concurrent first-warning races resolve to a single emission.
+    nonisolated(unsafe) private static var hasWarnedAboutCacheTokenAbsence: Bool = false
+    private static let cacheTokenWarningLock = NSLock()
+
+    /// Fire the once-per-process cache-token-absence warning. Called from
+    /// the response-decode path when opt-in was requested but the upstream
+    /// response is missing both `cache_*_input_tokens` fields.
+    static func warnAboutMissingCacheTokensOnceIfNeeded() {
+        cacheTokenWarningLock.lock()
+        let alreadyWarned = hasWarnedAboutCacheTokenAbsence
+        if !alreadyWarned { hasWarnedAboutCacheTokenAbsence = true }
+        cacheTokenWarningLock.unlock()
+        if alreadyWarned { return }
+        FileHandle.standardError.write(Data(
+            "warning: prompt-caching beta header may be deprecated — response carried no cache_* usage fields\n".utf8
+        ))
+    }
+
+    /// TEST-ONLY — reset the once-per-process warning flag. Production code
+    /// MUST NOT call this; it exists so tests can drive the
+    /// "fire the warning" branch deterministically.
+    static func resetCacheTokenAbsenceWarningForTesting() {
+        cacheTokenWarningLock.lock()
+        hasWarnedAboutCacheTokenAbsence = false
+        cacheTokenWarningLock.unlock()
+    }
+
+    /// TEST-ONLY — observe the warning flag state. Production code MUST
+    /// NOT call this.
+    static func hasWarnedAboutCacheTokenAbsenceForTesting() -> Bool {
+        cacheTokenWarningLock.lock()
+        let v = hasWarnedAboutCacheTokenAbsence
+        cacheTokenWarningLock.unlock()
+        return v
+    }
+
     /// V.13b-2b — bounded-backoff policy for `429`/`529` retries.
     /// `maxRetries` retries follow the initial attempt (so up to
     /// `maxRetries + 1` total upstream requests). `maxTotalWait` caps the
@@ -154,6 +214,22 @@ public final class ClaudeAPIChatEngine: ChatEngine {
         messages: [ChatCompletionRequest.Message],
         tools: [ChatCompletionRequest.Tool]
     ) async throws -> OpenAIChatHandler.Completion {
+        try await chat(model: model, messages: messages, tools: tools, cacheControl: nil)
+    }
+
+    /// V.13b prompt-caching A — extended `chat(...)` that takes the
+    /// `ChatCompletionRequest.cacheControl` opt-in flag. The protocol
+    /// `chat(model:messages:tools:)` above delegates here with `nil`. The
+    /// serve-side dispatcher passes through `request.cacheControl` so the
+    /// Anthropic arm honors the operator's opt-in. Engines that don't
+    /// model caching (MLX, OpenAI proxy) ignore the field by never being
+    /// called through this path.
+    public func chat(
+        model: String,
+        messages: [ChatCompletionRequest.Message],
+        tools: [ChatCompletionRequest.Tool],
+        cacheControl: CacheControlMode?
+    ) async throws -> OpenAIChatHandler.Completion {
         // 1. Accept-list gate BEFORE any I/O. No DNS, no connect.
         guard ClaudeAPIChatEngine_AcceptList.models.contains(model) else {
             throw ClaudeAPIChatEngineError.upstreamModelUnavailable(model: model)
@@ -163,13 +239,15 @@ public final class ClaudeAPIChatEngine: ChatEngine {
         let wireModel = ClaudeAPIChatEngine.wireModelID(for: model)
         let (system, anthropicMessages) = try ClaudeAPIChatEngine.splitMessages(messages)
         let anthropicTools = tools.isEmpty ? nil : tools.map(ClaudeAPIChatEngine.mapTool(_:))
+        let systemField = ClaudeAPIChatEngine.buildSystemField(system: system, cacheControl: cacheControl)
+        let cachingEnabled = ClaudeAPIChatEngine.systemFieldCarriesCacheControl(systemField)
 
         let bodyData: Data
         do {
             let req = AnthropicMessagesRequest(
                 model: wireModel,
                 max_tokens: maxTokens,
-                system: system,
+                system: systemField,
                 messages: anthropicMessages,
                 tools: anthropicTools,
                 stream: false
@@ -190,6 +268,13 @@ public final class ClaudeAPIChatEngine: ChatEngine {
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue(anthropicVersion, forHTTPHeaderField: "anthropic-version")
         request.setValue("application/json", forHTTPHeaderField: "content-type")
+        // V.13b prompt-caching A — beta header IFF the encoded body carries
+        // a cache_control block. Linked emission rule (Lauret P0): header
+        // and body cache_control are bound together; never one without the
+        // other.
+        if cachingEnabled {
+            request.setValue(Self.promptCachingBetaHeader, forHTTPHeaderField: "anthropic-beta")
+        }
         request.httpBody = bodyData
         // V.13b-4a — per-attempt wall-clock deadline (serve consumer sets it).
         if let requestTimeout { request.timeoutInterval = requestTimeout }
@@ -245,14 +330,75 @@ public final class ClaudeAPIChatEngine: ChatEngine {
         let heuristicPrompt = OpenAIChatHandler.estimateTokens(promptForHeuristic)
         let heuristicCompletion = OpenAIChatHandler.estimateTokens(content)
 
+        // V.13b prompt-caching A — wire the Anthropic-decoded
+        // `cache_creation_input_tokens` + `cache_read_input_tokens` through
+        // to `Completion`. Pass `.some(0)` UNNORMALIZED; the writer in
+        // `OpenAIRequestLogStore.record(...)` collapses `.some(0) → nil` so
+        // canonical-hash distinction stays at one trust boundary (Schneier
+        // P1 — Child B's writer-side invariant).
+        let realCacheCreation = decoded.usage?.cache_creation_input_tokens
+        let realCacheRead = decoded.usage?.cache_read_input_tokens
+
+        // V.13b prompt-caching A — Schneier P2: when opt-in was requested
+        // but the upstream response carries NEITHER cache_* field, fire a
+        // once-per-process stderr warning. Defensive signal that the beta
+        // header may be deprecated / rejected by Anthropic. Capped to once
+        // so log spam is bounded.
+        if cachingEnabled, realCacheCreation == nil, realCacheRead == nil {
+            Self.warnAboutMissingCacheTokensOnceIfNeeded()
+        }
+
         return OpenAIChatHandler.Completion(
             content: content,
             toolCalls: toolCalls,
             promptTokens: heuristicPrompt,
             completionTokens: heuristicCompletion,
             realPromptTokens: decoded.usage?.input_tokens,
-            realCompletionTokens: decoded.usage?.output_tokens
+            realCompletionTokens: decoded.usage?.output_tokens,
+            realCacheCreationTokens: realCacheCreation,
+            realCacheReadTokens: realCacheRead
         )
+    }
+
+    /// V.13b prompt-caching A — build the `AnthropicSystem` field for the
+    /// outgoing request body.
+    ///
+    /// Default code path (`cacheControl == nil`, even when system text is
+    /// many thousands of tokens) emits `.legacy(text)` which encodes as a
+    /// BARE JSON STRING — byte-identical with today's `system: "..."`
+    /// wire. Existing v13b-2 + sse-A fixtures pass unchanged.
+    ///
+    /// Opt-in path (`cacheControl == .ephemeral`, system text non-nil)
+    /// wraps the text in a single `AnthropicSystemBlock(type: "text", text:
+    /// system, cache_control: ephemeral)` carried inside `.blocks([...])`.
+    /// When system is nil under opt-in, we return nil (no system field at
+    /// all on the wire) — opt-in with no system content has nothing to
+    /// cache.
+    static func buildSystemField(system: String?, cacheControl: CacheControlMode?) -> AnthropicSystem? {
+        switch (cacheControl, system) {
+        case (.ephemeral, .some(let s)):
+            return .blocks([
+                AnthropicSystemBlock(
+                    type: "text",
+                    text: s,
+                    cache_control: CacheControl(type: "ephemeral")
+                )
+            ])
+        case (.ephemeral, .none):
+            return nil
+        case (nil, .some(let s)):
+            return .legacy(s)
+        case (nil, .none):
+            return nil
+        }
+    }
+
+    /// V.13b prompt-caching A — Lauret P0: "header IFF body carries
+    /// cache_control" rule. Inspect the built system field rather than the
+    /// opt-in flag so the linked emission can't drift.
+    static func systemFieldCarriesCacheControl(_ field: AnthropicSystem?) -> Bool {
+        guard case .blocks(let blocks) = field else { return false }
+        return blocks.contains { $0.cache_control != nil }
     }
 
     // MARK: - Retry / backoff (V.13b-2b)
@@ -575,10 +721,79 @@ public final class ClaudeAPIChatEngine: ChatEngine {
 struct AnthropicMessagesRequest: Codable {
     let model: String
     let max_tokens: Int
-    let system: String?
+    /// V.13b prompt-caching A — sum-type system field. Encodes as a BARE
+    /// JSON STRING for the legacy form (byte-identical with the pre-
+    /// prompt-caching wire) and as a JSON ARRAY for the typed-block opt-in
+    /// form. Default code paths build `.legacy(...)` so existing fixtures
+    /// pass unchanged.
+    let system: AnthropicSystem?
     let messages: [AnthropicMessage]
     let tools: [AnthropicTool]?
     let stream: Bool
+}
+
+/// V.13b prompt-caching A — sum-type for the Anthropic `system` field.
+///
+/// `.legacy(String)` encodes as a BARE JSON STRING (no object wrapper).
+/// `.blocks([AnthropicSystemBlock])` encodes as a JSON ARRAY.
+///
+/// Lauret P0 — sum-type wire round-trip: encoding `.legacy("hi")` MUST
+/// produce JSON `"hi"` and decoding `"hi"` MUST return `.legacy("hi")`.
+/// Likewise `.blocks([...])` ↔ `[...]`. The single-value-container pattern
+/// makes this transparent.
+public enum AnthropicSystem: Codable, Sendable, Equatable {
+    case legacy(String)
+    case blocks([AnthropicSystemBlock])
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .legacy(let s):    try c.encode(s)
+        case .blocks(let arr):  try c.encode(arr)
+        }
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if let s = try? c.decode(String.self) { self = .legacy(s); return }
+        let arr = try c.decode([AnthropicSystemBlock].self)
+        self = .blocks(arr)
+    }
+
+    /// Convenience: pull the text content regardless of variant. Used by
+    /// audit / debug surfaces that want a plain string view.
+    public var systemText: String? {
+        switch self {
+        case .legacy(let s): return s
+        case .blocks(let arr):
+            let texts = arr.map(\.text)
+            return texts.isEmpty ? nil : texts.joined()
+        }
+    }
+}
+
+/// V.13b prompt-caching A — typed system block (Anthropic's
+/// `{"type":"text","text":"...","cache_control":{...}}`). Today only
+/// `type: "text"` is modeled — Anthropic may add more block types in
+/// future; we'll widen when they ship.
+public struct AnthropicSystemBlock: Codable, Sendable, Equatable {
+    public let type: String         // always "text" today
+    public let text: String
+    public let cache_control: CacheControl?
+    public init(type: String, text: String, cache_control: CacheControl? = nil) {
+        self.type = type
+        self.text = text
+        self.cache_control = cache_control
+    }
+}
+
+/// V.13b prompt-caching A — typed `cache_control` discriminator
+/// (Anthropic's `{"type":"ephemeral"}`). Only `ephemeral` is modeled
+/// today.
+public struct CacheControl: Codable, Sendable, Equatable {
+    public let type: String         // always "ephemeral" today
+    public init(type: String) {
+        self.type = type
+    }
 }
 
 struct AnthropicMessage: Codable {
@@ -730,6 +945,40 @@ enum AnthropicResponseBlock: Codable {
 struct AnthropicUsage: Codable {
     let input_tokens: Int
     let output_tokens: Int
+    /// V.13b prompt-caching A — Anthropic-reported cache write tokens (the
+    /// "cold path" cost of seeding the cache on this turn). Absent when
+    /// the request did NOT opt into caching; absent ALSO when the beta
+    /// header was rejected / deprecated (defensive once-per-process stderr
+    /// warning fires in that case).
+    let cache_creation_input_tokens: Int?
+    /// V.13b prompt-caching A — Anthropic-reported cache read tokens (the
+    /// "warm path" cost when the cache hit). Same absence semantics as
+    /// `cache_creation_input_tokens`.
+    let cache_read_input_tokens: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case input_tokens, output_tokens
+        case cache_creation_input_tokens, cache_read_input_tokens
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        input_tokens = try c.decode(Int.self, forKey: .input_tokens)
+        output_tokens = try c.decode(Int.self, forKey: .output_tokens)
+        cache_creation_input_tokens = try c.decodeIfPresent(Int.self, forKey: .cache_creation_input_tokens)
+        cache_read_input_tokens = try c.decodeIfPresent(Int.self, forKey: .cache_read_input_tokens)
+    }
+
+    /// Encoder is retained for forward-compat — production code only
+    /// decodes this shape — but kept symmetric so test fixtures can encode
+    /// canonical Anthropic usage envelopes.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(input_tokens, forKey: .input_tokens)
+        try c.encode(output_tokens, forKey: .output_tokens)
+        try c.encodeIfPresent(cache_creation_input_tokens, forKey: .cache_creation_input_tokens)
+        try c.encodeIfPresent(cache_read_input_tokens, forKey: .cache_read_input_tokens)
+    }
 }
 
 // MARK: - V.13b-sse-a — typed streaming events (Child A)
@@ -806,6 +1055,20 @@ extension ClaudeAPIChatEngine {
         messages: [ChatCompletionRequest.Message],
         tools: [ChatCompletionRequest.Tool]
     ) -> AsyncThrowingStream<AnthropicStreamEvent, Error> {
+        chatStream(model: model, messages: messages, tools: tools, cacheControl: nil)
+    }
+
+    /// V.13b prompt-caching A — extended `chatStream(...)` taking the
+    /// opt-in flag. Symmetric to `chat(...)` (Lauret P0): a wire-shape
+    /// regression in one path but not the other would silently bifurcate
+    /// the caching surface. The serve dispatcher passes
+    /// `request.cacheControl` here just as it does for `chat(...)`.
+    public func chatStream(
+        model: String,
+        messages: [ChatCompletionRequest.Message],
+        tools: [ChatCompletionRequest.Tool],
+        cacheControl: CacheControlMode?
+    ) -> AsyncThrowingStream<AnthropicStreamEvent, Error> {
         // Shared mutable handle on the in-flight URLSessionDataTask. The
         // stream's `onTermination` reaches into this box to call
         // `dataTask.cancel()` directly — `URLSession.bytes(for:)`'s native
@@ -827,13 +1090,15 @@ extension ClaudeAPIChatEngine {
                     let wireModel = ClaudeAPIChatEngine.wireModelID(for: model)
                     let (system, anthropicMessages) = try ClaudeAPIChatEngine.splitMessages(messages)
                     let anthropicTools = tools.isEmpty ? nil : tools.map(ClaudeAPIChatEngine.mapTool(_:))
+                    let systemField = ClaudeAPIChatEngine.buildSystemField(system: system, cacheControl: cacheControl)
+                    let cachingEnabled = ClaudeAPIChatEngine.systemFieldCarriesCacheControl(systemField)
 
                     let bodyData: Data
                     do {
                         let req = AnthropicMessagesRequest(
                             model: wireModel,
                             max_tokens: self.maxTokens,
-                            system: system,
+                            system: systemField,
                             messages: anthropicMessages,
                             tools: anthropicTools,
                             stream: true
@@ -852,6 +1117,12 @@ extension ClaudeAPIChatEngine {
                     request.setValue(self.anthropicVersion, forHTTPHeaderField: "anthropic-version")
                     request.setValue("application/json", forHTTPHeaderField: "content-type")
                     request.setValue("text/event-stream", forHTTPHeaderField: "accept")
+                    // V.13b prompt-caching A — beta header IFF the encoded
+                    // body carries a cache_control block. Same linked-emission
+                    // rule as chat() (Lauret P0).
+                    if cachingEnabled {
+                        request.setValue(Self.promptCachingBetaHeader, forHTTPHeaderField: "anthropic-beta")
+                    }
                     request.httpBody = bodyData
                     // Per-attempt IDLE timeout for streams (doc-noted above).
                     if let t = self.requestTimeout { request.timeoutInterval = t }

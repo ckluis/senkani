@@ -1,5 +1,119 @@
 import Foundation
 
+// MARK: - Process-wide dispatch concurrency gate (v13b-4c follow-up)
+//
+// Rationale (v13b-4c follow-up — Karpathy P2, 2026-06-02):
+//
+// `dispatch(...)` bridges a synchronous NWListener connection thread into the
+// async `ClaudeAPIChatEngine.chat(...)` via `ServeBridge.runBlocking`, which
+// parks the calling thread on a `DispatchSemaphore` until the engine returns.
+// v13b-1 amplifies fan-out by selecting an Anthropic key per request — under
+// concurrent hung-upstream load (slow / stuck remote), each in-flight
+// dispatch can pin one GCD thread for the full per-request timeout.
+//
+// Without a cap, N concurrent requests against an unreachable upstream pin N
+// threads. GCD's worker pool is bounded (~64 threads on Apple platforms);
+// crossing that ceiling produces unpredictable thread starvation across
+// every other dispatch queue in the process — including the NWListener's
+// own accept queue and the dedicated `ServeBridge.executor`.
+//
+// `DispatchGate` is a process-wide static `DispatchSemaphore` that caps the
+// number of in-flight Claude dispatches. The default of 16 is well below
+// the GCD worker ceiling and well above typical local-MLX-front-of-Claude
+// burst rates. Operators can tune via `configureMaxInflight(_:)`; tests
+// reconfigure under `.serialized` traits to keep cross-test contention out.
+//
+// The gate is acquired at the TOP of `dispatch(...)` and released in a
+// `defer` that ALWAYS runs — including throws, CancellationError, and the
+// `.other` collapse. The unconstrained path (≤ maxInflight in flight) is
+// byte-equivalent to pre-gate behavior; the gate only adds wall-clock
+// latency when contended.
+//
+// macOS-14 floor respected: `DispatchSemaphore` is a Foundation primitive
+// available on every supported platform; no `@available` guards needed.
+private enum DispatchGate {
+
+    /// Default cap. Sized to stay well under GCD's worker pool ceiling
+    /// while leaving headroom for non-Claude dispatches in the same
+    /// process. Tunable via `configure(maxInflight:)`.
+    static let defaultMaxInflight: Int = 16
+
+    /// Singleton state — lock guards the swap when `configure(...)` is
+    /// called mid-process (tests). The `DispatchSemaphore` itself is
+    /// thread-safe; the lock only serializes the rebuild.
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var current: DispatchSemaphore =
+        DispatchSemaphore(value: defaultMaxInflight)
+    nonisolated(unsafe) private static var currentMax: Int = defaultMaxInflight
+
+    /// Atomic mid-flight counter used by tests to assert the gate's
+    /// concurrency cap holds under burst load. Production callers ignore
+    /// this — it is only mutated inside `acquire`/`release`.
+    nonisolated(unsafe) private static var inflightCounter: Int = 0
+    nonisolated(unsafe) private static var observedPeakInflight: Int = 0
+    private static let counterLock = NSLock()
+
+    static func acquire() {
+        let sem = currentSemaphore()
+        sem.wait()
+        counterLock.lock()
+        inflightCounter += 1
+        if inflightCounter > observedPeakInflight {
+            observedPeakInflight = inflightCounter
+        }
+        counterLock.unlock()
+    }
+
+    static func release() {
+        counterLock.lock()
+        inflightCounter -= 1
+        counterLock.unlock()
+        currentSemaphore().signal()
+    }
+
+    private static func currentSemaphore() -> DispatchSemaphore {
+        lock.lock(); defer { lock.unlock() }
+        return current
+    }
+
+    /// Reconfigure the cap. Test-driven (and operator-driven if exposed).
+    /// Drains the existing semaphore and installs a fresh one — callers
+    /// that are mid-`wait()` on the OLD semaphore continue to wait on it,
+    /// but every NEW `acquire()` uses the new value. Tests must serialize
+    /// (`.serialized`) to avoid old-semaphore stragglers.
+    static func configure(maxInflight: Int) {
+        precondition(maxInflight > 0, "maxInflight must be positive; got \(maxInflight)")
+        lock.lock()
+        current = DispatchSemaphore(value: maxInflight)
+        currentMax = maxInflight
+        lock.unlock()
+        counterLock.lock()
+        observedPeakInflight = 0
+        counterLock.unlock()
+    }
+
+    /// Restore the default cap. Tests call this in `defer` to leave the
+    /// gate in a predictable state for subsequent suites.
+    static func resetToDefault() {
+        configure(maxInflight: defaultMaxInflight)
+    }
+
+    /// Test-only — observed peak number of simultaneously in-flight
+    /// dispatches since the last `configure(...)`. Production callers
+    /// must not read this; it exists so a concurrency-cap test can
+    /// assert `peakInflight() <= maxInflight`.
+    static func peakInflight() -> Int {
+        counterLock.lock(); defer { counterLock.unlock() }
+        return observedPeakInflight
+    }
+
+    /// Test-only — current configured cap.
+    static func currentMaxInflight() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return currentMax
+    }
+}
+
 /// V.13b-4c — synchronous dispatch helper that the serve-path chatHandler
 /// closure calls for `.quick/.balanced/.frontier` requests. Implements the
 /// b-2b safety bundle:
@@ -22,6 +136,40 @@ import Foundation
 /// state. The Anthropic key is held in the engine instance only — this
 /// helper never sees the raw key, only the `keyLabel` for the audit row.
 public enum ClaudeAPIServeDispatch {
+
+    // MARK: - Process-wide concurrency cap (V.13b-4c follow-up)
+
+    /// Default in-flight dispatch cap (`DispatchGate.defaultMaxInflight`).
+    /// Documented at the top-of-file rationale block.
+    public static var defaultMaxInflight: Int { DispatchGate.defaultMaxInflight }
+
+    /// Reconfigure the process-wide concurrency cap. Operator-facing for
+    /// production tuning; test-facing for the per-gate concurrency-cap
+    /// regression tests. Pass `nil` to restore the default.
+    ///
+    /// Tests must wrap calls under `.serialized` so callers parked on the
+    /// OLD semaphore don't bleed into a subsequent suite.
+    public static func configureMaxInflight(_ n: Int) {
+        DispatchGate.configure(maxInflight: n)
+    }
+
+    /// Restore `defaultMaxInflight`. Test-only — guarded `internal` to keep
+    /// the operator-facing public surface minimal (Schneier r23 P2).
+    static func resetMaxInflightToDefault() {
+        DispatchGate.resetToDefault()
+    }
+
+    /// TEST-ONLY — observed peak number of simultaneously in-flight
+    /// dispatches since the last `configureMaxInflight(...)` call. Internal
+    /// access so production callers can't bind to it (Schneier r23 P2).
+    static func _testOnlyPeakInflight() -> Int {
+        DispatchGate.peakInflight()
+    }
+
+    /// TEST-ONLY — current configured cap. Internal access (Schneier r23 P2).
+    static func _testOnlyCurrentMaxInflight() -> Int {
+        DispatchGate.currentMaxInflight()
+    }
 
     /// Outcome of one non-local-tier dispatch through the Claude engine.
     /// The caller (ServeCommand chatHandler closure) records exactly one
@@ -59,6 +207,15 @@ public enum ClaudeAPIServeDispatch {
         now: Date,
         id: String
     ) -> Outcome {
+        // V.13b-4c follow-up — process-wide concurrency gate. Acquired
+        // BEFORE any engine work; released in a defer that fires on
+        // EVERY exit path (success, throw, CancellationError, .other
+        // collapse). The gate is byte-equivalent to today on the
+        // unconstrained path; under burst it bounds the number of
+        // GCD threads parked in `ServeBridge.runBlocking`.
+        DispatchGate.acquire()
+        defer { DispatchGate.release() }
+
         // Build the heuristic prompt-token count up front — it's used for
         // BOTH the success path and any error audit row (no completion
         // bytes in the error case, so completionTokenCount is 0).

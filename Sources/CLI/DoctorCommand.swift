@@ -1938,52 +1938,206 @@ struct Doctor: ParsableCommand {
         }
     }
 
+    /// V.13b-4c — result type returned by `listAnthropicVaultLabels`.
+    /// Schneier P2 (perm-denied conflation, timeout-as-empty): distinct
+    /// cases let the formatter render distinct operator-facing messages
+    /// for each fault class, instead of collapsing every failure mode
+    /// into "unprovisioned".
+    ///
+    /// - `.ok(VaultLabels)`: vault query returned (possibly zero labels).
+    /// - `.timedOut`: the 5s semaphore ceiling elapsed before the
+    ///   background Task signaled. Distinct from `.ok([])` so the
+    ///   formatter can render `"Keychain query timed out"` rather than
+    ///   `"no labels provisioned"`.
+    /// - `.permissionDenied(Error)`: the underlying Keychain store threw
+    ///   with an OSStatus that indicates a locked / permission-denied
+    ///   state (`errSecAuthFailed`, `errSecInteractionNotAllowed`,
+    ///   `errSecUserCanceled`, `errSecAuthFailed`-class). Distinct from
+    ///   `.otherFailure` so the formatter can render a "re-run after
+    ///   unlocking the login Keychain" hint.
+    /// - `.otherFailure(Error)`: any other thrown error from the vault
+    ///   layer (corrupted item, future broker-store I/O, etc.).
+    enum KeychainVaultLookupResult: Sendable {
+        case ok(VaultLabels)
+        case timedOut
+        case permissionDenied(Error)
+        case otherFailure(Error)
+    }
+
     /// V.13b-5 — pure formatter for the Anthropic vault-labels check.
     /// Returns `(Status, message)` for the doctor surface. Lifted out of
     /// `checkAnthropicVaultLabels` so the unit test can assert on the
     /// operator-facing line directly (mirror of `formatOpenAIEndpointLine`
     /// / `formatChainAuditLines`).
     ///
-    /// **Schneier (no-secret-on-stdout):** input is `[String]` of LABELS
-    /// — there is no parameter shape by which a raw API key could reach
-    /// this formatter. The vault layer (`CredentialVault.list(scope:)`)
+    /// **Schneier (no-secret-on-stdout):** input is a `VaultLabels` of
+    /// LABELS — there is no parameter shape by which a raw API key could
+    /// reach this formatter. The vault layer (`CredentialVault.list(scope:)`)
     /// returns label keys only; the raw key material lives in the value
-    /// payload that this formatter never sees.
+    /// payload that this formatter never sees. V.13b-4c made the no-secret
+    /// guarantee type-level via the `VaultLabels` wrapper — a future
+    /// refactor that swapped the inner element type would fail to
+    /// compile here.
     ///
-    /// - Zero labels → `.skip` with the operator-actionable
+    /// V.13b-4c (Schneier P2): distinct messages per failure class.
+    ///
+    /// - `.ok` zero labels → `.skip` with the operator-actionable
     ///   `senkani vault add anthropic-key --label <name>` pointer.
-    /// - One or more labels → `.pass` listing every label in the order
+    /// - `.ok` one or more labels → `.pass` listing every label in the order
     ///   the vault returned them.
-    static func formatAnthropicVaultLabelsLine(_ labels: [String]) -> (Status, String) {
-        if labels.isEmpty {
+    /// - `.timedOut` → `.fail` "Keychain query timed out — re-run doctor".
+    /// - `.permissionDenied(err)` → `.fail` "Keychain unavailable
+    ///   (locked / permission denied)". The error's `localizedDescription`
+    ///   is appended — OSStatus error descriptions carry only status
+    ///   codes + Apple-canned text, never vault values, so no secret
+    ///   material can reach this surface through the error.
+    /// - `.otherFailure(err)` → `.fail` "Keychain query failed:
+    ///   <localizedDescription>".
+    static func formatAnthropicVaultLabelsLine(
+        _ result: KeychainVaultLookupResult
+    ) -> (Status, String) {
+        switch result {
+        case .ok(let vaultLabels):
+            let labels = vaultLabels.labels
+            if labels.isEmpty {
+                return (
+                    .skip,
+                    "Anthropic vault: no labels provisioned. Run `senkani vault add anthropic-key --label <name>` to seed the upstream key."
+                )
+            }
+            let listed = labels.joined(separator: ", ")
             return (
-                .skip,
-                "Anthropic vault: no labels provisioned. Run `senkani vault add anthropic-key --label <name>` to seed the upstream key."
+                .pass,
+                "Anthropic vault: \(labels.count) label(s) provisioned (\(listed))"
+            )
+        case .timedOut:
+            return (
+                .fail,
+                "Anthropic vault: Keychain query timed out (>5s) — re-run `senkani doctor`. If this persists, your login Keychain may be locked or the Security daemon is unresponsive."
+            )
+        case .permissionDenied(let error):
+            return (
+                .fail,
+                "Anthropic vault: Keychain unavailable (locked / permission denied): \(error.localizedDescription)"
+            )
+        case .otherFailure(let error):
+            return (
+                .fail,
+                "Anthropic vault: Keychain query failed: \(error.localizedDescription)"
             )
         }
-        let listed = labels.joined(separator: ", ")
-        return (
-            .pass,
-            "Anthropic vault: \(labels.count) label(s) provisioned (\(listed))"
-        )
     }
 
-    /// V.13b-5 — synchronously list provisioned Anthropic vault labels.
-    /// Bridges the async `CredentialVault.list` actor call onto doctor's
-    /// sync execution path via a bounded-timeout semaphore. The list call
-    /// is bounded by the underlying store's single Keychain query; no
-    /// network I/O. Extracted so the unit test can drive the bridge with
-    /// an injected `InMemoryKeychainStore`-backed vault and assert the
-    /// label list (label-only — the raw key never reaches this surface).
-    static func listAnthropicVaultLabels(vault: CredentialVault) -> [String] {
-        let sem = DispatchSemaphore(value: 0)
-        nonisolated(unsafe) var labels: [String] = []
-        Task {
-            labels = (try? await vault.list(scope: AnthropicKeyProvisioner.vaultScope)) ?? []
-            sem.signal()
+    /// V.13b-5 / V.13b-4c — synchronously list provisioned Anthropic
+    /// vault labels with a 5s ceiling. Bridges the async
+    /// `CredentialVault.list` actor call onto doctor's sync execution
+    /// path via a bounded-timeout semaphore. The list call is bounded
+    /// by the underlying store's single Keychain query; no network I/O.
+    /// Extracted so the unit test can drive the bridge with an injected
+    /// `InMemoryKeychainStore`-backed vault and assert the label list
+    /// (label-only — the raw key never reaches this surface).
+    ///
+    /// V.13b-4c hardening:
+    /// - **Thread-safe publish**: the prior `nonisolated(unsafe) var
+    ///   labels` had a real TSan race on the timeout codepath (the
+    ///   background Task could still be writing `labels` when the main
+    ///   thread returned it). Replaced with an `NSLock`-guarded
+    ///   `LookupSlot` so the background-Task write and the main-thread
+    ///   read are serialized, and the main thread only ever returns
+    ///   what was atomically published.
+    /// - **5s ceiling** (was 3s): matches the b-4d test ceiling; on
+    ///   timeout, returns `.timedOut` (NOT `.ok([])`) so the formatter
+    ///   renders a distinct "Keychain query timed out" message instead
+    ///   of the false-negative "no labels provisioned" hint.
+    /// - **Perm-denied classification**: caught throws are classified
+    ///   into `.permissionDenied` vs `.otherFailure` based on the
+    ///   underlying NSError's `code` (OSStatus). `errSecAuthFailed`,
+    ///   `errSecInteractionNotAllowed`, `errSecUserCanceled`, and
+    ///   `errSecAuthFailed`-class statuses route to `.permissionDenied`;
+    ///   everything else routes to `.otherFailure`.
+    static func listAnthropicVaultLabels(
+        vault: CredentialVault
+    ) -> KeychainVaultLookupResult {
+        // NSLock-guarded slot: the background Task writes
+        // `(labels, error, done)` atomically; the main thread reads
+        // them atomically after the semaphore fires (or sees `done ==
+        // false` on timeout). No `nonisolated(unsafe)` shared state.
+        final class LookupSlot: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _labels: [String] = []
+            private var _error: Error? = nil
+            private var _done: Bool = false
+
+            func publish(labels: [String]?, error: Error?) {
+                lock.lock()
+                defer { lock.unlock() }
+                if let labels = labels {
+                    _labels = labels
+                }
+                _error = error
+                _done = true
+            }
+
+            func snapshot() -> (labels: [String], error: Error?, done: Bool) {
+                lock.lock()
+                defer { lock.unlock() }
+                return (_labels, _error, _done)
+            }
         }
-        _ = sem.wait(timeout: .now() + .seconds(3))
-        return labels
+
+        let slot = LookupSlot()
+        let sem = DispatchSemaphore(value: 0)
+        Task {
+            defer { sem.signal() }
+            do {
+                let labels = try await vault.list(
+                    scope: AnthropicKeyProvisioner.vaultScope
+                )
+                slot.publish(labels: labels, error: nil)
+            } catch {
+                slot.publish(labels: nil, error: error)
+            }
+        }
+        // V.13b-4c: 5s ceiling (was 3s).
+        let waitResult = sem.wait(timeout: .now() + .seconds(5))
+        let snap = slot.snapshot()
+        if waitResult == .timedOut || !snap.done {
+            // Timed out — do NOT collapse to empty labels.
+            return .timedOut
+        }
+        if let error = snap.error {
+            if Self.isPermissionDeniedError(error) {
+                return .permissionDenied(error)
+            }
+            return .otherFailure(error)
+        }
+        return .ok(VaultLabels(snap.labels))
+    }
+
+    /// V.13b-4c — classify a Keychain `list` throw as permission-denied
+    /// vs other-failure. The `MacOSKeychainStore` wraps OSStatus into
+    /// an `NSError(domain: "MacOSKeychainStore", code: Int(status))`,
+    /// so we read back the OSStatus from the NSError code. The status
+    /// codes treated as permission-denied are:
+    ///
+    /// - `errSecAuthFailed` (-25293): authentication failed (canonical
+    ///   "Keychain locked / wrong password" status).
+    /// - `errSecInteractionNotAllowed` (-25308): UI prompt required
+    ///   but disallowed (headless serve hitting a locked Keychain).
+    /// - `errSecUserCanceled` (-128): operator dismissed an unlock
+    ///   prompt.
+    /// - `errSecNotAvailable` (-25291): no Keychain available
+    ///   (e.g. headless CI without a login Keychain).
+    ///
+    /// Everything else (e.g. `errSecParam`, future broker-store I/O
+    /// errors) routes to `.otherFailure`.
+    static func isPermissionDeniedError(_ error: Error) -> Bool {
+        let ns = error as NSError
+        // OSStatus values (from `<Security/SecBase.h>`):
+        // errSecAuthFailed = -25293, errSecInteractionNotAllowed = -25308,
+        // errSecUserCanceled = -128, errSecNotAvailable = -25291.
+        let permissionDeniedCodes: Set<Int> = [-25293, -25308, -128, -25291]
+        return permissionDeniedCodes.contains(ns.code)
     }
 
     /// V.13b-5 — surface provisioned upstream Anthropic vault labels.
@@ -2004,8 +2158,8 @@ struct Doctor: ParsableCommand {
     /// configuration choice (the local-only tiers still serve), not a
     /// broken state.
     private func checkAnthropicVaultLabels(_ results: inout Results) {
-        let labels = Self.listAnthropicVaultLabels(vault: AnthropicKeyProvisioner.vault())
-        let (status, message) = Self.formatAnthropicVaultLabelsLine(labels)
+        let lookup = Self.listAnthropicVaultLabels(vault: AnthropicKeyProvisioner.vault())
+        let (status, message) = Self.formatAnthropicVaultLabelsLine(lookup)
         printStatus(status, message)
         switch status {
         case .pass: results.passed += 1

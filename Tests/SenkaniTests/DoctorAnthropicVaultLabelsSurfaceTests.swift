@@ -26,7 +26,9 @@ struct DoctorAnthropicVaultLabelsSurfaceTests {
     /// `senkani vault add anthropic-key --label <name>` pointer.
     @Test("zero-labels — skip with the vault-add hint, count(0) suppressed")
     func zeroLabelsSkipsWithHint() {
-        let (status, line) = Doctor.formatAnthropicVaultLabelsLine([])
+        let (status, line) = Doctor.formatAnthropicVaultLabelsLine(
+            .ok(VaultLabels([]))
+        )
 
         guard case .skip = status else {
             Issue.record("expected .skip on zero labels, got \(status): \(line)")
@@ -39,11 +41,13 @@ struct DoctorAnthropicVaultLabelsSurfaceTests {
     }
 
     /// Single label → `.pass` with the label rendered inline. The raw
-    /// key never reaches the line (the formatter takes `[String]`
+    /// key never reaches the line (the formatter takes `VaultLabels`
     /// labels — there is no parameter shape by which a key could leak).
     @Test("single-label — pass with the label rendered, never the raw key")
     func singleLabelPassesWithLabel() {
-        let (status, line) = Doctor.formatAnthropicVaultLabelsLine(["work"])
+        let (status, line) = Doctor.formatAnthropicVaultLabelsLine(
+            .ok(VaultLabels(["work"]))
+        )
 
         guard case .pass = status else {
             Issue.record("expected .pass on single label, got \(status): \(line)")
@@ -59,7 +63,7 @@ struct DoctorAnthropicVaultLabelsSurfaceTests {
     @Test("multi-label — pass with all labels listed in vault order")
     func multipleLabelsPassWithAllListed() {
         let (status, line) = Doctor.formatAnthropicVaultLabelsLine(
-            ["personal", "work"]
+            .ok(VaultLabels(["personal", "work"]))
         )
 
         guard case .pass = status else {
@@ -102,11 +106,16 @@ struct DoctorAnthropicVaultLabelsSurfaceTests {
             key: rawKeyPersonal, label: "personal", vault: vault
         )
 
-        let labels = Doctor.listAnthropicVaultLabels(vault: vault)
+        let lookup = Doctor.listAnthropicVaultLabels(vault: vault)
+        guard case .ok(let vaultLabels) = lookup else {
+            Issue.record("expected .ok, got \(lookup)")
+            return
+        }
+        let labels = vaultLabels.labels
         #expect(labels.sorted() == ["personal", "work"],
             "bridge must round-trip both provisioned labels in vault order; got \(labels)")
 
-        let (status, line) = Doctor.formatAnthropicVaultLabelsLine(labels)
+        let (status, line) = Doctor.formatAnthropicVaultLabelsLine(lookup)
         guard case .pass = status else {
             Issue.record("expected .pass for live two-label vault, got \(status): \(line)")
             return
@@ -131,15 +140,19 @@ struct DoctorAnthropicVaultLabelsSurfaceTests {
     }
 
     /// Empty vault via the live bridge — proves `listAnthropicVaultLabels`
-    /// returns `[]` (not nil-collapsed-to-error) for an unprovisioned
+    /// returns `.ok([])` (not nil-collapsed-to-error) for an unprovisioned
     /// vault, and the formatter renders the `.skip` hint.
-    @Test("empty-vault bridge — returns [] and the skip hint renders")
+    @Test("empty-vault bridge — returns .ok([]) and the skip hint renders")
     func emptyVaultBridgeReturnsEmpty() {
         let vault = CredentialVault(store: InMemoryKeychainStore())
-        let labels = Doctor.listAnthropicVaultLabels(vault: vault)
-        #expect(labels.isEmpty, "fresh vault must list zero labels, got \(labels)")
+        let lookup = Doctor.listAnthropicVaultLabels(vault: vault)
+        guard case .ok(let vaultLabels) = lookup else {
+            Issue.record("expected .ok on empty live vault, got \(lookup)")
+            return
+        }
+        #expect(vaultLabels.isEmpty, "fresh vault must list zero labels, got \(vaultLabels.labels)")
 
-        let (status, line) = Doctor.formatAnthropicVaultLabelsLine(labels)
+        let (status, line) = Doctor.formatAnthropicVaultLabelsLine(lookup)
         guard case .skip = status else {
             Issue.record("expected .skip on empty live vault, got \(status): \(line)")
             return

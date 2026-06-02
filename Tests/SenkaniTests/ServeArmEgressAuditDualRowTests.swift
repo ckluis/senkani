@@ -93,38 +93,81 @@ private func dualRowWaitForRow(
 @Suite("ServeArmEgressAuditDualRow — negative source-scan (T1)", .serialized)
 struct ServeArmEgressAuditDualRowSourceScanTests {
 
-    @Test("Serve-path files NEVER reference egress-write APIs")
+    /// V.13b-4c follow-up b-4d (Schneier P2): T1 widened from include-list to
+    /// DENY-LIST. Previously the scan only inspected `Sources/CLI/ServeCommand.swift`
+    /// + `Sources/Core/OpenAIEndpoint/*.swift` — a future serve-path helper landing
+    /// under a NEW directory (`Sources/Core/OpenAIServeNew/`,
+    /// `Sources/Core/Routing/`, etc.) would silently slip past the static guarantee.
+    /// The deny-list approach enumerates EVERY `.swift` file under `Sources/` and
+    /// exempts only the files / directories where the egress-write API symbols
+    /// LEGITIMATELY appear:
+    ///
+    ///   - `Sources/Core/EgressProxy/`  — the daemon writer dir (the only real
+    ///     producer of `egress_decisions` rows). All paths inside this prefix
+    ///     are exempt.
+    ///   - `Sources/Core/SessionDatabase+EgressAPI.swift`  — the SessionDatabase
+    ///     facade that exposes `recordEgressDecision(...)` /
+    ///     `egressDecisionStore.record(...)`. It IS the wrapper the daemon calls
+    ///     through, not a serve-path writer.
+    ///   - `Sources/Core/SessionDatabase.swift`  — store wiring: `internal var
+    ///     egressDecisionStore: EgressDecisionStore!` and the two
+    ///     `EgressDecisionStore(parent: self)` construction sites. Pure
+    ///     dependency wiring, not a write.
+    ///   - `Sources/Core/ChainVerifier.swift`  — doc-comment reference (`/// writer
+    ///     side in EgressDecisionStore.record.`). Read-side code, no write.
+    ///
+    /// Any match OUTSIDE the exemption set fails the test — a new serve-path
+    /// helper that grows an `egress_decisions` write under any directory is
+    /// caught at compile-time-equivalent (test-time) granularity.
+    @Test("Serve-path files NEVER reference egress-write APIs (deny-list scan)")
     func servePathFilesNeverWriteEgressRows() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()  // Tests/SenkaniTests
             .deletingLastPathComponent()  // Tests
             .deletingLastPathComponent()  // repo root
         let sourcesDir = repoRoot.appendingPathComponent("Sources", isDirectory: true)
+        let sourcesPrefix = sourcesDir.standardizedFileURL.path
 
-        // Files / dirs to scan. ServeCommand.swift + every .swift under
-        // Sources/Core/OpenAIEndpoint/. The b-4d delta introduces no new
-        // helpers; if it ever does, they'll appear under one of these
-        // roots and be picked up automatically.
-        var targets: [URL] = []
-        targets.append(sourcesDir
-            .appendingPathComponent("CLI", isDirectory: true)
-            .appendingPathComponent("ServeCommand.swift"))
-        let openAIDir = sourcesDir
-            .appendingPathComponent("Core", isDirectory: true)
-            .appendingPathComponent("OpenAIEndpoint", isDirectory: true)
+        // Exemption set — paths that legitimately reference egress-write API
+        // symbols. Stored as repo-relative substrings; an exemption matches if
+        // the candidate file's path under Sources/ has the substring as a
+        // prefix (so a DIR exemption like `Core/EgressProxy/` matches every
+        // file inside that subtree).
+        let exemptions: [String] = [
+            "Core/EgressProxy/",
+            "Core/SessionDatabase+EgressAPI.swift",
+            "Core/SessionDatabase.swift",
+            "Core/ChainVerifier.swift",
+        ]
+
+        // Recursively enumerate every `.swift` under Sources/. We use
+        // `FileManager.enumerator(at:)` (the same shape the build system uses)
+        // so a future re-arrangement of the source tree picks up new files
+        // automatically.
         let fm = FileManager.default
-        if let openAIChildren = try? fm.contentsOfDirectory(at: openAIDir, includingPropertiesForKeys: nil) {
-            for child in openAIChildren where child.pathExtension == "swift" {
-                targets.append(child)
-            }
-        } else {
-            Issue.record("could not enumerate \(openAIDir.path)")
+        guard let enumerator = fm.enumerator(
+            at: sourcesDir,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            Issue.record("could not enumerate \(sourcesDir.path)")
+            return
+        }
+
+        var targets: [URL] = []
+        for case let url as URL in enumerator where url.pathExtension == "swift" {
+            // Repo-relative-to-Sources/ path for exemption matching.
+            let absPath = url.standardizedFileURL.path
+            guard absPath.hasPrefix(sourcesPrefix + "/") else { continue }
+            let rel = String(absPath.dropFirst(sourcesPrefix.count + 1))
+            let isExempt = exemptions.contains { rel.hasPrefix($0) }
+            if !isExempt { targets.append(url) }
         }
 
         // Schneier P0: cover three indirect write shapes. Any match in a
-        // serve-path file fails the test — write paths must funnel through
+        // non-exempt file fails the test — write paths must funnel through
         // the daemon (`Sources/Core/EgressProxy/`) + the SessionDatabase
-        // facade (`Sources/Core/SessionDatabase+EgressAPI.swift`) only.
+        // facade only.
         let patterns: [String] = [
             #"\brecordEgressDecision\s*\("#,
             #"\bEgressDecisionStore\s*[(.]"#,
@@ -142,7 +185,11 @@ struct ServeArmEgressAuditDualRowSourceScanTests {
                 let lineStr = String(line)
                 for pattern in patterns {
                     if lineStr.range(of: pattern, options: .regularExpression) != nil {
-                        hits.append("\(file.lastPathComponent):\(idx + 1): \(lineStr.trimmingCharacters(in: .whitespaces))")
+                        let absPath = file.standardizedFileURL.path
+                        let rel = absPath.hasPrefix(sourcesPrefix + "/")
+                            ? String(absPath.dropFirst(sourcesPrefix.count + 1))
+                            : file.lastPathComponent
+                        hits.append("\(rel):\(idx + 1): \(lineStr.trimmingCharacters(in: .whitespaces))")
                         break
                     }
                 }
@@ -150,7 +197,7 @@ struct ServeArmEgressAuditDualRowSourceScanTests {
         }
 
         #expect(hits.isEmpty,
-            "serve-path files MUST NOT call the egress-write API; offenders: \(hits)")
+            "non-exempt files MUST NOT call the egress-write API; offenders: \(hits)")
     }
 }
 
@@ -258,6 +305,67 @@ struct ServeArmEgressAuditDualRowDispatchTests {
             },
             label: "upstream"
         )
+    }
+
+    /// V.13b-4c follow-up b-4d (Schneier P3): defense-in-depth fifth T2 case
+    /// for the `Captured.cancellation` arm of `ClaudeAPIServeDispatch.dispatch`.
+    /// T1's static deny-list already guarantees no serve-path file even
+    /// references the egress-write API, but the T2 behavioral matrix should
+    /// close every dispatch-outcome variant — success, rateLimited,
+    /// upstreamError, networkError, AND cancellation. We trigger the
+    /// cancellation arm by:
+    ///   - Registering a 429 mock response so the engine enters its retry
+    ///     loop (with a low-retry policy that still allows ONE attempt).
+    ///   - Injecting a `sleeper` that throws `CancellationError()` on the
+    ///     first backoff. The engine propagates `CancellationError` (NOT
+    ///     `ClaudeAPIChatEngineError`) — see ClaudeAPIChatEngine.fireWithRetry
+    ///     line 512 — which dispatch captures into `Captured.cancellation`
+    ///     and routes through the no-egress-write `errorOutcome(...)` arm.
+    /// Asserts `db.recentEgressDecisions(limit:10).count` delta == 0 — the
+    /// cancellation path must not leak an egress row from the serve dispatch.
+    @Test("Cancellation path writes zero egress rows")
+    func cancellationZeroDelta() {
+        MockURLProtocol.reset()
+        defer { MockURLProtocol.reset() }
+        // Register a 429 so the engine enters its retry/backoff loop. The
+        // sleeper throws `CancellationError()` on the first sleep, before
+        // any second upstream attempt fires.
+        MockURLProtocol.register(
+            url: anthropicURL, status: 429,
+            body: Data(#"{"error":{"type":"rate_limit_error"}}"#.utf8)
+        )
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: config)
+        let engine = ClaudeAPIChatEngine(
+            apiKey: "ak-test",
+            session: session,
+            endpoint: anthropicURL,
+            retryPolicy: ClaudeAPIChatEngine.RetryPolicy(
+                maxRetries: 3,
+                maxTotalWait: .seconds(5),
+                baseDelay: .milliseconds(1)
+            ),
+            // The cancellation injection seam: a `sleeper` that throws
+            // `CancellationError()` propagates exactly the same shape as a
+            // real task cancellation mid-backoff.
+            sleeper: { _ in throw CancellationError() }
+        )
+
+        let db = dualRowTempDB()
+        let before = db.recentEgressDecisions(limit: 10).count
+        _ = ClaudeAPIServeDispatch.dispatch(
+            engine: engine,
+            request: request(),
+            routing: routing(),
+            keyLabel: "work",
+            now: Date(),
+            id: "chatcmpl-cancel"
+        )
+        let after = db.recentEgressDecisions(limit: 10).count
+        #expect(after - before == 0,
+            "cancellation dispatch must not write egress rows; before=\(before) after=\(after)")
     }
 
     @Test("Network error path writes zero egress rows")
@@ -398,14 +506,63 @@ struct ServeArmEgressAuditDualRowLiveTests {
         }
     }
 
+    /// V.13b-4c follow-up b-4d (Schneier P3): bind-then-close ephemeral
+    /// port idiom. Previously T4 used the hard-coded literal `0xDEAD`
+    /// (= 57005), which had a rare collision hazard if something else on the
+    /// test host bound 57005. The replacement asks the kernel to assign an
+    /// ephemeral 127.0.0.1 port (bind to `port: 0`), reads the assigned port
+    /// via `getsockname`, then closes the socket — yielding a port number
+    /// that is "known closed" at the instant we use it.
+    ///
+    /// Accepted trade-off: under heavy churn the kernel may re-assign the
+    /// port to another process between close and `dataTask.resume()`,
+    /// transitioning it out of `TIME_WAIT`. In that case the test would
+    /// turn from "URLSession surfaces an error" into "URLSession connects to
+    /// the wrong endpoint" — a different failure mode, but still a failure
+    /// (the response would not be a successful CONNECT through our proxy).
+    /// We accept that rare flake as a strictly better trade than the
+    /// hard-coded 57005 collision risk.
+    private func reservedClosedPort() throws -> Int {
+        enum PortHelperError: Error { case bindFailed, getsocknameFailed }
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw PortHelperError.bindFailed }
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = 0  // kernel-assigned
+        addr.sin_addr.s_addr = UInt32(0x7F00_0001).bigEndian  // 127.0.0.1
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        let br = withUnsafePointer(to: &addr) { ptr -> Int32 in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                bind(fd, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        if br != 0 { close(fd); throw PortHelperError.bindFailed }
+        var bound = sockaddr_in()
+        var blen = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let nr = withUnsafeMutablePointer(to: &bound) { ptr -> Int32 in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                getsockname(fd, sa, &blen)
+            }
+        }
+        if nr != 0 { close(fd); throw PortHelperError.getsocknameFailed }
+        let port = Int(UInt16(bigEndian: bound.sin_port))
+        // Close so the port is no longer bound; kernel keeps it in TIME_WAIT
+        // for the rest of this test invocation (typical macOS default ≥ 15s)
+        // which is plenty for the dataTask below.
+        close(fd)
+        return port
+    }
+
     /// T4: Bogus-port inverse. Build a URLSession with a proxy port we
-    /// know is closed (`0xDEAD = 57005`); the dataTask must surface an
-    /// error — proving CFNetwork does NOT silently fall back to direct
-    /// egress when the proxy is unreachable. Validates the "proxy is
-    /// REQUIRED, not preferred" half of the routing-regression guard.
+    /// know is closed (bind-then-close ephemeral; see `reservedClosedPort()`);
+    /// the dataTask must surface an error — proving CFNetwork does NOT
+    /// silently fall back to direct egress when the proxy is unreachable.
+    /// Validates the "proxy is REQUIRED, not preferred" half of the
+    /// routing-regression guard.
     @Test("Bogus proxy port surfaces URLError (proxy is required, not preferred)")
-    func bogusProxyPortFails() {
-        let config = ClaudeAPIServeEngineFactory.proxiedConfiguration(port: 0xDEAD)
+    func bogusProxyPortFails() throws {
+        let closedPort = try reservedClosedPort()
+        let config = ClaudeAPIServeEngineFactory.proxiedConfiguration(port: closedPort)
         config.timeoutIntervalForRequest = 2
         config.timeoutIntervalForResource = 2
         config.httpMaximumConnectionsPerHost = 1

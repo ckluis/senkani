@@ -18,27 +18,36 @@ import Darwin
 /// does real `getaddrinfo` — exercising it from CI would dial real
 /// Anthropic.
 ///
-/// This suite codifies the deferred ALLOW arm proof under THREE tests:
-///   T1. PARITY — the new `DefaultEgressUpstreamConnector` adopter
-///       returns byte-equivalent results to the static
-///       `EgressUpstreamConnector.connect(host:port:)` call (loopback
-///       fixture; both should return a connected fd to the same port).
-///   T2. LIVE ALLOW-ARM INTEGRATION — `EgressListener` with the b-4b
-///       `serve-anthropic` allow rule + a `LoopbackStubConnector` that
-///       redirects to a `FixtureTCPServer` produces EXACTLY ONE allow
-///       row whose row-shape matches the spec (host=api.anthropic.com,
-///       method=CONNECT, decision=.allow, ruleId="serve-anthropic").
-///   T3. CHAIN-INTEGRITY-AND-FIELDS — same allow-arm run; assert
-///       `ChainVerifier.verifyEgressDecisions == .ok` and the audit row
-///       fields are correct. (Overlaps T2's (c) per spec by design.)
+/// This suite codifies the deferred ALLOW arm proof under FOUR tests
+/// (T1 has 2 sub-tests — adopter parity + unreachable-port nil — plus
+/// T2 + T3):
+///   T1a. PARITY — the new `DefaultEgressUpstreamConnector` adopter
+///        returns byte-equivalent results to the static
+///        `EgressUpstreamConnector.connect(host:port:)` call (loopback
+///        fixture; both should return a connected fd to the same port).
+///   T1b. UNREACHABLE-PORT PARITY — both paths return nil on a closed
+///        loopback port; locks in that the adopter doesn't add a
+///        retry / fallback / different error semantics.
+///   T2.  LIVE ALLOW-ARM INTEGRATION — `EgressListener` with the b-4b
+///        `serve-anthropic` allow rule + a `LoopbackStubConnector` that
+///        redirects to a `FixtureTCPServer` produces EXACTLY ONE allow
+///        row whose row-shape matches the spec (host=api.anthropic.com,
+///        method=CONNECT, decision=.allow, ruleId="serve-anthropic").
+///   T3.  CHAIN-INTEGRITY-AND-FIELDS — direct multi-row seed through
+///        the SessionDatabase facade; assert
+///        `ChainVerifier.verifyEgressDecisions == .ok` across 3
+///        successive allow rows so the verdict exercises row-to-row
+///        chain LINKAGE, not just anchor → first-row.
 ///
 /// Plan-audit guards adopted from b-4d:
 ///   - `.serialized` on every suite — EgressListener + URLSession
 ///     process-global state collide otherwise (Karpathy P2).
-///   - URLSession is `.ephemeral`, `timeoutIntervalForRequest = 2`,
-///     `httpMaximumConnectionsPerHost = 1`, one `dataTask`, then
-///     `invalidateAndCancel()` BEFORE the assertion (Schneier P1 —
-///     HTTP/2 keepalive/retry hazard).
+///   - URLSession is `.ephemeral`, `timeoutIntervalForRequest = 5`
+///     (widened from 2s for slow-CI headroom — V.13b-4c-followup-4dii
+///     Karpathy P3 — the exactly-one-row assertion remains the actual
+///     keepalive/retry hazard-catcher), `httpMaximumConnectionsPerHost = 1`,
+///     one `dataTask`, then `invalidateAndCancel()` BEFORE the
+///     assertion (Schneier P1 — HTTP/2 keepalive/retry hazard).
 ///   - Exact count asserted on the rows table (Schneier P1 — a future
 ///     double-CONNECT-from-keepalive bug would fail this).
 ///   - Port-zero bind on both `EgressListener` and `FixtureTCPServer`
@@ -77,9 +86,10 @@ private func seamWaitForRow(
 private struct LoopbackStubConnector: EgressUpstreamConnecting {
     let fixturePort: Int
 
-    func connect(host: String, port: Int) -> Int32? {
+    func connect(host: String, port: Int, timeoutSeconds: Int) -> Int32? {
         _ = host  // intentionally ignored
         _ = port  // intentionally ignored
+        _ = timeoutSeconds  // intentionally ignored — fixture is loopback
         return connectToLocalhost(port: fixturePort)
     }
 }
@@ -187,9 +197,10 @@ struct EgressUpstreamConnectingSeamAllowArmTests {
         defer { fixture.shutdown() }
         // The fixture HOLDS the connection: drain bytes in a loop until
         // the peer closes. This blocks URLSession's CONNECT pipe in a
-        // steady-state read — URLSession's `timeoutIntervalForRequest:2`
-        // fires before any retry can run, so we get EXACTLY ONE allow
-        // row, not 2 from a keepalive/retry. (A premature fixture-close
+        // steady-state read — URLSession's `timeoutIntervalForRequest:5`
+        // (widened V.13b-4c-followup-4dii for slow-CI headroom) fires
+        // before any retry can run, so we get EXACTLY ONE allow row,
+        // not 2 from a keepalive/retry. (A premature fixture-close
         // mid-TLS-handshake would let URLSession retry the CONNECT,
         // producing a 2nd allow row — the assertion below catches that
         // hazard.) Accept on multiple slots as belt-and-braces in case
@@ -224,16 +235,23 @@ struct EgressUpstreamConnectingSeamAllowArmTests {
         #expect(listener.port > 0)
 
         // Schneier P1: bound URLSession's HTTP/2 keepalive + retry hazard.
+        // Karpathy P3 (V.13b-4c-followup-4dii): envelope widened 2s→5s
+        // for slow-CI headroom. The exactly-one-row assertion below is
+        // the actual hazard-catcher — it pins that even with the
+        // permissive 5s window, the listener never emits a 2nd
+        // CONNECT row from a keepalive/retry. If a future regression
+        // ever did double-CONNECT, the row count would jump to 2 and
+        // this test fails loudly regardless of the timeout slack.
         let config = ClaudeAPIServeEngineFactory.proxiedConfiguration(port: listener.port)
-        config.timeoutIntervalForRequest = 2
-        config.timeoutIntervalForResource = 2
+        config.timeoutIntervalForRequest = 5
+        config.timeoutIntervalForResource = 5
         config.httpMaximumConnectionsPerHost = 1
         let session = URLSession(configuration: config)
         defer { session.invalidateAndCancel() }
 
         var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
         request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        request.timeoutInterval = 2
+        request.timeoutInterval = 5
 
         let sem = DispatchSemaphore(value: 0)
         nonisolated(unsafe) var capturedError: Error?
@@ -242,7 +260,10 @@ struct EgressUpstreamConnectingSeamAllowArmTests {
             sem.signal()
         }
         task.resume()
-        _ = sem.wait(timeout: .now() + .seconds(5))
+        // Sem wait > request envelope so we always observe completion
+        // rather than racing past it; the row-count assertion is the
+        // structural check.
+        _ = sem.wait(timeout: .now() + .seconds(10))
         // URLSession may surface an error (the fixture doesn't complete
         // a real TLS handshake) OR may succeed-then-EOF — either is fine.
         // The structural assertion is the row, not the URLError shape.
@@ -289,28 +310,44 @@ struct EgressUpstreamConnectingSeamAllowArmTests {
         }
     }
 
-    /// Standalone chain-integrity-and-fields assertion against a freshly
-    /// written allow row through the SAME seam. Lets the verdict's
+    /// Standalone chain-integrity-and-fields assertion against freshly
+    /// written allow rows through the SAME seam. Lets the verdict's
     /// pass/fail be attributable independently of the integration test's
     /// live-traffic shape — if the integration test fails for a
     /// listener-port reason, this still pins the row-write + chain
     /// invariants on the allow path.
-    @Test("Direct allow-row write through SessionDatabase facade chains cleanly")
+    ///
+    /// Karpathy P3 (V.13b-4c-followup-4dii): seed THREE successive
+    /// allow rows rather than one so the verdict exercises row-to-row
+    /// LINKAGE (each new `prev_hash` chains to the previous row's
+    /// `entry_hash`), not just anchor → first-row. A future regression
+    /// that broke the chain at row N>0 would slip past a single-row
+    /// seed.
+    @Test("Direct allow-row writes through SessionDatabase facade chain cleanly across multiple rows")
     func directAllowRowWriteVerifiesChain() {
         let db = seamTempDB()
-        let writeOK = db.recordEgressDecision(
-            host: "api.anthropic.com",
-            method: "CONNECT",
-            decision: .allow,
-            ruleId: "serve-anthropic",
-            latencyUs: 1234,
-            paneMode: .general,
-            judgeRationale: nil
-        )
-        #expect(writeOK, "direct allow-row write must succeed against a fresh tempDB")
+
+        let seeds: [(host: String, ruleId: String, latencyUs: Int64)] = [
+            ("api.anthropic.com", "serve-anthropic", 1234),
+            ("api.anthropic.com", "serve-anthropic", 2345),
+            ("api.anthropic.com", "serve-anthropic", 3456),
+        ]
+        for seed in seeds {
+            let writeOK = db.recordEgressDecision(
+                host: seed.host,
+                method: "CONNECT",
+                decision: .allow,
+                ruleId: seed.ruleId,
+                latencyUs: seed.latencyUs,
+                paneMode: .general,
+                judgeRationale: nil
+            )
+            #expect(writeOK, "direct allow-row write must succeed against a fresh tempDB (latency=\(seed.latencyUs))")
+        }
 
         let rows = db.recentEgressDecisions(limit: 10)
-        #expect(rows.count == 1, "expected exactly one row after direct write")
+        #expect(rows.count == seeds.count,
+            "expected exactly \(seeds.count) rows after \(seeds.count) successive direct writes, got \(rows.count)")
         if let first = rows.first {
             #expect(first.host == "api.anthropic.com")
             #expect(first.method == "CONNECT")
@@ -319,12 +356,16 @@ struct EgressUpstreamConnectingSeamAllowArmTests {
             #expect(first.paneMode == .general)
         }
 
+        // Multi-row chain verdict: anchor → row1 → row2 → row3 must all
+        // chain cleanly. A future regression that broke any row-to-row
+        // linkage would surface here even though a single-row seed would
+        // still pass.
         let verdict = ChainVerifier.verifyEgressDecisions(db)
         switch verdict {
         case .ok:
             break
         default:
-            Issue.record("expected ChainVerifier.verifyEgressDecisions == .ok after one allow row, got \(verdict)")
+            Issue.record("expected ChainVerifier.verifyEgressDecisions == .ok after \(seeds.count) chained allow rows, got \(verdict)")
         }
     }
 }

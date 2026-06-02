@@ -19,16 +19,29 @@ import Glibc
 /// `EgressListener` → `EgressConnectionHandler` without dialing the
 /// real upstream from CI. Introduced V.13b-4d-ii.
 public protocol EgressUpstreamConnecting: Sendable {
-    func connect(host: String, port: Int) -> Int32?
+    func connect(host: String, port: Int, timeoutSeconds: Int) -> Int32?
+}
+
+/// Source-compat default: pre-V.13b-4c-followup-4dii callers used the
+/// 2-arg `connect(host:port:)` shape. The protocol extension routes
+/// them through the new 3-arg method with `timeoutSeconds: 5` (the same
+/// default the static `EgressUpstreamConnector.connect` has carried
+/// since V.13b-4d-ii). This means existing call sites — including
+/// `EgressConnectionHandler.handleAllowArm` / `handleAllowArmGet` —
+/// compile unchanged while new callers can pin an explicit timeout.
+public extension EgressUpstreamConnecting {
+    func connect(host: String, port: Int) -> Int32? {
+        connect(host: host, port: port, timeoutSeconds: 5)
+    }
 }
 
 /// Default production adopter: forwards directly to the static
-/// `EgressUpstreamConnector.connect(host:port:)` path so behavior is
-/// byte-equivalent to the pre-seam call. Parity test pins this.
+/// `EgressUpstreamConnector.connect(host:port:timeoutSeconds:)` path so
+/// behavior is byte-equivalent to the pre-seam call. Parity test pins this.
 public struct DefaultEgressUpstreamConnector: EgressUpstreamConnecting {
     public init() {}
-    public func connect(host: String, port: Int) -> Int32? {
-        EgressUpstreamConnector.connect(host: host, port: port)
+    public func connect(host: String, port: Int, timeoutSeconds: Int) -> Int32? {
+        EgressUpstreamConnector.connect(host: host, port: port, timeoutSeconds: timeoutSeconds)
     }
 }
 

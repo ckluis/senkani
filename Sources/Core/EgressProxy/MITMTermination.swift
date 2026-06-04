@@ -109,6 +109,37 @@ enum MITMTermination {
         /// from `.upstreamCompleted` so a stalled write is auditably
         /// different from a clean pipe close.
         case upstreamWriteBudgetExhausted
+
+        // --- Child-(iv) inner-Host rebind outcomes. ---
+
+        /// Decrypted inner HTTP `Host:` header value did not match the
+        /// SNI/CONNECT-validated host — classic HTTP/1.1 connection-
+        /// reuse / domain-fronting smuggling attempt. Mapped to the
+        /// stable `mitm_inner_host_mismatch` ruleId. The raw
+        /// mismatched host is NOT carried on this case (info-leak
+        /// guard: an attacker request could embed sensitive data in
+        /// the Host header and we don't want it landing in audit rows).
+        case innerHostMismatch
+        /// Decrypted inner request head exceeded the 16 KiB peek
+        /// budget without a `\r\n\r\n` terminator — likely malicious
+        /// header smuggling or a non-HTTP protocol smuggled inside
+        /// TLS. Mapped to `mitm_inner_head_too_large`.
+        case innerHeadTooLarge
+        /// First decrypted bytes don't look like an HTTP/1.x request
+        /// (method token not in the recognized set). Covers HTTP/2
+        /// client preface + arbitrary binary garbage. Mapped to
+        /// `mitm_inner_unknown_protocol`.
+        case innerUnknownProtocol
+        /// SSLRead surfaced an error / unexpected EOF while peeking
+        /// the inner head — connection torn down before the head was
+        /// complete. Mapped to `mitm_inner_read_error`.
+        case innerReadError(OSStatus)
+        /// r86 Karpathy P2 — mid-stream TLS abort on the bidirectional
+        /// upstream pipe surfaces as a distinct deny outcome rather
+        /// than silently mapping to `.upstreamCompleted → allow`. The
+        /// reason is a sanitized short string (no raw cert / hostname
+        /// bytes). Mapped to `mitm_upstream_pipe_error`.
+        case upstreamPipeError(reason: String)
     }
 
     /// Heap-boxed connection context referenced from the
@@ -282,6 +313,26 @@ enum MITMTermination {
         }
     }
 
+    /// `select(2)` for write-ready, with timeout. Mirror of
+    /// `waitReadable`. r86 Carmack P2: SSLWrite would-block should
+    /// route here, not to `waitReadable`. EINTR retries internally.
+    static func waitWritable(fd: Int32, seconds: Int) -> SelectOutcome {
+        while true {
+            var wfds = fd_set()
+            withUnsafeMutableBytes(of: &wfds) { ptr in
+                ptr.initializeMemory(as: UInt8.self, repeating: 0)
+            }
+            fdSet(fd, &wfds)
+            var tv = timeval(tv_sec: seconds, tv_usec: 0)
+            let rc = select(fd + 1, nil, &wfds, nil, &tv)
+            if rc > 0 { return .ready }
+            if rc == 0 { return .timeout }
+            let err = errno
+            if err == EINTR { continue }
+            return .error(err)
+        }
+    }
+
     /// FD_SET equivalent. Darwin's `fd_set` is a 1024-bit array of
     /// `Int32`s (`fds_bits`). We toggle the bit for `fd` by hand.
     ///
@@ -425,7 +476,9 @@ enum MITMTermination {
                         if sentinelBudget <= 0 {
                             return .sentinelWriteBudgetExhausted
                         }
-                        switch waitReadable(fd: ctx.fd, seconds: selectTimeoutSeconds) {
+                        // r86 Carmack P2: SSLWrite would-block waits on
+                        // write-readiness, not read-readiness.
+                        switch waitWritable(fd: ctx.fd, seconds: selectTimeoutSeconds) {
                         case .ready, .timeout:
                             continue
                         case .error(let e):

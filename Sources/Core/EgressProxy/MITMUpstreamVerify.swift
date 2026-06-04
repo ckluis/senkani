@@ -322,14 +322,30 @@ enum MITMUpstreamVerify {
     /// directions using `SSLRead` / `SSLWrite` with a bounded
     /// would-block budget and an internal `select(2)` wait.
     ///
-    /// Returns one of the `.upstream*` outcomes. `.upstreamCompleted`
-    /// means the pipe ran to EOF on one side (or both); a stuck write
-    /// surfaces as `.upstreamWriteBudgetExhausted` (r85 Allspaw P3).
+    /// Returns one of the `.upstream*` / `.inner*` outcomes.
+    /// `.upstreamCompleted` means the pipe ran to EOF on one side (or
+    /// both); a stuck write surfaces as `.upstreamWriteBudgetExhausted`
+    /// (r85 Allspaw P3); a mid-stream TLS abort surfaces as
+    /// `.upstreamPipeError(_)` (r86 Karpathy P2).
+    ///
+    /// ### Inner-Host rebind (T.1d-2b-iv)
+    ///
+    /// If `validatedHost` is non-nil, BEFORE any client→upstream byte
+    /// flows, we peek the inner HTTP/1.x request head from the
+    /// terminated client TLS, validate the `Host:` header against the
+    /// validated SNI/CONNECT host, and FAIL-CLOSED on mismatch /
+    /// non-HTTP-1.x / over-budget input. The successfully-peeked head
+    /// bytes are replayed to the upstream as the first write so no
+    /// bytes are lost or double-consumed.
+    ///
+    /// `validatedHost == nil` skips the rebind (preserved for the
+    /// child-iii seam tests that bypass the inner-Host layer).
     static func pipeBidirectional(
         clientSSL: SSLContext,
         clientFD: Int32,
         upstreamSSL: SSLContext,
-        upstreamFD: Int32
+        upstreamFD: Int32,
+        validatedHost: String? = nil
     ) -> MITMTermination.Outcome {
         let bufSize = 16 * 1024
         var clientBuf = [UInt8](repeating: 0, count: bufSize)
@@ -339,6 +355,50 @@ enum MITMUpstreamVerify {
         var upstreamDone = false
         var blockBudget = pipeWouldBlockBudget
         var writeBudget = pipeWouldBlockBudget
+
+        // T.1d-2b-iv — inner-Host rebind peek. Drain the first request
+        // head into a bounded buffer, validate Host matches the
+        // validated SNI/CONNECT host, fail-CLOSED on mismatch. On
+        // accept, replay the buffered head bytes to the upstream as
+        // the first write so the pipe sees an intact request.
+        if let validatedHost = validatedHost {
+            let decision = MITMInnerHostRebind.peekAndDecide(
+                ssl: clientSSL,
+                waitFD: clientFD,
+                validatedHost: validatedHost
+            )
+            switch decision {
+            case .rejectMismatch:
+                return .innerHostMismatch
+            case .rejectHeadTooLarge:
+                return .innerHeadTooLarge
+            case .rejectUnknownProtocol:
+                return .innerUnknownProtocol
+            case .rejectReadError(let st):
+                return .innerReadError(st)
+            case .allow(let headBytes):
+                // Replay buffered head bytes to upstream as the first
+                // write. Use the same bounded sslWriteAll that the
+                // pipe uses so write would-block waits + budget exhaustion
+                // are uniformly handled.
+                let writeResult = sslWriteAll(
+                    ssl: upstreamSSL,
+                    buf: headBytes,
+                    count: headBytes.count,
+                    writeBudget: &writeBudget,
+                    waitFD: upstreamFD
+                )
+                switch writeResult {
+                case .ok: break
+                case .wouldBlockBudgetExhausted:
+                    return .upstreamWriteBudgetExhausted
+                case .ioError(let e):
+                    return .upstreamIOError(e)
+                case .terminalStatus:
+                    return .upstreamPipeError(reason: "head replay failed")
+                }
+            }
+        }
 
         // Outer drive loop. Each iteration: try to drain client → upstream,
         // then upstream → client. EOF on either side closes the pipe.
@@ -367,15 +427,15 @@ enum MITMUpstreamVerify {
                 case .ioError(let e):
                     return .upstreamIOError(e)
                 case .terminalError:
-                    // The far side hung up or returned a status we can't
-                    // recover from — treat as completion since we're
-                    // mid-stream and any partial bytes were already
-                    // flushed. Allspaw P3 spirit: don't silently turn an
-                    // upstream-side failure into a "clean" outcome — but
-                    // also don't escalate every torn-down pipe to a
-                    // distinct audit row, since most "terminal" closes
-                    // here are just the upstream completing the response.
-                    clientDone = true
+                    // r86 Karpathy P2: a non-graceful, non-wouldblock
+                    // TLS status mid-stream surfaces as a distinct
+                    // `.upstreamPipeError` deny outcome rather than
+                    // silently mapping to `.upstreamCompleted → allow`.
+                    // The chain was already System-validated so this
+                    // isn't a security bypass, but a mid-stream TLS
+                    // abort being logged as ALLOW is operationally
+                    // misleading.
+                    return .upstreamPipeError(reason: "client-side mid-stream abort")
                 }
             }
 
@@ -402,7 +462,7 @@ enum MITMUpstreamVerify {
                 case .ioError(let e):
                     return .upstreamIOError(e)
                 case .terminalError:
-                    upstreamDone = true
+                    return .upstreamPipeError(reason: "upstream-side mid-stream abort")
                 }
             }
 
@@ -479,7 +539,13 @@ enum MITMUpstreamVerify {
         if readStatus == errSSLClosedGraceful || readStatus == errSSLClosedNoNotify {
             return .eof
         }
-        if readStatus == errSecSuccess { return .progressed }
+        // r86 Carmack P2: tighten the 0-byte-success case. A successful
+        // SSLRead with `processed == 0` does NOT indicate forward
+        // progress (it's most commonly a TLS re-handshake / session-
+        // resumption interstitial). Treat it as wouldBlock so the outer
+        // loop's would-block budget catches a stall instead of being
+        // silently reset.
+        if readStatus == errSecSuccess { return .wouldBlock }
         return .terminalError
     }
 
@@ -510,7 +576,13 @@ enum MITMUpstreamVerify {
                     if writeBudget <= 0 {
                         return .wouldBlockBudgetExhausted
                     }
-                    switch MITMTermination.waitReadable(fd: waitFD, seconds: selectTimeoutSeconds) {
+                    // r86 Carmack P2: SSLWrite would-block waits on
+                    // write-readiness, not read-readiness. Previously
+                    // we routed through `waitReadable` which is a
+                    // mis-shaped wait (the bounded budget kept this
+                    // fail-CLOSED but the typical recovery path was
+                    // suboptimal).
+                    switch MITMTermination.waitWritable(fd: waitFD, seconds: selectTimeoutSeconds) {
                     case .ready, .timeout: continue
                     case .error(let e): return .ioError(e)
                     }

@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 #if canImport(Darwin)
 import Darwin
@@ -373,8 +374,14 @@ final class EgressConnectionHandler: @unchecked Sendable {
                     return failureOutcome
                 case .succeeded(let handle):
                     defer {
-                        // The SSLContext is closed by pipeBidirectional
-                        // via its caller's lifecycle; we own the fd.
+                        // r86 Schneier P2: send TLS close_notify alert to
+                        // the upstream BEFORE closing the fd. ARC would
+                        // release the SSLContext without `SSLClose`, which
+                        // is operationally indistinguishable from a TCP
+                        // RST but worth catching if upstream resource-
+                        // cleanliness becomes audit-visible. Idempotent
+                        // for ANY exit path from the pipe.
+                        _ = SSLClose(handle.ssl)
                         Darwin.close(handle.fd)
                     }
                     return withExtendedLifetime(handle.ctx) { () -> MITMTermination.Outcome in
@@ -382,7 +389,8 @@ final class EgressConnectionHandler: @unchecked Sendable {
                             clientSSL: clientSSL,
                             clientFD: clientCtx.fd,
                             upstreamSSL: handle.ssl,
-                            upstreamFD: handle.fd
+                            upstreamFD: handle.fd,
+                            validatedHost: normalizedHost
                         )
                     }
                 }
@@ -440,6 +448,35 @@ final class EgressConnectionHandler: @unchecked Sendable {
             case .upstreamWriteBudgetExhausted:
                 recordDecision(host: normalizedHost, method: parsed.method,
                                decision: .deny, ruleId: "mitm_upstream_write_budget",
+                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+            case .innerHostMismatch:
+                // T.1d-2b-iv — inner HTTP Host header did not match the
+                // SNI/CONNECT-validated host. Closes the HTTP/1.1
+                // connection-reuse / domain-fronting smuggling bypass.
+                // The mismatched raw Host value is INTENTIONALLY not
+                // surfaced in the audit row (Schneier 2026-06-04
+                // info-leak guard).
+                recordDecision(host: normalizedHost, method: parsed.method,
+                               decision: .deny, ruleId: "mitm_inner_host_mismatch",
+                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+            case .innerHeadTooLarge:
+                recordDecision(host: normalizedHost, method: parsed.method,
+                               decision: .deny, ruleId: "mitm_inner_head_too_large",
+                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+            case .innerUnknownProtocol:
+                recordDecision(host: normalizedHost, method: parsed.method,
+                               decision: .deny, ruleId: "mitm_inner_unknown_protocol",
+                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+            case .innerReadError:
+                recordDecision(host: normalizedHost, method: parsed.method,
+                               decision: .deny, ruleId: "mitm_inner_read_error",
+                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+            case .upstreamPipeError:
+                // r86 Karpathy P2 — mid-stream TLS abort distinct from
+                // clean pipe completion. Sanitized reason on the case
+                // is intentionally not surfaced as the audit ruleId.
+                recordDecision(host: normalizedHost, method: parsed.method,
+                               decision: .deny, ruleId: "mitm_upstream_pipe_error",
                                paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
             }
             return

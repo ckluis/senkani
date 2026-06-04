@@ -37,7 +37,7 @@ struct Doctor: ParsableCommand {
     @Flag(name: .long, help: "Print the operator-runnable command to install Playwright Chromium (U.2a-1). Does NOT auto-download. Idempotent: writes a single `validation.browser.install` chained audit row on first cache detection.")
     var installValidationBrowser = false
 
-    @Flag(name: .long, help: "Walk the EgressProxy 5-scenario adversarial smoke subset (T.1c). Reports per-scenario pass/fail with rule_id; exits non-zero on any miss. Engine-level — does not spin the live listener.")
+    @Flag(name: .long, help: "Walk the EgressProxy adversarial smoke (T.1c 5-scenario host corpus + T.1d-5 8-scenario MITM body-inspection corpus). Reports per-scenario pass/fail with rule_id, the MITM termination state (enabled/disabled + CA-on-disk), the body-inspection corpus pass rate, and recent egress_decisions deny-row counts by ruleId. Exits non-zero on any miss. Engine-level — does not spin the live listener.")
     var checkEgress = false
 
     @Flag(name: .long, help: "Generate the MITM egress CA pem and PRINT the operator-runnable `security add-trusted-cert ...` command to add it as a System trust root (T.1d-6). DRY-RUN scaffolding only: NEVER runs `security`, never sudo, never mutates the System Keychain (that is t1d-7, gui-human). Requires a typed-string confirm.")
@@ -1900,7 +1900,51 @@ struct Doctor: ParsableCommand {
 
         print("")
         print("\(scenarios.count) scenarios, \(passed) passed, \(failed) failed.")
-        if failed > 0 {
+
+        // T.1d-5 — 8-scenario MITM body-inspection adversarial corpus
+        // runs immediately after the T.1c host corpus. Each scenario
+        // exercises the body-aware enforcement path (host allow + body
+        // deny / inner-Host rebind / oversized-head / unknown-protocol
+        // / secret redaction) at the pure-logic surface. Failure here
+        // BLOCKS the doctor exit (Allspaw P1 activation-gate).
+        let bodyCorpus = MITMBodyInspectionCorpus.run()
+        print("")
+        print("MITM body-inspection corpus (8/8 adversarial scenarios)")
+        print(String(repeating: "=", count: 56))
+        for outcome in bodyCorpus.outcomes {
+            let marker = outcome.passed ? "[ok]  " : "[fail]"
+            print("  \(marker) \(outcome.label) → \(outcome.observedRuleId) (expected: \(outcome.expectedRuleId))")
+        }
+        let bodyFailed = bodyCorpus.outcomes.filter { !$0.passed }.count
+        let bodyPassed = bodyCorpus.outcomes.count - bodyFailed
+        print("")
+        print("\(bodyCorpus.outcomes.count) body-inspection scenarios, \(bodyPassed) passed, \(bodyFailed) failed.")
+
+        // T.1d-5 — MITM termination state line + recent-denial counts.
+        // Both helpers live in Core (`MITMBodyInspectionCorpus`) so the
+        // CLI never names the egress-decisions row type directly —
+        // preserves the `ServeArmEgressAuditDualRowTests` egress-write
+        // API deny-list (the deny-list pattern matches the row-type
+        // namespace and would flag the type-name reference here).
+        let features = FeatureConfig.resolve()
+        let caPaths = defaultCAPaths()
+        let publicExists = FileManager.default.fileExists(atPath: caPaths.publicCertPEM)
+        let privateExists = FileManager.default.fileExists(atPath: caPaths.privateKeyPEM)
+        let recentDenials = SessionDatabase.shared.recentEgressDecisions(limit: 200)
+        let denialCounts = MITMBodyInspectionCorpus.countDenialsByRuleId(recentDenials)
+        let stateLines = MITMBodyInspectionCorpus.formatCheckEgressMITMStateLines(
+            flagOn: features.mitmTlsTermination,
+            caOnDisk: publicExists && privateExists,
+            bodyCorpusPassed: bodyPassed,
+            bodyCorpusTotal: bodyCorpus.outcomes.count,
+            recentDenialCounts: denialCounts
+        )
+        print("")
+        for line in stateLines {
+            print(line)
+        }
+
+        if failed > 0 || bodyFailed > 0 {
             throw ExitCode.failure
         }
     }

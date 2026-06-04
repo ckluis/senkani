@@ -97,6 +97,20 @@ public final class EgressDecisionStore: @unchecked Sendable {
                 columns["pane_mode"] = paneMode.map { .text($0.rawValue) } ?? .null
             }
             if useV46Shape {
+                // r89 P3 (Karpathy): NULL-vs-EMPTY body policy pin —
+                // `.some(Data())` (empty body excerpt) flows through
+                // `prepareBodyExcerpt(Data()) -> Data()` and then
+                // `.blob(Data())` on the canonical map, which hashes
+                // DISTINCTLY from `.null` (the `.none` case). The
+                // distinction is by-design: an explicit empty-body
+                // request is a different event than a no-body-captured
+                // request (e.g. a GET with no body vs a POST whose body
+                // bytes weren't extracted). The canonical-map hash
+                // therefore distinguishes them on disk. See the
+                // `AdversarialBodyCorpus.scenarios()` corpus for the
+                // pin test ("inner-host-mismatch" carries an EMPTY
+                // representativeBodyExcerpt and rounds-trips as a
+                // distinct row from a nil-body row of the same shape).
                 columns["body_excerpt"] = preparedExcerpt.map { .blob($0) } ?? .null
             }
             let entryHash = ChainHasher.entryHash(

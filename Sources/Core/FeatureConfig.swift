@@ -7,7 +7,7 @@ public enum Feature: String, Codable, Sendable, CaseIterable {
     case indexer        // Symbol indexer
     case terse          // TerseCompressor word/phrase compression
     case injectionGuard // InjectionGuard prompt attack detection
-    case mitmTlsTermination // Egress MITM TLS termination (T.1d-2b; default-OFF)
+    case mitmTlsTermination // Egress MITM TLS termination (T.1d-2b; default-ON as of T.1d-5)
 }
 
 /// Per-feature byte savings tracking.
@@ -35,7 +35,28 @@ public struct FeatureConfig: Sendable {
     public let injectionGuard: Bool
     public let mitmTlsTermination: Bool
 
-    public init(filter: Bool = true, secrets: Bool = true, indexer: Bool = true, terse: Bool = false, injectionGuard: Bool = true, mitmTlsTermination: Bool = false) {
+    // T.1d-5 (2026-06-04) MITM-FLAG FLIP-ON. The `mitmTlsTermination`
+    // default for NEW configurations is now `true`. The flip is gated on
+    // the 8-scenario adversarial body-inspection corpus shipping green
+    // (Allspaw P1 activation-gate: no flip until the body-aware enforcement
+    // path is proven). When the flag is ON but no CA pem is on disk,
+    // `EgressListener.start()` emits a stderr WARN and
+    // `senkani doctor` surfaces a `.fail` line — the listener falls
+    // through to the opaque-tunnel path in that environmental case so
+    // an operator who has not yet generated a CA is not locked out of
+    // egress entirely (see DoctorCommand.checkMITMTerminationReadiness).
+    //
+    // BACK-COMPAT INVARIANT (Allspaw P1): the SNAPSHOT-side default in
+    // `PolicyFeatures.init(from:)` STAYS `false` via
+    // `decodeIfPresent(...) ?? false`. Existing `policy_snapshots` rows
+    // written before this flag existed lack the key and MUST still
+    // decode to `false` so the historical audit record is preserved
+    // bit-for-bit. The audit-side default tracks what was ACTUALLY in
+    // effect when the snapshot was captured (off, then); only NEW
+    // FeatureConfig instances minted post-flip carry the `true`
+    // default. Do NOT collapse the two defaults into one — they
+    // serve different invariants.
+    public init(filter: Bool = true, secrets: Bool = true, indexer: Bool = true, terse: Bool = false, injectionGuard: Bool = true, mitmTlsTermination: Bool = true) {
         self.filter = filter
         self.secrets = secrets
         self.indexer = indexer
@@ -78,14 +99,15 @@ public struct FeatureConfig: Sendable {
         let envInjection = envBool("SENKANI_INJECTION_GUARD")
         let envMitmTls = envBool("SENKANI_MITM_TLS_TERMINATION")
 
-        // Resolution: flag > env > file > default (terse + mitmTlsTermination default off; injectionGuard on)
+        // Resolution: flag > env > file > default (terse default off;
+        // injectionGuard + mitmTlsTermination default on as of T.1d-5).
         return FeatureConfig(
             filter: filterFlag ?? envFilter ?? fileConfig?.filter ?? true,
             secrets: secretsFlag ?? envSecrets ?? fileConfig?.secrets ?? true,
             indexer: indexerFlag ?? envIndexer ?? fileConfig?.indexer ?? true,
             terse: terseFlag ?? envTerse ?? fileConfig?.terse ?? false,
             injectionGuard: injectionGuardFlag ?? envInjection ?? fileConfig?.injectionGuard ?? true,
-            mitmTlsTermination: mitmTlsTerminationFlag ?? envMitmTls ?? fileConfig?.mitmTlsTermination ?? false
+            mitmTlsTermination: mitmTlsTerminationFlag ?? envMitmTls ?? fileConfig?.mitmTlsTermination ?? true
         )
     }
 

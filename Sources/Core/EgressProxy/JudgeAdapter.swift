@@ -112,6 +112,16 @@ public final class GemmaJudgeAdapter: JudgeAdapter, @unchecked Sendable {
     public static let timeout: TimeInterval = 0.300
     public static let rationaleByteCap = 2_000  // ≤200 tokens conservatively
 
+    /// r89 P3 (Lauret) — stable code-constant for the body-excerpt
+    /// framing prefix. The prompt template above embeds this string
+    /// verbatim; pinning it here lets the snapshot test assert the
+    /// EXACT framing without the test having to mirror the literal.
+    /// A future framing tweak that changes wording (e.g.
+    /// `"Body excerpt:"`) must update this constant + the template +
+    /// the snapshot test in lockstep — making the change PR-visible.
+    public static let bodyExcerptFramingPrefix: String =
+        "Request body excerpt (≤4 KB, post-redaction):"
+
     private let inference: InferenceClosure
     private let lock = NSLock()
     private var _callCount = 0
@@ -134,15 +144,35 @@ public final class GemmaJudgeAdapter: JudgeAdapter, @unchecked Sendable {
 
         let deadline = DispatchTime.now() + .milliseconds(Int(Self.timeout * 1_000))
         let sem = DispatchSemaphore(value: 0)
-        var result: (decision: EgressRule.Decision, rationale: String)?
+        // r89 P3 (Karpathy) — pre-existing Sendable concurrency cleanup
+        // (LSP previously reported `sendable-closure-captures` on the
+        // captured `var result`). Wrap the cross-thread handoff in a
+        // tiny lock-protected box so the Sendable warning is
+        // structurally satisfied; semantics are unchanged. The caller
+        // path is sync (DispatchSemaphore-bounded async) so the box is
+        // written once on the worker, then read once on the calling
+        // thread after sem.wait — the lock makes the happens-before
+        // explicit.
+        final class ResultBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _value: (decision: EgressRule.Decision, rationale: String)?
+            func set(_ v: (decision: EgressRule.Decision, rationale: String)?) {
+                lock.lock(); _value = v; lock.unlock()
+            }
+            func get() -> (decision: EgressRule.Decision, rationale: String)? {
+                lock.lock(); defer { lock.unlock() }
+                return _value
+            }
+        }
+        let box = ResultBox()
         DispatchQueue.global(qos: .userInitiated).async { [inference] in
-            result = inference(prompt)
+            box.set(inference(prompt))
             sem.signal()
         }
         if sem.wait(timeout: deadline) == .timedOut {
             return JudgeVerdict(decision: .deny, rationale: "judge timeout (≥\(Int(Self.timeout * 1_000))ms)")
         }
-        guard let result else {
+        guard let result = box.get() else {
             return JudgeVerdict(decision: .deny, rationale: "judge unavailable")
         }
 
@@ -171,7 +201,7 @@ public final class GemmaJudgeAdapter: JudgeAdapter, @unchecked Sendable {
         if let body = request.bodyExcerpt,
            !body.isEmpty,
            let bodyStr = String(data: body, encoding: .utf8) {
-            prompt += "\n\nRequest body excerpt (≤4 KB, post-redaction):\n\(bodyStr)"
+            prompt += "\n\n\(bodyExcerptFramingPrefix)\n\(bodyStr)"
         }
         prompt += """
 

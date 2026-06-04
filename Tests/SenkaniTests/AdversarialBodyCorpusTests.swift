@@ -288,7 +288,7 @@ struct DoctorCheckEgressMITMStateTests {
                 (ruleId: "body-deny-sql", count: 2),
             ]
         )
-        #expect(lines.count == 3)
+        #expect(lines.count == 4)
         #expect(lines[0] == "mitm: enabled | ca-on-disk: yes",
                 "mitm state line shape pinned (operator-greppable)")
         #expect(lines[1] == "body-inspection corpus: 8/8",
@@ -298,6 +298,11 @@ struct DoctorCheckEgressMITMStateTests {
         // Highest count rendered first; ties sort alphabetically.
         #expect(lines[2].contains("mitm_inner_host_mismatch=3"))
         #expect(lines[2].contains("body-deny-sql=2"))
+        // T.1d-3 — best-effort caveat footer (operator caveat surface).
+        #expect(lines[3].hasPrefix("note: body/header/path DENY rules are best-effort"),
+                "caveat footer line carries the stable prefix")
+        #expect(lines[3].contains("docs/concepts/security-posture.html"),
+                "caveat footer references the operator-facing doc surface")
     }
 
     /// Flag OFF surface (also covers the back-compat "disabled" word).
@@ -326,6 +331,42 @@ struct DoctorCheckEgressMITMStateTests {
             recentDenialCounts: []
         )
         #expect(lines[1] == "body-inspection corpus: 7/8")
+    }
+
+    /// T.1d-3 — the best-effort caveat footer is unconditional. Operator
+    /// must see the caveat whether MITM is on or off, whether the corpus
+    /// is all-green or partial, and whether there are recent denials or
+    /// none. The footer points at the operator-facing doc surface so the
+    /// evasion-vector list lives at exactly one source of truth.
+    @Test("doctor --check-egress: best-effort caveat footer is unconditional + references the docs")
+    func caveatFooterIsUnconditional() {
+        // Variant A — flag OFF, no CA, all-green corpus, no denials.
+        let offLines = MITMBodyInspectionCorpus.formatCheckEgressMITMStateLines(
+            flagOn: false,
+            caOnDisk: false,
+            bodyCorpusPassed: 8,
+            bodyCorpusTotal: 8,
+            recentDenialCounts: []
+        )
+        #expect(offLines.count == 4, "caveat footer present even when flag is off")
+        #expect(offLines.last?.hasPrefix("note: ") == true,
+                "footer carries the stable 'note:' prefix")
+        #expect(offLines.last?.contains("best-effort defense-in-depth") == true,
+                "footer names the best-effort defense-in-depth posture")
+        #expect(offLines.last?.contains("docs/concepts/security-posture.html") == true,
+                "footer points at the operator-facing doc surface (single source of truth)")
+
+        // Variant B — flag ON, CA present, partial corpus, with denials.
+        let onLines = MITMBodyInspectionCorpus.formatCheckEgressMITMStateLines(
+            flagOn: true,
+            caOnDisk: true,
+            bodyCorpusPassed: 7,
+            bodyCorpusTotal: 8,
+            recentDenialCounts: [(ruleId: "body-deny-sql", count: 1)]
+        )
+        #expect(onLines.count == 4, "caveat footer present in the full-on state too")
+        #expect(onLines.last == offLines.last,
+                "footer text is identical across states — it's a stable caveat, not state-conditional")
     }
 
     /// `countDenialsByRuleId` — verify the grouping function deterministically

@@ -408,12 +408,23 @@ public enum MITMBodyInspectionCorpus {
     }
 
     /// T.1d-5 — pure formatter for the doctor `--check-egress` MITM-state
-    /// + body-corpus pass-rate + recent-deny-counts lines. Three lines in
+    /// + body-corpus pass-rate + recent-deny-counts lines. Four lines in
     /// operator-greppable shape:
     ///
     ///   `mitm: <enabled|disabled> | ca-on-disk: <yes|no>`
     ///   `body-inspection corpus: N/M`
     ///   `recent denials (last 200): <rule_id=count, ...> | none`
+    ///   `note: body/header/path DENY rules are best-effort defense-in-depth — see docs/concepts/security-posture.html for evasion vectors`
+    ///
+    /// The fourth line (T.1d-3 operator caveat, added 2026-06-04) reminds
+    /// the operator that body-substring / header / path DENY matchers are
+    /// evadable by case change, encoding, embedded whitespace, or being
+    /// split across the ≤4 KB body excerpt bound; the host allowlist +
+    /// deny-on-miss default is the real enforcement boundary. Doc surface:
+    /// `docs/concepts/security-posture.html` "Egress body/header/path
+    /// DENY matchers are best-effort". The line is unconditional so the
+    /// operator never sees a successful `--check-egress` without also
+    /// seeing the caveat.
     ///
     /// Lifted into Core so the CLI module never needs to name
     /// `EgressDecisionStore.Row` directly (preserving the
@@ -438,7 +449,8 @@ public enum MITMBodyInspectionCorpus {
                 .joined(separator: ", ")
         }
         let denialLine = "recent denials (last 200): \(denialBody)"
-        return [mitmLine, corpusLine, denialLine]
+        let caveatLine = "note: body/header/path DENY rules are best-effort defense-in-depth — see docs/concepts/security-posture.html for evasion vectors"
+        return [mitmLine, corpusLine, denialLine, caveatLine]
     }
 
     /// Pure probe for the size-overflow path: did the bytes exceed

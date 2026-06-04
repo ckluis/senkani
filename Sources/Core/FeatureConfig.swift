@@ -7,6 +7,7 @@ public enum Feature: String, Codable, Sendable, CaseIterable {
     case indexer        // Symbol indexer
     case terse          // TerseCompressor word/phrase compression
     case injectionGuard // InjectionGuard prompt attack detection
+    case mitmTlsTermination // Egress MITM TLS termination (T.1d-2b; default-OFF)
 }
 
 /// Per-feature byte savings tracking.
@@ -32,13 +33,15 @@ public struct FeatureConfig: Sendable {
     public let indexer: Bool
     public let terse: Bool
     public let injectionGuard: Bool
+    public let mitmTlsTermination: Bool
 
-    public init(filter: Bool = true, secrets: Bool = true, indexer: Bool = true, terse: Bool = false, injectionGuard: Bool = true) {
+    public init(filter: Bool = true, secrets: Bool = true, indexer: Bool = true, terse: Bool = false, injectionGuard: Bool = true, mitmTlsTermination: Bool = false) {
         self.filter = filter
         self.secrets = secrets
         self.indexer = indexer
         self.terse = terse
         self.injectionGuard = injectionGuard
+        self.mitmTlsTermination = mitmTlsTermination
     }
 
     /// Check if a specific feature is enabled.
@@ -49,6 +52,7 @@ public struct FeatureConfig: Sendable {
         case .indexer: return indexer
         case .terse: return terse
         case .injectionGuard: return injectionGuard
+        case .mitmTlsTermination: return mitmTlsTermination
         }
     }
 
@@ -60,6 +64,7 @@ public struct FeatureConfig: Sendable {
         indexerFlag: Bool? = nil,
         terseFlag: Bool? = nil,
         injectionGuardFlag: Bool? = nil,
+        mitmTlsTerminationFlag: Bool? = nil,
         projectRoot: String? = nil
     ) -> FeatureConfig {
         // Layer 1: config file
@@ -71,14 +76,16 @@ public struct FeatureConfig: Sendable {
         let envIndexer = envBool("SENKANI_INDEXER")
         let envTerse = envBool("SENKANI_TERSE")
         let envInjection = envBool("SENKANI_INJECTION_GUARD")
+        let envMitmTls = envBool("SENKANI_MITM_TLS_TERMINATION")
 
-        // Resolution: flag > env > file > default (terse defaults to off; injectionGuard on)
+        // Resolution: flag > env > file > default (terse + mitmTlsTermination default off; injectionGuard on)
         return FeatureConfig(
             filter: filterFlag ?? envFilter ?? fileConfig?.filter ?? true,
             secrets: secretsFlag ?? envSecrets ?? fileConfig?.secrets ?? true,
             indexer: indexerFlag ?? envIndexer ?? fileConfig?.indexer ?? true,
             terse: terseFlag ?? envTerse ?? fileConfig?.terse ?? false,
-            injectionGuard: injectionGuardFlag ?? envInjection ?? fileConfig?.injectionGuard ?? true
+            injectionGuard: injectionGuardFlag ?? envInjection ?? fileConfig?.injectionGuard ?? true,
+            mitmTlsTermination: mitmTlsTerminationFlag ?? envMitmTls ?? fileConfig?.mitmTlsTermination ?? false
         )
     }
 
@@ -106,6 +113,7 @@ public struct FeatureConfig: Sendable {
             let indexer: Bool?
             let terse: Bool?
             let injectionGuard: Bool?
+            let mitmTlsTermination: Bool?
         }
 
         var filter: Bool? { features?.filter }
@@ -113,5 +121,6 @@ public struct FeatureConfig: Sendable {
         var indexer: Bool? { features?.indexer }
         var terse: Bool? { features?.terse }
         var injectionGuard: Bool? { features?.injectionGuard }
+        var mitmTlsTermination: Bool? { features?.mitmTlsTermination }
     }
 }

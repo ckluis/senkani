@@ -35,6 +35,10 @@ final class EgressConnectionHandler: @unchecked Sendable {
     /// compile and behave unchanged. Tests inject `LoopbackStubConnector`
     /// to redirect ALLOW-arm CONNECTs at a fixture loopback port.
     private let upstreamConnector: EgressUpstreamConnecting
+    /// T.1d-2b-i default-OFF MITM-termination gate. When false (default +
+    /// today's only value) `handleConnect` runs the opaque tunnel unchanged.
+    /// Child (ii) attaches the server-TLS termination seam to the ON branch.
+    private let mitmTerminationEnabled: Bool
     /// Resolved during request-head parsing (PaneMode.default if no
     /// `X-Senkani-Pane-Mode` header is present). Used by the decision
     /// recorder so audit rows carry the framing for the dispatched
@@ -61,7 +65,8 @@ final class EgressConnectionHandler: @unchecked Sendable {
         judge: JudgeAdapter? = nil,
         database: SessionDatabase,
         clientFD: Int32,
-        upstreamConnector: EgressUpstreamConnecting = DefaultEgressUpstreamConnector()
+        upstreamConnector: EgressUpstreamConnecting = DefaultEgressUpstreamConnector(),
+        mitmTerminationEnabled: Bool = false
     ) {
         self.policy = policy
         self.judge = judge
@@ -69,6 +74,7 @@ final class EgressConnectionHandler: @unchecked Sendable {
         self.clientFD = clientFD
         self.startTime = DispatchTime.now()
         self.upstreamConnector = upstreamConnector
+        self.mitmTerminationEnabled = mitmTerminationEnabled
     }
 
     /// Back-compat init that wraps a flat rule engine in an EgressPolicy
@@ -282,6 +288,17 @@ final class EgressConnectionHandler: @unchecked Sendable {
         if normalizedSNI != normalizedHost {
             recordDecision(host: normalizedHost, method: parsed.method, decision: .deny, ruleId: "sni_mismatch", paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
             return
+        }
+
+        // T.1d-2b-i: default-OFF MITM-termination gate. Flag OFF (default +
+        // today's only shipped value) falls through to the opaque tunnel
+        // below, byte-for-byte unchanged (parity by construction). Flag ON
+        // is an empty seam that ALSO falls through to the same tunnel, so
+        // flag state does not change behavior yet — child (ii)
+        // (phase-t1d-2b-ii-server-terminate-seam) terminates the client TLS
+        // session here with the t1d-1 minted leaf.
+        if mitmTerminationEnabled {
+            // child (ii): server-side TLS termination seam lands here.
         }
 
         // SNI matches CONNECT line. Open upstream and tunnel.

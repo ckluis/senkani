@@ -47,15 +47,23 @@ public final class EgressListener: @unchecked Sendable {
         public var writePortFile: Bool
         /// Path of the port file. Override for tests.
         public var portFilePath: String
+        /// T.1d-2b-i default-OFF gate for MITM TLS termination in
+        /// `handleConnect`. When false (default + today's only value) the
+        /// opaque-tunnel path runs unchanged. Resolved from
+        /// `FeatureConfig.mitmTlsTermination` by the CLI; flipped ON only at
+        /// t1d-5 once the adversarial corpus is green.
+        public var mitmTermination: Bool
 
         public init(
             port: Int = 0,
             writePortFile: Bool = true,
-            portFilePath: String = NSHomeDirectory() + "/.senkani/egress.port"
+            portFilePath: String = NSHomeDirectory() + "/.senkani/egress.port",
+            mitmTermination: Bool = false
         ) {
             self.port = port
             self.writePortFile = writePortFile
             self.portFilePath = portFilePath
+            self.mitmTermination = mitmTermination
         }
     }
 
@@ -265,7 +273,8 @@ public final class EgressListener: @unchecked Sendable {
             judge: judge,
             database: database,
             clientFD: clientFD,
-            upstreamConnector: upstreamConnector
+            upstreamConnector: upstreamConnector,
+            mitmTerminationEnabled: config.mitmTermination
         )
         connectionQueue.async {
             handler.run()

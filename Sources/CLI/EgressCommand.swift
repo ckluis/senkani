@@ -83,6 +83,11 @@ struct Egress: ParsableCommand {
             if let degraded {
                 FileHandle.standardError.write(Data("egress: \(degraded)\n".utf8))
             }
+            // T.1d-2b-i: resolve the default-OFF MITM-termination flag from
+            // the canonical FeatureConfig stack (flag > SENKANI_MITM_TLS_
+            // TERMINATION env > .senkani/config.json > default false) and
+            // thread it to handleConnect via the listener config.
+            let features = FeatureConfig.resolve()
             let listener = EgressListener(
                 policy: policy,
                 judge: nil,  // T.1b judge wiring requires Gemma availability;
@@ -92,7 +97,7 @@ struct Egress: ParsableCommand {
                              // Schneier-preferred posture (no model layer
                              // unless explicitly opted into).
                 database: SessionDatabase.shared,
-                config: .init(port: port)
+                config: .init(port: port, mitmTermination: features.mitmTlsTermination)
             )
             do {
                 try listener.start()

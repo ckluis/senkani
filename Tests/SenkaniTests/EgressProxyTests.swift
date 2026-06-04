@@ -1013,6 +1013,79 @@ struct EgressListenerLiveTests {
         #expect(row!.method == "CONNECT")
     }
 
+    // T.1d-2b-i parity: the default-OFF gate must not alter the opaque
+    // tunnel. Both flag states drive a CONNECT + matching-SNI ClientHello
+    // through the listener to an echo fixture and assert byte-for-byte
+    // round-trip. OFF = the unchanged path; ON = the child-(i) stub seam,
+    // which currently falls through to the same tunnel (child (ii) attaches
+    // real termination later).
+    @Test("CONNECT tunnel byte-identical with MITM-termination flag OFF (T.1d-2b-i parity)")
+    func connectTunnelByteIdenticalFlagOff() throws {
+        try Self.assertConnectTunnelByteIdentical(mitmTermination: false)
+    }
+
+    @Test("CONNECT tunnel byte-identical with MITM-termination flag ON — child-(i) stub seam is inert (T.1d-2b-i parity)")
+    func connectTunnelByteIdenticalFlagOnStub() throws {
+        try Self.assertConnectTunnelByteIdentical(mitmTermination: true)
+    }
+
+    private static func assertConnectTunnelByteIdentical(mitmTermination: Bool) throws {
+        let db = tempDB()
+        let fixture = try FixtureTCPServer()
+        defer { fixture.shutdown() }
+
+        // Fixture echoes whatever bytes it receives, then closes.
+        fixture.acceptOnce { fd in
+            var buf = [UInt8](repeating: 0, count: 4096)
+            while true {
+                let n = buf.withUnsafeMutableBufferPointer { ptr -> Int in
+                    Darwin.read(fd, ptr.baseAddress, ptr.count)
+                }
+                if n <= 0 { return }
+                _ = buf.withUnsafeBufferPointer { ptr -> Int in
+                    Darwin.write(fd, ptr.baseAddress, n)
+                }
+            }
+        }
+
+        let listener = EgressListener(
+            rules: EgressRuleEngine(rules: [
+                EgressRule(id: "allow-loopback", pattern: "127.0.0.1", mode: .exact, decision: .allow)
+            ]),
+            database: db,
+            config: .init(port: 0, writePortFile: false, portFilePath: "", mitmTermination: mitmTermination)
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        let cfd = connectToLocalhost(port: listener.port)
+        try #require(cfd != nil)
+        let cli = cfd!
+        defer { close(cli) }
+
+        let req = "CONNECT 127.0.0.1:\(fixture.port) HTTP/1.1\r\nHost: 127.0.0.1:\(fixture.port)\r\n\r\n"
+        #expect(writeAllToFD(cli, Data(req.utf8)))
+
+        // Drain the 200 reply head before sending the ClientHello.
+        let okResp = readHTTPHead(cli)
+        let okStr = String(data: okResp, encoding: .utf8) ?? ""
+        #expect(okStr.contains("200 Connection Established"))
+
+        // Matching-SNI ClientHello; the echo fixture returns it verbatim.
+        let hello = makeClientHello(sni: "127.0.0.1")
+        let helloChecksum = sha256Prefix(hello)
+        #expect(writeAllToFD(cli, hello))
+
+        let echoed = readBytes(cli, count: hello.count)
+        #expect(echoed.count == hello.count)
+        #expect(sha256Prefix(echoed) == helloChecksum)
+
+        let row = waitForRow(db: db)
+        try #require(row != nil)
+        #expect(row!.decision == .allow)
+        #expect(row!.method == "CONNECT")
+    }
+
     @Test("Stop unlinks the port file and clears the bound port")
     func stopClearsPortFile() throws {
         let db = tempDB()

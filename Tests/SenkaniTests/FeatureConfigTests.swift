@@ -69,7 +69,7 @@ struct FeatureConfigTests {
             // exhaustively and returns a Bool for every case.
             _ = config.isEnabled(feature)
         }
-        #expect(Feature.allCases.count == 5)
+        #expect(Feature.allCases.count == 6)
     }
 
     // FeatureContribution arithmetic: savedBytes is the difference between
@@ -95,6 +95,25 @@ struct FeatureConfigTests {
         #expect(Feature.indexer.rawValue == "indexer")
         #expect(Feature.terse.rawValue == "terse")
         #expect(Feature.injectionGuard.rawValue == "injectionGuard")
+        #expect(Feature.mitmTlsTermination.rawValue == "mitmTlsTermination")
+    }
+
+    // T.1d-2b-i: the MITM-termination flag is default-OFF and honors the
+    // flag-override leg of the resolution stack.
+    @Test func mitmTlsTerminationFlagDefaultsOff() {
+        #expect(FeatureConfig().mitmTlsTermination == false)
+        #expect(FeatureConfig.resolve().mitmTlsTermination == false)
+        #expect(FeatureConfig.resolve(mitmTlsTerminationFlag: true).mitmTlsTermination == true)
+    }
+
+    // T.1d-2b-i: policy_snapshots rows written before the flag existed lack
+    // the key and must still decode (→ false), preserving the historical
+    // audit record instead of failing to nil.
+    @Test func policyFeaturesDecodesLegacySnapshotWithoutMitmKey() throws {
+        let legacyJSON = #"{"filter":true,"secrets":true,"indexer":true,"terse":false,"injectionGuard":true}"#
+        let decoded = try JSONDecoder().decode(PolicyFeatures.self, from: Data(legacyJSON.utf8))
+        #expect(decoded.mitmTlsTermination == false)
+        #expect(decoded.filter == true)
     }
 
     // Config file precedence: when no flag and no env var is set, the

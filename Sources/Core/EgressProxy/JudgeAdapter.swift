@@ -21,15 +21,27 @@ public struct JudgeVerdict: Sendable, Equatable {
 /// Request shape handed to a `JudgeAdapter`. The struct is value-typed
 /// so unit tests can construct one directly without spinning the
 /// daemon.
+///
+/// T.1d-4 (body-aware judge): `bodyExcerpt` carries the truncate-then-
+/// redact request-body excerpt (≤4 KB, post-SecretDetector) for HTTP
+/// methods that may carry one (POST/PUT/PATCH on the MITM-terminate
+/// path). nil for paths that don't capture a body (GET/HEAD, the opaque
+/// tunnel path, or pre-MITM denies). The judge prompt builder includes
+/// the excerpt as a separate framed section so a body containing
+/// "ALLOW" / "DENY" tokens can't smuggle a verdict (the prompt's last
+/// line still pins the LLM to a fresh decision over the structured
+/// inputs).
 public struct JudgeRequest: Sendable, Equatable {
     public let host: String
     public let method: String
     public let paneMode: PaneMode
+    public let bodyExcerpt: Data?
 
-    public init(host: String, method: String, paneMode: PaneMode) {
+    public init(host: String, method: String, paneMode: PaneMode, bodyExcerpt: Data? = nil) {
         self.host = host
         self.method = method
         self.paneMode = paneMode
+        self.bodyExcerpt = bodyExcerpt
     }
 }
 
@@ -141,19 +153,34 @@ public final class GemmaJudgeAdapter: JudgeAdapter, @unchecked Sendable {
     /// Stable code-constant prompt template. Bumping requires a code
     /// change AND new test fixtures so regressions are visible in
     /// PR review (Karpathy P0).
+    ///
+    /// T.1d-4 (body-aware): when `bodyExcerpt` is present, the prompt
+    /// includes a separate framed section so the LLM can promote a deny
+    /// on payload content (Schneier P1: the bytes were ALREADY truncate-
+    /// then-redacted by `EgressDecisionStore.prepareBodyExcerpt` before
+    /// being placed on JudgeRequest, so the LLM never sees raw secrets).
     public static func buildPrompt(_ request: JudgeRequest) -> String {
-        return """
+        var prompt = """
         You are evaluating a network egress request from a developer tool.
         Reply with one line: ALLOW or DENY, followed by a brief rationale.
 
         Pane mode: \(request.paneMode.rawValue)
         Method: \(request.method)
         Host: \(request.host)
+        """
+        if let body = request.bodyExcerpt,
+           !body.isEmpty,
+           let bodyStr = String(data: body, encoding: .utf8) {
+            prompt += "\n\nRequest body excerpt (≤4 KB, post-redaction):\n\(bodyStr)"
+        }
+        prompt += """
+
 
         ALLOW if the host is a well-known software-development service
         (package registry, source forge, official documentation) AND
         the method is HEAD/GET/CONNECT.
         DENY otherwise. When in doubt, DENY.
         """
+        return prompt
     }
 }

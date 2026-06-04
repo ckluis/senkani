@@ -149,6 +149,15 @@ final class EgressConnectionHandler: @unchecked Sendable {
         let normalizedHost = EgressHostNormalizer.normalize(parsed.host)
         var judgeRationale: String? = nil
 
+        // T.1d-4: extract a request-body excerpt from the buffered head
+        // bytes — body bytes (if any) follow the `\r\n\r\n` terminator
+        // within `restOfHead`. For requests whose body overflowed the
+        // 16 KB head buffer, the remainder streams through the pipe and
+        // is not captured here. The excerpt is truncate-then-redacted
+        // by `EgressDecisionStore.prepareBodyExcerpt` before it lands
+        // in the audit row OR the judge prompt (Schneier P1).
+        let bodyExcerptRaw: Data? = Self.bodyBytes(restOfHead: restOfHead)
+
         // T.1b: judge fallback on static-miss. Conditions:
         //   1. Static engine returned `defaultDeny` (no explicit rule).
         //   2. The pane mode allows judge dispatch (NOT .redteam).
@@ -157,10 +166,15 @@ final class EgressConnectionHandler: @unchecked Sendable {
         if evaluation.ruleId == "default-deny",
            resolvedPaneMode.allowsJudge,
            let judge {
+            // T.1d-4: hand the judge a truncate-then-redact body excerpt
+            // so it can promote a deny on payload content. The bytes are
+            // already scrubbed of secrets by `prepareBodyExcerpt`.
+            let preparedExcerpt = bodyExcerptRaw.map { EgressDecisionStore.prepareBodyExcerpt($0) }
             let verdict = judge.evaluate(JudgeRequest(
                 host: normalizedHost,
                 method: parsed.method,
-                paneMode: resolvedPaneMode
+                paneMode: resolvedPaneMode,
+                bodyExcerpt: preparedExcerpt
             ))
             judgeRationale = verdict.rationale
             evaluation = EgressEvaluation(decision: verdict.decision, ruleId: "judge-\(verdict.decision.rawValue)")
@@ -170,7 +184,8 @@ final class EgressConnectionHandler: @unchecked Sendable {
             recordDecision(
                 host: normalizedHost, method: parsed.method,
                 decision: .deny, ruleId: evaluation.ruleId,
-                paneMode: resolvedPaneMode, judgeRationale: judgeRationale
+                paneMode: resolvedPaneMode, judgeRationale: judgeRationale,
+                bodyExcerpt: bodyExcerptRaw
             )
             sendStatus(403, message: "Forbidden")
             return
@@ -628,7 +643,8 @@ final class EgressConnectionHandler: @unchecked Sendable {
         decision: EgressRule.Decision,
         ruleId: String,
         paneMode: PaneMode? = nil,
-        judgeRationale: String? = nil
+        judgeRationale: String? = nil,
+        bodyExcerpt: Data? = nil
     ) {
         let elapsed = DispatchTime.now().uptimeNanoseconds &- startTime.uptimeNanoseconds
         let latencyUs = Int64(elapsed / 1_000)
@@ -639,7 +655,25 @@ final class EgressConnectionHandler: @unchecked Sendable {
             ruleId: ruleId,
             latencyUs: max(latencyUs, 1),  // always > 0 per acceptance
             paneMode: paneMode,
-            judgeRationale: judgeRationale
+            judgeRationale: judgeRationale,
+            bodyExcerpt: bodyExcerpt
         )
+    }
+
+    /// T.1d-4 — extract the request-body bytes from the buffered head.
+    /// The head buffer holds bytes through the `\r\n\r\n` terminator and
+    /// any tail bytes that came along in the same kernel read. Body
+    /// bytes (if any) start AFTER the terminator. Returns nil when:
+    ///   - the terminator is absent (caller's parse path normally rejects
+    ///     earlier, but defensive),
+    ///   - no tail bytes follow the terminator (HEAD/GET with no body).
+    /// The returned bytes are RAW — the caller is responsible for
+    /// `EgressDecisionStore.prepareBodyExcerpt` (truncate-then-redact)
+    /// before they enter the canonical-map or judge prompt.
+    static func bodyBytes(restOfHead: Data) -> Data? {
+        let terminator = Data([0x0d, 0x0a, 0x0d, 0x0a])
+        guard let r = restOfHead.range(of: terminator) else { return nil }
+        let after = restOfHead.subdata(in: r.upperBound..<restOfHead.count)
+        return after.isEmpty ? nil : after
     }
 }

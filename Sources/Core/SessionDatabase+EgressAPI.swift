@@ -18,7 +18,8 @@ extension SessionDatabase {
         paneId: String? = nil,
         projectRoot: String? = nil,
         paneMode: PaneMode? = nil,
-        judgeRationale: String? = nil
+        judgeRationale: String? = nil,
+        bodyExcerpt: Data? = nil
     ) -> Bool {
         egressDecisionStore.record(
             host: host,
@@ -29,7 +30,8 @@ extension SessionDatabase {
             paneId: paneId,
             projectRoot: projectRoot,
             paneMode: paneMode,
-            judgeRationale: judgeRationale
+            judgeRationale: judgeRationale,
+            bodyExcerpt: bodyExcerpt
         )
     }
 

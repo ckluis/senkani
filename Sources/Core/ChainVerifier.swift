@@ -678,13 +678,24 @@ public enum ChainVerifier {
     /// `migration-v23`, post-v23 `fresh-install`, future `repair-*`
     /// rebinds — include both in the canonical map. Mirrored on the
     /// writer side in `EgressDecisionStore.record`.
+    ///
+    /// T.1d-4 (v46): rows under a v46+ anchor carry `body_excerpt` in their
+    /// canonical hash. EXCLUSION-form (not an allowlist) so a future
+    /// `repair-*` rebind inherits the current (v46) shape. The THREE
+    /// pre-v46 anchor reasons omit the column — crucially `migration-v23`
+    /// is here (Schneier P0): those rows were hashed under the v23 shape
+    /// and stay v23 forever.
     /// `entry_hash IS NOT NULL` filter — see `verifyAnchorTokenEvents` notes.
     private static func verifyAnchorEgressDecisions(db: OpaquePointer, anchor: Anchor) -> Result? {
         let useLegacyShape = (anchor.reason == "fresh-install-pre-v23")
+        let useV46Shape = ![
+            "fresh-install-pre-v23", "migration-v23", "fresh-install-pre-v46",
+        ].contains(anchor.reason)
         let sql = """
             SELECT id, timestamp, host, method, decision, rule_id, latency_us,
                    pane_id, project_root,
                    judge_rationale, pane_mode,
+                   body_excerpt,
                    prev_hash, entry_hash
               FROM egress_decisions
              WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
@@ -706,8 +717,22 @@ public enum ChainVerifier {
                 columns["judge_rationale"] = textOrNull(stmt, 9)
                 columns["pane_mode"] = textOrNull(stmt, 10)
             }
-            let prev = optionalText(stmt, 11)
-            let stored = sqlite3_column_text(stmt, 12).map { String(cString: $0) } ?? ""
+            if useV46Shape {
+                // T.1d-4: body_excerpt rides the v46 shape. The persisted
+                // bytes are already truncate-then-redacted by the writer
+                // (Schneier P1). NULL → .null in canonical map.
+                if sqlite3_column_type(stmt, 11) == SQLITE_NULL {
+                    columns["body_excerpt"] = .null
+                } else if let bytes = sqlite3_column_blob(stmt, 11) {
+                    let len = Int(sqlite3_column_bytes(stmt, 11))
+                    let data = Data(bytes: bytes, count: len)
+                    columns["body_excerpt"] = .blob(data)
+                } else {
+                    columns["body_excerpt"] = .blob(Data())
+                }
+            }
+            let prev = optionalText(stmt, 12)
+            let stored = sqlite3_column_text(stmt, 13).map { String(cString: $0) } ?? ""
             return (rowid, columns, prev, stored)
         }
     }

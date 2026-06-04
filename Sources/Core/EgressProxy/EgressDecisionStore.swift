@@ -38,9 +38,23 @@ public final class EgressDecisionStore: @unchecked Sendable {
         paneId: String? = nil,
         projectRoot: String? = nil,
         paneMode: PaneMode? = nil,
-        judgeRationale: String? = nil
+        judgeRationale: String? = nil,
+        bodyExcerpt: Data? = nil
     ) -> Bool {
         let normalizedRoot = SessionDatabase.normalizePath(projectRoot)
+        // T.1d-4 Schneier P1: truncate-then-redact the body excerpt BEFORE
+        // it enters the canonical-map / SQLite bind. Truncate first to
+        // ≤4 KB so a giant body of secrets gets bounded BEFORE the
+        // SecretDetector regex pass (saves cycles on bytes that'd be
+        // dropped). The on-disk bytes are post-redaction — the audit row
+        // NEVER contains raw secrets.
+        //
+        // Callers that pass nil get nil on-disk: existing pre-T.1d-4
+        // recordEgressDecision sites stay byte-identical to their v23
+        // shape output (only the .null body_excerpt slot is added to the
+        // canonical map, distinct from "no body_excerpt slot at all"
+        // under pre-v46 anchors).
+        let preparedExcerpt: Data? = bodyExcerpt.map { Self.prepareBodyExcerpt($0) }
         let now = Date().timeIntervalSince1970
         return parent.queue.sync { [parent, chain] in
             guard let db = parent.db else { return false }
@@ -53,8 +67,20 @@ public final class EgressDecisionStore: @unchecked Sendable {
             // post-v23 fresh-install, future repair-* rebinds) use
             // the new shape. Mirrored in
             // `ChainVerifier.verifyAnchorEgressDecisions`.
+            //
+            // T.1d-4: include `body_excerpt` in the canonical column map
+            // for v46+ anchors (`migration-v46`, post-v46 `fresh-install`,
+            // future `repair-*`). The three pre-v46 anchor reasons —
+            // `fresh-install-pre-v23`, `migration-v23`,
+            // `fresh-install-pre-v46` — OMIT the column (Schneier P0:
+            // those rows were hashed under their respective shapes and
+            // stay there forever). Mirrors the verifier's exclusion-list
+            // branch in `ChainVerifier.verifyAnchorEgressDecisions`.
             let reason = chain.anchorReason(db: db, anchorId: anchorId) ?? ""
             let useLegacyShape = (reason == "fresh-install-pre-v23")
+            let useV46Shape = ![
+                "fresh-install-pre-v23", "migration-v23", "fresh-install-pre-v46",
+            ].contains(reason)
 
             var columns: [String: ChainHasher.CanonicalValue] = [
                 "timestamp":     .real(now),
@@ -70,6 +96,9 @@ public final class EgressDecisionStore: @unchecked Sendable {
                 columns["judge_rationale"] = judgeRationale.map { .text($0) } ?? .null
                 columns["pane_mode"] = paneMode.map { .text($0.rawValue) } ?? .null
             }
+            if useV46Shape {
+                columns["body_excerpt"] = preparedExcerpt.map { .blob($0) } ?? .null
+            }
             let entryHash = ChainHasher.entryHash(
                 table: "egress_decisions", columns: columns, prev: prevHash
             )
@@ -79,8 +108,9 @@ public final class EgressDecisionStore: @unchecked Sendable {
                     (timestamp, host, method, decision, rule_id, latency_us,
                      pane_id, project_root,
                      judge_rationale, pane_mode,
+                     body_excerpt,
                      prev_hash, entry_hash, chain_anchor_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
@@ -111,18 +141,56 @@ public final class EgressDecisionStore: @unchecked Sendable {
             } else {
                 sqlite3_bind_null(stmt, 10)
             }
-            if let prevHash {
-                sqlite3_bind_text(stmt, 11, (prevHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            if let preparedExcerpt {
+                _ = preparedExcerpt.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Int32 in
+                    sqlite3_bind_blob(stmt, 11, raw.baseAddress, Int32(preparedExcerpt.count), SQLITE_TRANSIENT_DESTRUCTOR)
+                }
             } else {
                 sqlite3_bind_null(stmt, 11)
             }
-            sqlite3_bind_text(stmt, 12, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
-            sqlite3_bind_int64(stmt, 13, anchorId)
+            if let prevHash {
+                sqlite3_bind_text(stmt, 12, (prevHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            } else {
+                sqlite3_bind_null(stmt, 12)
+            }
+            sqlite3_bind_text(stmt, 13, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_int64(stmt, 14, anchorId)
 
             guard sqlite3_step(stmt) == SQLITE_DONE else { return false }
             chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
             return true
         }
+    }
+
+    /// Truncate-then-redact the request-body excerpt that will land in
+    /// the audit row + judge prompt.
+    ///
+    /// Schneier P1 (T.1d-4): order matters. Truncate to ≤4 KB FIRST so a
+    /// giant body of secrets gets bounded BEFORE the SecretDetector
+    /// regex pass (vs redact-then-truncate which would waste cycles
+    /// redacting bytes that get dropped). The output is what's persisted
+    /// AND what's handed to the judge — so the LLM never sees raw
+    /// secrets either.
+    ///
+    /// Non-UTF8 bytes: SecretDetector is text-based, so bytes that don't
+    /// decode as UTF-8 pass through unchanged (the regex pass can't
+    /// process them and they're not text-shaped secrets). The audit row
+    /// still records the truncated bytes — the integrity contract is
+    /// "no raw text-format secrets land on disk", not "all bytes get
+    /// canonicalized to ASCII".
+    public static let bodyExcerptMaxBytes: Int = 4 * 1024
+
+    public static func prepareBodyExcerpt(_ input: Data) -> Data {
+        let truncated: Data = input.count > bodyExcerptMaxBytes
+            ? input.prefix(bodyExcerptMaxBytes)
+            : input
+        guard let s = String(data: truncated, encoding: .utf8) else {
+            // Non-UTF8 body — pass truncated bytes through. No raw
+            // text-shaped secrets to scrub.
+            return truncated
+        }
+        let scan = SecretDetector.scan(s)
+        return Data(scan.redacted.utf8)
     }
 
     /// Decision row as read back from the table.
@@ -138,6 +206,12 @@ public final class EgressDecisionStore: @unchecked Sendable {
         public let projectRoot: String?
         public let paneMode: PaneMode?
         public let judgeRationale: String?
+        /// T.1d-4 — truncate-then-redact request-body excerpt
+        /// (post-SecretDetector, ≤4 KB). nil for pre-v46 rows and for
+        /// post-v46 rows where the connection handler did not capture a
+        /// body (e.g. opaque-tunnel path, deny-before-MITM, GET with no
+        /// body).
+        public let bodyExcerpt: Data?
     }
 
     /// Return the N most recent rows in descending id order. Used by
@@ -150,7 +224,7 @@ public final class EgressDecisionStore: @unchecked Sendable {
             let sql = """
                 SELECT id, timestamp, host, method, decision, rule_id,
                        latency_us, pane_id, project_root,
-                       pane_mode, judge_rationale
+                       pane_mode, judge_rationale, body_excerpt
                   FROM egress_decisions
                  ORDER BY id DESC
                  LIMIT ?;
@@ -180,13 +254,23 @@ public final class EgressDecisionStore: @unchecked Sendable {
                 let judgeRationale: String? = sqlite3_column_type(stmt, 10) == SQLITE_NULL
                     ? nil
                     : sqlite3_column_text(stmt, 10).map { String(cString: $0) }
+                let bodyExcerpt: Data?
+                if sqlite3_column_type(stmt, 11) == SQLITE_NULL {
+                    bodyExcerpt = nil
+                } else if let raw = sqlite3_column_blob(stmt, 11) {
+                    let len = Int(sqlite3_column_bytes(stmt, 11))
+                    bodyExcerpt = Data(bytes: raw, count: len)
+                } else {
+                    bodyExcerpt = Data()
+                }
                 let decision = EgressRule.Decision(rawValue: decisionStr) ?? .deny
                 let paneMode = paneModeStr.flatMap { PaneMode(rawValue: $0) }
                 out.append(Row(
                     id: id, timestamp: Date(timeIntervalSince1970: ts),
                     host: host, method: method, decision: decision, ruleId: ruleId,
                     latencyUs: latency, paneId: paneId, projectRoot: projectRoot,
-                    paneMode: paneMode, judgeRationale: judgeRationale
+                    paneMode: paneMode, judgeRationale: judgeRationale,
+                    bodyExcerpt: bodyExcerpt
                 ))
             }
             return out

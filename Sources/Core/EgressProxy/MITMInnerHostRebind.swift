@@ -282,8 +282,36 @@ enum MITMInnerHostRebind {
             // Any other status is fail-CLOSED.
             return .rejectReadError(st)
         }
-        // Drained `maxBytes` without seeing `\r\n\r\n`.
-        return .rejectHeadTooLarge
+        // Drained `maxBytes` without seeing `\r\n\r\n`. Use the shared
+        // r93 Carmack P2 sub-routine so the live IO path + the corpus
+        // probe (scenario 4) call the SAME predicate — single source of
+        // truth. The predicate must hold here by construction: we fell
+        // out of `while buf.count < maxBytes` and never returned on a
+        // terminator above.
+        if headIsOverBoundsWithoutTerminator(buf, maxBytes: maxBytes) {
+            return .rejectHeadTooLarge
+        }
+        // Defensive: if somehow the predicate doesn't hold, fall back
+        // to the historical fail-CLOSED on a generic read-error to
+        // preserve the existing fail-CLOSED contract.
+        return .rejectReadError(errSSLInternal)
+    }
+
+    /// r93 Carmack P2 — single source of truth for the "head buffer
+    /// dragged past `maxBytes` without seeing `\r\n\r\n`" check that
+    /// `peekAndDecide`'s outer loop uses to fire `.rejectHeadTooLarge`,
+    /// and that `MITMBodyInspectionCorpus.probeHeadSizeOverflow` mirrors
+    /// for scenario-4 (oversized inner head). Lifted out so the live IO
+    /// path AND the doctor-corpus probe call the SAME function — adding
+    /// a future tweak (e.g. >= vs >) needs ONE edit, not two.
+    ///
+    /// Returns true iff the buffer is at-or-above the cap AND no
+    /// terminator is present anywhere in the bytes — the exact predicate
+    /// the live `peekAndDecide` loop's `while buf.count < maxBytes`
+    /// outer-bound returns on once it falls out without having found a
+    /// terminator. Pure — no IO.
+    static func headIsOverBoundsWithoutTerminator(_ bytes: [UInt8], maxBytes: Int) -> Bool {
+        return bytes.count >= maxBytes && headTerminatorIndex(in: bytes) == nil
     }
 
     /// Locate the index AFTER the `\r\n\r\n` terminator in `buf`,

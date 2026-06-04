@@ -318,4 +318,50 @@ struct MITMInnerHostRebindTests {
         #expect(probed == "mitm_inner_head_too_large",
                 "valid-method + oversized-header head MUST classify as mitm_inner_head_too_large; got \(probed)")
     }
+
+    // MARK: - r93 Carmack P2 — shared sub-routine used by both peekAndDecide + corpus probe
+
+    /// r93 Carmack P2 — pin that the shared
+    /// `headIsOverBoundsWithoutTerminator` sub-routine implements the
+    /// exact predicate scenario 4 (oversized inner head) exercises.
+    /// Calls the shared sub-routine directly to prove the live IO path's
+    /// outer-loop fall-out AND the corpus's `probeHeadSizeOverflow` are
+    /// reading from the SAME source of truth — one edit moves both.
+    @Test("r93 Carmack P2 — headIsOverBoundsWithoutTerminator is the single source of truth for scenario-4 + peekAndDecide outer-loop")
+    func headIsOverBoundsWithoutTerminatorSharedPredicate() async throws {
+        // 1) The exact corpus scenario-4 fixture must hit the predicate.
+        let corpusOversized = MITMBodyInspectionCorpus.oversizedHead
+        #expect(MITMInnerHostRebind.headIsOverBoundsWithoutTerminator(
+            corpusOversized, maxBytes: MITMInnerHostRebind.maxHeadBytes
+        ), "corpus scenario-4 fixture must trip the shared size-overflow predicate")
+
+        // 2) A buffer at/above the cap WITH a CRLF-CRLF terminator
+        //    somewhere must NOT trip the predicate (terminator wins
+        //    over size — the live IO path would have returned at the
+        //    terminator check before reaching the size fall-out).
+        var withTerminator: [UInt8] = Array("GET / HTTP/1.1\r\nHost: x\r\n\r\n".utf8)
+        // Pad past the cap with filler — the terminator is at the start.
+        withTerminator.append(contentsOf: [UInt8](repeating: 0x41,
+                                                  count: MITMInnerHostRebind.maxHeadBytes))
+        #expect(!MITMInnerHostRebind.headIsOverBoundsWithoutTerminator(
+            withTerminator, maxBytes: MITMInnerHostRebind.maxHeadBytes
+        ), "buffer at/above the cap WITH a CRLF-CRLF terminator must NOT trip the size-overflow predicate (terminator wins)")
+
+        // 3) Below-limit buffer without terminator must NOT trip (the
+        //    live IO path keeps reading).
+        let small: [UInt8] = Array("GET / HTTP/1.1\r\nHost: x\r\nNo-Terminator: yet".utf8)
+        #expect(!MITMInnerHostRebind.headIsOverBoundsWithoutTerminator(
+            small, maxBytes: MITMInnerHostRebind.maxHeadBytes
+        ), "below-cap buffer with no terminator yet must NOT trip — keep-reading is the live behavior")
+
+        // 4) The corpus probe must produce the same string the live
+        //    path's outer-loop fall-out maps to via Self.ruleIdForRebind.
+        let probedRuleId = MITMBodyInspectionCorpus.probeHeadSizeOverflow(
+            bytes: corpusOversized,
+            limit: MITMInnerHostRebind.maxHeadBytes
+        )
+        let mappedRuleId = MITMBodyInspectionCorpus.ruleIdForRebind(.rejectHeadTooLarge)
+        #expect(probedRuleId == mappedRuleId,
+                "corpus probe ruleId must match the live path's .rejectHeadTooLarge → ruleId mapping (single-source-of-truth invariant)")
+    }
 }

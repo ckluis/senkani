@@ -371,6 +371,72 @@ struct DoctorCheckEgressMITMStateTests {
                 "footer text is identical across states — it's a stable caveat, not state-conditional")
     }
 
+    /// r93 Allspaw P3 — install-CA hint appears ONLY in the flag-on +
+    /// no-CA state. An operator who ran `--check-egress` (without the
+    /// broader `doctor` run) previously saw `mitm: enabled | ca-on-disk:
+    /// no` with no prescription — the hint surfaces the fix at the same
+    /// site as the diagnosis. The hint is absent in flag-off / on-with-CA
+    /// states. The caveat footer remains the LAST line in ALL states.
+    @Test("r93 Allspaw P3 — install-CA hint present ONLY when flag-on + ca-on-disk false; caveat remains last")
+    func installCAHintConditionalOnFlagOnNoCA() {
+        // Variant A — flag ON + CA missing → 5 lines, hint at index 3,
+        // caveat at index 4.
+        let onNoCa = MITMBodyInspectionCorpus.formatCheckEgressMITMStateLines(
+            flagOn: true,
+            caOnDisk: false,
+            bodyCorpusPassed: 8,
+            bodyCorpusTotal: 8,
+            recentDenialCounts: []
+        )
+        #expect(onNoCa.count == 5,
+                "flag-on + no-CA renders 5 lines (mitm/corpus/denials/hint/caveat)")
+        #expect(onNoCa[0] == "mitm: enabled | ca-on-disk: no")
+        #expect(onNoCa[3].hasPrefix("hint: run `senkani doctor --install-egress-ca`"),
+                "hint line is positioned just before the caveat footer")
+        #expect(onNoCa[3].contains("MITM termination"),
+                "hint surfaces the prescription tied to MITM termination")
+        // Caveat MUST remain the last line in this 5-line variant.
+        #expect(onNoCa.last?.hasPrefix("note: ") == true,
+                "caveat footer remains the LAST line even when the hint is present")
+
+        // Variant B — flag ON + CA present → NO hint, 4 lines.
+        let onWithCa = MITMBodyInspectionCorpus.formatCheckEgressMITMStateLines(
+            flagOn: true,
+            caOnDisk: true,
+            bodyCorpusPassed: 8,
+            bodyCorpusTotal: 8,
+            recentDenialCounts: []
+        )
+        #expect(onWithCa.count == 4,
+                "flag-on + ca-on-disk renders 4 lines (no hint needed)")
+        #expect(!onWithCa.contains(where: { $0.hasPrefix("hint: ") }),
+                "no install-CA hint when the CA is already on disk")
+
+        // Variant C — flag OFF (with or without CA) → NO hint, 4 lines.
+        let offNoCa = MITMBodyInspectionCorpus.formatCheckEgressMITMStateLines(
+            flagOn: false,
+            caOnDisk: false,
+            bodyCorpusPassed: 8,
+            bodyCorpusTotal: 8,
+            recentDenialCounts: []
+        )
+        #expect(offNoCa.count == 4,
+                "flag-off renders 4 lines (no hint — operator hasn't asked for MITM)")
+        #expect(!offNoCa.contains(where: { $0.hasPrefix("hint: ") }),
+                "no install-CA hint when the MITM flag is off")
+
+        let offWithCa = MITMBodyInspectionCorpus.formatCheckEgressMITMStateLines(
+            flagOn: false,
+            caOnDisk: true,
+            bodyCorpusPassed: 8,
+            bodyCorpusTotal: 8,
+            recentDenialCounts: []
+        )
+        #expect(offWithCa.count == 4,
+                "flag-off + ca-on-disk renders 4 lines (no hint)")
+        #expect(!offWithCa.contains(where: { $0.hasPrefix("hint: ") }))
+    }
+
     /// `countDenialsByRuleId` — verify the grouping function deterministically
     /// sorts by (descending count, then ascending ruleId) so the operator
     /// surface is stable across runs.

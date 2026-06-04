@@ -94,6 +94,31 @@ public final class MockJudgeAdapter: JudgeAdapter, @unchecked Sendable {
     }
 }
 
+/// r93 Carmack P3 — file-private lock-protected box used by
+/// `GemmaJudgeAdapter.evaluate` to hand the inference result across the
+/// DispatchSemaphore-bounded async → sync boundary. Hoisted out of the
+/// function body so type-metadata setup happens ONCE at module load
+/// rather than on every `evaluate(...)` call (micro-optimization for
+/// the per-request hot path). The box is INTERNAL to this file —
+/// `private` keeps it invisible to other Core sources, preserving the
+/// public API surface unchanged.
+///
+/// Semantics: written once by the worker queue, read once by the
+/// caller after `sem.wait()` returns. The lock makes the
+/// happens-before explicit so Sendable-warning analysis is structurally
+/// satisfied without the call-site closure capturing a `var`.
+private final class JudgeResultBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: (decision: EgressRule.Decision, rationale: String)?
+    func set(_ v: (decision: EgressRule.Decision, rationale: String)?) {
+        lock.lock(); _value = v; lock.unlock()
+    }
+    func get() -> (decision: EgressRule.Decision, rationale: String)? {
+        lock.lock(); defer { lock.unlock() }
+        return _value
+    }
+}
+
 /// Production `JudgeAdapter` backed by the local Gemma inference
 /// adapter through `MLXInferenceLock`. The actual Gemma call lives in
 /// `Sources/MCP/GemmaInferenceAdapter.swift` and is injected via the
@@ -146,25 +171,18 @@ public final class GemmaJudgeAdapter: JudgeAdapter, @unchecked Sendable {
         let sem = DispatchSemaphore(value: 0)
         // r89 P3 (Karpathy) — pre-existing Sendable concurrency cleanup
         // (LSP previously reported `sendable-closure-captures` on the
-        // captured `var result`). Wrap the cross-thread handoff in a
-        // tiny lock-protected box so the Sendable warning is
-        // structurally satisfied; semantics are unchanged. The caller
-        // path is sync (DispatchSemaphore-bounded async) so the box is
-        // written once on the worker, then read once on the calling
-        // thread after sem.wait — the lock makes the happens-before
-        // explicit.
-        final class ResultBox: @unchecked Sendable {
-            private let lock = NSLock()
-            private var _value: (decision: EgressRule.Decision, rationale: String)?
-            func set(_ v: (decision: EgressRule.Decision, rationale: String)?) {
-                lock.lock(); _value = v; lock.unlock()
-            }
-            func get() -> (decision: EgressRule.Decision, rationale: String)? {
-                lock.lock(); defer { lock.unlock() }
-                return _value
-            }
-        }
-        let box = ResultBox()
+        // captured `var result`). The cross-thread handoff is a tiny
+        // lock-protected box so the Sendable warning is structurally
+        // satisfied; semantics are unchanged. The caller path is sync
+        // (DispatchSemaphore-bounded async) so the box is written once
+        // on the worker, then read once on the calling thread after
+        // `sem.wait` — the lock makes the happens-before explicit.
+        //
+        // r93 Carmack P3 — `JudgeResultBox` is now file-private (defined
+        // at module scope above) rather than re-declared inside this
+        // function each call. Avoids per-call type-metadata setup; the
+        // public API surface is unchanged.
+        let box = JudgeResultBox()
         DispatchQueue.global(qos: .userInitiated).async { [inference] in
             box.set(inference(prompt))
             sem.signal()

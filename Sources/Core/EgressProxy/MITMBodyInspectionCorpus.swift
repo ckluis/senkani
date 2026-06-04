@@ -170,6 +170,18 @@ public enum MITMBodyInspectionCorpus {
     /// Build the 8-scenario corpus. Returns scenarios in canonical
     /// (stable) order so tests and the doctor surface render them
     /// identically.
+    ///
+    /// r93 Karpathy P3 — clarification on freshness: `scenarios()` is
+    /// REBUILT per call (engines + body fixtures are constructed fresh
+    /// on every invocation). The closures inside each Scenario capture
+    /// `engine1` / `engine2` / `validatedHost` BY VALUE at build-time;
+    /// there is NO shared mutable state across calls. We deliberately
+    /// avoid lifting the list into a `static let` cache — the rule
+    /// engines depend on other Core types whose init-order across
+    /// process boot is not formally guaranteed, and the per-call cost
+    /// is unmeasurable for doctor's once-per-invocation use (and for
+    /// tests which can reasonably re-build). If this ever appears on a
+    /// hot path the fix is local: cache here, NOT in callers.
     public static func scenarios() -> [Scenario] {
         let validatedHost = "api.example.com"
 
@@ -411,23 +423,32 @@ public enum MITMBodyInspectionCorpus {
     }
 
     /// T.1d-5 — pure formatter for the doctor `--check-egress` MITM-state
-    /// + body-corpus pass-rate + recent-deny-counts lines. Four lines in
-    /// operator-greppable shape:
+    /// + body-corpus pass-rate + recent-deny-counts lines. Four or five
+    /// lines in operator-greppable shape:
     ///
     ///   `mitm: <enabled|disabled> | ca-on-disk: <yes|no>`
     ///   `body-inspection corpus: N/M`
     ///   `recent denials (last 200): <rule_id=count, ...> | none`
+    ///   `hint: run \`senkani doctor --install-egress-ca\` to install the CA needed for MITM termination`   (ONLY when flag-on + !ca-on-disk)
     ///   `note: body/header/path DENY rules are best-effort defense-in-depth — see docs/concepts/security-posture.html for evasion vectors`
     ///
-    /// The fourth line (T.1d-3 operator caveat, added 2026-06-04) reminds
-    /// the operator that body-substring / header / path DENY matchers are
-    /// evadable by case change, encoding, embedded whitespace, or being
-    /// split across the ≤4 KB body excerpt bound; the host allowlist +
-    /// deny-on-miss default is the real enforcement boundary. Doc surface:
-    /// `docs/concepts/security-posture.html` "Egress body/header/path
-    /// DENY matchers are best-effort". The line is unconditional so the
-    /// operator never sees a successful `--check-egress` without also
-    /// seeing the caveat.
+    /// r93 Allspaw P3 — the install-CA hint is conditional on
+    /// `flagOn && !caOnDisk`: an operator who ran `--check-egress`
+    /// (without the broader `doctor` run) and sees `mitm: enabled |
+    /// ca-on-disk: no` previously had no prescription — they'd have to
+    /// know to run `senkani doctor --install-egress-ca` separately. The
+    /// hint surfaces the prescription at the same site as the diagnosis.
+    /// In all other states (flag off / on-with-ca) the hint is absent.
+    ///
+    /// The final caveat (T.1d-3 operator caveat, added 2026-06-04)
+    /// remains the LAST line in ALL states — body-substring / header /
+    /// path DENY matchers are evadable by case change, encoding, embedded
+    /// whitespace, or being split across the ≤4 KB body excerpt bound;
+    /// the host allowlist + deny-on-miss default is the real enforcement
+    /// boundary. Doc surface: `docs/concepts/security-posture.html`
+    /// "Egress body/header/path DENY matchers are best-effort". The line
+    /// is unconditional so the operator never sees a successful
+    /// `--check-egress` without also seeing the caveat.
     ///
     /// Lifted into Core so the CLI module never needs to name
     /// `EgressDecisionStore.Row` directly (preserving the
@@ -453,15 +474,31 @@ public enum MITMBodyInspectionCorpus {
         }
         let denialLine = "recent denials (last 200): \(denialBody)"
         let caveatLine = "note: body/header/path DENY rules are best-effort defense-in-depth — see docs/concepts/security-posture.html for evasion vectors"
-        return [mitmLine, corpusLine, denialLine, caveatLine]
+
+        var lines: [String] = [mitmLine, corpusLine, denialLine]
+        // r93 Allspaw P3 — install-CA prescription appears ONLY in the
+        // flag-on + no-CA state. Placed BEFORE the caveat footer so the
+        // footer remains the LAST line in all states.
+        if flagOn && !caOnDisk {
+            lines.append("hint: run `senkani doctor --install-egress-ca` to install the CA needed for MITM termination")
+        }
+        lines.append(caveatLine)
+        return lines
     }
 
     /// Pure probe for the size-overflow path: did the bytes exceed
     /// the `MITMInnerHostRebind.maxHeadBytes` budget without a
     /// `\r\n\r\n` terminator? Mirrors the conditional inside
     /// `peekAndDecide` that would have returned `.rejectHeadTooLarge`.
+    ///
+    /// r93 Carmack P2 — delegates to
+    /// `MITMInnerHostRebind.headIsOverBoundsWithoutTerminator`, the
+    /// shared single-source-of-truth predicate that `peekAndDecide`'s
+    /// outer-loop fall-out branch ALSO calls. Scenario 4 of the corpus
+    /// now exercises the SAME code path as the live listener — not a
+    /// hand-rolled mirror.
     public static func probeHeadSizeOverflow(bytes: [UInt8], limit: Int) -> String {
-        if bytes.count >= limit && MITMInnerHostRebind.headTerminatorIndex(in: bytes) == nil {
+        if MITMInnerHostRebind.headIsOverBoundsWithoutTerminator(bytes, maxBytes: limit) {
             return "mitm_inner_head_too_large"
         }
         return "size-overflow-not-tripped"

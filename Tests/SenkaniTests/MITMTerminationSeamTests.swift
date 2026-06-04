@@ -373,8 +373,8 @@ struct MITMTerminationSeamTests {
              .upstreamCompleted, .upstreamUnreachable, .upstreamHandshakeFailed,
              .upstreamCertRejected, .upstreamIOError,
              .upstreamWouldBlockBudgetExhausted, .upstreamWriteBudgetExhausted,
-             .innerHostMismatch, .innerHeadTooLarge, .innerUnknownProtocol,
-             .innerReadError, .upstreamPipeError:
+             .innerHostMismatch, .innerNoHost, .innerHeadTooLarge,
+             .innerUnknownProtocol, .innerReadError, .upstreamPipeError:
             // Any non-.terminated outcome is correct fail-CLOSED
             // behavior. (The .upstream* variants are unreachable from
             // the sentinel-mode `runTermination` overload exercised

@@ -59,6 +59,13 @@ enum MITMInnerHostRebind {
         /// is the stable `mitm_inner_host_mismatch` string — the raw
         /// mismatched host is NOT surfaced (info-leak guard).
         case rejectMismatch
+        /// Inner request had no `Host:` header at all (HTTP/1.1 requires
+        /// it). Operator-distinguishable from `.rejectMismatch` — a
+        /// missing-Host smuggling attempt has different forensics from a
+        /// reused-connection mismatch. Maps to `mitm_inner_no_host`.
+        /// Karpathy r92 P2 — was previously folded into `.rejectMismatch`,
+        /// which fused two distinct attack shapes under one ruleId.
+        case rejectMissingHost
         /// Head exceeded `maxHeadBytes` without a `\r\n\r\n` terminator.
         /// Audit ruleId `mitm_inner_head_too_large`.
         case rejectHeadTooLarge
@@ -98,10 +105,24 @@ enum MITMInnerHostRebind {
     /// hosts (`[::1]:443` → `[::1]`). For bare-host inputs (no colon, or
     /// only colons that are part of an IPv6 literal without a port
     /// suffix) returns the input unchanged.
+    ///
+    /// Allspaw r92 P3 — refactored to use `lastIndex(of: ":")` plus an
+    /// unbracketed-multi-colon guard, replacing the previous
+    /// `firstIndex + filter().count == 1` pair which was correct but
+    /// harder to reason about.
+    ///
+    /// Cases handled:
+    ///   - `[::1]:443` (bracketed IPv6 + port)  → `[::1]`
+    ///   - `[::1]` (bracketed IPv6 alone)       → `[::1]`
+    ///   - `::1` (unbracketed IPv6, ambiguous)  → `::1` (no strip)
+    ///   - `127.0.0.1:443` (IPv4 + port)        → `127.0.0.1`
+    ///   - `api.example.com:443` (DNS + port)   → `api.example.com`
+    ///   - `api.example.com` (DNS alone)        → `api.example.com`
     static func stripPort(_ host: String) -> String {
         if host.hasPrefix("[") {
-            // IPv6 literal — strip `[...]:port` → `[...]`, but if no
-            // port suffix exists keep the brackets.
+            // IPv6 literal — strip `[...]:port` → `[...]`. If no port
+            // suffix exists keep the brackets. Bracketed form is the
+            // unambiguous shape per RFC 3986.
             if let close = host.firstIndex(of: "]") {
                 let bracketed = String(host[host.startIndex...close])
                 // After the close-bracket, anything is the port (or nothing).
@@ -109,13 +130,26 @@ enum MITMInnerHostRebind {
             }
             return host
         }
-        // IPv4 / DNS host. Last colon (if any) is the port separator.
-        // A DNS host has no embedded colons; bare IPv6 without brackets
-        // is malformed Host-header input — we conservatively return as-is.
-        if let firstColon = host.firstIndex(of: ":"),
-           host[host.index(after: firstColon)...].allSatisfy({ $0.isASCII && ($0.isNumber || $0 == ":") }),
-           host.filter({ $0 == ":" }).count == 1 {
-            return String(host[..<firstColon])
+        // Unbracketed. Count colons to disambiguate IPv4/DNS-with-port
+        // (one colon) vs unbracketed IPv6 (multiple colons, ambiguous).
+        let colons = host.filter { $0 == ":" }.count
+        if colons == 0 {
+            return host
+        }
+        if colons > 1 {
+            // Unbracketed multi-colon → treat as IPv6 without brackets
+            // and DO NOT strip. There's no unambiguous way to know
+            // where the host ends and the port begins. Host-header
+            // input in this shape is malformed per RFC 7230 but we
+            // conservatively preserve it.
+            return host
+        }
+        // Single colon → port separator. Use lastIndex (functionally
+        // identical to firstIndex here since there's only one colon,
+        // but `lastIndex` is the canonical "port separator" lookup
+        // when ports could in principle hide in multi-colon inputs).
+        if let last = host.lastIndex(of: ":") {
+            return String(host[..<last])
         }
         return host
     }
@@ -272,10 +306,12 @@ enum MITMInnerHostRebind {
             return .rejectUnknownProtocol
         }
         guard let host = extractHostHeader(headBytes: headBytes) else {
-            // No Host header → treat as mismatch (HTTP/1.1 requires
-            // Host; a missing-Host request to a CONNECT-validated
-            // host is structurally invalid).
-            return .rejectMismatch
+            // No Host header at all → operator-distinguishable from a
+            // host-mismatch (HTTP/1.1 requires Host; absence is a
+            // distinct attack shape from "wrong host"). Karpathy r92
+            // P2 — splits `mitm_inner_no_host` out of the
+            // `mitm_inner_host_mismatch` ruleId bucket.
+            return .rejectMissingHost
         }
         if hostsMatch(innerHostHeader: host, validatedHost: validatedHost) {
             return .allow(headBytes: headBytes)

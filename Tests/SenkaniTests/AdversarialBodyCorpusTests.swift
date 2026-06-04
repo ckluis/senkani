@@ -152,7 +152,9 @@ struct AdversarialBodyCorpusTests {
     @Test("Scenario 7 — MITM-inner request missing Host header entirely (HTTP/1.1 requires Host)")
     func scenario7_missingHost() {
         let scenario = Self.scenario(id: "missing-host-header")
-        #expect(scenario.observedRuleId() == "mitm_inner_host_mismatch")
+        // Karpathy r92 P2 — missing-Host is now distinct from
+        // host-mismatch at the audit-row layer.
+        #expect(scenario.observedRuleId() == "mitm_inner_no_host")
     }
 
     @Test("Scenario 8 — body planted secret redacted BEFORE judge/audit sees it (Schneier P1)")

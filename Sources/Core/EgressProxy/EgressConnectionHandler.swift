@@ -474,6 +474,13 @@ final class EgressConnectionHandler: @unchecked Sendable {
                 recordDecision(host: normalizedHost, method: parsed.method,
                                decision: .deny, ruleId: "mitm_inner_host_mismatch",
                                paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+            case .innerNoHost:
+                // Karpathy r92 P2 — split out from `.innerHostMismatch`
+                // so missing-Host smuggling has its own auditable
+                // ruleId. Different attack shape, different forensics.
+                recordDecision(host: normalizedHost, method: parsed.method,
+                               decision: .deny, ruleId: "mitm_inner_no_host",
+                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
             case .innerHeadTooLarge:
                 recordDecision(host: normalizedHost, method: parsed.method,
                                decision: .deny, ruleId: "mitm_inner_head_too_large",

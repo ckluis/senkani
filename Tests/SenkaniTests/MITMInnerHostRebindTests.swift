@@ -124,16 +124,23 @@ struct MITMInnerHostRebindTests {
 
     // MARK: - Defensive rejections
 
-    /// Missing Host header → mismatch (RFC requires Host on HTTP/1.1).
-    @Test("missing Host header is rejected as mismatch")
+    /// Missing Host header → `.rejectMissingHost` (mapped to the
+    /// `mitm_inner_no_host` ruleId, distinct from `.rejectMismatch` /
+    /// `mitm_inner_host_mismatch`). Karpathy r92 P2 — operator-
+    /// distinguishable forensics: a missing-Host smuggling attempt is
+    /// a different attacker shape from a reused-connection mismatch.
+    @Test("missing Host header is rejected as mitm_inner_no_host (distinct ruleId)")
     func missingHostHeaderRejected() async throws {
         let s = "GET /v1/test HTTP/1.1\r\nAccept: */*\r\n\r\n"
         let decision = MITMInnerHostRebind.decide(
             headBytes: Array(s.utf8),
             validatedHost: "api.anthropic.com"
         )
-        if case .rejectMismatch = decision { /* ok */ }
-        else { Issue.record("missing Host should reject as mismatch — got \(decision)") }
+        if case .rejectMissingHost = decision { /* ok */ }
+        else { Issue.record("missing Host should reject as .rejectMissingHost — got \(decision)") }
+        // Pin the ruleId mapping at the corpus seam so the audit-row
+        // distinction is verified end-to-end.
+        #expect(MITMBodyInspectionCorpus.ruleIdForRebind(decision) == "mitm_inner_no_host")
     }
 
     /// Unknown method (non-HTTP/1.x) → `.rejectUnknownProtocol`. The
@@ -226,5 +233,89 @@ struct MITMInnerHostRebindTests {
         // No terminator yet → nil.
         let partial = Array("GET / HTTP/1.1\r\nHost: x\r\n".utf8)
         #expect(MITMInnerHostRebind.headTerminatorIndex(in: partial) == nil)
+    }
+
+    // MARK: - r92 Allspaw P3 — stripPort edge cases (lastIndex + bracketed/multi-colon)
+
+    /// stripPort exhaustive edge cases on the six canonical input shapes.
+    /// Bracketed IPv6 must preserve brackets + strip port. Unbracketed
+    /// multi-colon (ambiguous IPv6) must NOT strip — there's no
+    /// unambiguous way to know where host ends and port begins.
+    @Test("stripPort — bracketed IPv6 with port → host kept, port stripped")
+    func stripPortBracketedIPv6WithPort() async throws {
+        #expect(MITMInnerHostRebind.stripPort("[::1]:443") == "[::1]")
+    }
+
+    @Test("stripPort — bracketed IPv6 without port → unchanged")
+    func stripPortBracketedIPv6NoPort() async throws {
+        #expect(MITMInnerHostRebind.stripPort("[::1]") == "[::1]")
+    }
+
+    @Test("stripPort — unbracketed multi-colon IPv6 → unchanged (ambiguous)")
+    func stripPortUnbracketedIPv6NoPort() async throws {
+        // Ambiguous: can't tell if `::1` is a host or a host:port. Be
+        // conservative and treat the whole string as the host.
+        #expect(MITMInnerHostRebind.stripPort("::1") == "::1")
+    }
+
+    @Test("stripPort — single-colon IPv4 with port → port stripped")
+    func stripPortIPv4WithPort() async throws {
+        #expect(MITMInnerHostRebind.stripPort("127.0.0.1:443") == "127.0.0.1")
+    }
+
+    @Test("stripPort — DNS hostname with port → port stripped")
+    func stripPortHostnameWithPort() async throws {
+        #expect(MITMInnerHostRebind.stripPort("api.anthropic.com:443") == "api.anthropic.com")
+    }
+
+    @Test("stripPort — DNS hostname without port → unchanged")
+    func stripPortHostnameNoPort() async throws {
+        #expect(MITMInnerHostRebind.stripPort("api.anthropic.com") == "api.anthropic.com")
+    }
+
+    // MARK: - r92 Allspaw P2 — positive .rejectHeadTooLarge with a recognized method
+
+    /// `peekAndDecide` rejects with `.rejectUnknownProtocol` as soon as
+    /// `buf.count >= 4` and the first token isn't a known method. To
+    /// reach the head-too-large path, the payload MUST start with a
+    /// recognized method then drag past 16 KB without `\r\n\r\n` (a
+    /// massive header smuggling attempt on a valid method line). This
+    /// test exercises the pure `decide()` surface, which is reachable
+    /// only when the corpus probe sees the size-overflow shape —
+    /// `decide()` itself does not enforce the size cap (that's done by
+    /// `peekAndDecide`'s outer loop). So we use the
+    /// `probeHeadSizeOverflow` corpus helper to assert the size-cap
+    /// classification on a method-prefixed oversized head, complementing
+    /// scenario 4 of the corpus (which uses a pure probe shape).
+    @Test("peekAndDecide head-too-large positive: valid method + oversized header drag past 16 KB")
+    func headTooLargePositiveWithRecognizedMethod() async throws {
+        // Construct a head that STARTS with a recognized method so
+        // `looksLikeHTTP1` does not short-circuit to
+        // `.rejectUnknownProtocol`, then drags well past 16 KB without
+        // a `\r\n\r\n` terminator (massive header smuggling shape).
+        var bytes: [UInt8] = Array("GET / HTTP/1.1\r\nHost: api.anthropic.com\r\nX-Filler: ".utf8)
+        bytes.append(contentsOf: [UInt8](repeating: 0x41 /* 'A' */, count: 16384))
+        // No trailing `\r\n\r\n` → would have dragged past peekAndDecide's
+        // 16 KiB budget in the live IO path.
+
+        // Sanity 1: this DOES look like HTTP/1.x (so the
+        // unknown-protocol short-circuit would not have fired).
+        #expect(MITMInnerHostRebind.looksLikeHTTP1(headBytes: bytes),
+                "payload must be classified HTTP/1.x so the unknown-protocol short-circuit does not pre-empt the head-too-large path")
+        // Sanity 2: no head terminator present anywhere in the buffer.
+        #expect(MITMInnerHostRebind.headTerminatorIndex(in: bytes) == nil,
+                "payload must NOT contain `\\r\\n\\r\\n` so the head-too-large path is the only reachable outcome")
+        // Sanity 3: payload size MUST exceed the head-budget cap.
+        #expect(bytes.count >= MITMInnerHostRebind.maxHeadBytes,
+                "payload must exceed maxHeadBytes (\(MITMInnerHostRebind.maxHeadBytes)) — got \(bytes.count)")
+
+        // The size-overflow corpus probe mirrors the conditional inside
+        // `peekAndDecide` that would have returned `.rejectHeadTooLarge`.
+        let probed = MITMBodyInspectionCorpus.probeHeadSizeOverflow(
+            bytes: bytes,
+            limit: MITMInnerHostRebind.maxHeadBytes
+        )
+        #expect(probed == "mitm_inner_head_too_large",
+                "valid-method + oversized-header head MUST classify as mitm_inner_head_too_large; got \(probed)")
     }
 }

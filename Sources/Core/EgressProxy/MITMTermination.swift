@@ -120,6 +120,12 @@ enum MITMTermination {
         /// guard: an attacker request could embed sensitive data in
         /// the Host header and we don't want it landing in audit rows).
         case innerHostMismatch
+        /// Decrypted inner request had NO `Host:` header at all.
+        /// Distinct from `.innerHostMismatch` so the audit row
+        /// distinguishes "wrong host" from "no host" — different
+        /// attacker shapes, different forensics. Mapped to
+        /// `mitm_inner_no_host` (Karpathy r92 P2).
+        case innerNoHost
         /// Decrypted inner request head exceeded the 16 KiB peek
         /// budget without a `\r\n\r\n` terminator — likely malicious
         /// header smuggling or a non-HTTP protocol smuggled inside

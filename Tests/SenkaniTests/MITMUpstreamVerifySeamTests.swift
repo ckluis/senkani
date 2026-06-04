@@ -245,4 +245,77 @@ struct MITMUpstreamVerifySeamTests {
         #expect(reason == "chain validation failed",
                 "nil CFError must map to the stable 'chain validation failed' classification, got: \(reason)")
     }
+
+    // MARK: - Test 4 — Carmack r92 P3 — connector injection seam contract
+
+    /// Recording stub: an `EgressUpstreamConnecting` that records the
+    /// host/port it was asked to dial and returns a caller-controlled
+    /// fd (or nil for the failure path). Used by the connector-seam
+    /// tests below to assert `connectAndVerify` actually routes its
+    /// `host`/`port` arguments through the seam (and that the nil-fd
+    /// outcome surfaces as `.upstreamUnreachable`, not as a silent
+    /// fall-through to the default connector).
+    private final class RecordingConnector: EgressUpstreamConnecting, @unchecked Sendable {
+        struct Call: Sendable {
+            let host: String
+            let port: Int
+            let timeoutSeconds: Int
+        }
+        private let lock = NSLock()
+        private var _calls: [Call] = []
+        private let fdToReturn: Int32?
+        var calls: [Call] {
+            lock.lock(); defer { lock.unlock() }
+            return _calls
+        }
+        init(fdToReturn: Int32?) {
+            self.fdToReturn = fdToReturn
+        }
+        func connect(host: String, port: Int, timeoutSeconds: Int) -> Int32? {
+            lock.lock()
+            _calls.append(Call(host: host, port: port, timeoutSeconds: timeoutSeconds))
+            lock.unlock()
+            return fdToReturn
+        }
+    }
+
+    /// Carmack r92 P3 — connector seam contract: a stub connector
+    /// returning nil must surface as `.upstreamUnreachable`, AND the
+    /// stub must have observed the exact host/port the caller passed.
+    /// This pins the seam at the API contract level so a future
+    /// refactor cannot silently fall back to the default connector
+    /// (which would dial the real internet from CI).
+    @Test("connector seam: stub returning nil → .upstreamUnreachable, stub observed exact host/port")
+    func connectorSeamObservesHostPortAndSurfacesUnreachable() async throws {
+        let stub = RecordingConnector(fdToReturn: nil)
+        let result = MITMUpstreamVerify.connectAndVerify(
+            host: "test.example",
+            port: 1234,
+            timeoutSeconds: 5,
+            connector: stub
+        )
+        // Outcome: nil fd → .upstreamUnreachable, fail-CLOSED.
+        switch result {
+        case .succeeded:
+            Issue.record("FAIL-CLOSED VIOLATION: nil-fd connector return must NOT surface as .succeeded — got success")
+        case .failed(let outcome):
+            switch outcome {
+            case .upstreamUnreachable:
+                break  // ✓
+            default:
+                Issue.record("expected .upstreamUnreachable for nil-fd connector return, got \(outcome)")
+            }
+        }
+        // Contract: the stub MUST have been called exactly once with
+        // the caller's host + port (no silent fall-through to the
+        // default connector).
+        #expect(stub.calls.count == 1,
+                "connector seam should be called exactly once; got \(stub.calls.count) calls")
+        if let call = stub.calls.first {
+            #expect(call.host == "test.example",
+                    "connector seam observed wrong host: \(call.host)")
+            #expect(call.port == 1234,
+                    "connector seam observed wrong port: \(call.port)")
+        }
+    }
 }

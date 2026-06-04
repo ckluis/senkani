@@ -295,7 +295,9 @@ public enum MITMBodyInspectionCorpus {
             Scenario(
                 id: "missing-host-header",
                 label: "MITM-inner request missing Host header entirely",
-                expectedRuleId: "mitm_inner_host_mismatch",
+                // Karpathy r92 P2 — missing-Host now has its own
+                // ruleId distinct from host-mismatch.
+                expectedRuleId: "mitm_inner_no_host",
                 representativeBodyExcerpt: Data(),
                 observedRuleId: {
                     let decision = MITMInnerHostRebind.decide(
@@ -380,6 +382,7 @@ public enum MITMBodyInspectionCorpus {
         switch decision {
         case .allow: return "allow"
         case .rejectMismatch: return "mitm_inner_host_mismatch"
+        case .rejectMissingHost: return "mitm_inner_no_host"
         case .rejectHeadTooLarge: return "mitm_inner_head_too_large"
         case .rejectUnknownProtocol: return "mitm_inner_unknown_protocol"
         case .rejectReadError: return "mitm_inner_read_error"

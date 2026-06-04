@@ -370,6 +370,8 @@ enum MITMUpstreamVerify {
             switch decision {
             case .rejectMismatch:
                 return .innerHostMismatch
+            case .rejectMissingHost:
+                return .innerNoHost
             case .rejectHeadTooLarge:
                 return .innerHeadTooLarge
             case .rejectUnknownProtocol:

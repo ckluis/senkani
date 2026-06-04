@@ -197,15 +197,25 @@ struct MITMTerminationSeamTests {
 
     /// Hazard #2 from the t1d-2b panel + the load-bearing acceptance
     /// bullet: flag ON terminates the client TLS session with the
-    /// t1d-1 leaf; flag OFF runs the opaque tunnel unchanged.
+    /// t1d-1 leaf and immediately routes plaintext to a re-originated
+    /// VERIFIED upstream leg (child iii). The listener-level test
+    /// asserts the audit-row contract for the new path:
+    ///   - flag-ON + leaf-provider wired,
+    ///   - the upstream is unreachable (no TLS server is bound at
+    ///     127.0.0.1:443 in CI),
+    ///   - so the seam fails-CLOSED on upstream connect → deny audit
+    ///     row with ruleId `mitm_upstream_unreachable`. Critically NOT
+    ///     a fall-through to the opaque tunnel (no `allow-loopback`
+    ///     row), and NOT a `mitm_upstream_cert_rejected` (we never
+    ///     reached the cert eval).
     ///
-    /// This is the production path: a `EgressListener` is bound to a
-    /// loopback port, the test issues a real `CONNECT` through the
-    /// proxy with `mitmTermination: true` and a wired-in CA-backed
-    /// leaf provider, and a real TLS client (SecureTransport over the
-    /// already-connected proxy fd) drives the handshake and reads
-    /// the sentinel plaintext.
-    @Test("flag-ON CONNECT terminates client TLS with t1d-1 leaf and exposes plaintext")
+    /// The server-side TLS handshake itself (peek-drain, leaf
+    /// presentation, plaintext channel) is exercised end-to-end by
+    /// `clientHelloNotDoubleConsumedAfterPeek` above (which calls
+    /// `runTermination` directly with the sentinel path). The
+    /// upstream-verify positive path lives in
+    /// `MITMUpstreamVerifySeamTests`.
+    @Test("flag-ON CONNECT + upstream unreachable → fail-CLOSED via mitm_upstream_unreachable, never falls through to opaque tunnel")
     func terminationRoundTripBehindFlag() async throws {
         let (paths, dir) = tempPaths()
         defer { cleanup(dir) }
@@ -224,14 +234,24 @@ struct MITMTerminationSeamTests {
             askedHost == host ? leafPKCS12 : nil
         }
 
+        // Pick an unreachable port for the upstream CONNECT target.
+        // 127.0.0.1:1 is closed in CI; the upstream connector will
+        // return nil, the seam will fail-CLOSED via
+        // `.upstreamUnreachable`. The CONNECT line itself uses 443 to
+        // keep the SNI-normalization path identical to production —
+        // but production's port is the connector's port, and the
+        // default connector dials parsed.port, so we must redirect via
+        // a LoopbackStubConnector pointed at a port we know is closed.
         let db = tempDB()
         let listener = EgressListener(
-            rules: EgressRuleEngine(rules: [
+            policy: EgressPolicy(engines: [.default: EgressRuleEngine(rules: [
                 EgressRule(id: "allow-loopback", pattern: host, mode: .exact, decision: .allow)
-            ]),
+            ])]),
             database: db,
             config: .init(port: 0, writePortFile: false, portFilePath: "", mitmTermination: true),
-            mitmLeafProvider: provider
+            upstreamConnector: ClosedPortConnector(),
+            mitmLeafProvider: provider,
+            mitmTrustEvaluator: nil
         )
         try listener.start()
         defer { listener.stop() }
@@ -250,10 +270,11 @@ struct MITMTerminationSeamTests {
         let okStr = String(data: okResp, encoding: .utf8) ?? ""
         #expect(okStr.contains("200 Connection Established"))
 
-        // --- Now drive a real SecureTransport TLS client over the
-        //     proxy fd. The first thing it sends is a ClientHello,
-        //     which the listener peeks for SNI; the listener then
-        //     terminates with the minted leaf. ---
+        // --- Drive a real SecureTransport TLS client over the proxy fd.
+        //     The server-side handshake will succeed (the seam loads the
+        //     t1d-1 leaf and runs the handshake), then immediately try
+        //     to connect to the upstream via the stubbed connector,
+        //     which returns nil → fail-CLOSED on .upstreamUnreachable. ---
         let clientCtx = ClientHelper.IOContext(proxy)
         let clientResult = ClientHelper.Result()
         ClientHelper.driveTLSClient(
@@ -261,34 +282,44 @@ struct MITMTerminationSeamTests {
             anchorCA: caCert,
             ctx: clientCtx,
             result: clientResult,
-            sentinelLength: Data("SENKANI-MITM-TERMINATED\n".utf8).count
+            sentinelLength: 1  // 1 byte is enough — we don't expect any
         )
 
-        // 1. Handshake completed.
+        // 1. Handshake completed — proves the server-side termination
+        //    seam took the t1d-1 leaf and the SecureTransport client
+        //    is happy with it.
         #expect(clientResult.handshakeStatus == errSecSuccess,
                 "TLS client handshake failed: \(clientResult.handshakeStatus)")
 
-        // 2. Sentinel decrypted byte-for-byte.
-        let sentinel = Data("SENKANI-MITM-TERMINATED\n".utf8)
-        #expect(clientResult.sentinel == sentinel,
-                "decrypted sentinel mismatch: got \(clientResult.sentinel.count) bytes")
-
-        // 3. Server presented the minted t1d-1 leaf (not a fresh
-        //    self-signed cert).
+        // 2. Peer cert byte-equality — proves the right identity was
+        //    presented (NOT a fresh self-signed cert).
         let peerLeaf = try #require(clientResult.peerLeafDER)
         #expect(peerLeaf == mintedLeafDER,
                 "server presented the wrong cert — t1d-1 leaf not used")
 
-        // 4. Audit row records the ALLOW under the original rule id —
-        //    not the opaque tunnel's `allow-loopback` from the parity
-        //    test, but proving the termination path took the same
-        //    decision row.
+        // 3. Audit row records the DENY under the new
+        //    `mitm_upstream_unreachable` ruleId — the load-bearing
+        //    fail-CLOSED contract for the upstream-verify path.
+        //    Critically NOT `allow-loopback` (no opaque-tunnel
+        //    fallback) and NOT `mitm_upstream_cert_rejected` (we
+        //    never reached the cert eval).
         let row = waitForRow(db: db)
         try #require(row != nil)
-        #expect(row!.decision == .allow)
+        #expect(row!.decision == .deny,
+                "fail-CLOSED expected when upstream is unreachable, got decision=\(row!.decision)")
         #expect(row!.method == "CONNECT")
-        #expect(row!.ruleId == "allow-loopback",
-                "termination path must reuse the static rule id, not invent its own")
+        #expect(row!.ruleId == "mitm_upstream_unreachable",
+                "expected mitm_upstream_unreachable, got: \(row!.ruleId)")
+    }
+
+    /// Test-only connector that returns nil so the seam exercises its
+    /// `.upstreamUnreachable` branch deterministically — no race on a
+    /// closed loopback port, no risk of accidentally dialing a real
+    /// upstream from CI.
+    private struct ClosedPortConnector: EgressUpstreamConnecting {
+        func connect(host: String, port: Int, timeoutSeconds: Int) -> Int32? {
+            return nil
+        }
     }
 
     // MARK: - Test 3 — Non-blocking IO fail-CLOSED
@@ -337,8 +368,16 @@ struct MITMTerminationSeamTests {
         case .terminated:
             Issue.record("FAIL-CLOSED VIOLATION: junk + EOF reached .terminated — seam silently accepted invalid TLS")
         case .handshakeFailed, .ioError, .wouldBlockBudgetExhausted,
-             .contextCreateFailed, .identityLoadFailed, .identitySetFailed:
-            // Any of these is correct fail-CLOSED behavior.
+             .contextCreateFailed, .identityLoadFailed, .identitySetFailed,
+             .sentinelWriteBudgetExhausted,
+             .upstreamCompleted, .upstreamUnreachable, .upstreamHandshakeFailed,
+             .upstreamCertRejected, .upstreamIOError,
+             .upstreamWouldBlockBudgetExhausted, .upstreamWriteBudgetExhausted:
+            // Any non-.terminated outcome is correct fail-CLOSED
+            // behavior. (The .upstream* variants are unreachable from
+            // the sentinel-mode `runTermination` overload exercised
+            // here, but listing them keeps the switch exhaustive
+            // against the shared `Outcome` enum.)
             break
         }
     }

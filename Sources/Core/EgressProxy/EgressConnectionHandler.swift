@@ -47,6 +47,11 @@ final class EgressConnectionHandler: @unchecked Sendable {
     /// has not yet generated a CA (e.g. fresh install). Returning nil
     /// from the closure (per-host failure) is treated as fail-CLOSED.
     private let mitmLeafProvider: ((String) -> Data?)?
+    /// T.1d-2b-iii — optional trust evaluator. Nil means production
+    /// `MITMUpstreamVerify.defaultEvaluate` (System anchors). Tests
+    /// inject a TEST-CA-anchored evaluator to drive the connect+
+    /// handshake plumbing without touching System trust.
+    private let mitmTrustEvaluator: MITMUpstreamVerify.TrustEvaluator?
     /// Resolved during request-head parsing (PaneMode.default if no
     /// `X-Senkani-Pane-Mode` header is present). Used by the decision
     /// recorder so audit rows carry the framing for the dispatched
@@ -75,7 +80,8 @@ final class EgressConnectionHandler: @unchecked Sendable {
         clientFD: Int32,
         upstreamConnector: EgressUpstreamConnecting = DefaultEgressUpstreamConnector(),
         mitmTerminationEnabled: Bool = false,
-        mitmLeafProvider: ((String) -> Data?)? = nil
+        mitmLeafProvider: ((String) -> Data?)? = nil,
+        mitmTrustEvaluator: MITMUpstreamVerify.TrustEvaluator? = nil
     ) {
         self.policy = policy
         self.judge = judge
@@ -85,6 +91,7 @@ final class EgressConnectionHandler: @unchecked Sendable {
         self.upstreamConnector = upstreamConnector
         self.mitmTerminationEnabled = mitmTerminationEnabled
         self.mitmLeafProvider = mitmLeafProvider
+        self.mitmTrustEvaluator = mitmTrustEvaluator
     }
 
     /// Back-compat init that wraps a flat rule engine in an EgressPolicy
@@ -335,13 +342,53 @@ final class EgressConnectionHandler: @unchecked Sendable {
                                paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
                 return
             }
-            let outcome = MITMTermination.runTermination(
+            // T.1d-2b-iii — production path: server-side TLS termination
+            // wired to a re-originated, VERIFIED upstream TLS leg via
+            // MITMUpstreamVerify. On ANY trust-eval rejection we
+            // FAIL-CLOSED: close the connection, write a structured
+            // deny audit row, and (load-bearing) NEVER pipe plaintext
+            // to the cert-rejected upstream. The opaque-tunnel
+            // fallback is DELIBERATELY not taken here — that would
+            // be a fail-OPEN bypass.
+            let upstreamHost = parsed.host
+            let upstreamPort = parsed.port
+            let connector = self.upstreamConnector
+            let evaluator = self.mitmTrustEvaluator ?? MITMUpstreamVerify.defaultEvaluate
+            let outcome = MITMTermination.runTerminationWithUpstream(
                 fd: clientFD,
                 peek: peek,
                 leafPKCS12: leafPKCS12
-            )
+            ) { clientSSL, clientCtx in
+                // After client-side handshake completes, re-originate
+                // to the real upstream with full chain + hostname
+                // verification against System anchors.
+                let connect = MITMUpstreamVerify.connectAndVerify(
+                    host: upstreamHost,
+                    port: upstreamPort,
+                    connector: connector,
+                    evaluator: evaluator
+                )
+                switch connect {
+                case .failed(let failureOutcome):
+                    return failureOutcome
+                case .succeeded(let handle):
+                    defer {
+                        // The SSLContext is closed by pipeBidirectional
+                        // via its caller's lifecycle; we own the fd.
+                        Darwin.close(handle.fd)
+                    }
+                    return withExtendedLifetime(handle.ctx) { () -> MITMTermination.Outcome in
+                        return MITMUpstreamVerify.pipeBidirectional(
+                            clientSSL: clientSSL,
+                            clientFD: clientCtx.fd,
+                            upstreamSSL: handle.ssl,
+                            upstreamFD: handle.fd
+                        )
+                    }
+                }
+            }
             switch outcome {
-            case .terminated:
+            case .terminated, .upstreamCompleted:
                 recordDecision(host: normalizedHost, method: parsed.method,
                                decision: .allow, ruleId: ruleId,
                                paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
@@ -357,9 +404,42 @@ final class EgressConnectionHandler: @unchecked Sendable {
                 recordDecision(host: normalizedHost, method: parsed.method,
                                decision: .deny, ruleId: "mitm_would_block_budget",
                                paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+            case .sentinelWriteBudgetExhausted:
+                recordDecision(host: normalizedHost, method: parsed.method,
+                               decision: .deny, ruleId: "mitm_sentinel_write_budget",
+                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
             case .contextCreateFailed, .identityLoadFailed, .identitySetFailed:
                 recordDecision(host: normalizedHost, method: parsed.method,
                                decision: .deny, ruleId: "mitm_setup_failed",
+                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+            case .upstreamUnreachable:
+                recordDecision(host: normalizedHost, method: parsed.method,
+                               decision: .deny, ruleId: "mitm_upstream_unreachable",
+                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+            case .upstreamHandshakeFailed:
+                recordDecision(host: normalizedHost, method: parsed.method,
+                               decision: .deny, ruleId: "mitm_upstream_handshake_failed",
+                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+            case .upstreamCertRejected:
+                // Load-bearing: bad upstream cert → deny + close. The
+                // sanitized reason on the .upstreamCertRejected case
+                // is intentionally not surfaced as the audit ruleId
+                // (so distinct reasons don't fragment the deny-row
+                // grouping); the ruleId is the stable enum string.
+                recordDecision(host: normalizedHost, method: parsed.method,
+                               decision: .deny, ruleId: "mitm_upstream_cert_rejected",
+                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+            case .upstreamIOError:
+                recordDecision(host: normalizedHost, method: parsed.method,
+                               decision: .deny, ruleId: "mitm_upstream_io_error",
+                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+            case .upstreamWouldBlockBudgetExhausted:
+                recordDecision(host: normalizedHost, method: parsed.method,
+                               decision: .deny, ruleId: "mitm_upstream_would_block_budget",
+                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+            case .upstreamWriteBudgetExhausted:
+                recordDecision(host: normalizedHost, method: parsed.method,
+                               decision: .deny, ruleId: "mitm_upstream_write_budget",
                                paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
             }
             return

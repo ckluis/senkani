@@ -93,6 +93,13 @@ public final class EgressListener: @unchecked Sendable {
     /// the handler falls back to the opaque tunnel — child (i)
     /// parity-by-construction).
     private let mitmLeafProvider: ((String) -> Data?)?
+    /// T.1d-2b-iii — optional trust-evaluator injection used ONLY by
+    /// tests to pin trust on a test CA (so the upstream-verify leg
+    /// can exercise the connect+handshake plumbing against a loopback
+    /// TLS fixture without touching the System trust store). Nil in
+    /// production — the handler defaults to `MITMUpstreamVerify
+    /// .defaultEvaluate` (System anchors).
+    private let mitmTrustEvaluator: MITMUpstreamVerify.TrustEvaluator?
     private let queue = DispatchQueue(label: "com.senkani.egress-listener", qos: .userInitiated)
     private let connectionQueue = DispatchQueue(label: "com.senkani.egress-conn", qos: .userInitiated, attributes: .concurrent)
     private let lock = NSLock()
@@ -118,6 +125,30 @@ public final class EgressListener: @unchecked Sendable {
         self.config = config
         self.upstreamConnector = upstreamConnector
         self.mitmLeafProvider = mitmLeafProvider
+        self.mitmTrustEvaluator = nil
+    }
+
+    /// T.1d-2b-iii test-only init: same as the primary init plus an
+    /// upstream-TLS trust-evaluator injection. Production never calls
+    /// this — the handler always defaults to System anchors when this
+    /// evaluator is nil. The init lives behind an `internal` access
+    /// level on purpose (testable via `@testable import Core`).
+    internal init(
+        policy: EgressPolicy,
+        judge: JudgeAdapter? = nil,
+        database: SessionDatabase = .shared,
+        config: Config = Config(),
+        upstreamConnector: EgressUpstreamConnecting = DefaultEgressUpstreamConnector(),
+        mitmLeafProvider: ((String) -> Data?)? = nil,
+        mitmTrustEvaluator: MITMUpstreamVerify.TrustEvaluator?
+    ) {
+        self.policy = policy
+        self.judge = judge
+        self.database = database
+        self.config = config
+        self.upstreamConnector = upstreamConnector
+        self.mitmLeafProvider = mitmLeafProvider
+        self.mitmTrustEvaluator = mitmTrustEvaluator
     }
 
     /// Back-compat init for T.1a callers. Wraps the flat rule engine in
@@ -302,7 +333,8 @@ public final class EgressListener: @unchecked Sendable {
             clientFD: clientFD,
             upstreamConnector: upstreamConnector,
             mitmTerminationEnabled: config.mitmTermination,
-            mitmLeafProvider: mitmLeafProvider
+            mitmLeafProvider: mitmLeafProvider,
+            mitmTrustEvaluator: mitmTrustEvaluator
         )
         connectionQueue.async {
             handler.run()

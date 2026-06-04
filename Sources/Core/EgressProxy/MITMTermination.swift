@@ -59,7 +59,9 @@ enum MITMTermination {
     /// row carries something more useful than "failed".
     enum Outcome: Equatable {
         /// Handshake completed; the sentinel plaintext was written and
-        /// the session was closed cleanly.
+        /// the session was closed cleanly. (Sentinel-mode for tests
+        /// only — production goes through `runTerminationWithUpstream`
+        /// and lands on `.upstreamCompleted`.)
         case terminated
         /// Handshake itself returned a non-zero OSStatus other than
         /// `errSSLWouldBlock`.
@@ -76,6 +78,37 @@ enum MITMTermination {
         /// Bounded retry budget for `errSSLWouldBlock` exhausted —
         /// treated as fail-CLOSED, not fail-OPEN.
         case wouldBlockBudgetExhausted
+        /// r85 Allspaw P3 — sentinel-write would-block budget exhausted
+        /// (the server-side TLS handshake succeeded but the
+        /// post-handshake write stalled). Distinct from `.terminated`
+        /// so the audit row reflects "we attempted termination but the
+        /// post-handshake write stalled" rather than "cleanly terminated".
+        case sentinelWriteBudgetExhausted
+
+        // --- Child-(iii) upstream-verify outcomes (production path). ---
+
+        /// Server-side TLS termination + upstream-verify leg completed;
+        /// the bidirectional plaintext pipe ran to EOF on one side.
+        case upstreamCompleted
+        /// Upstream TCP connect failed (DNS / unreachable / timeout).
+        case upstreamUnreachable
+        /// Upstream TLS handshake state machine returned a non-success
+        /// OSStatus.
+        case upstreamHandshakeFailed(OSStatus)
+        /// `SecTrustEvaluateWithError` rejected the upstream chain.
+        /// Reason is a sanitized classification string (NEVER raw cert
+        /// bytes or upstream-specific identifiers) — e.g.
+        /// "chain validation failed".
+        case upstreamCertRejected(reason: String)
+        /// Upstream non-blocking IO unrecoverable error.
+        case upstreamIOError(Int32)
+        /// Upstream handshake / pipe would-block budget exhausted.
+        case upstreamWouldBlockBudgetExhausted
+        /// r85 Allspaw P3, mirrored on the upstream side — write budget
+        /// exhausted while flushing buffered plaintext or piping. Distinct
+        /// from `.upstreamCompleted` so a stalled write is auditably
+        /// different from a clean pipe close.
+        case upstreamWriteBudgetExhausted
     }
 
     /// Heap-boxed connection context referenced from the
@@ -209,24 +242,56 @@ enum MITMTermination {
         return rc != -1
     }
 
-    /// `select(2)` for read-ready, with timeout. Returns true on
-    /// readable, false on timeout / error. Used between handshake retries
-    /// so we don't busy-spin on `errSSLWouldBlock`.
-    static func waitReadable(fd: Int32, seconds: Int) {
-        var rfds = fd_set()
-        // Initialize fd_set to zero. Darwin's fd_set is a fixed-size
-        // bitmap; zeroing all words via withUnsafeMutableBytes is
-        // equivalent to FD_ZERO without needing the macro.
-        withUnsafeMutableBytes(of: &rfds) { ptr in
-            ptr.initializeMemory(as: UInt8.self, repeating: 0)
+    /// Outcome of a `select(2)` wait — r85 Carmack P3 fix surfaces
+    /// errno + return code so callers can map EBADF / EINVAL to
+    /// `.ioError` instead of waiting out the would-block budget.
+    enum SelectOutcome {
+        /// fd is readable (select returned > 0).
+        case ready
+        /// 0-return — timer elapsed with no readiness. Caller retries.
+        case timeout
+        /// select(2) failed with the given errno. Caller maps to
+        /// `.ioError` and fails CLOSED. EINTR is retried internally so
+        /// it never surfaces here.
+        case error(Int32)
+    }
+
+    /// `select(2)` for read-ready, with timeout. Surfaces errno via
+    /// `SelectOutcome` so EBADF / EINVAL are distinguishable from a
+    /// clean timeout (r85 Carmack P3). EINTR retries internally with
+    /// the timeout reset — at worst the caller waits ~2× the configured
+    /// timeout before its own budget catches the stuck fd.
+    static func waitReadable(fd: Int32, seconds: Int) -> SelectOutcome {
+        while true {
+            var rfds = fd_set()
+            // Initialize fd_set to zero. Darwin's fd_set is a fixed-size
+            // bitmap; zeroing all words via withUnsafeMutableBytes is
+            // equivalent to FD_ZERO without needing the macro.
+            withUnsafeMutableBytes(of: &rfds) { ptr in
+                ptr.initializeMemory(as: UInt8.self, repeating: 0)
+            }
+            fdSet(fd, &rfds)
+            var tv = timeval(tv_sec: seconds, tv_usec: 0)
+            let rc = select(fd + 1, &rfds, nil, nil, &tv)
+            if rc > 0 { return .ready }
+            if rc == 0 { return .timeout }
+            // rc < 0
+            let err = errno
+            if err == EINTR { continue }
+            return .error(err)
         }
-        fdSet(fd, &rfds)
-        var tv = timeval(tv_sec: seconds, tv_usec: 0)
-        _ = select(fd + 1, &rfds, nil, nil, &tv)
     }
 
     /// FD_SET equivalent. Darwin's `fd_set` is a 1024-bit array of
     /// `Int32`s (`fds_bits`). We toggle the bit for `fd` by hand.
+    ///
+    /// r85 Carmack P3 fix: `Int32(1 << bit)` traps when `bit == 31`
+    /// because Swift computes `1 << 31` in `Int` as `2_147_483_648`,
+    /// which does not fit in `Int32` (max `2^31 - 1`). The fix is to
+    /// compute the mask in `UInt32` and bit-pattern-convert. For typical
+    /// loopback proxy fds (< 32) the old code never tripped, but child
+    /// (iii) opens upstream sockets in addition to client sockets, so
+    /// the FD pressure goes up.
     private static func fdSet(_ fd: Int32, _ set: UnsafeMutablePointer<fd_set>) {
         let bitsPerWord = MemoryLayout<Int32>.size * 8
         let word = Int(fd) / bitsPerWord
@@ -234,7 +299,7 @@ enum MITMTermination {
         withUnsafeMutableBytes(of: &set.pointee.fds_bits) { raw in
             let words = raw.bindMemory(to: Int32.self)
             if word < words.count {
-                words[word] |= Int32(1 << bit)
+                words[word] |= Int32(bitPattern: UInt32(1) << bit)
             }
         }
     }
@@ -318,8 +383,14 @@ enum MITMTermination {
                     if blockBudget <= 0 {
                         return .wouldBlockBudgetExhausted
                     }
-                    waitReadable(fd: ctx.fd, seconds: selectTimeoutSeconds)
-                    continue
+                    switch waitReadable(fd: ctx.fd, seconds: selectTimeoutSeconds) {
+                    case .ready, .timeout:
+                        continue
+                    case .error(let e):
+                        // r85 Carmack P3 fix: surface as ioError rather
+                        // than waiting out the would-block budget.
+                        return .ioError(e)
+                    }
                 }
                 // ANY other return is fail-CLOSED. The opaque-tunnel
                 // fallback is DELIBERATELY not taken here — that would
@@ -332,12 +403,18 @@ enum MITMTermination {
             //    that the server presented the t1d-1 leaf, that the
             //    handshake actually completed, and that we now have a
             //    plaintext channel. Child (iii) replaces this with a
-            //    verified upstream pipe.
+            //    verified upstream pipe via runTerminationWithUpstream
+            //    (this overload is now a test-only convenience).
+            //
+            //    r85 Allspaw P3 fix: budget exhaustion now returns
+            //    .sentinelWriteBudgetExhausted, not .terminated. A
+            //    nested function is used so we can `return` a distinct
+            //    Outcome from inside withUnsafeBytes.
             let sentinel = sentinelOverride ?? Data("SENKANI-MITM-TERMINATED\n".utf8)
-            var sentinelBudget = maxWouldBlockRetries
-            sentinel.withUnsafeBytes { (rb: UnsafeRawBufferPointer) in
-                guard let base = rb.baseAddress else { return }
+            let sentinelOutcome: Outcome = sentinel.withUnsafeBytes { (rb: UnsafeRawBufferPointer) -> Outcome in
+                guard let base = rb.baseAddress else { return .terminated }
                 var sent = 0
+                var sentinelBudget = maxWouldBlockRetries
                 while sent < sentinel.count {
                     var processed = 0
                     let st = SSLWrite(ssl, base.advanced(by: sent), sentinel.count - sent, &processed)
@@ -345,18 +422,87 @@ enum MITMTermination {
                     if st == errSecSuccess { continue }
                     if st == errSSLWouldBlock {
                         sentinelBudget -= 1
-                        if sentinelBudget <= 0 { return }
-                        waitReadable(fd: ctx.fd, seconds: selectTimeoutSeconds)
-                        continue
+                        if sentinelBudget <= 0 {
+                            return .sentinelWriteBudgetExhausted
+                        }
+                        switch waitReadable(fd: ctx.fd, seconds: selectTimeoutSeconds) {
+                        case .ready, .timeout:
+                            continue
+                        case .error(let e):
+                            return .ioError(e)
+                        }
                     }
-                    return
+                    // Non-success non-wouldblock — surface as ioError
+                    // rather than silently returning .terminated.
+                    return .handshakeFailed(st)
                 }
+                return .terminated
             }
 
             // 7. Orderly shutdown of the TLS session. The fd is closed
             //    by the caller's defer { close(clientFD) }.
             _ = SSLClose(ssl)
-            return .terminated
+            return sentinelOutcome
+        }
+    }
+
+    /// T.1d-2b-iii — production termination + upstream-verify path.
+    ///
+    /// Runs the server-side TLS handshake (same prepend-buffer logic as
+    /// `runTermination`) and, on success, invokes `pipeUpstream` with the
+    /// live `SSLContextRef` so the caller can re-originate to the real
+    /// upstream over a verified TLS leg and pipe plaintext both ways.
+    ///
+    /// The `pipeUpstream` closure receives the SSLContext + the
+    /// post-handshake Context (which carries the client fd + any prepend
+    /// residue) and returns the final `Outcome` (a `.upstream*` variant).
+    /// `runTerminationWithUpstream` does NOT write the sentinel — the
+    /// closure owns the plaintext side end-to-end.
+    static func runTerminationWithUpstream(
+        fd: Int32,
+        peek: Data,
+        leafPKCS12: Data,
+        pipeUpstream: (SSLContext, Context) -> Outcome
+    ) -> Outcome {
+        let identity: SecIdentity
+        do {
+            identity = try MITMCertificateAuthority.loadIdentity(from: leafPKCS12)
+        } catch {
+            return .identityLoadFailed
+        }
+        guard setNonBlocking(fd) else { return .ioError(errno) }
+        guard let ssl = SSLCreateContext(nil, .serverSide, .streamType) else {
+            return .contextCreateFailed
+        }
+        let ctx = Context(fd: fd, prepend: peek)
+        return withExtendedLifetime(ctx) { () -> Outcome in
+            _ = SSLSetIOFuncs(ssl, sslReadCallback, sslWriteCallback)
+            _ = SSLSetConnection(ssl, Unmanaged.passUnretained(ctx).toOpaque())
+            let setStatus = SSLSetCertificate(ssl, [identity] as CFArray)
+            if setStatus != errSecSuccess { return .identitySetFailed(setStatus) }
+            _ = SSLSetProtocolVersionMin(ssl, .tlsProtocol12)
+            _ = SSLSetClientSideAuthenticate(ssl, .neverAuthenticate)
+
+            var blockBudget = maxWouldBlockRetries
+            while true {
+                let st = SSLHandshake(ssl)
+                if st == errSecSuccess { break }
+                if st == errSSLWouldBlock {
+                    blockBudget -= 1
+                    if blockBudget <= 0 {
+                        return .wouldBlockBudgetExhausted
+                    }
+                    switch waitReadable(fd: ctx.fd, seconds: selectTimeoutSeconds) {
+                    case .ready, .timeout: continue
+                    case .error(let e): return .ioError(e)
+                    }
+                }
+                return .handshakeFailed(st)
+            }
+            // Handshake succeeded — caller drives the upstream + pipe.
+            let result = pipeUpstream(ssl, ctx)
+            _ = SSLClose(ssl)
+            return result
         }
     }
 }

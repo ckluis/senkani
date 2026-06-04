@@ -87,6 +87,12 @@ public final class EgressListener: @unchecked Sendable {
     /// `LoopbackStubConnector` to redirect ALLOW-arm CONNECTs at a
     /// fixture loopback port without dialing the real upstream.
     private let upstreamConnector: EgressUpstreamConnecting
+    /// T.1d-2b-ii — per-host PKCS#12 leaf provider passed to
+    /// `EgressConnectionHandler` when `config.mitmTermination` is ON.
+    /// Nil in the OFF case (and in the ON-without-leaf-provider case
+    /// the handler falls back to the opaque tunnel — child (i)
+    /// parity-by-construction).
+    private let mitmLeafProvider: ((String) -> Data?)?
     private let queue = DispatchQueue(label: "com.senkani.egress-listener", qos: .userInitiated)
     private let connectionQueue = DispatchQueue(label: "com.senkani.egress-conn", qos: .userInitiated, attributes: .concurrent)
     private let lock = NSLock()
@@ -103,13 +109,15 @@ public final class EgressListener: @unchecked Sendable {
         judge: JudgeAdapter? = nil,
         database: SessionDatabase = .shared,
         config: Config = Config(),
-        upstreamConnector: EgressUpstreamConnecting = DefaultEgressUpstreamConnector()
+        upstreamConnector: EgressUpstreamConnecting = DefaultEgressUpstreamConnector(),
+        mitmLeafProvider: ((String) -> Data?)? = nil
     ) {
         self.policy = policy
         self.judge = judge
         self.database = database
         self.config = config
         self.upstreamConnector = upstreamConnector
+        self.mitmLeafProvider = mitmLeafProvider
     }
 
     /// Back-compat init for T.1a callers. Wraps the flat rule engine in
@@ -119,7 +127,8 @@ public final class EgressListener: @unchecked Sendable {
         rules: EgressRuleEngine,
         database: SessionDatabase = .shared,
         config: Config = Config(),
-        upstreamConnector: EgressUpstreamConnecting = DefaultEgressUpstreamConnector()
+        upstreamConnector: EgressUpstreamConnecting = DefaultEgressUpstreamConnector(),
+        mitmLeafProvider: ((String) -> Data?)? = nil
     ) {
         var engines: [PaneMode: EgressRuleEngine] = [:]
         for mode in PaneMode.allCases { engines[mode] = rules }
@@ -129,7 +138,8 @@ public final class EgressListener: @unchecked Sendable {
             judge: nil,
             database: database,
             config: config,
-            upstreamConnector: upstreamConnector
+            upstreamConnector: upstreamConnector,
+            mitmLeafProvider: mitmLeafProvider
         )
     }
 
@@ -157,6 +167,23 @@ public final class EgressListener: @unchecked Sendable {
         lock.lock()
         if running { lock.unlock(); return }
         lock.unlock()
+
+        // T.1d-2b-ii r85 — Schneier P1 / Allspaw P1 env-safety
+        // observability: if the operator flipped `mitmTermination` ON
+        // (via flag / env / `~/.senkani/config.json`) but no leaf provider
+        // was wired into the listener constructor, the
+        // `handleConnect` MITM branch silently falls through to the
+        // opaque tunnel with NO audit row and NO operator feedback.
+        // That's a fail-CLOSED-by-omission posture for the security
+        // control the flag is supposed to deliver. Emit a one-time
+        // stderr warning at listener start so the operator knows the
+        // flag they enabled is currently a no-op. The matching
+        // diagnostic on the doctor surface is in `DoctorCommand
+        // .checkMITMTerminationReadiness` (`senkani doctor`).
+        if config.mitmTermination && mitmLeafProvider == nil {
+            let msg = "egress: WARNING — mitmTlsTermination flag is ON but no leaf provider is wired; opaque tunnel is in effect. Run `senkani doctor` to diagnose.\n"
+            FileHandle.standardError.write(Data(msg.utf8))
+        }
 
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { throw ListenError.createFailed(errno) }
@@ -274,7 +301,8 @@ public final class EgressListener: @unchecked Sendable {
             database: database,
             clientFD: clientFD,
             upstreamConnector: upstreamConnector,
-            mitmTerminationEnabled: config.mitmTermination
+            mitmTerminationEnabled: config.mitmTermination,
+            mitmLeafProvider: mitmLeafProvider
         )
         connectionQueue.async {
             handler.run()

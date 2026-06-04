@@ -193,6 +193,14 @@ struct Doctor: ParsableCommand {
         // 18. Egress proxy — T.1a daemon scaffold + decision audit log
         checkEgressProxy(&results)
 
+        // 18a. MITM termination env-safety readiness (T.1d-2b-ii r85) —
+        //      surfaces the operator-state where `mitmTlsTermination`
+        //      is flipped ON in FeatureConfig but the on-disk CA pem
+        //      is missing, so the listener silently falls through to
+        //      the opaque tunnel. Mirrors the stderr WARNING the
+        //      listener emits at bind time (`EgressListener.start()`).
+        checkMITMTerminationReadiness(&results)
+
         // 18b. Anthropic serve egress allow rule (V.13b-4b, Option B) —
         //      surface the one-line hint when api.anthropic.com is not yet
         //      authorized in egress-policy.json (deny-on-miss preserved).
@@ -1917,6 +1925,74 @@ struct Doctor: ParsableCommand {
             printStatus(.skip, "Egress proxy: down (decisions: \(count))")
             results.skipped += 1
         }
+    }
+
+    /// T.1d-2b-ii r85 — env-safety readiness check for the operator
+    /// state where `FeatureConfig.mitmTlsTermination` is flipped ON
+    /// but no on-disk CA pem exists for the listener to mint leaves
+    /// from. In that state `EgressConnectionHandler` silently falls
+    /// through to the opaque tunnel — the security control the
+    /// flag is supposed to deliver is INACTIVE. Doctor reports the
+    /// mismatch as `.fail` with the operator-runnable next step.
+    ///
+    /// Doctor runs in a separate process from the listener so we can't
+    /// directly observe whether the listener was constructed with a
+    /// leaf provider. Instead we report on the necessary precondition
+    /// for any wired provider: the on-disk CA pem + private-key pair
+    /// at `~/.senkani/egress-ca.{pem,key}`. If both exist + the flag
+    /// is ON → `.pass`. If the flag is ON but the CA materials are
+    /// missing → `.fail` (operator-actionable). Flag OFF → `.skip`.
+    ///
+    /// Mirror of the stderr WARNING emitted by `EgressListener.start()`.
+    private func checkMITMTerminationReadiness(_ results: inout Results) {
+        let features = FeatureConfig.resolve()
+        let paths = defaultCAPaths()
+        let publicExists = FileManager.default.fileExists(atPath: paths.publicCertPEM)
+        let privateExists = FileManager.default.fileExists(atPath: paths.privateKeyPEM)
+        let caOnDisk = publicExists && privateExists
+        let (status, message) = Self.formatMITMTerminationReadinessLine(
+            flagOn: features.mitmTlsTermination,
+            caOnDisk: caOnDisk
+        )
+        printStatus(status, message)
+        switch status {
+        case .pass: results.passed += 1
+        case .fixed: results.fixed += 1
+        case .fail: results.failed += 1
+        case .skip: results.skipped += 1
+        }
+    }
+
+    /// T.1d-2b-ii r85 — pure formatter for the MITM termination
+    /// env-safety readiness check. Lifted out so the unit test can
+    /// drive the three states without touching the filesystem or
+    /// resolving the live FeatureConfig (mirror of
+    /// `formatAnthropicVaultLabelsLine`).
+    ///
+    /// - Flag OFF → `.skip` "opaque tunnel mode".
+    /// - Flag ON + CA on disk → `.pass`.
+    /// - Flag ON + CA missing → `.fail` with the operator-runnable
+    ///   `senkani doctor --install-egress-ca` next step.
+    static func formatMITMTerminationReadinessLine(
+        flagOn: Bool,
+        caOnDisk: Bool
+    ) -> (Status, String) {
+        if !flagOn {
+            return (
+                .skip,
+                "MITM termination: flag is OFF — opaque tunnel mode (default)"
+            )
+        }
+        if caOnDisk {
+            return (
+                .pass,
+                "MITM termination: flag is ON; on-disk CA pem + key present"
+            )
+        }
+        return (
+            .fail,
+            "MITM termination: flag is ON but no on-disk CA pem/key — opaque tunnel is in effect. Run `senkani doctor --install-egress-ca` and re-enable the flag."
+        )
     }
 
     /// V.13b-4b (Option B) — surface whether the operator has authorized

@@ -39,6 +39,14 @@ final class EgressConnectionHandler: @unchecked Sendable {
     /// today's only value) `handleConnect` runs the opaque tunnel unchanged.
     /// Child (ii) attaches the server-TLS termination seam to the ON branch.
     private let mitmTerminationEnabled: Bool
+    /// T.1d-2b-ii — synchronous "give me the t1d-1 leaf PKCS#12 for this
+    /// host" callback used ONLY on the flag-ON termination branch. Nil
+    /// means "no leaf provider wired" — the handler falls back to the
+    /// opaque tunnel even when the flag is ON, which preserves the
+    /// child-(i) parity invariant in environments where the operator
+    /// has not yet generated a CA (e.g. fresh install). Returning nil
+    /// from the closure (per-host failure) is treated as fail-CLOSED.
+    private let mitmLeafProvider: ((String) -> Data?)?
     /// Resolved during request-head parsing (PaneMode.default if no
     /// `X-Senkani-Pane-Mode` header is present). Used by the decision
     /// recorder so audit rows carry the framing for the dispatched
@@ -66,7 +74,8 @@ final class EgressConnectionHandler: @unchecked Sendable {
         database: SessionDatabase,
         clientFD: Int32,
         upstreamConnector: EgressUpstreamConnecting = DefaultEgressUpstreamConnector(),
-        mitmTerminationEnabled: Bool = false
+        mitmTerminationEnabled: Bool = false,
+        mitmLeafProvider: ((String) -> Data?)? = nil
     ) {
         self.policy = policy
         self.judge = judge
@@ -75,6 +84,7 @@ final class EgressConnectionHandler: @unchecked Sendable {
         self.startTime = DispatchTime.now()
         self.upstreamConnector = upstreamConnector
         self.mitmTerminationEnabled = mitmTerminationEnabled
+        self.mitmLeafProvider = mitmLeafProvider
     }
 
     /// Back-compat init that wraps a flat rule engine in an EgressPolicy
@@ -290,15 +300,69 @@ final class EgressConnectionHandler: @unchecked Sendable {
             return
         }
 
-        // T.1d-2b-i: default-OFF MITM-termination gate. Flag OFF (default +
-        // today's only shipped value) falls through to the opaque tunnel
-        // below, byte-for-byte unchanged (parity by construction). Flag ON
-        // is an empty seam that ALSO falls through to the same tunnel, so
-        // flag state does not change behavior yet — child (ii)
-        // (phase-t1d-2b-ii-server-terminate-seam) terminates the client TLS
-        // session here with the t1d-1 minted leaf.
-        if mitmTerminationEnabled {
-            // child (ii): server-side TLS termination seam lands here.
+        // T.1d-2b-i/ii: default-OFF MITM-termination gate.
+        //
+        //  - Flag OFF (default + today's only shipped value): fall through
+        //    to the opaque-tunnel path below, byte-for-byte unchanged.
+        //    This is the parity invariant child (i) shipped.
+        //  - Flag ON + a leaf-provider wired: terminate the client TLS
+        //    session with the t1d-1 minted leaf via the
+        //    `MITMTermination` seam. On success, write a sentinel
+        //    plaintext line (child (iii) replaces this with a verified
+        //    upstream pipe) and close. On ANY failure, the connection
+        //    is closed and an audit row is recorded — we DELIBERATELY
+        //    do NOT silently fall back to the opaque tunnel here, since
+        //    that would be a fail-OPEN bypass of the security control
+        //    the flag turns ON (Schneier 2026-06-04).
+        //  - Flag ON + NO leaf provider: fall through to the opaque
+        //    tunnel. This handles the "operator flipped the flag but
+        //    has not wired a provider" environmental case. The env-
+        //    safety surface for that operator state is observability,
+        //    not refusal: `EgressListener.start()` writes a stderr
+        //    WARNING at bind time, and `senkani doctor` emits a
+        //    matching .fail check (see
+        //    `DoctorCommand.checkMITMTerminationReadiness` / r85 fix
+        //    for the Schneier + Allspaw env-safety panel finding). An
+        //    earlier comment here falsely claimed the listener
+        //    constructor refuses to wire a provider when the on-disk
+        //    CA is missing — that refusal logic never existed; the
+        //    observability-via-stderr-warn-and-doctor surface is the
+        //    actual behavior.
+        if mitmTerminationEnabled, let provider = mitmLeafProvider {
+            guard let leafPKCS12 = provider(normalizedHost) else {
+                recordDecision(host: normalizedHost, method: parsed.method,
+                               decision: .deny, ruleId: "mitm_leaf_unavailable",
+                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                return
+            }
+            let outcome = MITMTermination.runTermination(
+                fd: clientFD,
+                peek: peek,
+                leafPKCS12: leafPKCS12
+            )
+            switch outcome {
+            case .terminated:
+                recordDecision(host: normalizedHost, method: parsed.method,
+                               decision: .allow, ruleId: ruleId,
+                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+            case .handshakeFailed:
+                recordDecision(host: normalizedHost, method: parsed.method,
+                               decision: .deny, ruleId: "mitm_handshake_failed",
+                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+            case .ioError:
+                recordDecision(host: normalizedHost, method: parsed.method,
+                               decision: .deny, ruleId: "mitm_io_error",
+                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+            case .wouldBlockBudgetExhausted:
+                recordDecision(host: normalizedHost, method: parsed.method,
+                               decision: .deny, ruleId: "mitm_would_block_budget",
+                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+            case .contextCreateFailed, .identityLoadFailed, .identitySetFailed:
+                recordDecision(host: normalizedHost, method: parsed.method,
+                               decision: .deny, ruleId: "mitm_setup_failed",
+                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+            }
+            return
         }
 
         // SNI matches CONNECT line. Open upstream and tunnel.

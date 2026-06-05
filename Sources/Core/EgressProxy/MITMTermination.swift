@@ -55,13 +55,20 @@ import Darwin
 /// already handles the floor.
 enum MITMTermination {
 
-    /// Outcome surfaced back to `handleConnect` so the audit decision
-    /// row carries something more useful than "failed".
-    enum Outcome: Equatable {
+    /// r93 Karpathy P3 — Outcome split into phase-scoped enums so
+    /// sentinel-mode `runTermination` can return a strict subset
+    /// (`ServerOutcome`) and exhaustive switches at call sites scope
+    /// to the actual phase rather than listing 20+ unreachable cases.
+    ///
+    /// `ServerOutcome` — produced by the server-side handshake/setup
+    /// phase. Sentinel-mode `runTermination` returns this directly
+    /// (not wrapped). `runTerminationWithUpstream` wraps these as
+    /// `.server(...)` in its tagged-union `Outcome`.
+    enum ServerOutcome: Equatable {
         /// Handshake completed; the sentinel plaintext was written and
         /// the session was closed cleanly. (Sentinel-mode for tests
         /// only — production goes through `runTerminationWithUpstream`
-        /// and lands on `.upstreamCompleted`.)
+        /// and lands on `.upstream(.upstreamCompleted)`.)
         case terminated
         /// Handshake itself returned a non-zero OSStatus other than
         /// `errSSLWouldBlock`.
@@ -84,7 +91,14 @@ enum MITMTermination {
         /// so the audit row reflects "we attempted termination but the
         /// post-handshake write stalled" rather than "cleanly terminated".
         case sentinelWriteBudgetExhausted
+    }
 
+    /// r93 Karpathy P3 — phase-scoped enum for the upstream-verify +
+    /// bidirectional-pipe + inner-Host-rebind phases. Produced by
+    /// `MITMUpstreamVerify.connectAndVerify` (on the failed branch) and
+    /// by `MITMUpstreamVerify.pipeBidirectional`. Wrapped as
+    /// `.upstream(...)` in the top-level tagged-union `Outcome`.
+    enum UpstreamOutcome: Equatable {
         // --- Child-(iii) upstream-verify outcomes (production path). ---
 
         /// Server-side TLS termination + upstream-verify leg completed;
@@ -109,6 +123,14 @@ enum MITMTermination {
         /// from `.upstreamCompleted` so a stalled write is auditably
         /// different from a clean pipe close.
         case upstreamWriteBudgetExhausted
+        /// r93 Karpathy P3 — `SSLCreateContext` failed for the upstream
+        /// client SSL context. Pre-split this surfaced as the
+        /// server-phase `.contextCreateFailed` returned from
+        /// `connectAndVerify`; the audit-row ruleId mapping is preserved
+        /// (`mitm_setup_failed`) — only the type-level location moved
+        /// from server-phase to upstream-phase to honour the
+        /// connectAndVerify-only-produces-upstream-phase invariant.
+        case upstreamContextCreateFailed
 
         // --- Child-(iv) inner-Host rebind outcomes. ---
 
@@ -146,6 +168,15 @@ enum MITMTermination {
         /// reason is a sanitized short string (no raw cert / hostname
         /// bytes). Mapped to `mitm_upstream_pipe_error`.
         case upstreamPipeError(reason: String)
+    }
+
+    /// Tagged-union top-level outcome surfaced back to `handleConnect`
+    /// so the audit decision row can switch on phase first, then on
+    /// phase-scoped case. The two-level switch shrinks the call-site
+    /// switch over 20+ flat cases to two switches over 8 + 14 cases.
+    enum Outcome: Equatable {
+        case server(ServerOutcome)
+        case upstream(UpstreamOutcome)
     }
 
     /// Heap-boxed connection context referenced from the
@@ -382,7 +413,7 @@ enum MITMTermination {
         peek: Data,
         leafPKCS12: Data,
         sentinelOverride: Data? = nil
-    ) -> Outcome {
+    ) -> ServerOutcome {
 
         // 1. Load the t1d-1 minted leaf as a SecIdentity. The whole
         //    point of the flag is that the server presents THIS leaf,
@@ -409,7 +440,7 @@ enum MITMTermination {
         //    whole handshake + sentinel write + close.
         let ctx = Context(fd: fd, prepend: peek)
 
-        return withExtendedLifetime(ctx) { () -> Outcome in
+        return withExtendedLifetime(ctx) { () -> ServerOutcome in
             _ = SSLSetIOFuncs(ssl, sslReadCallback, sslWriteCallback)
             _ = SSLSetConnection(ssl, Unmanaged.passUnretained(ctx).toOpaque())
             let setStatus = SSLSetCertificate(ssl, [identity] as CFArray)
@@ -468,7 +499,7 @@ enum MITMTermination {
             //    nested function is used so we can `return` a distinct
             //    Outcome from inside withUnsafeBytes.
             let sentinel = sentinelOverride ?? Data("SENKANI-MITM-TERMINATED\n".utf8)
-            let sentinelOutcome: Outcome = sentinel.withUnsafeBytes { (rb: UnsafeRawBufferPointer) -> Outcome in
+            let sentinelOutcome: ServerOutcome = sentinel.withUnsafeBytes { (rb: UnsafeRawBufferPointer) -> ServerOutcome in
                 guard let base = rb.baseAddress else { return .terminated }
                 var sent = 0
                 var sentinelBudget = maxWouldBlockRetries
@@ -521,24 +552,24 @@ enum MITMTermination {
         fd: Int32,
         peek: Data,
         leafPKCS12: Data,
-        pipeUpstream: (SSLContext, Context) -> Outcome
+        pipeUpstream: (SSLContext, Context) -> UpstreamOutcome
     ) -> Outcome {
         let identity: SecIdentity
         do {
             identity = try MITMCertificateAuthority.loadIdentity(from: leafPKCS12)
         } catch {
-            return .identityLoadFailed
+            return .server(.identityLoadFailed)
         }
-        guard setNonBlocking(fd) else { return .ioError(errno) }
+        guard setNonBlocking(fd) else { return .server(.ioError(errno)) }
         guard let ssl = SSLCreateContext(nil, .serverSide, .streamType) else {
-            return .contextCreateFailed
+            return .server(.contextCreateFailed)
         }
         let ctx = Context(fd: fd, prepend: peek)
         return withExtendedLifetime(ctx) { () -> Outcome in
             _ = SSLSetIOFuncs(ssl, sslReadCallback, sslWriteCallback)
             _ = SSLSetConnection(ssl, Unmanaged.passUnretained(ctx).toOpaque())
             let setStatus = SSLSetCertificate(ssl, [identity] as CFArray)
-            if setStatus != errSecSuccess { return .identitySetFailed(setStatus) }
+            if setStatus != errSecSuccess { return .server(.identitySetFailed(setStatus)) }
             _ = SSLSetProtocolVersionMin(ssl, .tlsProtocol12)
             _ = SSLSetClientSideAuthenticate(ssl, .neverAuthenticate)
 
@@ -549,19 +580,19 @@ enum MITMTermination {
                 if st == errSSLWouldBlock {
                     blockBudget -= 1
                     if blockBudget <= 0 {
-                        return .wouldBlockBudgetExhausted
+                        return .server(.wouldBlockBudgetExhausted)
                     }
                     switch waitReadable(fd: ctx.fd, seconds: selectTimeoutSeconds) {
                     case .ready, .timeout: continue
-                    case .error(let e): return .ioError(e)
+                    case .error(let e): return .server(.ioError(e))
                     }
                 }
-                return .handshakeFailed(st)
+                return .server(.handshakeFailed(st))
             }
             // Handshake succeeded — caller drives the upstream + pipe.
             let result = pipeUpstream(ssl, ctx)
             _ = SSLClose(ssl)
-            return result
+            return .upstream(result)
         }
     }
 }

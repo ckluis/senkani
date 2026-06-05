@@ -415,7 +415,7 @@ final class EgressConnectionHandler: @unchecked Sendable {
                         _ = SSLClose(handle.ssl)
                         Darwin.close(handle.fd)
                     }
-                    return withExtendedLifetime(handle.ctx) { () -> MITMTermination.Outcome in
+                    return withExtendedLifetime(handle.ctx) { () -> MITMTermination.UpstreamOutcome in
                         return MITMUpstreamVerify.pipeBidirectional(
                             clientSSL: clientSSL,
                             clientFD: clientCtx.fd,
@@ -429,102 +429,139 @@ final class EgressConnectionHandler: @unchecked Sendable {
                     }
                 }
             }
+            // r93 Karpathy P3 — Outcome split into ServerOutcome +
+            // UpstreamOutcome. The switch is now phase-scoped: server-
+            // side setup/handshake failures vs upstream/inner-Host/pipe
+            // failures. The audit-row ruleId mapping is unchanged —
+            // every (case → ruleId) edge below is byte-identical to the
+            // pre-split flat switch.
             switch outcome {
-            case .terminated, .upstreamCompleted:
-                // t1d-5 follow-ups Round A — plumb the captured CONNECT-
-                // path inner body excerpt through to the allow audit row.
-                // Raw bytes flow into `recordEgressDecision`; the store's
-                // `prepareBodyExcerpt` runs truncate-then-redact BEFORE
-                // SQLite bind / chain hashing (Schneier P1 invariant).
-                recordDecision(host: normalizedHost, method: parsed.method,
-                               decision: .allow, ruleId: ruleId,
-                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale,
-                               bodyExcerpt: capturedInnerBody)
-            case .handshakeFailed:
-                recordDecision(host: normalizedHost, method: parsed.method,
-                               decision: .deny, ruleId: "mitm_handshake_failed",
-                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
-            case .ioError:
-                recordDecision(host: normalizedHost, method: parsed.method,
-                               decision: .deny, ruleId: "mitm_io_error",
-                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
-            case .wouldBlockBudgetExhausted:
-                recordDecision(host: normalizedHost, method: parsed.method,
-                               decision: .deny, ruleId: "mitm_would_block_budget",
-                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
-            case .sentinelWriteBudgetExhausted:
-                recordDecision(host: normalizedHost, method: parsed.method,
-                               decision: .deny, ruleId: "mitm_sentinel_write_budget",
-                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
-            case .contextCreateFailed, .identityLoadFailed, .identitySetFailed:
-                recordDecision(host: normalizedHost, method: parsed.method,
-                               decision: .deny, ruleId: "mitm_setup_failed",
-                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
-            case .upstreamUnreachable:
-                recordDecision(host: normalizedHost, method: parsed.method,
-                               decision: .deny, ruleId: "mitm_upstream_unreachable",
-                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
-            case .upstreamHandshakeFailed:
-                recordDecision(host: normalizedHost, method: parsed.method,
-                               decision: .deny, ruleId: "mitm_upstream_handshake_failed",
-                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
-            case .upstreamCertRejected:
-                // Load-bearing: bad upstream cert → deny + close. The
-                // sanitized reason on the .upstreamCertRejected case
-                // is intentionally not surfaced as the audit ruleId
-                // (so distinct reasons don't fragment the deny-row
-                // grouping); the ruleId is the stable enum string.
-                recordDecision(host: normalizedHost, method: parsed.method,
-                               decision: .deny, ruleId: "mitm_upstream_cert_rejected",
-                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
-            case .upstreamIOError:
-                recordDecision(host: normalizedHost, method: parsed.method,
-                               decision: .deny, ruleId: "mitm_upstream_io_error",
-                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
-            case .upstreamWouldBlockBudgetExhausted:
-                recordDecision(host: normalizedHost, method: parsed.method,
-                               decision: .deny, ruleId: "mitm_upstream_would_block_budget",
-                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
-            case .upstreamWriteBudgetExhausted:
-                recordDecision(host: normalizedHost, method: parsed.method,
-                               decision: .deny, ruleId: "mitm_upstream_write_budget",
-                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
-            case .innerHostMismatch:
-                // T.1d-2b-iv — inner HTTP Host header did not match the
-                // SNI/CONNECT-validated host. Closes the HTTP/1.1
-                // connection-reuse / domain-fronting smuggling bypass.
-                // The mismatched raw Host value is INTENTIONALLY not
-                // surfaced in the audit row (Schneier 2026-06-04
-                // info-leak guard).
-                recordDecision(host: normalizedHost, method: parsed.method,
-                               decision: .deny, ruleId: "mitm_inner_host_mismatch",
-                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
-            case .innerNoHost:
-                // Karpathy r92 P2 — split out from `.innerHostMismatch`
-                // so missing-Host smuggling has its own auditable
-                // ruleId. Different attack shape, different forensics.
-                recordDecision(host: normalizedHost, method: parsed.method,
-                               decision: .deny, ruleId: "mitm_inner_no_host",
-                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
-            case .innerHeadTooLarge:
-                recordDecision(host: normalizedHost, method: parsed.method,
-                               decision: .deny, ruleId: "mitm_inner_head_too_large",
-                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
-            case .innerUnknownProtocol:
-                recordDecision(host: normalizedHost, method: parsed.method,
-                               decision: .deny, ruleId: "mitm_inner_unknown_protocol",
-                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
-            case .innerReadError:
-                recordDecision(host: normalizedHost, method: parsed.method,
-                               decision: .deny, ruleId: "mitm_inner_read_error",
-                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
-            case .upstreamPipeError:
-                // r86 Karpathy P2 — mid-stream TLS abort distinct from
-                // clean pipe completion. Sanitized reason on the case
-                // is intentionally not surfaced as the audit ruleId.
-                recordDecision(host: normalizedHost, method: parsed.method,
-                               decision: .deny, ruleId: "mitm_upstream_pipe_error",
-                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+            case .server(let serverOutcome):
+                switch serverOutcome {
+                case .terminated:
+                    // Sentinel-mode terminated reaches the allow row in
+                    // production via the tagged-union wrap. (The
+                    // server-side handshake completed and the sentinel
+                    // write finished cleanly — same audit shape as
+                    // upstreamCompleted in the pre-split flat switch.)
+                    // t1d-5 follow-ups Round A — plumb the captured CONNECT-
+                    // path inner body excerpt through to the allow audit row.
+                    // Raw bytes flow into `recordEgressDecision`; the store's
+                    // `prepareBodyExcerpt` runs truncate-then-redact BEFORE
+                    // SQLite bind / chain hashing (Schneier P1 invariant).
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .allow, ruleId: ruleId,
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale,
+                                   bodyExcerpt: capturedInnerBody)
+                case .handshakeFailed:
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .deny, ruleId: "mitm_handshake_failed",
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                case .ioError:
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .deny, ruleId: "mitm_io_error",
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                case .wouldBlockBudgetExhausted:
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .deny, ruleId: "mitm_would_block_budget",
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                case .sentinelWriteBudgetExhausted:
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .deny, ruleId: "mitm_sentinel_write_budget",
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                case .contextCreateFailed, .identityLoadFailed, .identitySetFailed:
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .deny, ruleId: "mitm_setup_failed",
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                }
+            case .upstream(let upstreamOutcome):
+                switch upstreamOutcome {
+                case .upstreamCompleted:
+                    // t1d-5 follow-ups Round A — plumb the captured CONNECT-
+                    // path inner body excerpt through to the allow audit row.
+                    // Raw bytes flow into `recordEgressDecision`; the store's
+                    // `prepareBodyExcerpt` runs truncate-then-redact BEFORE
+                    // SQLite bind / chain hashing (Schneier P1 invariant).
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .allow, ruleId: ruleId,
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale,
+                                   bodyExcerpt: capturedInnerBody)
+                case .upstreamUnreachable:
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .deny, ruleId: "mitm_upstream_unreachable",
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                case .upstreamHandshakeFailed:
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .deny, ruleId: "mitm_upstream_handshake_failed",
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                case .upstreamCertRejected:
+                    // Load-bearing: bad upstream cert → deny + close. The
+                    // sanitized reason on the .upstreamCertRejected case
+                    // is intentionally not surfaced as the audit ruleId
+                    // (so distinct reasons don't fragment the deny-row
+                    // grouping); the ruleId is the stable enum string.
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .deny, ruleId: "mitm_upstream_cert_rejected",
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                case .upstreamIOError:
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .deny, ruleId: "mitm_upstream_io_error",
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                case .upstreamWouldBlockBudgetExhausted:
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .deny, ruleId: "mitm_upstream_would_block_budget",
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                case .upstreamWriteBudgetExhausted:
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .deny, ruleId: "mitm_upstream_write_budget",
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                case .upstreamContextCreateFailed:
+                    // r93 Karpathy P3 — upstream client SSLContext
+                    // creation failed. Pre-split this case lived under
+                    // the server-phase `.contextCreateFailed` arm
+                    // alongside identityLoadFailed / identitySetFailed
+                    // and all three mapped to `mitm_setup_failed`. The
+                    // ruleId is preserved byte-identical here.
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .deny, ruleId: "mitm_setup_failed",
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                case .innerHostMismatch:
+                    // T.1d-2b-iv — inner HTTP Host header did not match the
+                    // SNI/CONNECT-validated host. Closes the HTTP/1.1
+                    // connection-reuse / domain-fronting smuggling bypass.
+                    // The mismatched raw Host value is INTENTIONALLY not
+                    // surfaced in the audit row (Schneier 2026-06-04
+                    // info-leak guard).
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .deny, ruleId: "mitm_inner_host_mismatch",
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                case .innerNoHost:
+                    // Karpathy r92 P2 — split out from `.innerHostMismatch`
+                    // so missing-Host smuggling has its own auditable
+                    // ruleId. Different attack shape, different forensics.
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .deny, ruleId: "mitm_inner_no_host",
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                case .innerHeadTooLarge:
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .deny, ruleId: "mitm_inner_head_too_large",
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                case .innerUnknownProtocol:
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .deny, ruleId: "mitm_inner_unknown_protocol",
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                case .innerReadError:
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .deny, ruleId: "mitm_inner_read_error",
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                case .upstreamPipeError:
+                    // r86 Karpathy P2 — mid-stream TLS abort distinct from
+                    // clean pipe completion. Sanitized reason on the case
+                    // is intentionally not surfaced as the audit ruleId.
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .deny, ruleId: "mitm_upstream_pipe_error",
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                }
             }
             return
         }

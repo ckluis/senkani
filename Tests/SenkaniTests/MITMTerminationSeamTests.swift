@@ -137,7 +137,7 @@ struct MITMTerminationSeamTests {
     /// join is unavailable from async contexts; this helper isolates
     /// the join so the test body itself stays async-clean.
     private struct DoubleConsumeResult {
-        let outcome: MITMTermination.Outcome
+        let outcome: MITMTermination.ServerOutcome
         let client: ClientHelper.Result
         let joined: Bool
         let peekStartsWithHandshakeByte: Bool
@@ -364,22 +364,19 @@ struct MITMTerminationSeamTests {
         // ClientHello + premature EOF. What matters is that the seam
         // SIGNALS FAILURE rather than silently succeeding (or worse,
         // falling through to an opaque tunnel).
+        // r93 Karpathy P3 — `runTermination` now returns
+        // `ServerOutcome` directly (not the flat 20+-case `Outcome`),
+        // so the switch scopes to the 8 server-phase cases. The
+        // previously-listed `.upstream*` / `.inner*` cases that were
+        // unreachable from sentinel-mode vanish from this site.
         switch outcome {
         case .terminated:
             Issue.record("FAIL-CLOSED VIOLATION: junk + EOF reached .terminated — seam silently accepted invalid TLS")
         case .handshakeFailed, .ioError, .wouldBlockBudgetExhausted,
              .contextCreateFailed, .identityLoadFailed, .identitySetFailed,
-             .sentinelWriteBudgetExhausted,
-             .upstreamCompleted, .upstreamUnreachable, .upstreamHandshakeFailed,
-             .upstreamCertRejected, .upstreamIOError,
-             .upstreamWouldBlockBudgetExhausted, .upstreamWriteBudgetExhausted,
-             .innerHostMismatch, .innerNoHost, .innerHeadTooLarge,
-             .innerUnknownProtocol, .innerReadError, .upstreamPipeError:
-            // Any non-.terminated outcome is correct fail-CLOSED
-            // behavior. (The .upstream* variants are unreachable from
-            // the sentinel-mode `runTermination` overload exercised
-            // here, but listing them keeps the switch exhaustive
-            // against the shared `Outcome` enum.)
+             .sentinelWriteBudgetExhausted:
+            // Any non-.terminated ServerOutcome is correct fail-CLOSED
+            // behavior.
             break
         }
     }

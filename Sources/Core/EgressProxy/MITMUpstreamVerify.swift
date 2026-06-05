@@ -205,7 +205,7 @@ enum MITMUpstreamVerify {
         // 3. Build the client SSLContext.
         guard let ssl = SSLCreateContext(nil, .clientSide, .streamType) else {
             Darwin.close(fd)
-            return .failed(.contextCreateFailed)
+            return .failed(.upstreamContextCreateFailed)
         }
         let ctx = Context(fd: fd)
         let connectionPtr = Unmanaged.passUnretained(ctx).toOpaque()
@@ -309,9 +309,14 @@ enum MITMUpstreamVerify {
 
     enum ConnectResult {
         case succeeded(SuccessHandle)
-        /// Connect + verify failed. The inner `MITMTermination.Outcome`
-        /// is always one of the `.upstream*` variants.
-        case failed(MITMTermination.Outcome)
+        /// Connect + verify failed. r93 Karpathy P3 — the inner
+        /// associated value is `MITMTermination.UpstreamOutcome`
+        /// (phase-scoped) since this path only ever produces upstream-
+        /// phase failures (connect / handshake / cert-rejected /
+        /// would-block budget / ioError). Previously this carried the
+        /// flat `MITMTermination.Outcome` which forced call sites to
+        /// list ~20 unreachable cases.
+        case failed(MITMTermination.UpstreamOutcome)
     }
 
     // MARK: - Bidirectional plaintext pipe
@@ -370,7 +375,7 @@ enum MITMUpstreamVerify {
         upstreamFD: Int32,
         validatedHost: String? = nil,
         onInnerBodyExcerpt: ((Data?) -> Void)? = nil
-    ) -> MITMTermination.Outcome {
+    ) -> MITMTermination.UpstreamOutcome {
         let bufSize = 16 * 1024
         var clientBuf = [UInt8](repeating: 0, count: bufSize)
         var upstreamBuf = [UInt8](repeating: 0, count: bufSize)

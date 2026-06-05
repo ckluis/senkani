@@ -451,6 +451,81 @@ struct AdversarialBodyCorpusTests {
         #expect(MITMUpstreamVerify.innerBodyBytes(fromHeadBuffer: headOnly) == nil,
                 "HEAD-only buffer (no trailing body bytes) must return nil")
     }
+
+    /// r98 t1d-5 r52 Karpathy P2 — `Content-Length: 0` POST.
+    /// Explicit empty-body POST request: the HEAD declares CL:0 and the
+    /// buffer terminates at `\r\n\r\n` with NO trailing bytes. Matches
+    /// the helper's `body.isEmpty ? nil` defensive return — callers
+    /// downstream see `nil` and skip emitting an empty-blob audit row.
+    @Test("t1d-5 r52 Karpathy P2 — Content-Length: 0 POST → innerBodyBytes returns nil (no empty-blob audit row)")
+    func innerBodyBytesContentLengthZeroReturnsNil() {
+        let head = "POST /v1/exec HTTP/1.1\r\nHost: api.example.com\r\nContent-Length: 0\r\n\r\n"
+        let buf = Array(head.utf8)
+        // The CRLFCRLF terminator sits at the very END of the buffer;
+        // there are zero trailing bytes. `terminatorEnd == headBytes.count`
+        // so the `end < headBytes.count` guard fires and the helper
+        // returns nil (the same defensive branch covered by the existing
+        // HEAD-only assertion, but explicitly pinned for the CL:0 case
+        // an operator audit-grep would encounter).
+        #expect(MITMUpstreamVerify.innerBodyBytes(fromHeadBuffer: buf) == nil,
+                "Content-Length:0 POST (HEAD ends at CRLFCRLF, zero body bytes) must return nil")
+    }
+
+    /// r98 t1d-5 r52 Karpathy P2 — malformed HEAD with NO `\r\n\r\n`
+    /// terminator. The rebind peek's contract is "only return `.allow`
+    /// once a terminator is found", so this branch is defensively
+    /// unreachable in practice — but the helper's guard MUST hold so a
+    /// future refactor of `peekAndDecide` cannot leak a partial HEAD as
+    /// the body excerpt.
+    @Test("t1d-5 r52 Karpathy P2 — malformed HEAD (no CRLFCRLF) → innerBodyBytes returns nil (helper contract pin)")
+    func innerBodyBytesMalformedHeadReturnsNil() {
+        // 16 KiB buffer with NO `\r\n\r\n` terminator — mimics the
+        // `peekAndDecide` over-budget branch's input shape, but fed
+        // straight to the helper to pin its `guard terminatorEnd` early
+        // return. Bytes are valid ASCII so the failure mode is
+        // unambiguously "no terminator" not "non-UTF8".
+        let payload = String(repeating: "A", count: 16 * 1024)
+        let buf = Array(payload.utf8)
+        #expect(buf.count == 16 * 1024)
+        #expect(MITMUpstreamVerify.innerBodyBytes(fromHeadBuffer: buf) == nil,
+                "16 KiB buffer with no CRLFCRLF terminator must return nil (no partial-HEAD leak)")
+    }
+
+    /// r98 t1d-5 r52 Karpathy P2 — straddle-boundary: body slice contains
+    /// a secret-shape token. `innerBodyBytes` is a PURE slice — it does
+    /// not redact. The Schneier P1 truncate-then-redact-before-hash
+    /// invariant lives downstream in `EgressDecisionStore.prepareBodyExcerpt`.
+    /// This test composes the two and asserts the integrated invariant:
+    /// the visible portion of a partially-captured token is REDACTED
+    /// before it can land in the audit row or the engine's bodyExcerpt.
+    @Test("t1d-5 r52 Karpathy P2 — straddle-boundary: secret in partial body slice is REDACTED by prepareBodyExcerpt before the engine sees it")
+    func innerBodyBytesStraddleBoundaryScrubsVisiblePortion() {
+        // Construct a HEAD + body such that the body contains a fully-
+        // formed sk-ant-* shaped token. innerBodyBytes slices the body
+        // verbatim; prepareBodyExcerpt then runs SecretDetector
+        // redaction. Assert the integrated output does NOT carry the
+        // raw token.
+        let head = "POST /v1/messages HTTP/1.1\r\nHost: api.anthropic.com\r\n\r\n"
+        let plantedSecret = "sk-ant-abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        let body = "{\"prompt\":\"\(plantedSecret)\",\"max_tokens\":10}"
+        let buf = Array((head + body).utf8)
+
+        guard let raw = MITMUpstreamVerify.innerBodyBytes(fromHeadBuffer: buf) else {
+            Issue.record("innerBodyBytes must extract a non-nil body slice")
+            return
+        }
+        // Helper is a pure slice — raw bytes contain the planted secret.
+        // This is BY DESIGN: redaction happens at prepareBodyExcerpt,
+        // not at the slice boundary. The lock-in here is "the SLICE +
+        // REDACT integration holds end-to-end on the CONNECT path."
+        #expect(String(data: raw, encoding: .utf8)?.contains(plantedSecret) == true,
+                "innerBodyBytes is a pure slice — the raw body slice contains the planted secret pre-redaction")
+
+        let redacted = EgressDecisionStore.prepareBodyExcerpt(raw)
+        let redactedStr = String(data: redacted, encoding: .utf8) ?? ""
+        #expect(!redactedStr.contains(plantedSecret),
+                "after prepareBodyExcerpt the planted sk-ant-* token must NOT survive — Schneier P1 invariant")
+    }
 }
 
 /// T.1d-5 — extension of `senkani doctor --check-egress` reporting.

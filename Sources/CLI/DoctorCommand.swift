@@ -40,6 +40,9 @@ struct Doctor: ParsableCommand {
     @Flag(name: .long, help: "Walk the EgressProxy adversarial smoke (T.1c 5-scenario host corpus + T.1d-5 8-scenario MITM body-inspection corpus). Reports per-scenario pass/fail with rule_id, the MITM termination state (enabled/disabled + CA-on-disk), the body-inspection corpus pass rate, and recent egress_decisions deny-row counts by ruleId. Exits non-zero on any miss. Engine-level — does not spin the live listener.")
     var checkEgress = false
 
+    @Flag(name: .long, help: "Report the senkani_exec execution-sandbox posture derived from the live ExecRoutingDecision (T.3b). Reports DENY-BY-DEFAULT / fail-CLOSED: user-supplied scripts are REFUSED (no host /bin/sh fallback), tool-internal callers use the host path, the positive wasm-sandbox path is deferred/unavailable. Read-only status; exit 0 when the fail-CLOSED invariant holds, non-zero if it is breached.")
+    var checkSandbox = false
+
     @Flag(name: .long, help: "Generate the MITM egress CA pem and PRINT the operator-runnable `security add-trusted-cert ...` command to add it as a System trust root (T.1d-6). DRY-RUN scaffolding only: NEVER runs `security`, never sudo, never mutates the System Keychain (that is t1d-7, gui-human). Requires a typed-string confirm.")
     var installEgressCA = false
 
@@ -85,6 +88,17 @@ struct Doctor: ParsableCommand {
         // print per-scenario verdicts, exit non-zero on any miss.
         if checkEgress {
             try runCheckEgress()
+            return
+        }
+
+        // T.3b focused posture motion — report the senkani_exec
+        // execution-sandbox routing posture DERIVED FROM the live
+        // ExecRoutingDecision (the single source of truth), not a
+        // hardcoded string. Read-only; exits non-zero only if the
+        // fail-CLOSED invariant is breached (a user-supplied caller
+        // routing to .host).
+        if checkSandbox {
+            try runCheckSandbox()
             return
         }
 
@@ -1972,6 +1986,145 @@ struct Doctor: ParsableCommand {
         }
 
         if failed > 0 || bodyFailed > 0 {
+            throw ExitCode.failure
+        }
+    }
+
+    // MARK: - --check-sandbox (T.3b)
+
+    /// Result of probing the live `ExecRoutingDecision` for the
+    /// execution-sandbox posture. `failClosedBreached` is the
+    /// load-bearing field: it is `true` IFF any user-supplied caller
+    /// routes to `.host` (an untrusted script reaching the host shell —
+    /// RCE). The CLI exits non-zero when it is set. Lifted out of
+    /// `runCheckSandbox` (and made pure) so a test can assert the exact
+    /// posture lines + the breach flag WITHOUT capturing stdout, mirroring
+    /// `formatChainAuditLines` and `formatCheckEgressMITMStateLines`.
+    struct SandboxPosture: Equatable {
+        var lines: [(Status, String)]
+        var failClosedBreached: Bool
+
+        static func == (lhs: SandboxPosture, rhs: SandboxPosture) -> Bool {
+            guard lhs.failClosedBreached == rhs.failClosedBreached,
+                  lhs.lines.count == rhs.lines.count else { return false }
+            for (a, b) in zip(lhs.lines, rhs.lines) where a != b { return false }
+            return true
+        }
+    }
+
+    /// Derive the operator-facing sandbox posture purely from the live
+    /// `ExecRoutingDecision.route(...)` — the SINGLE source of truth for
+    /// the v2 routing branch. This deliberately does NOT hardcode the
+    /// posture text: it probes the real router for each `ExecCallerKind`
+    /// (and the future trusted-wasm-opt-in arm) and reports what the
+    /// router actually decides. If `ExecRoutingDecision` ever changes
+    /// (e.g. a positive wasm path is authorized), this surface — and the
+    /// tests pinning it — move with it, so the doctor output can never
+    /// drift into overclaiming the posture.
+    ///
+    /// Schneier: the headline ("deny-by-default / fail-CLOSED") is
+    /// emitted ONLY when the router actually denies user-supplied callers
+    /// for BOTH `sandboxAvailable` states. If the router ever routed a
+    /// user-supplied caller to `.host`, this returns `failClosedBreached`
+    /// and a FAIL line instead — no false reassurance.
+    static func deriveSandboxPosture() -> SandboxPosture {
+        var lines: [(Status, String)] = []
+
+        // 1. The RCE-blocker: user-supplied scripts. Probe the router for
+        //    both sandbox-availability states — the fail-CLOSED invariant
+        //    is that NEITHER routes to .host.
+        let userSuppliedAvail = ExecRoutingDecision.route(
+            callerKind: .userSupplied, sandboxAvailable: true
+        )
+        let userSuppliedNoAvail = ExecRoutingDecision.route(
+            callerKind: .userSupplied, sandboxAvailable: false
+        )
+        let userSuppliedDenied =
+            userSuppliedAvail == .deny(.userSuppliedDenyByDefault)
+            && userSuppliedNoAvail == .deny(.userSuppliedDenyByDefault)
+        let failClosedBreached =
+            userSuppliedAvail == .host || userSuppliedNoAvail == .host
+
+        // 2. The trusted host arm: tool-internal callers (no wasm opt-in)
+        //    keep today's Foundation Process /bin/sh path.
+        let toolInternal = ExecRoutingDecision.route(callerKind: .toolInternal)
+        let toolInternalIsHost = toolInternal == .host
+
+        // 3. The future positive-wasm arm: a trusted opt-in caller whose
+        //    sandbox runtime is missing must fail CLOSED, never fall back.
+        let wasmOptInMissingRuntime = ExecRoutingDecision.route(
+            callerKind: .toolInternal, sandboxAvailable: false, wantsSandbox: true
+        )
+        let wasmFailsClosed =
+            wasmOptInMissingRuntime == .deny(.sandboxRuntimeUnavailable)
+
+        if failClosedBreached {
+            // The router leaked a user-supplied caller to the host shell.
+            // This must never happen; report it as a hard FAIL.
+            lines.append((
+                .fail,
+                "exec sandbox: FAIL-CLOSED BREACH — a user-supplied senkani_exec caller routes to the host shell (RCE). ExecRoutingDecision must deny .userSupplied."
+            ))
+            return SandboxPosture(lines: lines, failClosedBreached: true)
+        }
+
+        // Headline posture — emitted only when the router genuinely denies.
+        if userSuppliedDenied {
+            lines.append((
+                .pass,
+                "exec sandbox: deny-by-default / fail-CLOSED"
+            ))
+        } else {
+            // Router neither denied nor leaked to host (e.g. a future
+            // positive path returned some non-.host route). Report
+            // honestly rather than claim deny-by-default.
+            lines.append((
+                .skip,
+                "exec sandbox: user-supplied routing changed — \(userSuppliedAvail) (no longer plain deny-by-default; review ExecRoutingDecision)"
+            ))
+        }
+
+        // Per-caller facts, each derived from the router above.
+        lines.append((
+            userSuppliedDenied ? .pass : .skip,
+            "  user-supplied scripts: REFUSED (reason=\(ExecDenyReason.userSuppliedDenyByDefault.rawValue)) — no host /bin/sh fallback"
+        ))
+        lines.append((
+            toolInternalIsHost ? .pass : .skip,
+            "  tool-internal callers: host path (Foundation Process /bin/sh) — reserved for explicitly-trusted in-process callers"
+        ))
+        lines.append((
+            wasmFailsClosed ? .pass : .skip,
+            "  positive wasm sandbox path: deferred / unavailable — trusted wasm opt-in fails CLOSED (reason=\(ExecDenyReason.sandboxRuntimeUnavailable.rawValue)) on missing runtime, never falls back to host"
+        ))
+
+        return SandboxPosture(lines: lines, failClosedBreached: false)
+    }
+
+    /// CLI dispatch for `--check-sandbox`. Prints the posture derived from
+    /// the live `ExecRoutingDecision` and exits non-zero only if the
+    /// fail-CLOSED invariant is breached. Read-only — no DB writes, no
+    /// process spawn, no mutation; safe to run anytime.
+    private func runCheckSandbox() throws {
+        print("Senkani Doctor — exec sandbox posture (T.3b)")
+        print(String(repeating: "=", count: 44))
+        print("")
+
+        let posture = Self.deriveSandboxPosture()
+        for (status, message) in posture.lines {
+            printStatus(status, message)
+        }
+
+        print("")
+        print("""
+        Derived from ExecRoutingDecision (the live v2 routing source of
+        truth). No third-party wasm shell is vendored, so user-supplied
+        scripts have no sandboxed surface to run on — the safe action is
+        to refuse. Ratified operator decision 2026-06-05; the positive
+        wasm-shell path is deferred indefinitely.
+        """)
+
+        if posture.failClosedBreached {
             throw ExitCode.failure
         }
     }

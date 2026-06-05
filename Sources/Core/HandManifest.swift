@@ -230,6 +230,29 @@ public struct HandCadence: Codable, Sendable, Equatable {
     ]
 }
 
+/// Execution-sandbox surface for hand-manifest-driven tools.
+///
+/// **Scope clarification (T.3b-1 child (i) — exec-sandbox-naming, 2026-06-05):**
+/// `HandSandbox` governs PROCESS EXECUTION (what runtime drives a command),
+/// NOT output truncation. The cases are:
+///
+/// - `.none` — caller-chosen / no constraint; the tool dispatches via its
+///   own default (e.g. `Foundation.Process` for `senkani_exec` today).
+/// - `.wasm` — execute inside the `WasmtimeSubprocessRuntime` (see
+///   `Sources/Core/WasmtimeSubprocessRuntime.swift`). T.3b-1 routing
+///   child (iv) lands this as the default for user-supplied scripts;
+///   tool-internal callers opt in via this field.
+/// - `.proc` — execute via a constrained `Foundation.Process` (e.g.
+///   sandbox-exec / seatbelt profile). NOT YET WIRED — reserved.
+/// - `.full` — full hand-manifest-declared sandbox (capabilities + IO
+///   + filesystem). NOT YET WIRED — reserved.
+///
+/// For OUTPUT truncation (when large stdout/stderr gets put aside to the
+/// `sandboxed_results` DB table), see `SandboxMode` in `OutputSandbox.swift`.
+/// The two surfaces share the word "sandbox" but are independent enums
+/// with distinct semantics; there is no collision (the original t3b-1
+/// P0-#3 collision claim was incorrect — `HandSandbox.wasm` already
+/// existed at decompose time and T.3b-2 extends its semantics).
 public enum HandSandbox: String, Codable, Sendable, Equatable {
     case none, wasm, proc, full
 }

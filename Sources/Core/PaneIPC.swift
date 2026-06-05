@@ -92,14 +92,72 @@ public enum PaneIPC {
         case encodeFailed
     }
 
+    /// Blocking write-until-complete of `total` bytes from `buffer` on `fd`,
+    /// looping on partial writes and retrying on `EINTR`. A single
+    /// `write(2)` is NOT guaranteed to drain the whole buffer in one shot:
+    /// when the peer is slow to read, the kernel send buffer fills and
+    /// `write` returns a SHORT count (bytes accepted so far) rather than
+    /// the full request. The old single-shot write treated any short
+    /// count as `.writeFailed` AND left a truncated frame on the wire —
+    /// the actual fault behind the multi-KB "large frame" failure under
+    /// load (a starved reader that hasn't `accept()`-ed yet). Looping
+    /// makes the send correct for any frame size against a slow-but-alive
+    /// reader, the same blocking write-loop idiom used by
+    /// `EgressConnectionHandler.writeAll` / the MITM SSL write callbacks.
+    ///
+    /// Forward-progress is the completion signal; a per-`write` `EAGAIN`
+    /// from the 200 ms `SO_SNDTIMEO` is retried so long as the peer keeps
+    /// draining (each byte of progress resets the stall budget). A genuine
+    /// error (peer hang-up → `EPIPE`/`ECONNRESET`, or a zero/-`1` return
+    /// that is not `EINTR`/`EAGAIN`) bails immediately to a short write.
+    /// A peer that connected but never reads — buffer stays full — is
+    /// bounded by `maxStallRetries` consecutive zero-progress timeouts so
+    /// the call cannot hang forever (≈ `maxStallRetries × 200 ms`),
+    /// preserving fire-and-forget liveness against a stuck peer. Returns
+    /// the total number of bytes written (== `total` on success).
+    private static func writeAll(
+        _ fd: Int32,
+        _ buffer: UnsafeRawPointer,
+        _ total: Int
+    ) -> Int {
+        // ~2 s worst case at the 200 ms SO_SNDTIMEO — comfortably past
+        // any plausible scheduling latency for a live reader to drain,
+        // but still a hard bound against a connected-but-silent peer.
+        let maxStallRetries = 10
+        let base = buffer.assumingMemoryBound(to: UInt8.self)
+        var written = 0
+        var stalls = 0
+        while written < total {
+            let n = Darwin.write(fd, base + written, total - written)
+            if n > 0 {
+                written += n
+                stalls = 0  // progress resets the stall budget
+                continue
+            }
+            // n <= 0: EINTR / EAGAIN (SO_SNDTIMEO fired with the buffer
+            // still full) retry — a live reader will drain and free space.
+            // Any other errno is a real failure (closed peer); stop.
+            if n < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
+                stalls += 1
+                if stalls >= maxStallRetries { break }
+                continue
+            }
+            break
+        }
+        return written
+    }
+
     /// Connect to `~/.senkani/pane.sock` (or `socketPath` override for
     /// tests), write the command as one length-prefixed frame, close. Does
     /// not read a response.
     ///
-    /// Never throws, never blocks on a readable socket: a 200 ms
-    /// `SO_SNDTIMEO` caps the worst-case write stall (buffer-full
-    /// scenarios are extremely rare for ≤ 1 KB frames but the timeout
-    /// preserves fire-and-forget semantics against a misbehaving peer).
+    /// Never throws, never blocks indefinitely on a readable socket: a
+    /// 200 ms `SO_SNDTIMEO` caps each `write(2)` stall, and the frame is
+    /// written through a partial-write loop (`writeAll`) so a slow-but-
+    /// alive reader receives the whole multi-KB frame intact rather than
+    /// a truncated one. A truly dead/absent peer surfaces as
+    /// `.socketUnreachable` (connect) or `.writeFailed` (no forward
+    /// progress) — fire-and-forget semantics preserved.
     ///
     /// Result is discardable — production callers ignore it; tests use
     /// it for assertions.
@@ -151,23 +209,25 @@ public enum PaneIPC {
         // server rejects unauthenticated clients on the gate path.
         if let token = SocketAuthToken.load(),
            let frame = SocketAuthToken.handshakeFrame(token: token) {
-            let n = frame.withUnsafeBytes { Darwin.write(fd, $0.baseAddress!, frame.count) }
+            let n = frame.withUnsafeBytes { writeAll(fd, $0.baseAddress!, frame.count) }
             if n != frame.count {
                 return .writeFailed
             }
         }
 
-        // UInt32 big-endian length + JSON payload
+        // UInt32 big-endian length + JSON payload, each written through
+        // the partial-write loop so a slow reader still receives the full
+        // frame instead of a truncated one.
         var length = UInt32(payload.count).bigEndian
         let lengthData = Data(bytes: &length, count: 4)
 
         let wroteLen = lengthData.withUnsafeBytes {
-            Darwin.write(fd, $0.baseAddress!, 4)
+            writeAll(fd, $0.baseAddress!, 4)
         }
         guard wroteLen == 4 else { return .writeFailed }
 
         let wrotePayload = payload.withUnsafeBytes {
-            Darwin.write(fd, $0.baseAddress!, payload.count)
+            writeAll(fd, $0.baseAddress!, payload.count)
         }
         guard wrotePayload == payload.count else { return .writeFailed }
 

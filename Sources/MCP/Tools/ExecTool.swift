@@ -81,6 +81,23 @@ enum ExecTool {
             return Core.SandboxMode(rawValue: raw) ?? .auto
         }()
 
+        // T.3b-1 child (iii) — caller classifier. The MCP entry point
+        // is operator-untrusted (a hostile prompt-injected call could
+        // try to impersonate a tool-internal caller to bypass the
+        // wasm dispatch child (iv) will land as the user-script
+        // default). MCP path is therefore unconditionally classified
+        // as `.userSupplied` — `callerKindOverride: nil` cannot be
+        // overridden from `arguments?` content. No behavioral change
+        // in this round; the kind is computed but does not drive any
+        // branching until child (iv) wires the routing.
+        //
+        // SECURITY DO-NOT: do NOT replace `nil` with any expression
+        // derived from `arguments?` content. That breaks the MCP-
+        // impersonation defense pinned in `ExecCallerClassifierTests`
+        // and lets a prompt-injected `caller_kind: "tool_internal"`
+        // arg bypass child (iv)'s wasm dispatch.
+        _ = Core.ExecCallerClassifier.classify(callerKindOverride: nil)
+
         // Run the command
         let process = Process()
         let outPipe = Pipe()

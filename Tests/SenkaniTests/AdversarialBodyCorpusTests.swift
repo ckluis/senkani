@@ -276,7 +276,39 @@ struct AdversarialBodyCorpusTests {
     /// `recordEgressDecision`'s `bodyExcerpt:` slot. The 8-scenario
     /// activation-gate corpus stays FROZEN — these scenarios live in
     /// `MITMBodyInspectionCorpus.connectPathScenarios()`.
-    @Test("t1d-5 follow-ups Round A — CONNECT-path body-deny scenarios classify + redact correctly")
+    ///
+    /// ### Coverage scope (r100 Karpathy P2 Option A clarification)
+    ///
+    /// This test exercises the SAME helpers the live plumbing uses
+    /// — `innerBodyBytes(fromHeadBuffer:)` + `prepareBodyExcerpt` +
+    /// `EgressRuleEngine.evaluate(request:)` — via the scenario's
+    /// `observedRuleId()` closure, which calls them synchronously
+    /// in-process. It does NOT drive the live
+    /// `MITMUpstreamVerify.pipeBidirectional` callback path through
+    /// real TLS contexts. That integration boundary is covered
+    /// asymmetrically today:
+    ///
+    /// - `connectPathPlantedSecretRedactedBeforeAudit` (below) exercises
+    ///   the SQLite-backed CONNECT-path end-to-end persistence
+    ///   invariant — the Schneier P1 truncate-then-redact-before-hash
+    ///   pin on the post-store row.
+    /// - The `EgressUpstreamConnecting` seam tests cover the
+    ///   connect-and-verify connector lifecycle (becc8f2 pattern),
+    ///   not the in-pipe callback wiring.
+    /// - The r94 LIVE in-path body denial work (commit 7ef5428)
+    ///   added unit-level coverage on `parseInnerHTTPHead` +
+    ///   `DefaultInnerBodyDenyEvaluator` (MITMInnerBodyDenyTests),
+    ///   but the actual `pipeBidirectional` call site that wires the
+    ///   deny evaluator is STRUCTURALLY UNCOVERED — Carmack r94 P2-A/B
+    ///   panel APPENDs in `phase-t1d-5-r52-followups-2026-06-04`
+    ///   capture the future work: drive `pipeBidirectional` with
+    ///   stub SSL contexts + assert `.bodyDeny` / `mitm_inner_head_parse_failed`
+    ///   outcomes + assert callback fires exactly once.
+    ///
+    /// In short: helper-level coverage is here; persistence-row
+    /// coverage is in the sibling test below; live in-pipe callback
+    /// integration coverage remains a tracked follow-up.
+    @Test("t1d-5 follow-ups Round A — CONNECT-path body-deny scenarios classify + redact correctly (helper-level coverage)")
     func connectPathScenariosClassifyCorrectly() {
         let scenarios = MITMBodyInspectionCorpus.connectPathScenarios()
         #expect(scenarios.count == 2,

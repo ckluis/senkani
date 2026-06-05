@@ -43,6 +43,60 @@ import Darwin
 /// `SSLContext` / SecureTransport / `SecTrustEvaluateWithError` are
 /// available on every supported macOS. No `@available(macOS 15.0, *)`
 /// symbols are referenced.
+
+/// r94 t1d-5 r52 Allspaw P1 — connector seam for live in-path body
+/// denial inside `pipeBidirectional`'s `.allow` arm. The evaluator
+/// receives the validated host + parsed HEAD fragments + REDACTED body
+/// excerpt and returns an `EgressEvaluation`. Production wiring threads
+/// in a real `EgressRuleEngine` via `DefaultInnerBodyDenyEvaluator`;
+/// tests inject a stub that returns canned `.allow` / `.deny` verdicts
+/// without standing up a real engine.
+///
+/// Mirrors the `EgressUpstreamConnecting` connector-seam pattern from
+/// becc8f2 — small protocol + struct adapter + injected default.
+///
+/// IMPORTANT: the `bodyExcerpt` handed to the evaluator is ALREADY
+/// `EgressDecisionStore.prepareBodyExcerpt`-processed (truncate-then-
+/// redact). Operator deny rules MUST therefore match against the
+/// REDACTED text shape — operator-supplied `bodyContains:` substrings
+/// that target redacted output (e.g. `[REDACTED:` from SecretDetector)
+/// will fire; substrings that ONLY appear in raw secret-shaped tokens
+/// (e.g. `sk-ant-`) will NOT fire because the redaction has already
+/// scrubbed those bytes. This is the SAME shape operator rules must
+/// use for the non-CONNECT path today since `prepareBodyExcerpt` runs
+/// there too — preserving the Schneier P1 truncate-then-redact-before-
+/// hash invariant end-to-end.
+protocol InnerBodyDenyEvaluating: Sendable {
+    func evaluate(
+        host: String,
+        method: String?,
+        path: String?,
+        headers: [(name: String, value: String)],
+        bodyExcerpt: String?
+    ) -> EgressEvaluation
+}
+
+/// Default production adapter — wraps an `EgressRuleEngine`.
+struct DefaultInnerBodyDenyEvaluator: InnerBodyDenyEvaluating {
+    let engine: EgressRuleEngine
+    func evaluate(
+        host: String,
+        method: String?,
+        path: String?,
+        headers: [(name: String, value: String)],
+        bodyExcerpt: String?
+    ) -> EgressEvaluation {
+        let req = EgressRequest(
+            host: host,
+            method: method,
+            path: path,
+            headers: headers,
+            bodyExcerpt: bodyExcerpt
+        )
+        return engine.evaluate(request: req)
+    }
+}
+
 enum MITMUpstreamVerify {
 
     /// Heap-boxed connection context for the upstream fd. Lifetime is
@@ -355,11 +409,33 @@ enum MITMUpstreamVerify {
     /// rebind peek already drained from the terminated TLS — i.e. the
     /// decrypted plaintext request body bytes that happened to be present
     /// in the same head buffer (capture-strategy: HEAD-BUFFER-BOUNDED, ≤16
-    /// KB, mirrors the non-CONNECT `bodyBytes(restOfHead:)` semantics so
-    /// operator body-deny rules fire identically on CONNECT-tunneled and
-    /// plain-HTTP targets). nil/empty body → callback receives nil so the
+    /// KB, mirrors the non-CONNECT `bodyBytes(restOfHead:)` semantics).
+    /// r94 Round B promoted CONNECT-path operator body-deny matchers from
+    /// audit-row-only to LIVE in-path denial via `bodyDenyEvaluator` below
+    /// (engine.evaluate(request:) called pre-head-replay; deny aborts the
+    /// upstream forward). Scope caveat: the plain-HTTP static path at
+    /// `EgressConnectionHandler.run()` calls `engine.evaluate(host:)` only
+    /// today; static `bodyContains` rules fire on plain-HTTP via the judge
+    /// fallback (not the request-dimension engine). Full plain-HTTP
+    /// request-dimension parity remains follow-up work — CONNECT path now
+    /// has stronger live body-deny coverage than plain-HTTP, not "identical".
+    /// nil/empty body → callback receives nil so the
     /// caller can pass it straight to `recordEgressDecision` without
     /// needing a "should I record an empty blob" decision.
+    ///
+    /// r52 P3 guard (Schneier): an internal `bodyExcerptDelivered` flag
+    /// pins the "EXACTLY ONCE" guarantee at the helper level so a
+    /// future refactor (e.g. moving the rebind peek inside the read
+    /// loop) cannot silently re-fire the callback per iteration — it
+    /// becomes a no-op past the first invocation.
+    ///
+    /// r52 P3 note (Carmack `@escaping`): the `onInnerBodyExcerpt`
+    /// parameter is `((Data?) -> Void)?` — Swift's optional closure
+    /// types are ALREADY implicitly escaping (the optionality forces
+    /// it). An explicit `@escaping` on an optional-closure-type
+    /// parameter is a compile error ("closure is already escaping in
+    /// optional type argument"), so the intent is pinned by the
+    /// optionality itself; the r52 P3 spec bullet is satisfied as-is.
     ///
     /// The bytes handed to the callback are RAW — the caller is responsible
     /// for `EgressDecisionStore.prepareBodyExcerpt` (truncate-then-redact)
@@ -368,12 +444,45 @@ enum MITMUpstreamVerify {
     /// on the CONNECT path (the same invariant already enforced by
     /// `EgressDecisionStore.record(... bodyExcerpt:)` which calls
     /// `prepareBodyExcerpt` before SQLite bind).
+    ///
+    /// ### r94 t1d-5 r52 follow-ups Round B — LIVE in-path body denial
+    ///
+    /// `bodyDenyEvaluator`, when non-nil, is invoked on the `.allow`
+    /// rebind branch IMMEDIATELY AFTER `onInnerBodyExcerpt` fires (so
+    /// the audit-row callback ALWAYS sees the raw body, even on a deny
+    /// outcome) and BEFORE the head is replayed upstream. The evaluator
+    /// sees the parsed HEAD fragments (method/path/headers) + the
+    /// `prepareBodyExcerpt`-REDACTED body excerpt (NOT the raw bytes —
+    /// the Schneier P1 truncate-then-redact-before-hash invariant
+    /// applies to the engine input too). On a `.deny` verdict, the
+    /// function returns `.bodyDeny(ruleId:)` carrying the operator's
+    /// stable rule id — upstream gets ZERO bytes, the client gets a
+    /// clean TLS close on the way out.
+    ///
+    /// Fall-through cases (do NOT body-deny, head-replay proceeds):
+    ///   - `bodyDenyEvaluator == nil` → behavior byte-identical to
+    ///     pre-r94 (default-OFF invariant).
+    ///   - Evaluator returns `.allow` → head-replay proceeds.
+    ///   - Evaluator returns the `default-deny` sentinel (no rule
+    ///     matched) → fall through to allow. Host-level was already
+    ///     allowed up-arc (else this code wouldn't run), so a request-
+    ///     dimension miss must NOT body-deny — that would be a second
+    ///     deny-on-miss layer the operator never opted into.
+    ///
+    /// Fail-CLOSED case (DO body-deny):
+    ///   - HEAD parse fails (`parseInnerHTTPHead` returns nil) → return
+    ///     `.bodyDeny(ruleId: "mitm_inner_head_parse_failed")`. The
+    ///     rebind peek already validated the Host header, so a parse
+    ///     failure HERE means the bytes between Host validation and
+    ///     full-head parse are malformed — fail-CLOSED rather than
+    ///     forwarding ambiguous bytes upstream.
     static func pipeBidirectional(
         clientSSL: SSLContext,
         clientFD: Int32,
         upstreamSSL: SSLContext,
         upstreamFD: Int32,
         validatedHost: String? = nil,
+        bodyDenyEvaluator: InnerBodyDenyEvaluating? = nil,
         onInnerBodyExcerpt: ((Data?) -> Void)? = nil
     ) -> MITMTermination.UpstreamOutcome {
         let bufSize = 16 * 1024
@@ -384,6 +493,15 @@ enum MITMUpstreamVerify {
         var upstreamDone = false
         var blockBudget = pipeWouldBlockBudget
         var writeBudget = pipeWouldBlockBudget
+
+        // r52 P3 (Schneier) — pin the "callback fires EXACTLY ONCE on
+        // the `.allow` branch" guarantee at the helper level. Today the
+        // rebind peek lives OUTSIDE the read loop so a single invocation
+        // is structurally guaranteed; this flag wraps the call site so a
+        // future refactor (e.g. moving the rebind peek inside the read
+        // loop) becomes a silent no-op on the second-and-later fire
+        // rather than re-firing per iteration.
+        var bodyExcerptDelivered = false
 
         // T.1d-2b-iv — inner-Host rebind peek. Drain the first request
         // head into a bounded buffer, validate Host matches the
@@ -408,32 +526,96 @@ enum MITMUpstreamVerify {
             case .rejectReadError(let st):
                 return .innerReadError(st)
             case .allow(let headBytes):
-                // t1d-5 follow-ups Round A — CONNECT-path body excerpt
-                // plumbing. The rebind peek drained the inner request HEAD
-                // (and any body bytes that fit in the same 16 KB buffer)
-                // off the terminated TLS. Extract the body slice (post
+                // t1d-5 follow-ups — CONNECT-path body excerpt plumbing.
+                // The rebind peek drained the inner request HEAD (and any
+                // body bytes that fit in the same 16 KB buffer) off the
+                // terminated TLS. Extract the body slice (post
                 // `\r\n\r\n`) with the SAME head-bounded semantics the
                 // non-CONNECT path's `bodyBytes(restOfHead:)` uses, then
-                // hand the raw bytes to the caller for AUDIT-ROW
-                // PERSISTENCE ONLY. Scope (Allspaw P1 / Schneier P2):
-                // this round ships persistence of the decrypted body
-                // excerpt to the audit chain so the operator can observe
-                // what crossed the tunnel — it does NOT re-invoke the
-                // rule engine against the captured body. `pipeBidirectional`
-                // has ALREADY returned `.allow` by the time the audit
-                // row lands, so live in-path denial of the upstream
-                // forward against this body excerpt is a SEPARATE
-                // follow-up (Allspaw P1 deferred work). Operator
-                // body-deny matchers fire LIVE on the non-CONNECT path
-                // today; on the CONNECT path they currently only fire
-                // post-hoc via the recorded excerpt. The Schneier P1
-                // truncate-then-redact-before-hash invariant IS
-                // preserved end-to-end: `EgressDecisionStore.prepareBodyExcerpt`
-                // runs INSIDE `record(... bodyExcerpt:)` so the raw
-                // bytes never reach disk or the canonical-map hash.
-                if let onInnerBodyExcerpt {
-                    let body = MITMUpstreamVerify.innerBodyBytes(fromHeadBuffer: headBytes)
+                // hand the raw bytes to the audit-row callback so the
+                // operator can see exactly what crossed the tunnel — even
+                // if the body matches a deny rule and we abort the
+                // upstream forward below.
+                //
+                // r94 Round B promoted this from audit-row-only to LIVE
+                // in-path denial: after the audit callback fires, if a
+                // `bodyDenyEvaluator` is wired in, evaluate the parsed
+                // HEAD + REDACTED body excerpt against the rule engine
+                // and abort the upstream forward on a `.deny` verdict.
+                // Scope: CONNECT path now invokes `engine.evaluate(request:)`
+                // with the redacted body excerpt; plain-HTTP static path
+                // still calls `evaluate(host:)` only, with static body
+                // rules routing through the judge fallback. Full
+                // request-dimension parity on the plain-HTTP path is
+                // follow-up work (Schneier r94 P2-#1 carve-out).
+                //
+                // The Schneier P1 truncate-then-redact-before-hash
+                // invariant IS preserved end-to-end:
+                //   - `EgressDecisionStore.prepareBodyExcerpt` runs
+                //     INSIDE `record(... bodyExcerpt:)` so the raw bytes
+                //     never reach disk or the canonical-map hash.
+                //   - The same `prepareBodyExcerpt` ALSO runs BEFORE the
+                //     bytes are handed to the body-deny evaluator below
+                //     — the engine never sees raw plaintext that wasn't
+                //     truncate-then-redact-processed.
+                let body = MITMUpstreamVerify.innerBodyBytes(fromHeadBuffer: headBytes)
+                // r52 P3 (Schneier) guard — fire EXACTLY ONCE even under
+                // a future refactor that could re-enter this arm.
+                if let onInnerBodyExcerpt, !bodyExcerptDelivered {
+                    bodyExcerptDelivered = true
                     onInnerBodyExcerpt(body)
+                }
+                // r94 t1d-5 r52 Allspaw P1 — LIVE in-path body denial.
+                // BEFORE the head-replay write, evaluate the parsed HEAD
+                // + redacted body excerpt against the rule engine.
+                if let bodyDenyEvaluator {
+                    guard let head = MITMUpstreamVerify.parseInnerHTTPHead(headBytes) else {
+                        // Fail-CLOSED: rebind already validated the Host
+                        // header, so a HEAD parse failure HERE means the
+                        // bytes between Host validation and full-head
+                        // parse are malformed. Refuse to forward
+                        // ambiguous bytes upstream.
+                        return .bodyDeny(ruleId: "mitm_inner_head_parse_failed")
+                    }
+                    // Redact-before-evaluate (Schneier P1 invariant).
+                    // Non-UTF8 caveat: `prepareBodyExcerpt` passes through
+                    // non-UTF8 bodies unchanged; the `String(data:encoding:.utf8)`
+                    // round-trip then yields nil, so the evaluator sees
+                    // `bodyExcerpt: nil` and operator `bodyContains:` rules
+                    // silently fall through to allow. This is consistent with
+                    // the existing plain-HTTP behavior (which also requires
+                    // UTF-8-decodable bodies for substring matching). Operators
+                    // with binary-body (gRPC over h2c, etc.) traffic should not
+                    // rely on `bodyContains:` for those targets. Schneier
+                    // r94 P2-#2.
+                    let preparedExcerpt: String? = body.map { raw in
+                        let prepared = EgressDecisionStore.prepareBodyExcerpt(raw)
+                        return String(data: prepared, encoding: .utf8)
+                    } ?? nil
+                    // Evaluator host: prefer the validated SNI/CONNECT host
+                    // so a parser-confused inner Host header cannot drive
+                    // host-dimension matching past the boundary we already
+                    // pinned via rebind.
+                    let evaluation = bodyDenyEvaluator.evaluate(
+                        host: validatedHost,
+                        method: head.method,
+                        path: head.path,
+                        headers: head.headers,
+                        bodyExcerpt: preparedExcerpt
+                    )
+                    if evaluation.decision == .deny
+                        && evaluation.ruleId != "default-deny" {
+                        // Operator rule fired — abort upstream forward.
+                        // Upstream gets ZERO bytes; the connection-handler
+                        // `defer` closes the upstream fd + sends client
+                        // TLS close cleanly on the way out.
+                        return .bodyDeny(ruleId: evaluation.ruleId)
+                    }
+                    // Either `.allow` OR the `default-deny` sentinel
+                    // (no rule matched) — fall through to head-replay.
+                    // Host-level was already allowed up-arc, so a request-
+                    // dimension miss must NOT introduce a second deny-on-
+                    // miss layer the operator never opted into.
                 }
                 // Replay buffered head bytes to upstream as the first
                 // write. Use the same bounded sslWriteAll that the
@@ -709,6 +891,84 @@ enum MITMUpstreamVerify {
         guard let end = terminatorEnd, end < headBytes.count else { return nil }
         let body = headBytes[end..<headBytes.count]
         return body.isEmpty ? nil : Data(body)
+    }
+
+    /// r94 t1d-5 r52 Allspaw P1 — parse the inner request HEAD out of
+    /// the rebind peek's head-buffer payload into (method, path,
+    /// headers). Returns nil on any malformed input (no `\r\n`
+    /// terminating the request line, request line missing parts, no
+    /// `\r\n\r\n` terminator).
+    ///
+    /// The rebind peek's `.allow(headBytes:)` payload contains the
+    /// validated request HEAD plus any body bytes that fit in the same
+    /// ≤16 KB buffer. The rebind already pulled `Host:` out and
+    /// validated it; this parser walks the full HEAD so the body-deny
+    /// evaluator can match against method / path / arbitrary headers.
+    ///
+    /// Pure — no IO. Bytes-level parser so a non-UTF8 header value
+    /// degrades gracefully (we use Latin-1-style byte-wise decoding for
+    /// header lines; the engine's own header normalizer handles case +
+    /// OWS trimming).
+    static func parseInnerHTTPHead(
+        _ headBytes: [UInt8]
+    ) -> (method: String, path: String, headers: [(name: String, value: String)])? {
+        // Locate `\r\n\r\n` — same shape as `innerBodyBytes`.
+        guard headBytes.count >= 4 else { return nil }
+        var terminatorEnd: Int? = nil
+        for i in 0...(headBytes.count - 4) {
+            if headBytes[i] == 0x0D && headBytes[i+1] == 0x0A
+                && headBytes[i+2] == 0x0D && headBytes[i+3] == 0x0A {
+                terminatorEnd = i
+                break
+            }
+        }
+        guard let headEnd = terminatorEnd else { return nil }
+        // Decode HEAD bytes up to (not including) the `\r\n\r\n` as a
+        // String. Use UTF8 first, fall back to Latin-1 (via
+        // ISOLatin1StringEncoding) so a stray non-UTF8 byte in a header
+        // value doesn't poison the whole parse.
+        let headSlice = Array(headBytes[0..<headEnd])
+        let headText: String
+        if let utf8 = String(bytes: headSlice, encoding: .utf8) {
+            headText = utf8
+        } else if let latin1 = String(bytes: headSlice, encoding: .isoLatin1) {
+            headText = latin1
+        } else {
+            return nil
+        }
+        // Split into lines on `\r\n`. The first line is the request
+        // line; the rest are headers.
+        let lines = headText.components(separatedBy: "\r\n")
+        guard let firstLine = lines.first, !firstLine.isEmpty else {
+            return nil
+        }
+        // Request line: METHOD SP PATH SP HTTP-VERSION
+        let parts = firstLine.split(separator: " ", omittingEmptySubsequences: true)
+        guard parts.count >= 3 else { return nil }
+        let method = String(parts[0])
+        let path = String(parts[1])
+        // Parse headers — each line is `name: value`. A leading `\t` or
+        // ` ` indicates a continuation of the previous header (obsolete
+        // line-folding per RFC 7230 §3.2.4); we collapse by appending.
+        var headers: [(name: String, value: String)] = []
+        for raw in lines.dropFirst() {
+            if raw.isEmpty { continue }
+            if (raw.first == " " || raw.first == "\t") && !headers.isEmpty {
+                // Obsolete line-folding: append to the previous value
+                // with a single space (the engine OWS-trims at match
+                // time so leading WS here is benign).
+                let last = headers.removeLast()
+                headers.append((name: last.name,
+                                value: last.value + " " + raw.trimmingCharacters(in: .whitespaces)))
+                continue
+            }
+            guard let colon = raw.firstIndex(of: ":") else { continue }
+            let name = String(raw[..<colon])
+            let valueStart = raw.index(after: colon)
+            let value = String(raw[valueStart...])
+            headers.append((name: name, value: value))
+        }
+        return (method: method, path: path, headers: headers)
     }
 
     /// FD_SET equivalent for the two-fd case — same r85 Carmack P3

@@ -196,7 +196,8 @@ final class EgressConnectionHandler: @unchecked Sendable {
                 parsed: parsed,
                 ruleId: evaluation.ruleId,
                 normalizedHost: normalizedHost,
-                judgeRationale: judgeRationale
+                judgeRationale: judgeRationale,
+                engine: engine
             )
         } else {
             handlePlainHTTP(
@@ -292,7 +293,8 @@ final class EgressConnectionHandler: @unchecked Sendable {
         parsed: HTTPRequestLine.ParsedRequest,
         ruleId: String,
         normalizedHost: String,
-        judgeRationale: String?
+        judgeRationale: String?,
+        engine: EgressRuleEngine
     ) {
         // Send 200 Connection Established to client. Per RFC 7231, no
         // body, no headers required.
@@ -416,12 +418,20 @@ final class EgressConnectionHandler: @unchecked Sendable {
                         Darwin.close(handle.fd)
                     }
                     return withExtendedLifetime(handle.ctx) { () -> MITMTermination.UpstreamOutcome in
+                        // r94 t1d-5 r52 Allspaw P1 — LIVE in-path body
+                        // denial. Wrap the per-pane engine in the
+                        // default body-deny evaluator so the rebind
+                        // peek's body slice flows into rule evaluation
+                        // BEFORE any head-replay write to upstream.
+                        let bodyDenyEvaluator: InnerBodyDenyEvaluating =
+                            DefaultInnerBodyDenyEvaluator(engine: engine)
                         return MITMUpstreamVerify.pipeBidirectional(
                             clientSSL: clientSSL,
                             clientFD: clientCtx.fd,
                             upstreamSSL: handle.ssl,
                             upstreamFD: handle.fd,
                             validatedHost: normalizedHost,
+                            bodyDenyEvaluator: bodyDenyEvaluator,
                             onInnerBodyExcerpt: { body in
                                 capturedInnerBody = body
                             }
@@ -561,6 +571,22 @@ final class EgressConnectionHandler: @unchecked Sendable {
                     recordDecision(host: normalizedHost, method: parsed.method,
                                    decision: .deny, ruleId: "mitm_upstream_pipe_error",
                                    paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                case .bodyDeny(let ruleId):
+                    // r94 t1d-5 r52 Allspaw P1 — LIVE in-path deny against
+                    // the decrypted CONNECT-tunneled inner request body.
+                    // The matched `ruleId` is the operator's EgressRule
+                    // id; record it verbatim so audit-grep aggregates by
+                    // the operator's own rule labels (NOT a stable
+                    // `mitm_inner_body_deny` string). The audit row also
+                    // carries the captured raw body excerpt — the store's
+                    // `prepareBodyExcerpt` runs truncate-then-redact
+                    // BEFORE SQLite bind / chain hashing (Schneier P1
+                    // invariant). Upstream got ZERO bytes; the operator
+                    // can see exactly what triggered the deny.
+                    recordDecision(host: normalizedHost, method: parsed.method,
+                                   decision: .deny, ruleId: ruleId,
+                                   paneMode: resolvedPaneMode, judgeRationale: judgeRationale,
+                                   bodyExcerpt: capturedInnerBody)
                 }
             }
             return

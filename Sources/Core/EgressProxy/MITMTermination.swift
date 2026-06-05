@@ -168,6 +168,22 @@ enum MITMTermination {
         /// reason is a sanitized short string (no raw cert / hostname
         /// bytes). Mapped to `mitm_upstream_pipe_error`.
         case upstreamPipeError(reason: String)
+        /// r94 t1d-5 r52 Allspaw P1 — live in-path deny against the
+        /// decrypted CONNECT-tunneled inner request body. The rebind
+        /// peek drained the HEAD+body slice off the terminated client
+        /// TLS; the rule engine evaluated the redacted body excerpt
+        /// BEFORE the head was replayed upstream and matched a `.deny`
+        /// rule. The captured `ruleId` is the matching operator
+        /// `EgressRule`'s stable id (NOT a fresh string per match — so
+        /// audit-grep aggregates cleanly by the operator's own rule
+        /// labels). Upstream got ZERO bytes; the client gets a clean
+        /// connection close. The audit row STILL carries the raw body
+        /// excerpt via the `onInnerBodyExcerpt` callback (which fires
+        /// before this branch is taken) — the operator can see exactly
+        /// what triggered the deny. Mapped at the connection-handler
+        /// to the operator's `ruleId`, not a stable
+        /// `mitm_inner_body_deny` string.
+        case bodyDeny(ruleId: String)
     }
 
     /// Tagged-union top-level outcome surfaced back to `handleConnect`

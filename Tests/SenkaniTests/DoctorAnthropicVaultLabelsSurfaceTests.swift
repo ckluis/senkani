@@ -106,7 +106,16 @@ struct DoctorAnthropicVaultLabelsSurfaceTests {
             key: rawKeyPersonal, label: "personal", vault: vault
         )
 
-        let lookup = Doctor.listAnthropicVaultLabels(vault: vault)
+        // Drive the async classification core directly (timeoutSeconds:
+        // nil → no ceiling). The in-memory vault list resolves instantly,
+        // so the `.ok` result is independent of cooperative-pool
+        // scheduling latency under full-suite parallel load — unlike the
+        // sync bridge, whose 5s wall-clock semaphore could fire before
+        // the background Task got pool time under saturation, spuriously
+        // returning `.timedOut`.
+        let lookup = await Doctor.listAnthropicVaultLabelsAsync(
+            vault: vault, timeoutSeconds: nil
+        )
         guard case .ok(let vaultLabels) = lookup else {
             Issue.record("expected .ok, got \(lookup)")
             return
@@ -143,9 +152,14 @@ struct DoctorAnthropicVaultLabelsSurfaceTests {
     /// returns `.ok([])` (not nil-collapsed-to-error) for an unprovisioned
     /// vault, and the formatter renders the `.skip` hint.
     @Test("empty-vault bridge — returns .ok([]) and the skip hint renders")
-    func emptyVaultBridgeReturnsEmpty() {
+    func emptyVaultBridgeReturnsEmpty() async {
         let vault = CredentialVault(store: InMemoryKeychainStore())
-        let lookup = Doctor.listAnthropicVaultLabels(vault: vault)
+        // Async core (timeoutSeconds: nil → no ceiling). The empty
+        // in-memory list resolves instantly, so `.ok([])` is independent
+        // of pool scheduling latency under full-suite parallel load.
+        let lookup = await Doctor.listAnthropicVaultLabelsAsync(
+            vault: vault, timeoutSeconds: nil
+        )
         guard case .ok(let vaultLabels) = lookup else {
             Issue.record("expected .ok on empty live vault, got \(lookup)")
             return

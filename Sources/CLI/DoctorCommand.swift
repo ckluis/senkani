@@ -2206,29 +2206,23 @@ struct Doctor: ParsableCommand {
         vault: CredentialVault
     ) -> KeychainVaultLookupResult {
         // NSLock-guarded slot: the background Task writes
-        // `(labels, error, done)` atomically; the main thread reads
-        // them atomically after the semaphore fires (or sees `done ==
+        // `(result, done)` atomically; the main thread reads it
+        // atomically after the semaphore fires (or sees `done ==
         // false` on timeout). No `nonisolated(unsafe)` shared state.
         final class LookupSlot: @unchecked Sendable {
             private let lock = NSLock()
-            private var _labels: [String] = []
-            private var _error: Error? = nil
-            private var _done: Bool = false
+            private var _result: KeychainVaultLookupResult? = nil
 
-            func publish(labels: [String]?, error: Error?) {
+            func publish(_ result: KeychainVaultLookupResult) {
                 lock.lock()
                 defer { lock.unlock() }
-                if let labels = labels {
-                    _labels = labels
-                }
-                _error = error
-                _done = true
+                _result = result
             }
 
-            func snapshot() -> (labels: [String], error: Error?, done: Bool) {
+            func snapshot() -> KeychainVaultLookupResult? {
                 lock.lock()
                 defer { lock.unlock() }
-                return (_labels, _error, _done)
+                return _result
             }
         }
 
@@ -2236,29 +2230,128 @@ struct Doctor: ParsableCommand {
         let sem = DispatchSemaphore(value: 0)
         Task {
             defer { sem.signal() }
+            // Delegate classification to the shared async helper. The
+            // helper has NO internal wall-clock ceiling (timeoutSeconds:
+            // nil) because the ceiling on doctor's sync path is enforced
+            // here by the semaphore wait below — keeping the production
+            // behavior (a 5s wall-clock budget on doctor's blocking call
+            // path) byte-for-byte unchanged.
+            let result = await Self.listAnthropicVaultLabelsAsync(
+                vault: vault, timeoutSeconds: nil
+            )
+            slot.publish(result)
+        }
+        // V.13b-4c: 5s ceiling (was 3s). This wall-clock budget bounds
+        // doctor's BLOCKING sync execution path — it is intentionally a
+        // real-machine deadline so a hung Security daemon cannot wedge
+        // `senkani doctor`. (Tests do NOT exercise this blocking path —
+        // they call `listAnthropicVaultLabelsAsync` directly, whose
+        // ceiling is a logical Task.sleep race, not a wall-clock wait —
+        // so the suite is independent of cooperative-pool scheduling
+        // latency under full-suite parallel load.)
+        let waitResult = sem.wait(timeout: .now() + .seconds(5))
+        if waitResult == .timedOut {
+            // Timed out — do NOT collapse to empty labels.
+            return .timedOut
+        }
+        // Semaphore signaled → the async helper published a result.
+        return slot.snapshot() ?? .timedOut
+    }
+
+    /// V.13b-4c / flake-doctor-keychain-vault-sleep-timing — the pure
+    /// async classification core shared by doctor's sync bridge
+    /// (`listAnthropicVaultLabels`) and the unit tests. Performs the
+    /// exact same fault-class mapping the sync bridge used to inline:
+    ///
+    /// - vault list returns → `.ok(VaultLabels(labels))`
+    /// - vault list throws a permission-denied OSStatus → `.permissionDenied`
+    /// - vault list throws anything else → `.otherFailure`
+    /// - the logical ceiling (when `timeoutSeconds != nil`) elapses
+    ///   before the vault list completes → `.timedOut`
+    ///
+    /// **Why this exists (test-flake fix, 2026-06-05):** the prior
+    /// design only exposed the *synchronous* bridge, whose 5s ceiling is
+    /// a real `DispatchSemaphore` wall-clock wait. Under full-suite
+    /// parallel load (~3.7k tests saturating the cooperative pool) the
+    /// background `Task` could not be scheduled within 5s of wall time —
+    /// so even an instant in-memory vault lookup wall-clock-stretched
+    /// past the deadline and returned `.timedOut` instead of `.ok`,
+    /// flaking 4 tests that PASSED 9/9 in isolation. The tests now drive
+    /// THIS async helper instead. The non-timeout paths (`.ok`,
+    /// `.permissionDenied`) have no wall-clock dependence at all — they
+    /// resolve the instant the vault `await` returns, regardless of pool
+    /// saturation. The timeout-contract tests pass `timeoutSeconds:` and
+    /// race the vault's `Task.sleep` against a `Task.sleep`-based
+    /// ceiling: both sleeps are scheduled on the same clock and starve
+    /// together under load, so their RELATIVE ordering (a 4s store sleep
+    /// resolving before a 5s ceiling; a 7s store sleep losing to it) is
+    /// preserved even when absolute wall-clock stretches. The assertion
+    /// still verifies the real contract — a 4s lookup succeeds under the
+    /// 5s ceiling, a 7s lookup times out — without depending on absolute
+    /// scheduler latency.
+    ///
+    /// `timeoutSeconds: nil` disables the logical ceiling entirely
+    /// (used by the sync bridge, which enforces its own wall-clock
+    /// ceiling via the semaphore).
+    static func listAnthropicVaultLabelsAsync(
+        vault: CredentialVault,
+        timeoutSeconds: Double?
+    ) async -> KeychainVaultLookupResult {
+        // Classify the vault list into a fault class. Factored as a
+        // closure so both the no-timeout fast path and the timeout race
+        // share one classification site.
+        func classifiedList() async -> KeychainVaultLookupResult {
             do {
                 let labels = try await vault.list(
                     scope: AnthropicKeyProvisioner.vaultScope
                 )
-                slot.publish(labels: labels, error: nil)
+                return .ok(VaultLabels(labels))
             } catch {
-                slot.publish(labels: nil, error: error)
+                if Self.isPermissionDeniedError(error) {
+                    return .permissionDenied(error)
+                }
+                return .otherFailure(error)
             }
         }
-        // V.13b-4c: 5s ceiling (was 3s).
-        let waitResult = sem.wait(timeout: .now() + .seconds(5))
-        let snap = slot.snapshot()
-        if waitResult == .timedOut || !snap.done {
-            // Timed out — do NOT collapse to empty labels.
-            return .timedOut
+
+        guard let timeoutSeconds = timeoutSeconds else {
+            // No logical ceiling — resolve as soon as the vault returns.
+            return await classifiedList()
         }
-        if let error = snap.error {
-            if Self.isPermissionDeniedError(error) {
-                return .permissionDenied(error)
+
+        // Logical timeout race: the classified vault list vs a
+        // `Task.sleep` ceiling. First to finish wins; the loser is
+        // cancelled. `Task.sleep` honors cancellation, so the ceiling
+        // task is torn down promptly when the list wins. Both arms are
+        // scheduled on the same clock, so under cooperative-pool
+        // starvation they stretch together and their relative ordering
+        // is preserved — that is what makes the timeout assertion
+        // load-independent.
+        let timeoutNanos = UInt64(timeoutSeconds * 1_000_000_000)
+        return await withTaskGroup(
+            of: KeychainVaultLookupResult.self
+        ) { group in
+            group.addTask {
+                await classifiedList()
             }
-            return .otherFailure(error)
+            group.addTask {
+                // Sleep losing the race is cancelled; treat cancellation
+                // (CancellationError thrown by Task.sleep) as "I lost".
+                do {
+                    try await Task.sleep(nanoseconds: timeoutNanos)
+                    return .timedOut
+                } catch {
+                    // Cancelled because the list arm already won. Return a
+                    // sentinel the harvester below filters out by taking
+                    // the FIRST completed result only.
+                    return .timedOut
+                }
+            }
+            // Take the first arm to finish, cancel the rest.
+            let first = await group.next() ?? .timedOut
+            group.cancelAll()
+            return first
         }
-        return .ok(VaultLabels(snap.labels))
     }
 
     /// V.13b-4c — classify a Keychain `list` throw as permission-denied

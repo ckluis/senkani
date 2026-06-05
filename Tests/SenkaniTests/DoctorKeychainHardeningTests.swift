@@ -85,7 +85,7 @@ struct DoctorKeychainHardeningTests {
     /// the "permission denied" phrasing AND must NOT contain the
     /// "no labels provisioned" / "unprovisioned" hint.
     @Test("perm-denied — errSecAuthFailed classifies as .permissionDenied + formatter renders distinct line")
-    func permDeniedFormatterRendering() {
+    func permDeniedFormatterRendering() async {
         // -25293 == errSecAuthFailed. Constructed as the
         // MacOSKeychainStore wraps it: NSError(domain, code, userInfo)
         // with `code` carrying the raw OSStatus integer.
@@ -100,7 +100,15 @@ struct DoctorKeychainHardeningTests {
         let store = ThrowingKeychainStore(error: authFailedError)
         let vault = CredentialVault(store: store)
 
-        let lookup = Doctor.listAnthropicVaultLabels(vault: vault)
+        // Drive the async classification core directly (timeoutSeconds:
+        // nil → no ceiling). The throw resolves instantly, so the
+        // classification is independent of cooperative-pool scheduling
+        // latency under full-suite parallel load — unlike the sync
+        // bridge, whose 5s wall-clock semaphore wait could fire before
+        // the background Task got pool time under saturation.
+        let lookup = await Doctor.listAnthropicVaultLabelsAsync(
+            vault: vault, timeoutSeconds: nil
+        )
         guard case .permissionDenied(let err) = lookup else {
             Issue.record("expected .permissionDenied, got \(lookup)")
             return
@@ -137,14 +145,22 @@ struct DoctorKeychainHardeningTests {
     /// build-flag concern (covered by the NSLock pattern's design
     /// correctness in normal runs).
     @Test("timeout race-free — sleep >5s returns .timedOut without publish corruption")
-    func timeoutRaceFreeUnderTSan() {
-        // 7s sleep > 5s ceiling → must time out. After the function
-        // returns, the background Task is STILL sleeping; the NSLock
-        // ensures any later publish does not race with our snapshot.
+    func timeoutRaceFreeUnderTSan() async {
+        // 7s store sleep raced against the 5s logical ceiling → the
+        // ceiling wins → `.timedOut`. The losing list arm is cancelled
+        // (its `Task.sleep` throws), so the labels it WOULD have
+        // returned never publish. Because BOTH the store's sleep and the
+        // ceiling sleep are scheduled on the same clock, full-suite
+        // scheduler starvation stretches them together — the relative
+        // ordering (5s ceiling before 7s store) is preserved, so the
+        // `.timedOut` outcome is load-independent (no wall-clock
+        // dependence on the cooperative pool granting a fixed deadline).
         let store = SleepingKeychainStore(sleepSeconds: 7.0, labels: ["should-not-surface"])
         let vault = CredentialVault(store: store)
 
-        let lookup = Doctor.listAnthropicVaultLabels(vault: vault)
+        let lookup = await Doctor.listAnthropicVaultLabelsAsync(
+            vault: vault, timeoutSeconds: 5.0
+        )
         guard case .timedOut = lookup else {
             Issue.record("expected .timedOut for 7s sleep, got \(lookup)")
             return
@@ -173,11 +189,22 @@ struct DoctorKeychainHardeningTests {
     /// succeed and return `.ok(VaultLabels(...))`. This is the
     /// "we bumped the ceiling" proof.
     @Test("5s ceiling honored — 4s sleep returns .ok (not .timedOut)")
-    func fiveSecondCeilingHonored() {
+    func fiveSecondCeilingHonored() async {
+        // 4s store sleep raced against the 5s logical ceiling → the
+        // store wins → `.ok`. This is the "we bumped the ceiling" proof:
+        // a lookup slower than the prior 3s ceiling but under the new 5s
+        // ceiling succeeds. Both arms (`Task.sleep(4s)` store,
+        // `Task.sleep(5s)` ceiling) are deadline-scheduled on the same
+        // clock, so the 4s deadline always becomes ready before the 5s
+        // deadline regardless of absolute scheduler latency under
+        // full-suite parallel load — the assertion no longer depends on
+        // the 4s sleep finishing within a fixed wall-clock budget.
         let store = SleepingKeychainStore(sleepSeconds: 4.0, labels: ["slow-but-ok"])
         let vault = CredentialVault(store: store)
 
-        let lookup = Doctor.listAnthropicVaultLabels(vault: vault)
+        let lookup = await Doctor.listAnthropicVaultLabelsAsync(
+            vault: vault, timeoutSeconds: 5.0
+        )
         guard case .ok(let vaultLabels) = lookup else {
             Issue.record("expected .ok for 4s sleep under 5s ceiling, got \(lookup)")
             return

@@ -1920,6 +1920,26 @@ struct Doctor: ParsableCommand {
         print("")
         print("\(bodyCorpus.outcomes.count) body-inspection scenarios, \(bodyPassed) passed, \(bodyFailed) failed.")
 
+        // r99 t1d-5 r52 Karpathy P2 — CONNECT-path body-deny scenarios.
+        // `scenarios()` (above) is the FROZEN 8-scenario activation gate;
+        // the new CONNECT-path corpus reports separately so the operator
+        // sees both surfaces in --check-egress. Failures here do NOT
+        // gate the doctor exit — only the frozen 8-scenario corpus does.
+        let connectPathCorpus = MITMBodyInspectionCorpus.runConnectPath()
+        let connectPathFailed = connectPathCorpus.outcomes.filter { !$0.passed }.count
+        let connectPathPassed = connectPathCorpus.outcomes.count - connectPathFailed
+        if !connectPathCorpus.outcomes.isEmpty {
+            print("")
+            print("MITM CONNECT-path body-deny corpus (\(connectPathPassed)/\(connectPathCorpus.outcomes.count) scenarios)")
+            print(String(repeating: "=", count: 56))
+            for outcome in connectPathCorpus.outcomes {
+                let marker = outcome.passed ? "[ok]  " : "[fail]"
+                print("  \(marker) \(outcome.label) → \(outcome.observedRuleId) (expected: \(outcome.expectedRuleId))")
+            }
+            print("")
+            print("\(connectPathCorpus.outcomes.count) CONNECT-path scenarios, \(connectPathPassed) passed, \(connectPathFailed) failed.")
+        }
+
         // T.1d-5 — MITM termination state line + recent-denial counts.
         // Both helpers live in Core (`MITMBodyInspectionCorpus`) so the
         // CLI never names the egress-decisions row type directly —
@@ -1937,7 +1957,9 @@ struct Doctor: ParsableCommand {
             caOnDisk: publicExists && privateExists,
             bodyCorpusPassed: bodyPassed,
             bodyCorpusTotal: bodyCorpus.outcomes.count,
-            recentDenialCounts: denialCounts
+            recentDenialCounts: denialCounts,
+            connectPathPassed: connectPathPassed,
+            connectPathTotal: connectPathCorpus.outcomes.count
         )
         print("")
         for line in stateLines {

@@ -541,6 +541,34 @@ public enum MITMBodyInspectionCorpus {
         return Result(outcomes: outcomes)
     }
 
+    /// r99 t1d-5 r52 Karpathy P2 — sibling sweep of `connectPathScenarios()`.
+    ///
+    /// `run()` iterates the FROZEN 8-scenario `scenarios()` corpus for the
+    /// activation gate. The new CONNECT-path scenarios live in
+    /// `connectPathScenarios()` (kept separate so `scenarios()` stays at
+    /// `count == 8` for the flag-flip gate). Without this sibling sweep
+    /// the CONNECT-path corpus was orphaned — only exercised by
+    /// `AdversarialBodyCorpusTests`, never reported through doctor
+    /// `--check-egress` to the operator. This wires the CONNECT-path
+    /// surface into operator-visible reporting WITHOUT touching the
+    /// frozen activation-gate corpus.
+    public static func runConnectPath() -> Result {
+        let all = connectPathScenarios()
+        var outcomes: [Outcome] = []
+        outcomes.reserveCapacity(all.count)
+        for scenario in all {
+            let observed = scenario.observedRuleId()
+            outcomes.append(Outcome(
+                id: scenario.id,
+                label: scenario.label,
+                expectedRuleId: scenario.expectedRuleId,
+                observedRuleId: observed,
+                passed: observed == scenario.expectedRuleId
+            ))
+        }
+        return Result(outcomes: outcomes)
+    }
+
     /// Map an `MITMInnerHostRebind.Decision` to the stable audit-row
     /// ruleId string the connection-handler outcome switch uses. Lifted
     /// here so the corpus + the handler agree on the mapping at the
@@ -582,7 +610,9 @@ public enum MITMBodyInspectionCorpus {
     /// lines in operator-greppable shape:
     ///
     ///   `mitm: <enabled|disabled> | ca-on-disk: <yes|no>`
-    ///   `body-inspection corpus: N/M`
+    ///   `body-inspection corpus: N/M` (r99: optionally suffixed
+    ///       ` + connect-path: K/L` when `connectPathTotal > 0` —
+    ///       same line, operator-greppable as `grep "connect-path:"`)
     ///   `recent denials (last 200): <rule_id=count, ...> | none`
     ///   `hint: run \`senkani doctor --install-egress-ca\` to install the CA needed for MITM termination`   (ONLY when flag-on + !ca-on-disk)
     ///   `note: body/header/path DENY rules are best-effort defense-in-depth — see docs/concepts/security-posture.html for evasion vectors`
@@ -613,12 +643,22 @@ public enum MITMBodyInspectionCorpus {
         caOnDisk: Bool,
         bodyCorpusPassed: Int,
         bodyCorpusTotal: Int,
-        recentDenialCounts: [(ruleId: String, count: Int)]
+        recentDenialCounts: [(ruleId: String, count: Int)],
+        connectPathPassed: Int = 0,
+        connectPathTotal: Int = 0
     ) -> [String] {
         let mitmStateWord = flagOn ? "enabled" : "disabled"
         let caStateWord = caOnDisk ? "yes" : "no"
         let mitmLine = "mitm: \(mitmStateWord) | ca-on-disk: \(caStateWord)"
-        let corpusLine = "body-inspection corpus: \(bodyCorpusPassed)/\(bodyCorpusTotal)"
+        // r99 t1d-5 r52 Karpathy P2 — extend the corpus line with the
+        // CONNECT-path surface when it has scenarios. `connectPathTotal == 0`
+        // omits the suffix (back-compat for callers that pre-date r99).
+        let corpusLine: String
+        if connectPathTotal > 0 {
+            corpusLine = "body-inspection corpus: \(bodyCorpusPassed)/\(bodyCorpusTotal) + connect-path: \(connectPathPassed)/\(connectPathTotal)"
+        } else {
+            corpusLine = "body-inspection corpus: \(bodyCorpusPassed)/\(bodyCorpusTotal)"
+        }
         let denialBody: String
         if recentDenialCounts.isEmpty {
             denialBody = "none"

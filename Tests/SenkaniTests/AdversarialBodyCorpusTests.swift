@@ -595,6 +595,65 @@ struct DoctorCheckEgressMITMStateTests {
         #expect(lines[1] == "body-inspection corpus: 7/8")
     }
 
+    /// r99 t1d-5 r52 Karpathy P2 — connect-path corpus suffix appears
+    /// when `connectPathTotal > 0`. Back-compat: `connectPathTotal == 0`
+    /// (the default) renders the SAME line shape as pre-r99 callers, so
+    /// existing tests continue to pass byte-identically.
+    @Test("doctor --check-egress: connect-path corpus suffix appears when connectPathTotal > 0")
+    func connectPathSuffixAppears() {
+        let lines = MITMBodyInspectionCorpus.formatCheckEgressMITMStateLines(
+            flagOn: true,
+            caOnDisk: true,
+            bodyCorpusPassed: 8,
+            bodyCorpusTotal: 8,
+            recentDenialCounts: [],
+            connectPathPassed: 2,
+            connectPathTotal: 2
+        )
+        #expect(lines[1] == "body-inspection corpus: 8/8 + connect-path: 2/2",
+                "corpus line suffixed with connect-path pass-rate when connectPathTotal > 0")
+        // Suffix MUST land on the same line, not a new one — line count
+        // stays at 4 (mitm-state, corpus, denials, caveat-footer).
+        #expect(lines.count == 4,
+                "suffix sits on the existing corpus line; does not add a new line")
+    }
+
+    /// r99 t1d-5 r52 Karpathy P2 — back-compat: default-arg form
+    /// (no connect-path args) renders the byte-identical pre-r99 shape.
+    /// Lock-in so a future refactor cannot accidentally flip the default
+    /// to emit a `+ connect-path: 0/0` empty suffix.
+    @Test("doctor --check-egress: connect-path suffix omitted when connectPathTotal == 0 (back-compat default)")
+    func connectPathSuffixOmittedByDefault() {
+        let lines = MITMBodyInspectionCorpus.formatCheckEgressMITMStateLines(
+            flagOn: true,
+            caOnDisk: true,
+            bodyCorpusPassed: 8,
+            bodyCorpusTotal: 8,
+            recentDenialCounts: []
+        )
+        #expect(lines[1] == "body-inspection corpus: 8/8",
+                "default-arg form (no connect-path args) renders pre-r99 line shape byte-identical")
+        #expect(!lines[1].contains("connect-path"),
+                "default-arg form must NOT emit '+ connect-path: 0/0' empty suffix")
+    }
+
+    /// r99 t1d-5 r52 Karpathy P2 — `runConnectPath()` actually returns
+    /// outcomes for `connectPathScenarios()` (lock the orphan fix).
+    @Test("r99 — runConnectPath() returns outcomes for connectPathScenarios (not the frozen 8)")
+    func runConnectPathSweepsConnectPathScenarios() {
+        let connectResult = MITMBodyInspectionCorpus.runConnectPath()
+        let connectScenarios = MITMBodyInspectionCorpus.connectPathScenarios()
+        #expect(connectResult.outcomes.count == connectScenarios.count,
+                "runConnectPath() iterates connectPathScenarios() exactly once")
+        #expect(connectResult.outcomes.count > 0,
+                "runConnectPath() must return AT LEAST the existing CONNECT-path scenarios — guards against future accidental drop")
+        // The activation-gate `run()` returns the FROZEN 8-scenario set
+        // and MUST NOT have been disturbed by adding the new sweep.
+        let frozenResult = MITMBodyInspectionCorpus.run()
+        #expect(frozenResult.outcomes.count == 8,
+                "scenarios() corpus stays FROZEN at 8 — adding runConnectPath() does not perturb the activation gate")
+    }
+
     /// T.1d-3 — the best-effort caveat footer is unconditional. Operator
     /// must see the caveat whether MITM is on or off, whether the corpus
     /// is all-green or partial, and whether there are recent denials or

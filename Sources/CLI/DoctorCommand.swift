@@ -1952,6 +1952,10 @@ struct Doctor: ParsableCommand {
         let privateExists = FileManager.default.fileExists(atPath: caPaths.privateKeyPEM)
         let recentDenials = SessionDatabase.shared.recentEgressDecisions(limit: 200)
         let denialCounts = MITMBodyInspectionCorpus.countDenialsByRuleId(recentDenials)
+        // v47 Allspaw P2 — capture-state distribution over the same 200-row
+        // window. Surfaces a per-state counter so the operator can spot an
+        // `.overflowed` spike (16 KB peek window undersized for their traffic).
+        let captureStateCounts = MITMBodyInspectionCorpus.countByCaptureState(recentDenials)
         let stateLines = MITMBodyInspectionCorpus.formatCheckEgressMITMStateLines(
             flagOn: features.mitmTlsTermination,
             caOnDisk: publicExists && privateExists,
@@ -1959,7 +1963,8 @@ struct Doctor: ParsableCommand {
             bodyCorpusTotal: bodyCorpus.outcomes.count,
             recentDenialCounts: denialCounts,
             connectPathPassed: connectPathPassed,
-            connectPathTotal: connectPathCorpus.outcomes.count
+            connectPathTotal: connectPathCorpus.outcomes.count,
+            captureStateCounts: captureStateCounts
         )
         print("")
         for line in stateLines {

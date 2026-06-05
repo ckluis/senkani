@@ -2718,6 +2718,113 @@ public enum MigrationRegistry {
                 try openEgressDecisionsV46Anchor(db: db)
             }
         },
+        Migration(version: 47, description: "egress_decisions.body_excerpt_capture_state column (Phase T.1d-5 r52 Allspaw P2 — capture-state annotation: empty / overflowed / extraction_failed / captured)") { db in
+            // T.1d-5 r52 Allspaw P2 — add `body_excerpt_capture_state TEXT`
+            // to `egress_decisions` so an audit row's nil body_excerpt is no
+            // longer ambiguous. The column stores the EgressBodyCaptureState
+            // rawValue (`empty` / `overflowed` / `extraction_failed` /
+            // `captured`), letting doctor `--check-egress` surface per-state
+            // counters so an operator can spot a spike in `.overflowed`
+            // (16 KB peek window undersized for their traffic).
+            //
+            // Chain-hash compatibility — FOURTH canonical-shape tier for
+            // `egress_decisions`, mirroring the v46 precedent exactly:
+            //   • pre-v23 rows (`fresh-install-pre-v23`): no judge_rationale
+            //     / pane_mode, no body_excerpt, no capture_state.
+            //   • v23..pre-v46 rows (`migration-v23`,
+            //     `fresh-install-pre-v46`): judge_rationale + pane_mode,
+            //     NO body_excerpt, NO capture_state.
+            //   • v46..pre-v47 rows (`migration-v46`,
+            //     `fresh-install-pre-v47`): + body_excerpt, NO capture_state.
+            //     (Schneier P0 — these rows stay on the v46 column-shape
+            //     FOREVER; their entry_hash bytes were computed without the
+            //     capture_state column and can never be retroactively
+            //     widened.)
+            //   • v47+ rows (`migration-v47`, post-v47 `fresh-install`,
+            //     future `repair-*`): + body_excerpt_capture_state.
+            // Adding the column to an existing anchor's canonical map would
+            // break its entry_hash, so we rename the rolling post-v46
+            // `fresh-install` anchor to `fresh-install-pre-v47` (any later
+            // bare `fresh-install` means "v47 shape") and open a
+            // `migration-v47` anchor at MAX(id) for post-v47 writes.
+            //
+            // REVIEWER CHECKLIST — copy-paste hazard from v46→v47:
+            //   - grep the v47 probe SQL for any literal v46/v45/v23 string —
+            //     must be zero matches (the probe MUST look for
+            //     `migration-v47` and `fresh-install-pre-v47`, NEVER a prior
+            //     version; leaving a prior literal silently makes v47's
+            //     rename+open run twice on a re-migration).
+            //   - the exclusion list in
+            //     `ChainVerifier.verifyAnchorEgressDecisions` (and the writer
+            //     `useV47Shape` predicate in the egress decision store's
+            //     `record(...)`) MUST include
+            //     ALL prior `egress_decisions` anchor reasons
+            //     (`fresh-install-pre-v23`, `migration-v23`,
+            //     `fresh-install-pre-v46`, `migration-v46`,
+            //     `fresh-install-pre-v47`) — the v46-shape rows stay
+            //     v46-shape forever.
+            func exec(_ sql: String, allowDuplicateColumn: Bool = false) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc == SQLITE_OK { return }
+                if allowDuplicateColumn && msg.contains("duplicate column name") { return }
+                throw MigrationError.sqlFailed(stage: "v47", detail: msg)
+            }
+
+            try exec("ALTER TABLE egress_decisions ADD COLUMN body_excerpt_capture_state TEXT;", allowDuplicateColumn: true)
+
+            // Idempotency guard (mirrors v46): a prior full/partial v47
+            // leaves either `migration-v47` or `fresh-install-pre-v47` in
+            // chain_anchors. If either is present, skip the rename +
+            // anchor-open — re-running them would mis-classify post-v47 lazy
+            // `fresh-install` anchors as pre-v47, breaking entry_hash
+            // verification for those rows.
+            //
+            // REVIEWER PIN: this probe MUST reference `migration-v47` and
+            // `fresh-install-pre-v47` ONLY. A literal `v46`/`v45`/`v23` here
+            // is the copy-paste hazard called out in the header doc-comment.
+            var probeStmt: OpaquePointer?
+            let probeSQL = """
+                SELECT EXISTS(SELECT 1 FROM chain_anchors
+                               WHERE table_name = 'egress_decisions'
+                                 AND reason IN ('migration-v47', 'fresh-install-pre-v47'));
+            """
+            guard sqlite3_prepare_v2(db, probeSQL, -1, &probeStmt, nil) == SQLITE_OK else {
+                throw MigrationError.sqlFailed(
+                    stage: "v47 marker probe",
+                    detail: String(cString: sqlite3_errmsg(db)))
+            }
+            var alreadyApplied = false
+            if sqlite3_step(probeStmt) == SQLITE_ROW {
+                alreadyApplied = sqlite3_column_int(probeStmt, 0) == 1
+            }
+            sqlite3_finalize(probeStmt)
+
+            if !alreadyApplied {
+                // Rename the rolling post-v46 `fresh-install` anchor to
+                // `fresh-install-pre-v47`. After this, any lazily-created
+                // `fresh-install` (post-v47) means "v47 canonical shape" —
+                // includes the body_excerpt_capture_state column. No-op when
+                // no `fresh-install` row exists.
+                try exec("""
+                    UPDATE chain_anchors
+                       SET reason = 'fresh-install-pre-v47'
+                     WHERE table_name = 'egress_decisions'
+                       AND reason = 'fresh-install';
+                """)
+
+                // Open a `migration-v47` anchor at MAX(id) so post-v47 writes
+                // chain under the new shape; pre-v47 rows verify under their
+                // existing anchors. Like v46 this inserts the anchor
+                // UNCONDITIONALLY (even on an empty table at MAX(id)=0) — so a
+                // fresh DB's first write lands on `migration-v47`, NOT a lazy
+                // `fresh-install`. Both are useV47Shape=true, so either way
+                // the first row hashes with the capture_state column.
+                try openEgressDecisionsV47Anchor(db: db)
+            }
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)
@@ -3105,6 +3212,50 @@ public enum MigrationRegistry {
             sqlite3_finalize(stmt)
             throw MigrationError.sqlFailed(
                 stage: "v46 anchor step(egress_decisions)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_finalize(stmt)
+    }
+
+    /// T.1d-5 r52 Allspaw P2 — open a `migration-v47` anchor at the current
+    /// MAX(id) of `egress_decisions` so post-v47 writes (which carry the new
+    /// `body_excerpt_capture_state` column in their canonical hash) chain
+    /// under the v47 shape, while pre-v47 rows verify under their existing
+    /// anchors (`migration-v46`, `fresh-install-pre-v47`, and the earlier
+    /// pre-v46 reasons). Mirrors `openEgressDecisionsV46Anchor`. No-op
+    /// semantics on empty tables (MAX(id)→0); fresh installs lazy-create a
+    /// post-v47 `fresh-install` anchor that uses the v47 shape from the start.
+    private static func openEgressDecisionsV47Anchor(db: OpaquePointer) throws {
+        var stmt: OpaquePointer?
+        let maxSQL = "SELECT COALESCE(MAX(id), 0) FROM egress_decisions;"
+        guard sqlite3_prepare_v2(db, maxSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(
+                stage: "v47 maxid(egress_decisions)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        var maxRowid: Int64 = 0
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            maxRowid = sqlite3_column_int64(stmt, 0)
+        }
+        sqlite3_finalize(stmt)
+
+        let now = Date().timeIntervalSince1970
+        let insertSQL = """
+            INSERT INTO chain_anchors
+                (table_name, started_at, started_at_rowid, reason, operator_note)
+            VALUES ('egress_decisions', ?, ?, 'migration-v47', NULL);
+        """
+        guard sqlite3_prepare_v2(db, insertSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw MigrationError.sqlFailed(
+                stage: "v47 anchor insert(egress_decisions)",
+                detail: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_bind_double(stmt, 1, now)
+        sqlite3_bind_int64(stmt, 2, maxRowid)
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            sqlite3_finalize(stmt)
+            throw MigrationError.sqlFailed(
+                stage: "v47 anchor step(egress_decisions)",
                 detail: String(cString: sqlite3_errmsg(db)))
         }
         sqlite3_finalize(stmt)

@@ -1,6 +1,49 @@
 import Foundation
 import SQLite3
 
+/// Why an audit row's `body_excerpt` came out the way it did.
+///
+/// T.1d-5 r52 Allspaw P2 (v47): before this column, an audit row with
+/// `body_excerpt: nil` was AMBIGUOUS — it could mean any of:
+///   - `.empty`            — no body was sent (GET/HEAD, or an explicit
+///                           Content-Length:0 POST). The request HEAD
+///                           terminated with `\r\n\r\n` and nothing
+///                           followed.
+///   - `.overflowed`       — a body WAS sent but its declared length
+///                           exceeded what fit in the ≤16 KB rebind-peek
+///                           head buffer, so the captured excerpt is a
+///                           PREFIX (or, if the body started past the
+///                           buffer boundary, nothing was captured). An
+///                           operator seeing a spike here knows the
+///                           16 KB peek window is undersized for their
+///                           traffic.
+///   - `.extractionFailed` — the head buffer was malformed (no
+///                           `\r\n\r\n` terminator, or fewer than 4
+///                           bytes). Defensively (near-)unreachable from
+///                           the live `.allow` arm — the rebind peek
+///                           guarantees a terminator before it returns
+///                           `.allow(headBytes:)` — but the classifier
+///                           pins the contract so a future caller that
+///                           feeds an unvalidated buffer gets an honest
+///                           state instead of a false `.empty`.
+///   - `.captured`         — a body was present and its excerpt bytes
+///                           were captured (possibly truncate-then-
+///                           redacted by `prepareBodyExcerpt`, but the
+///                           full declared body fit the head buffer).
+///
+/// Persisted as the `rawValue` TEXT in the `body_excerpt_capture_state`
+/// column. The rawValues are a STABLE on-disk vocabulary — never rename
+/// a case's rawValue (it would break audit-chain re-derivation for rows
+/// already written under that string). Pre-v47 rows carry NULL (the
+/// column did not exist); the verifier omits the column for pre-v47
+/// anchors so those rows re-derive byte-identically.
+public enum EgressBodyCaptureState: String, Sendable, Equatable, CaseIterable {
+    case empty
+    case overflowed
+    case extractionFailed = "extraction_failed"
+    case captured
+}
+
 /// Owns `egress_decisions` end-to-end: schema (migration v19), chained
 /// writes, recent-row reads. Mirrors `TokenEventStore`'s shape so the
 /// chain mechanics are uniform across participants.
@@ -39,7 +82,8 @@ public final class EgressDecisionStore: @unchecked Sendable {
         projectRoot: String? = nil,
         paneMode: PaneMode? = nil,
         judgeRationale: String? = nil,
-        bodyExcerpt: Data? = nil
+        bodyExcerpt: Data? = nil,
+        bodyExcerptCaptureState: EgressBodyCaptureState? = nil
     ) -> Bool {
         let normalizedRoot = SessionDatabase.normalizePath(projectRoot)
         // T.1d-4 Schneier P1: truncate-then-redact the body excerpt BEFORE
@@ -81,6 +125,20 @@ public final class EgressDecisionStore: @unchecked Sendable {
             let useV46Shape = ![
                 "fresh-install-pre-v23", "migration-v23", "fresh-install-pre-v46",
             ].contains(reason)
+            // T.1d-5 r52 Allspaw P2 (v47): include `body_excerpt_capture_state`
+            // in the canonical column map for v47+ anchors (`migration-v47`,
+            // post-v47 `fresh-install`, future `repair-*`). The FOUR pre-v47
+            // anchor reasons — the three pre-v46 reasons PLUS `migration-v46`
+            // — OMIT the column (Schneier P0: `migration-v46` rows were hashed
+            // under the v46 shape that had NO capture_state column and stay
+            // there forever). Mirrors the verifier's exclusion-list branch in
+            // `ChainVerifier.verifyAnchorEgressDecisions`. EXCLUSION-form (not
+            // an allowlist) so a future `repair-*` rebind inherits the v47
+            // shape automatically.
+            let useV47Shape = ![
+                "fresh-install-pre-v23", "migration-v23", "fresh-install-pre-v46",
+                "migration-v46", "fresh-install-pre-v47",
+            ].contains(reason)
 
             var columns: [String: ChainHasher.CanonicalValue] = [
                 "timestamp":     .real(now),
@@ -113,6 +171,18 @@ public final class EgressDecisionStore: @unchecked Sendable {
                 // distinct row from a nil-body row of the same shape).
                 columns["body_excerpt"] = preparedExcerpt.map { .blob($0) } ?? .null
             }
+            if useV47Shape {
+                // v47 Allspaw P2: capture-state annotation. nil → .null in
+                // the canonical map (distinct from any non-null state's
+                // rawValue text), matching the NULL-vs-present policy the
+                // body_excerpt slot uses. A nil capture-state means "the
+                // caller did not annotate" — which a v47-aware writer never
+                // does for a real CONNECT-path body, but defaulted call
+                // sites (plain-HTTP, synthetic test rows) legitimately pass
+                // nil and round-trip as NULL.
+                columns["body_excerpt_capture_state"] =
+                    bodyExcerptCaptureState.map { .text($0.rawValue) } ?? .null
+            }
             let entryHash = ChainHasher.entryHash(
                 table: "egress_decisions", columns: columns, prev: prevHash
             )
@@ -123,8 +193,9 @@ public final class EgressDecisionStore: @unchecked Sendable {
                      pane_id, project_root,
                      judge_rationale, pane_mode,
                      body_excerpt,
+                     body_excerpt_capture_state,
                      prev_hash, entry_hash, chain_anchor_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
@@ -162,13 +233,22 @@ public final class EgressDecisionStore: @unchecked Sendable {
             } else {
                 sqlite3_bind_null(stmt, 11)
             }
-            if let prevHash {
-                sqlite3_bind_text(stmt, 12, (prevHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            // v47 capture-state. Bind the rawValue text (or NULL when the
+            // caller didn't annotate). On-disk value is always the canonical
+            // rawValue string so the read-back + verifier re-derive
+            // identically.
+            if let bodyExcerptCaptureState {
+                sqlite3_bind_text(stmt, 12, (bodyExcerptCaptureState.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 12)
             }
-            sqlite3_bind_text(stmt, 13, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
-            sqlite3_bind_int64(stmt, 14, anchorId)
+            if let prevHash {
+                sqlite3_bind_text(stmt, 13, (prevHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            } else {
+                sqlite3_bind_null(stmt, 13)
+            }
+            sqlite3_bind_text(stmt, 14, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_int64(stmt, 15, anchorId)
 
             guard sqlite3_step(stmt) == SQLITE_DONE else { return false }
             chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
@@ -226,6 +306,12 @@ public final class EgressDecisionStore: @unchecked Sendable {
         /// body (e.g. opaque-tunnel path, deny-before-MITM, GET with no
         /// body).
         public let bodyExcerpt: Data?
+        /// T.1d-5 r52 Allspaw P2 (v47) — why `bodyExcerpt` came out the
+        /// way it did. nil for pre-v47 rows and for post-v47 rows whose
+        /// writer did not annotate (defaulted call sites). Lets the
+        /// operator (via doctor `--check-egress`) distinguish a benign
+        /// no-body GET from a body that overflowed the 16 KB peek window.
+        public let bodyExcerptCaptureState: EgressBodyCaptureState?
     }
 
     /// Return the N most recent rows in descending id order. Used by
@@ -238,7 +324,8 @@ public final class EgressDecisionStore: @unchecked Sendable {
             let sql = """
                 SELECT id, timestamp, host, method, decision, rule_id,
                        latency_us, pane_id, project_root,
-                       pane_mode, judge_rationale, body_excerpt
+                       pane_mode, judge_rationale, body_excerpt,
+                       body_excerpt_capture_state
                   FROM egress_decisions
                  ORDER BY id DESC
                  LIMIT ?;
@@ -277,14 +364,19 @@ public final class EgressDecisionStore: @unchecked Sendable {
                 } else {
                     bodyExcerpt = Data()
                 }
+                let captureStateStr: String? = sqlite3_column_type(stmt, 12) == SQLITE_NULL
+                    ? nil
+                    : sqlite3_column_text(stmt, 12).map { String(cString: $0) }
                 let decision = EgressRule.Decision(rawValue: decisionStr) ?? .deny
                 let paneMode = paneModeStr.flatMap { PaneMode(rawValue: $0) }
+                let captureState = captureStateStr.flatMap { EgressBodyCaptureState(rawValue: $0) }
                 out.append(Row(
                     id: id, timestamp: Date(timeIntervalSince1970: ts),
                     host: host, method: method, decision: decision, ruleId: ruleId,
                     latencyUs: latency, paneId: paneId, projectRoot: projectRoot,
                     paneMode: paneMode, judgeRationale: judgeRationale,
-                    bodyExcerpt: bodyExcerpt
+                    bodyExcerpt: bodyExcerpt,
+                    bodyExcerptCaptureState: captureState
                 ))
             }
             return out

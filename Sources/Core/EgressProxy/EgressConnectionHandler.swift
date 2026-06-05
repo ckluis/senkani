@@ -388,6 +388,11 @@ final class EgressConnectionHandler: @unchecked Sendable {
             // termination driver — it's the caller thread). No atomic
             // wrapper needed.
             var capturedInnerBody: Data? = nil
+            // v47 Allspaw P2 — the capture-state delivered alongside the
+            // body excerpt by `pipeBidirectional`'s callback. Threaded into
+            // the .allow audit rows so the operator can distinguish a benign
+            // no-body GET from an overflowed-peek-window body.
+            var capturedCaptureState: EgressBodyCaptureState? = nil
             let outcome = MITMTermination.runTerminationWithUpstream(
                 fd: clientFD,
                 peek: peek,
@@ -432,8 +437,9 @@ final class EgressConnectionHandler: @unchecked Sendable {
                             upstreamFD: handle.fd,
                             validatedHost: normalizedHost,
                             bodyDenyEvaluator: bodyDenyEvaluator,
-                            onInnerBodyExcerpt: { body in
+                            onInnerBodyExcerpt: { body, captureState in
                                 capturedInnerBody = body
+                                capturedCaptureState = captureState
                             }
                         )
                     }
@@ -462,7 +468,8 @@ final class EgressConnectionHandler: @unchecked Sendable {
                     recordDecision(host: normalizedHost, method: parsed.method,
                                    decision: .allow, ruleId: ruleId,
                                    paneMode: resolvedPaneMode, judgeRationale: judgeRationale,
-                                   bodyExcerpt: capturedInnerBody)
+                                   bodyExcerpt: capturedInnerBody,
+                                   bodyExcerptCaptureState: capturedCaptureState)
                 case .handshakeFailed:
                     recordDecision(host: normalizedHost, method: parsed.method,
                                    decision: .deny, ruleId: "mitm_handshake_failed",
@@ -495,7 +502,8 @@ final class EgressConnectionHandler: @unchecked Sendable {
                     recordDecision(host: normalizedHost, method: parsed.method,
                                    decision: .allow, ruleId: ruleId,
                                    paneMode: resolvedPaneMode, judgeRationale: judgeRationale,
-                                   bodyExcerpt: capturedInnerBody)
+                                   bodyExcerpt: capturedInnerBody,
+                                   bodyExcerptCaptureState: capturedCaptureState)
                 case .upstreamUnreachable:
                     recordDecision(host: normalizedHost, method: parsed.method,
                                    decision: .deny, ruleId: "mitm_upstream_unreachable",
@@ -739,7 +747,8 @@ final class EgressConnectionHandler: @unchecked Sendable {
         ruleId: String,
         paneMode: PaneMode? = nil,
         judgeRationale: String? = nil,
-        bodyExcerpt: Data? = nil
+        bodyExcerpt: Data? = nil,
+        bodyExcerptCaptureState: EgressBodyCaptureState? = nil
     ) {
         let elapsed = DispatchTime.now().uptimeNanoseconds &- startTime.uptimeNanoseconds
         let latencyUs = Int64(elapsed / 1_000)
@@ -751,7 +760,8 @@ final class EgressConnectionHandler: @unchecked Sendable {
             latencyUs: max(latencyUs, 1),  // always > 0 per acceptance
             paneMode: paneMode,
             judgeRationale: judgeRationale,
-            bodyExcerpt: bodyExcerpt
+            bodyExcerpt: bodyExcerpt,
+            bodyExcerptCaptureState: bodyExcerptCaptureState
         )
     }
 

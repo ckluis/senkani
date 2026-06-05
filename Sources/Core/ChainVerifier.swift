@@ -691,11 +691,24 @@ public enum ChainVerifier {
         let useV46Shape = ![
             "fresh-install-pre-v23", "migration-v23", "fresh-install-pre-v46",
         ].contains(anchor.reason)
+        // T.1d-5 r52 Allspaw P2 (v47): rows under a v47+ anchor carry
+        // `body_excerpt_capture_state` in their canonical hash. EXCLUSION-form
+        // mirrors the v46 predicate. The FOUR pre-v47 anchor reasons — the
+        // three pre-v46 reasons PLUS `migration-v46` — omit the column.
+        // Crucially `migration-v46` is here (Schneier P0): those rows were
+        // hashed under the v46 shape (body_excerpt but NO capture_state) and
+        // stay v46-shape forever. Mirrors the writer-side `useV47Shape` in
+        // `EgressDecisionStore.record`.
+        let useV47Shape = ![
+            "fresh-install-pre-v23", "migration-v23", "fresh-install-pre-v46",
+            "migration-v46", "fresh-install-pre-v47",
+        ].contains(anchor.reason)
         let sql = """
             SELECT id, timestamp, host, method, decision, rule_id, latency_us,
                    pane_id, project_root,
                    judge_rationale, pane_mode,
                    body_excerpt,
+                   body_excerpt_capture_state,
                    prev_hash, entry_hash
               FROM egress_decisions
              WHERE chain_anchor_id = ? AND id > ? AND entry_hash IS NOT NULL
@@ -731,8 +744,15 @@ public enum ChainVerifier {
                     columns["body_excerpt"] = .blob(Data())
                 }
             }
-            let prev = optionalText(stmt, 12)
-            let stored = sqlite3_column_text(stmt, 13).map { String(cString: $0) } ?? ""
+            if useV47Shape {
+                // v47: body_excerpt_capture_state rides the v47 shape as
+                // TEXT (the EgressBodyCaptureState rawValue) or NULL. Read
+                // it back exactly as the writer bound it so the entry_hash
+                // re-derives byte-identically.
+                columns["body_excerpt_capture_state"] = textOrNull(stmt, 12)
+            }
+            let prev = optionalText(stmt, 13)
+            let stored = sqlite3_column_text(stmt, 14).map { String(cString: $0) } ?? ""
             return (rowid, columns, prev, stored)
         }
     }

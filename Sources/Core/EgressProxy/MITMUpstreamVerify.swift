@@ -423,6 +423,17 @@ enum MITMUpstreamVerify {
     /// caller can pass it straight to `recordEgressDecision` without
     /// needing a "should I record an empty blob" decision.
     ///
+    /// ### t1d-5 r52 Allspaw P2 — capture-state annotation (v47)
+    ///
+    /// The callback's SECOND argument is the `EgressBodyCaptureState` that
+    /// explains the first argument: `.empty` (no body), `.overflowed` (a
+    /// Content-Length-declared body exceeded the ≤16 KB peek window so the
+    /// excerpt is a prefix), `.extractionFailed` (malformed head — defensively
+    /// (near-)unreachable from `.allow`), or `.captured` (full body fit). The
+    /// caller threads this into `recordEgressDecision(... bodyExcerptCaptureState:)`
+    /// so doctor `--check-egress` can surface a per-state counter and an
+    /// operator can spot an `.overflowed` spike (peek window undersized).
+    ///
     /// r52 P3 guard (Schneier): an internal `bodyExcerptDelivered` flag
     /// pins the "EXACTLY ONCE" guarantee at the helper level so a
     /// future refactor (e.g. moving the rebind peek inside the read
@@ -483,7 +494,7 @@ enum MITMUpstreamVerify {
         upstreamFD: Int32,
         validatedHost: String? = nil,
         bodyDenyEvaluator: InnerBodyDenyEvaluating? = nil,
-        onInnerBodyExcerpt: ((Data?) -> Void)? = nil
+        onInnerBodyExcerpt: ((Data?, EgressBodyCaptureState) -> Void)? = nil
     ) -> MITMTermination.UpstreamOutcome {
         let bufSize = 16 * 1024
         var clientBuf = [UInt8](repeating: 0, count: bufSize)
@@ -559,11 +570,15 @@ enum MITMUpstreamVerify {
                 //     — the engine never sees raw plaintext that wasn't
                 //     truncate-then-redact-processed.
                 let body = MITMUpstreamVerify.innerBodyBytes(fromHeadBuffer: headBytes)
+                // v47 Allspaw P2 — classify WHY `body` came out the way it
+                // did from the SAME headBytes payload (pure, no IO). Delivered
+                // alongside the body so the audit row is non-ambiguous.
+                let captureState = MITMUpstreamVerify.innerBodyCaptureState(fromHeadBuffer: headBytes)
                 // r52 P3 (Schneier) guard — fire EXACTLY ONCE even under
                 // a future refactor that could re-enter this arm.
                 if let onInnerBodyExcerpt, !bodyExcerptDelivered {
                     bodyExcerptDelivered = true
-                    onInnerBodyExcerpt(body)
+                    onInnerBodyExcerpt(body, captureState)
                 }
                 // r94 t1d-5 r52 Allspaw P1 — LIVE in-path body denial.
                 // BEFORE the head-replay write, evaluate the parsed HEAD
@@ -891,6 +906,74 @@ enum MITMUpstreamVerify {
         guard let end = terminatorEnd, end < headBytes.count else { return nil }
         let body = headBytes[end..<headBytes.count]
         return body.isEmpty ? nil : Data(body)
+    }
+
+    /// r-followups t1d-5 r52 Allspaw P2 — classify WHY `innerBodyBytes`
+    /// came out the way it did, so the audit row can record a non-ambiguous
+    /// `EgressBodyCaptureState` instead of a bare nil.
+    ///
+    /// Pure — no IO. Operates on the SAME `headBytes` payload the rebind
+    /// peek's `.allow` arm produced, applying the SAME `\r\n\r\n`-locating
+    /// semantics as `innerBodyBytes`:
+    ///   - `< 4` bytes or no `\r\n\r\n` terminator → `.extractionFailed`
+    ///     (defensively (near-)unreachable from `.allow` — the rebind peek
+    ///     guarantees a terminator before returning `.allow(headBytes:)` —
+    ///     but the classifier is honest if a future caller feeds an
+    ///     unvalidated buffer).
+    ///   - terminator found, NO body bytes after it → `.empty` (GET/HEAD,
+    ///     or an explicit Content-Length:0 POST).
+    ///   - terminator found, body bytes present, AND a parseable
+    ///     `Content-Length` header declares MORE bytes than were captured
+    ///     after the terminator → `.overflowed` (the declared body exceeded
+    ///     the 16 KB peek window, so the captured excerpt is a PREFIX).
+    ///   - terminator found, body bytes present, declared length fits (or no
+    ///     Content-Length to compare) → `.captured`.
+    ///
+    /// The `.overflowed` signal is best-effort: it fires ONLY when a
+    /// parseable `Content-Length` proves the body was truncated. A chunked
+    /// body (Transfer-Encoding: chunked, no Content-Length) whose frames
+    /// overflowed the window is reported `.captured` (we have no length to
+    /// compare) — a conservative classification that never FALSELY claims
+    /// `.overflowed`. An operator monitoring the `.overflowed` counter is
+    /// thus seeing a lower bound on real overflows, never a false alarm.
+    static func innerBodyCaptureState(fromHeadBuffer headBytes: [UInt8]) -> EgressBodyCaptureState {
+        guard headBytes.count >= 4 else { return .extractionFailed }
+        var terminatorEnd: Int? = nil
+        for i in 0...(headBytes.count - 4) {
+            if headBytes[i] == 0x0D && headBytes[i+1] == 0x0A
+                && headBytes[i+2] == 0x0D && headBytes[i+3] == 0x0A {
+                terminatorEnd = i + 4
+                break
+            }
+        }
+        guard let end = terminatorEnd, end <= headBytes.count else {
+            return .extractionFailed
+        }
+        let capturedBodyLen = headBytes.count - end
+        if capturedBodyLen == 0 { return .empty }
+        // Body bytes present — check whether a declared Content-Length proves
+        // the captured slice is only a prefix (overflowed the peek window).
+        if let declared = declaredContentLength(fromHeadBuffer: headBytes),
+           declared > capturedBodyLen {
+            return .overflowed
+        }
+        return .captured
+    }
+
+    /// Parse a `Content-Length` request-header value (the first one) out of
+    /// the head buffer, if present and a non-negative integer. Returns nil
+    /// when absent or unparseable. Case-insensitive header-name match per
+    /// RFC 7230 §3.2. Pure — no IO.
+    static func declaredContentLength(fromHeadBuffer headBytes: [UInt8]) -> Int? {
+        guard let parsed = parseInnerHTTPHead(headBytes) else { return nil }
+        for header in parsed.headers
+        where header.name.trimmingCharacters(in: .whitespaces)
+            .lowercased() == "content-length" {
+            let v = header.value.trimmingCharacters(in: .whitespaces)
+            if let n = Int(v), n >= 0 { return n }
+            return nil  // present but malformed → don't guess
+        }
+        return nil
     }
 
     /// r94 t1d-5 r52 Allspaw P1 — parse the inner request HEAD out of

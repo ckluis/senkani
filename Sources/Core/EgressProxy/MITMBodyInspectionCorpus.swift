@@ -605,6 +605,33 @@ public enum MITMBodyInspectionCorpus {
             }
     }
 
+    /// T.1d-5 r52 Allspaw P2 — count `egress_decisions` rows by their
+    /// `body_excerpt_capture_state`, returning a count for EACH of the four
+    /// known states (in the canonical `.empty / .overflowed /
+    /// .extractionFailed / .captured` order) plus a `nil`-state count for
+    /// rows whose writer did not annotate (pre-v47 rows + defaulted call
+    /// sites). The fixed-order, all-states-present shape gives the operator a
+    /// stable greppable surface — a sudden spike in `.overflowed` signals the
+    /// 16 KB peek window is undersized for their traffic. Pure — lifted here
+    /// so the doctor CLI never references `EgressDecisionStore` directly.
+    public static func countByCaptureState(
+        _ rows: [EgressDecisionStore.Row]
+    ) -> (states: [(state: EgressBodyCaptureState, count: Int)], unannotated: Int) {
+        var counts: [EgressBodyCaptureState: Int] = [:]
+        var unannotated = 0
+        for row in rows {
+            if let s = row.bodyExcerptCaptureState {
+                counts[s, default: 0] += 1
+            } else {
+                unannotated += 1
+            }
+        }
+        let ordered = EgressBodyCaptureState.allCases.map {
+            (state: $0, count: counts[$0] ?? 0)
+        }
+        return (states: ordered, unannotated: unannotated)
+    }
+
     /// T.1d-5 — pure formatter for the doctor `--check-egress` MITM-state
     /// + body-corpus pass-rate + recent-deny-counts lines. Four or five
     /// lines in operator-greppable shape:
@@ -645,7 +672,8 @@ public enum MITMBodyInspectionCorpus {
         bodyCorpusTotal: Int,
         recentDenialCounts: [(ruleId: String, count: Int)],
         connectPathPassed: Int = 0,
-        connectPathTotal: Int = 0
+        connectPathTotal: Int = 0,
+        captureStateCounts: (states: [(state: EgressBodyCaptureState, count: Int)], unannotated: Int)? = nil
     ) -> [String] {
         let mitmStateWord = flagOn ? "enabled" : "disabled"
         let caStateWord = caOnDisk ? "yes" : "no"
@@ -671,6 +699,20 @@ public enum MITMBodyInspectionCorpus {
         let caveatLine = "note: body/header/path DENY rules are best-effort defense-in-depth — see docs/concepts/security-posture.html for evasion vectors"
 
         var lines: [String] = [mitmLine, corpusLine, denialLine]
+        // v47 Allspaw P2 — capture-state distribution line. Defaulted-nil so
+        // pre-r-followups callers (and the 6 existing formatter tests) omit
+        // it byte-identically. When present: a fixed-order all-states-present
+        // surface so an operator can grep `body capture states:` and spot an
+        // `.overflowed` spike (16 KB peek window undersized for their
+        // traffic). Placed AFTER the denial line, BEFORE the hint/caveat
+        // footer so the caveat stays LAST in all states.
+        if let cs = captureStateCounts {
+            let stateBody = cs.states
+                .map { "\($0.state.rawValue)=\($0.count)" }
+                .joined(separator: ", ")
+            let unannotatedSuffix = cs.unannotated > 0 ? ", unannotated=\(cs.unannotated)" : ""
+            lines.append("body capture states (last 200): \(stateBody)\(unannotatedSuffix)")
+        }
         // r93 Allspaw P3 — install-CA prescription appears ONLY in the
         // flag-on + no-CA state. Placed BEFORE the caveat footer so the
         // footer remains the LAST line in all states.

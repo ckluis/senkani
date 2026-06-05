@@ -821,7 +821,8 @@ struct DoctorCheckEgressMITMStateTests {
             host: "api.example.com", method: "POST",
             decision: decision, ruleId: ruleId,
             latencyUs: 1, paneId: nil, projectRoot: nil,
-            paneMode: nil, judgeRationale: nil, bodyExcerpt: nil
+            paneMode: nil, judgeRationale: nil, bodyExcerpt: nil,
+            bodyExcerptCaptureState: nil
         )
     }
 }

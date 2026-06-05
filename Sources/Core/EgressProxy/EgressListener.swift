@@ -108,31 +108,13 @@ public final class EgressListener: @unchecked Sendable {
     private var boundPort: Int = 0
     private var running = false
 
-    /// T.1b primary init — takes a per-pane policy and an optional
-    /// judge adapter. Production wires both; tests can pass `judge: nil`
-    /// to assert static-only behavior.
-    public init(
-        policy: EgressPolicy,
-        judge: JudgeAdapter? = nil,
-        database: SessionDatabase = .shared,
-        config: Config = Config(),
-        upstreamConnector: EgressUpstreamConnecting = DefaultEgressUpstreamConnector(),
-        mitmLeafProvider: ((String) -> Data?)? = nil
-    ) {
-        self.policy = policy
-        self.judge = judge
-        self.database = database
-        self.config = config
-        self.upstreamConnector = upstreamConnector
-        self.mitmLeafProvider = mitmLeafProvider
-        self.mitmTrustEvaluator = nil
-    }
-
-    /// T.1d-2b-iii test-only init: same as the primary init plus an
-    /// upstream-TLS trust-evaluator injection. Production never calls
-    /// this — the handler always defaults to System anchors when this
-    /// evaluator is nil. The init lives behind an `internal` access
-    /// level on purpose (testable via `@testable import Core`).
+    /// T.1d-2b r53 follow-up — single internal designated init carrying
+    /// the full field set including the `mitmTrustEvaluator` test seam.
+    /// Production callers go through the public convenience init below
+    /// (passes `mitmTrustEvaluator: nil`); the trust-evaluator seam
+    /// stays internal (testable via `@testable import Core`). Eliminates
+    /// the prior two-init drift risk — a new stored property added here
+    /// can't be forgotten in a parallel init shape.
     internal init(
         policy: EgressPolicy,
         judge: JudgeAdapter? = nil,
@@ -149,6 +131,29 @@ public final class EgressListener: @unchecked Sendable {
         self.upstreamConnector = upstreamConnector
         self.mitmLeafProvider = mitmLeafProvider
         self.mitmTrustEvaluator = mitmTrustEvaluator
+    }
+
+    /// T.1b primary init — takes a per-pane policy and an optional
+    /// judge adapter. Production wires both; tests can pass `judge: nil`
+    /// to assert static-only behavior. Public wrapper around the
+    /// designated internal init (passes `mitmTrustEvaluator: nil`).
+    public convenience init(
+        policy: EgressPolicy,
+        judge: JudgeAdapter? = nil,
+        database: SessionDatabase = .shared,
+        config: Config = Config(),
+        upstreamConnector: EgressUpstreamConnecting = DefaultEgressUpstreamConnector(),
+        mitmLeafProvider: ((String) -> Data?)? = nil
+    ) {
+        self.init(
+            policy: policy,
+            judge: judge,
+            database: database,
+            config: config,
+            upstreamConnector: upstreamConnector,
+            mitmLeafProvider: mitmLeafProvider,
+            mitmTrustEvaluator: nil
+        )
     }
 
     /// Back-compat init for T.1a callers. Wraps the flat rule engine in

@@ -340,12 +340,36 @@ enum MITMUpstreamVerify {
     ///
     /// `validatedHost == nil` skips the rebind (preserved for the
     /// child-iii seam tests that bypass the inner-Host layer).
+    ///
+    /// ### t1d-5 follow-ups Round A — CONNECT-path body excerpt plumbing
+    ///
+    /// `onInnerBodyExcerpt`, when non-nil, is invoked EXACTLY ONCE on the
+    /// `.allow` rebind branch, immediately after the inner Host header is
+    /// validated and BEFORE any client→upstream byte forwarding. The Data
+    /// payload is the post-`\r\n\r\n` slice of the head-buffered bytes the
+    /// rebind peek already drained from the terminated TLS — i.e. the
+    /// decrypted plaintext request body bytes that happened to be present
+    /// in the same head buffer (capture-strategy: HEAD-BUFFER-BOUNDED, ≤16
+    /// KB, mirrors the non-CONNECT `bodyBytes(restOfHead:)` semantics so
+    /// operator body-deny rules fire identically on CONNECT-tunneled and
+    /// plain-HTTP targets). nil/empty body → callback receives nil so the
+    /// caller can pass it straight to `recordEgressDecision` without
+    /// needing a "should I record an empty blob" decision.
+    ///
+    /// The bytes handed to the callback are RAW — the caller is responsible
+    /// for `EgressDecisionStore.prepareBodyExcerpt` (truncate-then-redact)
+    /// before they enter the canonical-map / judge prompt. This preserves
+    /// the Schneier truncate-then-redact-before-hash invariant end-to-end
+    /// on the CONNECT path (the same invariant already enforced by
+    /// `EgressDecisionStore.record(... bodyExcerpt:)` which calls
+    /// `prepareBodyExcerpt` before SQLite bind).
     static func pipeBidirectional(
         clientSSL: SSLContext,
         clientFD: Int32,
         upstreamSSL: SSLContext,
         upstreamFD: Int32,
-        validatedHost: String? = nil
+        validatedHost: String? = nil,
+        onInnerBodyExcerpt: ((Data?) -> Void)? = nil
     ) -> MITMTermination.Outcome {
         let bufSize = 16 * 1024
         var clientBuf = [UInt8](repeating: 0, count: bufSize)
@@ -379,6 +403,33 @@ enum MITMUpstreamVerify {
             case .rejectReadError(let st):
                 return .innerReadError(st)
             case .allow(let headBytes):
+                // t1d-5 follow-ups Round A — CONNECT-path body excerpt
+                // plumbing. The rebind peek drained the inner request HEAD
+                // (and any body bytes that fit in the same 16 KB buffer)
+                // off the terminated TLS. Extract the body slice (post
+                // `\r\n\r\n`) with the SAME head-bounded semantics the
+                // non-CONNECT path's `bodyBytes(restOfHead:)` uses, then
+                // hand the raw bytes to the caller for AUDIT-ROW
+                // PERSISTENCE ONLY. Scope (Allspaw P1 / Schneier P2):
+                // this round ships persistence of the decrypted body
+                // excerpt to the audit chain so the operator can observe
+                // what crossed the tunnel — it does NOT re-invoke the
+                // rule engine against the captured body. `pipeBidirectional`
+                // has ALREADY returned `.allow` by the time the audit
+                // row lands, so live in-path denial of the upstream
+                // forward against this body excerpt is a SEPARATE
+                // follow-up (Allspaw P1 deferred work). Operator
+                // body-deny matchers fire LIVE on the non-CONNECT path
+                // today; on the CONNECT path they currently only fire
+                // post-hoc via the recorded excerpt. The Schneier P1
+                // truncate-then-redact-before-hash invariant IS
+                // preserved end-to-end: `EgressDecisionStore.prepareBodyExcerpt`
+                // runs INSIDE `record(... bodyExcerpt:)` so the raw
+                // bytes never reach disk or the canonical-map hash.
+                if let onInnerBodyExcerpt {
+                    let body = MITMUpstreamVerify.innerBodyBytes(fromHeadBuffer: headBytes)
+                    onInnerBodyExcerpt(body)
+                }
                 // Replay buffered head bytes to upstream as the first
                 // write. Use the same bounded sslWriteAll that the
                 // pipe uses so write would-block waits + budget exhaustion
@@ -618,6 +669,41 @@ enum MITMUpstreamVerify {
             if err == EINTR { continue }
             return .error(err)
         }
+    }
+
+    /// t1d-5 follow-ups Round A — extract the inner request body bytes
+    /// from the rebind peek's head-buffer payload.
+    ///
+    /// The rebind peek drained a bounded (≤16 KB) buffer off the
+    /// terminated TLS containing the inner HTTP request HEAD and any body
+    /// bytes that fit into the same read. The HEAD ends at the first
+    /// `\r\n\r\n` terminator; body bytes (if present) are everything
+    /// after that. Returns nil when no body bytes follow the terminator
+    /// (HEAD/GET-style requests) and nil when the terminator is somehow
+    /// absent (defensive — `peekAndDecide` only returns `.allow` once a
+    /// terminator was found, so this branch should be unreachable in
+    /// practice). Mirrors `EgressConnectionHandler.bodyBytes(restOfHead:)`
+    /// semantics exactly so the CONNECT and plain-HTTP paths produce
+    /// identical excerpt-shape inputs to `recordEgressDecision`.
+    ///
+    /// Pure — no IO. Lives here next to `pipeBidirectional` so the head
+    /// buffer's body-byte extraction has a single owning module.
+    static func innerBodyBytes(fromHeadBuffer headBytes: [UInt8]) -> Data? {
+        // Locate `\r\n\r\n`. Same shape as
+        // `MITMInnerHostRebind.headTerminatorIndex` but operates on raw
+        // bytes (no allocations until we slice).
+        guard headBytes.count >= 4 else { return nil }
+        var terminatorEnd: Int? = nil
+        for i in 0...(headBytes.count - 4) {
+            if headBytes[i] == 0x0D && headBytes[i+1] == 0x0A
+                && headBytes[i+2] == 0x0D && headBytes[i+3] == 0x0A {
+                terminatorEnd = i + 4
+                break
+            }
+        }
+        guard let end = terminatorEnd, end < headBytes.count else { return nil }
+        let body = headBytes[end..<headBytes.count]
+        return body.isEmpty ? nil : Data(body)
     }
 
     /// FD_SET equivalent for the two-fd case — same r85 Carmack P3

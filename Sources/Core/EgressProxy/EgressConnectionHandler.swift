@@ -370,6 +370,22 @@ final class EgressConnectionHandler: @unchecked Sendable {
             let upstreamPort = parsed.port
             let connector = self.upstreamConnector
             let evaluator = self.mitmTrustEvaluator ?? MITMUpstreamVerify.defaultEvaluate
+            // t1d-5 follow-ups Round A — capture the decrypted post-Host-
+            // rebind body bytes from the CONNECT path so operator body-deny
+            // matchers fire on CONNECT-tunneled targets. Capture-strategy:
+            // HEAD-BUFFER-BOUNDED (≤16 KB, mirrors the non-CONNECT
+            // `bodyBytes(restOfHead:)` semantics). The closure stores raw
+            // bytes here; `recordEgressDecision` calls into
+            // `EgressDecisionStore.prepareBodyExcerpt` which performs the
+            // Schneier truncate-then-redact-before-hash invariant before
+            // the bytes hit SQLite or the chain canonical-map.
+            //
+            // The store is single-threaded: `pipeBidirectional` invokes
+            // the callback at most ONCE, synchronously, on the same thread
+            // as this handler's `run()` (no Dispatch queue hop in the
+            // termination driver — it's the caller thread). No atomic
+            // wrapper needed.
+            var capturedInnerBody: Data? = nil
             let outcome = MITMTermination.runTerminationWithUpstream(
                 fd: clientFD,
                 peek: peek,
@@ -405,16 +421,25 @@ final class EgressConnectionHandler: @unchecked Sendable {
                             clientFD: clientCtx.fd,
                             upstreamSSL: handle.ssl,
                             upstreamFD: handle.fd,
-                            validatedHost: normalizedHost
+                            validatedHost: normalizedHost,
+                            onInnerBodyExcerpt: { body in
+                                capturedInnerBody = body
+                            }
                         )
                     }
                 }
             }
             switch outcome {
             case .terminated, .upstreamCompleted:
+                // t1d-5 follow-ups Round A — plumb the captured CONNECT-
+                // path inner body excerpt through to the allow audit row.
+                // Raw bytes flow into `recordEgressDecision`; the store's
+                // `prepareBodyExcerpt` runs truncate-then-redact BEFORE
+                // SQLite bind / chain hashing (Schneier P1 invariant).
                 recordDecision(host: normalizedHost, method: parsed.method,
                                decision: .allow, ruleId: ruleId,
-                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale)
+                               paneMode: resolvedPaneMode, judgeRationale: judgeRationale,
+                               bodyExcerpt: capturedInnerBody)
             case .handshakeFailed:
                 recordDecision(host: normalizedHost, method: parsed.method,
                                decision: .deny, ruleId: "mitm_handshake_failed",

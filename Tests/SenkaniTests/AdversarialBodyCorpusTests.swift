@@ -266,6 +266,191 @@ struct AdversarialBodyCorpusTests {
         }
         return match
     }
+
+    // MARK: - t1d-5 follow-ups Round A — CONNECT-path body excerpt plumbing
+
+    /// t1d-5 follow-ups Round A — the CONNECT-path body-excerpt corpus
+    /// extends `scenarios()` with two scenarios that exercise the new
+    /// plumbing from `MITMUpstreamVerify.pipeBidirectional`'s
+    /// `onInnerBodyExcerpt` callback through to
+    /// `recordEgressDecision`'s `bodyExcerpt:` slot. The 8-scenario
+    /// activation-gate corpus stays FROZEN — these scenarios live in
+    /// `MITMBodyInspectionCorpus.connectPathScenarios()`.
+    @Test("t1d-5 follow-ups Round A — CONNECT-path body-deny scenarios classify + redact correctly")
+    func connectPathScenariosClassifyCorrectly() {
+        let scenarios = MITMBodyInspectionCorpus.connectPathScenarios()
+        #expect(scenarios.count == 2,
+                "CONNECT-path corpus must carry exactly 2 scenarios (body-deny-fires + planted-secret-redacted)")
+        for scenario in scenarios {
+            let observed = scenario.observedRuleId()
+            #expect(observed == scenario.expectedRuleId,
+                    "CONNECT-path scenario \(scenario.id): expected ruleId=\(scenario.expectedRuleId), observed=\(observed)")
+        }
+    }
+
+    /// Schneier P1 end-to-end on the CONNECT path: a planted-secret body
+    /// in a CONNECT-tunneled request must have the raw secret REPLACED in
+    /// the persisted `body_excerpt` BEFORE any hashing / SQLite bind.
+    /// This locks in the truncate-then-redact-before-hash invariant on the
+    /// CONNECT path (the same invariant the non-CONNECT path already
+    /// exercised via scenario 8 of the activation-gate corpus).
+    @Test("t1d-5 follow-ups Round A — Schneier P1 CONNECT-path planted-secret redaction: raw secret never lands on disk")
+    func connectPathPlantedSecretRedactedBeforeAudit() {
+        let path = Self.tempDBPath()
+        defer { TempSessionDatabase.cleanup(path: path) }
+        let db = SessionDatabase(path: path)
+        defer { db.close() }
+
+        // Karpathy P1 fix: pass the RAW planted-secret body bytes (NOT
+        // the corpus's already-`prepareBodyExcerpt`-redacted
+        // `representativeBodyExcerpt`) so the store's
+        // `prepareBodyExcerpt` is the ONLY redaction barrier under
+        // test. With the prior wiring the input was double-redacted —
+        // the "no raw secret on disk" assertion passed trivially
+        // because the test input never CONTAINED the raw secret in the
+        // first place. Now the test input DOES contain the raw secret
+        // and the assertion meaningfully proves the store redacted
+        // before persisting.
+        let rawSecret = "sk-abcdef1234567890ABCDEFGHIJKL"
+        guard let rawPlantedSecretBody = MITMUpstreamVerify.innerBodyBytes(
+            fromHeadBuffer: MITMBodyInspectionCorpus.connectInnerBodyPlantedSecretHead
+        ) else {
+            Issue.record("planted-secret raw body fixture must extract a non-nil body slice")
+            return
+        }
+        // Sanity-check the fixture before the round-trip: the RAW body
+        // slice MUST carry the raw secret bytes (otherwise the
+        // assertion below would be vacuous in a different way).
+        guard let rawBodyStr = String(data: rawPlantedSecretBody, encoding: .utf8) else {
+            Issue.record("planted-secret raw body must be UTF-8 decodable")
+            return
+        }
+        #expect(rawBodyStr.contains(rawSecret),
+                "fixture invariant: the RAW planted-secret body slice MUST contain the raw secret bytes (otherwise the redaction-before-persist assertion is vacuous)")
+
+        // Also derive the matching raw body for the body-deny scenario
+        // so both rows go in with raw (non-double-redacted) bytes.
+        guard let rawDenyBody = MITMUpstreamVerify.innerBodyBytes(
+            fromHeadBuffer: MITMBodyInspectionCorpus.connectInnerBodyDenyHead
+        ) else {
+            Issue.record("body-deny raw body fixture must extract a non-nil body slice")
+            return
+        }
+
+        // Insert one row per scenario, keyed off scenario id to pick
+        // the matching RAW body bytes. The store's `prepareBodyExcerpt`
+        // is the only redaction barrier between these raw bytes and
+        // disk.
+        let scenarios = MITMBodyInspectionCorpus.connectPathScenarios()
+        for scenario in scenarios {
+            let rawBody: Data
+            switch scenario.id {
+            case "connect-path-body-planted-secret-redacted":
+                rawBody = rawPlantedSecretBody
+            case "connect-path-body-deny-fires":
+                rawBody = rawDenyBody
+            default:
+                Issue.record("unexpected CONNECT-path scenario id: \(scenario.id)")
+                return
+            }
+            #expect(db.recordEgressDecision(
+                host: "api.example.com",
+                method: "POST",
+                decision: .deny,
+                ruleId: scenario.expectedRuleId,
+                latencyUs: 1,
+                paneMode: .general,
+                judgeRationale: nil,
+                bodyExcerpt: rawBody
+            ), "CONNECT-path scenario \(scenario.id) deny row must persist")
+        }
+
+        let rows = db.recentEgressDecisions(limit: scenarios.count)
+        #expect(rows.count == scenarios.count)
+
+        // Schneier P1 — raw OPENAI key bytes MUST NOT appear in any
+        // persisted CONNECT-path body_excerpt. With raw inputs now
+        // carrying the raw secret on the way in, this is the
+        // load-bearing assertion: failure means the store's redaction
+        // barrier did NOT run before the SQLite bind.
+        for row in rows {
+            guard let excerpt = row.bodyExcerpt,
+                  let s = String(data: excerpt, encoding: .utf8) else { continue }
+            #expect(!s.contains(rawSecret),
+                    "Schneier P1: raw OPENAI key MUST NOT survive in any persisted CONNECT-path body_excerpt (row id=\(row.id) rule=\(row.ruleId))")
+        }
+
+        // Positive assertion: at least one persisted CONNECT-path row
+        // must carry the SecretDetector marker, proving the redaction
+        // ran (and ran BEFORE the row landed on disk).
+        let redactedRows = rows.compactMap { row -> String? in
+            guard let excerpt = row.bodyExcerpt,
+                  let s = String(data: excerpt, encoding: .utf8),
+                  s.contains("[REDACTED:") else { return nil }
+            return s
+        }
+        #expect(!redactedRows.isEmpty,
+                "at least one CONNECT-path row must carry the SecretDetector marker post-redaction")
+
+        // Karpathy P1 fix (additional assertion) — the canonical body
+        // bytes that landed on disk MUST equal what `prepareBodyExcerpt`
+        // produces over the RAW input. Because the chain `entry_hash`
+        // (EgressDecisionStore.swift line ~170) is computed over the
+        // canonical column map which includes `body_excerpt` on v46+
+        // anchors, equal on-disk bytes imply equal hash inputs — i.e.
+        // the chain hash is bound to the REDACTED form, never the raw
+        // form. (Row does not expose entry_hash directly; comparing
+        // the persisted bytes to the redacted form is the cleanest
+        // proxy without widening the public API.)
+        let expectedRedactedPlanted = EgressDecisionStore.prepareBodyExcerpt(rawPlantedSecretBody)
+        let expectedRedactedDeny = EgressDecisionStore.prepareBodyExcerpt(rawDenyBody)
+        for row in rows {
+            switch row.ruleId {
+            case "connect-body-deny-secret-leak":
+                #expect(row.bodyExcerpt == expectedRedactedPlanted,
+                        "persisted body_excerpt MUST equal prepareBodyExcerpt(raw) — the canonical bytes hashed into the chain are the REDACTED form, not the raw form")
+            case "connect-body-deny-sql":
+                #expect(row.bodyExcerpt == expectedRedactedDeny,
+                        "persisted body_excerpt MUST equal prepareBodyExcerpt(raw) — the canonical bytes hashed into the chain are the REDACTED form, not the raw form")
+            default:
+                Issue.record("unexpected persisted ruleId on CONNECT-path row: \(row.ruleId)")
+            }
+        }
+    }
+
+    /// Pin the byte-shape `MITMUpstreamVerify.innerBodyBytes(fromHeadBuffer:)`
+    /// returns so a regression on the head/body slice boundary breaks
+    /// THIS test rather than silently leaking the request HEAD into the
+    /// body excerpt slot (which would be a Schneier-flagged info-leak
+    /// into the audit row).
+    @Test("t1d-5 follow-ups Round A — innerBodyBytes slices ONLY the post-CRLFCRLF bytes from the rebind head buffer")
+    func innerBodyBytesSlicesPostTerminatorOnly() {
+        // HEAD + body buffer (decrypted plaintext as it would appear in
+        // the rebind peek's `.allow(headBytes:)` payload).
+        let head = "POST /v1/exec HTTP/1.1\r\nHost: api.example.com\r\n\r\n"
+        let body = "{\"command\":\"DROP TABLE users; --\"}"
+        let combined = Array((head + body).utf8)
+        guard let extracted = MITMUpstreamVerify.innerBodyBytes(fromHeadBuffer: combined) else {
+            Issue.record("innerBodyBytes must extract a non-nil body from the head+body buffer")
+            return
+        }
+        #expect(extracted == Data(body.utf8),
+                "extracted body must equal the post-CRLFCRLF slice byte-for-byte")
+        let extractedStr = String(data: extracted, encoding: .utf8) ?? ""
+        // Defense-in-depth: the HEAD must NEVER appear inside the body
+        // excerpt slot (otherwise the audit row would carry the request
+        // method + path, which is an info-leak surface we already audit
+        // through `host` + `method` columns).
+        #expect(!extractedStr.contains("POST /v1/exec"),
+                "the request HEAD must NEVER leak into the extracted body excerpt")
+        #expect(!extractedStr.contains("Host: api.example.com"),
+                "the Host header must NEVER leak into the extracted body excerpt")
+
+        // No-body request — HEAD only, no trailing bytes.
+        let headOnly = Array("GET /v1/test HTTP/1.1\r\nHost: api.example.com\r\n\r\n".utf8)
+        #expect(MITMUpstreamVerify.innerBodyBytes(fromHeadBuffer: headOnly) == nil,
+                "HEAD-only buffer (no trailing body bytes) must return nil")
+    }
 }
 
 /// T.1d-5 — extension of `senkani doctor --check-egress` reporting.

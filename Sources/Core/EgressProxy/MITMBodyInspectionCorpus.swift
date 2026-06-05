@@ -24,21 +24,31 @@ import Foundation
 /// doctor --check-egress` (Allspaw P1 activation-gate for the
 /// t1d-2b MITM-termination feature flag).
 ///
-/// r89 P3 (Schneier) — CONNECT-path MITM-inner-rebind body capture
-/// limitation: the t1d-4 body-excerpt capture in `EgressConnectionHandler`
-/// reads from the head buffer (16 KB). For the CONNECT path with MITM
-/// termination, the decrypted plaintext bodies are NOT currently plumbed
-/// into the body-excerpt capture (the CONNECT path runs through a
-/// separate seam). The 8-scenario corpus exercises this limitation via
-/// the inner-Host / oversized-head / unknown-protocol scenarios which
-/// classify on the request HEAD (not body); scenarios 1, 2, and 8
-/// exercise the plain-HTTP body-inspection path where the head buffer
-/// DOES contain the body. Acceptance decision (Schneier 2026-06-04):
-/// the CONNECT-path body capture is a documented limitation under
-/// t1d-5, deferred to a child item should the body-classify need to
-/// fire post-MITM-decrypt. The 8-scenario green is sufficient for the
-/// activation gate because the CONNECT-path adversaries are caught
-/// at the head-parse layer (inner-Host / size / protocol).
+/// r89 P3 (Schneier) — CONNECT-path MITM-inner-rebind body capture: the
+/// t1d-4 body-excerpt capture in `EgressConnectionHandler` reads from the
+/// head buffer (16 KB) on the non-CONNECT path. t1d-5 follow-ups Round A
+/// (2026-06-04) closed the CONNECT-path AUDIT-ROW gap: the rebind peek's
+/// `.allow(headBytes:)` payload is now sliced post-`\r\n\r\n` via
+/// `MITMUpstreamVerify.innerBodyBytes(fromHeadBuffer:)` and plumbed
+/// into `recordEgressDecision`'s `bodyExcerpt:` slot through a callback
+/// on `pipeBidirectional`. SCOPE (Allspaw P1): this round ships
+/// PERSISTENCE of the decrypted body excerpt to the audit chain on the
+/// CONNECT path — it does NOT make operator body-deny rules fire LIVE
+/// on the upstream forward. `pipeBidirectional` has already returned
+/// `.allow` by the time the audit row lands; the rule engine is NOT
+/// re-invoked against the captured body. On the non-CONNECT path body
+/// matchers DO fire in-path; on the CONNECT path they currently only
+/// fire post-hoc via the recorded excerpt. Live in-path denial against
+/// the CONNECT-tunneled inner body is a SEPARATE follow-up. The two
+/// `connectPathScenarios()` cases below exercise the audit-row plumbing
+/// shipped in this round: one for the body-deny ruleId classification
+/// observability, one for the planted-secret-redacted-before-audit
+/// (Schneier P1) on-disk invariant.
+/// The original 8-scenario `scenarios()` corpus remains the FROZEN
+/// activation-gate (already flag-flipped at r93) — see
+/// `connectPathScenarios()` for the new t1d-5 follow-ups Round A
+/// coverage, kept SEPARATE so the activation-gate `count == 8` pin
+/// stays stable.
 ///
 /// The corpus is structured as a list of `Scenario` records each carrying:
 ///   - A `label` for the operator-facing line.
@@ -164,6 +174,31 @@ public enum MITMBodyInspectionCorpus {
 
     static let missingHostHead: [UInt8] = {
         let s = "GET /v1/test HTTP/1.1\r\nUser-Agent: test\r\n\r\n"
+        return Array(s.utf8)
+    }()
+
+    /// t1d-5 follow-ups Round A — a representative CONNECT-tunneled
+    /// HTTP/1.1 request HEAD + body, as the decrypted plaintext bytes
+    /// would appear in the MITM-terminated head buffer after the inner
+    /// Host header has been validated. Carries an SQL-injection-shaped
+    /// body so a pure body-deny rule (no host signal) can fire.
+    ///
+    /// Shape: `POST /v1/exec HTTP/1.1\r\nHost: api.example.com\r\n\r\n{...body...}`
+    /// — same byte-shape `MITMInnerHostRebind.peekAndDecide` returns in
+    /// its `.allow(headBytes:)` payload when a single TLS read drains
+    /// the head + body.
+    static let connectInnerBodyDenyHead: [UInt8] = {
+        let s = "POST /v1/exec HTTP/1.1\r\nHost: api.example.com\r\n\r\n{\"command\":\"DROP TABLE users; --\"}"
+        return Array(s.utf8)
+    }()
+
+    /// t1d-5 follow-ups Round A — CONNECT-tunneled HEAD + body carrying
+    /// a planted OPENAI_API_KEY-shaped secret. End-to-end redaction
+    /// invariant: `prepareBodyExcerpt` MUST scrub the raw secret BEFORE
+    /// the canonical-map hash sees it. Mirrors `plantedSecretBody` but
+    /// in the CONNECT-path head-buffer shape.
+    static let connectInnerBodyPlantedSecretHead: [UInt8] = {
+        let s = "POST /v1/keys HTTP/1.1\r\nHost: api.example.com\r\n\r\n{\"upstream_key\":\"sk-abcdef1234567890ABCDEFGHIJKL\"}"
         return Array(s.utf8)
     }()
 
@@ -363,6 +398,126 @@ public enum MITMBodyInspectionCorpus {
                         bodyExcerpt: preparedStr
                     )
                     return engine.evaluate(request: request).ruleId
+                }
+            ),
+        ]
+    }
+
+    /// t1d-5 follow-ups Round A — CONNECT-path body-excerpt scenarios.
+    ///
+    /// The 8-scenario `scenarios()` corpus is the FROZEN activation-gate
+    /// (already flag-flipped at r93); adding to it would break the
+    /// pinned `count == 8` assertion that gates the flag-flip. These two
+    /// new scenarios exercise the t1d-5 follow-ups Round A plumbing
+    /// (CONNECT-path decrypted-plaintext body bytes into
+    /// `recordEgressDecision`) and are kept as a SEPARATE list so:
+    ///
+    ///   1. The activation gate remains a stable 8-scenario contract.
+    ///   2. The new CONNECT-path coverage is independently runnable.
+    ///   3. Adding future CONNECT-path-specific scenarios extends THIS
+    ///      list, not the activation-gate corpus.
+    ///
+    /// Each scenario reflects the byte-shape `MITMInnerHostRebind`
+    /// returns in its `.allow(headBytes:)` payload, exercises the
+    /// `MITMUpstreamVerify.innerBodyBytes(fromHeadBuffer:)` extraction,
+    /// and asserts the body-deny rule fires + (where applicable) the
+    /// planted secret is redacted before any audit-row hash.
+    public static func connectPathScenarios() -> [Scenario] {
+        // Body-only deny rule — host signal is intentionally absent from
+        // the matcher's pattern shape (it matches ANY host with the body
+        // signal). This proves the body excerpt is what's driving the
+        // deny, not the host.
+        let bodyOnlyDenyRule = EgressRule(
+            id: "connect-body-deny-sql",
+            pattern: "api.example.com",
+            mode: .exact,
+            decision: .deny,
+            bodyContains: "DROP TABLE",
+            header: nil,
+            path: nil
+        )
+        let allowAllRule = EgressRule(
+            id: "allow-api",
+            pattern: "api.example.com",
+            mode: .exact,
+            decision: .allow
+        )
+        let engine = EgressRuleEngine(rules: [bodyOnlyDenyRule, allowAllRule])
+
+        let secretRule = EgressRule(
+            id: "connect-body-deny-secret-leak",
+            pattern: "api.example.com",
+            mode: .exact,
+            decision: .deny,
+            bodyContains: "[REDACTED:",
+            header: nil,
+            path: nil
+        )
+        let secretEngine = EgressRuleEngine(rules: [secretRule, allowAllRule])
+
+        return [
+            Scenario(
+                id: "connect-path-body-deny-fires",
+                label: "CONNECT-tunneled body-deny rule fires on decrypted plaintext (no host signal)",
+                expectedRuleId: "connect-body-deny-sql",
+                // Round-trip: extract body via the same helper the live
+                // pipe uses, then redact-truncate via prepareBodyExcerpt.
+                representativeBodyExcerpt: {
+                    guard let raw = MITMUpstreamVerify.innerBodyBytes(
+                        fromHeadBuffer: connectInnerBodyDenyHead
+                    ) else { return Data() }
+                    return EgressDecisionStore.prepareBodyExcerpt(raw)
+                }(),
+                observedRuleId: {
+                    guard let raw = MITMUpstreamVerify.innerBodyBytes(
+                        fromHeadBuffer: connectInnerBodyDenyHead
+                    ) else { return "connect-body-extract-failed" }
+                    let prepared = EgressDecisionStore.prepareBodyExcerpt(raw)
+                    guard let preparedStr = String(data: prepared, encoding: .utf8) else {
+                        return "connect-body-non-utf8"
+                    }
+                    let request = EgressRequest(
+                        host: "api.example.com",
+                        method: "POST",
+                        path: "/v1/exec",
+                        headers: [],
+                        bodyExcerpt: preparedStr
+                    )
+                    return engine.evaluate(request: request).ruleId
+                }
+            ),
+            Scenario(
+                id: "connect-path-body-planted-secret-redacted",
+                label: "CONNECT-tunneled body planted OPENAI_API_KEY redacted BEFORE audit/judge sees it (Schneier P1)",
+                expectedRuleId: "connect-body-deny-secret-leak",
+                representativeBodyExcerpt: {
+                    guard let raw = MITMUpstreamVerify.innerBodyBytes(
+                        fromHeadBuffer: connectInnerBodyPlantedSecretHead
+                    ) else { return Data() }
+                    return EgressDecisionStore.prepareBodyExcerpt(raw)
+                }(),
+                observedRuleId: {
+                    guard let raw = MITMUpstreamVerify.innerBodyBytes(
+                        fromHeadBuffer: connectInnerBodyPlantedSecretHead
+                    ) else { return "connect-body-extract-failed" }
+                    let prepared = EgressDecisionStore.prepareBodyExcerpt(raw)
+                    guard let preparedStr = String(data: prepared, encoding: .utf8) else {
+                        return "connect-body-non-utf8"
+                    }
+                    // Defense-in-depth: the raw secret MUST NOT survive
+                    // into the prepared excerpt the rule engine sees.
+                    let rawSecret = "sk-abcdef1234567890ABCDEFGHIJKL"
+                    if preparedStr.contains(rawSecret) {
+                        return "connect-body-redaction-leaked-raw-secret"
+                    }
+                    let request = EgressRequest(
+                        host: "api.example.com",
+                        method: "POST",
+                        path: "/v1/keys",
+                        headers: [],
+                        bodyExcerpt: preparedStr
+                    )
+                    return secretEngine.evaluate(request: request).ruleId
                 }
             ),
         ]

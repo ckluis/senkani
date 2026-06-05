@@ -45,37 +45,55 @@ struct BrowserRunnerScaffoldTests {
 
     // MARK: - Test 2: BrowserDispatchMode round-trip
 
-    @Test("BrowserDispatchMode round-trips as 'subprocess'/'headless'; unknown values rejected")
+    @Test("BrowserDispatchMode round-trips as 'subprocess'/'headless'/'pane'; unknown values rejected; three audit-chain runner values")
     func browserDispatchModeRoundTrip() throws {
         // Raw-value round trip.
         #expect(BrowserDispatchMode.subprocess.rawValue == "subprocess")
         #expect(BrowserDispatchMode.headless.rawValue == "headless")
+        #expect(BrowserDispatchMode.pane.rawValue == "pane")
         #expect(BrowserDispatchMode(rawValue: "subprocess") == .subprocess)
         #expect(BrowserDispatchMode(rawValue: "headless") == .headless)
 
-        // U.2b-2's `.pane` value is reserved — not in this round's enum.
-        #expect(BrowserDispatchMode(rawValue: "pane") == nil,
-                "pane is reserved for U.2b-2; U.2b-1a's enum has only subprocess + headless")
+        // U.2b-2 child (a) — `.pane` is now the third valid case (the
+        // visible-pane runner selector). Until child (b) wires pane
+        // execution, the dispatcher's `.pane` arm refuses with a
+        // structured validation_browser_pane_not_yet_wired Response.
+        #expect(BrowserDispatchMode(rawValue: "pane") == .pane,
+                "pane is now accepted (U.2b-2 child (a)); the enum carries three cases")
         #expect(BrowserDispatchMode(rawValue: "unknown") == nil)
         #expect(BrowserDispatchMode(rawValue: "") == nil)
+        // Case-sensitive parse — capitalized variants are rejected.
+        #expect(BrowserDispatchMode(rawValue: "Pane") == nil)
 
-        // Audit-chain field values: the headless arm gets the explicit
-        // `wkwebview-headless` name so observability rows distinguish
-        // the off-screen WKWebView path from future pane variants.
+        // CaseIterable now enumerates exactly the three closed values.
+        #expect(BrowserDispatchMode.allCases == [.subprocess, .headless, .pane])
+
+        // Audit-chain field values: subprocess/headless/pane each get a
+        // distinct `runner=` value so observability rows distinguish the
+        // node-subprocess path, the off-screen WKWebView path, and the
+        // visible-pane path. These three are the closed set the
+        // audit-chain `runner` field carries (no row schema change).
         #expect(BrowserDispatchMode.subprocess.auditChainRunnerValue == "subprocess")
         #expect(BrowserDispatchMode.headless.auditChainRunnerValue == "wkwebview-headless")
+        #expect(BrowserDispatchMode.pane.auditChainRunnerValue == "wkwebview-pane")
+        // All three are distinct — no collision in the runner column.
+        let runnerValues = Set(BrowserDispatchMode.allCases.map(\.auditChainRunnerValue))
+        #expect(runnerValues.count == 3, "the three runner values must be distinct")
 
-        // Codable round trip.
+        // Codable round trip — all three cases.
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let subprocessData = try encoder.encode(BrowserDispatchMode.subprocess)
         let headlessData = try encoder.encode(BrowserDispatchMode.headless)
+        let paneData = try encoder.encode(BrowserDispatchMode.pane)
         #expect(String(data: subprocessData, encoding: .utf8) == "\"subprocess\"")
         #expect(String(data: headlessData, encoding: .utf8) == "\"headless\"")
+        #expect(String(data: paneData, encoding: .utf8) == "\"pane\"")
 
         let decoder = JSONDecoder()
         #expect(try decoder.decode(BrowserDispatchMode.self, from: subprocessData) == .subprocess)
         #expect(try decoder.decode(BrowserDispatchMode.self, from: headlessData) == .headless)
+        #expect(try decoder.decode(BrowserDispatchMode.self, from: paneData) == .pane)
     }
 
     // MARK: - Test 3: audit-chain runner field (subprocess path)
@@ -220,8 +238,8 @@ struct BrowserRunnerScaffoldTests {
         let text = result.content.compactMap { content -> String? in
             if case let .text(text: t, annotations: _, _meta: _) = content { return t } else { return nil }
         }.joined()
-        #expect(text.contains("dispatch must be 'subprocess' or 'headless'"),
-                "refusal message must enumerate the two accepted values; got: \(text)")
+        #expect(text.contains("dispatch must be 'subprocess', 'headless', or 'pane'"),
+                "refusal message must enumerate the three accepted values; got: \(text)")
 
         // CLI parity: the CLI's `--dispatch foo` parsing routes through
         // the same `BrowserDispatchMode(rawValue:)` initializer and
@@ -231,6 +249,11 @@ struct BrowserRunnerScaffoldTests {
                 "BrowserDispatchMode must reject 'foo' so both MCP and CLI refuse with the structured message")
         #expect(BrowserDispatchMode(rawValue: "Subprocess") == nil,
                 "raw-value parse is case-sensitive — 'Subprocess' is not 'subprocess'")
+        // U.2b-2 child (a) — 'pane' is now a VALID dispatch value (does
+        // not trip the invalidArguments refusal). The MCP handler accepts
+        // it and routes to the dispatcher's .pane refusal arm instead.
+        #expect(BrowserDispatchMode(rawValue: "pane") == .pane,
+                "'pane' must be accepted by the parser now (U.2b-2 child (a))")
     }
 }
 

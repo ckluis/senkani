@@ -36,8 +36,20 @@ public enum BrowserValidationDispatcher {
         /// U.2b-1a — runner selector. `.subprocess` invokes the runner
         /// closure as before; `.headless` short-circuits to a structured
         /// `headless_not_yet_implemented` refusal until U.2b-1b lands the
-        /// off-screen WKWebView runner.
+        /// off-screen WKWebView runner; `.pane` (U.2b-2 child (a))
+        /// short-circuits to a structured
+        /// `validation_browser_pane_not_yet_wired` refusal until child
+        /// (b) lands the visible-pane execution.
         public let dispatch: BrowserDispatchMode
+        /// U.2b-2 child (a) — visible-pane selector. Identifies which
+        /// `BrowserPane` a `dispatch: .pane` call targets. `nil` resolves
+        /// to the most-recently-focused pane once child (b) wires the
+        /// pane registry; non-nil pins a specific pane id. Default-safe:
+        /// callers on the `.subprocess` / `.headless` arms leave this
+        /// `nil` and observe no behavioral change. Until child (b) lands,
+        /// the value is carried but not yet consulted — the `.pane` arm
+        /// refuses uniformly regardless of `paneId`.
+        public let paneId: String?
         /// Optional EgressProxy URL the spawned Chromium subprocess should
         /// route through (e.g. `"http://127.0.0.1:18080"`). When set, the
         /// dispatcher computes a same-origin allowlist for `targetURL`,
@@ -64,6 +76,7 @@ public enum BrowserValidationDispatcher {
             sessionId: String,
             projectRoot: String?,
             dispatch: BrowserDispatchMode = .subprocess,
+            paneId: String? = nil,
             egressProxyURL: String? = nil,
             toolCallId: String = UUID().uuidString
         ) {
@@ -75,6 +88,7 @@ public enum BrowserValidationDispatcher {
             self.sessionId = sessionId
             self.projectRoot = projectRoot
             self.dispatch = dispatch
+            self.paneId = paneId
             self.egressProxyURL = egressProxyURL
             self.toolCallId = toolCallId
         }
@@ -284,6 +298,26 @@ public enum BrowserValidationDispatcher {
                     advisory: "headless_not_yet_implemented — register a BrowserDispatchRegistry.headlessRunnerFactory at app startup, or use dispatch:'subprocess'"
                 )
             }
+        case .pane:
+            // U.2b-2 child (a) — the visible-pane execution path lands in
+            // sibling child (b) (the GUI/Cowork half). Until then `.pane`
+            // resolves to a structured `validation_browser_pane_not_yet_
+            // wired` refusal: a correctly-shaped fail Response + a
+            // validation.dispatch audit row carrying runner=wkwebview-pane.
+            // This is intentionally NOT wired to a runner closure — it is
+            // a no-op-but-correctly-shaped row so the three-value parity
+            // and mixed-runner chain-integrity tests hold byte-for-byte
+            // regardless of which arm runs. The `paneId` selector is
+            // carried on the Request but not yet consulted; child (b)
+            // resolves it against the BrowserPane registry.
+            result = PlaywrightResult(
+                resultStatus: "fail",
+                axesRun: [],
+                assertionsPassed: 0,
+                assertionsFailed: 0,
+                screenshotPath: nil,
+                advisory: "validation_browser_pane_not_yet_wired — the visible-pane runner lands in U.2b-2 child (b); use dispatch:'subprocess' or 'headless' until then"
+            )
         }
 
         let advisory = formatAdvisory(

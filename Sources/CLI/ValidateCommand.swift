@@ -41,8 +41,11 @@ struct Validate: ParsableCommand {
     @Option(name: .long, help: "[--browser] Output format. 'json' produces byte-identical output to the senkani_validate_browser MCP response.")
     var format: String?
 
-    @Option(name: .long, help: "[--browser] Runner selector. 'subprocess' (default) drives the node+Playwright Chromium subprocess. 'headless' drives the off-screen WKWebView runner via BrowserDispatchRegistry's factory (registered by SenkaniApp at startup); standalone CLI invocations without that factory still see a structured headless_not_yet_implemented refusal.")
+    @Option(name: .long, help: "[--browser] Runner selector. 'subprocess' (default) drives the node+Playwright Chromium subprocess. 'headless' drives the off-screen WKWebView runner via BrowserDispatchRegistry's factory (registered by SenkaniApp at startup); standalone CLI invocations without that factory still see a structured headless_not_yet_implemented refusal. 'pane' (U.2b-2) targets a visible BrowserPane; until U.2b-2 child (b) wires pane execution, it returns a structured validation_browser_pane_not_yet_wired refusal.")
     var dispatch: String = "subprocess"
+
+    @Option(name: .long, help: "[--browser --dispatch pane] BrowserPane id to target. Omit to target the most-recently-focused pane (resolved by U.2b-2 child (b)). Ignored for 'subprocess' / 'headless' dispatch.")
+    var paneId: String?
 
     @Option(name: .long, help: "[--browser] EgressProxy URL (e.g. 'http://127.0.0.1:18080'). When set, the spawned Chromium subprocess routes through it with a per-target same-origin allowlist written to SENKANI_EGRESS_POLICY_OVERRIDE. Operator runs 'senkani egress start' first.")
     var egressProxy: String?
@@ -122,7 +125,7 @@ struct Validate: ParsableCommand {
             return parsed.isEmpty ? ValidationAxes.allCases : parsed
         }()
         guard let dispatchMode = BrowserDispatchMode(rawValue: dispatch) else {
-            print("Error: dispatch must be 'subprocess' or 'headless'")
+            print("Error: dispatch must be 'subprocess', 'headless', or 'pane'")
             throw ExitCode.failure
         }
         let diff: DiffRequest? = {
@@ -141,6 +144,7 @@ struct Validate: ParsableCommand {
             sessionId: sessionId,
             projectRoot: projectRoot,
             dispatch: dispatchMode,
+            paneId: paneId,
             egressProxyURL: egressProxy
         )
 

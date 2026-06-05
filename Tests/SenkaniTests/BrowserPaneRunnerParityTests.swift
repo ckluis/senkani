@@ -42,7 +42,19 @@ import Foundation
 ///      against a fresh SessionDatabase; `ChainVerifier.
 ///      verifyTokenEvents` must return `.ok` across the mixed
 ///      audit-chain row stream.
-@Suite("U.2b-1b-6 — Cross-runner parity corpus")
+///   5. `chainIntegrityAcrossHundredMixedRunnerRows` (U.2b-2 child (a))
+///      — extends test 4 to 100 interleaved dispatches round-robining
+///      `.subprocess` / `.headless` / `.pane` (a `wkwebview-pane`
+///      variant per cycle); chain integrity must hold across all three
+///      runner= variants, and all three must be present in the stream.
+///
+/// Suite serialization (U.2b-2 child (a)): both this suite and
+/// `BrowserValidateDispatchTests` swap the `nonisolated(unsafe)` static
+/// `HookRouter.browserValidationGateReader`; under Swift Testing's
+/// default parallel runner they raced (one suite's canned row bled into
+/// the other's assertion). The `.browserValidationGateReaderGate` trait
+/// serializes both suites process-wide; `.serialized` orders within each.
+@Suite("U.2b-1b-6 — Cross-runner parity corpus", .serialized, .browserValidationGateReaderGate)
 struct BrowserPaneRunnerParityTests {
 
     // MARK: - Fixture types
@@ -379,6 +391,118 @@ struct BrowserPaneRunnerParityTests {
         let hdRows = allCommands.filter { $0.contains("runner=wkwebview-headless") }
         #expect(subRows.count == 25, "expected 25 runner=subprocess rows; got \(subRows.count)")
         #expect(hdRows.count == 25, "expected 25 runner=wkwebview-headless rows; got \(hdRows.count)")
+    }
+
+    // MARK: - Test 5 (U.2b-2 child (a)): 100-row three-runner chain integrity
+
+    @Test("ChainVerifier.verifyTokenEvents holds across 100 interleaved subprocess/headless/pane dispatches (T.5 three-value chain)")
+    func chainIntegrityAcrossHundredMixedRunnerRows() throws {
+        let dbPath = "/tmp/senkani-u2b-2-chain-\(UUID().uuidString).sqlite"
+        let db = SessionDatabase(path: dbPath)
+        defer { TempSessionDatabase.cleanup(path: dbPath) }
+        let sid = db.createSession(projectRoot: "/tmp/u2b-2-chain")
+
+        // Stubs for the subprocess + headless arms. The .pane arm is a
+        // no-op refusal inside the dispatcher — it invokes NEITHER stub,
+        // so a .pane dispatch that touched a stub would Issue.record.
+        let subprocessStub: BrowserValidationDispatcher.Runner = { _, _, _, _ in
+            PlaywrightResult(resultStatus: "pass", axesRun: ["perf"],
+                             assertionsPassed: 3, assertionsFailed: 0,
+                             screenshotPath: "/tmp/three-chain-sub.png", advisory: nil)
+        }
+        let headlessStub: BrowserValidationDispatcher.Runner = { _, _, _, _ in
+            PlaywrightResult(resultStatus: "pass", axesRun: ["completeness"],
+                             assertionsPassed: 5, assertionsFailed: 0,
+                             screenshotPath: "/tmp/three-chain-hd.png", advisory: nil)
+        }
+
+        let resultSink: BrowserValidationDispatcher.ResultSink = { _ in
+            // chain under test is the token_events chain, not validation_results.
+        }
+        let tokenEventSink: BrowserValidationDispatcher.TokenEventSink = { ev in
+            db.recordTokenEvent(
+                sessionId: ev.sessionId,
+                paneId: nil,
+                projectRoot: ev.projectRoot,
+                source: "mcp_tool",
+                toolName: "validate_browser",
+                model: nil,
+                inputTokens: 0,
+                outputTokens: 0,
+                savedTokens: 0,
+                costCents: 0,
+                feature: ev.feature,
+                command: ev.command,
+                modelTier: nil,
+                connectionId: nil
+            )
+        }
+
+        // 100 interleaved dispatches — round-robin subprocess / headless /
+        // pane (so the .pane refusal arm is exercised once per cycle, the
+        // "wkwebview-pane variant per row" the acceptance bullet calls for).
+        let modes: [BrowserDispatchMode] = [.subprocess, .headless, .pane]
+        var expectedSub = 0, expectedHd = 0, expectedPane = 0
+        for i in 0..<100 {
+            let mode = modes[i % 3]
+            switch mode {
+            case .subprocess: expectedSub += 1
+            case .headless: expectedHd += 1
+            case .pane: expectedPane += 1
+            }
+            let axes: [ValidationAxes]
+            switch mode {
+            case .subprocess: axes = [.perf]
+            case .headless: axes = [.completeness]
+            case .pane: axes = [.security]
+            }
+            let req = BrowserValidationDispatcher.Request(
+                targetURL: "https://chain-test-\(i).example.com/",
+                axes: axes,
+                diff: nil,
+                allowFailed: false,
+                screenshot: false,
+                sessionId: sid,
+                projectRoot: "/tmp/u2b-2-chain",
+                dispatch: mode,
+                paneId: mode == .pane ? "pane-\(i)" : nil
+            )
+            _ = try BrowserValidationDispatcher.dispatch(
+                request: req,
+                runner: subprocessStub,
+                headlessRunner: headlessStub,
+                resultSink: resultSink,
+                tokenEventSink: tokenEventSink
+            )
+        }
+        db.flushWrites()
+
+        // Chain integrity across the 100-row three-runner stream.
+        let result = ChainVerifier.verifyTokenEvents(db)
+        switch result {
+        case .ok:
+            break
+        case .noChain:
+            Issue.record("expected token_events chain after 100 three-runner dispatches, got .noChain")
+        case .brokenAt(let table, let rowid, let expected, let actual):
+            Issue.record("chain broken at \(table):\(rowid) — expected=\(expected) actual=\(actual)")
+        }
+
+        // All three runner= variants are present in the chain — proves the
+        // 100-row test actually exercised every arm (Karpathy test-fidelity:
+        // a three-runner chain test is meaningless if a variant never ran).
+        let allEvents = db.recentTokenEvents(projectRoot: "/tmp/u2b-2-chain", limit: 200)
+        let allCommands = allEvents.compactMap { $0.command }
+        let subRows = allCommands.filter { $0.contains("runner=subprocess") }
+        let hdRows = allCommands.filter { $0.contains("runner=wkwebview-headless") }
+        let paneRows = allCommands.filter { $0.contains("runner=wkwebview-pane") }
+        #expect(subRows.count == expectedSub, "expected \(expectedSub) runner=subprocess rows; got \(subRows.count)")
+        #expect(hdRows.count == expectedHd, "expected \(expectedHd) runner=wkwebview-headless rows; got \(hdRows.count)")
+        #expect(paneRows.count == expectedPane, "expected \(expectedPane) runner=wkwebview-pane rows; got \(paneRows.count)")
+        // 100 total dispatch rows (no allow_failed override rows — the
+        // pane refusal is allow_failed:false so no fail.allow row chains).
+        #expect(subRows.count + hdRows.count + paneRows.count == 100,
+                "all 100 dispatch rows accounted for across the three runner variants")
     }
 
     // MARK: - helpers

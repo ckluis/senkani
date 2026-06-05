@@ -21,7 +21,7 @@ import Foundation
 ///   5. EgressPolicy.sameOriginAllowlist allows same-origin host
 ///      requests and denies off-host requests via the default-deny
 ///      sentinel.
-@Suite("U.2a-2b — Browser validation dispatch surface")
+@Suite("U.2a-2b — Browser validation dispatch surface", .serialized, .browserValidationGateReaderGate)
 struct BrowserValidateDispatchTests {
 
     private func makeStubRunner(
@@ -332,6 +332,209 @@ struct BrowserValidateDispatchTests {
         let bad = URL(string: "file:///etc/passwd")!
         #expect(EgressPolicy.sameOriginAllowlist(targetURL: bad) == nil)
     }
+
+    // MARK: - Test 6 (U.2b-2 child (a)): dispatch:.pane structured refusal
+
+    @Test("dispatch:.pane returns structured validation_browser_pane_not_yet_wired refusal; audit row carries runner=wkwebview-pane; no runner closure invoked")
+    func paneDispatchReturnsStructuredRefusal() throws {
+        let evSink = LockedArray<BrowserValidationDispatcher.TokenEventInput>()
+        let rowSink = LockedArray<BrowserValidationDispatcher.BrowserValidationRow>()
+        let subprocessRunnerCalled = LockedBoxBool(value: false)
+        let headlessRunnerCalled = LockedBoxBool(value: false)
+
+        // Both runner arms must be UNTOUCHED by a .pane dispatch — the
+        // pane arm is a no-op-but-correctly-shaped refusal row.
+        let subprocessRunner: BrowserValidationDispatcher.Runner = { _, _, _, _ in
+            subprocessRunnerCalled.set(true)
+            Issue.record(".pane path must NOT invoke the subprocess runner closure")
+            return PlaywrightResult(resultStatus: "pass", axesRun: [], assertionsPassed: 0,
+                                    assertionsFailed: 0, screenshotPath: nil, advisory: nil)
+        }
+        let headlessRunner: BrowserValidationDispatcher.Runner = { _, _, _, _ in
+            headlessRunnerCalled.set(true)
+            Issue.record(".pane path must NOT invoke the headless runner closure")
+            return PlaywrightResult(resultStatus: "pass", axesRun: [], assertionsPassed: 0,
+                                    assertionsFailed: 0, screenshotPath: nil, advisory: nil)
+        }
+
+        let request = BrowserValidationDispatcher.Request(
+            targetURL: "https://example.com/pane",
+            axes: [.perf, .completeness, .security, .design],
+            diff: nil,
+            allowFailed: false,
+            screenshot: true,
+            sessionId: "sid-u2b-2-pane",
+            projectRoot: "/tmp/u2b-2-pane",
+            dispatch: .pane,
+            paneId: "pane-abc-123"
+        )
+        let response = try BrowserValidationDispatcher.dispatch(
+            request: request,
+            runner: subprocessRunner,
+            headlessRunner: headlessRunner,
+            resultSink: { rowSink.append($0) },
+            tokenEventSink: { evSink.append($0) }
+        )
+
+        // Structured refusal Response shape: fail + the canonical
+        // validation_browser_pane_not_yet_wired advisory, no screenshot.
+        #expect(response.resultStatus == "fail",
+                ".pane dispatch must surface result_status:fail until child (b) wires execution")
+        #expect(response.advisory.contains("validation_browser_pane_not_yet_wired"),
+                "advisory must carry the canonical pane-not-yet-wired code; got: \(response.advisory)")
+        #expect(response.screenshotPath == nil, "pane refusal writes no screenshot")
+        #expect(!subprocessRunnerCalled.get() && !headlessRunnerCalled.get(),
+                "neither runner closure may be invoked on the .pane arm")
+
+        // Exactly one validation.dispatch audit row, runner=wkwebview-pane.
+        let events = evSink.snapshot()
+        #expect(events.count == 1,
+                ".pane dispatch (allow_failed:false) writes exactly one validation.dispatch row; got \(events.count)")
+        let dispatchRow = events.first!
+        #expect(dispatchRow.feature == "validation.dispatch")
+        #expect(dispatchRow.command.contains("runner=wkwebview-pane"),
+                "audit command must record runner=wkwebview-pane; got: \(dispatchRow.command)")
+        #expect(dispatchRow.command.contains("status=fail"),
+                "audit command must record status=fail for the refused pane dispatch; got: \(dispatchRow.command)")
+
+        // validation_results row also recorded with status=fail.
+        let rows = rowSink.snapshot()
+        #expect(rows.count == 1)
+        #expect(rows.first?.resultStatus == "fail")
+    }
+
+    // MARK: - Test 6b (U.2b-2 child (a)): allow_failed override parity on .pane
+
+    @Test("allow_failed:true on a .pane refusal emits a chained validation.fail.allow row carrying runner=wkwebview-pane (HookRouter override parity across all three runners)")
+    func paneAllowFailedOverrideParity() throws {
+        let evSink = LockedArray<BrowserValidationDispatcher.TokenEventInput>()
+        let request = BrowserValidationDispatcher.Request(
+            targetURL: "https://example.com/pane-override",
+            axes: [.perf],
+            diff: nil,
+            allowFailed: true,
+            screenshot: false,
+            sessionId: "sid-pane-override",
+            projectRoot: "/tmp/u2b-2-pane-override",
+            dispatch: .pane
+        )
+        // The runner closures must not be touched on the .pane arm.
+        let neverRun: BrowserValidationDispatcher.Runner = { _, _, _, _ in
+            Issue.record(".pane must not invoke a runner closure")
+            return PlaywrightResult(resultStatus: "pass", axesRun: [], assertionsPassed: 0,
+                                    assertionsFailed: 0, screenshotPath: nil, advisory: nil)
+        }
+        let resp = try BrowserValidationDispatcher.dispatch(
+            request: request,
+            runner: neverRun,
+            headlessRunner: neverRun,
+            resultSink: { _ in },
+            tokenEventSink: { evSink.append($0) }
+        )
+
+        #expect(resp.resultStatus == "fail")
+        #expect(resp.allowFailed)
+        let events = evSink.snapshot()
+        // Exactly two rows: the dispatch row + the fail.allow override row —
+        // identical override behavior to subprocess/headless fail paths.
+        #expect(events.count == 2,
+                ".pane fail + allow_failed:true must emit one dispatch row + one fail.allow row; got \(events.count)")
+        let features = events.map(\.feature).sorted()
+        #expect(features == ["validation.dispatch", "validation.fail.allow"])
+        // Both audit rows carry runner=wkwebview-pane.
+        for ev in events {
+            #expect(ev.command.contains("runner=wkwebview-pane"),
+                    "\(ev.feature) row must carry runner=wkwebview-pane; got: \(ev.command)")
+        }
+    }
+
+    // MARK: - Test 7 (U.2b-2 child (a)): three-value parity for the same plan
+
+    @Test("three-value parity: identical stub results across .subprocess/.headless/.pane produce byte-identical Response JSON modulo runner= (and the pane refusal advisory)")
+    func threeValueParityByteIdentical() throws {
+        // Parity contract: for the SAME input plan, the dispatcher's
+        // Response JSON is byte-identical across the three dispatch values
+        // when the underlying runner returns the same PlaywrightResult.
+        // The .subprocess and .headless arms route through identical stub
+        // closures, so their Response bytes must be equal. The .pane arm
+        // is a no-op refusal (no runner closure), so it returns a fail
+        // Response — parity here is the AUDIT-ROW shape (runner= is the
+        // only intended difference) plus the byte-stable encoding contract
+        // (sorted keys, withoutEscapingSlashes) holding for all three.
+        let stub: BrowserValidationDispatcher.Runner = { _, _, _, _ in
+            PlaywrightResult(resultStatus: "pass", axesRun: ["completeness", "perf"],
+                             assertionsPassed: 4, assertionsFailed: 0,
+                             screenshotPath: "/tmp/three-value-parity.png", advisory: nil)
+        }
+
+        func dispatchAndCapture(mode: BrowserDispatchMode) throws
+            -> (response: BrowserValidationDispatcher.Response, dispatchCommand: String) {
+            let evSink = LockedArray<BrowserValidationDispatcher.TokenEventInput>()
+            let request = BrowserValidationDispatcher.Request(
+                targetURL: "https://example.com/page",
+                axes: [.perf, .completeness],
+                diff: nil,
+                allowFailed: false,
+                screenshot: true,
+                sessionId: "sid-three-value",
+                projectRoot: "/tmp/three-value",
+                dispatch: mode
+            )
+            let resp = try BrowserValidationDispatcher.dispatch(
+                request: request,
+                runner: stub,
+                headlessRunner: stub,
+                resultSink: { _ in },
+                tokenEventSink: { evSink.append($0) }
+            )
+            let cmd = evSink.snapshot().first { $0.feature == "validation.dispatch" }!.command
+            return (resp, cmd)
+        }
+
+        let sub = try dispatchAndCapture(mode: .subprocess)
+        let hd = try dispatchAndCapture(mode: .headless)
+        let pane = try dispatchAndCapture(mode: .pane)
+
+        // 1. subprocess and headless route through identical stubs →
+        //    byte-identical Response JSON.
+        let subBytes = try BrowserValidationDispatcher.encode(sub.response)
+        let hdBytes = try BrowserValidationDispatcher.encode(hd.response)
+        #expect(subBytes == hdBytes,
+                "subprocess and headless Response JSON must be byte-identical for the same stub result")
+
+        // 2. The audit command is identical across all three modes modulo
+        //    the runner= field — the three-value parity at the audit layer.
+        let subNorm = sub.dispatchCommand.replacingOccurrences(of: "runner=subprocess", with: "runner=<R>")
+        let hdNorm = hd.dispatchCommand.replacingOccurrences(of: "runner=wkwebview-headless", with: "runner=<R>")
+        // The pane arm's status=fail differs from the pass arms (it's a
+        // refusal), so normalize the runner AND status to prove the
+        // url=/axes=/allow_failed= prefix is shared structure.
+        #expect(subNorm == hdNorm,
+                "subprocess/headless audit commands must match modulo runner=; got\nsub: \(sub.dispatchCommand)\nhd:  \(hd.dispatchCommand)")
+
+        // 3. All three audit commands carry the distinct runner= value and
+        //    share the url=/axes=/allow_failed= prefix structure.
+        #expect(sub.dispatchCommand.contains("runner=subprocess"))
+        #expect(hd.dispatchCommand.contains("runner=wkwebview-headless"))
+        #expect(pane.dispatchCommand.contains("runner=wkwebview-pane"))
+        for cmd in [sub.dispatchCommand, hd.dispatchCommand, pane.dispatchCommand] {
+            #expect(cmd.contains("url=https://example.com/page"))
+            #expect(cmd.contains("axes=completeness,perf"))
+            #expect(cmd.contains("allow_failed=false"))
+        }
+
+        // 4. Byte-stable encoding contract holds for the pane refusal
+        //    Response too (sorted keys present, slashes unescaped).
+        let paneBytes = try BrowserValidationDispatcher.encode(pane.response)
+        let paneJSON = String(data: paneBytes, encoding: .utf8) ?? ""
+        #expect(paneJSON.contains("\"result_status\":\"fail\""))
+        #expect(paneJSON.contains("validation_browser_pane_not_yet_wired"))
+        // sorted-keys: allow_failed precedes result_status alphabetically.
+        if let allowIdx = paneJSON.range(of: "\"allow_failed\"")?.lowerBound,
+           let statusIdx = paneJSON.range(of: "\"result_status\"")?.lowerBound {
+            #expect(allowIdx < statusIdx, "pane Response must encode with sorted keys")
+        }
+    }
 }
 
 // MARK: - Thread-safe collection for sink closures
@@ -347,4 +550,14 @@ private final class LockedArray<Element>: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         return items
     }
+}
+
+/// Thread-safe boolean flag for asserting a runner closure was (not)
+/// invoked from inside a `@Sendable` dispatch path.
+private final class LockedBoxBool: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Bool
+    init(value: Bool) { self.value = value }
+    func set(_ v: Bool) { lock.lock(); defer { lock.unlock() }; value = v }
+    func get() -> Bool { lock.lock(); defer { lock.unlock() }; return value }
 }

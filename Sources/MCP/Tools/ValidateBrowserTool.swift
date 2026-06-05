@@ -27,12 +27,17 @@ enum ValidateBrowserTool {
             dispatchMode = parsed
         } else {
             return .init(
-                content: [.text(text: "Error: dispatch must be 'subprocess' or 'headless'", annotations: nil, _meta: nil)],
+                content: [.text(text: "Error: dispatch must be 'subprocess', 'headless', or 'pane'", annotations: nil, _meta: nil)],
                 isError: true
             )
         }
 
         let egressProxyURL = arguments?["egress_proxy_url"]?.stringValue
+        // U.2b-2 child (a) — optional visible-pane selector. Default-safe:
+        // omitted for the subprocess/headless arms; on the .pane arm it
+        // pins a specific BrowserPane (child (b) resolves it; until then
+        // the .pane arm refuses uniformly regardless of this value).
+        let paneId = arguments?["pane_id"]?.stringValue
 
         let request = BrowserValidationDispatcher.Request(
             targetURL: url,
@@ -43,6 +48,7 @@ enum ValidateBrowserTool {
             sessionId: session.sessionId ?? "mcp-validate-browser",
             projectRoot: session.projectRoot,
             dispatch: dispatchMode,
+            paneId: paneId,
             egressProxyURL: egressProxyURL
         )
 
@@ -137,9 +143,10 @@ enum ValidateBrowserTool {
         }
     }
 
-    /// Parse the `dispatch` argument. Omitted → `.subprocess`. Unknown
+    /// Parse the `dispatch` argument. Omitted → `.subprocess`. Accepts
+    /// `"subprocess"`, `"headless"`, `"pane"` (U.2b-2 child (a)). Unknown
     /// values return nil; the handler turns nil into a structured
-    /// `invalidArguments`-shaped Response.
+    /// `invalidArguments`-shaped Response enumerating the three values.
     private static func parseDispatch(_ raw: String?) -> BrowserDispatchMode? {
         guard let raw, !raw.isEmpty else { return .subprocess }
         return BrowserDispatchMode(rawValue: raw)

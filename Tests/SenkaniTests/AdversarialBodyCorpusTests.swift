@@ -558,6 +558,143 @@ struct AdversarialBodyCorpusTests {
         #expect(!redactedStr.contains(plantedSecret),
                 "after prepareBodyExcerpt the planted sk-ant-* token must NOT survive — Schneier P1 invariant")
     }
+
+    // MARK: - r98 Karpathy panel APPENDs (K-r98-1 / K-r98-2 / K-r98-3)
+
+    /// K-r98-1 — TRUE peek-cutoff straddle. The r98 straddle test above
+    /// plants a WHOLE token inside the captured slice; this one plants a
+    /// token whose tail is GUILLOTINED by the 4 KB `prepareBodyExcerpt`
+    /// truncation so only a sub-`{20,}` prefix survives into the excerpt.
+    ///
+    /// This pins a KNOWN, DELIBERATE limitation rather than a defect: the
+    /// SecretDetector `sk-[a-zA-Z0-9]{20,}` quantifier requires ≥20 token
+    /// chars to fire, so a token sliced to <20 visible chars is NOT
+    /// redacted — the truncated remnant rides through. The security
+    /// argument for why this is acceptable: the FULL secret never lands on
+    /// disk (the bytes past the 4 KB cut are dropped by truncation BEFORE
+    /// the redact pass per the Schneier P1 truncate-then-redact ordering),
+    /// and a <20-char remnant is not a usable credential. We lock the
+    /// boundary in BOTH directions so a future regex rewrite that changes
+    /// the quantifier floor (or the truncation length) breaks this test
+    /// loudly instead of silently widening the unredacted remnant.
+    @Test("K-r98-1 — secret straddling the 4 KB excerpt cutoff: ≥20-char prefix is redacted, <20-char remnant is a pinned known limitation")
+    func krStraddlePeekCutoffQuantifierBoundary() {
+        let maxBytes = EgressDecisionStore.bodyExcerptMaxBytes
+        let tokenBody = "sk-" + String(repeating: "Z", count: 60)
+
+        // --- Case A: the token's 20th char lands INSIDE the 4 KB window.
+        // Pad so exactly 25 token chars (well past the {20,} floor) survive
+        // truncation → the prefix MUST be redacted (no usable remnant).
+        let padA = String(repeating: "x", count: maxBytes - "sk-".count - 25)
+        let bodyA = padA + tokenBody
+        let redactedA = String(
+            data: EgressDecisionStore.prepareBodyExcerpt(Data(bodyA.utf8)),
+            encoding: .utf8) ?? ""
+        #expect(redactedA.contains("[REDACTED:"),
+                "a ≥20-char token prefix surviving truncation MUST be redacted by the {20,} quantifier")
+        #expect(!redactedA.contains("sk-" + String(repeating: "Z", count: 20)),
+                "no 20-char run of the token may survive the redact pass")
+
+        // --- Case B: the token is sliced to a <20-char prefix by the 4 KB
+        // truncation. Pad so only 15 token chars survive. The {20,} floor
+        // is NOT met → the 15-char remnant rides through UN-redacted. This
+        // is the pinned known limitation; the FULL token never survives.
+        let padB = String(repeating: "y", count: maxBytes - "sk-".count - 15)
+        let bodyB = padB + tokenBody
+        let preparedB = EgressDecisionStore.prepareBodyExcerpt(Data(bodyB.utf8))
+        let redactedB = String(data: preparedB, encoding: .utf8) ?? ""
+        // The truncation cap is load-bearing: the excerpt never exceeds 4 KB,
+        // so the bytes past the cut (the rest of the token) are GONE.
+        #expect(preparedB.count <= maxBytes,
+                "prepareBodyExcerpt output must be bounded by the 4 KB truncation cap")
+        #expect(!redactedB.contains("sk-" + String(repeating: "Z", count: 20)),
+                "the FULL 20+-char token MUST NEVER survive — the bytes past the 4 KB cut are dropped before redaction")
+        // KNOWN LIMITATION pin: the <20-char remnant IS present (quantifier
+        // floor not met). If a future SecretDetector rewrite lowers the floor
+        // or adds an entropy fallback that catches half-tokens, this flips and
+        // the test must be revisited — that is the point of pinning it.
+        #expect(redactedB.contains("sk-" + String(repeating: "Z", count: 15)),
+                "pinned known limitation: a <20-char token remnant is NOT redacted (the {20,} quantifier floor is not met)")
+    }
+
+    /// K-r98-2 — `Transfer-Encoding: chunked` HEAD. `innerBodyBytes` is a
+    /// DUMB post-`\r\n\r\n` slice: it does NOT de-chunk. So a chunked body
+    /// is returned as the RAW chunk-framed bytes (size line + CRLF + data +
+    /// CRLF + terminating `0\r\n\r\n`), NOT the de-framed payload. Pin this
+    /// so a future caller does not assume the helper hands back a decoded
+    /// body — the chunk framing is part of what the audit row / engine sees.
+    @Test("K-r98-2 — Transfer-Encoding: chunked → innerBodyBytes returns the RAW chunk-framed bytes (helper is a dumb slice, no de-chunking)")
+    func krChunkedHeadReturnsRawFrameBytes() {
+        let head = "POST /v1/exec HTTP/1.1\r\nHost: api.example.com\r\nTransfer-Encoding: chunked\r\n\r\n"
+        // One 5-byte chunk "hello" then the terminating zero-chunk.
+        let chunkedBody = "5\r\nhello\r\n0\r\n\r\n"
+        let buf = Array((head + chunkedBody).utf8)
+
+        guard let extracted = MITMUpstreamVerify.innerBodyBytes(fromHeadBuffer: buf) else {
+            Issue.record("chunked body buffer must extract a non-nil body slice")
+            return
+        }
+        // The helper slices everything AFTER the first `\r\n\r\n` verbatim —
+        // including the chunk SIZE LINE and the trailing zero-chunk. It must
+        // NOT have de-chunked down to just "hello".
+        #expect(extracted == Data(chunkedBody.utf8),
+                "innerBodyBytes must return the raw chunk-framed bytes verbatim, got \(String(data: extracted, encoding: .utf8) ?? "<non-utf8>")")
+        let s = String(data: extracted, encoding: .utf8) ?? ""
+        #expect(s.contains("5\r\n") && s.contains("0\r\n\r\n"),
+                "chunk framing (size line + zero-chunk terminator) must be present — the helper does not de-chunk")
+        #expect(s != "hello",
+                "the helper must NOT de-frame the chunked body down to the decoded payload")
+        // declaredContentLength has no Content-Length to read on a chunked
+        // request → nil (so the capture-state classifier never FALSELY claims
+        // `.overflowed` on a chunked body, per the v47 conservative contract).
+        #expect(MITMUpstreamVerify.declaredContentLength(fromHeadBuffer: buf) == nil,
+                "a chunked request has no Content-Length → declaredContentLength must be nil")
+        #expect(MITMUpstreamVerify.innerBodyCaptureState(fromHeadBuffer: buf) == .captured,
+                "chunked body (no Content-Length to compare) classifies as .captured, never a false .overflowed")
+    }
+
+    /// K-r98-3 — "first-occurrence wins" CRLFCRLF property. The head
+    /// terminator is the FIRST `\r\n\r\n` in the buffer; any later
+    /// `\r\n\r\n` sequences are BODY bytes and must be sliced into the body
+    /// verbatim. A naive `lastIndex`/`rangeOfLast` rewrite would mis-slice.
+    /// Fuzz across many body shapes that each embed additional CRLFCRLF
+    /// runs at varying offsets and assert the slice is always anchored on
+    /// the FIRST terminator.
+    @Test("K-r98-3 — first-occurrence-wins CRLFCRLF: the head terminator is the FIRST run; embedded later runs stay in the body slice (property fuzz)")
+    func krFirstOccurrenceWinsCRLFCRLF() {
+        let head = "POST /v1/exec HTTP/1.1\r\nHost: api.example.com\r\n\r\n"
+        // Body fragments that themselves embed CRLFCRLF runs (e.g. a
+        // multipart-ish blob, a serialized HTTP response inside the body,
+        // trailing blank lines). Each is the EXACT expected body slice.
+        let bodyFuzzCases: [String] = [
+            "\r\n\r\n",                                   // body is itself a bare CRLFCRLF
+            "{\"a\":1}\r\n\r\n{\"b\":2}",                  // two json frames split by CRLFCRLF
+            "GET /smuggled HTTP/1.1\r\nHost: x\r\n\r\n",  // a whole smuggled request in the body
+            "line1\r\n\r\nline2\r\n\r\nline3",            // three CRLFCRLF runs
+            "x",                                          // trivial single-byte body (control)
+            String(repeating: "\r\n\r\n", count: 8),     // many back-to-back runs
+        ]
+        for body in bodyFuzzCases {
+            let buf = Array((head + body).utf8)
+            guard let extracted = MITMUpstreamVerify.innerBodyBytes(fromHeadBuffer: buf) else {
+                Issue.record("first-occurrence fuzz: body \(body.debugDescription) extracted nil unexpectedly")
+                continue
+            }
+            #expect(extracted == Data(body.utf8),
+                    "first-occurrence-wins: the slice must be anchored on the FIRST CRLFCRLF; embedded later runs belong to the body. body=\(body.debugDescription) got=\(String(data: extracted, encoding: .utf8)?.debugDescription ?? "<non-utf8>")")
+            // The extracted body must NEVER contain the request line — that
+            // would prove the slice anchored on a LATER terminator.
+            #expect(!(String(data: extracted, encoding: .utf8) ?? "").contains("POST /v1/exec"),
+                    "the request HEAD must never leak into the body slice on any fuzz case")
+        }
+
+        // Negative control: a buffer whose ONLY CRLFCRLF is the head
+        // terminator (no body) returns nil regardless of how many lone CRLFs
+        // precede it inside the headers.
+        let headOnlyMultiCRLF = Array("POST /v1/exec HTTP/1.1\r\nHost: x\r\nA: 1\r\nB: 2\r\n\r\n".utf8)
+        #expect(MITMUpstreamVerify.innerBodyBytes(fromHeadBuffer: headOnlyMultiCRLF) == nil,
+                "a HEAD-only buffer (single terminal CRLFCRLF, lone CRLFs between headers) must slice to nil body")
+    }
 }
 
 /// T.1d-5 — extension of `senkani doctor --check-egress` reporting.

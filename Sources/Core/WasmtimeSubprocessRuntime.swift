@@ -207,18 +207,29 @@ public actor WasmtimeSubprocessRuntime {
             return .epoch
         }
         let lower = stderr.lowercased()
+        // T.3b-5a (Schneier P1, no-silent-undercount): the capability-denial
+        // arm MUST be evaluated BEFORE the timeout/interrupt/epoch arm. A
+        // genuine WASI escape whose stderr happens to also carry the
+        // substring "timeout" or "interrupt" must classify as `.escape`,
+        // never `.epoch` — an escape that reads as a benign timeout is the
+        // worst audit failure mode (the eventual zero-escape suite would
+        // silently undercount escapes). `fuel` stays first (self-terminating
+        // soft cap, never an escape) and `watchdogFired` short-circuits above
+        // (the host watchdog only arms past the wall-time deadline, so a
+        // watchdog kill is by construction an epoch deadline, not a denial).
         if lower.contains("fuel") {
             return .fuel
-        }
-        if lower.contains("interrupt") || lower.contains("timeout") || lower.contains("epoch") {
-            return .epoch
         }
         if lower.contains("permission denied")
             || lower.contains("unknown import")
             || lower.contains("not allowed")
+            || lower.contains("capability")
             || lower.contains("wasi") && lower.contains("denied")
         {
             return .escape
+        }
+        if lower.contains("interrupt") || lower.contains("timeout") || lower.contains("epoch") {
+            return .epoch
         }
         return .crash
     }

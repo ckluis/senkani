@@ -12,15 +12,22 @@ public actor AutoValidateQueue {
     private let database: SessionDatabase
     private let registry: ValidatorRegistry
     private let configLoader: @Sendable (String) -> AutoValidateConfig
+    /// U.9b-1 — loads the default-OFF `WorkBusConfig.dualWrite` flag.
+    /// Default reads `~/.senkani/work-bus.json` (missing ⇒ dualWrite=false),
+    /// so production is byte-identical to U.9a unless an operator opts in
+    /// per project root. Tests inject a loader to force the flag on/off.
+    private let workBusConfigLoader: @Sendable () -> WorkBusConfig
 
     public init(
         database: SessionDatabase = .shared,
         registry: ValidatorRegistry = .shared,
-        configLoader: @escaping @Sendable (String) -> AutoValidateConfig = { AutoValidateConfig.load(projectRoot: $0) }
+        configLoader: @escaping @Sendable (String) -> AutoValidateConfig = { AutoValidateConfig.load(projectRoot: $0) },
+        workBusConfigLoader: @escaping @Sendable () -> WorkBusConfig = { (try? WorkBusConfigStore.load()) ?? WorkBusConfig() }
     ) {
         self.database = database
         self.registry = registry
         self.configLoader = configLoader
+        self.workBusConfigLoader = workBusConfigLoader
     }
 
     struct PendingValidation {
@@ -146,9 +153,22 @@ public actor AutoValidateQueue {
         let timeoutMs = config.timeoutMs
         let db = database
         let registry = self.registry
+        // U.9b-1 — read the default-OFF dual-write flag ONCE per
+        // validation so the off-path adds zero work and the on-path is
+        // deterministic for one item. NOT re-read inside the loop.
+        let dualWrite = workBusConfigLoader().dualWrite
         db.recordEvent(type: "auto_validate.started", projectRoot: item.projectRoot)
 
-        // Run validation on a background thread (not the actor)
+        // Run validation on a background thread (not the actor).
+        //
+        // U.9b-1 (Carmack, no-flake): the dual-write bus leg runs
+        // SYNCHRONOUSLY inside THIS already-off-actor detached worker —
+        // it does NOT spawn a SECOND `Task.detached(.utility)`. That is
+        // the load-bearing no-flake guarantee: we reuse the existing
+        // worker's background thread for the bus enqueue + parity
+        // counters instead of adding another cooperative-pool hop (the
+        // R7/R8 starvation pattern). When `dualWrite == false` this block
+        // is never entered and the path is byte-identical to U.9a.
         Task.detached(priority: .utility) { [weak self] in
             let attempts = AutoValidateWorker.validateAttempts(
                 path: item.path,
@@ -158,7 +178,11 @@ public actor AutoValidateQueue {
                 registry: registry
             )
 
-            // Store results in DB
+            // Store results in DB (the in-process leg). The leg is
+            // considered delivered when the validator produced attempts
+            // and they were handed to the store (a no-attempt run is a
+            // skip, not a leg failure).
+            let inProcessLegOK = !attempts.isEmpty
             for attempt in attempts {
                 db.insertValidationResult(
                     sessionId: item.sessionId,
@@ -204,6 +228,22 @@ public actor AutoValidateQueue {
                     costCents: 0,
                     feature: "auto_validate",
                     command: (item.path as NSString).lastPathComponent
+                )
+            }
+
+            // U.9b-1 — dual-write bus leg (default-OFF). Only runs when an
+            // operator opted in via `WorkBusConfig.dualWrite`. Reuses THIS
+            // detached worker's thread — no second cooperative-pool hop.
+            // When off, this is a no-op and the path is byte-identical to
+            // U.9a (zero bus rows, zero parity counters).
+            if dualWrite && inProcessLegOK {
+                AutoValidateDualWrite.run(
+                    db: db,
+                    sessionId: item.sessionId,
+                    path: item.path,
+                    projectRoot: item.projectRoot,
+                    attempts: attempts,
+                    inProcessLegOK: inProcessLegOK
                 )
             }
 

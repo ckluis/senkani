@@ -99,6 +99,11 @@ public final class SessionDatabase: @unchecked Sendable {
     /// Outside the T.5 chain (accepted-risk per V.2 precedent — see
     /// `Sources/Core/ProviderRuntime/ProviderRuntimeEvent.swift` doc).
     public var providerRuntimeEventStore: ProviderRuntimeEventStore!
+    /// V.17b-1 — ProviderHealthSnapshot core (provider_health_snapshot).
+    /// Owned schema lives in migration v48. Outside the T.5 chain (a
+    /// derived/cache projection of local CLI probes — see
+    /// `Sources/Core/ProviderRuntime/ProviderHealthSnapshot.swift` doc).
+    public var providerHealthSnapshotStore: ProviderHealthSnapshotStore!
 
     // MARK: - Init
 
@@ -161,6 +166,8 @@ public final class SessionDatabase: @unchecked Sendable {
         runtimeTelemetryStore.setupSchema()
         providerRuntimeEventStore = ProviderRuntimeEventStore(parent: self)
         providerRuntimeEventStore.setupSchema()
+        providerHealthSnapshotStore = ProviderHealthSnapshotStore(parent: self)
+        providerHealthSnapshotStore.setupSchema()
     }
 
     /// Testable initializer — opens a DB at a custom path (use a temp file).
@@ -209,6 +216,8 @@ public final class SessionDatabase: @unchecked Sendable {
         runtimeTelemetryStore.setupSchema()
         providerRuntimeEventStore = ProviderRuntimeEventStore(parent: self)
         providerRuntimeEventStore.setupSchema()
+        providerHealthSnapshotStore = ProviderHealthSnapshotStore(parent: self)
+        providerHealthSnapshotStore.setupSchema()
     }
 
     // MARK: - Observability counters (migration v2)

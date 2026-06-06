@@ -2825,6 +2825,56 @@ public enum MigrationRegistry {
                 try openEgressDecisionsV47Anchor(db: db)
             }
         },
+        Migration(version: 48, description: "provider_health_snapshot table for V.17b-1 (ProviderHealthSnapshot core — per-provider health row, event/CLI refresh, no-network)") { db in
+            // V.17b-1 — the headless data spine for the provider-health
+            // dashboard. One row per provider_id, upserted by
+            // `senkani provider refresh` (local --version probe, NO
+            // network) and flipped forward by `turn_completed`
+            // provider_runtime_event refresh. The SwiftUI Dashboard pane
+            // row that renders stale=yellow/error=red is the carved-off
+            // Cowork sibling (phase-v17b-2) — this migration ships only
+            // the table the pane reads.
+            //
+            // Chain note: like provider_runtime_event (v36), this table
+            // is NOT in the T.5 audit chain. It is a derived/cache
+            // projection of local CLI probes; tampering is detectable by
+            // re-running `provider refresh`. The snapshot carries no
+            // entry_hash and no chain_anchors row.
+            //
+            // staleness (.fresh/.stale/.error) is a PURE function of
+            // (last_refresh, now, ttl) computed in Swift — it is NOT a
+            // stored column, so a snapshot row never goes stale on disk;
+            // it goes stale only relative to read-time `now`. ttl_stale_s
+            // / ttl_error_s persist the per-provider thresholds (spec'd
+            // defaults 86400 / 604800) so the GUI sibling reads them back.
+            func exec(_ sql: String) throws {
+                var err: UnsafeMutablePointer<CChar>?
+                let rc = sqlite3_exec(db, sql, nil, nil, &err)
+                let msg = err.map { String(cString: $0) } ?? "unknown"
+                if let err { sqlite3_free(err) }
+                if rc != SQLITE_OK {
+                    throw MigrationError.sqlFailed(stage: "v48", detail: msg)
+                }
+            }
+            try exec("""
+                CREATE TABLE IF NOT EXISTS provider_health_snapshot (
+                    provider_id TEXT PRIMARY KEY,
+                    cli_installed INTEGER NOT NULL,
+                    version TEXT,
+                    auth_state TEXT NOT NULL DEFAULT 'unknown',
+                    selected_model TEXT,
+                    subscription_state TEXT,
+                    last_refresh REAL NOT NULL,
+                    ttl_stale_s REAL NOT NULL,
+                    ttl_error_s REAL NOT NULL,
+                    remediation_hint TEXT
+                );
+            """)
+            // Covering read for "all snapshots, oldest-refresh first" —
+            // the GUI sibling's primary query (render every provider,
+            // most-stale at the top).
+            try exec("CREATE INDEX IF NOT EXISTS idx_provider_health_snapshot_refresh ON provider_health_snapshot(last_refresh);")
+        },
     ]
 
     /// Open a 'migration-v23' anchor for `egress_decisions` at MAX(id)

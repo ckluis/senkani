@@ -50,6 +50,25 @@ public final class ProviderRuntimeEventStore: @unchecked Sendable {
     /// payload hash was already present.
     @discardableResult
     public func insert(event: ProviderRuntimeEvent) -> InsertOutcome {
+        let outcome = insertRow(event: event)
+        // V.17b-1 — event-driven provider-health refresh (NO timer).
+        // A NEWLY-inserted `turn_completed` event flips that provider's
+        // health snapshot `last_refresh` forward. A dedup'd replay does
+        // NOT re-flip (the canonical input already counted). The touch is
+        // a no-op when the provider has no snapshot yet (the CLI probe
+        // owns row creation — an event never fabricates a snapshot row).
+        // This is purely local SQLite work: zero network, zero
+        // egress_decisions rows.
+        if outcome == .insertedRow, event.type == .turnCompleted {
+            parent.providerHealthSnapshotStore.touchLastRefresh(
+                providerID: event.providerID,
+                at: event.observedAt
+            )
+        }
+        return outcome
+    }
+
+    private func insertRow(event: ProviderRuntimeEvent) -> InsertOutcome {
         return parent.queue.sync {
             guard let db = parent.db else { return .idempotencyHit }
             let sql = """

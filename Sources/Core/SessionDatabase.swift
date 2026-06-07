@@ -84,6 +84,26 @@ public final class SessionDatabase: @unchecked Sendable {
     internal var policyStore: PolicyStore!
     internal var egressDecisionStore: EgressDecisionStore!
     public var packAuditStore: PackAuditStore!
+    internal var evalResultsStore: EvalResultsStore!
+    /// V.13e-1 — DB-backed OpenAI-endpoint request log (openai_request_log).
+    /// Owned schema lives in migration v41.
+    public var openAIRequestLogStore: OpenAIRequestLogStore!
+    public var sessionWorkQueueStore: SessionWorkQueueStore!
+    public var sessionEventStreamStore: SessionEventStreamStore!
+    public var surrogateWritesStore: SurrogateWritesStore!
+    /// V.18a-2 — RuntimeTelemetryDataset (runtime_telemetry_{dataset,span,log}).
+    /// Owned schema lives in migrations v30 + v31.
+    public var runtimeTelemetryStore: RuntimeTelemetryStore!
+    /// V.17a-1 — ProviderRuntimeEvent canonical spine
+    /// (provider_runtime_event). Owned schema lives in migration v36.
+    /// Outside the T.5 chain (accepted-risk per V.2 precedent — see
+    /// `Sources/Core/ProviderRuntime/ProviderRuntimeEvent.swift` doc).
+    public var providerRuntimeEventStore: ProviderRuntimeEventStore!
+    /// V.17b-1 — ProviderHealthSnapshot core (provider_health_snapshot).
+    /// Owned schema lives in migration v48. Outside the T.5 chain (a
+    /// derived/cache projection of local CLI probes — see
+    /// `Sources/Core/ProviderRuntime/ProviderHealthSnapshot.swift` doc).
+    public var providerHealthSnapshotStore: ProviderHealthSnapshotStore!
 
     // MARK: - Init
 
@@ -115,6 +135,10 @@ public final class SessionDatabase: @unchecked Sendable {
         // table, and triggers; TokenEventStore's `claude_session_cursors`
         // and the ALTER for `model_tier`).
         runMigrations(path: dbPath)
+        // V.18a-1: tune page_size + auto_vacuum required by the runtime
+        // telemetry tables. Idempotent — only VACUUMs when current pragma
+        // values don't match the targets.
+        tuneTelemetryPragmas()
         commandStore = CommandStore(parent: self)
         commandStore.setupSchema()
         tokenEventStore = TokenEventStore(parent: self)
@@ -133,6 +157,17 @@ public final class SessionDatabase: @unchecked Sendable {
         policyStore = PolicyStore(parent: self)
         egressDecisionStore = EgressDecisionStore(parent: self)
         packAuditStore = PackAuditStore(parent: self)
+        evalResultsStore = EvalResultsStore(parent: self)
+        openAIRequestLogStore = OpenAIRequestLogStore(parent: self)
+        sessionWorkQueueStore = SessionWorkQueueStore(parent: self)
+        sessionEventStreamStore = SessionEventStreamStore(parent: self)
+        surrogateWritesStore = SurrogateWritesStore(parent: self)
+        runtimeTelemetryStore = RuntimeTelemetryStore(parent: self)
+        runtimeTelemetryStore.setupSchema()
+        providerRuntimeEventStore = ProviderRuntimeEventStore(parent: self)
+        providerRuntimeEventStore.setupSchema()
+        providerHealthSnapshotStore = ProviderHealthSnapshotStore(parent: self)
+        providerHealthSnapshotStore.setupSchema()
     }
 
     /// Testable initializer — opens a DB at a custom path (use a temp file).
@@ -153,6 +188,7 @@ public final class SessionDatabase: @unchecked Sendable {
         }
         enableWAL()
         runMigrations(path: path)
+        tuneTelemetryPragmas()
         commandStore = CommandStore(parent: self)
         commandStore.setupSchema()
         tokenEventStore = TokenEventStore(parent: self)
@@ -171,6 +207,17 @@ public final class SessionDatabase: @unchecked Sendable {
         policyStore = PolicyStore(parent: self)
         egressDecisionStore = EgressDecisionStore(parent: self)
         packAuditStore = PackAuditStore(parent: self)
+        evalResultsStore = EvalResultsStore(parent: self)
+        openAIRequestLogStore = OpenAIRequestLogStore(parent: self)
+        sessionWorkQueueStore = SessionWorkQueueStore(parent: self)
+        sessionEventStreamStore = SessionEventStreamStore(parent: self)
+        surrogateWritesStore = SurrogateWritesStore(parent: self)
+        runtimeTelemetryStore = RuntimeTelemetryStore(parent: self)
+        runtimeTelemetryStore.setupSchema()
+        providerRuntimeEventStore = ProviderRuntimeEventStore(parent: self)
+        providerRuntimeEventStore.setupSchema()
+        providerHealthSnapshotStore = ProviderHealthSnapshotStore(parent: self)
+        providerHealthSnapshotStore.setupSchema()
     }
 
     // MARK: - Observability counters (migration v2)
@@ -222,8 +269,8 @@ public final class SessionDatabase: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (root as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (type as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (root as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (type as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 3, Int64(delta))
             sqlite3_bind_double(stmt, 4, ts)
             sqlite3_bind_double(stmt, 5, ts)
@@ -255,11 +302,11 @@ public final class SessionDatabase: @unchecked Sendable {
             defer { sqlite3_finalize(stmt) }
             var idx: Int32 = 1
             if let root = projectRoot {
-                sqlite3_bind_text(stmt, idx, (root as NSString).utf8String, -1, nil); idx += 1
+                sqlite3_bind_text(stmt, idx, (root as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1
             }
             if let pfx = prefix {
                 let like = pfx + "%"
-                sqlite3_bind_text(stmt, idx, (like as NSString).utf8String, -1, nil); idx += 1
+                sqlite3_bind_text(stmt, idx, (like as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1
             }
             var out: [EventCountRow] = []
             while sqlite3_step(stmt) == SQLITE_ROW {
@@ -377,6 +424,94 @@ public final class SessionDatabase: @unchecked Sendable {
         sqlite3_exec(db, "PRAGMA optimize;", nil, nil, nil)
     }
 
+    // MARK: - Telemetry pragmas (V.18a-1)
+
+    /// Tune database-wide pragmas required by V.18 RuntimeTelemetryDataset:
+    /// `page_size = 8192` and `auto_vacuum = INCREMENTAL`. Both settings are
+    /// per-DB in SQLite, and changing either on an existing DB requires a
+    /// `VACUUM` to rewrite pages. The migration that creates the telemetry
+    /// tables (v30) cannot perform `VACUUM` itself because the runner wraps
+    /// each migration in `BEGIN IMMEDIATE` and `VACUUM` is disallowed in a
+    /// transaction.
+    ///
+    /// Idempotent: if both pragmas are already at target, returns without
+    /// touching the DB. On mismatch, sets both pragmas and runs `VACUUM`
+    /// (which may be a noticeable one-time pause for DBs in the tens-of-MB
+    /// range — logged so operators see the cause).
+    ///
+    /// SQLite auto_vacuum modes: 0 = NONE, 1 = FULL, 2 = INCREMENTAL.
+    internal func tuneTelemetryPragmas() {
+        queue.sync {
+            guard let db = db else { return }
+
+            let currentPageSize = readIntPragma(db: db, "page_size")
+            let currentAutoVacuum = readIntPragma(db: db, "auto_vacuum")
+            let pageSizeMatch = (currentPageSize == 8192)
+            let autoVacuumMatch = (currentAutoVacuum == 2)
+            if pageSizeMatch && autoVacuumMatch { return }
+
+            Logger.log("db.session.telemetry_pragmas_tuning", fields: [
+                "page_size_before": .int(currentPageSize),
+                "auto_vacuum_before": .int(currentAutoVacuum),
+                "page_size_target": .int(8192),
+                "auto_vacuum_target": .int(2),
+                "outcome": .string("starting"),
+            ])
+
+            // SQLite gotcha: `PRAGMA page_size` cannot be changed while
+            // the DB is in WAL journal mode. Temporarily switch to DELETE
+            // mode for the VACUUM-rewrite, then restore WAL. (When only
+            // auto_vacuum needs changing — page_size already correct —
+            // VACUUM under WAL is fine, so we only switch journal modes
+            // when the page_size change is required.)
+            let needsJournalSwap = !pageSizeMatch
+            if needsJournalSwap {
+                _ = sqlite3_exec(db, "PRAGMA journal_mode = DELETE;", nil, nil, nil)
+            }
+            _ = sqlite3_exec(db, "PRAGMA page_size = 8192;", nil, nil, nil)
+            _ = sqlite3_exec(db, "PRAGMA auto_vacuum = INCREMENTAL;", nil, nil, nil)
+
+            var err: UnsafeMutablePointer<CChar>?
+            let rc = sqlite3_exec(db, "VACUUM;", nil, nil, &err)
+            let msg = err.map { String(cString: $0) } ?? ""
+            if let err = err { sqlite3_free(err) }
+
+            if needsJournalSwap {
+                // Restore WAL mode regardless of VACUUM outcome — the DB
+                // must end up in the same journal mode it started in.
+                _ = sqlite3_exec(db, "PRAGMA journal_mode = WAL;", nil, nil, nil)
+            }
+
+            guard rc == SQLITE_OK else {
+                Logger.log("db.session.telemetry_pragmas_vacuum_failed", fields: [
+                    "error": .string(msg),
+                    "outcome": .string("error"),
+                ])
+                return
+            }
+
+            let pageSizeAfter = readIntPragma(db: db, "page_size")
+            let autoVacuumAfter = readIntPragma(db: db, "auto_vacuum")
+            Logger.log("db.session.telemetry_pragmas_tuned", fields: [
+                "page_size_after": .int(pageSizeAfter),
+                "auto_vacuum_after": .int(autoVacuumAfter),
+                "outcome": .string("success"),
+            ])
+        }
+    }
+
+    /// Read an integer-valued PRAGMA on the current connection. Returns 0
+    /// on failure. Caller MUST hold the queue.
+    private func readIntPragma(db: OpaquePointer, _ name: String) -> Int {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA \(name);", -1, &stmt, nil) == SQLITE_OK else { return 0 }
+        defer { sqlite3_finalize(stmt) }
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            return Int(sqlite3_column_int64(stmt, 0))
+        }
+        return 0
+    }
+
     // MARK: - Schema Ownership
     //
     // Store-owned schemas are created by CommandStore, TokenEventStore,
@@ -419,8 +554,8 @@ public final class SessionDatabase: @unchecked Sendable {
             var tsStmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, tsSql, -1, &tsStmt, nil) == SQLITE_OK else { return nil }
             defer { sqlite3_finalize(tsStmt) }
-            sqlite3_bind_text(tsStmt, 1, (normalized as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(tsStmt, 2, (command as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(tsStmt, 1, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(tsStmt, 2, (command as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             guard sqlite3_step(tsStmt) == SQLITE_ROW else { return nil }
             guard sqlite3_column_type(tsStmt, 0) != SQLITE_NULL else { return nil }
             let ts = sqlite3_column_double(tsStmt, 0)
@@ -437,7 +572,7 @@ public final class SessionDatabase: @unchecked Sendable {
             var preview: String?
             if sqlite3_prepare_v2(db, previewSql, -1, &prevStmt, nil) == SQLITE_OK {
                 defer { sqlite3_finalize(prevStmt) }
-                sqlite3_bind_text(prevStmt, 1, (command as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(prevStmt, 1, (command as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
                 sqlite3_bind_double(prevStmt, 2, ts)
                 if sqlite3_step(prevStmt) == SQLITE_ROW && sqlite3_column_type(prevStmt, 0) != SQLITE_NULL {
                     preview = String(cString: sqlite3_column_text(prevStmt, 0))
@@ -484,7 +619,7 @@ public final class SessionDatabase: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sessionSql, -1, &stmt, nil) == SQLITE_OK else { return nil }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
 
             let sid = String(cString: sqlite3_column_text(stmt, 0))
@@ -513,7 +648,7 @@ public final class SessionDatabase: @unchecked Sendable {
                 )
             }
             defer { sqlite3_finalize(eventStmt) }
-            sqlite3_bind_text(eventStmt, 1, (sid as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(eventStmt, 1, (sid as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
 
             var lastCommand: String?
             var searches: [String] = []
@@ -601,7 +736,7 @@ public final class SessionDatabase: @unchecked Sendable {
 
             var bindIdx: Int32 = 1
             if let root = normalized {
-                sqlite3_bind_text(stmt, bindIdx, (root as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, bindIdx, (root as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
                 bindIdx += 1
             }
             if let since {
@@ -660,7 +795,7 @@ public final class SessionDatabase: @unchecked Sendable {
             defer { sqlite3_finalize(totalStmt) }
             for (idx, val) in bindValues {
                 if let s = val as? String {
-                    sqlite3_bind_text(totalStmt, idx, (s as NSString).utf8String, -1, nil)
+                    sqlite3_bind_text(totalStmt, idx, (s as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
                 } else if let d = val as? Double {
                     sqlite3_bind_double(totalStmt, idx, d)
                 }
@@ -678,7 +813,7 @@ public final class SessionDatabase: @unchecked Sendable {
             defer { sqlite3_finalize(senkaniStmt) }
             for (idx, val) in bindValues {
                 if let s = val as? String {
-                    sqlite3_bind_text(senkaniStmt, idx, (s as NSString).utf8String, -1, nil)
+                    sqlite3_bind_text(senkaniStmt, idx, (s as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
                 } else if let d = val as? Double {
                     sqlite3_bind_double(senkaniStmt, idx, d)
                 }

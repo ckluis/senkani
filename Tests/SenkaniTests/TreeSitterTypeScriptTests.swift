@@ -249,10 +249,13 @@ struct TreeSitterTypeScriptPerformanceTests {
             source += "function fn\(i)(x: number): number { return x; }\n"
         }
 
-        let (entries, median, samples) = measureIndex(source, language: "typescript")
+        let (entries, samples) = measureIndex(source, language: "typescript")
         // 5 interfaces + 5 classes + 30 methods + 30 functions = 70
         #expect(entries.count >= 65, "Should find >= 65 symbols, got \(entries.count)")
-        #expect(median < 10.0, "median of 3 TypeScript parses: \(samples) → median \(String(format: "%.2f", median))ms")
+        #expect(
+            PerfGate.passes(samples: samples, budget: 10.0),
+            "min of 3 TypeScript parses must be < 10ms: \(samples)"
+        )
     }
 
     @Test func tsxFileParsesUnder10ms() {
@@ -267,10 +270,13 @@ struct TreeSitterTypeScriptPerformanceTests {
             """
         }
 
-        let (entries, median, samples) = measureIndex(source, language: "tsx")
+        let (entries, samples) = measureIndex(source, language: "tsx")
         // 10 interfaces + 10 functions = 20
         #expect(entries.count >= 20, "Should find >= 20 symbols, got \(entries.count)")
-        #expect(median < 10.0, "median of 3 TSX parses: \(samples) → median \(String(format: "%.2f", median))ms")
+        #expect(
+            PerfGate.passes(samples: samples, budget: 10.0),
+            "min of 3 TSX parses must be < 10ms: \(samples)"
+        )
     }
 
     @Test func tsxAndTsCoexist() {
@@ -310,6 +316,58 @@ struct TreeSitterTypeScriptPerformanceTests {
     }
 }
 
+// MARK: - Suite 5: TypeScript Depth-Stress
+
+@Suite("TreeSitterBackend — TypeScript Depth Stress")
+struct TreeSitterTypeScriptDepthStressTests {
+
+    // Chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Generates a top-level lexical_declaration whose initializer is a
+    // 2200-deep parenthesized-expression chain, bracketed by two
+    // top-level function declarations to assert pre-order symbol
+    // emission. Indexes the file WITHOUT `runOnLargeStackThread` to
+    // prove the iterative walk is cooperative-pool-safe.
+    //
+    // Why a top-level const initializer: leaf-emit arms
+    // (function_declaration, type_alias_declaration, method_definition)
+    // don't descend, and the body-rebind arms (class_declaration,
+    // interface_declaration, enum_declaration) only descend into a
+    // body block whose internal expression depth tops out around grammar
+    // structure, not user-controllable parens. The deep chain must live
+    // in a node whose descendants fall through the default arm —
+    // `lexical_declaration` (TS-grammar node for `const`/`let`) is not
+    // matched by any special arm and falls through default, then the
+    // variable_declarator → parenthesized_expression chain pushes
+    // ~2200 deep through repeated default-arm descent. The pre-refactor
+    // recursive walk would consume ~2200 Swift call frames and crash
+    // on the cooperative pool's smaller stack; the iterative form runs
+    // in heap-allocated work-stack memory.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() {
+        let depth = 2200
+        let opens = String(repeating: "(", count: depth)
+        let closes = String(repeating: ")", count: depth)
+        let source = """
+        function first() { return 1; }
+
+        // Top-level lexical_declaration with a 2200-deep parenthesized
+        // initializer. lexical_declaration falls through the default
+        // arm; the parenthesized_expression chain descends via
+        // repeated reverse-pushes.
+        const x = \(opens)0\(closes);
+
+        function last() { return 2; }
+        """
+
+        let entries = indexTypeScript(source)
+        let funcs = entries.filter { $0.kind == .function }
+        #expect(funcs.map(\.name) == ["first", "last"],
+                "Bracketing top-level functions must emit in left-to-right pre-order")
+        #expect(funcs.allSatisfy { $0.container == nil },
+                "Top-level TypeScript functions carry no container")
+    }
+}
+
 // MARK: - Helpers
 
 private func indexTypeScript(_ code: String) -> [IndexEntry] {
@@ -332,17 +390,14 @@ private func indexLanguage(_ code: String, language: String, ext: String) -> [In
     return (try? TreeSitterBackend.index(files: [filePath], language: language, projectRoot: tmpDir)) ?? []
 }
 
-/// Returns (entries-from-the-last-sample, median-ms over 3 samples, all 3 samples).
-///
-/// Median-of-3 — see DependencyGraphPerfGateTests for the canonical
-/// pattern. `.serialized` only serializes within-suite, so peer-suite
-/// CPU contention can spike a single sample under parallel runner;
-/// a single transient spike on one of three runs cannot fail the
-/// test, but a real regression (every run blows budget) still does.
-/// Threshold preserved at 10 ms in callers — the median strengthens
-/// the gate on its own (mirrors the Scala/Ruby/Haskell/PHP siblings,
-/// with the InjectionGuard 2026-05-06 precedent of preserve-don't-widen).
-private func measureIndex(_ code: String, language: String) -> ([IndexEntry], Double, [Double]) {
+/// Returns (entries-from-the-last-sample, all 3 ms samples). Callers feed the
+/// samples to `PerfGate.passes` (min-of-N — see PerfGate.swift / the canonical
+/// `DependencyGraphPerfGateTests`). `.serialized` only serializes within-suite,
+/// so peer-suite CPU contention can spike a single sample under the parallel
+/// runner; asserting the minimum tolerates that spike while a real regression
+/// (every run blows budget) still trips the gate. Per-site 10 ms budgets are
+/// preserved unchanged.
+private func measureIndex(_ code: String, language: String) -> ([IndexEntry], [Double]) {
     let ext = language == "tsx" ? "tsx" : "ts"
     let tmpDir = NSTemporaryDirectory() + "senkani-\(language)-perf-\(UUID().uuidString)"
     let filePath = "perf_test.\(ext)"
@@ -361,6 +416,5 @@ private func measureIndex(_ code: String, language: String) -> ([IndexEntry], Do
         }
         samples.append(Double(elapsed.components.attoseconds) / 1e15)
     }
-    let median = samples.sorted()[1]
-    return (entries, median, samples)
+    return (entries, samples)
 }

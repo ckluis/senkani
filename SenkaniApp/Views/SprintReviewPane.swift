@@ -20,6 +20,11 @@ struct SprintReviewPane: View {
     @State private var errorMessage: String?
     @State private var busyRowId: String?
 
+    // V.9b-1 follow-up — observe the shared focus request so a
+    // double-click on a sprintReview-source artifact in
+    // ArtifactGalleryView lands on the matching row.
+    private let focusRequest = SprintReviewFocusRequest.shared
+
     private var projectRoot: String {
         workspace?.activeProject?.path ?? FileManager.default.currentDirectoryPath
     }
@@ -31,23 +36,33 @@ struct SprintReviewPane: View {
             if snapshot.isEmpty {
                 emptyState
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 16) {
-                        ForEach(snapshot.sections) { section in
-                            sectionHeader(section.kind, count: section.rows.count)
-                            ForEach(section.rows) { row in
-                                rowView(row)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 16) {
+                            ForEach(snapshot.sections) { section in
+                                sectionHeader(section.kind, count: section.rows.count)
+                                ForEach(section.rows) { row in
+                                    rowView(row)
+                                        .id(row.id)
+                                }
+                            }
+                            if !snapshot.stalenessFlags.isEmpty {
+                                stalenessHeader
+                                ForEach(snapshot.stalenessFlags) { flag in
+                                    stalenessRow(flag)
+                                        .id(flag.id)
+                                }
                             }
                         }
-                        if !snapshot.stalenessFlags.isEmpty {
-                            stalenessHeader
-                            ForEach(snapshot.stalenessFlags) { flag in
-                                stalenessRow(flag)
-                            }
-                        }
+                        .padding(.vertical, 12)
+                        .padding(.horizontal, 14)
                     }
-                    .padding(.vertical, 12)
-                    .padding(.horizontal, 14)
+                    .onChange(of: focusRequest.mutationStamp) { _, _ in
+                        tryScrollToFocusTarget(proxy: proxy)
+                    }
+                    .onChange(of: snapshot) { _, _ in
+                        tryScrollToFocusTarget(proxy: proxy)
+                    }
                 }
             }
             if let msg = errorMessage {
@@ -55,7 +70,22 @@ struct SprintReviewPane: View {
             }
         }
         .background(SenkaniTheme.paneBody)
-        .onAppear { reload() }
+        .onAppear {
+            reload()
+            // First-load case: if a focus request arrived before the
+            // pane was visible (route handler runs before onAppear),
+            // try to scroll once the snapshot is in place.
+        }
+    }
+
+    private func tryScrollToFocusTarget(proxy: ScrollViewProxy) {
+        guard let matched = SprintReviewFocusResolver.matchedRow(
+            target: focusRequest.targetRowId,
+            snapshot: snapshot
+        ) else { return }
+        withAnimation {
+            proxy.scrollTo(matched, anchor: .top)
+        }
     }
 
     // MARK: - Subviews
@@ -282,7 +312,12 @@ struct SprintReviewPane: View {
 
     private func reload() {
         LearnedRulesStore.reload()
-        snapshot = SprintReviewViewModel.load(windowDays: windowDays)
+        // recordSnapshot: true captures one snapshot batch per
+        // pane-open event into sprint_review_snapshots (V.9a
+        // follow-up sub-2 lineage recording).
+        snapshot = SprintReviewViewModel.load(
+            windowDays: windowDays,
+            recordSnapshot: true)
     }
 
     private func performAccept(_ row: SprintReviewRow) {

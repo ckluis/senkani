@@ -142,6 +142,14 @@ extension SessionDatabase {
         commandStore.endSession(sessionId: sessionId)
     }
 
+    /// V.5c durability check: count of `commands` rows for the given
+    /// session. Short-lived CLI callers (`AuthorshipBackfillRunner`)
+    /// SELECT this after a `recordCommand` to verify the audit-chain
+    /// row actually committed before the process exits.
+    public func commandCount(sessionId: String) -> Int {
+        commandStore.commandCount(sessionId: sessionId)
+    }
+
     public func loadSessions(limit: Int = 50) -> [SessionSummaryRow] {
         commandStore.loadSessions(limit: limit)
     }

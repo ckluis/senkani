@@ -27,6 +27,34 @@ actor MCPSession {
     /// default.
     @TaskLocal public static var currentToggleOverrides: ToggleOverrides?
 
+    /// Cached `SENKANI_SAVINGS_DEBUG` env-var lookup. When set to a truthy
+    /// value (`1`, `true`, `on`, `yes`), `recordMetrics` emits a
+    /// `mcp.metrics.recorded` event for every tool call (raw/compressed
+    /// bytes, tool name, feature). Off by default — `mcp.metrics.compression_negative`
+    /// fires unconditionally for the diagnostic case (`savedBytes <= 0`)
+    /// regardless of this flag.
+    ///
+    /// Mirrors the `Logger.isJSON` cache pattern: env read once, memoized
+    /// for the process lifetime. Tests reset via `_resetSavingsDebugCacheForTesting`.
+    nonisolated(unsafe) private static var _savingsDebugEnabled: Bool?
+    private static let savingsDebugLock = NSLock()
+
+    public static var savingsDebugEnabled: Bool {
+        savingsDebugLock.lock(); defer { savingsDebugLock.unlock() }
+        if let cached = _savingsDebugEnabled { return cached }
+        let raw = ProcessInfo.processInfo.environment["SENKANI_SAVINGS_DEBUG"]?.lowercased() ?? ""
+        let v = (raw == "1" || raw == "true" || raw == "on" || raw == "yes")
+        _savingsDebugEnabled = v
+        return v
+    }
+
+    /// Test-only: clear the cached env lookup so a test can flip
+    /// `SENKANI_SAVINGS_DEBUG` and observe the new behavior in-process.
+    public static func _resetSavingsDebugCacheForTesting() {
+        savingsDebugLock.lock(); defer { savingsDebugLock.unlock() }
+        _savingsDebugEnabled = nil
+    }
+
     /// Per-connection feature-toggle override map. Each field is optional —
     /// nil means "fall back to the session's default toggle"; `.some(true)`
     /// or `.some(false)` overrides for the lifetime of the wrapped tool call.
@@ -286,6 +314,10 @@ actor MCPSession {
         SessionDatabase.shared.pruneSandboxedResults()
         // Prune token_events older than 90 days to prevent unbounded table growth
         SessionDatabase.shared.pruneTokenEvents()
+        // Same cadence for claude_session_cursors — the watcher upserts one
+        // row per JSONL file it ever opens, so without this the table grows
+        // monotonically across operator-months.
+        SessionDatabase.shared.pruneSessionCursors()
         // Phase H+1 daily cadence sweep — promote `.recurring` rules with
         // sufficient evidence to `.staged` so they're visible to the
         // operator on the next `senkani learn status`. Lazy on session
@@ -399,7 +431,12 @@ actor MCPSession {
             let pr = projectRoot
             let tc = treeCache
             Task.detached(priority: .utility) { [weak self] in
-                let updated = IndexEngine.incrementalUpdate(existing: cached, projectRoot: pr, treeCache: tc)
+                // AST walks must run on a large-stack thread; cooperative-
+                // pool threads (~512 KB) blow the stack guard on deep Go/TS
+                // ASTs. See RunOnLargeStackThread.swift for the rationale.
+                let updated = await runOnLargeStackThread {
+                    IndexEngine.incrementalUpdate(existing: cached, projectRoot: pr, treeCache: tc)
+                }
                 try? IndexStore.save(updated, projectRoot: pr)
                 await self?.applyIndexUpdate(updated)
                 await self?.startFileWatcher()
@@ -410,7 +447,9 @@ actor MCPSession {
             let pr = projectRoot
             let tc = treeCache
             Task.detached(priority: .utility) { [weak self] in
-                let idx = IndexEngine.index(projectRoot: pr, treeCache: tc)
+                let idx = await runOnLargeStackThread {
+                    IndexEngine.index(projectRoot: pr, treeCache: tc)
+                }
                 try? IndexStore.save(idx, projectRoot: pr)
                 await self?.applyIndexUpdate(idx)
                 await self?.startFileWatcher()
@@ -626,10 +665,13 @@ actor MCPSession {
     }
 
     /// Blocking index build for CLI commands. Checks if background build finished first.
-    func ensureIndex() -> SymbolIndex {
+    /// AST walks run on a large-stack thread (see `RunOnLargeStackThread.swift`).
+    func ensureIndex() async -> SymbolIndex {
         if let idx = _symbolIndex { return idx }
-        // Background build may be in progress — just do a synchronous build
-        let idx = IndexStore.buildOrUpdate(projectRoot: projectRoot)
+        let pr = projectRoot
+        let idx = await runOnLargeStackThread {
+            IndexStore.buildOrUpdate(projectRoot: pr)
+        }
         try? IndexStore.save(idx, projectRoot: projectRoot)
         _symbolIndex = idx
         _repoMap = nil
@@ -895,7 +937,7 @@ actor MCPSession {
 
     /// Handle a batch of changed files from the FileWatcher.
     /// Re-indexes each file incrementally, then updates the in-memory symbol index.
-    private func handleFileChanges(_ changedFiles: [String]) {
+    private func handleFileChanges(_ changedFiles: [String]) async {
         let prefix = projectRoot + "/"
         let relativePaths = changedFiles.compactMap { absPath -> String? in
             guard absPath.hasPrefix(prefix) else { return nil }
@@ -908,28 +950,33 @@ actor MCPSession {
         let events = relativePaths.map { ChangeEvent(path: $0, eventType: "modified", timestamp: now) }
         appendChangeEvents(events)
 
-        var newEntries: [IndexEntry] = []
-        var affectedFiles: Set<String> = []
+        // AST walks must run on a large-stack thread; see RunOnLargeStackThread.swift.
+        let pr = projectRoot
+        let tc = treeCache
+        let (newEntries, affectedFiles): ([IndexEntry], Set<String>) = await runOnLargeStackThread {
+            var entries: [IndexEntry] = []
+            var affected: Set<String> = []
+            for relativePath in relativePaths {
+                let fullPath = pr + "/" + relativePath
+                affected.insert(relativePath)
 
-        for relativePath in relativePaths {
-            let fullPath = projectRoot + "/" + relativePath
-            affectedFiles.insert(relativePath)
+                if !FileManager.default.fileExists(atPath: fullPath) {
+                    tc.remove(file: relativePath)
+                    continue
+                }
 
-            if !FileManager.default.fileExists(atPath: fullPath) {
-                treeCache.remove(file: relativePath)
-                continue
+                do {
+                    let fileEntries = try IndexEngine.indexFileIncremental(
+                        relativePath: relativePath,
+                        projectRoot: pr,
+                        treeCache: tc
+                    )
+                    entries.append(contentsOf: fileEntries)
+                } catch {
+                    fputs("[senkani] indexFileIncremental skipped for \(relativePath): \(error)\n", stderr)
+                }
             }
-
-            do {
-                let entries = try IndexEngine.indexFileIncremental(
-                    relativePath: relativePath,
-                    projectRoot: projectRoot,
-                    treeCache: treeCache
-                )
-                newEntries.append(contentsOf: entries)
-            } catch {
-                fputs("[senkani] indexFileIncremental skipped for \(relativePath): \(error)\n", stderr)
-            }
+            return (entries, affected)
         }
 
         guard var idx = _symbolIndex else { return }
@@ -963,6 +1010,40 @@ actor MCPSession {
         perFeatureSaved[feature, default: 0] += (rawBytes - compressedBytes)
 
         let savedBytes = rawBytes - compressedBytes
+
+        // Compression-delta diagnostics (parent_finding 2026-05-12: real
+        // Claude-session-driven Read tool calls observed `savedBytes <= 0`
+        // on every mcp_tool row, suppressing the `firstNonzeroSavings`
+        // onboarding milestone via the `if savedTokens > 0` gate).
+        //
+        // Two-tier emission, per acceptance criterion B:
+        // - High-signal: when `savedBytes <= 0`, ALWAYS emit so the
+        //   compression-hurts-here case surfaces in the operator's stderr
+        //   without env-var configuration. Volume is bounded by how often
+        //   the compression layer fails to beat the raw payload — not a
+        //   per-call hot path.
+        // - Per-call verbose: gated behind SENKANI_SAVINGS_DEBUG=1 for
+        //   diagnostic deep-dives where every recordMetrics entry needs
+        //   inspection. Off by default to keep production stderr quiet.
+        if savedBytes <= 0 {
+            Logger.log("mcp.metrics.compression_negative", fields: [
+                "raw_bytes":        .int(rawBytes),
+                "compressed_bytes": .int(compressedBytes),
+                "saved_bytes":      .int(savedBytes),
+                "tool_name":        .string(feature),
+                "feature":          .string(feature),
+                "command":          .string(command ?? ""),
+            ])
+        }
+        if MCPSession.savingsDebugEnabled {
+            Logger.log("mcp.metrics.recorded", fields: [
+                "raw_bytes":        .int(rawBytes),
+                "compressed_bytes": .int(compressedBytes),
+                "saved_bytes":      .int(savedBytes),
+                "tool_name":        .string(feature),
+                "feature":          .string(feature),
+            ])
+        }
 
         // JSONL write — matches MetricEntry format expected by MetricsWatcher
         if let path = metricsFilePath {

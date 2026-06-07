@@ -404,3 +404,299 @@ struct SearchWebCatalogTests {
         #expect((tool.description ?? "").lowercased().contains("guard-research"))
     }
 }
+
+// MARK: - DDG soft-block resilience: region rotation + cool-down ledger
+//
+// `search-web-ddg-soft-block-resilience-2026-05-16` — once a region
+// returns a DDG Lite CAPTCHA / soft-block, the tool auto-retries against
+// the next region in `SearchWebRegionRotation.order(primary:)` and
+// records the cool-down in `SearchWebCoolDownLedger`. Bounded at 2
+// HTTP attempts per call; back-off between attempts is configured via
+// the `SearchWebRetryConfig` TaskLocal slot so tests don't pay the 2s
+// sleep.
+
+@Suite("SearchWeb — region rotation default order")
+struct SearchWebRegionRotationTests {
+
+    @Test("default primary `wt-wt` leads the rotation without duplicates")
+    func defaultRotation() {
+        let order = SearchWebRegionRotation.order(primary: "wt-wt")
+        #expect(order == ["wt-wt", "us-en", "uk-en", "de-de"])
+    }
+
+    @Test("non-default primary leads, default list follows in order, no duplicates")
+    func customPrimary() {
+        let order = SearchWebRegionRotation.order(primary: "fr-fr")
+        #expect(order == ["fr-fr", "wt-wt", "us-en", "uk-en", "de-de"])
+    }
+
+    @Test("primary that matches a default entry is not duplicated")
+    func deduplicatesWhenPrimaryIsInDefault() {
+        let order = SearchWebRegionRotation.order(primary: "us-en")
+        #expect(order == ["us-en", "wt-wt", "uk-en", "de-de"])
+    }
+}
+
+@Suite("SearchWeb — cool-down ledger (file format + expiry + mode 0600)")
+struct SearchWebCoolDownLedgerTests {
+
+    private func makeTempPath() -> String {
+        NSTemporaryDirectory() + "senkani-search-web-cooldown-\(UUID().uuidString)/cooldown.json"
+    }
+
+    @Test("recordCaptcha writes a ledger entry and isCooling returns true within the window")
+    func recordsAndReadsBack() {
+        let path = makeTempPath()
+        defer {
+            let dir = (path as NSString).deletingLastPathComponent
+            try? FileManager.default.removeItem(atPath: dir)
+        }
+
+        SearchWebCoolDownLedger.withPath(path) {
+            #expect(!SearchWebCoolDownLedger.isCooling(region: "wt-wt"))
+            SearchWebCoolDownLedger.recordCaptcha(region: "wt-wt")
+            #expect(SearchWebCoolDownLedger.isCooling(region: "wt-wt"))
+            // A region that wasn't recorded is not cooling.
+            #expect(!SearchWebCoolDownLedger.isCooling(region: "us-en"))
+        }
+    }
+
+    @Test("isCooling returns false after expiry passes (`now > cooldownUntil`)")
+    func expiryUnblocksRegion() {
+        let path = makeTempPath()
+        defer {
+            let dir = (path as NSString).deletingLastPathComponent
+            try? FileManager.default.removeItem(atPath: dir)
+        }
+
+        SearchWebCoolDownLedger.withPath(path) {
+            // Record with a 1-second duration so we can test expiry in a deterministic way.
+            let pastSeen = Date(timeIntervalSinceNow: -2)
+            SearchWebCoolDownLedger.recordCaptcha(
+                region: "wt-wt",
+                now: pastSeen,
+                duration: 1
+            )
+            // 2 seconds after captchaSeenAt, the 1-second cool-down has expired.
+            let later = Date()
+            #expect(!SearchWebCoolDownLedger.isCooling(region: "wt-wt", now: later))
+            #expect(SearchWebCoolDownLedger.cooldownUntil(region: "wt-wt", now: later) == nil)
+        }
+    }
+
+    @Test("ledger JSON file lands with mode 0600")
+    func ledgerFileHasMode0600() throws {
+        let path = makeTempPath()
+        defer {
+            let dir = (path as NSString).deletingLastPathComponent
+            try? FileManager.default.removeItem(atPath: dir)
+        }
+
+        try SearchWebCoolDownLedger.withPath(path) {
+            SearchWebCoolDownLedger.recordCaptcha(region: "wt-wt")
+            // File must exist after recordCaptcha.
+            #expect(FileManager.default.fileExists(atPath: path))
+            // Permissions: NSFilePosixPermissions returns the mode bits
+            // as an NSNumber. We assert the low 9 bits equal 0o600.
+            let attrs = try FileManager.default.attributesOfItem(atPath: path)
+            let posix = (attrs[.posixPermissions] as? NSNumber)?.int16Value ?? -1
+            #expect(posix == 0o600,
+                    "ledger file at \(path) must have mode 0o600 (got \(String(posix, radix: 8)))")
+        }
+    }
+}
+
+@Suite("SearchWeb — soft-block resilience end-to-end")
+struct SearchWebSoftBlockResilienceTests {
+
+    /// Backend whose response depends on the URL's `kl` query item — so
+    /// the rotation logic gets a different fixture per region. Captures
+    /// the region of each call for assertion + ordering checks.
+    fileprivate final class PerRegionBackend: SearchWebBackend, @unchecked Sendable {
+        let responses: [String: String]
+        nonisolated(unsafe) var callLog: [String] = []
+        nonisolated(unsafe) var callCount: Int = 0
+
+        init(responses: [String: String]) { self.responses = responses }
+
+        func fetch(url: URL) async throws -> String {
+            // Extract `kl` (region) query item.
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            let region = components?.queryItems?.first(where: { $0.name == "kl" })?.value ?? "<none>"
+            callLog.append(region)
+            callCount += 1
+            return responses[region] ?? captchaHTML
+        }
+    }
+
+    /// CAPTCHA-shaped HTML — no `<a class="result-link">`, contains the
+    /// `anomaly` sentinel that `DuckDuckGoLiteParser.captchaSignals`
+    /// detects.
+    fileprivate static let captchaHTML = """
+    <html><body><h1>Anomaly detected</h1><p>Please try again later.</p></body></html>
+    """
+
+    fileprivate static let goodHTML = """
+    <table>
+    <tr><td class="result-link"><a rel="nofollow" class="result-link" href="https://example.com/post">Example Post</a></td></tr>
+    <tr><td class="result-snippet">a public snippet</td></tr>
+    </table>
+    """
+
+    private func makeTempPath() -> String {
+        NSTemporaryDirectory() + "senkani-search-web-rotation-\(UUID().uuidString)/cooldown.json"
+    }
+
+    @Test("synthetic CAPTCHA on primary region triggers retry against next; structured success on B")
+    func rotationRetriesToNextRegionOnCAPTCHA() async throws {
+        let path = makeTempPath()
+        defer {
+            let dir = (path as NSString).deletingLastPathComponent
+            try? FileManager.default.removeItem(atPath: dir)
+        }
+        let backend = PerRegionBackend(responses: [
+            "wt-wt": Self.captchaHTML,
+            "us-en": Self.goodHTML,
+        ])
+        let session = MCPSession(projectRoot: NSTemporaryDirectory())
+
+        let result = await SearchWebCoolDownLedger.withPath(path) {
+            await SearchWebRetryConfig.withBackoffMs(0) {
+                await SearchWebTool.handle(
+                    arguments: ["query": .string("public topic")],
+                    session: session,
+                    backend: backend
+                )
+            }
+        }
+
+        #expect(result.isError != true, "rotation must succeed when next region returns results")
+        let text = result.content.compactMap { c -> String? in
+            if case .text(let t, _, _) = c { return t } else { return nil }
+        }.joined(separator: "\n")
+        #expect(text.contains("Example Post"))
+        #expect(text.contains("https://example.com/post"))
+        #expect(backend.callLog == ["wt-wt", "us-en"],
+                "expected primary→fallback order, got \(backend.callLog)")
+        // Cool-down ledger should now have recorded the wt-wt CAPTCHA.
+        SearchWebCoolDownLedger.withPath(path) {
+            #expect(SearchWebCoolDownLedger.isCooling(region: "wt-wt"))
+            #expect(!SearchWebCoolDownLedger.isCooling(region: "us-en"))
+        }
+    }
+
+    @Test("both regions CAPTCHA → returns structured allRegionsCooling error")
+    func bothRegionsBlockedReturnsAllCoolingError() async {
+        let path = makeTempPath()
+        defer {
+            let dir = (path as NSString).deletingLastPathComponent
+            try? FileManager.default.removeItem(atPath: dir)
+        }
+        let backend = PerRegionBackend(responses: [
+            "wt-wt": Self.captchaHTML,
+            "us-en": Self.captchaHTML,
+        ])
+        let session = MCPSession(projectRoot: NSTemporaryDirectory())
+
+        let result = await SearchWebCoolDownLedger.withPath(path) {
+            await SearchWebRetryConfig.withBackoffMs(0) {
+                await SearchWebTool.handle(
+                    arguments: ["query": .string("public topic")],
+                    session: session,
+                    backend: backend
+                )
+            }
+        }
+
+        #expect(result.isError == true)
+        let text = result.content.compactMap { c -> String? in
+            if case .text(let t, _, _) = c { return t } else { return nil }
+        }.joined(separator: " ")
+        // The error must name the cooling regions.
+        #expect(text.lowercased().contains("cool-down")
+                || text.lowercased().contains("cooling")
+                || text.lowercased().contains("cool"),
+                "all-cooling error must surface the cool-down state. Got: \(text)")
+        #expect(text.contains("wt-wt") && text.contains("us-en"),
+                "all-cooling error must enumerate the blocked regions. Got: \(text)")
+        // Both regions should be in the ledger.
+        SearchWebCoolDownLedger.withPath(path) {
+            #expect(SearchWebCoolDownLedger.isCooling(region: "wt-wt"))
+            #expect(SearchWebCoolDownLedger.isCooling(region: "us-en"))
+        }
+    }
+
+    @Test("subsequent call within cool-down skips the cooling region without an HTTP request")
+    func coolingRegionsSkipHTTP() async throws {
+        let path = makeTempPath()
+        defer {
+            let dir = (path as NSString).deletingLastPathComponent
+            try? FileManager.default.removeItem(atPath: dir)
+        }
+        // Pre-record wt-wt as cooling; backend would CAPTCHA on wt-wt
+        // if called, but should NOT be called (skipped via ledger).
+        SearchWebCoolDownLedger.withPath(path) {
+            SearchWebCoolDownLedger.recordCaptcha(region: "wt-wt")
+        }
+
+        let backend = PerRegionBackend(responses: [
+            "wt-wt": Self.captchaHTML,
+            "us-en": Self.goodHTML,
+        ])
+        let session = MCPSession(projectRoot: NSTemporaryDirectory())
+
+        let result = await SearchWebCoolDownLedger.withPath(path) {
+            await SearchWebRetryConfig.withBackoffMs(0) {
+                await SearchWebTool.handle(
+                    arguments: ["query": .string("public topic")],
+                    session: session,
+                    backend: backend
+                )
+            }
+        }
+
+        #expect(result.isError != true)
+        #expect(backend.callLog == ["us-en"],
+                "wt-wt should have been skipped (cooling); only us-en should be called. Got: \(backend.callLog)")
+        #expect(backend.callCount == 1)
+    }
+
+    @Test("expired cool-down entries retry the region (ledger ignores stale rows)")
+    func expiredCooldownRetriesRegion() async throws {
+        let path = makeTempPath()
+        defer {
+            let dir = (path as NSString).deletingLastPathComponent
+            try? FileManager.default.removeItem(atPath: dir)
+        }
+        // Record wt-wt with a 1-second duration centred 2 seconds ago →
+        // already expired by the time SearchWebTool.handle reads.
+        SearchWebCoolDownLedger.withPath(path) {
+            SearchWebCoolDownLedger.recordCaptcha(
+                region: "wt-wt",
+                now: Date(timeIntervalSinceNow: -2),
+                duration: 1
+            )
+            #expect(!SearchWebCoolDownLedger.isCooling(region: "wt-wt"),
+                    "pre-condition: wt-wt cool-down must have already expired")
+        }
+
+        let backend = PerRegionBackend(responses: [
+            "wt-wt": Self.goodHTML,
+        ])
+        let session = MCPSession(projectRoot: NSTemporaryDirectory())
+
+        let result = await SearchWebCoolDownLedger.withPath(path) {
+            await SearchWebRetryConfig.withBackoffMs(0) {
+                await SearchWebTool.handle(
+                    arguments: ["query": .string("public topic")],
+                    session: session,
+                    backend: backend
+                )
+            }
+        }
+
+        #expect(result.isError != true)
+        #expect(backend.callLog == ["wt-wt"],
+                "expired cool-down must let wt-wt run again. Got: \(backend.callLog)")
+    }
+}

@@ -1,6 +1,16 @@
 import Foundation
 import SQLite3
 
+/// SQLite's `SQLITE_TRANSIENT` destructor sentinel — `(sqlite3_destructor_type)(-1)`.
+///
+/// Local mirror of `Sources/Core/SQLiteTransient.swift`'s internal
+/// `SQLITE_TRANSIENT_DESTRUCTOR`. Indexer does not depend on Core so the
+/// Core symbol is not visible here. Originating audit:
+/// `sqlite-bind-static-dangling-pointer-audit-2026-05-21`; this file's
+/// parallel-drift sweep: `sqlite-bind-static-indexer-symbolftsstore-2026-05-21`.
+private let SQLITE_TRANSIENT_DESTRUCTOR: sqlite3_destructor_type =
+    unsafeBitCast(OpaquePointer(bitPattern: -1), to: sqlite3_destructor_type.self)
+
 /// Per-project SQLite FTS5 store for BM25-ranked symbol search.
 /// Stored at `<projectRoot>/.senkani/index.db` alongside `index.json`.
 ///
@@ -8,8 +18,10 @@ import SQLite3
 /// SQLite WAL mode handles concurrent readers + one writer without corruption.
 public struct SymbolFTSStore {
     public let dbPath: String
+    public let projectRoot: String
 
     public init(projectRoot: String) {
+        self.projectRoot = projectRoot
         self.dbPath = projectRoot + "/.senkani/index.db"
     }
 
@@ -34,6 +46,19 @@ public struct SymbolFTSStore {
     // MARK: - Connection
 
     private func openDB() throws -> OpaquePointer {
+        // Defense-in-depth twin of the guard at `IndexStore.save`'s top.
+        // `createDirectory(withIntermediateDirectories: true)` below would
+        // otherwise resurrect a vanished `projectRoot` as a side effect of
+        // creating `<projectRoot>/.senkani/`. The race that matters:
+        // `MCPSession.warmIndex`'s detached Task drives
+        // `IndexStore.save` → `SymbolFTSStore.rebuild`; even with the
+        // top-level guard, `projectRoot` can disappear between save's
+        // JSON write and the FTS rebuild call. Both guards together close
+        // the leak (`mcp-session-warmindex-detached-task-races-test-
+        // cleanup-2026-05-18`, 2026-05-19).
+        guard FileManager.default.fileExists(atPath: projectRoot) else {
+            throw FTSError.openFailed(dbPath)
+        }
         let dir = (dbPath as NSString).deletingLastPathComponent
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
 
@@ -76,11 +101,11 @@ public struct SymbolFTSStore {
 
         for entry in entries {
             sqlite3_reset(stmt)
-            sqlite3_bind_text(stmt, 1, (entry.name as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, ((entry.signature ?? "") as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 3, ((entry.container ?? "") as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 4, (entry.kind.rawValue as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 5, (entry.file as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (entry.name as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, ((entry.signature ?? "") as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 3, ((entry.container ?? "") as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 4, (entry.kind.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 5, (entry.file as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int(stmt, 6, Int32(entry.startLine))
             sqlite3_step(stmt)
         }
@@ -103,7 +128,7 @@ public struct SymbolFTSStore {
             var delStmt: OpaquePointer?
             if sqlite3_prepare_v2(db, delSQL, -1, &delStmt, nil) == SQLITE_OK {
                 for (i, file) in removedFiles.enumerated() {
-                    sqlite3_bind_text(delStmt, Int32(i + 1), (file as NSString).utf8String, -1, nil)
+                    sqlite3_bind_text(delStmt, Int32(i + 1), (file as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
                 }
                 sqlite3_step(delStmt)
                 sqlite3_finalize(delStmt)
@@ -117,11 +142,11 @@ public struct SymbolFTSStore {
                 defer { sqlite3_finalize(stmt) }
                 for entry in addedEntries {
                     sqlite3_reset(stmt)
-                    sqlite3_bind_text(stmt, 1, (entry.name as NSString).utf8String, -1, nil)
-                    sqlite3_bind_text(stmt, 2, ((entry.signature ?? "") as NSString).utf8String, -1, nil)
-                    sqlite3_bind_text(stmt, 3, ((entry.container ?? "") as NSString).utf8String, -1, nil)
-                    sqlite3_bind_text(stmt, 4, (entry.kind.rawValue as NSString).utf8String, -1, nil)
-                    sqlite3_bind_text(stmt, 5, (entry.file as NSString).utf8String, -1, nil)
+                    sqlite3_bind_text(stmt, 1, (entry.name as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                    sqlite3_bind_text(stmt, 2, ((entry.signature ?? "") as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                    sqlite3_bind_text(stmt, 3, ((entry.container ?? "") as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                    sqlite3_bind_text(stmt, 4, (entry.kind.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                    sqlite3_bind_text(stmt, 5, (entry.file as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
                     sqlite3_bind_int(stmt, 6, Int32(entry.startLine))
                     sqlite3_step(stmt)
                 }
@@ -164,7 +189,7 @@ public struct SymbolFTSStore {
         }
         defer { sqlite3_finalize(stmt) }
 
-        sqlite3_bind_text(stmt, 1, (sanitized as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 1, (sanitized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         // Fetch more than limit to allow post-FTS filtering
         sqlite3_bind_int(stmt, 2, Int32(min(limit * 3, 300)))
 

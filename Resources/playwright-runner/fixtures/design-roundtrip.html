@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>U.2b-1b-2 design roundtrip fixture</title>
+</head>
+<body>
+    <!--
+        Fixture for runner.ts measureDesign() byte-shape contract tests.
+        When fed through `Resources/playwright-runner/runner.ts` against an
+        origin of `https://example.com`, the measurement output is
+        captured in Resources/playwright-runner/fixtures/
+        design-roundtrip.expected.json and consumed by the Swift
+        PlaywrightRunnerDesignMeasurementTests round-trip test. The
+        fixture's bounding-rect + contrast values in expected.json are
+        canonical-not-empirical: they pin the Codable shape contract,
+        not real Chromium layout output. U.2b-1b-3 (pure-JS extraction)
+        and U.2b-1b-6 (parity corpus) reuse the HTML against jsdom +
+        Chromium.
+
+        Each interactive target has an explicit id so the stable-id
+        heuristic resolves to the same identifier in both the baseline
+        DOM walk and the Tab-walk path.
+    -->
+    <a href="/start" id="start">start</a>
+    <button id="submit">submit</button>
+    <div role="button" tabindex="0" id="custom">custom</div>
+</body>
+</html>

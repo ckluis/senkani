@@ -1,0 +1,19 @@
+{
+  "name": "auth-over-rate-429",
+  "kind": "auth_error",
+  "description": "Requests beyond the per-key rate limit (limit 2, third request) -> 429 rate_limit_exceeded with a Retry-After header. All requests share one limiter and a single fixed clock.",
+  "records": [
+    { "key": "sk-senkani-rate", "scope": ["chat"], "rate_limit": 2 }
+  ],
+  "presented_key": "sk-senkani-rate",
+  "requested_surface": "chat",
+  "repeat": 3,
+  "expect": {
+    "http_status": "429 Too Many Requests",
+    "contains": [
+      "\"code\":\"rate_limit_exceeded\"",
+      "\"type\":\"rate_limit_error\"",
+      "Retry-After:"
+    ]
+  }
+}

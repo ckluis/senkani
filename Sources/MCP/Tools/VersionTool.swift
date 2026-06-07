@@ -22,7 +22,7 @@ public enum VersionTool {
 
     /// Bumped alongside any user-visible behavior change. Kept in sync with
     /// `Server(name:, version:)` in MCPMain + SocketServer.
-    public static let serverVersion = "0.2.0"
+    public static let serverVersion = "0.3.0"
 
     static func handle(arguments _: [String: Value]?, session _: MCPSession) async -> CallTool.Result {
         let dbVersion = SessionDatabase.shared.currentSchemaVersion()

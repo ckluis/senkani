@@ -25,6 +25,89 @@ public enum ClaudeSessionReader {
         public let timestamp: Date
     }
 
+    /// Parsed `usage` block from a single Claude JSONL assistant line.
+    /// Returned by `parseAssistantUsageLine`. Single source of truth for the
+    /// JSONL schema — both `ClaudeSessionReader.readFile` and
+    /// `ClaudeSessionWatcher.readNewMessages` (SenkaniApp) consume it so the
+    /// `cache_read_input_tokens → savedTokens` mapping cannot drift between
+    /// the two readers (parent_finding 2026-05-12: ClaudeSessionWatcher
+    /// hardcoded `savedTokens: 0` because it had its own copy of the parser
+    /// that didn't extract cacheRead).
+    public struct ParsedUsage: Sendable, Equatable {
+        public let sessionId: String?
+        public let inputTokens: Int
+        public let outputTokens: Int
+        public let cacheReadTokens: Int
+        public let cacheWriteTokens: Int
+        public let model: String?
+        public let timestamp: Date?
+
+        public init(sessionId: String?, inputTokens: Int, outputTokens: Int,
+                    cacheReadTokens: Int, cacheWriteTokens: Int,
+                    model: String?, timestamp: Date?) {
+            self.sessionId = sessionId
+            self.inputTokens = inputTokens
+            self.outputTokens = outputTokens
+            self.cacheReadTokens = cacheReadTokens
+            self.cacheWriteTokens = cacheWriteTokens
+            self.model = model
+            self.timestamp = timestamp
+        }
+    }
+
+    /// Parse a single JSONL line and extract the `usage` block if it is an
+    /// assistant message with non-zero input/output tokens. Returns `nil`
+    /// for non-assistant lines, malformed JSON, or lines missing `usage`.
+    ///
+    /// Lines with `input_tokens == 0 && output_tokens == 0` ARE returned —
+    /// the file-context `readFile` caller filters those (they're streaming
+    /// partials), but the realtime tail caller in SenkaniApp wants every
+    /// recordable assistant message routed to the DB to keep the timeline
+    /// pane truthful, including cache-read-only re-prompts (which can
+    /// have zero `input_tokens` but a non-zero `cache_read_input_tokens`).
+    public static func parseAssistantUsageLine(_ line: String) -> ParsedUsage? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty,
+              let data = trimmed.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+
+        guard let msgType = obj["type"] as? String, msgType == "assistant" else { return nil }
+
+        let usage: [String: Any]?
+        let model: String?
+        if let msg = obj["message"] as? [String: Any] {
+            usage = msg["usage"] as? [String: Any]
+            model = msg["model"] as? String
+        } else {
+            usage = obj["usage"] as? [String: Any]
+            model = obj["model"] as? String
+        }
+        guard let usageBlock = usage else { return nil }
+
+        let inputTokens  = (usageBlock["input_tokens"]  as? Int) ?? 0
+        let outputTokens = (usageBlock["output_tokens"] as? Int) ?? 0
+        let cacheRead    = (usageBlock["cache_read_input_tokens"]    as? Int) ?? 0
+        let cacheWrite   = (usageBlock["cache_creation_input_tokens"] as? Int) ?? 0
+
+        let timestamp: Date?
+        if let tsStr = obj["timestamp"] as? String {
+            timestamp = iso8601.date(from: tsStr)
+        } else {
+            timestamp = nil
+        }
+
+        return ParsedUsage(
+            sessionId: obj["sessionId"] as? String,
+            inputTokens: inputTokens,
+            outputTokens: outputTokens,
+            cacheReadTokens: cacheRead,
+            cacheWriteTokens: cacheWrite,
+            model: model,
+            timestamp: timestamp
+        )
+    }
+
     /// Scan all JSONL files under `projectsDir` and return any new events
     /// since the stored cursor for each file. Updates cursors in the database.
     ///
@@ -79,7 +162,7 @@ public enum ClaudeSessionReader {
         guard let handle = FileHandle(forReadingAtPath: path) else { return [] }
         defer { handle.closeFile() }
 
-        let (byteOffset, turnIndex) = db.getSessionCursor(path: path)
+        let (byteOffset, turnIndex) = db.getSessionCursor(path: path, reader: "reader")
         if byteOffset > 0 {
             handle.seek(toFileOffset: UInt64(byteOffset))
         }
@@ -93,63 +176,33 @@ public enum ClaudeSessionReader {
         var currentTurn = turnIndex
 
         for line in text.components(separatedBy: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty else { continue }
-            guard let data = trimmed.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            else { continue }
-
-            // Only assistant messages carry real usage data.
-            guard let msgType = obj["type"] as? String, msgType == "assistant" else { continue }
-
-            // The message content is nested: { type: "assistant", message: { usage: ... } }
-            // or directly: { type: "assistant", usage: ... }
-            let usage: [String: Any]?
-            if let msg = obj["message"] as? [String: Any] {
-                usage = msg["usage"] as? [String: Any]
-            } else {
-                usage = obj["usage"] as? [String: Any]
-            }
-            guard let usageBlock = usage else { continue }
-
-            let inputTokens  = (usageBlock["input_tokens"]  as? Int) ?? 0
-            let outputTokens = (usageBlock["output_tokens"] as? Int) ?? 0
-            let cacheRead    = (usageBlock["cache_read_input_tokens"]    as? Int) ?? 0
-            let cacheWrite   = (usageBlock["cache_creation_input_tokens"] as? Int) ?? 0
+            guard let parsed = parseAssistantUsageLine(line) else { continue }
 
             // Skip entries with no real usage (e.g., filtered or streaming partials).
-            guard inputTokens > 0 || outputTokens > 0 else { continue }
-
-            let model: String?
-            if let msg = obj["message"] as? [String: Any] {
-                model = msg["model"] as? String
-            } else {
-                model = obj["model"] as? String
-            }
-
-            let timestamp: Date
-            if let tsStr = obj["timestamp"] as? String,
-               let parsed = iso8601.date(from: tsStr) {
-                timestamp = parsed
-            } else {
-                timestamp = Date()
-            }
+            // Note: cache-read-only re-prompts (input==0, output==0, cacheRead>0)
+            // are filtered here too — `readNew` is the cursor-driven background
+            // path that aggregates per-session totals; the realtime
+            // ClaudeSessionWatcher records every assistant message instead.
+            guard parsed.inputTokens > 0 || parsed.outputTokens > 0 else { continue }
 
             events.append(TokenEvent(
                 claudeSessionId: sessionId,
                 turnIndex: currentTurn,
-                inputTokens: inputTokens,
-                outputTokens: outputTokens,
-                cacheReadTokens: cacheRead,
-                cacheWriteTokens: cacheWrite,
-                model: model,
-                timestamp: timestamp
+                inputTokens: parsed.inputTokens,
+                outputTokens: parsed.outputTokens,
+                cacheReadTokens: parsed.cacheReadTokens,
+                cacheWriteTokens: parsed.cacheWriteTokens,
+                model: parsed.model,
+                timestamp: parsed.timestamp ?? Date()
             ))
             currentTurn += 1
         }
 
         // Always advance cursor even if no events (skips junk lines on next read).
-        db.setSessionCursor(path: path, byteOffset: newCursor, turnIndex: currentTurn)
+        // reader: "reader" — readNew tracks monotonic turn_index; the
+        // realtime tail (reader: "watcher") writes turn_index=0 and lives
+        // on its own (path, reader) row post-migration-21.
+        db.setSessionCursor(path: path, byteOffset: newCursor, turnIndex: currentTurn, reader: "reader")
 
         return events
     }

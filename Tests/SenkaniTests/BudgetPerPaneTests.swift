@@ -9,20 +9,23 @@ struct BudgetPerPaneTests {
     // MARK: - Helpers
 
     /// Build a minimal MCPSession for budget tests (no index, no cache, no sessionId).
-    private func makeSession() -> MCPSession {
-        MCPSession(
-            projectRoot: "/tmp/senkani-budget-test",
+    private func makeSession() -> (MCPSession, String) {
+        let root = "/tmp/senkani-budget-test-\(UUID().uuidString)"
+        let session = MCPSession(
+            projectRoot: root,
             filterEnabled: false,
             secretsEnabled: false,
             indexerEnabled: false,
             cacheEnabled: false
         )
+        return (session, root)
     }
 
     // MARK: - Suite: Budget decision logic
 
     @Test func paneBudgetBlocksAtHardLimit() async {
-        let session = makeSession()
+        let (session, root) = makeSession()
+        defer { TempSessionDatabase.cleanup(projectRoot: root) }
         // Set 10-cent pane cap
         await session.updateConfig(budgetSessionCents: 10)
         // 140 000 bytes → costSavedCents(140_000) = 10¢ (Claude Sonnet 4 @ $3/M input)
@@ -35,7 +38,8 @@ struct BudgetPerPaneTests {
     }
 
     @Test func paneBudgetWarnsAtSoftLimit() async {
-        let session = makeSession()
+        let (session, root) = makeSession()
+        defer { TempSessionDatabase.cleanup(projectRoot: root) }
         // 10-cent cap; soft limit = 80% = 8¢
         await session.updateConfig(budgetSessionCents: 10)
         // 120 000 bytes → 9¢ — above 8¢ soft limit, below 10¢ hard limit
@@ -48,7 +52,8 @@ struct BudgetPerPaneTests {
     }
 
     @Test func paneBudgetAllowsBelowSoftLimit() async {
-        let session = makeSession()
+        let (session, root) = makeSession()
+        defer { TempSessionDatabase.cleanup(projectRoot: root) }
         await session.updateConfig(budgetSessionCents: 10)
         // 50 000 bytes → 3¢ — below 8¢ soft limit
         await session.recordMetrics(rawBytes: 50_000, compressedBytes: 0, feature: "test")
@@ -57,7 +62,8 @@ struct BudgetPerPaneTests {
     }
 
     @Test func paneBudgetNotSetAllows() async {
-        let session = makeSession()
+        let (session, root) = makeSession()
+        defer { TempSessionDatabase.cleanup(projectRoot: root) }
         // No pane limit set; heavy usage should still allow (no global budget.json in CI)
         await session.recordMetrics(rawBytes: 1_000_000, compressedBytes: 0, feature: "test")
         let decision = await session.checkBudget()
@@ -67,7 +73,8 @@ struct BudgetPerPaneTests {
     // MARK: - Suite: Runtime configuration
 
     @Test func updateConfigSetsBudgetLimit() async {
-        let session = makeSession()
+        let (session, root) = makeSession()
+        defer { TempSessionDatabase.cleanup(projectRoot: root) }
         await session.updateConfig(budgetSessionCents: 500)
         let limit = await session.paneBudgetSessionLimitCents
         #expect(limit == 500)
@@ -79,8 +86,10 @@ struct BudgetPerPaneTests {
         defer { try? FileManager.default.removeItem(atPath: configPath) }
         try "SENKANI_PANE_BUDGET_SESSION=1000\n".write(toFile: configPath, atomically: true, encoding: .utf8)
 
+        let sessionRoot = "/tmp/senkani-budget-test-\(UUID().uuidString)"
+        defer { TempSessionDatabase.cleanup(projectRoot: sessionRoot) }
         let session = MCPSession(
-            projectRoot: "/tmp/senkani-budget-test",
+            projectRoot: sessionRoot,
             filterEnabled: false,
             secretsEnabled: false,
             indexerEnabled: false,

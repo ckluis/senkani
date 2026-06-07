@@ -10,7 +10,7 @@ Expected shape:
 
 ```json
 {
-  "server_version": "0.2.0",
+  "server_version": "0.3.0",
   "tool_schemas_version": 1,
   "schema_db_version": 1,
   "tools": ["deps", "embed", "exec", "explore", "fetch", "knowledge",

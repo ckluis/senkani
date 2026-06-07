@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Panes — reference</title>
-<meta name="description" content="All 18 senkani workspace pane types.">
+<meta name="description" content="All 20 senkani workspace pane types.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -38,26 +38,28 @@
       </ul>
     </div>
     <div class="wiki-nav-group">
-      <h4>Pane types (18)</h4>
+      <h4>Pane types (20)</h4>
       <ul>
         <li><a href="../../docs/reference/panes/terminal.html">Terminal</a></li>
-        <li><a href="../../docs/reference/panes/dashboard.html">Dashboard</a></li>
-        <li><a href="../../docs/reference/panes/code-editor.html">Code Editor</a></li>
-        <li><a href="../../docs/reference/panes/browser.html">Browser</a></li>
-        <li><a href="../../docs/reference/panes/markdown-preview.html">Markdown Preview</a></li>
-        <li><a href="../../docs/reference/panes/analytics.html">Analytics</a></li>
-        <li><a href="../../docs/reference/panes/model-manager.html">Model Manager</a></li>
-        <li><a href="../../docs/reference/panes/savings-test.html">Savings Test</a></li>
         <li><a href="../../docs/reference/panes/agent-timeline.html">Agent Timeline</a></li>
-        <li><a href="../../docs/reference/panes/knowledge-base.html">Knowledge Base</a></li>
-        <li><a href="../../docs/reference/panes/diff-viewer.html">Diff Viewer</a></li>
-        <li><a href="../../docs/reference/panes/log-viewer.html">Log Viewer</a></li>
-        <li><a href="../../docs/reference/panes/scratchpad.html">Scratchpad</a></li>
-        <li><a href="../../docs/reference/panes/schedules.html">Schedules</a></li>
         <li><a href="../../docs/reference/panes/skill-library.html">Skill Library</a></li>
+        <li><a href="../../docs/reference/panes/knowledge-base.html">Knowledge Base</a></li>
+        <li><a href="../../docs/reference/panes/model-manager.html">Models</a></li>
         <li><a href="../../docs/reference/panes/sprint-review.html">Sprint Review</a></li>
-        <li><a href="../../docs/reference/panes/settings.html">Settings</a></li>
+        <li><a href="../../docs/reference/panes/artifact-gallery.html">Artifact Gallery</a></li>
         <li><a href="../../docs/reference/panes/ollama-launcher.html">Ollama</a></li>
+        <li><a href="../../docs/reference/panes/dashboard.html">Dashboard</a></li>
+        <li><a href="../../docs/reference/panes/analytics.html">Analytics</a></li>
+        <li><a href="../../docs/reference/panes/savings-test.html">Savings Test</a></li>
+        <li><a href="../../docs/reference/panes/schedules.html">Schedules</a></li>
+        <li><a href="../../docs/reference/panes/log-viewer.html">Log Viewer</a></li>
+        <li><a href="../../docs/reference/panes/served-requests.html">Served Requests</a></li>
+        <li><a href="../../docs/reference/panes/code-editor.html">Code Editor</a></li>
+        <li><a href="../../docs/reference/panes/markdown-preview.html">Markdown Preview</a></li>
+        <li><a href="../../docs/reference/panes/html-preview.html">HTML Preview</a></li>
+        <li><a href="../../docs/reference/panes/browser.html">Browser</a></li>
+        <li><a href="../../docs/reference/panes/diff-viewer.html">Diff Viewer</a></li>
+        <li><a href="../../docs/reference/panes/scratchpad.html">Scratchpad</a></li>
       </ul>
     </div>
   </aside>
@@ -73,23 +75,25 @@
 
     <div class="card-grid">
       <a class="card" href="../../docs/reference/panes/terminal.html"><h4>Terminal</h4><p>SwiftTerm-backed terminal with Senkani's FCSIT controls. Configurable font size. Kill/restart buttons. Broadcast mode for running the same command across selected panes.</p></a>
-      <a class="card" href="../../docs/reference/panes/dashboard.html"><h4>Dashboard</h4><p>Multi-project portfolio: total savings across every workspace, project-level table, per-feature charts, and insights (top filter rule by hit, freshest KB entity, etc.).</p></a>
-      <a class="card" href="../../docs/reference/panes/code-editor.html"><h4>Code Editor</h4><p>NSTextView with tree-sitter syntax highlighting across 25 languages. Cmd+click for symbol navigation. Token-intelligence overlays show live compression counts per file.</p></a>
-      <a class="card" href="../../docs/reference/panes/browser.html"><h4>Browser</h4><p>Embedded WKWebView. Localhost or any URL. Optional click-to-capture Design Mode (env-gate `SENKANI_BROWSER_DESIGN=on`, ⌥⇧D toggles) — click an element, get a fixed-schema Markdown block on the clipboard.</p></a>
-      <a class="card" href="../../docs/reference/panes/markdown-preview.html"><h4>Markdown Preview</h4><p>Live render from a file, updating on save. Supports GFM tables, fenced code, and <code>&lt;img&gt;</code> with sanitization.</p></a>
-      <a class="card" href="../../docs/reference/panes/analytics.html"><h4>Analytics</h4><p>Token + cost savings with charts, persistent across restarts. Compression breakdown by source (filter / indexer / intercept). Compliance rate meter.</p></a>
-      <a class="card" href="../../docs/reference/panes/model-manager.html"><h4>Model Manager</h4><p>Download, verify, and delete local LLMs (Gemma, MiniLM). Shows disk usage + last-used time. Triggers background memory-pressure-aware loading.</p></a>
-      <a class="card" href="../../docs/reference/panes/savings-test.html"><h4>Savings Test</h4><p>Fixture benchmark + live session replay + scenario simulator. Shows the fixture ceiling and the live multiplier side by side — the live number is the honest one.</p></a>
       <a class="card" href="../../docs/reference/panes/agent-timeline.html"><h4>Agent Timeline</h4><p>Timeline of optimization events, interactive tool calls, and scheduled-task runs. Start/end/blocked states. Scrubbable.</p></a>
-      <a class="card" href="../../docs/reference/panes/knowledge-base.html"><h4>Knowledge Base</h4><p>Project knowledge entities with freshness indicators. Click to open the markdown file. Quick-search via `senkani_knowledge`.</p></a>
-      <a class="card" href="../../docs/reference/panes/diff-viewer.html"><h4>Diff Viewer</h4><p>Side-by-side LCS diff — correct insertions, deletions, replacements. Works with file pairs or git revisions.</p></a>
-      <a class="card" href="../../docs/reference/panes/log-viewer.html"><h4>Log Viewer</h4><p>Searchable log output. Tail mode, regex filter, persistent search history.</p></a>
-      <a class="card" href="../../docs/reference/panes/scratchpad.html"><h4>Scratchpad</h4><p>Auto-saving markdown notepad. One per project. Search across all scratchpads via ⌘K.</p></a>
-      <a class="card" href="../../docs/reference/panes/schedules.html"><h4>Schedules</h4><p>Manage recurring tasks via launchd. View fire history, next-run times, worktree artifacts, budget ledger.</p></a>
       <a class="card" href="../../docs/reference/panes/skill-library.html"><h4>Skill Library</h4><p>Browse, install, and manage AI agent skills discovered in the project or shipped globally. Zero-install enable/disable.</p></a>
+      <a class="card" href="../../docs/reference/panes/knowledge-base.html"><h4>Knowledge Base</h4><p>Project knowledge entities with freshness indicators. Click to open the markdown file. Quick-search via `senkani_knowledge`.</p></a>
+      <a class="card" href="../../docs/reference/panes/model-manager.html"><h4>Models</h4><p>Download, verify, and delete local LLMs (Gemma, MiniLM). Shows disk usage + last-used time. Triggers background memory-pressure-aware loading.</p></a>
       <a class="card" href="../../docs/reference/panes/sprint-review.html"><h4>Sprint Review</h4><p>GUI counterpart to `senkani learn review`. Accept/reject staged compound-learning proposals (filter rules, context docs, instruction patches, workflow playbooks) plus a stale-applied section mirroring the quarterly audit.</p></a>
-      <a class="card" href="../../docs/reference/panes/settings.html"><h4>Settings</h4><p>Global app preferences: theme, font size, default FCSIT, key bindings, telemetry (off by default).</p></a>
+      <a class="card" href="../../docs/reference/panes/artifact-gallery.html"><h4>Artifact Gallery</h4><p>Browse diaries, sprint snapshots, and on-disk artifacts produced by senkani's autonomous and learning loops. Click an entry to open the underlying file.</p></a>
       <a class="card" href="../../docs/reference/panes/ollama-launcher.html"><h4>Ollama</h4><p>Local LLM chat via Ollama with a tri-state availability gate (detecting → absent-CTA → connected-terminal). Header download button opens a curated-catalog drawer: pick from 5 LLMs (llama3.1:8b, qwen2.5-coder:7b, deepseek-r1:7b, mistral:7b, gemma2:2b), each row discloses size before the pull click and streams `ollama pull` progress into the UI. The same Senkani MCP env that terminal panes get flows through to the subprocess.</p></a>
+      <a class="card" href="../../docs/reference/panes/dashboard.html"><h4>Dashboard</h4><p>Multi-project portfolio: total savings across every workspace, project-level table, per-feature charts, and insights (top filter rule by hit, freshest KB entity, etc.).</p></a>
+      <a class="card" href="../../docs/reference/panes/analytics.html"><h4>Analytics</h4><p>Token + cost savings with charts, persistent across restarts. Compression breakdown by source (filter / indexer / intercept). Compliance rate meter.</p></a>
+      <a class="card" href="../../docs/reference/panes/savings-test.html"><h4>Savings Test</h4><p>Fixture benchmark + live session replay + scenario simulator. Shows the fixture ceiling and the live multiplier side by side — the live number is the honest one.</p></a>
+      <a class="card" href="../../docs/reference/panes/schedules.html"><h4>Schedules</h4><p>Manage recurring tasks via launchd. View fire history, next-run times, worktree artifacts, budget ledger.</p></a>
+      <a class="card" href="../../docs/reference/panes/log-viewer.html"><h4>Log Viewer</h4><p>Searchable log output. Tail mode, regex filter, persistent search history.</p></a>
+      <a class="card" href="../../docs/reference/panes/served-requests.html"><h4>Served Requests</h4><p>Live feed of OpenAI-compatible served requests. Per-request route, model, latency, and status — the request-level companion to Analytics.</p></a>
+      <a class="card" href="../../docs/reference/panes/code-editor.html"><h4>Code Editor</h4><p>NSTextView with tree-sitter syntax highlighting across 25 languages. Cmd+click for symbol navigation. Token-intelligence overlays show live compression counts per file.</p></a>
+      <a class="card" href="../../docs/reference/panes/markdown-preview.html"><h4>Markdown Preview</h4><p>Live render from a file, updating on save. Supports GFM tables, fenced code, and <code>&lt;img&gt;</code> with sanitization.</p></a>
+      <a class="card" href="../../docs/reference/panes/html-preview.html"><h4>HTML Preview</h4><p>Preview web pages with CSP sandboxing. Render local HTML safely inside the workspace, updating as the file changes on disk.</p></a>
+      <a class="card" href="../../docs/reference/panes/browser.html"><h4>Browser</h4><p>Embedded WKWebView. Localhost or any URL. Optional click-to-capture Design Mode (env-gate `SENKANI_BROWSER_DESIGN=on`, ⌥⇧D toggles) — click an element, get a fixed-schema Markdown block on the clipboard.</p></a>
+      <a class="card" href="../../docs/reference/panes/diff-viewer.html"><h4>Diff Viewer</h4><p>Side-by-side LCS diff — correct insertions, deletions, replacements. Works with file pairs or git revisions.</p></a>
+      <a class="card" href="../../docs/reference/panes/scratchpad.html"><h4>Scratchpad</h4><p>Auto-saving markdown notepad. One per project. Search across all scratchpads via ⌘K.</p></a>
     </div>
 
     <h2 style="margin-top:32px;">Keyboard</h2>

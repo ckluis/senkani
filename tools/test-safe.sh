@@ -29,17 +29,50 @@
 #                                       #  bisect)
 #   ./tools/test-safe.sh --list-chunks  # print chunk regex table
 #
+# Pre-test daemon sweep
+#   On every invocation (filter / chunk / all modes — not --list-chunks),
+#   the pre-flight kills stale `SenkaniApp`, `senkani.*--mcp-server`,
+#   `senkaniPackageTests`, `swift-test`, and `swiftpm-testing-helper`
+#   processes that may have leaked from a prior session. These
+#   processes can hold SQLite locks, listening sockets, and port
+#   assignments that the upcoming run expects free; killing them
+#   first removes the cross-session contention class. Best-effort
+#   hygiene — `pkill` failures are logged but never abort the script.
+#   Opt out with `--skip-daemon-sweep` for tests that intentionally
+#   target a long-running senkani daemon (rare). The `swift-test`
+#   pattern is a substring match against the full command line, so
+#   it can collide with concurrent `swift test` runs in another
+#   shell tab — use `--skip-daemon-sweep` if running parallel
+#   harness invocations.
+#
 # Knobs
 #   SWT_NO_PARALLEL=1       Disables Swift Testing's intra-process
 #                           parallelism. Set automatically by every
 #                           chunk run; stays off for passthrough too.
 #   TEST_SAFE_RETRIES=N     Per-chunk retry count on SIGTRAP / non-
 #                           zero exit. Default 3.
+#   SKIP_DAEMON_SWEEP=1     Skip the pre-test daemon sweep. Use when
+#                           a test intentionally targets a pre-launched
+#                           senkani daemon, or when running parallel
+#                           test-safe invocations from multiple shells.
+#                           Also settable via `--skip-daemon-sweep`.
 #   SKIP_MULTIPLIER_CHECK,
 #   SKIP_GRAMMAR_HASH_CHECK Skip the two pre-flight guard scripts
 #                           (set when re-running after a known-good
 #                           pre-flight or when bisecting older
 #                           commits without those guards).
+#   SKIP_MIG_HELPER_CHECK   Skip the stale-`senkani-mig-helper`-process
+#                           pre-flight guard. Off by default — a fresh
+#                           `swift test` cannot start while leftover
+#                           helpers from a previous run are still alive
+#                           (they will contend for the same flock /tmp
+#                           sidecars and have historically deadlocked
+#                           fresh runs). See
+#                           spec/autonomous/backlog/swift-test-suite-hang-mig-helper-zombies-2026-05-14.md.
+#   FORCE_REAP_MIG_HELPERS  When the guard finds stale helpers, send
+#                           SIGKILL and continue. Default behavior is to
+#                           print PIDs + cputime + tmp-dir paths and
+#                           refuse to start the run.
 #
 # Adding a new suite to the harness
 #   New tests fall into the catch-all `other` chunk by default.
@@ -92,6 +125,10 @@ while [ $# -gt 0 ]; do
       MODE="list"
       shift
       ;;
+    --skip-daemon-sweep)
+      SKIP_DAEMON_SWEEP=1
+      shift
+      ;;
     *)
       # Unknown args — pass through to swift test (legacy contract).
       MODE="filter"
@@ -105,11 +142,21 @@ done
 # Pre-flight guards (Luminary P0 round 2026-04-24-0 + P2 2026-04-24-13)
 # ---------------------------------------------------------------------
 preflight() {
+  sweep_stale_daemons
   if [ -z "${SKIP_MULTIPLIER_CHECK:-}" ] && [ -x ./tools/check-multiplier-claims.sh ]; then
     ./tools/check-multiplier-claims.sh
   fi
   if [ -z "${SKIP_GRAMMAR_HASH_CHECK:-}" ] && [ -x ./tools/verify-grammar-hashes.sh ]; then
     ./tools/verify-grammar-hashes.sh
+  fi
+  # Stale-helper guard. Refuses to start a new test run while any
+  # senkani-mig-helper process from a previous (likely-deadlocked) run
+  # is still alive — fresh test spawns would compete with them for
+  # /tmp sidecars and have historically deadlocked the whole suite.
+  # Operator can override with FORCE_REAP_MIG_HELPERS=1 to send SIGKILL
+  # and continue, or SKIP_MIG_HELPER_CHECK=1 to bypass the check entirely.
+  if ! mig_helper_zombie_guard; then
+    exit 2
   fi
   # /tmp staleness alarm — a future test that creates `SessionDatabase(path:)`
   # without the canonical sidecar cleanup (see
@@ -127,6 +174,102 @@ preflight() {
            "Clear with: rm /tmp/senkani-*"
     fi
   fi
+}
+
+# Pre-test daemon sweep. Kills stale senkani-flavored processes from
+# prior sessions (likely leaked by an earlier crashed / interrupted
+# test run, soak run, or autonomous round) so the new run doesn't
+# race them for SQLite locks, listening sockets, or port assignments.
+# Best-effort: a failing `pkill` is logged but never aborts. Opt out
+# via SKIP_DAEMON_SWEEP=1 or `--skip-daemon-sweep`.
+#
+# Patterns are substring-matched against the full ps command line
+# (pgrep -f). See the docstring at the top of this file for the
+# concurrent-`swift test` caveat.
+sweep_stale_daemons() {
+  if [ -n "${SKIP_DAEMON_SWEEP:-}" ]; then
+    return 0
+  fi
+  local patterns=(
+    "SenkaniApp"
+    "senkani.*--mcp-server"
+    "senkaniPackageTests"
+    "swift-test"
+    "swiftpm-testing-helper"
+  )
+  local any_killed=0
+  local p
+  for p in "${patterns[@]}"; do
+    local matches
+    matches="$(pgrep -f "$p" 2>/dev/null || true)"
+    if [ -z "$matches" ]; then
+      continue
+    fi
+    local n
+    n="$(echo "$matches" | wc -l | tr -d ' ')"
+    echo "sweep_stale_daemons: killing ${n} stale process(es) matching '${p}'"
+    if ! pkill -f "$p" 2>/dev/null; then
+      echo "::warning::sweep_stale_daemons: pkill failed for '${p}' (best-effort, continuing)"
+    fi
+    any_killed=1
+  done
+  if [ "$any_killed" -eq 0 ]; then
+    echo "sweep_stale_daemons: no stale daemons found"
+  else
+    # Give the kernel a moment to actually reap before swift test launches.
+    sleep 1
+  fi
+}
+
+# Stale-helper guard. Detects leftover `senkani-mig-helper` processes
+# from a previous (likely-deadlocked) test run and either reaps them
+# (FORCE_REAP_MIG_HELPERS=1) or prints them and exits non-zero. Background:
+# pre-2026-05-15 each MigrationMultiProcTests test inlined an unbounded
+# busy-poll on a parent-supplied `go` file; if the parent test crashed
+# before writing `go`, the helper spun forever. Across Apr/May 2026 this
+# leaked ~18 zombies that accumulated ~90 min of CPU each. The helper-side
+# timeout (commit 2026-05-15) keeps new tests from leaking, but any
+# residual zombies from before the fix can still deadlock a fresh suite.
+# This guard catches them.
+mig_helper_zombie_guard() {
+  if [ -n "${SKIP_MIG_HELPER_CHECK:-}" ]; then
+    return 0
+  fi
+  local pids
+  pids="$(pgrep -f senkani-mig-helper 2>/dev/null || true)"
+  if [ -z "$pids" ]; then
+    return 0
+  fi
+  local n
+  n="$(echo "$pids" | wc -l | tr -d ' ')"
+  echo "::error::found ${n} stale senkani-mig-helper process(es) — running new tests will compete with them and may deadlock the suite:"
+  # `ps` accepts a space-separated PID list via -p.
+  # shellcheck disable=SC2086
+  ps -o pid,etime,cputime,command -p $pids 2>/dev/null | head -50 || true
+  if [ -n "${FORCE_REAP_MIG_HELPERS:-}" ]; then
+    echo "FORCE_REAP_MIG_HELPERS=1 — sending SIGKILL to ${n} process(es)"
+    # shellcheck disable=SC2086
+    kill -9 $pids 2>/dev/null || true
+    # Give the kernel up to 2 s to reap; in practice this is sub-second.
+    local waited=0
+    while [ "$waited" -lt 20 ]; do
+      sleep 0.1
+      waited=$(( waited + 1 ))
+      if [ -z "$(pgrep -f senkani-mig-helper 2>/dev/null || true)" ]; then
+        echo "reaped ${n} stale helper(s); continuing"
+        return 0
+      fi
+    done
+    local remaining
+    remaining="$(pgrep -f senkani-mig-helper 2>/dev/null || true)"
+    echo "::error::reap failed — ${remaining} still alive"
+    return 1
+  fi
+  echo
+  echo "to reap and continue: FORCE_REAP_MIG_HELPERS=1 $0 $*"
+  echo "to bypass guard:      SKIP_MIG_HELPER_CHECK=1 $0 $*"
+  echo "to reap manually:     pkill -9 -f senkani-mig-helper"
+  return 1
 }
 
 # /tmp staleness post-flight (runs in the all-mode tail). Same idea as the

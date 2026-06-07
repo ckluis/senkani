@@ -50,4 +50,49 @@ extension SessionDatabase {
         let cutoff = now.addingTimeInterval(-30 * 24 * 3600)
         return trustAuditStore.stats(since: cutoff)
     }
+
+    // MARK: - U.4b-1 promotion + override (Phase U.4b-1)
+
+    /// Persist a `set-mode` flip as a chained `promotion` row. Returns
+    /// the new rowid or -1 on failure.
+    @discardableResult
+    public func recordTrustPromotion(
+        from: String,
+        to: String,
+        fpRateMax: Double?,
+        minLabeledSample: Int?,
+        observedRate: Double?,
+        observedSample: Int,
+        promotedBy: String,
+        at: Date = Date()
+    ) -> Int64 {
+        return trustAuditStore.recordPromotion(
+            from: from, to: to,
+            fpRateMax: fpRateMax, minLabeledSample: minLabeledSample,
+            observedRate: observedRate, observedSample: observedSample,
+            promotedBy: promotedBy, at: at
+        )
+    }
+
+    /// Persist a per-call override as a chained `override` row. Returns
+    /// the new rowid or -1 on failure.
+    @discardableResult
+    public func recordTrustOverride(
+        callId: String,
+        flagId: Int64? = nil,
+        operator opAlias: String,
+        justification: String? = nil,
+        at: Date = Date()
+    ) -> Int64 {
+        return trustAuditStore.recordOverride(
+            callId: callId, flagId: flagId,
+            operator: opAlias, justification: justification, at: at
+        )
+    }
+
+    /// True when an `override` row exists for the given callId.
+    /// HookRouter denial path reads this before refusing.
+    public func trustOverrideExists(callId: String) -> Bool {
+        return trustAuditStore.overrideExists(callId: callId)
+    }
 }

@@ -38,26 +38,34 @@
       </ul>
     </div>
     <div class="wiki-nav-group">
-      <h4>Pane types (18)</h4>
+      <h4>Pane types (20)</h4>
       <ul>
         <li><a href="../../../docs/reference/panes/terminal.html">Terminal</a></li>
-        <li><a href="../../../docs/reference/panes/dashboard.html">Dashboard</a></li>
-        <li><a href="../../../docs/reference/panes/code-editor.html">Code Editor</a></li>
-        <li><a href="../../../docs/reference/panes/browser.html">Browser</a></li>
-        <li><a href="../../../docs/reference/panes/markdown-preview.html">Markdown Preview</a></li>
-        <li><a href="../../../docs/reference/panes/analytics.html">Analytics</a></li>
-        <li><a href="../../../docs/reference/panes/model-manager.html">Model Manager</a></li>
-        <li><a href="../../../docs/reference/panes/savings-test.html">Savings Test</a></li>
         <li><a href="../../../docs/reference/panes/agent-timeline.html" class="active">Agent Timeline</a></li>
-        <li><a href="../../../docs/reference/panes/knowledge-base.html">Knowledge Base</a></li>
-        <li><a href="../../../docs/reference/panes/diff-viewer.html">Diff Viewer</a></li>
-        <li><a href="../../../docs/reference/panes/log-viewer.html">Log Viewer</a></li>
-        <li><a href="../../../docs/reference/panes/scratchpad.html">Scratchpad</a></li>
-        <li><a href="../../../docs/reference/panes/schedules.html">Schedules</a></li>
         <li><a href="../../../docs/reference/panes/skill-library.html">Skill Library</a></li>
+        <li><a href="../../../docs/reference/panes/knowledge-base.html">Knowledge Base</a></li>
+        <li><a href="../../../docs/reference/panes/model-manager.html">Models</a></li>
         <li><a href="../../../docs/reference/panes/sprint-review.html">Sprint Review</a></li>
-        <li><a href="../../../docs/reference/panes/settings.html">Settings</a></li>
+        <li><a href="../../../docs/reference/panes/artifact-gallery.html">Artifact Gallery</a></li>
         <li><a href="../../../docs/reference/panes/ollama-launcher.html">Ollama</a></li>
+        <li><a href="../../../docs/reference/panes/dashboard.html">Dashboard</a></li>
+        <li><a href="../../../docs/reference/panes/analytics.html">Analytics</a></li>
+        <li><a href="../../../docs/reference/panes/savings-test.html">Savings Test</a></li>
+        <li><a href="../../../docs/reference/panes/schedules.html">Schedules</a></li>
+        <li><a href="../../../docs/reference/panes/log-viewer.html">Log Viewer</a></li>
+        <li><a href="../../../docs/reference/panes/served-requests.html">Served Requests</a></li>
+        <li><a href="../../../docs/reference/panes/code-editor.html">Code Editor</a></li>
+        <li><a href="../../../docs/reference/panes/markdown-preview.html">Markdown Preview</a></li>
+        <li><a href="../../../docs/reference/panes/html-preview.html">HTML Preview</a></li>
+        <li><a href="../../../docs/reference/panes/browser.html">Browser</a></li>
+        <li><a href="../../../docs/reference/panes/diff-viewer.html">Diff Viewer</a></li>
+        <li><a href="../../../docs/reference/panes/scratchpad.html">Scratchpad</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>Panels &amp; overlays</h4>
+      <ul>
+        <li><a href="../../../docs/reference/panes/settings.html">Settings</a></li>
       </ul>
     </div>
   </aside>
@@ -79,6 +87,9 @@
 
     <h2>Authorship badge</h2>
     <p>Every row shows a subdued <strong>Untagged</strong> capsule. Token events do not yet carry an authorship column — Phase V.5's tag lives on Knowledge Base entries today. The badge surfaces this without ever silently inferring AI / Human / Mixed.</p>
+
+    <h2>Runtime-error badge <small>(V.18a-7)</small></h2>
+    <p>Rows whose <code>session_id</code> / <code>tool_call_id</code> / <code>validation_run_id</code> correlate to runtime-telemetry spans with <code>status_code = ERROR</code> or <code>duration > p99</code> of the visible-window span set show a small badge dot — red for ERROR, amber for slow-only. First click expands a compact inline summary: error count, total duration, and a capped slow-span list (5 entries max). Second click opens a side pane that fetches the full span tree on demand via <code>senkani_telemetry_get_trace</code>. The inline summary is intentionally summary-only — the full span tree is never embedded in prompt context.</p>
 
     <h2>Keyboard</h2>
     <p>Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas).</p>
@@ -103,7 +114,7 @@
   </div>
   <div class="foot-meta">
     <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
-    <span><a href="../../../docs/changelog.html">v0.2.0 changelog</a></span>
+    <span><a href="../../../docs/changelog.html">v0.3.0 changelog</a></span>
   </div>
 </footer>
 <script src="../../../assets/app.js" defer></script>

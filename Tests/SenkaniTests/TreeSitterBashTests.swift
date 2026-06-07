@@ -232,12 +232,12 @@ struct BashPerformanceTests {
             source += "    return 0\n"
             source += "}\n\n"
         }
-        // Median-of-3 — see DependencyGraphPerfGateTests for the canonical
+        // Min-of-N — see DependencyGraphPerfGateTests for the canonical
         // pattern. `.serialized` only serializes within-suite, so peer-suite
         // CPU contention can spike a single sample under parallel runner;
         // a single transient spike on one of three runs cannot fail the
         // test, but a real regression (every run blows budget) still does.
-        // Threshold preserved at 10 ms — the median strengthens the gate
+        // Threshold preserved at 10 ms — the minimum keeps the gate honest
         // on its own (mirrors the Scala/Ruby/Haskell/PHP siblings, with
         // the InjectionGuard 2026-05-06 precedent of preserve-don't-widen).
         let clock = ContinuousClock()
@@ -249,11 +249,44 @@ struct BashPerformanceTests {
             }
             samples.append(elapsed)
         }
-        let median = samples.sorted()[1]
         #expect(
-            median < .milliseconds(10),
-            "median of 3 Bash parses: \(samples) → median \(median)"
+            PerfGate.passes(samples: samples, budget: .milliseconds(10)),
+            "min of 3 Bash parses must be < 10ms: \(samples)"
         )
+    }
+}
+
+// MARK: - Bash Depth-Stress Tests
+
+@Suite("TreeSitterBackend — Bash Depth Stress")
+struct TreeSitterBashDepthStressTests {
+
+    // Chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Generates a deeply-nested `if ... then ... fi` Bash source and indexes
+    // it WITHOUT `runOnLargeStackThread` to prove the iterative walk is
+    // cooperative-pool-safe. The pre-refactor recursive walk would have
+    // consumed ~2200 Swift call frames descending the if_statement chain
+    // and crashed on the cooperative pool's smaller stack. The iterative
+    // form runs in heap-allocated work-stack memory and clears it.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() {
+        let depth = 2200
+        var source = "first() { :; }\n"
+        for _ in 0..<depth {
+            source += "if true; then "
+        }
+        source += "echo deep"
+        for _ in 0..<depth {
+            source += "; fi"
+        }
+        source += "\nlast() { :; }\n"
+
+        let entries = indexBash(source)
+        let funcs = entries.filter { $0.kind == .function }
+        // Two top-level functions emitted in source order; the deep
+        // nested `if` chain in between contributes no symbols.
+        #expect(funcs.map(\.name) == ["first", "last"])
+        #expect(funcs.allSatisfy { $0.container == nil })
     }
 }
 

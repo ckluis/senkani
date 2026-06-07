@@ -1,13 +1,30 @@
 import Foundation
 
-/// Controls when large outputs are sandboxed (stored in DB, summary returned).
+/// Controls when large outputs are **truncated** (stored to the
+/// `sandboxed_results` DB table, summary returned to the caller).
+///
+/// **Scope clarification (T.3b-1 child (i) — exec-sandbox-naming, 2026-06-05):**
+/// `SandboxMode` governs OUTPUT TRUNCATION, NOT process execution.
+/// The naming is historical — "sandbox" here means "put the large output
+/// aside so the caller gets a summary." The DB table is also named
+/// `sandboxed_results` for the same historical reason.
+///
+/// For EXECUTION sandboxing (running a command inside wasmtime / a
+/// constrained process / a full hand-manifest sandbox), see
+/// `HandSandbox` in `HandManifest.swift`. The two surfaces share the
+/// word "sandbox" but are independent enums with distinct semantics;
+/// T.3b-2 will extend `HandSandbox.wasm` semantics — there is no
+/// collision between `SandboxMode` and `HandSandbox` (the original
+/// t3b-1 P0-#3 collision claim was incorrect).
 public enum SandboxMode: String, Sendable {
     case auto   // Sandbox if output exceeds line threshold (default)
     case always // Always sandbox, even small outputs
     case never  // Never sandbox, return full output
 }
 
-/// Outputs with more lines than this trigger sandboxing in `auto` mode.
+/// Outputs with more lines than this trigger output-truncation in
+/// `SandboxMode.auto`. See `SandboxMode` doc-comment for naming
+/// scope (OUTPUT-truncation, NOT execution).
 public let sandboxLineThreshold = 20
 
 /// Number of head/tail lines to include in the sandbox summary.

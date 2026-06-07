@@ -38,26 +38,34 @@
       </ul>
     </div>
     <div class="wiki-nav-group">
-      <h4>Pane types (18)</h4>
+      <h4>Pane types (20)</h4>
       <ul>
         <li><a href="../../../docs/reference/panes/terminal.html">Terminal</a></li>
-        <li><a href="../../../docs/reference/panes/dashboard.html">Dashboard</a></li>
-        <li><a href="../../../docs/reference/panes/code-editor.html">Code Editor</a></li>
-        <li><a href="../../../docs/reference/panes/browser.html">Browser</a></li>
-        <li><a href="../../../docs/reference/panes/markdown-preview.html">Markdown Preview</a></li>
-        <li><a href="../../../docs/reference/panes/analytics.html">Analytics</a></li>
-        <li><a href="../../../docs/reference/panes/model-manager.html">Model Manager</a></li>
-        <li><a href="../../../docs/reference/panes/savings-test.html">Savings Test</a></li>
         <li><a href="../../../docs/reference/panes/agent-timeline.html">Agent Timeline</a></li>
-        <li><a href="../../../docs/reference/panes/knowledge-base.html">Knowledge Base</a></li>
-        <li><a href="../../../docs/reference/panes/diff-viewer.html">Diff Viewer</a></li>
-        <li><a href="../../../docs/reference/panes/log-viewer.html">Log Viewer</a></li>
-        <li><a href="../../../docs/reference/panes/scratchpad.html">Scratchpad</a></li>
-        <li><a href="../../../docs/reference/panes/schedules.html" class="active">Schedules</a></li>
         <li><a href="../../../docs/reference/panes/skill-library.html">Skill Library</a></li>
+        <li><a href="../../../docs/reference/panes/knowledge-base.html">Knowledge Base</a></li>
+        <li><a href="../../../docs/reference/panes/model-manager.html">Models</a></li>
         <li><a href="../../../docs/reference/panes/sprint-review.html">Sprint Review</a></li>
-        <li><a href="../../../docs/reference/panes/settings.html">Settings</a></li>
+        <li><a href="../../../docs/reference/panes/artifact-gallery.html">Artifact Gallery</a></li>
         <li><a href="../../../docs/reference/panes/ollama-launcher.html">Ollama</a></li>
+        <li><a href="../../../docs/reference/panes/dashboard.html">Dashboard</a></li>
+        <li><a href="../../../docs/reference/panes/analytics.html">Analytics</a></li>
+        <li><a href="../../../docs/reference/panes/savings-test.html">Savings Test</a></li>
+        <li><a href="../../../docs/reference/panes/schedules.html" class="active">Schedules</a></li>
+        <li><a href="../../../docs/reference/panes/log-viewer.html">Log Viewer</a></li>
+        <li><a href="../../../docs/reference/panes/served-requests.html">Served Requests</a></li>
+        <li><a href="../../../docs/reference/panes/code-editor.html">Code Editor</a></li>
+        <li><a href="../../../docs/reference/panes/markdown-preview.html">Markdown Preview</a></li>
+        <li><a href="../../../docs/reference/panes/html-preview.html">HTML Preview</a></li>
+        <li><a href="../../../docs/reference/panes/browser.html">Browser</a></li>
+        <li><a href="../../../docs/reference/panes/diff-viewer.html">Diff Viewer</a></li>
+        <li><a href="../../../docs/reference/panes/scratchpad.html">Scratchpad</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>Panels &amp; overlays</h4>
+      <ul>
+        <li><a href="../../../docs/reference/panes/settings.html">Settings</a></li>
       </ul>
     </div>
   </aside>
@@ -85,6 +93,15 @@
       <li><strong>Counter cadence</strong> — fires every Nth event ("every 10 tool_calls") rather than on a wall-clock schedule. Counter rows fire from <code>HookRouter</code> post-tool reactions and are clamped by <code>CounterCadenceRateLimiter</code> to ≤ 1 fire / minute, defending against amplification when a power user produces many sessions in a day.</li>
     </ul>
 
+    <h2>Creating a schedule</h2>
+    <p>The <strong>New Schedule</strong> form composes any of the three cadence kinds, mirroring the <code>senkani schedule create</code> CLI flags. A segmented toggle picks the compose mode:</p>
+    <ul>
+      <li><strong>Prose</strong> — type a phrase ("every weekday at 9am"); it compiles to cron live as you type and the form shows the resolved human-readable cron. Common phrases resolve in-process with no model; a phrase that needs the MLX fallback shows an inline message when no model is available.</li>
+      <li><strong>Counter</strong> — type <code>every N event_name</code> (e.g. <code>every 10 tool_calls</code>); the form confirms the parsed cadence.</li>
+      <li><strong>Cron</strong> — pick a preset (Every hour / 6 hours / Daily / Weekly) or choose Custom and enter a 5-field cron string.</li>
+    </ul>
+    <p>As you compose, the form surfaces a live <strong>amplification verdict banner</strong> from <code>AmplificationGuard</code> — green when the schedule fires above the 60-second floor, red with the reason when it would amplify — plus a <strong>next-fires preview</strong> (the upcoming five fire times from <code>CronPreview</code>, for cron and prose). The <strong>Create</strong> button is gated on an OK verdict: an amplifying schedule cannot be submitted unless you tick the explicit <em>Override and create anyway</em> checkbox.</p>
+
     <h2>Keyboard</h2>
     <p>Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas).</p>
 
@@ -108,7 +125,7 @@
   </div>
   <div class="foot-meta">
     <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
-    <span><a href="../../../docs/changelog.html">v0.2.0 changelog</a></span>
+    <span><a href="../../../docs/changelog.html">v0.3.0 changelog</a></span>
   </div>
 </footer>
 <script src="../../../assets/app.js" defer></script>

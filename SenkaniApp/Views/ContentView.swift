@@ -46,8 +46,13 @@ struct ContentView: View {
                     .fill(SenkaniTheme.appBackground)
                     .frame(width: 1)
 
-                // Workstream sidebar (conditional — only when 2+ workstreams)
-                if let project = workspace.activeProject, project.workstreams.count > 1 {
+                // Workstream sidebar — always visible when a project is
+                // active. The "+ New Workstream" button is the only
+                // discoverable UI path for the `firstWorkstreamCreated`
+                // onboarding milestone on a fresh install, so the gate
+                // that previously hid the sidebar until count > 1
+                // would have stranded users on the seven-milestone arc.
+                if let project = workspace.activeProject {
                     WorkstreamSidebarView(project: project, workspace: workspace)
                         .transition(.move(edge: .leading).combined(with: .opacity))
 
@@ -453,21 +458,22 @@ struct ContentView: View {
     }
 
     /// Add a pane by type ID string (from command palette).
+    ///
+    /// Resolves through `PaneGalleryBuilder.launchMap` (the Core single source
+    /// of truth) rather than a hand-maintained mirror, so every gallery id with
+    /// a launch-map row launches — no silent dead clicks. Parity between the
+    /// gallery and the launch map is enforced by
+    /// `PaneGalleryTests.launchMapMatchesGallery`.
+    ///
+    /// The pane's title comes from the gallery entry's `defaultTitle` (via
+    /// `PaneGalleryBuilder.defaultTitle(forLaunchID:)`), matching the title the
+    /// Add-Pane sheet gives the same pane. The old `typeId.capitalized` fallback
+    /// mangled camelCase ids ("artifactGallery" → "Artifactgallery"); it remains
+    /// only as a never-reached safety net (parity guarantees a gallery match).
     private func addPaneByTypeId(_ typeId: String) {
-        let typeMap: [String: PaneType] = [
-            "terminal": .terminal, "browser": .browser,
-            "markdownPreview": .markdownPreview, "htmlPreview": .htmlPreview,
-            "scratchpad": .scratchpad, "logViewer": .logViewer,
-            "diffViewer": .diffViewer, "analytics": .analytics,
-            "skillLibrary": .skillLibrary, "knowledgeBase": .knowledgeBase,
-            "modelManager": .modelManager, "schedules": .scheduleManager,
-            "savingsTest": .savingsTest, "codeEditor": .codeEditor,
-            "agentTimeline": .agentTimeline,
-            "dashboard": .dashboard,
-            "sprintReview": .sprintReview,
-            "ollamaLauncher": .ollamaLauncher,
-        ]
-        guard let type = typeMap[typeId] else { return }
-        addPane(type: type, title: type == .terminal ? "Terminal" : typeId.capitalized, command: "")
+        guard let rawValue = PaneGalleryBuilder.launchMap[typeId],
+              let type = PaneType(rawValue: rawValue) else { return }
+        let title = PaneGalleryBuilder.defaultTitle(forLaunchID: typeId) ?? typeId.capitalized
+        addPane(type: type, title: title, command: "")
     }
 }

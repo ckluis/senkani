@@ -92,6 +92,48 @@ public struct GemmaRationaleRewriter: Sendable {
         return String(capped.prefix(maxPromptBytes))
     }
 
+    // MARK: - U.10b — summary entrypoint
+    //
+    // ContextManifest's `summary` mode uses the same rewriter
+    // machinery to compress a knowledge entity's compiled understanding
+    // (or any free-text content) into ~`budgetTokens` tokens. The
+    // safety+determinism+fallback contract from `enrich(_:)` carries
+    // over: prompt-cap on input, SecretDetector on output, nil on any
+    // backend failure so callers (BundleComposer.composeManifest via
+    // CLI/MCP wiring) gracefully fall back to KB content.
+
+    /// Summarize `content` to ~`budgetTokens` tokens. Returns nil if
+    /// the model is unavailable, the prompt would be empty, or the
+    /// model's reply is unusable. Callers fall back to the source
+    /// content (e.g. `KnowledgeEntity.compiledUnderstanding`).
+    public func summarize(content: String, budgetTokens: Int) async -> String? {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let prompt = buildSummaryPrompt(content: trimmed, budgetTokens: budgetTokens)
+        do {
+            let raw = try await llm.rewrite(prompt: prompt)
+            return sanitize(raw)
+        } catch {
+            return nil
+        }
+    }
+
+    /// Prompt for the summary entrypoint. Deterministic given inputs.
+    /// Budget is advisory — the sanitizer's `maxOutputChars` is the
+    /// hard cap. Truncates `content` first if the assembled prompt
+    /// exceeds `maxPromptBytes`.
+    func buildSummaryPrompt(content: String, budgetTokens: Int) -> String {
+        let budget = max(20, budgetTokens)
+        let header = "Summarize the following text in approximately \(budget) tokens. " +
+                     "Preserve key facts and identifiers. No preamble, no quotes. Reply with the summary only.\n\n---\n"
+        let raw = header + content
+        if raw.utf8.count <= maxPromptBytes { return raw }
+        let overhead = header.utf8.count + 8
+        let contentCap = max(0, maxPromptBytes - overhead)
+        let trimmedContent = String(content.prefix(contentCap))
+        return header + trimmedContent
+    }
+
     /// Strip secrets, trim whitespace, cap length. Returns nil if the
     /// LLM emitted only whitespace or only a redaction marker (no
     /// information to surface).

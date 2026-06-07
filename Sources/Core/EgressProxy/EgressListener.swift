@@ -24,6 +24,20 @@ import Glibc
 /// dispatch source runs on `queue`. Each accepted connection gets
 /// its own short-lived task that either completes (response sent +
 /// closed) or runs the bidirectional pipe to EOF on either side.
+///
+/// fd ownership contract: the accept-source's cancel handler captures
+/// the bound listening `fd` as a LOCAL — never reads `self.listenFD`
+/// — so a stale cancel handler closes the correct fd even if `start()`
+/// has already reassigned `self.listenFD` to a newer fd. The `= -1`
+/// nil-out of `self.listenFD` happens in `stop()` under the lock.
+/// Rationale: the original design read `self.listenFD` inside the
+/// cancel handler closure; a stop()-then-start() sequence (config
+/// reload, port collision recovery, test teardown + re-init) could
+/// queue an old cancel handler that fired after the new listener had
+/// bound, silently closing the new healthy listening socket. Same
+/// race-class as `ClaudeSessionWatcher`'s 2026-05-14 EXC_BREAKPOINT
+/// fix — listener variant is silent-failure rather than crash, since
+/// `accept(-1, …)` returns EBADF and the listener appears stopped.
 public final class EgressListener: @unchecked Sendable {
 
     public struct Config: Sendable {
@@ -33,15 +47,23 @@ public final class EgressListener: @unchecked Sendable {
         public var writePortFile: Bool
         /// Path of the port file. Override for tests.
         public var portFilePath: String
+        /// T.1d-2b-i default-OFF gate for MITM TLS termination in
+        /// `handleConnect`. When false (default + today's only value) the
+        /// opaque-tunnel path runs unchanged. Resolved from
+        /// `FeatureConfig.mitmTlsTermination` by the CLI; flipped ON only at
+        /// t1d-5 once the adversarial corpus is green.
+        public var mitmTermination: Bool
 
         public init(
             port: Int = 0,
             writePortFile: Bool = true,
-            portFilePath: String = NSHomeDirectory() + "/.senkani/egress.port"
+            portFilePath: String = NSHomeDirectory() + "/.senkani/egress.port",
+            mitmTermination: Bool = false
         ) {
             self.port = port
             self.writePortFile = writePortFile
             self.portFilePath = portFilePath
+            self.mitmTermination = mitmTermination
         }
     }
 
@@ -56,9 +78,28 @@ public final class EgressListener: @unchecked Sendable {
         case upstreamFailure       = "upstream_unreachable"
     }
 
-    private let rules: EgressRuleEngine
+    private let policy: EgressPolicy
+    private let judge: JudgeAdapter?
     private let database: SessionDatabase
     private let config: Config
+    /// Upstream-connect seam (V.13b-4d-ii). Defaults to the production
+    /// `DefaultEgressUpstreamConnector` adopter. Tests inject a
+    /// `LoopbackStubConnector` to redirect ALLOW-arm CONNECTs at a
+    /// fixture loopback port without dialing the real upstream.
+    private let upstreamConnector: EgressUpstreamConnecting
+    /// T.1d-2b-ii — per-host PKCS#12 leaf provider passed to
+    /// `EgressConnectionHandler` when `config.mitmTermination` is ON.
+    /// Nil in the OFF case (and in the ON-without-leaf-provider case
+    /// the handler falls back to the opaque tunnel — child (i)
+    /// parity-by-construction).
+    private let mitmLeafProvider: ((String) -> Data?)?
+    /// T.1d-2b-iii — optional trust-evaluator injection used ONLY by
+    /// tests to pin trust on a test CA (so the upstream-verify leg
+    /// can exercise the connect+handshake plumbing against a loopback
+    /// TLS fixture without touching the System trust store). Nil in
+    /// production — the handler defaults to `MITMUpstreamVerify
+    /// .defaultEvaluate` (System anchors).
+    private let mitmTrustEvaluator: MITMUpstreamVerify.TrustEvaluator?
     private let queue = DispatchQueue(label: "com.senkani.egress-listener", qos: .userInitiated)
     private let connectionQueue = DispatchQueue(label: "com.senkani.egress-conn", qos: .userInitiated, attributes: .concurrent)
     private let lock = NSLock()
@@ -67,10 +108,75 @@ public final class EgressListener: @unchecked Sendable {
     private var boundPort: Int = 0
     private var running = false
 
-    public init(rules: EgressRuleEngine, database: SessionDatabase = .shared, config: Config = Config()) {
-        self.rules = rules
+    /// T.1d-2b r53 follow-up — single internal designated init carrying
+    /// the full field set including the `mitmTrustEvaluator` test seam.
+    /// Production callers go through the public convenience init below
+    /// (passes `mitmTrustEvaluator: nil`); the trust-evaluator seam
+    /// stays internal (testable via `@testable import Core`). Eliminates
+    /// the prior two-init drift risk — a new stored property added here
+    /// can't be forgotten in a parallel init shape.
+    internal init(
+        policy: EgressPolicy,
+        judge: JudgeAdapter? = nil,
+        database: SessionDatabase = .shared,
+        config: Config = Config(),
+        upstreamConnector: EgressUpstreamConnecting = DefaultEgressUpstreamConnector(),
+        mitmLeafProvider: ((String) -> Data?)? = nil,
+        mitmTrustEvaluator: MITMUpstreamVerify.TrustEvaluator?
+    ) {
+        self.policy = policy
+        self.judge = judge
         self.database = database
         self.config = config
+        self.upstreamConnector = upstreamConnector
+        self.mitmLeafProvider = mitmLeafProvider
+        self.mitmTrustEvaluator = mitmTrustEvaluator
+    }
+
+    /// T.1b primary init — takes a per-pane policy and an optional
+    /// judge adapter. Production wires both; tests can pass `judge: nil`
+    /// to assert static-only behavior. Public wrapper around the
+    /// designated internal init (passes `mitmTrustEvaluator: nil`).
+    public convenience init(
+        policy: EgressPolicy,
+        judge: JudgeAdapter? = nil,
+        database: SessionDatabase = .shared,
+        config: Config = Config(),
+        upstreamConnector: EgressUpstreamConnecting = DefaultEgressUpstreamConnector(),
+        mitmLeafProvider: ((String) -> Data?)? = nil
+    ) {
+        self.init(
+            policy: policy,
+            judge: judge,
+            database: database,
+            config: config,
+            upstreamConnector: upstreamConnector,
+            mitmLeafProvider: mitmLeafProvider,
+            mitmTrustEvaluator: nil
+        )
+    }
+
+    /// Back-compat init for T.1a callers. Wraps the flat rule engine in
+    /// an `EgressPolicy` covering every `PaneMode`. No judge adapter
+    /// (static-only behavior — matches T.1a semantics exactly).
+    public convenience init(
+        rules: EgressRuleEngine,
+        database: SessionDatabase = .shared,
+        config: Config = Config(),
+        upstreamConnector: EgressUpstreamConnecting = DefaultEgressUpstreamConnector(),
+        mitmLeafProvider: ((String) -> Data?)? = nil
+    ) {
+        var engines: [PaneMode: EgressRuleEngine] = [:]
+        for mode in PaneMode.allCases { engines[mode] = rules }
+        let policy = EgressPolicy(engines: engines)
+        self.init(
+            policy: policy,
+            judge: nil,
+            database: database,
+            config: config,
+            upstreamConnector: upstreamConnector,
+            mitmLeafProvider: mitmLeafProvider
+        )
     }
 
     /// Bound port after `start()` succeeds. Zero before start / after stop.
@@ -97,6 +203,23 @@ public final class EgressListener: @unchecked Sendable {
         lock.lock()
         if running { lock.unlock(); return }
         lock.unlock()
+
+        // T.1d-2b-ii r85 — Schneier P1 / Allspaw P1 env-safety
+        // observability: if the operator flipped `mitmTermination` ON
+        // (via flag / env / `~/.senkani/config.json`) but no leaf provider
+        // was wired into the listener constructor, the
+        // `handleConnect` MITM branch silently falls through to the
+        // opaque tunnel with NO audit row and NO operator feedback.
+        // That's a fail-CLOSED-by-omission posture for the security
+        // control the flag is supposed to deliver. Emit a one-time
+        // stderr warning at listener start so the operator knows the
+        // flag they enabled is currently a no-op. The matching
+        // diagnostic on the doctor surface is in `DoctorCommand
+        // .checkMITMTerminationReadiness` (`senkani doctor`).
+        if config.mitmTermination && mitmLeafProvider == nil {
+            let msg = "egress: WARNING — mitmTlsTermination flag is ON but no leaf provider is wired; opaque tunnel is in effect. Run `senkani doctor` to diagnose.\n"
+            FileHandle.standardError.write(Data(msg.utf8))
+        }
 
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { throw ListenError.createFailed(errno) }
@@ -149,15 +272,8 @@ public final class EgressListener: @unchecked Sendable {
         source.setEventHandler { [weak self] in
             self?.acceptOne()
         }
-        source.setCancelHandler { [weak self] in
-            guard let self else { return }
-            self.lock.lock()
-            if self.listenFD >= 0 {
-                close(self.listenFD)
-                self.listenFD = -1
-            }
-            self.lock.unlock()
-        }
+        // Capture fd locally — see class doc `fd ownership contract`.
+        source.setCancelHandler { close(fd) }
 
         lock.lock()
         listenFD = fd
@@ -182,6 +298,10 @@ public final class EgressListener: @unchecked Sendable {
         let path = config.portFilePath
         let writePort = config.writePortFile
         boundPort = 0
+        // Nil out under the lock; the actual close(fd) happens
+        // asynchronously in the dispatch source's cancel handler,
+        // which captured the fd locally.
+        listenFD = -1
         lock.unlock()
 
         source?.cancel()
@@ -212,9 +332,14 @@ public final class EgressListener: @unchecked Sendable {
         }
 
         let handler = EgressConnectionHandler(
-            rules: rules,
+            policy: policy,
+            judge: judge,
             database: database,
-            clientFD: clientFD
+            clientFD: clientFD,
+            upstreamConnector: upstreamConnector,
+            mitmTerminationEnabled: config.mitmTermination,
+            mitmLeafProvider: mitmLeafProvider,
+            mitmTrustEvaluator: mitmTrustEvaluator
         )
         connectionQueue.async {
             handler.run()

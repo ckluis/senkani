@@ -4,10 +4,11 @@ import Core
 
 /// Renders a raw HTML file in a WKWebView with live auto-reload.
 ///
-/// V.10a — adds an A/B segmented toolbar over the render area. The
-/// `Original` and `Design-system` modes both pass the same file path
-/// to the WebView in this round; V.10b wires pattern application to
-/// `.designSystem` without touching the surface.
+/// V.10a — adds an A/B segmented toolbar over the render area.
+/// V.10b — on `.designSystem` mode, parses the canonical patterns
+/// spec, generates the stylesheet, and registers a `WKUserScript`
+/// that injects a `<style data-senkani-design-system="1">` block
+/// at document-end. `.original` registers zero user scripts.
 struct HTMLPreviewView: View {
     @Bindable var pane: PaneModel
 
@@ -25,10 +26,28 @@ struct HTMLPreviewView: View {
                 WebViewRepresentable(filePath: HTMLPreviewModeResolver.resolve(
                                         for: pane.previewFilePath,
                                         mode: pane.htmlPreviewMode),
-                                     mode: .html)
+                                     mode: .html,
+                                     userScripts: Self.designSystemUserScripts(
+                                        for: pane.htmlPreviewMode))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+    }
+
+    /// V.10b — resolve user scripts for the current preview mode.
+    /// `.original` returns `[]`. `.designSystem` parses
+    /// `spec/design_system_patterns.md` from the bundled resource
+    /// (or falls back to the embedded canonical default) and builds
+    /// a single WKUserScript carrying the generated stylesheet.
+    /// Regenerated on every render — no caching, per scope-groom Q3.
+    static func designSystemUserScripts(for mode: HTMLPreviewMode) -> [WKUserScript] {
+        guard mode == .designSystem else { return [] }
+        let markdown = DesignSystemPatternsResource.canonicalMarkdown
+        guard let ruleSet = try? DesignSystemPatternParser.parse(markdown) else {
+            return []
+        }
+        let css = DesignSystemStylesheet.css(from: ruleSet)
+        return DesignSystemUserScript.userScripts(for: mode, css: css)
     }
 
     /// Toolbar segmented control for V.10a's A/B render toggle.

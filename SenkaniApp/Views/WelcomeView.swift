@@ -28,6 +28,7 @@ struct WelcomeView: View {
     @State private var ollamaAvailable: Bool?
     @State private var milestoneSummary: OnboardingMilestoneProgression.Summary =
         OnboardingMilestoneProgression.summary(completed: [])
+    @State private var showNewWorkstreamSheet = false
 
     /// True when the user has picked at least one project. The
     /// implicit "Default" project (auto-created by `addPane(...)` for
@@ -125,9 +126,17 @@ struct WelcomeView: View {
             // Onboarding next-step banner — surfaces the next early-
             // use milestone the user hasn't hit yet. Hidden once the
             // user completes the seven-milestone arc; never blocks
-            // the primary task-starter flow above.
-            OnboardingNextStepBanner(summary: milestoneSummary)
-                .frame(maxWidth: 320)
+            // the primary task-starter flow above. When the next
+            // milestone is `.firstWorkstreamCreated`, the banner
+            // becomes tappable and presents `NewWorkstreamSheet`
+            // against the active project so a fresh-install user has
+            // an active onboarding nudge alongside the always-visible
+            // workstream sidebar.
+            OnboardingNextStepBanner(
+                summary: milestoneSummary,
+                onActionTap: bannerActionTapHandler()
+            )
+            .frame(maxWidth: 320)
 
             // Advanced path — the 18-pane gallery. Demoted to a
             // single secondary affordance so first-run users see the
@@ -151,6 +160,23 @@ struct WelcomeView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.windowBackgroundColor))
+        .sheet(isPresented: $showNewWorkstreamSheet) {
+            NewWorkstreamSheet(project: workspace.activeProject) { name, branchOverride in
+                if let project = workspace.activeProject {
+                    let result = workspace.addWorkstream(
+                        name: name,
+                        branch: branchOverride,
+                        to: project
+                    )
+                    if case .failure(let error) = result {
+                        fputs(
+                            "[senkani] Failed to create workstream: \(error.localizedDescription)\n",
+                            stderr)
+                    }
+                    refreshMilestoneSummary()
+                }
+            }
+        }
         .task {
             refreshMilestoneSummary()
             await detectTools()
@@ -158,6 +184,19 @@ struct WelcomeView: View {
         .onChange(of: workspace.projects.count) { _, _ in
             refreshMilestoneSummary()
         }
+    }
+
+    /// Return the tap handler the next-step banner uses, or nil if
+    /// the banner should remain non-tappable. Today only the
+    /// `.firstWorkstreamCreated` milestone exposes an in-banner CTA;
+    /// extending to other milestones is intentionally a separate
+    /// round (see milestone-6 scope decisions).
+    private func bannerActionTapHandler() -> (() -> Void)? {
+        guard let entry = milestoneSummary.nextEntry,
+              entry.milestone == .firstWorkstreamCreated,
+              workspace.activeProject != nil
+        else { return nil }
+        return { showNewWorkstreamSheet = true }
     }
 
     /// Pull the latest set of completed milestones off disk and
@@ -353,41 +392,60 @@ struct TaskStarterCard: View {
 /// pin its contract without a SwiftUI test harness.
 struct OnboardingNextStepBanner: View {
     let summary: OnboardingMilestoneProgression.Summary
+    /// Optional tap handler. When non-nil, the banner renders as a
+    /// Button so the operator can act on the surfaced milestone
+    /// inline (today: only `.firstWorkstreamCreated`).
+    var onActionTap: (() -> Void)? = nil
 
+    @ViewBuilder
     var body: some View {
         if let entry = summary.nextEntry, !summary.allComplete {
-            HStack(alignment: .top, spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text("Next:")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                        Text(entry.title)
-                            .font(.system(size: 11, weight: .medium))
-                        Spacer(minLength: 0)
-                        Text(summary.progressLabel)
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundStyle(.tertiary)
-                    }
-                    Text(entry.nextAction)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
+            if let tap = onActionTap {
+                Button(action: tap) {
+                    banner(for: entry)
                 }
+                .buttonStyle(.plain)
+            } else {
+                banner(for: entry)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(Color(.controlBackgroundColor).opacity(0.6))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.secondary.opacity(0.18), lineWidth: 0.5)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(
-                "Next early-use milestone: \(entry.title). \(entry.nextAction). \(summary.progressLabel) complete."
-            )
         }
+    }
+
+    @ViewBuilder
+    private func banner(
+        for entry: OnboardingMilestoneCopy.Entry
+    ) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text("Next:")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Text(entry.title)
+                        .font(.system(size: 11, weight: .medium))
+                    Spacer(minLength: 0)
+                    Text(summary.progressLabel)
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+                Text(entry.nextAction)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color(.controlBackgroundColor).opacity(0.6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.secondary.opacity(0.18), lineWidth: 0.5)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "Next early-use milestone: \(entry.title). \(entry.nextAction). \(summary.progressLabel) complete."
+        )
     }
 }

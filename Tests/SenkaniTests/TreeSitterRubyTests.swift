@@ -354,7 +354,7 @@ struct RubyPerformanceTests {
         for i in 0..<2 {
             source += "end\n"
         }
-        // Median-of-3 — see DependencyGraphPerfGateTests for canonical
+        // Min-of-N — see DependencyGraphPerfGateTests for canonical
         // pattern. Threshold widened 10 ms → 20 ms because typical in-
         // isolation is ~7 ms — too tight for parallel-runner contention.
         let clock = ContinuousClock()
@@ -366,10 +366,9 @@ struct RubyPerformanceTests {
             }
             samples.append(elapsed)
         }
-        let median = samples.sorted()[1]
         #expect(
-            median < .milliseconds(20),
-            "median of 3 Ruby parses: \(samples) → median \(median)"
+            PerfGate.passes(samples: samples, budget: .milliseconds(20)),
+            "min of 3 Ruby parses must be < 20ms: \(samples)"
         )
     }
 
@@ -404,6 +403,56 @@ struct RubyPerformanceTests {
 
         #expect(pyEntries.count == 2) // class + method
         #expect(pyEntries.contains { $0.name == "Greeter" && $0.kind == .class })
+    }
+}
+
+// MARK: - Ruby Depth Stress
+
+@Suite("TreeSitterBackend — Ruby Depth Stress")
+struct TreeSitterRubyDepthStressTests {
+
+    // Chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Generates a top-level class with a class-constant initializer whose
+    // expression is a deeply-nested parenthesized chain, and indexes the
+    // file WITHOUT `runOnLargeStackThread` to prove the iterative walk
+    // is cooperative-pool-safe. Two empty top-level classes bracket the
+    // deep expression to assert pre-order symbol emission.
+    //
+    // Why a class-constant initializer, not a method body or a top-level
+    // expression: Ruby's `method` and `singleton_method` switch arms
+    // emit and return without walking the body, so depth inside a `def`
+    // is not walked. The deep chain must live inside a node whose
+    // descendants fall through the default arm (reverse-push children).
+    // A class with a constant initializer satisfies this: `class` emits
+    // and pushes the body with the class name as container, the body
+    // descends to the assignment via default, and the parenthesized
+    // expression chain pushes ~2200 deep. The pre-refactor walk would
+    // consume ~2200 Swift call frames and crash on the cooperative
+    // pool's smaller stack; the iterative form runs in heap-allocated
+    // work-stack memory.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() {
+        let depth = 2200
+        let opens = String(repeating: "(", count: depth)
+        let closes = String(repeating: ")", count: depth)
+        let source = """
+        class First
+        end
+
+        class Container
+          X = \(opens)0\(closes)
+        end
+
+        class Last
+        end
+        """
+
+        let entries = indexRuby(source)
+        let classes = entries.filter { $0.kind == .class }
+        #expect(classes.map(\.name) == ["First", "Container", "Last"],
+                "Symbol order must remain left-to-right pre-order")
+        #expect(classes.allSatisfy { $0.container == nil },
+                "Top-level Ruby classes carry no container")
     }
 }
 

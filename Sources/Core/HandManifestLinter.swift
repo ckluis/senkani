@@ -123,6 +123,65 @@ public enum HandManifestLinter {
                 message: "cadence.schedule, if present, must be non-empty"))
         }
 
+        // V.19a-5 — trust_remote_code lockdown. The HuggingFace
+        // `transformers` library treats `trust_remote_code=True` as an
+        // arbitrary-code-execution opt-in (the model card's Python is
+        // imported and run). Senkani's HandManifest does not host that
+        // execution surface today, and this rule locks the gate so a
+        // future template or imported profile cannot turn it on through
+        // `settings`. The key is matched against three canonical
+        // spellings (`trust_remote_code`, `trustRemoteCode`,
+        // `TRUST_REMOTE_CODE`); `.bool(true)` is the only flagged value
+        // — `.bool(false)` passes (the default-off case) so the rule
+        // doesn't break manifests that explicitly opt out.
+        let trustRemoteKeys: Set<String> = [
+            "trust_remote_code",
+            "trustRemoteCode",
+            "TRUST_REMOTE_CODE",
+        ]
+        for key in trustRemoteKeys {
+            if case .bool(true) = m.settings[key] {
+                issues.append(.init(
+                    severity: .error,
+                    path: "settings.\(key)",
+                    message:
+                        "settings.\(key) MUST NOT be true — arbitrary " +
+                        "remote-code execution is a hard-blocked " +
+                        "capability (V.19a-5 lockdown). Remove the " +
+                        "key or set it to false."))
+            }
+        }
+
+        // V.18a-4 — runtime_telemetry.capture=full demands per-field
+        // operator review. An empty (or absent) validated_fields map
+        // means the operator opted into verbatim capture without
+        // declaring which attribute keys they actually reviewed; warn.
+        if let rt = m.runtimeTelemetry, rt.capture == .full {
+            let v = rt.validatedFields ?? [:]
+            if v.isEmpty {
+                issues.append(.init(
+                    severity: .warning,
+                    path: "runtime_telemetry.validated_fields",
+                    message:
+                        "runtime_telemetry.capture is 'full' but " +
+                        "validated_fields is empty — declare each " +
+                        "captured attribute key with a per-field " +
+                        "validated reason (the `// validated: <reason>` " +
+                        "annotation) so the audit trail records " +
+                        "operator review"))
+            } else {
+                for (key, reason) in v where reason.trimmingCharacters(in: .whitespaces).isEmpty {
+                    issues.append(.init(
+                        severity: .warning,
+                        path: "runtime_telemetry.validated_fields[\(key)]",
+                        message:
+                            "validated_fields['\(key)'] reason is empty " +
+                            "— `// validated: <reason>` annotation must " +
+                            "name why the field is safe to capture verbatim"))
+                }
+            }
+        }
+
         return issues
     }
 

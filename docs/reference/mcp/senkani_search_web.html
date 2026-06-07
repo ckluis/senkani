@@ -87,6 +87,8 @@
     <p><code>guard-research</code> runs <em>before</em> the HTTP call and denies queries containing absolute filesystem paths (<code>/Users/</code>, <code>/etc/</code>), tilde-home paths (<code>~/Library/...</code>), Windows drives, glob patterns (<code>/foo/*</code>, <code>**/*</code>), or any token flagged by <code>SecretDetector</code> (Anthropic / OpenAI / GitHub / AWS / Stripe / Slack / npm / HuggingFace / GCP / generic bearer). Public <code>site:</code> operators and ordinary phrase searches pass.</p>
     <p>Every snippet and title is passed through <code>SecretDetector</code> before formatting, so leaked tokens in third-party result text get <code>[REDACTED:…]</code>-stamped before the model sees them. CAPTCHA / soft-block pages from DuckDuckGo surface as a structured <code>BackendBlocked</code> error rather than zero-result silence.</p>
 
+    <p><strong>Soft-block resilience.</strong> When DuckDuckGo Lite returns a CAPTCHA / soft-block page for the requested region, the tool auto-retries against the next region in <code>SearchWebRegionRotation.order(primary:)</code> within the same call. The default rotation is <code>[primary, wt-wt, us-en, uk-en, de-de]</code> with deduplication; the in-process retry is bounded at 2 HTTP attempts so callers fail fast (~5s budget under the default 2000 ms inter-attempt back-off, overridable via <code>SENKANI_SEARCH_WEB_RETRY_DELAY_MS</code>). Every CAPTCHA detection writes a cool-down entry to <code>~/.senkani/state/search_web_cooldown.json</code> (mode 0600) with a 30-minute default expiry; subsequent invocations pre-flight-skip any region whose <code>cooldownUntil</code> is still in the future, with no HTTP request emitted. When every region in the rotation is cooling, the tool returns a structured <code>allRegionsCooling</code> error naming each region and its expiry timestamp so the caller can wait or fall back (<code>search-web-ddg-soft-block-resilience-2026-05-16</code>, shipped 2026-05-21).</p>
+
     <h2>Inputs</h2>
     <div class="ref-io-table">
       <div class="head">Name</div><div class="head">Type</div><div class="head">Default</div><div class="head">Description</div>
@@ -129,7 +131,7 @@
   </div>
   <div class="foot-meta">
     <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
-    <span><a href="../../../docs/changelog.html">v0.2.0 changelog</a></span>
+    <span><a href="../../../docs/changelog.html">v0.3.0 changelog</a></span>
   </div>
 </footer>
 <script src="../../../assets/app.js" defer></script>

@@ -36,6 +36,57 @@ struct ReleaseSLORowTests {
         #expect(row.value(for: .coldStart) == 142.0)
     }
 
+    @Test("openai.cold.start (V.13e-3): field decodes, backfills nil pre-V.13e-3, and evaluates against threshold")
+    func openaiColdStartRowAppendedAndEvaluated() throws {
+        // 1. A row carrying the V.13e-3 field decodes it + value(for:).
+        let withField = """
+        {"ts": 1714161600.0, "git_sha": "abc1234", "version": "0.4.0",
+         "cold_start_ms_p95": 142.0, "idle_memory_mb": null,
+         "install_size_mb": 21.3, "classifier_p95_ms": null,
+         "openai_cold_start_ms_p95": 412.0}
+        """
+        let row = try JSONDecoder().decode(ReleaseSLORow.self,
+                                           from: Data(withField.utf8))
+        #expect(row.openaiColdStartMsP95 == 412.0)
+        #expect(row.value(for: .openaiColdStart) == 412.0)
+
+        // 2. A pre-V.13e-3 row (no key) backfills to nil — the
+        //    measure-slos.sh schema bump is backward compatible.
+        let withoutField = """
+        {"ts": 1.0, "git_sha": "a", "version": "0.2.0",
+         "cold_start_ms_p95": 100.0, "idle_memory_mb": null,
+         "install_size_mb": 20.0, "classifier_p95_ms": null}
+        """
+        let old = try JSONDecoder().decode(ReleaseSLORow.self,
+                                           from: Data(withoutField.utf8))
+        #expect(old.openaiColdStartMsP95 == nil)
+        #expect(old.value(for: .openaiColdStart) == nil)
+
+        // 3. A measured row under the 1500ms threshold is ok. (History
+        //    is one JSON object per line, so use a single-line row.)
+        let okPath = makeTempHistoryPath()
+        defer { try? FileManager.default.removeItem(atPath: okPath) }
+        writeRows([
+            #"{"ts":1714161600.0,"git_sha":"abc1234","version":"0.4.0","cold_start_ms_p95":142.0,"idle_memory_mb":null,"install_size_mb":21.3,"classifier_p95_ms":null,"openai_cold_start_ms_p95":412.0}"#
+        ], to: okPath)
+        let okHistory = ReleaseSLOHistory(customPath: okPath)
+        let okEval = okHistory.evaluateAll().first { $0.slo == .openaiColdStart }!
+        #expect(okEval.verdict == .ok)
+        #expect(okEval.latest == 412.0)
+        #expect(okHistory.shouldFailGate() == false)
+
+        // 4. A row over the 1500ms threshold fails as overBudget.
+        let badPath = makeTempHistoryPath()
+        defer { try? FileManager.default.removeItem(atPath: badPath) }
+        writeRows([
+            #"{"ts":2.0,"git_sha":"b","version":"0.4.0","cold_start_ms_p95":142.0,"idle_memory_mb":null,"install_size_mb":21.3,"classifier_p95_ms":null,"openai_cold_start_ms_p95":1600.0}"#
+        ], to: badPath)
+        let badHistory = ReleaseSLOHistory(customPath: badPath)
+        let badEval = badHistory.evaluateAll().first { $0.slo == .openaiColdStart }!
+        #expect(badEval.verdict == .overBudget)
+        #expect(badHistory.shouldFailGate() == true)
+    }
+
     @Test("Empty history returns noHistory for every SLO")
     func emptyHistoryNoHistoryVerdict() {
         let path = makeTempHistoryPath()
@@ -48,6 +99,84 @@ struct ReleaseSLORowTests {
             #expect(e.verdict == .noHistory)
         }
         #expect(history.shouldFailGate() == false)
+    }
+}
+
+@Suite(.serialized)
+struct ReleaseSLOInstallSizeMeasurementTests {
+
+    /// Repo root, resolved from this source file:
+    /// Tests/SenkaniTests/ReleaseSLOTests.swift → up three components.
+    private static var repoRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // SenkaniTests
+            .deletingLastPathComponent()   // Tests
+            .deletingLastPathComponent()   // repo root
+    }
+
+    /// Run `tools/measure-install-size.sh <dir>` and return its trimmed
+    /// stdout. Throws if the binary can't launch.
+    private static func runHelper(_ dir: String) throws -> String {
+        let script = repoRoot.appendingPathComponent("tools/measure-install-size.sh")
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/bash")
+        p.arguments = [script.path, dir]
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = Pipe()
+        try p.run()
+        p.waitUntilExit()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private static func writeRandom(_ bytes: Int, to path: String) {
+        let data = Data((0..<bytes).map { _ in UInt8.random(in: 0...255) })
+        FileManager.default.createFile(atPath: path, contents: data)
+    }
+
+    @Test("measure-install-size.sh resolves a symlinked release dir to a non-zero size and sums only shipped products")
+    func resolvesSymlinkAndExcludesIntermediates() throws {
+        let fm = FileManager.default
+        let root = "/tmp/senkani-install-size-\(UUID().uuidString)"
+        let target = root + "/arm64-apple-macosx/release"
+        let link = root + "/release"          // symlink → target, like SwiftPM
+        defer { try? fm.removeItem(atPath: root) }
+
+        try fm.createDirectory(atPath: target, withIntermediateDirectories: true)
+
+        // Shipped products (≈ 384 KB total) — what install.size counts.
+        Self.writeRandom(256 * 1024, to: target + "/senkani")
+        Self.writeRandom(128 * 1024, to: target + "/senkani-mcp")
+
+        // Build intermediates + a non-product binary (≈ 8 MB) — these
+        // MUST NOT be counted. This is the 1.8 GB-tree problem in
+        // miniature: random (non-compressible) so APFS can't sparse it.
+        try fm.createDirectory(atPath: target + "/Core.build",
+                               withIntermediateDirectories: true)
+        Self.writeRandom(4 * 1024 * 1024, to: target + "/Core.build/junk.o")
+        Self.writeRandom(4 * 1024 * 1024, to: target + "/SenkaniApp") // GUI bundle target — not a CLI product
+
+        // SwiftPM-shaped symlink: `release` → `arm64-apple-macosx/release`.
+        try fm.createSymbolicLink(atPath: link, withDestinationPath: "arm64-apple-macosx/release")
+
+        // The bug: `du -sk <symlink>` reports ~0. The fix must follow
+        // the link AND sum only the products.
+        let out = try Self.runHelper(link)
+        let mb = Double(out)
+        #expect(mb != nil, "helper printed non-numeric output: \(out)")
+        guard let mb else { return }
+
+        // Non-zero → the symlink was followed (the original bug yielded 0.0).
+        #expect(mb > 0.0)
+        // < 1 MB → only the ~384 KB of products counted; the 8 MB of
+        // intermediates / non-products were excluded.
+        #expect(mb < 1.0, "expected products-only (~0.4 MB), got \(mb) MB — intermediates leaked in")
+
+        // A missing dir is a `null` measurement, not an error — the
+        // script's "never abort the run" contract.
+        #expect(try Self.runHelper(root + "/nope") == "null")
     }
 }
 

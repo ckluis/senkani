@@ -140,4 +140,41 @@ public actor CredentialVault {
     ) async throws -> [String] {
         try await store.list(scope: scope)
     }
+
+    /// V.13b-4c — strongly-typed `VaultLabels` wrapper around
+    /// `list(scope:)`. Schneier P3 (type-level no-secret invariant):
+    /// a future refactor that changes the return shape to e.g.
+    /// `[AnthropicKeyRecord]` would have to update the construction
+    /// site here AND the `VaultLabels` shape, so the no-secret
+    /// guarantee fails to compile rather than silently leaking the
+    /// raw value payload onto a `[String]`-shaped surface.
+    public func listLabels(
+        scope: String = CredentialVault.defaultScope
+    ) async throws -> VaultLabels {
+        let labels = try await store.list(scope: scope)
+        return VaultLabels(labels)
+    }
+}
+
+/// V.13b-4c — strongly-typed wrapper around the label-only return
+/// shape of `CredentialVault.list(scope:)`. Schneier P3 (type-level
+/// no-secret invariant): the contract is "labels only, NEVER the
+/// raw secret value", and a `[String]` return shape encodes that by
+/// convention but does not BLOCK a refactor from changing the shape
+/// to e.g. `[AnthropicKeyRecord]`. `VaultLabels` makes the contract
+/// type-level — a refactor that swaps the underlying element type
+/// would have to update both this struct's stored property AND
+/// every consumer.
+///
+/// Sendable + Equatable so it crosses the actor boundary cleanly
+/// and round-trips through tests.
+public struct VaultLabels: Sendable, Equatable {
+    public let labels: [String]
+
+    public init(_ labels: [String]) {
+        self.labels = labels
+    }
+
+    public var isEmpty: Bool { labels.isEmpty }
+    public var count: Int { labels.count }
 }

@@ -113,16 +113,16 @@ final class CommandStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return id }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 2, now)
             sqlite3_bind_int(stmt, 3, Int32(paneCount))
             if let root = normalizedRoot {
-                sqlite3_bind_text(stmt, 4, (root as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 4, (root as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 4)
             }
             if let agent = agentType {
-                sqlite3_bind_text(stmt, 5, (agent.rawValue as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 5, (agent.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 5)
             }
@@ -159,7 +159,16 @@ final class CommandStore: @unchecked Sendable {
         // a single `Authorization: Bearer ey...` line fits inside that cap.
         let previewRedaction = PersistenceRedaction.redact(outputPreview.map { String($0.prefix(500)) })
         let preview = previewRedaction.redacted
-        parent.queue.async { [weak parent, weak self] in
+        // 2026-05-18: chain-participating writes commit synchronously per
+        // the V.5c durability contract — async dispatch + short-lived CLI
+        // callers (AuthorshipBackfillRunner) silently dropped audit rows
+        // when the process exited before the queue drained. Filed as
+        // authorship-backfill-audit-row-not-durable-2026-05-17. Every
+        // other queue access in this file is already .sync; these three
+        // writes were the inconsistent outliers. See
+        // Sources/Core/Stores/INVARIANTS.md § Chain-participating writes
+        // are caller-durable for the invariant.
+        parent.queue.sync { [weak parent, weak self] in
             guard let parent, let self, let db = parent.db else { return }
 
             guard sqlite3_exec(db, "BEGIN IMMEDIATE;", nil, nil, nil) == SQLITE_OK else { return }
@@ -213,37 +222,37 @@ final class CommandStore: @unchecked Sendable {
                 """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 2, now)
-            sqlite3_bind_text(stmt, 3, (toolName as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, (toolName as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             if let cmd = redactedCommand {
-                sqlite3_bind_text(stmt, 4, (cmd as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 4, (cmd as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 4)
             }
             sqlite3_bind_int64(stmt, 5, Int64(rawBytes))
             sqlite3_bind_int64(stmt, 6, Int64(compressedBytes))
             if let feat = feature {
-                sqlite3_bind_text(stmt, 7, (feat as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 7, (feat as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 7)
             }
             if let prev = preview {
-                sqlite3_bind_text(stmt, 8, (prev as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 8, (prev as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 8)
             }
             if let cid = connectionId {
-                sqlite3_bind_text(stmt, 9, (cid as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 9, (cid as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 9)
             }
             if let prevH = prevHash {
-                sqlite3_bind_text(stmt, 10, (prevH as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 10, (prevH as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 10)
             }
-            sqlite3_bind_text(stmt, 11, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 11, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 12, anchorId)
             let insertRC = sqlite3_step(stmt)
             sqlite3_finalize(stmt)
@@ -268,7 +277,7 @@ final class CommandStore: @unchecked Sendable {
             sqlite3_bind_int64(updateStmt, 1, Int64(rawBytes))
             sqlite3_bind_int64(updateStmt, 2, Int64(saved))
             sqlite3_bind_int(updateStmt, 3, Int32(costCents))
-            sqlite3_bind_text(updateStmt, 4, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(updateStmt, 4, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             let updateRC = sqlite3_step(updateStmt)
             sqlite3_finalize(updateStmt)
             guard updateRC == SQLITE_DONE else { return }
@@ -288,7 +297,10 @@ final class CommandStore: @unchecked Sendable {
     /// End a session, recording its end time and duration.
     func endSession(sessionId: String) {
         let now = Date().timeIntervalSince1970
-        parent.queue.async { [weak parent] in
+        // 2026-05-18: sync to match recordCommand. Short-lived CLI
+        // callers (AuthorshipBackfillRunner) exit before async would
+        // drain, leaving sessions.ended_at NULL on every backfill.
+        parent.queue.sync { [weak parent] in
             guard let parent, let db = parent.db else { return }
             let sql = """
                 UPDATE sessions SET
@@ -301,8 +313,25 @@ final class CommandStore: @unchecked Sendable {
             defer { sqlite3_finalize(stmt) }
             sqlite3_bind_double(stmt, 1, now)
             sqlite3_bind_double(stmt, 2, now)
-            sqlite3_bind_text(stmt, 3, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_step(stmt)
+        }
+    }
+
+    /// Count of `commands` rows for the given session. Used by short-
+    /// lived CLI callers (e.g. `AuthorshipBackfillRunner`) to verify
+    /// that a `recordCommand` write actually committed before the
+    /// process exits — the V.5c audit-chain durability contract.
+    func commandCount(sessionId: String) -> Int {
+        return parent.queue.sync {
+            guard let db = parent.db else { return 0 }
+            let sql = "SELECT COUNT(*) FROM commands WHERE session_id = ?;"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+            return Int(sqlite3_column_int64(stmt, 0))
         }
     }
 
@@ -375,7 +404,7 @@ final class CommandStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (sanitized as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (sanitized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int(stmt, 2, Int32(min(limit, 200)))
 
             var results: [CommandSearchResult] = []
@@ -454,7 +483,7 @@ final class CommandStore: @unchecked Sendable {
                 return LifetimeStats(totalSessions: 0, totalCommands: 0, totalRawBytes: 0, totalSavedBytes: 0, totalCostSavedCents: 0)
             }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (projectRoot as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (projectRoot as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
 
             if sqlite3_step(stmt) == SQLITE_ROW {
                 return LifetimeStats(
@@ -518,7 +547,7 @@ final class CommandStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
 
             var results: [(command: String, rawBytes: Int, compressedBytes: Int)] = []
             while sqlite3_step(stmt) == SQLITE_ROW {
@@ -573,12 +602,12 @@ final class CommandStore: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
 
-            sqlite3_bind_text(stmt, 1, (commandPrefix as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (likePattern as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (commandPrefix as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (likePattern as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             var nextBind: Int32 = 3
             if let root = projectRoot {
                 let normalized = SessionDatabase.normalizePath(root) ?? root
-                sqlite3_bind_text(stmt, nextBind, (normalized as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, nextBind, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
                 nextBind += 1
             }
             sqlite3_bind_int(stmt, nextBind, Int32(limit))
@@ -642,7 +671,11 @@ final class CommandStore: @unchecked Sendable {
         compressedBytes: Int = 0
     ) {
         let now = Date().timeIntervalSince1970
-        parent.queue.async { [weak parent, weak self] in
+        // 2026-05-18: sync per the V.5c chain-participation durability
+        // contract. Today's only caller is MCP/ToolRouter (long-running,
+        // would have drained anyway), but a future short-lived CLI caller
+        // would hit the same silent-loss bug recordCommand had.
+        parent.queue.sync { [weak parent, weak self] in
             guard let parent, let self, let db = parent.db else { return }
 
             // T.5 round 3: chain-aware budget-decision insert. Canonical
@@ -680,18 +713,18 @@ final class CommandStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 2, now)
-            sqlite3_bind_text(stmt, 3, (toolName as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, (toolName as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 4, Int64(rawBytes))
             sqlite3_bind_int64(stmt, 5, Int64(compressedBytes))
-            sqlite3_bind_text(stmt, 6, (decision as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 6, (decision as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             if let prevH = prevHash {
-                sqlite3_bind_text(stmt, 7, (prevH as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 7, (prevH as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             } else {
                 sqlite3_bind_null(stmt, 7)
             }
-            sqlite3_bind_text(stmt, 8, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 8, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 9, anchorId)
             if sqlite3_step(stmt) == SQLITE_DONE {
                 self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
@@ -715,7 +748,7 @@ final class CommandStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (connectionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (connectionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int(stmt, 2, Int32(min(limit, 1000)))
 
             var rows: [CommandSearchResult] = []
@@ -767,7 +800,7 @@ final class CommandStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [:] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (normalized as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
 
             var out: [String: ConnectionAggregateRow] = [:]
             while sqlite3_step(stmt) == SQLITE_ROW {

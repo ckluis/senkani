@@ -49,14 +49,14 @@ final class AnnotationStore: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return -1 }
             defer { sqlite3_finalize(stmt) }
 
-            sqlite3_bind_text(stmt, 1, (annotation.targetKind.rawValue as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (annotation.targetId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (annotation.targetKind.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (annotation.targetId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 3, Int64(annotation.rangeStart))
             sqlite3_bind_int64(stmt, 4, Int64(annotation.rangeEnd))
-            sqlite3_bind_text(stmt, 5, (annotation.verdict.rawValue as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 5, (annotation.verdict.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             Self.bindOptionalText(stmt, 6, annotation.notes)
-            sqlite3_bind_text(stmt, 7, (annotation.authoredBy as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 8, (annotation.authorship.rawValue as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 7, (annotation.authoredBy as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 8, (annotation.authorship.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 9, annotation.createdAt.timeIntervalSince1970)
 
             guard sqlite3_step(stmt) == SQLITE_DONE else { return -1 }
@@ -80,9 +80,9 @@ final class AnnotationStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (toId as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (kind.rawValue as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 3, (fromId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (toId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (kind.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 3, (fromId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             guard sqlite3_step(stmt) == SQLITE_DONE else { return 0 }
             return Int(sqlite3_changes(db))
         }
@@ -114,8 +114,8 @@ final class AnnotationStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (kind.rawValue as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (id as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (kind.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (id as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             return Self.collect(stmt)
         }
     }
@@ -160,7 +160,7 @@ final class AnnotationStore: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
             if let kind = targetKind {
-                sqlite3_bind_text(stmt, 1, (kind.rawValue as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 1, (kind.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             }
 
             var out: [AnnotationVerdictRollup] = []
@@ -214,7 +214,7 @@ final class AnnotationStore: @unchecked Sendable {
 
     private static func bindOptionalText(_ stmt: OpaquePointer?, _ index: Int32, _ value: String?) {
         if let val = value {
-            sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         } else {
             sqlite3_bind_null(stmt, index)
         }

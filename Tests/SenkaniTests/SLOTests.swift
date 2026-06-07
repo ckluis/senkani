@@ -230,8 +230,9 @@ struct SLOPerfGateTests {
         // statistical envelope to five independent 200-sample
         // distributions with a supermajority gate (≥ 4 of 5 burn fails).
         // 1 ms threshold preserved (product contract; see spec/slos.md).
-        // See DependencyGraphPerfGateTests for the canonical median-of-N
-        // pattern this extends.
+        // See DependencyGraphPerfGateTests for the canonical min-of-N
+        // perf-floor pattern (this burn gate is a related supermajority
+        // variant, not a copy).
         var evaluations: [SLOEvaluation] = []
         for _ in 0..<5 {
             let path = makeTempStorePath()

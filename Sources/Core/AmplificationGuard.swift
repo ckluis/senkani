@@ -66,14 +66,21 @@ public enum AmplificationGuard {
 
     /// Check whether a cron's first two fires are too close together.
     /// Cheap approximation: compute the next 2 fires from `Date()` and
-    /// reject if the gap is below `minIntervalSeconds`.
+    /// reject if the gap is at or below `minIntervalSeconds`.
+    /// `<=` not `<`: cron's minute-granularity means the only fast-fire
+    /// case syntactically expressible is exactly the floor (`* * * * *`
+    /// → 60s gap), and the rate limiter clamps it to one fire / floor
+    /// anyway — the guard refuses up front so the operator gets a clear
+    /// rejection instead of a silent clamp downstream
+    /// (`schedule-amplification-guard-and-pane-not-wired-2026-05-17`,
+    /// shipped 2026-05-21).
     private static func checkCron(_ cron: String, minIntervalSeconds: Int) -> Verdict? {
         let fires = CronPreview.nextFires(cron: cron, after: Date(), count: 2)
         guard fires.count == 2 else { return .ok }
         let gap = fires[1].timeIntervalSince(fires[0])
-        if gap < TimeInterval(minIntervalSeconds) {
+        if gap <= TimeInterval(minIntervalSeconds) {
             return .amplification(
-                reason: "cron fires every \(Int(gap))s, below the \(minIntervalSeconds)s amplification floor",
+                reason: "cron fires every \(Int(gap))s, at or below the \(minIntervalSeconds)s amplification floor",
                 minIntervalSeconds: minIntervalSeconds
             )
         }
@@ -137,5 +144,21 @@ public struct CounterCadence: Equatable, Sendable {
         while name.hasSuffix("_") { name.removeLast() }
         if name.hasSuffix("s") && name.count > 1 { name.removeLast() }
         return name
+    }
+
+    /// Sentinel cron pattern stored on counter-cadence `ScheduledTask`
+    /// rows. The existing JSON schema requires `cronPattern: String`
+    /// (non-optional); counter cadences fire from HookRouter post-tool
+    /// reactions, not launchd, so the field gets this sentinel and
+    /// dispatch reads `task.cronPattern.hasPrefix("COUNTER:")` to skip
+    /// the plist path.
+    public var sentinelCronPattern: String {
+        "COUNTER:\(eventName):\(everyN)"
+    }
+
+    /// Whether a cron-shaped string is in fact a counter-cadence
+    /// sentinel rather than a real cron expression.
+    public static func isSentinel(_ cronPattern: String) -> Bool {
+        cronPattern.hasPrefix("COUNTER:")
     }
 }

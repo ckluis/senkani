@@ -15,6 +15,8 @@ struct SidebarView: View {
     let onLaunchPane: (PaneType, String, String) -> Void
     @State private var showClaudeLaunch = false
     @State private var enrichmentBadge: Int = 0
+    @State private var hoveredProjectID: UUID?
+    @State private var removalTarget: ProjectModel?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -117,6 +119,9 @@ struct SidebarView: View {
                 clearToolSelection()
             }
         }
+        .sheet(item: $removalTarget) { project in
+            ProjectRemoveSheet(project: project, workspace: workspace)
+        }
     }
 
     // MARK: - Section header
@@ -161,7 +166,7 @@ struct SidebarView: View {
             clearToolSelection()
         } label: {
             VStack(alignment: .leading, spacing: 4) {
-                // Row 1: project name + git branch
+                // Row 1: project name + git branch + hover-revealed remove X
                 HStack(spacing: 4) {
                     Text(project.name)
                         .font(.system(size: 11, weight: project.isActive ? .semibold : .regular))
@@ -176,6 +181,22 @@ struct SidebarView: View {
                             .padding(.vertical, 1)
                             .background(Capsule().fill(.cyan.opacity(0.1)))
                             .lineLimit(1)
+                    }
+
+                    Spacer()
+
+                    if hoveredProjectID == project.id {
+                        Button {
+                            removalTarget = project
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(SenkaniTheme.textTertiary)
+                                .frame(width: 14, height: 14)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Remove project…")
                     }
                 }
 
@@ -227,10 +248,8 @@ struct SidebarView: View {
             .background(project.isActive ? SenkaniTheme.accentAnalytics.opacity(0.06) : Color.clear)
         }
         .buttonStyle(.plain)
-        .contextMenu {
-            Button("Remove Project") {
-                workspace.removeProject(id: project.id)
-            }
+        .onHover { inside in
+            hoveredProjectID = inside ? project.id : (hoveredProjectID == project.id ? nil : hoveredProjectID)
         }
     }
 

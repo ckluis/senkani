@@ -17,6 +17,9 @@ extension SessionDatabase {
     }
 
     /// Store a validation result from auto-validate.
+    ///
+    /// V.18a-5 — optional `validationRunId` tags the row for the
+    /// cross-cutting JOIN against `runtime_telemetry_span`.
     public func insertValidationResult(
         sessionId: String,
         filePath: String,
@@ -27,7 +30,8 @@ extension SessionDatabase {
         advisory: String,
         durationMs: Int,
         outcome: String? = nil,
-        reason: String? = nil
+        reason: String? = nil,
+        validationRunId: String? = nil
     ) {
         validationStore.insertValidationResult(
             sessionId: sessionId,
@@ -39,8 +43,69 @@ extension SessionDatabase {
             advisory: advisory,
             durationMs: durationMs,
             outcome: outcome,
-            reason: reason
+            reason: reason,
+            validationRunId: validationRunId
         )
+    }
+
+    /// V.18a-5 — read the `validation_run_id` stored on a row.
+    public func validationRunId(forResultId id: Int64) -> String? {
+        validationStore.validationRunId(forResultId: id)
+    }
+
+    /// V.18a-5 — find the most recent validation_results.id for a session.
+    public func mostRecentValidationResultId(sessionId: String) -> Int64? {
+        validationStore.mostRecentValidationResultId(sessionId: sessionId)
+    }
+
+    /// U.2a-2b — minimal row shape returned by
+    /// `firstFailingBrowserValidation(sessionId:)`. `axesJSON` is the
+    /// raw `axes` column (JSON array, e.g. `["perf","completeness"]`)
+    /// for HookRouter to derive a single representative `failing_axis`
+    /// without re-querying. Schneier side-channel guard: the row
+    /// deliberately omits raw assertion output.
+    public struct BrowserValidationFailRow: Sendable, Equatable {
+        public let id: Int64
+        public let targetURL: String?
+        public let axesJSON: String
+        public let advisory: String
+        public let createdAt: Date
+    }
+
+    /// U.2a-2b — insert a structured browser-validation row.
+    ///
+    /// V.18a-5 — optional `validationRunId` tags the row for the
+    /// cross-cutting JOIN against `runtime_telemetry_span`.
+    public func insertBrowserValidationResult(
+        sessionId: String,
+        targetURL: String,
+        axes: [String],
+        planStepsJSON: String,
+        resultStatus: String,
+        assertionsPassed: Int,
+        assertionsFailed: Int,
+        advisory: String,
+        screenshotPath: String?,
+        validationRunId: String? = nil
+    ) {
+        validationStore.insertBrowserValidationResult(
+            sessionId: sessionId,
+            targetURL: targetURL,
+            axes: axes,
+            planStepsJSON: planStepsJSON,
+            resultStatus: resultStatus,
+            assertionsPassed: assertionsPassed,
+            assertionsFailed: assertionsFailed,
+            advisory: advisory,
+            screenshotPath: screenshotPath,
+            validationRunId: validationRunId
+        )
+    }
+
+    /// U.2a-2b — first failing browser-validation row for a session
+    /// (HookRouter PreToolUse hard-block reader).
+    public func firstFailingBrowserValidation(sessionId: String) -> BrowserValidationFailRow? {
+        validationStore.firstFailingBrowserValidation(sessionId: sessionId)
     }
 
     /// Fetch undelivered validation results with errors for a session.
@@ -61,6 +126,14 @@ extension SessionDatabase {
     /// Legacy compatibility helper for callers/tests that explicitly want the old destructive read.
     public func fetchAndMarkDelivered(sessionId: String) -> [ValidationResultRow] {
         validationStore.fetchAndMarkDelivered(sessionId: sessionId)
+    }
+
+    /// U.11a-2 — resolve a batch of `validation_run_id` UUIDs against
+    /// `validation_results`. Returns a structured `(resolved,
+    /// unresolved)` partition; unresolved IDs are surfaced as data,
+    /// not thrown. Used by `ValidationAssertion` resolution.
+    public func resolveValidationRuns(_ runIDs: [UUID]) -> ValidationEvidenceResolution {
+        validationStore.resolveValidationRuns(runIDs)
     }
 
     /// Prune old validation results.

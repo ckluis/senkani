@@ -82,15 +82,39 @@
     <h2>Behavior</h2>
     <p>Generates a launchd plist per schedule. Each fire gets its own worktree + pane pair. Budget cap per run. <code>preset install</code> reuses the same <code>PresetInstaller</code> plist generator as <code>create</code>, so the two code paths produce byte-identical plists.</p>
 
+    <p><strong>Amplification guard.</strong> <code>create</code> AND <code>preset install</code> both call <code>AmplificationGuard.validate</code> before any disk write. Crons whose first two fires sit at or below the 60-second amplification floor (default <code>defaultMinIntervalSeconds</code>) are refused with a structured error; no JSON is written under <code>~/.senkani/schedules/</code> and no plist is written under <code>~/Library/LaunchAgents/</code>. The canonical reproduction case is <code>--cron '* * * * *'</code> (every-minute, 60s gap == floor); the guard refuses up front so the operator sees a clear rejection instead of a silent downstream clamp by the rate limiter. For <code>preset install</code> the guard runs AFTER cron-override resolution AND AFTER the secret-scan, so an amplifying <code>--cron</code> override against a shipped preset (or a malformed user-shipped preset record) is refused with a message naming the preset name + reason + floor (<code>schedule-preset-install-amplification-guard-not-wired-2026-05-21</code>, shipped 2026-05-21).</p>
+
+    <p><strong>Counter-cadence schedules.</strong> Pass <code>--counter-cadence "every N event_name"</code> (mutually exclusive with <code>--cron</code>) to register a schedule that fires from <code>HookRouter</code> post-tool reactions instead of launchd. Counter cadences DO NOT get a launchd plist — only the <code>ScheduledTask</code> JSON is written under <code>~/.senkani/schedules/</code>, with <code>cronPattern</code> set to the sentinel <code>COUNTER:&lt;event&gt;:&lt;N&gt;</code> (the JSON schema requires a non-optional <code>cronPattern</code>; dispatch readers filter on <code>task.eventCounterCadence != nil</code> or <code>CounterCadence.isSentinel(task.cronPattern)</code>). Validation refuses <code>N &lt; 2</code> up front (every-event fires would be clamped to one fire per minute by the rate limiter); the parser tolerates <code>every 10 tool_calls</code>, <code>every 10th tool_call</code>, and <code>every 10 tool_call</code> equivalently. <code>senkani schedule list</code> renders the SCHEDULE column with the operator's prose (e.g. <code>every 10 tool_calls</code>) for counter rows rather than the raw <code>COUNTER:</code> sentinel — cron rows continue to render via <code>CronToLaunchd.humanReadable</code>.</p>
+
+    <p><strong>Natural-language cadence (<code>--prose</code>).</strong> Pass <code>--prose "every weekday at 9am"</code> instead of a raw cron. The three cadence flags form a <strong>three-way XOR</strong>: exactly one of <code>--cron</code>, <code>--counter-cadence</code>, or <code>--prose</code> is required. The prose is compiled to a 5-field cron by <code>CompositeProseCadenceCompiler</code> (U.8b-4 production default — rule-first / MLX-fallback) before any disk write; the compiled cron then runs through the same <code>CronToLaunchd.convert</code> validation and <code>AmplificationGuard</code> as <code>--cron</code>, and a launchd plist <em>is</em> generated (prose resolves to a real time-based schedule). The composite tries <code>RuleBasedProseCadenceCompiler</code> (a pure, MLX-free, <em>English-only</em> compiler in <code>Core</code>) first — deterministic phrases below hit in sub-ms — and falls through to <code>MLXProseCadenceCompiler</code> (Gemma 4 VLM, English-only, lazy cold-load on the first fallback call) on <code>.unrecognizedPhrase</code> or <code>.unsupportedLocale</code> from the rule arm. Every other rule-side error (<code>.invalidCron</code>, <code>.unavailable</code>, <code>.invalidJSON</code>, <code>.cancelled</code>) re-throws unchanged; MLX-side errors also re-throw unchanged so the operator sees clear messages when no Gemma tier is downloaded ("No prose-cadence model is available. Pass an explicit cron with --cron instead."). Rule arm phrases: <code>hourly</code>, <code>daily</code>, <code>weekly</code>, <code>every minute</code>, <code>every hour</code>, <code>every day</code>, <code>every N minutes</code> (1–59), <code>every N hours</code> (1–23), <code>every day at &lt;time&gt;</code>, <code>every weekday at &lt;time&gt;</code> (Mon–Fri), and <code>every &lt;weekday&gt; at &lt;time&gt;</code>; <code>&lt;time&gt;</code> accepts <code>9</code>, <code>9am</code>, <code>9:30</code>, <code>9:30am</code>, <code>14:00</code>, <code>2pm</code>. Irregular phrases like <code>every other Tuesday at 6pm</code> fall through to the MLX arm. There is <strong>no silent fallback</strong> beyond the rule→MLX seam — an unrecognized phrase on both arms or a non-English locale is refused with a clear error pointing at <code>--cron</code> or <code>--locale en-US</code>, and nothing is written. <code>--locale &lt;BCP-47&gt;</code> defaults to the system locale (<code>Locale.current.identifier</code>); both compiler arms accept only <code>en-*</code>. The persisted <code>ScheduledTask</code> records <code>proseCadence</code> (the phrase), <code>compiledCadence</code> + <code>cronPattern</code> (the cron), and <code>locale</code>. <strong>Lazy MLX invariant:</strong> constructing the composite (which the CLI does on every <code>senkani</code> invocation) does NOT load the Gemma model — model load happens lazily inside <code>MLXProseCadenceCompiler.ensureModel()</code> on the first MLX-fallback call.</p>
+
     <h2>Example</h2>
     <pre class="code">$ senkani schedule create --name nightly-lint --cron "0 3 * * *" --command "swift test"
+$ senkani schedule create --name learn-after-10 --counter-cadence "every 10 tool_calls" --command "senkani learn"
+$ senkani schedule create --name weekday-brief --prose "every weekday at 9am" --command "senkani learn"
 $ senkani schedule preset list
-$ senkani schedule preset install autoresearch --topic "AI workstation"</pre>
+$ senkani schedule preset install autoresearch --topic "AI workstation"
+
+# Amplification guard refuses fast-firing crons:
+$ senkani schedule create --name fast --cron "* * * * *" --command "echo x"
+Validation Error: Refused: schedule would amplify (cron fires every 60s,
+at or below the 60s amplification floor). The amplification floor is 60s.
+Pick a cron whose fire interval is above the floor.
+
+# Counter-cadence with N=1 is refused at parse time:
+$ senkani schedule create --name every-call --counter-cadence "every 1 tool_call" --command "echo x"
+Validation Error: Counter cadence N=1 is at or below the amplification floor. Pick N >= 2 so the schedule doesn't fire on every event.
+
+# Amplification guard also refuses fast-firing --cron overrides on preset install:
+$ senkani schedule preset install log-rotation --cron "* * * * *"
+Validation Error: Refused: preset `log-rotation` would amplify (cron fires every 60s,
+at or below the 60s amplification floor). The amplification floor is 60s.
+Pick a `--cron` override whose fire interval is above the floor.</pre>
 
     <h2>Subcommands</h2>
     <div class="ref-io-table">
       <div class="head">Subcommand</div><div class="head"></div><div class="head"></div><div class="head">Description</div>
-      <div class="k">create</div><div class="t"></div><div class="default"></div><div class="desc">Create a scheduled task from --name / --cron / --command / --budget / --worktree.</div>
+      <div class="k">create</div><div class="t"></div><div class="default"></div><div class="desc">Create a scheduled task from --name / --command / --budget / --worktree plus exactly one cadence flag — three-way XOR of --cron, --counter-cadence, or --prose (with optional --locale, default system locale). --cron and --prose drive launchd; --counter-cadence drives HookRouter (no plist); --prose compiles an English phrase to a cron via CompositeProseCadenceCompiler (rule-first / MLX-fallback, U.8b-4) before save.</div>
       <div class="k">list</div><div class="t"></div><div class="default"></div><div class="desc">Show active schedules.</div>
       <div class="k">remove --name &lt;n&gt;</div><div class="t"></div><div class="default"></div><div class="desc">Delete a schedule.</div>
       <div class="k">run --name &lt;n&gt;</div><div class="t"></div><div class="default"></div><div class="desc">Execute a scheduled task (called by launchd).</div>
@@ -133,7 +157,7 @@ $ senkani schedule preset install autoresearch --topic "AI workstation"</pre>
   </div>
   <div class="foot-meta">
     <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
-    <span><a href="../../../docs/changelog.html">v0.2.0 changelog</a></span>
+    <span><a href="../../../docs/changelog.html">v0.3.0 changelog</a></span>
   </div>
 </footer>
 <script src="../../../assets/app.js" defer></script>

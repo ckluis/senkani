@@ -2,7 +2,7 @@ import ArgumentParser
 import Foundation
 import Indexer
 
-struct Index: ParsableCommand {
+struct Index: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "index",
         abstract: "Build or refresh the symbol index for the current project."
@@ -14,11 +14,17 @@ struct Index: ParsableCommand {
     @Option(name: .long, help: "Project root directory (defaults to current directory).")
     var root: String?
 
-    func run() throws {
+    func run() async throws {
         let projectRoot = root ?? FileManager.default.currentDirectoryPath
         let start = Date()
 
-        let index = IndexStore.buildOrUpdate(projectRoot: projectRoot, force: force)
+        // Tree-sitter / DependencyExtractor walks recurse on AST depth.
+        // Wrap on a large-stack background Thread for stack-guard symmetry
+        // with `MCPSession.ensureIndex`. See `RunOnLargeStackThread.swift`.
+        let forceFlag = force
+        let index = await runOnLargeStackThread {
+            IndexStore.buildOrUpdate(projectRoot: projectRoot, force: forceFlag)
+        }
 
         try IndexStore.save(index, projectRoot: projectRoot)
 

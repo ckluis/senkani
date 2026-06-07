@@ -1,0 +1,437 @@
+import Foundation
+
+/// V.13a-3 — pure request→route→respond pipeline for
+/// `POST /v1/chat/completions` (non-streaming), plus the per-request
+/// audit-entry construction. No socket, no `Network` import — every
+/// acceptance bullet is unit-testable.
+///
+/// Routing contract (Karpathy):
+///   - The provisioned key's `ModelPreset` WINS. The request's `model`
+///     field (e.g. `gpt-4o`) is logged for telemetry but does NOT change
+///     routing. The response's `model` field reports the ACTUAL model.
+///   - A key whose stored preset string is not a `ModelPreset` raw value
+///     (the v13a-2 provisioner currently stores provider names like
+///     `openai`) falls back to `.auto` — difficulty-scored routing. See
+///     the round's filed follow-up for reconciling the provisioner's
+///     `--preset` vocabulary with `ModelPreset`.
+///
+/// Model serving (scope, V.13a-3): this child ships the routing + audit
+/// SURFACE. The assistant content is produced by an injectable `Engine`
+/// so the surface is testable without a live LLM; `ServeCommand` wires a
+/// placeholder engine that reports the routing decision. Real in-process
+/// model inference is a later V.13 child (filed follow-up).
+public enum OpenAIChatHandler {
+
+    // MARK: - Engine (injectable completion backend)
+
+    public struct Completion: Sendable, Equatable {
+        public let content: String
+        /// V.13d — non-empty when the model called a tool. When set, the
+        /// response message carries `tool_calls` + `content: null` and
+        /// `finish_reason: "tool_calls"`; `content` above is ignored.
+        public let toolCalls: [OpenAIToolCall]
+        public let promptTokens: Int
+        public let completionTokens: Int
+        /// V.13 real-chat (sub-item 3) — tokenizer-accurate prompt token
+        /// count when the engine knows it (e.g. the MLX adapter captures
+        /// `Generation.info(GenerateCompletionInfo).promptTokenCount`).
+        /// nil on the placeholder path and any engine that has only a
+        /// heuristic; `handle(...)` propagates this to `usage.prompt_tokens`
+        /// when present, otherwise falls back to `promptTokens` above.
+        public let realPromptTokens: Int?
+        /// V.13 real-chat (sub-item 3) — tokenizer-accurate completion
+        /// token count when the engine knows it (the MLX adapter captures
+        /// `Generation.info(GenerateCompletionInfo).generationTokenCount`).
+        /// Same fallback semantics as `realPromptTokens`.
+        public let realCompletionTokens: Int?
+        /// V.13b prompt-caching B — Anthropic-decoded
+        /// `cache_creation_input_tokens` from the upstream usage block.
+        /// Always nil in Child B (no engine populates this yet); Child A
+        /// wires the value through when an opt-in request invokes Anthropic
+        /// prompt caching. **Audit-only** — `ChatCompletionResponse.Usage`
+        /// stays at `{prompt_tokens, completion_tokens, total_tokens}` and
+        /// NEVER surfaces cache token fields on the OpenAI response wire
+        /// (Lauret P2 wire-stability invariant).
+        public let realCacheCreationTokens: Int?
+        /// V.13b prompt-caching B — Anthropic-decoded
+        /// `cache_read_input_tokens` from the upstream usage block. Same
+        /// semantics as `realCacheCreationTokens` — audit-only, never on the
+        /// OpenAI response wire (Lauret P2).
+        public let realCacheReadTokens: Int?
+        public init(
+            content: String,
+            toolCalls: [OpenAIToolCall] = [],
+            promptTokens: Int,
+            completionTokens: Int,
+            realPromptTokens: Int? = nil,
+            realCompletionTokens: Int? = nil,
+            realCacheCreationTokens: Int? = nil,
+            realCacheReadTokens: Int? = nil
+        ) {
+            self.content = content
+            self.toolCalls = toolCalls
+            self.promptTokens = promptTokens
+            self.completionTokens = completionTokens
+            self.realPromptTokens = realPromptTokens
+            self.realCompletionTokens = realCompletionTokens
+            self.realCacheCreationTokens = realCacheCreationTokens
+            self.realCacheReadTokens = realCacheReadTokens
+        }
+
+        /// V.13b-4c follow-up (Karpathy P3) — single source of truth for the
+        /// "prefer the tokenizer-accurate count when present; fall back to
+        /// the heuristic" resolution. Both the local-arm `OpenAIChatHandler
+        /// .handle(...)` and the serve-arm `ClaudeAPIServeDispatch
+        /// .successOutcome(...)` route through this property so a future
+        /// engine that populates only one of the real-* fields has exactly
+        /// one resolution rule. Audit-row + `Usage` wire stay in lockstep.
+        public var resolvedTokenCounts: (prompt: Int, completion: Int) {
+            (realPromptTokens ?? promptTokens,
+             realCompletionTokens ?? completionTokens)
+        }
+    }
+
+    /// Produces the assistant completion for a routed request. Injected so
+    /// tests (and the placeholder serve path) supply a deterministic body
+    /// without a network round-trip. V.13d adds `tools` so the engine can
+    /// decide to call a declared tool.
+    public struct Engine: Sendable {
+        public let complete: @Sendable (_ model: String, _ messages: [ChatCompletionRequest.Message], _ tools: [ChatCompletionRequest.Tool]) -> Completion
+        public init(complete: @escaping @Sendable (_ model: String, _ messages: [ChatCompletionRequest.Message], _ tools: [ChatCompletionRequest.Tool]) -> Completion) {
+            self.complete = complete
+        }
+    }
+
+    // MARK: - Routing
+
+    public struct Routing: Sendable, Equatable {
+        public let presetUsed: ModelPreset
+        public let resolvedTier: ModelTier
+        /// The concrete model the tier maps to — the response's `model`.
+        public let actualModel: String
+        /// The client-requested model — telemetry only.
+        public let modelLogged: String
+
+        public init(
+            presetUsed: ModelPreset,
+            resolvedTier: ModelTier,
+            actualModel: String,
+            modelLogged: String
+        ) {
+            self.presetUsed = presetUsed
+            self.resolvedTier = resolvedTier
+            self.actualModel = actualModel
+            self.modelLogged = modelLogged
+        }
+    }
+
+    /// Telemetry surfaced per request — `modelLogged` (the client's ask)
+    /// is deliberately DISTINCT from `resolvedTier` (what actually ran).
+    public struct TelemetryEvent: Sendable, Equatable {
+        public let surface: String
+        public let modelLogged: String
+        public let resolvedTier: String
+        public let presetUsed: String
+    }
+
+    public struct Result: Sendable {
+        public let response: ChatCompletionResponse
+        public let routing: Routing
+        public let telemetry: TelemetryEvent
+        public let auditFields: OpenAIAuditChain.AuditFields
+        public let auditBodies: OpenAIAuditChain.AuditBodies
+    }
+
+    /// Map a stored preset string to a `ModelPreset`. Unrecognized values
+    /// (e.g. provider names) fall back to `.auto`.
+    public static func preset(forRecordPreset raw: String) -> ModelPreset {
+        ModelPreset(rawValue: raw.lowercased()) ?? .auto
+    }
+
+    /// Resolve the routing decision. The preset wins; the request `model`
+    /// is carried as `modelLogged` only.
+    public static func route(request: ChatCompletionRequest, recordPreset: String) -> Routing {
+        let preset = preset(forRecordPreset: recordPreset)
+        let prompt = request.messages.map(\.content).joined(separator: "\n")
+        let decision = ModelRouter.resolve(prompt: prompt, preset: preset)
+        return Routing(
+            presetUsed: preset,
+            resolvedTier: decision.tier,
+            actualModel: decision.tier.claudeModelValue,
+            modelLogged: request.model
+        )
+    }
+
+    // MARK: - Full pipeline
+
+    /// Build the OpenAI response + telemetry + audit fields for a decoded
+    /// request. Pure — `now` and `id` are injected for determinism.
+    public static func handle(
+        request: ChatCompletionRequest,
+        recordPreset: String,
+        keyLabel: String?,
+        engine: Engine,
+        now: Date,
+        id: String
+    ) -> Result {
+        let routing = route(request: request, recordPreset: recordPreset)
+        let completion = engine.complete(routing.actualModel, request.messages, request.tools ?? [])
+
+        // V.13b-4c follow-up (Lauret P3 — option B) — both the local-arm
+        // (here) and the serve-arm (`ClaudeAPIServeDispatch.successOutcome`)
+        // now route through the single `buildSuccessOutcome(...)` builder so
+        // future fields wired on one path land on the other automatically —
+        // structural divergence guard.
+        let built = buildSuccessOutcome(
+            completion: completion,
+            request: request,
+            routing: routing,
+            keyLabel: keyLabel,
+            now: now,
+            id: id
+        )
+
+        let telemetry = TelemetryEvent(
+            surface: "chat",
+            modelLogged: routing.modelLogged,
+            resolvedTier: routing.resolvedTier.rawValue,
+            presetUsed: routing.presetUsed.rawValue
+        )
+
+        return Result(
+            response: built.response,
+            routing: routing,
+            telemetry: telemetry,
+            auditFields: built.fields,
+            auditBodies: built.bodies
+        )
+    }
+
+    // MARK: - Shared success builder (Lauret P3 — option B)
+
+    /// V.13b-4c follow-up (Lauret P3 — option B) — shared success-shape
+    /// builder used by BOTH `handle(...)` (local-arm) and
+    /// `ClaudeAPIServeDispatch.successOutcome(...)` (serve-arm Claude API
+    /// path). Returns the OpenAI `ChatCompletionResponse` + the matching
+    /// `AuditFields` (status `"ok"`) + the `AuditBodies` summary. Routing,
+    /// `now`, and `id` are injected for determinism.
+    ///
+    /// Centralizing the shape here STRUCTURALLY eliminates the prior risk
+    /// of the two callers drifting (e.g. one wiring a new completion
+    /// field, the other forgetting). Token counts go through
+    /// `completion.resolvedTokenCounts` so the `usage` block and the audit
+    /// row's `prompt_token_count`/`completion_token_count` stay in lockstep.
+    ///
+    /// `internal` visibility — `ClaudeAPIServeDispatch` is in the same
+    /// `Core` module; the helper is not part of the public API surface
+    /// (Schneier — minimize the public footprint).
+    static func buildSuccessOutcome(
+        completion: Completion,
+        request: ChatCompletionRequest,
+        routing: Routing,
+        keyLabel: String?,
+        now: Date,
+        id: String
+    ) -> (response: ChatCompletionResponse,
+          fields: OpenAIAuditChain.AuditFields,
+          bodies: OpenAIAuditChain.AuditBodies) {
+        // V.13d — a tool-call completion sets `tool_calls` + `content: null`
+        // + `finish_reason: "tool_calls"`; a normal completion sets the
+        // string content + `finish_reason: "stop"`.
+        let usesTools = !completion.toolCalls.isEmpty
+        let choiceMessage: ChatCompletionResponse.Choice.Message = usesTools
+            ? .init(role: "assistant", content: nil, toolCalls: completion.toolCalls)
+            : .init(role: "assistant", content: completion.content)
+        let finishReason = usesTools ? "tool_calls" : "stop"
+
+        // V.13b-4c follow-up (Karpathy P3) — single source of truth for
+        // tokenizer-accurate vs heuristic count resolution. Both `usage` and
+        // the audit chain see the same numbers via the `Completion`
+        // computed property.
+        let (promptTokens, completionTokens) = completion.resolvedTokenCounts
+
+        let response = ChatCompletionResponse(
+            id: id,
+            created: Int(now.timeIntervalSince1970),
+            model: routing.actualModel,
+            choices: [
+                .init(index: 0, message: choiceMessage, finishReason: finishReason)
+            ],
+            usage: .init(
+                promptTokens: promptTokens,
+                completionTokens: completionTokens,
+                totalTokens: promptTokens + completionTokens
+            )
+        )
+
+        let fields = OpenAIAuditChain.AuditFields(
+            ts: now,
+            keyLabel: keyLabel,
+            surface: "chat",
+            modelLogged: routing.modelLogged,
+            presetUsed: routing.presetUsed.rawValue,
+            resolvedTier: routing.resolvedTier.rawValue,
+            promptTokenCount: promptTokens,
+            completionTokenCount: completionTokens,
+            status: "ok",
+            // V.13b prompt-caching B — propagate Anthropic-decoded cache
+            // token counts from the engine. The values ride to the persisted
+            // store via AuditFields (Lauret P2 — the sink positional
+            // signature stays unchanged); they are AUDIT-ONLY and never
+            // surface on the OpenAI response wire (Lauret P2 wire-stability
+            // invariant). The local-arm path's engine reports nil here; the
+            // serve-arm's `ClaudeAPIChatEngine.chat(...)` populates these
+            // when an opt-in request invokes Anthropic prompt caching.
+            cacheCreationInputTokens: completion.realCacheCreationTokens,
+            cacheReadInputTokens: completion.realCacheReadTokens
+        )
+
+        // When the model called a tool the response carries no text — the
+        // audit body names the called tool(s) instead of an empty string.
+        let responseBody = usesTools
+            ? "tool_calls=[" + completion.toolCalls.map(\.function.name).joined(separator: ",") + "]"
+            : completion.content
+        let bodies = OpenAIAuditChain.AuditBodies(
+            requestBody: requestSummary(request),
+            responseBody: responseBody
+        )
+
+        return (response, fields, bodies)
+    }
+
+    // MARK: - Decode / encode (JSON + HTTP framing)
+
+    /// Decode an OpenAI chat-completion request body. Returns nil for
+    /// malformed JSON or an unsupported shape (e.g. array-valued
+    /// `content`, which yields a `String` decode failure).
+    public static func decodeRequest(_ body: Data) -> ChatCompletionRequest? {
+        try? JSONDecoder().decode(ChatCompletionRequest.self, from: body)
+    }
+
+    /// Render a successful `chat.completion` as a framed `200` HTTP
+    /// response. Uses sorted keys so the body is byte-deterministic.
+    public static func encodeResponse(_ response: ChatCompletionResponse) -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let json = (try? encoder.encode(response)).flatMap { String(data: $0, encoding: .utf8) }
+            ?? "{\"error\":{\"message\":\"encode failure\",\"type\":\"server_error\"}}"
+        return OpenAIHTTPResponse.render(code: 200, message: "OK", body: json)
+    }
+
+    /// Render an OpenAI-shaped error as a framed HTTP response.
+    ///
+    /// `extraHeaders` (V.13b-2b) lets a caller attach response headers such
+    /// as `Retry-After` on a `429`. Defaulted to `[:]` so the shipped
+    /// call sites stay source-compatible; `OpenAIHTTPResponse.render`
+    /// emits them in deterministic sorted order.
+    public static func errorResponse(
+        code: Int,
+        httpMessage: String,
+        message: String,
+        type: String,
+        errorCode: String?,
+        extraHeaders: [String: String] = [:]
+    ) -> Data {
+        let escaped = message
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let body: String
+        if let errorCode {
+            body = "{\"error\":{\"message\":\"\(escaped)\",\"type\":\"\(type)\",\"code\":\"\(errorCode)\"}}"
+        } else {
+            body = "{\"error\":{\"message\":\"\(escaped)\",\"type\":\"\(type)\"}}"
+        }
+        return OpenAIHTTPResponse.render(code: code, message: httpMessage, body: body, extraHeaders: extraHeaders)
+    }
+
+    // MARK: - Helpers
+
+    /// Rough token estimate — ~4 chars/token, floor of 1 for non-empty.
+    /// Good enough for `usage` accounting on the placeholder path; a real
+    /// engine reports exact counts.
+    public static func estimateTokens(_ text: String) -> Int {
+        guard !text.isEmpty else { return 0 }
+        return max(1, (text.count + 3) / 4)
+    }
+
+    /// Generate a `chatcmpl-…` id. Random hex; not security-sensitive.
+    public static func generateID() -> String {
+        let hex = (0..<12).map { _ in String(format: "%02x", UInt8.random(in: .min ... .max)) }.joined()
+        return "chatcmpl-\(hex)"
+    }
+
+    /// Non-sensitive request summary stored in the audit `request_body`
+    /// column when `--audit-bodies` is on: model + message count + roles.
+    /// (The full prompt text is the response engine's input; the audit
+    /// body captures the request envelope, not a transcript dump.)
+    public static func requestSummary(_ request: ChatCompletionRequest) -> String {
+        let roles = request.messages.map(\.role).joined(separator: ",")
+        var summary = "model=\(request.model) messages=\(request.messages.count) roles=[\(roles)]"
+        // V.13d — append the declared-tool count ONLY when the request uses
+        // tools, so a non-tool request's summary (and therefore its audit
+        // hash) is byte-identical to the v13a-3 shape.
+        let toolCount = request.tools?.count ?? 0
+        if toolCount > 0 { summary += " tools=\(toolCount)" }
+        return summary
+    }
+
+    // MARK: - V.13d tool-use scope + validation
+
+    /// True when the request declares one or more tools (a tool-use
+    /// round-trip is requested). A nil or empty `tools` array is not a
+    /// tool-use request.
+    public static func requestUsesTools(_ request: ChatCompletionRequest) -> Bool {
+        !(request.tools ?? []).isEmpty
+    }
+
+    /// The `tools` surface scope gate. A key may use tool-use only when its
+    /// scope includes `"tools"`. Path-based `chat`/`embeddings` scope is
+    /// enforced by `OpenAIAuthGate`; the `tools` scope is body-derived (the
+    /// request carries `tools:`), so it is enforced here — see
+    /// `OpenAIAuthGate.surface(forPath:)`.
+    public static func scopeAllowsTools(_ scope: [String]) -> Bool {
+        scope.contains("tools")
+    }
+
+    /// Validate the declared tools' shape. Returns a human-readable reason
+    /// when a tool is malformed (a non-`function` type, or an empty
+    /// function name), or nil when every declared tool is well-formed.
+    /// (A structurally malformed `tools` — missing `function`/`name`, a
+    /// non-array — fails JSON decode upstream and never reaches here.)
+    public static func toolsValidationMessage(_ request: ChatCompletionRequest) -> String? {
+        for tool in request.tools ?? [] {
+            if tool.type != "function" {
+                return "unsupported tool type '\(tool.type)' (only 'function' is supported)"
+            }
+            if tool.function.name.isEmpty {
+                return "tool function name must be non-empty"
+            }
+        }
+        return nil
+    }
+
+    /// Single pre-flight for a tool-use request: a framed `400` when the
+    /// declared tools are malformed, a framed `403` (`insufficient_scope`)
+    /// when the key's scope excludes `tools`, or nil when the request is
+    /// acceptable (no tools, or tools + valid schema + in-scope key). Both
+    /// the non-streaming chat handler and the streaming handler funnel
+    /// through this so the error shape is rendered in exactly one place.
+    public static func toolsPreflightError(request: ChatCompletionRequest, scope: [String]) -> Data? {
+        guard requestUsesTools(request) else { return nil }
+        if let reason = toolsValidationMessage(request) {
+            return errorResponse(
+                code: 400, httpMessage: "Bad Request",
+                message: reason,
+                type: "invalid_request_error", errorCode: "invalid_request"
+            )
+        }
+        if !scopeAllowsTools(scope) {
+            return errorResponse(
+                code: 403, httpMessage: "Forbidden",
+                message: "key scope does not include surface 'tools'",
+                type: "invalid_request_error", errorCode: "insufficient_scope"
+            )
+        }
+        return nil
+    }
+}

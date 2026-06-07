@@ -33,77 +33,104 @@ internal enum CBackend: TreeSitterLanguageBackend {
         walk(root, file: file, source: source, lines: lines, container: container, entries: &entries)
     }
 
+    // Iterative work-stack of (node, container) tuples. Replaces a
+    // recursive descent so AST depth no longer consumes Swift call
+    // frames. Chain child of `indexer-backends-iterative-walk-refactor-
+    // 2026-05-11` (GoBackend pilot precedent, BashBackend predecessor,
+    // both 2026-05-18).
     private static func walk(
-        _ node: Node, file: String, source: NSString, lines: [String],
+        _ root: Node, file: String, source: NSString, lines: [String],
         container: String?, entries: inout [IndexEntry]
     ) {
-        for i in 0..<Int(node.childCount) {
-            guard let child = node.child(at: i) else { continue }
-            let type = child.nodeType ?? ""
+        var stack: [(Node, String?)] = [(root, container)]
+        while let (node, currentContainer) = stack.popLast() {
+            let type = node.nodeType ?? ""
 
             switch type {
             case "function_definition":
-                if let name = TreeSitterBackend.extractCDeclaratorName(child, source: source) {
+                if let name = TreeSitterBackend.extractCDeclaratorName(node, source: source) {
                     entries.append(IndexEntry(
                         name: name, kind: .function, file: file,
-                        startLine: TreeSitterBackend.startLine(of: child),
-                        endLine: TreeSitterBackend.endLine(of: child),
-                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: child)),
+                        startLine: TreeSitterBackend.startLine(of: node),
+                        endLine: TreeSitterBackend.endLine(of: node),
+                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: node)),
                         container: nil, engine: "tree-sitter"
                     ))
                 }
+                // Bodies aren't walked — matches the pre-refactor
+                // recursive form (the switch arm returned without
+                // recursing into children).
 
             case "struct_specifier", "union_specifier":
-                if let name = TreeSitterBackend.nodeName(child, source: source) {
+                if let name = TreeSitterBackend.nodeName(node, source: source) {
                     entries.append(IndexEntry(
                         name: name, kind: .struct, file: file,
-                        startLine: TreeSitterBackend.startLine(of: child),
-                        endLine: TreeSitterBackend.endLine(of: child),
-                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: child)),
+                        startLine: TreeSitterBackend.startLine(of: node),
+                        endLine: TreeSitterBackend.endLine(of: node),
+                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: node)),
                         container: nil, engine: "tree-sitter"
                     ))
                 }
 
             case "enum_specifier":
-                if let name = TreeSitterBackend.nodeName(child, source: source) {
+                if let name = TreeSitterBackend.nodeName(node, source: source) {
                     entries.append(IndexEntry(
                         name: name, kind: .enum, file: file,
-                        startLine: TreeSitterBackend.startLine(of: child),
-                        endLine: TreeSitterBackend.endLine(of: child),
-                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: child)),
+                        startLine: TreeSitterBackend.startLine(of: node),
+                        endLine: TreeSitterBackend.endLine(of: node),
+                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: node)),
                         container: nil, engine: "tree-sitter"
                     ))
                 }
 
             case "type_definition":
-                if let name = TreeSitterBackend.extractCDeclaratorName(child, source: source) {
+                if let name = TreeSitterBackend.extractCDeclaratorName(node, source: source) {
                     entries.append(IndexEntry(
                         name: name, kind: .type, file: file,
-                        startLine: TreeSitterBackend.startLine(of: child),
-                        endLine: TreeSitterBackend.endLine(of: child),
-                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: child)),
+                        startLine: TreeSitterBackend.startLine(of: node),
+                        endLine: TreeSitterBackend.endLine(of: node),
+                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: node)),
                         container: nil, engine: "tree-sitter"
                     ))
                 }
 
             case "declaration":
-                if TreeSitterBackend.cHasFunctionDeclarator(child),
-                   let name = TreeSitterBackend.extractCDeclaratorName(child, source: source) {
-                    let kind: SymbolKind = container != nil ? .method : .function
+                if TreeSitterBackend.cHasFunctionDeclarator(node),
+                   let name = TreeSitterBackend.extractCDeclaratorName(node, source: source) {
+                    let kind: SymbolKind = currentContainer != nil ? .method : .function
                     entries.append(IndexEntry(
                         name: name, kind: kind, file: file,
-                        startLine: TreeSitterBackend.startLine(of: child),
-                        endLine: TreeSitterBackend.endLine(of: child),
-                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: child)),
-                        container: container, engine: "tree-sitter"
+                        startLine: TreeSitterBackend.startLine(of: node),
+                        endLine: TreeSitterBackend.endLine(of: node),
+                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: node)),
+                        container: currentContainer, engine: "tree-sitter"
                     ))
-                } else if child.childCount > 0 {
-                    walk(child, file: file, source: source, lines: lines, container: container, entries: &entries)
+                    // Don't push children — matches pre-refactor: when
+                    // the declaration carries a function declarator,
+                    // its body/children are not descended.
+                } else {
+                    // No function declarator (or name extraction
+                    // failed) — push children for later iteration.
+                    // Matches pre-refactor `else if child.childCount > 0`.
+                    let count = Int(node.childCount)
+                    guard count > 0 else { continue }
+                    for i in stride(from: count - 1, through: 0, by: -1) {
+                        if let child = node.child(at: i) {
+                            stack.append((child, currentContainer))
+                        }
+                    }
                 }
 
             default:
-                if child.childCount > 0 {
-                    walk(child, file: file, source: source, lines: lines, container: container, entries: &entries)
+                // Push children in reverse so LIFO pop preserves
+                // left-to-right pre-order traversal — symbol-emission
+                // order matches the pre-refactor recursive form exactly.
+                let count = Int(node.childCount)
+                guard count > 0 else { continue }
+                for i in stride(from: count - 1, through: 0, by: -1) {
+                    if let child = node.child(at: i) {
+                        stack.append((child, currentContainer))
+                    }
                 }
             }
         }

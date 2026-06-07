@@ -38,26 +38,34 @@
       </ul>
     </div>
     <div class="wiki-nav-group">
-      <h4>Pane types (18)</h4>
+      <h4>Pane types (20)</h4>
       <ul>
         <li><a href="../../../docs/reference/panes/terminal.html">Terminal</a></li>
-        <li><a href="../../../docs/reference/panes/dashboard.html" class="active">Dashboard</a></li>
-        <li><a href="../../../docs/reference/panes/code-editor.html">Code Editor</a></li>
-        <li><a href="../../../docs/reference/panes/browser.html">Browser</a></li>
-        <li><a href="../../../docs/reference/panes/markdown-preview.html">Markdown Preview</a></li>
-        <li><a href="../../../docs/reference/panes/analytics.html">Analytics</a></li>
-        <li><a href="../../../docs/reference/panes/model-manager.html">Model Manager</a></li>
-        <li><a href="../../../docs/reference/panes/savings-test.html">Savings Test</a></li>
         <li><a href="../../../docs/reference/panes/agent-timeline.html">Agent Timeline</a></li>
-        <li><a href="../../../docs/reference/panes/knowledge-base.html">Knowledge Base</a></li>
-        <li><a href="../../../docs/reference/panes/diff-viewer.html">Diff Viewer</a></li>
-        <li><a href="../../../docs/reference/panes/log-viewer.html">Log Viewer</a></li>
-        <li><a href="../../../docs/reference/panes/scratchpad.html">Scratchpad</a></li>
-        <li><a href="../../../docs/reference/panes/schedules.html">Schedules</a></li>
         <li><a href="../../../docs/reference/panes/skill-library.html">Skill Library</a></li>
+        <li><a href="../../../docs/reference/panes/knowledge-base.html">Knowledge Base</a></li>
+        <li><a href="../../../docs/reference/panes/model-manager.html">Models</a></li>
         <li><a href="../../../docs/reference/panes/sprint-review.html">Sprint Review</a></li>
-        <li><a href="../../../docs/reference/panes/settings.html">Settings</a></li>
+        <li><a href="../../../docs/reference/panes/artifact-gallery.html">Artifact Gallery</a></li>
         <li><a href="../../../docs/reference/panes/ollama-launcher.html">Ollama</a></li>
+        <li><a href="../../../docs/reference/panes/dashboard.html" class="active">Dashboard</a></li>
+        <li><a href="../../../docs/reference/panes/analytics.html">Analytics</a></li>
+        <li><a href="../../../docs/reference/panes/savings-test.html">Savings Test</a></li>
+        <li><a href="../../../docs/reference/panes/schedules.html">Schedules</a></li>
+        <li><a href="../../../docs/reference/panes/log-viewer.html">Log Viewer</a></li>
+        <li><a href="../../../docs/reference/panes/served-requests.html">Served Requests</a></li>
+        <li><a href="../../../docs/reference/panes/code-editor.html">Code Editor</a></li>
+        <li><a href="../../../docs/reference/panes/markdown-preview.html">Markdown Preview</a></li>
+        <li><a href="../../../docs/reference/panes/html-preview.html">HTML Preview</a></li>
+        <li><a href="../../../docs/reference/panes/browser.html">Browser</a></li>
+        <li><a href="../../../docs/reference/panes/diff-viewer.html">Diff Viewer</a></li>
+        <li><a href="../../../docs/reference/panes/scratchpad.html">Scratchpad</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>Panels &amp; overlays</h4>
+      <ul>
+        <li><a href="../../../docs/reference/panes/settings.html">Settings</a></li>
       </ul>
     </div>
   </aside>
@@ -80,6 +88,11 @@
     <h2>Live tiles</h2>
     <p>The Dashboard's <em>Live Tiles</em> strip shows three coordinator-backed tiles — Budget Burn (30 s cache), Validation Queue (5 s), and Repo Dirty (10 s) — each driven by a <code>PaneRefreshScheduler</code> under one bounded worker pool (cap 4). State is persisted per tile in <code>pane_refresh_state</code> so values survive an app restart.</p>
     <p>When a fetch returns a partial result, the tile renders a yellow warning strip with a triangle icon and the notice text (e.g. <em>"no spend yet"</em>); a hard failure renders a red strip with an octagon icon. Error wins over notice — the tile never shows both at once. Each tile sets a single <code>accessibilityLabel</code> so VoiceOver reads "<em>tile name, partial: notice</em>" or "<em>tile name, error: detail</em>" instead of an unlabeled stack.</p>
+
+    <h2>Models &amp; Inference tile (V.19a-4)</h2>
+    <p>The <em>Models &amp; Inference</em> tile sits below the Live Tiles strip and surfaces local-MLX prefix-cache visibility on every 2 s tick. Four metric cards: cache hit rate (<code>hit_count / (hit + cold_miss)</code> from <code>cache_lifecycle</code> spans), cached tokens (<code>SUM(token_events.cached_prompt_tokens)</code> over matched sessions), active tier (most recent matched <code>token_events.model_tier</code>), and memory pressure.</p>
+    <p>Values are derived from a JOIN of <code>runtime_telemetry_span</code> (where <code>name LIKE 'cache_lifecycle.%'</code>) × <code>token_events</code> (where <code>cache_origin IS NOT NULL OR cached_prompt_tokens &gt; 0</code>) on <code>session_id</code>. The JOIN runs in pure Swift via <code>MLXInferenceTileCorrelator</code> — narrow inputs, scalar-only snapshot output. The tile is scoped to the local MLX inference path; external CLI provider observability (Codex / Claude Code / Gemini CLI / OpenCode) lives in V.17a's separate <code>provider_runtime_event</code> spine.</p>
+    <p>On JOIN mismatch the tile renders a yellow stale badge next to the section header, never silent dropout: <em>"stale: cache_lifecycle span without token_events row"</em> (orphan span), <em>"stale: token_events row without cache_lifecycle span"</em> (orphan accounting row), or <em>"stale: cache and accounting paths disconnected"</em> (both directions). The badge surfaces a wiring gap so the operator can investigate before trusting the numbers.</p>
 
     <h2>Keyboard</h2>
     <p>Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas).</p>
@@ -104,7 +117,7 @@
   </div>
   <div class="foot-meta">
     <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
-    <span><a href="../../../docs/changelog.html">v0.2.0 changelog</a></span>
+    <span><a href="../../../docs/changelog.html">v0.3.0 changelog</a></span>
   </div>
 </footer>
 <script src="../../../assets/app.js" defer></script>

@@ -46,6 +46,9 @@ struct ToolRouterRegistryTests {
             "explore", "outline", "session", "validate", "parse",
             "embed", "vision", "deps", "pane", "watch", "version",
             "repo", "bundle", "knowledge",
+            "validate_browser", // U.2a-2b — browser validation dispatch surface.
+            "senkani_telemetry_list", "senkani_telemetry_query", "senkani_telemetry_get_trace",
+            // V.18a-6 — read-only runtime_telemetry query surface.
         ]
         let actual = Set(ToolRegistry.byName.keys)
         #expect(actual == expected,

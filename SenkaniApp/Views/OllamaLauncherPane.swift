@@ -225,7 +225,8 @@ struct OllamaLauncherPane: View {
                 cacheOn: pane.features.cache,
                 secretsOn: pane.features.secrets,
                 indexerOn: pane.features.indexer,
-                terseOn: pane.features.terse
+                terseOn: pane.features.terse,
+                paneMode: HookRouter.paneModeResolver(pane.id.uuidString)
             ),
             resolvedModelTag: resolvedTag
         )

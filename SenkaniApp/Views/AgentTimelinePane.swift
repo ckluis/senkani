@@ -3,6 +3,15 @@ import Core
 
 /// Live feed of optimization events. Polls `token_events` every 500ms and
 /// renders each row with color-coded savings, timestamp, tool, and cost.
+///
+/// V.18a-7 — adds a runtime-error badge surface. Rows whose
+/// `session_id` / `tool_call_id` / `validation_run_id` correlate to
+/// spans with `status_code = ERROR` or `duration > p99` of the
+/// visible-window span set show a small badge dot. First click
+/// expands a compact summary inline (slow-span list + error count +
+/// total duration). Second click opens the side pane that loads the
+/// full span tree on demand. The compact summary stays summary-only;
+/// the full tree is NOT embedded in prompt context.
 struct AgentTimelinePane: View {
     @Bindable var pane: PaneModel
     let workspace: WorkspaceModel?
@@ -11,8 +20,16 @@ struct AgentTimelinePane: View {
     @State private var expandedEventId: Int64?
     @State private var paused = false
     @State private var refreshTask: Task<Void, Never>?
+    /// V.18a-7 — per-event badge / compact summary cache. Rebuilt
+    /// on each correlation pass (~2s cadence, see correlationTask).
+    @State private var correlations: [Int64: TimelineTelemetryCorrelator.RowCorrelation] = [:]
+    @State private var correlationTask: Task<Void, Never>?
+    /// V.18a-7 — second-click target. When non-nil the side pane
+    /// renders and calls `getTrace` on appear.
+    @State private var openTraceId: String?
 
     private let pollInterval: TimeInterval = 0.5
+    private let correlationInterval: TimeInterval = 2.0
     private let maxEvents: Int = 100
 
     private var activeProjectPath: String? {
@@ -28,6 +45,28 @@ struct AgentTimelinePane: View {
     }
 
     var body: some View {
+        HStack(spacing: 0) {
+            timelineColumn
+            if let traceId = openTraceId {
+                Divider()
+                TimelineSpanSidePane(
+                    traceId: traceId,
+                    onClose: { openTraceId = nil }
+                )
+                .frame(minWidth: 280, idealWidth: 320, maxWidth: 420)
+            }
+        }
+        .onAppear {
+            startPolling()
+            startCorrelation()
+        }
+        .onDisappear {
+            stopPolling()
+            stopCorrelation()
+        }
+    }
+
+    private var timelineColumn: some View {
         VStack(spacing: 0) {
             // Control bar
             HStack(spacing: 6) {
@@ -83,11 +122,17 @@ struct AgentTimelinePane: View {
                             TimelineRow(
                                 event: event,
                                 isExpanded: expandedEventId == event.id,
+                                correlation: correlations[event.id],
                                 onTap: {
-                                    if expandedEventId == event.id {
-                                        expandedEventId = nil
-                                    } else {
+                                    let already = (expandedEventId == event.id)
+                                    if !already {
                                         expandedEventId = event.id
+                                    } else if let trace = correlations[event.id]?.summary.primaryTraceId {
+                                        // Second click on an expanded badged row
+                                        // promotes to the side pane.
+                                        openTraceId = trace
+                                    } else {
+                                        expandedEventId = nil
                                     }
                                 }
                             )
@@ -127,8 +172,6 @@ struct AgentTimelinePane: View {
             .padding(.vertical, 4)
             .background(SenkaniTheme.paneBody)
         }
-        .onAppear { startPolling() }
-        .onDisappear { stopPolling() }
     }
 
     // MARK: - Polling
@@ -163,6 +206,61 @@ struct AgentTimelinePane: View {
         }
     }
 
+    // MARK: - Telemetry correlation (V.18a-7)
+
+    private func startCorrelation() {
+        stopCorrelation()
+        correlationTask = Task { @MainActor in
+            while !Task.isCancelled {
+                if !paused {
+                    refreshCorrelations()
+                }
+                try? await Task.sleep(for: .seconds(correlationInterval))
+            }
+        }
+    }
+
+    private func stopCorrelation() {
+        correlationTask?.cancel()
+        correlationTask = nil
+    }
+
+    private func refreshCorrelations() {
+        guard !events.isEmpty else {
+            if !correlations.isEmpty { correlations = [:] }
+            return
+        }
+        let store = SessionDatabase.shared.runtimeTelemetryStore
+        guard let store else { return }
+
+        // Build a unique sessionId set across the visible events,
+        // capped at 10 to bound DB cost per refresh.
+        let sessionIds: [String] = Array(
+            Set(events.compactMap { $0.sessionId })
+        ).prefix(10).map { $0 }
+
+        var allSpans: [RuntimeTelemetryStore.SpanResult] = []
+        for sid in sessionIds {
+            var filter = RuntimeTelemetryStore.QueryFilter()
+            filter.sessionId = sid
+            let spans = store.querySpans(filter: filter, limit: 200, cursorAfterId: nil)
+            allSpans.append(contentsOf: spans)
+        }
+
+        let keys = events.map { ev in
+            TimelineTelemetryCorrelator.EventKeys(
+                eventId: ev.id,
+                sessionId: ev.sessionId,
+                toolCallId: nil,
+                validationRunId: nil
+            )
+        }
+        let result = TimelineTelemetryCorrelator.correlate(events: keys, spans: allSpans)
+        if result != correlations {
+            correlations = result
+        }
+    }
+
     // MARK: - Formatting helpers
 
     private func formatTokens(_ tokens: Int) -> String {
@@ -180,6 +278,7 @@ struct AgentTimelinePane: View {
 private struct TimelineRow: View {
     let event: SessionDatabase.TimelineEvent
     let isExpanded: Bool
+    let correlation: TimelineTelemetryCorrelator.RowCorrelation?
     let onTap: () -> Void
 
     private var tierColor: Color {
@@ -228,6 +327,26 @@ private struct TimelineRow: View {
         return collapsed
     }
 
+    private var badgeColor: Color? {
+        switch correlation?.badge ?? .none {
+        case .error: return .red
+        case .slow:  return .orange
+        case .none:  return nil
+        }
+    }
+
+    private var badgeTooltip: String {
+        guard let c = correlation else { return "" }
+        switch c.badge {
+        case .error:
+            return "\(c.summary.errorCount) error span(s) · click for details"
+        case .slow:
+            return "\(c.summary.slowSpans.count) slow span(s) · click for details"
+        case .none:
+            return ""
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Single-line row
@@ -253,6 +372,15 @@ private struct TimelineRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
+
+                // V.18a-7 — runtime-error badge dot.
+                if let color = badgeColor {
+                    Circle()
+                        .fill(color)
+                        .frame(width: 6, height: 6)
+                        .help(badgeTooltip)
+                        .accessibilityLabel(Text(badgeTooltip))
+                }
 
                 // V.5d — token_events doesn't carry authorship; the
                 // badge surfaces the "Untagged" affordance with a
@@ -292,6 +420,45 @@ private struct TimelineRow: View {
                         Text("\(event.savedTokens) tok")
                             .foregroundStyle(SenkaniTheme.savingsGreen)
                     }
+                    // V.18a-7 — compact runtime-error summary
+                    // (inline). The full span tree is not rendered
+                    // here; click again to open the side pane.
+                    if let c = correlation, c.badge != .none {
+                        Divider().padding(.vertical, 2)
+                        HStack(spacing: 4) {
+                            Text("errors:")
+                                .foregroundStyle(SenkaniTheme.textTertiary)
+                                .frame(width: 40, alignment: .trailing)
+                            Text("\(c.summary.errorCount)")
+                                .foregroundStyle(c.summary.errorCount > 0 ? .red : SenkaniTheme.textSecondary)
+                        }
+                        HStack(spacing: 4) {
+                            Text("dur:")
+                                .foregroundStyle(SenkaniTheme.textTertiary)
+                                .frame(width: 40, alignment: .trailing)
+                            Text("\(c.summary.totalDurationMs) ms")
+                                .foregroundStyle(SenkaniTheme.textSecondary)
+                        }
+                        if !c.summary.slowSpans.isEmpty {
+                            HStack(alignment: .top, spacing: 4) {
+                                Text("slow:")
+                                    .foregroundStyle(SenkaniTheme.textTertiary)
+                                    .frame(width: 40, alignment: .trailing)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    ForEach(Array(c.summary.slowSpans.enumerated()), id: \.offset) { _, sp in
+                                        Text("\(sp.name) — \(sp.durationMs) ms")
+                                            .foregroundStyle(.orange)
+                                    }
+                                }
+                            }
+                        }
+                        if c.summary.primaryTraceId != nil {
+                            Text("click again → open trace side pane")
+                                .font(.system(size: 8, design: .monospaced))
+                                .foregroundStyle(SenkaniTheme.textTertiary.opacity(0.8))
+                                .padding(.top, 2)
+                        }
+                    }
                 }
                 .font(.system(size: 9, design: .monospaced))
                 .padding(.horizontal, 8)
@@ -321,5 +488,111 @@ private struct TimelineRow: View {
         if value >= 1_000_000 { return String(format: "%.1fM", Double(value) / 1_000_000) }
         if value >= 1_000 { return String(format: "%.1fK", Double(value) / 1_000) }
         return "\(value)"
+    }
+}
+
+/// V.18a-7 — side pane that fetches and renders the full span tree
+/// for one trace_id. Loaded on demand (second click on a badged
+/// row) via `TelemetryQueryDispatcher.getTrace`; the inline compact
+/// summary stays summary-only.
+private struct TimelineSpanSidePane: View {
+    let traceId: String
+    let onClose: () -> Void
+
+    @State private var spans: [TelemetryQueryDispatcher.QueryResponse.SpanEntry] = []
+    @State private var truncated = false
+    @State private var loaded = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 4) {
+                Text("trace ")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(SenkaniTheme.textTertiary)
+                Text(String(traceId.prefix(12)))
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(SenkaniTheme.textSecondary)
+                    .textSelection(.enabled)
+                Spacer()
+                if truncated {
+                    Text("TRUNCATED")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.orange)
+                }
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9))
+                }
+                .buttonStyle(.borderless)
+                .help("Close trace side pane")
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(SenkaniTheme.paneBody)
+
+            Divider()
+
+            if !loaded {
+                VStack {
+                    Spacer()
+                    ProgressView()
+                        .controlSize(.small)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if spans.isEmpty {
+                VStack(spacing: 6) {
+                    Spacer()
+                    Image(systemName: "tray")
+                        .font(.system(size: 24))
+                        .foregroundStyle(SenkaniTheme.textTertiary.opacity(0.5))
+                    Text("No spans for this trace")
+                        .font(.system(size: 10))
+                        .foregroundStyle(SenkaniTheme.textTertiary)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 1) {
+                        ForEach(spans, id: \.id) { sp in
+                            HStack(alignment: .top, spacing: 4) {
+                                Text(sp.status_code == 2 ? "ERR" : "OK ")
+                                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(sp.status_code == 2 ? .red : SenkaniTheme.textTertiary)
+                                Text(sp.name)
+                                    .font(.system(size: 9, design: .monospaced))
+                                    .foregroundStyle(SenkaniTheme.textSecondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                Spacer()
+                                Text("\(Int((sp.end_unix_ns - sp.start_unix_ns) / 1_000_000)) ms")
+                                    .font(.system(size: 9, design: .monospaced))
+                                    .foregroundStyle(SenkaniTheme.textTertiary)
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                        }
+                    }
+                }
+                .scrollContentBackground(.hidden)
+                .background(SenkaniTheme.paneBody)
+            }
+        }
+        .background(SenkaniTheme.paneBody)
+        .onAppear { load() }
+    }
+
+    private func load() {
+        guard !loaded else { return }
+        let store = SessionDatabase.shared.runtimeTelemetryStore
+        guard let store else {
+            loaded = true
+            return
+        }
+        let resp = TelemetryQueryDispatcher.getTrace(store: store, traceId: traceId)
+        spans = resp.spans.sorted { $0.start_unix_ns < $1.start_unix_ns }
+        truncated = resp.truncated
+        loaded = true
     }
 }

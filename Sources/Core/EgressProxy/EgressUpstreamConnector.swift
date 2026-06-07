@@ -6,6 +6,45 @@ import Darwin
 import Glibc
 #endif
 
+/// Injection seam for the upstream-connect step of the egress
+/// daemon's allow arm. Adopters return a connected fd (caller owns,
+/// must `close()`) or nil on connect failure.
+///
+/// Production: `DefaultEgressUpstreamConnector` — pure POSIX
+/// `getaddrinfo` + `connect(2)` (delegates to
+/// `EgressUpstreamConnector.connect`).
+///
+/// Tests: a loopback stub that ignores `host` and dials a
+/// pre-bound fixture port — lets the live ALLOW-arm test exercise
+/// `EgressListener` → `EgressConnectionHandler` without dialing the
+/// real upstream from CI. Introduced V.13b-4d-ii.
+public protocol EgressUpstreamConnecting: Sendable {
+    func connect(host: String, port: Int, timeoutSeconds: Int) -> Int32?
+}
+
+/// Source-compat default: pre-V.13b-4c-followup-4dii callers used the
+/// 2-arg `connect(host:port:)` shape. The protocol extension routes
+/// them through the new 3-arg method with `timeoutSeconds: 5` (the same
+/// default the static `EgressUpstreamConnector.connect` has carried
+/// since V.13b-4d-ii). This means existing call sites — including
+/// `EgressConnectionHandler.handleAllowArm` / `handleAllowArmGet` —
+/// compile unchanged while new callers can pin an explicit timeout.
+public extension EgressUpstreamConnecting {
+    func connect(host: String, port: Int) -> Int32? {
+        connect(host: host, port: port, timeoutSeconds: 5)
+    }
+}
+
+/// Default production adopter: forwards directly to the static
+/// `EgressUpstreamConnector.connect(host:port:timeoutSeconds:)` path so
+/// behavior is byte-equivalent to the pre-seam call. Parity test pins this.
+public struct DefaultEgressUpstreamConnector: EgressUpstreamConnecting {
+    public init() {}
+    public func connect(host: String, port: Int, timeoutSeconds: Int) -> Int32? {
+        EgressUpstreamConnector.connect(host: host, port: port, timeoutSeconds: timeoutSeconds)
+    }
+}
+
 /// Resolve `host:port` and open a TCP connection to the first usable
 /// address. Pure POSIX `getaddrinfo` + `connect` — no Foundation
 /// `URLSession` to keep the code path testable and free of background

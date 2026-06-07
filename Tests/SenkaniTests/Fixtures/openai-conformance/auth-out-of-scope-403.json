@@ -1,0 +1,18 @@
+{
+  "name": "auth-out-of-scope-403",
+  "kind": "auth_error",
+  "description": "A valid key whose scope does not include the requested surface -> 403 insufficient_scope. Here a chat-only key requests the embeddings surface.",
+  "records": [
+    { "key": "sk-senkani-chatonly", "scope": ["chat"], "rate_limit": 60 }
+  ],
+  "presented_key": "sk-senkani-chatonly",
+  "requested_surface": "embeddings",
+  "repeat": 1,
+  "expect": {
+    "http_status": "403 Forbidden",
+    "contains": [
+      "\"code\":\"insufficient_scope\"",
+      "embeddings"
+    ]
+  }
+}

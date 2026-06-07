@@ -24,7 +24,7 @@ public struct PaneGalleryEntry: Sendable, Identifiable, Equatable {
 /// Categorized pane gallery for the Add-Pane sheet.
 ///
 /// Categories (Morville + Norman) are mutually-exclusive and collectively-
-/// exhaustive across the 17 pane types. Order is stable for display.
+/// exhaustive across the 20 pane types. Order is stable for display.
 public enum PaneGalleryBuilder {
 
     public static let categoryOrder: [String] = [
@@ -34,7 +34,7 @@ public enum PaneGalleryBuilder {
         "Docs & Code",
     ]
 
-    /// All 17 pane types with category assignments. Adding a new PaneType
+    /// All 20 pane types with category assignments. Adding a new PaneType
     /// requires adding an entry here AND registering it in the app target's
     /// string→PaneType map (see AddPaneSheet + ContentView).
     public static func allEntries() -> [PaneGalleryEntry] {
@@ -66,6 +66,10 @@ public enum PaneGalleryBuilder {
                 description: "Review staged compound-learning proposals",
                 icon: "sparkles.rectangle.stack", category: "AI & Models",
                 defaultTitle: "Sprint Review"),
+            PaneGalleryEntry(id: "artifactGallery", name: "Artifact Gallery",
+                description: "Browse diaries, sprint snapshots, and on-disk artifacts",
+                icon: "rectangle.stack.badge.person.crop", category: "AI & Models",
+                defaultTitle: "Artifacts"),
             PaneGalleryEntry(id: "ollamaLauncher", name: "Ollama",
                 description: "Local LLM chat via Ollama",
                 icon: "cpu.fill", category: "AI & Models",
@@ -92,6 +96,10 @@ public enum PaneGalleryBuilder {
                 description: "Tail and filter log files",
                 icon: "doc.text.magnifyingglass", category: "Data & Insights",
                 defaultTitle: "Log"),
+            PaneGalleryEntry(id: "openAIServedRequests", name: "Served Requests",
+                description: "Live feed of OpenAI-compatible served requests",
+                icon: "network", category: "Data & Insights",
+                defaultTitle: "Served Requests"),
 
             // Docs & Code — where you READ and edit
             PaneGalleryEntry(id: "codeEditor", name: "Code Editor",
@@ -119,6 +127,65 @@ public enum PaneGalleryBuilder {
                 icon: "note.text", category: "Docs & Code",
                 defaultTitle: "Notes"),
         ]
+    }
+
+    /// Canonical launch map: gallery entry `id` → `PaneType` raw value.
+    ///
+    /// Single source of truth for the string→PaneType binding the app target
+    /// resolves via `PaneType(rawValue:)`. It lives in Core (not the
+    /// non-importable `SenkaniApp` executable target) so the
+    /// gallery-id ⇄ launch-path parity is unit-testable — the defect class
+    /// this guards is "a gallery id with no launch path" (a dead ⌘K row),
+    /// which `PaneGalleryTests.launchMapMatchesGallery` now fails CI on.
+    ///
+    /// The app target's command palette (`ContentView.addPaneByTypeId`) and
+    /// Add-Pane sheet (`AddPaneSheet.idToType`) DERIVE their
+    /// `[String: PaneType]` launchers from this map rather than hand-mirroring
+    /// it, so the two app surfaces can no longer drift from each other or from
+    /// the gallery.
+    ///
+    /// Almost every id maps to the identically-named `PaneType` case; the sole
+    /// exception is `schedules` → `scheduleManager`. Adding a pane type: add an
+    /// entry in `allEntries()` AND a row here — the parity test enforces both.
+    public static let launchMap: [String: String] = [
+        "terminal": "terminal",
+        "agentTimeline": "agentTimeline",
+        "skillLibrary": "skillLibrary",
+        "knowledgeBase": "knowledgeBase",
+        "modelManager": "modelManager",
+        "sprintReview": "sprintReview",
+        "artifactGallery": "artifactGallery",
+        "ollamaLauncher": "ollamaLauncher",
+        "dashboard": "dashboard",
+        "analytics": "analytics",
+        "savingsTest": "savingsTest",
+        "schedules": "scheduleManager",
+        "logViewer": "logViewer",
+        "openAIServedRequests": "openAIServedRequests",
+        "codeEditor": "codeEditor",
+        "markdownPreview": "markdownPreview",
+        "htmlPreview": "htmlPreview",
+        "browser": "browser",
+        "diffViewer": "diffViewer",
+        "scratchpad": "scratchpad",
+    ]
+
+    /// Display title for a launch id (a `launchMap` key / gallery `id`).
+    ///
+    /// Both launch surfaces resolve the new pane's title through the gallery's
+    /// `defaultTitle` so the SAME pane gets the SAME title regardless of where
+    /// it was launched: the Add-Pane sheet (`AddPaneSheet`, which holds the
+    /// entry directly) and the ⌘K command palette
+    /// (`ContentView.addPaneByTypeId`, which resolves through this helper).
+    /// The bug this closes: the palette used `id.capitalized`, which mangles
+    /// camelCase ids (`artifactGallery` → "Artifactgallery") while the sheet
+    /// showed the clean `defaultTitle` ("Artifacts") — one pane, two names.
+    ///
+    /// Returns nil if no entry matches; `launchMapMatchesGallery` guarantees
+    /// every `launchMap` key has a matching gallery entry, so callers using a
+    /// `launchMap` key always get a non-nil title.
+    public static func defaultTitle(forLaunchID id: String) -> String? {
+        return allEntries().first(where: { $0.id == id })?.defaultTitle
     }
 
     /// Entries grouped by category, in `categoryOrder`. Empty categories

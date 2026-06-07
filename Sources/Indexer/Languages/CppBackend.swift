@@ -39,143 +39,175 @@ internal enum CppBackend: TreeSitterLanguageBackend {
         walk(root, file: file, source: source, lines: lines, container: container, entries: &entries)
     }
 
+    // Iterative work-stack of (node, container) tuples. Replaces a
+    // recursive descent so AST depth no longer consumes Swift call
+    // frames. Chain child of `indexer-backends-iterative-walk-refactor-
+    // 2026-05-11` (GoBackend pilot 2026-05-18, BashBackend / CBackend
+    // predecessors 2026-05-18). CppBackend is the first chain child
+    // whose substrate genuinely USES the container slot — class /
+    // struct / union body pushes re-bind container to the type's
+    // name; namespace / declaration / default propagate unchanged.
     private static func walk(
-        _ node: Node, file: String, source: NSString, lines: [String],
+        _ root: Node, file: String, source: NSString, lines: [String],
         container: String?, entries: inout [IndexEntry]
     ) {
-        for i in 0..<Int(node.childCount) {
-            guard let child = node.child(at: i) else { continue }
-            let type = child.nodeType ?? ""
+        var stack: [(Node, String?)] = [(root, container)]
+        while let (node, currentContainer) = stack.popLast() {
+            let type = node.nodeType ?? ""
 
             switch type {
             case "function_definition":
-                if let entry = TreeSitterBackend.extractFunction(child, file: file, source: source, lines: lines, container: container) {
+                if let entry = TreeSitterBackend.extractFunction(node, file: file, source: source, lines: lines, container: currentContainer) {
                     entries.append(entry)
-                } else if let (name, qualContainer) = TreeSitterBackend.extractCppQualifiedMethod(child, source: source) {
+                } else if let (name, qualContainer) = TreeSitterBackend.extractCppQualifiedMethod(node, source: source) {
                     entries.append(IndexEntry(
                         name: name, kind: .method, file: file,
-                        startLine: TreeSitterBackend.startLine(of: child),
-                        endLine: TreeSitterBackend.endLine(of: child),
-                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: child)),
+                        startLine: TreeSitterBackend.startLine(of: node),
+                        endLine: TreeSitterBackend.endLine(of: node),
+                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: node)),
                         container: qualContainer, engine: "tree-sitter"
                     ))
-                } else if let name = TreeSitterBackend.extractCDeclaratorName(child, source: source) {
-                    let kind: SymbolKind = container != nil ? .method : .function
+                } else if let name = TreeSitterBackend.extractCDeclaratorName(node, source: source) {
+                    let kind: SymbolKind = currentContainer != nil ? .method : .function
                     entries.append(IndexEntry(
                         name: name, kind: kind, file: file,
-                        startLine: TreeSitterBackend.startLine(of: child),
-                        endLine: TreeSitterBackend.endLine(of: child),
-                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: child)),
-                        container: container, engine: "tree-sitter"
+                        startLine: TreeSitterBackend.startLine(of: node),
+                        endLine: TreeSitterBackend.endLine(of: node),
+                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: node)),
+                        container: currentContainer, engine: "tree-sitter"
                     ))
                 }
+                // No body push — matches pre-refactor (the arm
+                // emitted and returned without recursing into the
+                // function body).
 
             case "class_specifier":
-                if let name = TreeSitterBackend.nodeName(child, source: source) {
+                if let name = TreeSitterBackend.nodeName(node, source: source) {
                     entries.append(IndexEntry(
                         name: name, kind: .class, file: file,
-                        startLine: TreeSitterBackend.startLine(of: child),
-                        endLine: TreeSitterBackend.endLine(of: child),
-                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: child)),
-                        container: container, engine: "tree-sitter"
+                        startLine: TreeSitterBackend.startLine(of: node),
+                        endLine: TreeSitterBackend.endLine(of: node),
+                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: node)),
+                        container: currentContainer, engine: "tree-sitter"
                     ))
-                    if let body = TreeSitterBackend.findBody(child) {
-                        walk(body, file: file, source: source, lines: lines, container: name, entries: &entries)
+                    if let body = TreeSitterBackend.findBody(node) {
+                        // Re-bind container to the class name for
+                        // the body's descendants — matches pre-
+                        // refactor `walk(body, ..., container: name)`.
+                        stack.append((body, name))
                     }
                 }
 
             case "struct_specifier", "union_specifier":
-                if let name = TreeSitterBackend.nodeName(child, source: source) {
+                if let name = TreeSitterBackend.nodeName(node, source: source) {
                     entries.append(IndexEntry(
                         name: name, kind: .struct, file: file,
-                        startLine: TreeSitterBackend.startLine(of: child),
-                        endLine: TreeSitterBackend.endLine(of: child),
-                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: child)),
-                        container: container, engine: "tree-sitter"
+                        startLine: TreeSitterBackend.startLine(of: node),
+                        endLine: TreeSitterBackend.endLine(of: node),
+                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: node)),
+                        container: currentContainer, engine: "tree-sitter"
                     ))
-                    if let body = TreeSitterBackend.findBody(child) {
-                        walk(body, file: file, source: source, lines: lines, container: name, entries: &entries)
+                    if let body = TreeSitterBackend.findBody(node) {
+                        stack.append((body, name))
                     }
                 }
 
             case "enum_specifier":
-                if let name = TreeSitterBackend.nodeName(child, source: source) {
+                if let name = TreeSitterBackend.nodeName(node, source: source) {
                     entries.append(IndexEntry(
                         name: name, kind: .enum, file: file,
-                        startLine: TreeSitterBackend.startLine(of: child),
-                        endLine: TreeSitterBackend.endLine(of: child),
-                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: child)),
+                        startLine: TreeSitterBackend.startLine(of: node),
+                        endLine: TreeSitterBackend.endLine(of: node),
+                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: node)),
                         container: nil, engine: "tree-sitter"
                     ))
                 }
 
             case "type_definition":
-                if let name = TreeSitterBackend.extractCDeclaratorName(child, source: source) {
+                if let name = TreeSitterBackend.extractCDeclaratorName(node, source: source) {
                     entries.append(IndexEntry(
                         name: name, kind: .type, file: file,
-                        startLine: TreeSitterBackend.startLine(of: child),
-                        endLine: TreeSitterBackend.endLine(of: child),
-                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: child)),
+                        startLine: TreeSitterBackend.startLine(of: node),
+                        endLine: TreeSitterBackend.endLine(of: node),
+                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: node)),
                         container: nil, engine: "tree-sitter"
                     ))
                 }
 
             case "declaration":
-                if TreeSitterBackend.cHasFunctionDeclarator(child),
-                   let name = TreeSitterBackend.extractCDeclaratorName(child, source: source) {
-                    let kind: SymbolKind = container != nil ? .method : .function
+                if TreeSitterBackend.cHasFunctionDeclarator(node),
+                   let name = TreeSitterBackend.extractCDeclaratorName(node, source: source) {
+                    let kind: SymbolKind = currentContainer != nil ? .method : .function
                     entries.append(IndexEntry(
                         name: name, kind: kind, file: file,
-                        startLine: TreeSitterBackend.startLine(of: child),
-                        endLine: TreeSitterBackend.endLine(of: child),
-                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: child)),
-                        container: container, engine: "tree-sitter"
+                        startLine: TreeSitterBackend.startLine(of: node),
+                        endLine: TreeSitterBackend.endLine(of: node),
+                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: node)),
+                        container: currentContainer, engine: "tree-sitter"
                     ))
-                } else if child.childCount > 0 {
-                    walk(child, file: file, source: source, lines: lines, container: container, entries: &entries)
+                    // No children push — matches pre-refactor.
+                } else {
+                    let count = Int(node.childCount)
+                    guard count > 0 else { continue }
+                    for i in stride(from: count - 1, through: 0, by: -1) {
+                        if let child = node.child(at: i) {
+                            stack.append((child, currentContainer))
+                        }
+                    }
                 }
 
             case "field_declaration":
-                if TreeSitterBackend.cHasFunctionDeclarator(child),
-                   let name = TreeSitterBackend.extractCDeclaratorName(child, source: source) {
-                    let kind: SymbolKind = container != nil ? .method : .function
+                if TreeSitterBackend.cHasFunctionDeclarator(node),
+                   let name = TreeSitterBackend.extractCDeclaratorName(node, source: source) {
+                    let kind: SymbolKind = currentContainer != nil ? .method : .function
                     entries.append(IndexEntry(
                         name: name, kind: kind, file: file,
-                        startLine: TreeSitterBackend.startLine(of: child),
-                        endLine: TreeSitterBackend.endLine(of: child),
-                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: child)),
-                        container: container, engine: "tree-sitter"
+                        startLine: TreeSitterBackend.startLine(of: node),
+                        endLine: TreeSitterBackend.endLine(of: node),
+                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: node)),
+                        container: currentContainer, engine: "tree-sitter"
                     ))
                 }
+                // No descent — matches pre-refactor (field_declaration
+                // arm emitted and returned without recursing).
 
             case "namespace_definition":
-                if let name = TreeSitterBackend.nodeName(child, source: source) {
+                if let name = TreeSitterBackend.nodeName(node, source: source) {
                     entries.append(IndexEntry(
                         name: name, kind: .extension, file: file,
-                        startLine: TreeSitterBackend.startLine(of: child),
-                        endLine: TreeSitterBackend.endLine(of: child),
-                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: child)),
-                        container: container, engine: "tree-sitter"
+                        startLine: TreeSitterBackend.startLine(of: node),
+                        endLine: TreeSitterBackend.endLine(of: node),
+                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: node)),
+                        container: currentContainer, engine: "tree-sitter"
                     ))
                 }
-                if let body = TreeSitterBackend.findBody(child) {
-                    walk(body, file: file, source: source, lines: lines, container: container, entries: &entries)
+                // Body recursion lives OUTSIDE the name-found guard —
+                // anonymous namespaces (no name field) still descend.
+                if let body = TreeSitterBackend.findBody(node) {
+                    stack.append((body, currentContainer))
                 }
 
             case "alias_declaration":
-                if let name = TreeSitterBackend.nodeName(child, source: source) {
+                if let name = TreeSitterBackend.nodeName(node, source: source) {
                     entries.append(IndexEntry(
                         name: name, kind: .type, file: file,
-                        startLine: TreeSitterBackend.startLine(of: child),
-                        endLine: TreeSitterBackend.endLine(of: child),
-                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: child)),
-                        container: container, engine: "tree-sitter"
+                        startLine: TreeSitterBackend.startLine(of: node),
+                        endLine: TreeSitterBackend.endLine(of: node),
+                        signature: TreeSitterBackend.signatureText(lines: lines, line: TreeSitterBackend.startLine(of: node)),
+                        container: currentContainer, engine: "tree-sitter"
                     ))
                 }
 
             default:
-                if child.childCount > 0 {
-                    walk(child, file: file, source: source, lines: lines, container: container, entries: &entries)
+                // Push children in reverse so LIFO pop preserves
+                // left-to-right pre-order traversal — symbol-emission
+                // order matches the pre-refactor recursive form exactly.
+                let count = Int(node.childCount)
+                guard count > 0 else { continue }
+                for i in stride(from: count - 1, through: 0, by: -1) {
+                    if let child = node.child(at: i) {
+                        stack.append((child, currentContainer))
+                    }
                 }
             }
         }

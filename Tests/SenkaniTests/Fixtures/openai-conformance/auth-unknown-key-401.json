@@ -1,0 +1,18 @@
+{
+  "name": "auth-unknown-key-401",
+  "kind": "auth_error",
+  "description": "A well-formed bearer key that is not in the vault -> 401 invalid_api_key. The reason is identical to a wrong-key rejection (no oracle between 'no such key' and 'wrong key').",
+  "records": [
+    { "key": "sk-senkani-known", "scope": ["chat"], "rate_limit": 60 }
+  ],
+  "presented_key": "sk-senkani-unknown",
+  "requested_surface": "chat",
+  "repeat": 1,
+  "expect": {
+    "http_status": "401 Unauthorized",
+    "contains": [
+      "\"code\":\"invalid_api_key\"",
+      "\"type\":\"invalid_request_error\""
+    ]
+  }
+}

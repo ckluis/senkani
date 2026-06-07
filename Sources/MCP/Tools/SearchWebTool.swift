@@ -14,6 +14,19 @@ enum SearchWebError: Error, LocalizedError, Equatable, Sendable {
     case backendBlocked
     case networkFailure(String)
     case invalidRecency(String)
+    /// Every region in the rotation order has an active cool-down
+    /// (CAPTCHA / soft-block recorded by the ledger). Caller chose to
+    /// fail rather than wait. The list is `(region, until)` pairs in
+    /// rotation order so the caller can format a useful retry hint.
+    case allRegionsCooling([RegionCoolDown])
+
+    /// One entry in the `allRegionsCooling` payload — used so the
+    /// case can be Equatable + Sendable + Codable-ish without tuple
+    /// pain.
+    struct RegionCoolDown: Equatable, Sendable {
+        let region: String
+        let until: Date
+    }
 
     var errorDescription: String? {
         switch self {
@@ -35,6 +48,10 @@ enum SearchWebError: Error, LocalizedError, Equatable, Sendable {
             return "Search backend network failure: \(detail)"
         case .invalidRecency(let v):
             return "Invalid recency `\(v)`. Use any|d|w|m|y."
+        case .allRegionsCooling(let entries):
+            let formatter = ISO8601DateFormatter()
+            let parts = entries.map { "\($0.region) until \(formatter.string(from: $0.until))" }
+            return "All DuckDuckGo Lite regions are in soft-block cool-down: \(parts.joined(separator: ", ")). Wait for the earliest expiry, or override `SENKANI_SEARCH_WEB_RETRY_DELAY_MS=0` after the cool-down clears."
         }
     }
 }
@@ -401,34 +418,95 @@ enum SearchWebTool {
             return errorResult(.queryBlocked(reason: reason))
         }
 
-        // Build URL (validates recency).
-        let url: URL
-        switch DuckDuckGoLiteURLBuilder.build(query: query, region: region, recency: recency) {
-        case .success(let u): url = u
-        case .failure(let e): return errorResult(e)
+        // Region rotation + soft-block resilience. The caller-supplied
+        // `region` leads; if it returns CAPTCHA (or is already cooling),
+        // we try the next region in `SearchWebRegionRotation`. Bounded
+        // at 2 HTTP attempts per call so callers fail fast (~5s budget
+        // including the inter-attempt back-off).
+        //
+        // `search-web-ddg-soft-block-resilience-2026-05-16`.
+        let rotation = SearchWebRegionRotation.order(primary: region)
+        let now = Date()
+        let liveCandidates = rotation.filter {
+            !SearchWebCoolDownLedger.isCooling(region: $0, now: now)
+        }
+        if liveCandidates.isEmpty {
+            // Every region in the rotation has an active cool-down.
+            // Build the structured all-cooling payload from the ledger
+            // (the ledger is the source of truth — read it once here).
+            let entries: [SearchWebError.RegionCoolDown] = rotation.compactMap { r in
+                guard let until = SearchWebCoolDownLedger.cooldownUntil(region: r, now: now)
+                else { return nil }
+                return SearchWebError.RegionCoolDown(region: r, until: until)
+            }
+            return errorResult(.allRegionsCooling(entries))
         }
 
-        // Fetch via the supplied backend.
-        let html: String
-        do {
-            html = try await backend.fetch(url: url)
-        } catch let e as SearchWebError {
-            return errorResult(e)
-        } catch {
-            return errorResult(.networkFailure(error.localizedDescription))
+        let maxAttempts = min(liveCandidates.count, 2)
+        let backoffMs = SearchWebRetryConfig.backoffMs
+
+        var attemptIdx = 0
+        var lastHtml: String = ""
+        var lastResults: [SearchResult] = []
+        var didSucceed = false
+
+        outer: for candidate in liveCandidates.prefix(maxAttempts) {
+            attemptIdx += 1
+            // Build URL (validates recency on each iteration — same args).
+            let url: URL
+            switch DuckDuckGoLiteURLBuilder.build(query: query, region: candidate, recency: recency) {
+            case .success(let u): url = u
+            case .failure(let e): return errorResult(e)
+            }
+
+            // Fetch via the supplied backend.
+            let html: String
+            do {
+                html = try await backend.fetch(url: url)
+            } catch let e as SearchWebError {
+                return errorResult(e)
+            } catch {
+                return errorResult(.networkFailure(error.localizedDescription))
+            }
+
+            // Parse.
+            switch DuckDuckGoLiteParser.parse(html: html, limit: limit) {
+            case .success(let r):
+                lastHtml = html
+                lastResults = r
+                didSucceed = true
+                break outer
+            case .failure(.backendBlocked):
+                // Record cool-down for this region and try the next
+                // candidate (if attempts remain). Pause to let the
+                // soft-block backoff window kick in.
+                SearchWebCoolDownLedger.recordCaptcha(region: candidate)
+                if attemptIdx < maxAttempts, backoffMs > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(backoffMs) * 1_000_000)
+                }
+                continue
+            case .failure(let e):
+                return errorResult(e)
+            }
         }
 
-        // Parse.
-        let results: [SearchResult]
-        switch DuckDuckGoLiteParser.parse(html: html, limit: limit) {
-        case .success(let r): results = r
-        case .failure(let e): return errorResult(e)
+        if !didSucceed {
+            // Every attempted region soft-blocked. Re-read the ledger
+            // (we just wrote to it) to surface the freshly-recorded
+            // cool-down expiries.
+            let nowAfter = Date()
+            let entries: [SearchWebError.RegionCoolDown] = rotation.compactMap { r in
+                guard let until = SearchWebCoolDownLedger.cooldownUntil(region: r, now: nowAfter)
+                else { return nil }
+                return SearchWebError.RegionCoolDown(region: r, until: until)
+            }
+            return errorResult(.allRegionsCooling(entries))
         }
 
         // SecretDetector pass on every snippet + title (adversarial input).
         var redacted: [SearchResult] = []
         var secretsFound = 0
-        for r in results {
+        for r in lastResults {
             let titleScan = SecretDetector.scan(r.title)
             let snippetScan = SecretDetector.scan(r.snippet)
             secretsFound += titleScan.patterns.count + snippetScan.patterns.count
@@ -441,7 +519,7 @@ enum SearchWebTool {
 
         let output = SearchWebFormatter.format(query: query, results: redacted)
         await session.recordMetrics(
-            rawBytes: html.utf8.count,
+            rawBytes: lastHtml.utf8.count,
             compressedBytes: output.utf8.count,
             feature: "search_web",
             command: query,

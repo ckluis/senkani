@@ -257,13 +257,15 @@ public struct PolicyFeatures: Codable, Sendable, Hashable {
     public let indexer: Bool
     public let terse: Bool
     public let injectionGuard: Bool
+    public let mitmTlsTermination: Bool
 
-    public init(filter: Bool, secrets: Bool, indexer: Bool, terse: Bool, injectionGuard: Bool) {
+    public init(filter: Bool, secrets: Bool, indexer: Bool, terse: Bool, injectionGuard: Bool, mitmTlsTermination: Bool = false) {
         self.filter = filter
         self.secrets = secrets
         self.indexer = indexer
         self.terse = terse
         self.injectionGuard = injectionGuard
+        self.mitmTlsTermination = mitmTlsTermination
     }
 
     public init(from config: FeatureConfig) {
@@ -272,6 +274,38 @@ public struct PolicyFeatures: Codable, Sendable, Hashable {
         self.indexer = config.indexer
         self.terse = config.terse
         self.injectionGuard = config.injectionGuard
+        self.mitmTlsTermination = config.mitmTlsTermination
+    }
+
+    // Explicit Codable: `mitmTlsTermination` (added T.1d-2b-i) is
+    // decode-tolerant — policy_snapshots rows written before the field
+    // existed lack the key and must still decode (→ false; the feature was
+    // off then), not silently fail to nil and drop the historical audit
+    // record. Mirrors the backward-compat decode posture in
+    // `PolicyConfig.init(from:)`. The other five keys predate the snapshot
+    // table and are always present.
+    enum CodingKeys: String, CodingKey {
+        case filter, secrets, indexer, terse, injectionGuard, mitmTlsTermination
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.filter = try c.decode(Bool.self, forKey: .filter)
+        self.secrets = try c.decode(Bool.self, forKey: .secrets)
+        self.indexer = try c.decode(Bool.self, forKey: .indexer)
+        self.terse = try c.decode(Bool.self, forKey: .terse)
+        self.injectionGuard = try c.decode(Bool.self, forKey: .injectionGuard)
+        self.mitmTlsTermination = try c.decodeIfPresent(Bool.self, forKey: .mitmTlsTermination) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(filter, forKey: .filter)
+        try c.encode(secrets, forKey: .secrets)
+        try c.encode(indexer, forKey: .indexer)
+        try c.encode(terse, forKey: .terse)
+        try c.encode(injectionGuard, forKey: .injectionGuard)
+        try c.encode(mitmTlsTermination, forKey: .mitmTlsTermination)
     }
 }
 

@@ -362,7 +362,7 @@ enum ToolRegistry {
                 name: "bundle",
                 schema: Tool(
                     name: "bundle",
-                    description: "Budget-bounded repo snapshot as a single markdown (or JSON) document. Local mode composes symbol outlines + dep graph + KB entities + README (critical context first). Remote mode (pass remote:\"owner/name\") snapshots any public GitHub repo via senkani_repo — same host allowlist + SecretDetector. Params: root, max_tokens, include, format (markdown|json), remote (owner/name), ref (branch/tag/SHA for --remote).",
+                    description: "Budget-bounded repo snapshot as a single markdown (or JSON) document. Local mode composes symbol outlines + dep graph + KB entities + README (critical context first). Remote mode (pass remote:\"owner/name\") snapshots any public GitHub repo via senkani_repo — same host allowlist + SecretDetector. Pass preview:true (U.10a) to emit a ContextManifest review surface JSON instead of the body. The U.10a-2 secret gate refuses preview emission when any manifest item carries a SecretDetector hit; pass allow_secrets:true to override (writes a chained bundle.secret.allow audit row). Every preview call also writes a chained bundle.dispatch audit row. U.10b: pass slice:\"<path>:<start>:<end>\" to add a file-lane slice item (requires modes:[\"slice\"]); pass diff:\"<selector>\" (unstaged|staged|branch:<ref>|range:<a>..<b>) to emit per-file diff items (requires modes:[\"diff-only\"]); modes:[\"summary\"] emits one knowledge-lane summary per entity. Params: root, max_tokens, include, format (markdown|json), remote (owner/name), ref (branch/tag/SHA for --remote), preview, modes, lanes, slice, diff, allow_secrets.",
                     inputSchema: .object([
                         "type": .string("object"),
                         "properties": .object([
@@ -372,11 +372,40 @@ enum ToolRegistry {
                             "format": .object(["type": .string("string"), "description": .string("Output format: 'markdown' (default) or 'json' (stable BundleDocument schema).")]),
                             "remote": .object(["type": .string("string"), "description": .string("Bundle a public GitHub repo (owner/name) instead of the local project. Validated strictly; host-allowlisted.")]),
                             "ref": .object(["type": .string("string"), "description": .string("Git ref (branch/tag/SHA) for `remote` bundles. Defaults to HEAD / default branch.")]),
+                            "preview": .object(["type": .string("boolean"), "description": .string("U.10a-1: emit a ContextManifest review surface (JSON) instead of the body. Default false.")]),
+                            "modes": .object(["type": .string("array"), "items": .object(["type": .string("string"), "enum": .array([.string("full"), .string("codemap"), .string("artifact-stubbed"), .string("excluded-with-reason"), .string("slice"), .string("diff-only"), .string("summary")])]), "description": .string("U.10a-1 (with preview:true): restrict the manifest to these modes. Default: full, codemap, artifact-stubbed, excluded-with-reason (the 4 trivial modes). U.10b ships slice/diff-only/summary as live modes — see slice:/diff: params + the knowledge lane's summary emission.")]),
+                            "lanes": .object(["type": .string("array"), "items": .object(["type": .string("string"), "enum": .array([.string("file"), .string("diff"), .string("codemap"), .string("symbol"), .string("knowledge"), .string("runtime"), .string("manual"), .string("artifact")])]), "description": .string("U.10a-1 (with preview:true): restrict the manifest to these lanes. Default: all 8.")]),
+                            "slice": .object(["type": .string("string"), "description": .string("U.10b (with preview:true and modes including 'slice'): slice spec '<path>:<start>:<end>' (1-indexed inclusive lines, path under projectRoot). Adds one file-lane manifest item with the resolved content.")]),
+                            "diff": .object(["type": .string("string"), "description": .string("U.10b (with preview:true and modes including 'diff-only'): selector for `git diff`. One of 'unstaged', 'staged', 'branch:<ref>', or 'range:<a>..<b>'. Emits one diff-lane manifest item per affected file; inclusion_reason carries the selector.")]),
+                            "allow_secrets": .object(["type": .string("boolean"), "description": .string("U.10a-2: override the secret gate. When any manifest item carries a SecretDetector hit (sensitivity=flagged), preview emission is refused unless this flag is true. Every override writes a chained bundle.secret.allow audit row in token_events. Default false.")]),
                         ]),
                     ]),
                     annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
                 ),
                 handler: .asyncHandler { args, session in await BundleTool.handle(arguments: args, session: session) }
+            ),
+            ToolDefinition(
+                name: "validate_browser",
+                schema: Tool(
+                    name: "validate_browser",
+                    description: "U.2a-2b — drive a Playwright Chromium pass against a URL across the four ValidationAxes (perf, completeness, security, design). Writes a chained validation_results row + a chained validation.dispatch token_events row. allow_failed:true emits an additional chained validation.fail.allow override row instead of leaving HookRouter to hard-block the next Apply tool call. Side-channel guard: refusal envelope carries only failing_axis + fixture_id + advisory + override_hint — never the failed assertion's payload.",
+                    inputSchema: .object([
+                        "type": .string("object"),
+                        "properties": .object([
+                            "target_url": .object(["type": .string("string"), "description": .string("HTTP or HTTPS URL to validate. file:// is not allowed — the EgressProxy same-origin allowlist denies off-host requests for the duration of the run.")]),
+                            "axes": .object(["type": .string("array"), "items": .object(["type": .string("string"), "enum": .array([.string("perf"), .string("completeness"), .string("security"), .string("design")])]), "description": .string("Subset of axes to run (default: all four). Order does not affect output.")]),
+                            "diff_target": .object(["type": .string("string"), "description": .string("Selector mirroring senkani_bundle's diff: 'unstaged', 'staged', 'branch:<ref>', or 'range:<a>..<b>'. Empty → one step per axis keyed on the target URL.")]),
+                            "allow_failed": .object(["type": .string("boolean"), "description": .string("Override the hard-block. When true and the run returns result_status:fail, the dispatcher writes a chained validation.fail.allow audit row instead of leaving HookRouter to refuse the next Apply tool call. Default: false.")]),
+                            "screenshot": .object(["type": .string("boolean"), "description": .string("Capture a screenshot via the Playwright runner. Default: true.")]),
+                            "dispatch": .object(["type": .string("string"), "enum": .array([.string("subprocess"), .string("headless"), .string("pane")]), "description": .string("U.2b-2 — runner selector. 'subprocess' (default) drives the node+Playwright Chromium subprocess. 'headless' drives the off-screen WKWebView runner registered via BrowserDispatchRegistry by the SenkaniApp host at startup; without that registration (standalone senkani-mcp binary) the dispatcher returns a structured headless_not_yet_implemented refusal. 'pane' targets a visible BrowserPane (see pane_id); until U.2b-2 child (b) wires pane execution, it returns a structured validation_browser_pane_not_yet_wired refusal. Audit-chain rows carry runner=<value> in all three modes (subprocess → 'subprocess'; headless → 'wkwebview-headless'; pane → 'wkwebview-pane').")]),
+                            "pane_id": .object(["type": .string("string"), "description": .string("U.2b-2 — BrowserPane id to target when dispatch:'pane'. Omit to target the most-recently-focused pane (resolved by U.2b-2 child (b)). Ignored for 'subprocess' / 'headless' dispatch.")]),
+                            "egress_proxy_url": .object(["type": .string("string"), "description": .string("Optional EgressProxy URL (e.g. 'http://127.0.0.1:18080'). When set, the spawned Chromium subprocess receives HTTP_PROXY/HTTPS_PROXY and a per-target same-origin allowlist written to SENKANI_EGRESS_POLICY_OVERRIDE — off-host asset requests fall to default-deny. Operator runs 'senkani egress start' first.")]),
+                        ]),
+                        "required": .array([.string("target_url")]),
+                    ]),
+                    annotations: .init(readOnlyHint: false, idempotentHint: false, openWorldHint: true)
+                ),
+                handler: .asyncHandler { args, session in await ValidateBrowserTool.handle(arguments: args, session: session) }
             ),
             ToolDefinition(
                 name: "knowledge",
@@ -398,7 +427,62 @@ enum ToolRegistry {
                     ]),
                     annotations: .init(readOnlyHint: false, idempotentHint: false, openWorldHint: false)
                 ),
-                handler: .asyncHandler { args, session in await KnowledgeTool.handle(arguments: args, session: session) }
+                handler: .asyncHandler { args, session in KnowledgeTool.handle(arguments: args, session: session) }
+            ),
+            ToolDefinition(
+                name: "senkani_telemetry_list",
+                schema: Tool(
+                    name: "senkani_telemetry_list",
+                    description: "V.18a-6 — list runtime_telemetry datasets, optionally scoped to a project. Returns id, project_id, workstream_id, created_at, bytes_used, span_count, log_count per dataset.",
+                    inputSchema: .object([
+                        "type": .string("object"),
+                        "properties": .object([
+                            "project_id": .object(["type": .string("string"), "description": .string("Scope to one project. Omit for every dataset.")]),
+                        ]),
+                    ]),
+                    annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
+                ),
+                handler: .asyncHandler { args, session in await TelemetryListTool.handle(arguments: args, session: session) }
+            ),
+            ToolDefinition(
+                name: "senkani_telemetry_query",
+                schema: Tool(
+                    name: "senkani_telemetry_query",
+                    description: "V.18a-6 — query runtime_telemetry spans by trace_id, session_id, tool_call_id, validation_run_id, or time range. Limit/cursor budget: max 1000 rows OR 1 MB per page (whichever first). Output routed through SecretDetector.",
+                    inputSchema: .object([
+                        "type": .string("object"),
+                        "properties": .object([
+                            "dataset_id": .object(["type": .string("integer"), "description": .string("Scope to one dataset.")]),
+                            "trace_id": .object(["type": .string("string"), "description": .string("Filter by OTLP trace_id.")]),
+                            "session_id": .object(["type": .string("string"), "description": .string("Filter by senkani session id.")]),
+                            "tool_call_id": .object(["type": .string("string"), "description": .string("Filter by tool-call id (paired with session_id for cross-cutting JOIN against agent_trace_event).")]),
+                            "validation_run_id": .object(["type": .string("string"), "description": .string("Filter by V.18a-5 validation_run_id.")]),
+                            "start_unix_ns_at_or_after": .object(["type": .string("integer"), "description": .string("Lower bound on span start_unix_ns (inclusive).")]),
+                            "end_unix_ns_at_or_before": .object(["type": .string("integer"), "description": .string("Upper bound on span end_unix_ns (inclusive).")]),
+                            "limit": .object(["type": .string("integer"), "description": .string("Max rows per page (default 100, clamped to 1..1000).")]),
+                            "cursor": .object(["type": .string("integer"), "description": .string("Resume after this row id (returned as next_cursor when a page is truncated).")]),
+                        ]),
+                    ]),
+                    annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
+                ),
+                handler: .asyncHandler { args, session in await TelemetryQueryTool.handle(arguments: args, session: session) }
+            ),
+            ToolDefinition(
+                name: "senkani_telemetry_get_trace",
+                schema: Tool(
+                    name: "senkani_telemetry_get_trace",
+                    description: "V.18a-6 — fetch one trace's full span tree, ordered by start_unix_ns ASC. Capped at 10K spans by default; truncated:true means the trace overflowed the cap. Output routed through SecretDetector.",
+                    inputSchema: .object([
+                        "type": .string("object"),
+                        "properties": .object([
+                            "trace_id": .object(["type": .string("string"), "description": .string("OTLP trace_id (hex string from a prior query / dispatch span emit).")]),
+                            "max_spans": .object(["type": .string("integer"), "description": .string("Cap on returned spans (default 10000).")]),
+                        ]),
+                        "required": .array([.string("trace_id")]),
+                    ]),
+                    annotations: .init(readOnlyHint: true, idempotentHint: true, openWorldHint: false)
+                ),
+                handler: .asyncHandler { args, session in await TelemetryGetTraceTool.handle(arguments: args, session: session) }
             ),
         ]
     }

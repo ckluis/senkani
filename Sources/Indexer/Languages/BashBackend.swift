@@ -27,23 +27,37 @@ internal enum BashBackend: TreeSitterLanguageBackend {
         walk(root, file: file, source: source, lines: lines, container: container, entries: &entries)
     }
 
+    // Iterative work-stack of (node, container) tuples. Replaces a
+    // recursive descent so AST depth no longer consumes Swift call
+    // frames. Chain child of `indexer-backends-iterative-walk-refactor-
+    // 2026-05-11` (GoBackend pilot precedent, 2026-05-18).
     private static func walk(
-        _ node: Node, file: String, source: NSString, lines: [String],
+        _ root: Node, file: String, source: NSString, lines: [String],
         container: String?, entries: inout [IndexEntry]
     ) {
-        for i in 0..<Int(node.childCount) {
-            guard let child = node.child(at: i) else { continue }
-            let type = child.nodeType ?? ""
+        var stack: [(Node, String?)] = [(root, container)]
+        while let (node, currentContainer) = stack.popLast() {
+            let type = node.nodeType ?? ""
 
             switch type {
             case "function_definition":
-                if let entry = TreeSitterBackend.extractFunction(child, file: file, source: source, lines: lines, container: container) {
+                if let entry = TreeSitterBackend.extractFunction(node, file: file, source: source, lines: lines, container: currentContainer) {
                     entries.append(entry)
                 }
+                // Bodies aren't walked — matches the pre-refactor
+                // recursive form (the switch arm extracted the function
+                // without recursing into its children).
 
             default:
-                if child.childCount > 0 {
-                    walk(child, file: file, source: source, lines: lines, container: container, entries: &entries)
+                // Push children in reverse so LIFO pop preserves
+                // left-to-right pre-order traversal — symbol-emission
+                // order matches the pre-refactor recursive form exactly.
+                let count = Int(node.childCount)
+                guard count > 0 else { continue }
+                for i in stride(from: count - 1, through: 0, by: -1) {
+                    if let child = node.child(at: i) {
+                        stack.append((child, currentContainer))
+                    }
                 }
             }
         }

@@ -23,8 +23,8 @@ enum RepoTool {
     /// tie them to the MCPSession because that would thrash the cache
     /// on every session restart. Schneier-safe: the cache holds
     /// already-redacted strings (SecretDetector ran before storage).
-    nonisolated(unsafe) private static let cache = RemoteRepoCache()
-    nonisolated(unsafe) private static let client = RemoteRepoClient()
+    private static let cache = RemoteRepoCache()
+    private static let client = RemoteRepoClient()
 
     static func handle(arguments: [String: Value]?, session: MCPSession) async -> CallTool.Result {
         guard let actionStr = arguments?["action"]?.stringValue,

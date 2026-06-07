@@ -192,14 +192,27 @@ struct GraphConstructionTests {
 //
 // Wall-clock budget assert against the real project source tree. The
 // regression this rules out (accidentally O(N²) re-parse) costs minutes,
-// not seconds. Under parallel-runner load a single peer-suite CPU spike
-// can push one measurement over a 5s ceiling even when the builder is
-// healthy — `.serialized` only serializes within-suite, not against
-// peer suites. So we take three measurements and assert the median: a
-// transient peer-CPU spike on one of three runs cannot fail the test,
-// but a real regression (every measurement blows budget) still does.
+// not seconds.
+//
+// Robustness (dependency-graph-perf-gate-flake-under-build-load-2026-05-27):
+// the gate previously asserted the MEDIAN of 3 samples. Under the IO/CPU
+// contention of a just-completed cold compile — or a peer-suite CPU spike
+// (`.serialized` only serializes within-suite, not against peer suites) —
+// every one of the 3 samples can inflate past the 5s ceiling, so the
+// median itself blows the budget and the gate flakes on a healthy builder
+// (green on rerun). The fix: take the MINIMUM of N samples. The least-
+// contended sample is the true build-time floor, which is what a perf
+// *floor* should measure. A genuine regression slows EVERY sample, so the
+// minimum still exceeds the budget — the gate stays honest (proven by
+// `gateFailsOnGenuineRegression`). An untimed warm-up build primes FS
+// caches so cold-cache cost is not charged to the first measured sample.
 @Suite("DependencyGraph — Perf gate")
 struct DependencyGraphPerfGateTests {
+
+    // Perf-gate decision factored into the shared `PerfGate.passes` helper
+    // (PerfGate.swift) — the canonical min-of-N gate, reused by this suite
+    // and the 19 micro-benchmark sibling gates so the robustness semantics
+    // live in exactly one place.
 
     @Test("Real project graph builds fast")
     func buildGraphFromRealProject() {
@@ -211,20 +224,25 @@ struct DependencyGraphPerfGateTests {
             .path
 
         let clock = ContinuousClock()
+
+        // Untimed warm-up: prime FS caches so a cold first read is not
+        // charged to a measured sample.
+        _ = IndexEngine.buildDependencyGraph(projectRoot: projectRoot)
+
+        // Five measured samples; assert the MINIMUM against the budget
+        // (see suite comment for why min, not median).
         var graph: DependencyGraph?
         var samples: [Duration] = []
-        for _ in 0..<3 {
+        for _ in 0..<5 {
             let elapsed = clock.measure {
                 graph = IndexEngine.buildDependencyGraph(projectRoot: projectRoot)
             }
             samples.append(elapsed)
         }
-        let sorted = samples.sorted()
-        let median = sorted[1]
 
         #expect(
-            median < .seconds(5),
-            "median of 3 graph builds: \(samples) → median \(median)"
+            PerfGate.passes(samples: samples, budget: .seconds(5)),
+            "min of 5 graph builds must be < 5s: \(samples)"
         )
 
         // Sanity: Core should be imported by multiple files
@@ -234,6 +252,33 @@ struct DependencyGraphPerfGateTests {
         // MCPSession.swift should import something
         let mcpDeps = graph!.dependencies(of: "Sources/MCP/Session/MCPSession.swift")
         #expect(!mcpDeps.isEmpty)
+    }
+
+    @Test("Perf gate still fails when every sample blows budget")
+    func gateFailsOnGenuineRegression() {
+        // A real O(N²) regression slows EVERY build, so even the minimum
+        // exceeds budget — the min-based gate must still fail. This guards
+        // against the robustness change silently disabling the gate.
+        let everySampleSlow: [Duration] = [.seconds(6), .seconds(7), .seconds(8)]
+        #expect(
+            !PerfGate.passes(samples: everySampleSlow, budget: .seconds(5)),
+            "every sample over budget must FAIL the gate"
+        )
+
+        // The flake this change fixes: one contended sample among healthy
+        // ones must PASS, because the minimum reflects the true floor.
+        let oneContended: [Duration] = [.seconds(8), .milliseconds(200), .milliseconds(300)]
+        #expect(
+            PerfGate.passes(samples: oneContended, budget: .seconds(5)),
+            "one contended sample among fast ones must PASS the gate"
+        )
+
+        // No samples is treated as failure — the gate can never be silently
+        // disabled by an empty measurement set.
+        #expect(
+            !PerfGate.passes(samples: [Duration](), budget: .seconds(5)),
+            "empty sample set must FAIL the gate"
+        )
     }
 }
 
@@ -321,5 +366,61 @@ struct ToolOutputTests {
         #expect(output.contains("imports (2)"))
         #expect(output.contains("→ Foundation"))
         #expect(!output.contains("Imported by"))
+    }
+}
+
+// MARK: - DependencyExtractor Depth Stress
+
+@Suite("DependencyExtractor — Depth Stress")
+struct DependencyExtractorDepthStressTests {
+
+    // LAST chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Drives a 2200-deep nested `const A = struct { … }` chain through
+    // `DependencyExtractor.extractImports(source:language:"zig")` to
+    // prove both of DependencyExtractor's walkers are cooperative-pool-
+    // safe.
+    //
+    // Why a Zig nested-struct chain (matching the immediate precedent
+    // `ZigBackend`'s depth-stress fixture rather than a TS/Swift paren
+    // chain): every per-language extractor inside DependencyExtractor
+    // dispatches through `walk(root)` which visits every node, so any
+    // language whose tree-sitter parser accepts a deep AST exercises
+    // the iterative work-stack. Zig's nested struct chain is the same
+    // shape ZigBackend's round used 2026-05-19, so we re-use it for
+    // continuity with the umbrella's chain.
+    //
+    // Coverage of the two refactored helpers:
+    //   • `walk` — `extractZig` calls `walk(root)` which visits all
+    //     ~2200 levels of the chain. Pre-refactor: ~1 Swift call frame
+    //     per level (`walk(root) → walk(child) → …`) blows the
+    //     cooperative pool. Post-refactor: heap-allocated `[Node]`
+    //     work-stack scales with depth in heap memory regardless of
+    //     stack size.
+    //   • `findFirstDescendantOfType` — not exercised at depth by this
+    //     fixture (no `@import` calls in the chain, so the per-node
+    //     guard `nodeType == "builtin_function"` never fires inside
+    //     `extractZig`). Its iterative correctness is verified by
+    //     (a) structural equivalence to `walk`'s iterative form
+    //     (same pop/check/reverse-push shape) and (b) the existing
+    //     `Zig @import` test in `ImportExtractionTests` which
+    //     exercises it functionally on a real `@import("std")` call.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() throws {
+        let depth = 2200
+        var openings = ""
+        var closings = ""
+        for _ in 0..<depth {
+            openings += "const A = struct { "
+            closings += " };"
+        }
+        let source = """
+        const std = @import("std");
+
+        \(openings)\(closings)
+        """
+
+        let imports = try DependencyExtractor.extractImports(source: source, language: "zig")
+        #expect(imports == ["std"],
+                "Walk + findFirstDescendantOfType must still extract the top-level @import even with a 2200-deep nested struct chain in the same file")
     }
 }

@@ -91,6 +91,20 @@ final class ProjectModel: Identifiable {
         activeWorkstreamID = id
     }
 
+    /// Resolve the workstream that owns a given pane via the existing
+    /// `workstreams[*].panes` parent link. Returns `nil` for orphaned
+    /// panes (the pane is not held by any workstream in this project).
+    ///
+    /// Added in U.11-pre a-2 to support audit-chain row attribution
+    /// from a pane handle without duplicating ownership in a new
+    /// `PaneModel.workstreamID` field (operator Q3 = keep parent
+    /// link, no field duplication).
+    func workstream(containing pane: PaneModel) -> WorkstreamModel? {
+        workstreams.first { ws in
+            ws.panes.contains(where: { $0.id == pane.id })
+        }
+    }
+
     // MARK: - Git Branch Detection
 
     /// Detect the current git branch for this project's active workstream.

@@ -81,7 +81,53 @@ enum ExecTool {
             return Core.SandboxMode(rawValue: raw) ?? .auto
         }()
 
-        // Run the command
+        // T.3b-1 child (iii)+(iv) — caller classifier + v2 routing branch.
+        //
+        // The MCP entry point is operator-untrusted: a hostile prompt-
+        // injected call could try to impersonate a tool-internal caller to
+        // reach the host shell. The MCP path is therefore UNCONDITIONALLY
+        // classified `.userSupplied` — `callerKindOverride: nil` cannot be
+        // overridden from `arguments?` content.
+        //
+        // SECURITY DO-NOT: do NOT replace `nil` with any expression
+        // derived from `arguments?` content. That breaks the MCP-
+        // impersonation defense pinned in `ExecCallerClassifierTests`
+        // and lets a prompt-injected `caller_kind: "tool_internal"`
+        // arg bypass the fail-CLOSED routing below.
+        let callerKind = Core.ExecCallerClassifier.classify(callerKindOverride: nil)
+
+        // child (iv) — FAIL-CLOSED routing. Operator decision (ratified
+        // 2026-06-05, `phase-t3b-1-input-shape-decision`): user-supplied
+        // execution is DENY-BY-DEFAULT. A `.userSupplied` caller routes to
+        // `.deny` and we return a structured refusal + audit row WITHOUT
+        // spawning any host `Process`. There is NO fallback to the
+        // Foundation `Process` path for a denied caller — the deny IS the
+        // security deliverable (closing the UNSANDBOXED-host-shell gap that
+        // exists today). `.toolInternal`/trusted callers keep the host path.
+        switch Core.ExecRoutingDecision.route(callerKind: callerKind) {
+        case .host:
+            break  // fall through to the Foundation Process host path below
+        case .deny(let reason):
+            // Audit row FIRST — the deny must be observable even if the
+            // refusal text is filtered downstream. Schneier/Allspaw: a
+            // fail-CLOSED security deny that nobody can see is half a
+            // control. RCE-blocker row: proves the untrusted script did
+            // NOT reach the host shell.
+            Core.Logger.log("exec.routing.denied", fields: [
+                "caller_kind": .string(callerKind.rawValue),
+                "reason": .string(reason.rawValue),
+                "outcome": .string("blocked"),
+                "tool": .string("senkani_exec"),
+            ])
+            return .init(
+                content: [.text(text: "Error: \(reason.operatorMessage)", annotations: nil, _meta: nil)],
+                isError: true
+            )
+        }
+
+        // Run the command (host path — reached only for `.host` routes,
+        // i.e. trusted `.toolInternal` callers; today no caller is
+        // classified `.toolInternal` from the MCP surface).
         let process = Process()
         let outPipe = Pipe()
         let errPipe = Pipe()

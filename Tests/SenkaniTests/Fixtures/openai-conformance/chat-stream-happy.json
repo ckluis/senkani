@@ -1,0 +1,14 @@
+{
+  "name": "chat-stream-happy",
+  "kind": "chat_stream",
+  "description": "POST /v1/chat/completions with stream:true -> chat.completion.chunk SSE events terminated by the [DONE] sentinel; concatenated delta.content reconstructs the full completion.",
+  "request_body": "{\"model\":\"gpt-4o\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"stream hello\"}]}",
+  "expect": {
+    "contains": [
+      "data: ",
+      "\"object\":\"chat.completion.chunk\"",
+      "\"finish_reason\":\"stop\"",
+      "data: [DONE]"
+    ]
+  }
+}

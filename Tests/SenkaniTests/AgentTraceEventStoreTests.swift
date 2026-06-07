@@ -67,12 +67,16 @@ struct AgentTraceEventStoreTests {
             }
             return set
         }
+        // V.18a-5 (migration v32) added session_id + tool_call_id as
+        // optional TEXT columns to enable the cross-cutting JOIN
+        // against runtime_telemetry_span.
         let expected: Set<String> = [
             "id", "idempotency_key", "pane", "project", "model", "tier",
             "ladder_position", "feature", "result", "started_at", "completed_at",
             "latency_ms", "tokens_in", "tokens_out", "cost_cents", "redaction_count",
             "validation_status", "confirmation_required", "egress_decisions",
             "plan_id", "cost_ledger_version",
+            "session_id", "tool_call_id",
         ]
         #expect(cols == expected, "table_info columns: \(cols.sorted())")
     }

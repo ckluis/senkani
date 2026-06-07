@@ -41,22 +41,22 @@ final class AgentTraceEventStore: @unchecked Sendable {
                      feature, result, started_at, completed_at, latency_ms,
                      tokens_in, tokens_out, cost_cents, redaction_count,
                      validation_status, confirmation_required, egress_decisions,
-                     plan_id, cost_ledger_version)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     plan_id, cost_ledger_version, session_id, tool_call_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(idempotency_key) DO NOTHING;
             """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
             defer { sqlite3_finalize(stmt) }
 
-            sqlite3_bind_text(stmt, 1, (row.idempotencyKey as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (row.idempotencyKey as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             Self.bindOptionalText(stmt, 2, row.pane)
             Self.bindOptionalText(stmt, 3, row.project)
             Self.bindOptionalText(stmt, 4, row.model)
             Self.bindOptionalText(stmt, 5, row.tier)
             Self.bindOptionalInt(stmt, 6, row.ladderPosition)
             Self.bindOptionalText(stmt, 7, row.feature?.rawValue)
-            sqlite3_bind_text(stmt, 8, (row.result.rawValue as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 8, (row.result.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 9, row.startedAt.timeIntervalSince1970)
             sqlite3_bind_double(stmt, 10, row.completedAt.timeIntervalSince1970)
             sqlite3_bind_int64(stmt, 11, Int64(row.latencyMs))
@@ -72,6 +72,12 @@ final class AgentTraceEventStore: @unchecked Sendable {
             // to thread it through every call site. Replays and
             // back-dated writes pass an explicit value.
             sqlite3_bind_int64(stmt, 20, Int64(row.costLedgerVersion ?? CostLedger.currentVersion))
+            // V.18a-5: session_id + tool_call_id power the cross-cutting
+            // JOIN against runtime_telemetry_span. Both optional —
+            // pre-v32 rows + non-routed paths legitimately leave them
+            // NULL.
+            Self.bindOptionalText(stmt, 21, row.sessionId)
+            Self.bindOptionalText(stmt, 22, row.toolCallId)
 
             guard sqlite3_step(stmt) == SQLITE_DONE else { return false }
             return sqlite3_changes(db) > 0
@@ -102,14 +108,14 @@ final class AgentTraceEventStore: @unchecked Sendable {
                        feature, result, started_at, completed_at, latency_ms,
                        tokens_in, tokens_out, cost_cents, redaction_count,
                        validation_status, confirmation_required, egress_decisions,
-                       plan_id, cost_ledger_version
+                       plan_id, cost_ledger_version, session_id, tool_call_id
                 FROM agent_trace_event
                 WHERE idempotency_key = ?;
             """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (key as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (key as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
 
             func text(_ i: Int32) -> String? {
@@ -143,7 +149,9 @@ final class AgentTraceEventStore: @unchecked Sendable {
                 confirmationRequired: sqlite3_column_int64(stmt, 16) != 0,
                 egressDecisions: Int(sqlite3_column_int64(stmt, 17)),
                 planId: text(18),
-                costLedgerVersion: int(19)
+                costLedgerVersion: int(19),
+                sessionId: text(20),
+                toolCallId: text(21)
             )
         }
     }
@@ -156,8 +164,66 @@ final class AgentTraceEventStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM agent_trace_event WHERE idempotency_key = ?;", -1, &stmt, nil) == SQLITE_OK else { return 0 }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (key as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (key as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             return sqlite3_step(stmt) == SQLITE_ROW ? Int(sqlite3_column_int64(stmt, 0)) : 0
+        }
+    }
+
+    /// U.11a-2 — resolve a batch of `(session_id, tool_call_id)`
+    /// composite refs against `agent_trace_event`. Returns a
+    /// structured `(resolved, unresolved)` partition so callers can
+    /// act on missing evidence without throwing.
+    ///
+    /// Composite keys are matched verbatim: `session_id = ? AND
+    /// tool_call_id = ?`. Both columns are TEXT and may legitimately
+    /// be NULL for pre-v32 rows — those will never match an
+    /// `AgentTraceRef` lookup (NULL ≠ any value), so they remain
+    /// unresolved by design. Duplicates inside `refs` collapse on
+    /// `Hashable` equality.
+    func resolveAgentTraceRefs(_ refs: [AgentTraceRef]) -> AgentTraceEvidenceResolution {
+        guard !refs.isEmpty else {
+            return AgentTraceEvidenceResolution(resolved: [], unresolved: [])
+        }
+        let distinct = Array(Set(refs))
+        return parent.queue.sync {
+            guard let db = parent.db else {
+                return AgentTraceEvidenceResolution(resolved: [], unresolved: distinct)
+            }
+            let sql = """
+                SELECT idempotency_key, result
+                FROM agent_trace_event
+                WHERE session_id = ? AND tool_call_id = ?
+                ORDER BY started_at ASC
+                LIMIT 1;
+            """
+            var byRef: [AgentTraceRef: ResolvedAgentTraceEvidence] = [:]
+            for ref in distinct {
+                var stmt: OpaquePointer?
+                guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { continue }
+                defer { sqlite3_finalize(stmt) }
+                let sessionStr = ref.sessionID.uuidString
+                sqlite3_bind_text(stmt, 1, (sessionStr as NSString).utf8String,
+                                  -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                sqlite3_bind_text(stmt, 2, (ref.toolCallID as NSString).utf8String,
+                                  -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                guard sqlite3_step(stmt) == SQLITE_ROW else { continue }
+                let key = String(cString: sqlite3_column_text(stmt, 0))
+                let resultRaw = String(cString: sqlite3_column_text(stmt, 1))
+                let result = self.decodeResult(resultRaw, idempotencyKey: key)
+                byRef[ref] = ResolvedAgentTraceEvidence(
+                    ref: ref, idempotencyKey: key, result: result
+                )
+            }
+            var resolved: [ResolvedAgentTraceEvidence] = []
+            var unresolved: [AgentTraceRef] = []
+            for ref in distinct {
+                if let row = byRef[ref] {
+                    resolved.append(row)
+                } else {
+                    unresolved.append(ref)
+                }
+            }
+            return AgentTraceEvidenceResolution(resolved: resolved, unresolved: unresolved)
         }
     }
 
@@ -262,8 +328,8 @@ final class AgentTraceEventStore: @unchecked Sendable {
             defer { sqlite3_finalize(stmt) }
 
             var idx: Int32 = 1
-            if let pane { sqlite3_bind_text(stmt, idx, (pane as NSString).utf8String, -1, nil); idx += 1 }
-            if let project { sqlite3_bind_text(stmt, idx, (project as NSString).utf8String, -1, nil); idx += 1 }
+            if let pane { sqlite3_bind_text(stmt, idx, (pane as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1 }
+            if let project { sqlite3_bind_text(stmt, idx, (project as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1 }
             if let since { sqlite3_bind_double(stmt, idx, since.timeIntervalSince1970); idx += 1 }
 
             guard sqlite3_step(stmt) == SQLITE_ROW else {
@@ -298,8 +364,8 @@ final class AgentTraceEventStore: @unchecked Sendable {
             defer { sqlite3_finalize(stmt) }
 
             var idx: Int32 = 1
-            if let pane { sqlite3_bind_text(stmt, idx, (pane as NSString).utf8String, -1, nil); idx += 1 }
-            if let project { sqlite3_bind_text(stmt, idx, (project as NSString).utf8String, -1, nil); idx += 1 }
+            if let pane { sqlite3_bind_text(stmt, idx, (pane as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1 }
+            if let project { sqlite3_bind_text(stmt, idx, (project as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1 }
             sqlite3_bind_int64(stmt, idx, Int64(limit))
 
             var out: [String] = []
@@ -323,7 +389,7 @@ final class AgentTraceEventStore: @unchecked Sendable {
                        feature, result, started_at, completed_at, latency_ms,
                        tokens_in, tokens_out, cost_cents, redaction_count,
                        validation_status, confirmation_required, egress_decisions,
-                       plan_id, cost_ledger_version
+                       plan_id, cost_ledger_version, session_id, tool_call_id
                 FROM agent_trace_event
                 """
             var clauses: [String] = []
@@ -337,7 +403,7 @@ final class AgentTraceEventStore: @unchecked Sendable {
             defer { sqlite3_finalize(stmt) }
 
             var idx: Int32 = 1
-            if let project { sqlite3_bind_text(stmt, idx, (project as NSString).utf8String, -1, nil); idx += 1 }
+            if let project { sqlite3_bind_text(stmt, idx, (project as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1 }
             if let since { sqlite3_bind_double(stmt, idx, since.timeIntervalSince1970); idx += 1 }
             sqlite3_bind_int64(stmt, idx, Int64(limit))
 
@@ -371,7 +437,9 @@ final class AgentTraceEventStore: @unchecked Sendable {
                     confirmationRequired: sqlite3_column_int64(stmt, 16) != 0,
                     egressDecisions: Int(sqlite3_column_int64(stmt, 17)),
                     planId: text(18),
-                    costLedgerVersion: intOpt(19)
+                    costLedgerVersion: intOpt(19),
+                    sessionId: text(20),
+                    toolCallId: text(21)
                 ))
             }
             return out
@@ -432,7 +500,7 @@ final class AgentTraceEventStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (tier as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (tier as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 2, since.timeIntervalSince1970)
             sqlite3_bind_int64(stmt, 3, Int64(limit))
 
@@ -533,7 +601,7 @@ final class AgentTraceEventStore: @unchecked Sendable {
 
     private static func bindOptionalText(_ stmt: OpaquePointer?, _ index: Int32, _ value: String?) {
         if let val = value {
-            sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         } else {
             sqlite3_bind_null(stmt, index)
         }
@@ -616,6 +684,14 @@ public struct AgentTraceEvent: Sendable, Equatable {
     /// an explicit value so historical rates aren't silently rebased
     /// when the live ledger advances.
     public let costLedgerVersion: Int?
+    /// V.18a-5 — session id paired with this trace row. nil for
+    /// pre-v32 rows + non-routed paths. Cross-cutting JOIN against
+    /// `runtime_telemetry_span` is keyed on (session_id, tool_call_id).
+    public let sessionId: String?
+    /// V.18a-5 — tool-call id paired with this trace row. nil for
+    /// pre-v32 rows + non-routed paths. Cross-cutting JOIN against
+    /// `runtime_telemetry_span` is keyed on (session_id, tool_call_id).
+    public let toolCallId: String?
 
     public init(
         idempotencyKey: String,
@@ -637,7 +713,9 @@ public struct AgentTraceEvent: Sendable, Equatable {
         confirmationRequired: Bool = false,
         egressDecisions: Int = 0,
         planId: String? = nil,
-        costLedgerVersion: Int? = nil
+        costLedgerVersion: Int? = nil,
+        sessionId: String? = nil,
+        toolCallId: String? = nil
     ) {
         self.idempotencyKey = idempotencyKey
         self.pane = pane
@@ -659,6 +737,8 @@ public struct AgentTraceEvent: Sendable, Equatable {
         self.egressDecisions = egressDecisions
         self.planId = planId
         self.costLedgerVersion = costLedgerVersion
+        self.sessionId = sessionId
+        self.toolCallId = toolCallId
     }
 }
 

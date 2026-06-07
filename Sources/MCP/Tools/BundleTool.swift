@@ -24,6 +24,20 @@ import Bundle
 //   - `format` (optional string): "markdown" (default) or "json". The
 //     JSON shape is stable (see BundleDocument). Unknown values fall
 //     back to markdown.
+//   - `preview` (optional bool, default false): U.10a-1. Emit a
+//     ContextManifest review surface as JSON instead of the bundle
+//     body. Mirrors `senkani bundle --preview`. Stable byte-equal
+//     output with the CLI form (parity contract).
+//   - `modes` (optional array of strings): U.10a-1. Restrict the
+//     manifest to the requested modes. Default = the 4 trivial
+//     modes. Unknown entries silently dropped (no crash).
+//   - `lanes` (optional array of strings): U.10a-1. Restrict the
+//     manifest to the requested lanes. Default = all 8.
+//   - `allow_secrets` (optional bool, default false): U.10a-2. Override
+//     the secret gate. When any manifest item carries a SecretDetector
+//     hit (sensitivity=flagged), composeManifestGated refuses unless
+//     this flag is true. Every override fires a chained
+//     bundle.secret.allow audit row in token_events.
 //
 // Safety:
 //   - Any free-text content (README, KB `compiledUnderstanding`)
@@ -99,16 +113,86 @@ enum BundleTool {
         let entities = session.knowledgeStore.allEntities(sortedBy: .mentionCountDesc)
         let readme = BundleComposer.readme(at: root)
 
-        let opts = BundleOptions(
-            projectRoot: root,
-            maxTokens: maxTokens,
-            include: include
-        )
         let inputs = BundleInputs(
             index: index,
             graph: graph,
             entities: entities,
             readme: readme
+        )
+
+        // U.10a-1 preview path — short-circuit before the body composer.
+        let preview = arguments?["preview"]?.boolValue ?? false
+        if preview {
+            // U.10b — pre-resolve slice / diff inputs at the MCP layer
+            // so the producer stays synchronous. Malformed strings
+            // return an isError result before any compose call.
+            let sliceReq: SliceRequest?
+            if let raw = arguments?["slice"]?.stringValue, !raw.isEmpty {
+                guard let parsed = Self.parseSliceArg(raw, projectRoot: root) else {
+                    return .init(content: [.text(
+                        text: "Error: invalid `slice` — expected '<path>:<start>:<end>' with 1 ≤ start ≤ end, path resolvable under projectRoot.",
+                        annotations: nil, _meta: nil)], isError: true)
+                }
+                sliceReq = parsed
+            } else {
+                sliceReq = nil
+            }
+
+            let diffReq: DiffRequest?
+            if let raw = arguments?["diff"]?.stringValue, !raw.isEmpty {
+                guard let parsed = Self.parseDiffArg(raw, projectRoot: root) else {
+                    return .init(content: [.text(
+                        text: "Error: invalid `diff` — expected 'unstaged', 'staged', 'branch:<ref>', or 'range:<a>..<b>'.",
+                        annotations: nil, _meta: nil)], isError: true)
+                }
+                diffReq = parsed
+            } else {
+                diffReq = nil
+            }
+
+            let manifestOpts = ManifestOptions(
+                projectRoot: root,
+                modes: Self.parseModeList(arguments?["modes"]) ?? ContextMode.trivial,
+                lanes: Self.parseLaneList(arguments?["lanes"]) ?? Set(ContextLane.allCases),
+                slice: sliceReq,
+                diff: diffReq
+            )
+            let allowSecrets = arguments?["allow_secrets"]?.boolValue ?? false
+            let manifest: ContextManifest
+            do {
+                manifest = try BundleComposer.composeManifestGated(
+                    options: manifestOpts,
+                    inputs: inputs,
+                    allowSecrets: allowSecrets,
+                    preview: true,
+                    recorder: LiveBundleAuditRecorder(),
+                    sessionId: session.sessionId,
+                    projectRoot: root
+                )
+            } catch let e as ManifestSecretGateError {
+                return .init(content: [.text(
+                    text: "Error: \(e.description)",
+                    annotations: nil, _meta: nil)], isError: true)
+            } catch {
+                return .init(content: [.text(
+                    text: "Error: \(error.localizedDescription)",
+                    annotations: nil, _meta: nil)], isError: true)
+            }
+            let manifestJSON = BundleComposer.renderManifestJSON(manifest)
+            await session.recordMetrics(
+                rawBytes: 0,
+                compressedBytes: manifestJSON.utf8.count,
+                feature: "bundle.preview",
+                command: "preview=true modes=\(manifestOpts.modes.count) lanes=\(manifestOpts.lanes.count) allow_secrets=\(allowSecrets)",
+                outputPreview: String(manifestJSON.prefix(200))
+            )
+            return .init(content: [.text(text: manifestJSON, annotations: nil, _meta: nil)])
+        }
+
+        let opts = BundleOptions(
+            projectRoot: root,
+            maxTokens: maxTokens,
+            include: include
         )
 
         let output = BundleComposer.compose(options: opts, inputs: inputs, format: format)
@@ -203,6 +287,122 @@ enum BundleTool {
         )
 
         return .init(content: [.text(text: output, annotations: nil, _meta: nil)])
+    }
+
+    /// Parse a `Value.array` of strings into a Set of ContextModes.
+    /// Unknown entries are silently dropped (mirrors `include` parsing
+    /// — a typo shouldn't hard-fail the call).
+    fileprivate static func parseModeList(_ raw: Value?) -> Set<ContextMode>? {
+        guard case let .array(arr)? = raw else { return nil }
+        var parsed: Set<ContextMode> = []
+        for v in arr {
+            guard let s = v.stringValue, let m = ContextMode(rawValue: s) else { continue }
+            parsed.insert(m)
+        }
+        return parsed.isEmpty ? nil : parsed
+    }
+
+    fileprivate static func parseLaneList(_ raw: Value?) -> Set<ContextLane>? {
+        guard case let .array(arr)? = raw else { return nil }
+        var parsed: Set<ContextLane> = []
+        for v in arr {
+            guard let s = v.stringValue, let l = ContextLane(rawValue: s) else { continue }
+            parsed.insert(l)
+        }
+        return parsed.isEmpty ? nil : parsed
+    }
+
+    /// U.10b. Parse `slice:"<path>:<start>:<end>"`. Mirrors the CLI's
+    /// parseSlice — path-traversal-safe, returns nil on any malformed
+    /// or unreadable input.
+    fileprivate static func parseSliceArg(
+        _ raw: String, projectRoot: String
+    ) -> SliceRequest? {
+        let components = raw.components(separatedBy: ":")
+        guard components.count == 3,
+              !components[0].isEmpty,
+              let start = Int(components[1]),
+              let end = Int(components[2]),
+              start >= 1, end >= start
+        else { return nil }
+        let relPath = components[0]
+        let absPath: String
+        if relPath.hasPrefix("/") {
+            absPath = relPath
+        } else {
+            absPath = (projectRoot as NSString).appendingPathComponent(relPath)
+        }
+        let resolved = URL(fileURLWithPath: absPath).standardizedFileURL.path
+        let rootResolved = URL(fileURLWithPath: projectRoot).standardizedFileURL.path
+        guard resolved.hasPrefix(rootResolved + "/") || resolved == rootResolved else {
+            return nil
+        }
+        guard let body = try? String(contentsOfFile: resolved, encoding: .utf8) else {
+            return nil
+        }
+        let lines = body.split(separator: "\n", omittingEmptySubsequences: false)
+        let lo = max(0, start - 1)
+        let hi = min(lines.count, end)
+        guard lo < hi else { return nil }
+        let sliced = lines[lo..<hi].joined(separator: "\n")
+        return SliceRequest(
+            path: relPath,
+            range: ContextRange(start: start, end: end),
+            content: sliced
+        )
+    }
+
+    /// U.10b. Parse `diff:"<selector>"` and shell `git diff`. Mirrors
+    /// the CLI's parseDiff; returns nil on parser or git failure.
+    fileprivate static func parseDiffArg(
+        _ raw: String, projectRoot: String
+    ) -> DiffRequest? {
+        guard let selector = DiffSelector(rawValue: raw) else { return nil }
+        let args: [String]
+        switch selector {
+        case .unstaged: args = ["diff"]
+        case .staged: args = ["diff", "--cached"]
+        case .branch(let ref): args = ["diff", "\(ref)...HEAD"]
+        case .range(let a, let b): args = ["diff", "\(a)..\(b)"]
+        }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        proc.arguments = ["git", "-C", projectRoot] + args
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = Pipe()
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+        } catch {
+            return nil
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let patch = String(data: data, encoding: .utf8) ?? ""
+        var result: [String: String] = [:]
+        let lines = patch.split(separator: "\n", omittingEmptySubsequences: false)
+        var current: String? = nil
+        var buffer: [String] = []
+        func flush() {
+            if let path = current {
+                result[path, default: ""] += buffer.joined(separator: "\n")
+            }
+            buffer.removeAll(keepingCapacity: true)
+        }
+        for line in lines {
+            if line.hasPrefix("diff --git ") {
+                flush()
+                let tokens = line.split(separator: " ", omittingEmptySubsequences: true)
+                if let last = tokens.last, last.hasPrefix("b/") {
+                    current = String(last.dropFirst(2))
+                } else {
+                    current = nil
+                }
+            }
+            buffer.append(String(line))
+        }
+        flush()
+        return DiffRequest(selector: selector, perFileDiff: result)
     }
 
     /// Rough source-byte estimate for the savings metric. Walks the

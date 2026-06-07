@@ -5,9 +5,48 @@ import Foundation
 @Suite("Pane Gallery")
 struct PaneGalleryTests {
 
-    @Test func allEntriesCoversAll18PaneTypes() {
+    @Test func allEntriesCoversEveryPaneType() throws {
+        // Count is DERIVED from the shipped `PaneType` enum (parsed off disk,
+        // since the SenkaniApp exe target is not importable) rather than a
+        // hardcoded literal — a literal re-staled at 18 once already and is
+        // what this finding fixes. The gallery must carry exactly one entry
+        // per pane type, so its count equals the enum case count.
+        let source = try PanesReferenceDriftTests.readFile(
+            PanesReferenceDriftTests.paneTypeRelPath)
+        let enumCaseCount = PanesReferenceDriftTests.paneTypeRawValues(in: source).count
+        #expect(enumCaseCount > 0,
+                "Failed to parse PaneType cases — parser or enum changed shape")
         let entries = PaneGalleryBuilder.allEntries()
-        #expect(entries.count == 18, "Should have 18 pane types, got \(entries.count)")
+        #expect(entries.count == enumCaseCount,
+                "Gallery has \(entries.count) entries but PaneType has \(enumCaseCount) cases")
+    }
+
+    @Test func galleryIDsMatchPanesReferenceSlugs() throws {
+        // Parity pin against the website. `allEntries()` ids must equal the
+        // `docs/reference/panes.html` card slug set, modulo the documented
+        // slug↔camelCase mapping and `scheduleManager`→`schedules`. This is the
+        // CI catch for the drift class that previously surfaced only by manual
+        // audit (e.g. artifactGallery / openAIServedRequests / schedules added
+        // to the enum + gallery but the reference page left stale).
+        let html = try PanesReferenceDriftTests.readFile(
+            PanesReferenceDriftTests.panesHTMLRelPath)
+        let slugs = PanesReferenceDriftTests.cardSlugs(in: html)
+        #expect(!slugs.isEmpty, "Parsed no card slugs from panes.html")
+
+        // slug → PaneType rawValue → gallery id. Gallery id equals the rawValue
+        // for every pane except `scheduleManager`, whose gallery id is `schedules`.
+        let slugGalleryIDs = Set(slugs.map { slug -> String in
+            let raw = PanesReferenceDriftTests.expectedRawValue(forSlug: slug)
+            return raw == "scheduleManager" ? "schedules" : raw
+        })
+        let galleryIDs = Set(PaneGalleryBuilder.allEntries().map(\.id))
+
+        let galleryOnly = galleryIDs.subtracting(slugGalleryIDs).sorted()
+        let docsOnly = slugGalleryIDs.subtracting(galleryIDs).sorted()
+        #expect(galleryOnly.isEmpty,
+                "Gallery ships panes the reference page omits: \(galleryOnly)")
+        #expect(docsOnly.isEmpty,
+                "Reference page documents panes the gallery omits: \(docsOnly)")
     }
 
     @Test func dashboardIsPresent() {
@@ -22,6 +61,64 @@ struct PaneGalleryTests {
         let entries = PaneGalleryBuilder.allEntries()
         let ids = entries.map(\.id)
         #expect(Set(ids).count == ids.count, "IDs must be unique")
+    }
+
+    @Test func launchMapMatchesGallery() {
+        // Regression pin: `artifactGallery` shipped in the gallery (and so in
+        // the ⌘K palette rows) but was missing from the command palette's
+        // launch map, making "New Artifact Gallery" a silent dead click. The
+        // app-target launchers (ContentView.addPaneByTypeId + AddPaneSheet)
+        // now derive from PaneGalleryBuilder.launchMap, so this Core test is
+        // the single guard that every gallery id has a launch path and that
+        // the launch map advertises no id the gallery doesn't ship.
+        let galleryIDs = Set(PaneGalleryBuilder.allEntries().map(\.id))
+        let launchIDs = Set(PaneGalleryBuilder.launchMap.keys)
+        let galleryOnly = galleryIDs.subtracting(launchIDs)
+        let launchOnly = launchIDs.subtracting(galleryIDs)
+        #expect(galleryOnly.isEmpty,
+                "Gallery ships panes with no launch path (dead ⌘K rows): \(galleryOnly)")
+        #expect(launchOnly.isEmpty,
+                "Launch map references ids not in the gallery: \(launchOnly)")
+    }
+
+    @Test func everyLaunchIDResolvesToNonEmptyDefaultTitle() {
+        // The ⌘K command palette (ContentView.addPaneByTypeId) titles a new
+        // pane via PaneGalleryBuilder.defaultTitle(forLaunchID:), matching the
+        // Add-Pane sheet. Every launchMap key MUST resolve to a non-nil,
+        // non-empty title — a nil would fall back to the camelCase id (the
+        // ugly-title defect this guards), and an empty title would render a
+        // blank pane header.
+        for id in PaneGalleryBuilder.launchMap.keys {
+            let title = PaneGalleryBuilder.defaultTitle(forLaunchID: id)
+            #expect(title != nil,
+                    "launchMap key '\(id)' has no gallery entry — would fall back to ugly id.capitalized")
+            #expect(!(title ?? "").isEmpty,
+                    "launchMap key '\(id)' resolves to an empty defaultTitle")
+        }
+    }
+
+    @Test func camelCaseLaunchIDsResolveToCleanTitles() {
+        // Regression pin: the ⌘K palette shipped `typeId.capitalized`, so a
+        // camelCase gallery id collapsed to one mangled word
+        // (`artifactGallery` → "Artifactgallery") while the Add-Pane sheet
+        // showed the clean `defaultTitle`. Both surfaces must now agree.
+        let expected: [String: String] = [
+            "artifactGallery": "Artifacts",
+            "openAIServedRequests": "Served Requests",
+            "skillLibrary": "Skills",
+            "agentTimeline": "Timeline",
+            "knowledgeBase": "Knowledge",
+            "sprintReview": "Sprint Review",
+        ]
+        for (id, title) in expected {
+            #expect(PaneGalleryBuilder.defaultTitle(forLaunchID: id) == title,
+                    "Launch id '\(id)' should title to '\(title)', not id.capitalized")
+        }
+    }
+
+    @Test func unknownLaunchIDResolvesToNil() {
+        #expect(PaneGalleryBuilder.defaultTitle(forLaunchID: "nonexistentPaneId") == nil,
+                "An id with no gallery entry must return nil so the caller can fall back")
     }
 
     @Test func everyCategoryHasAtMostSixEntries() {

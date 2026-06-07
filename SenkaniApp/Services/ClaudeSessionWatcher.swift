@@ -9,9 +9,50 @@ import Core
 /// the active file for new lines. Handles conversation rotation automatically.
 ///
 /// Source: ~/.claude/projects/<encoded-cwd>/*.jsonl
-class ClaudeSessionWatcher {
+///
+/// Concurrency contract: all mutable state below is owned by `stateQueue`
+/// (a private serial dispatch queue). Reads and writes — including from
+/// dispatch-source event and cancel handlers — must run on
+/// `stateQueue.async`. Dispatch sources still publish events on
+/// `.global(qos: .utility)` (no back-pressure on filesystem events), but
+/// their handlers hop to `stateQueue` before touching state. Each source's
+/// cancel handler captures its file descriptor as a LOCAL — never reads
+/// `self.fileFD` / `self.dirFD` — so cancelling a stale source closes the
+/// correct fd even if `startWatchingFile` has already reassigned the
+/// property to a newer fd. Rationale: the original design read
+/// `self.fileFD` inside the cancel handler closure, which crashed the app
+/// (`EXC_BREAKPOINT` at `makeFileSystemObjectSource`) when a stale cancel
+/// handler raced with a fresh `open()`+`makeFileSystemObjectSource()` and
+/// closed the just-opened fd before the source could bind to it.
+///
+/// Burst-rotation contract: the file `setEventHandler` closure captures the
+/// intended path as a LOCAL, and the `stateQueue.async` body guards on
+/// `self.watchedFile == capturedPath` before reading. Without this guard,
+/// pending events from a stale `fileSource` (cancelled but not yet
+/// drained) re-run after a fresh `startWatchingFile` has already
+/// reassigned `watchedFile`, causing the leftover events to read the NEW
+/// active file from offset 0 — the 95% double-emit observed in the 200×10
+/// burst harness (`claude-session-watcher-stress-harness-burst-rotation-
+/// double-emit-and-partial-drop-2026-05-15`). The guard short-circuits
+/// stale callbacks without losing data: the rotation path drains the prior
+/// file via `ClaudeSessionWatcherPlan` before the watch flips. Combined
+/// with the planner's intermediate-file drain (silent-drop fix), a burst
+/// of 200 sessions × 10 events ingests exactly 2000 rows.
+///
+/// Restart contract: per-file read progress lives in
+/// `claude_session_cursors` (keyed by absolute path). On every batch the
+/// watcher delegates to `ClaudeSessionTail.tail`, which reads from the
+/// persisted offset and writes the post-read offset back. Restarts pick
+/// up exactly where the prior process stopped — historical lines are not
+/// re-emitted (`claude-session-watcher-restart-double-count-2026-05-14`).
+final class ClaudeSessionWatcher: @unchecked Sendable {
     private let projectRoot: String
     private let paneId: UUID
+    private let database: SessionDatabase
+    private let claudeProjectDirOverride: String?
+
+    // Serial queue owns ALL mutable state below.
+    private let stateQueue = DispatchQueue(label: "dev.senkani.claude-session-watcher")
 
     // Directory watching — detects new conversation files
     private var dirSource: DispatchSourceFileSystemObject?
@@ -20,12 +61,13 @@ class ClaudeSessionWatcher {
     // Current file tailing — reads new JSONL lines
     private var fileSource: DispatchSourceFileSystemObject?
     private var fileFD: Int32 = -1
-    private var fileHandle: FileHandle?
-    private var lastReadOffset: UInt64 = 0
     private var watchedFile: String?
 
-    // Track files we've already started reading to avoid double-counting
-    private var processedFiles: Set<String> = []
+    // Files we've called `ClaudeSessionTail.tail` on at least once during
+    // this process's lifetime. Used by `ClaudeSessionWatcherPlan` to skip
+    // repeated drain attempts under burst (cursor table is the source of
+    // truth on restart, so this in-memory set is safe to drop).
+    private var drainedFiles: Set<String> = []
 
     /// Compute the Claude Code session directory for a project path.
     /// Claude encodes paths by replacing / with -, keeping the leading dash.
@@ -35,188 +77,175 @@ class ClaudeSessionWatcher {
         return NSHomeDirectory() + "/.claude/projects/" + encoded
     }
 
-    init(projectRoot: String, paneId: UUID) {
+    init(projectRoot: String,
+         paneId: UUID,
+         database: SessionDatabase = .shared,
+         claudeProjectDirOverride: String? = nil) {
         // Normalize for consistent DB storage
         self.projectRoot = URL(fileURLWithPath: projectRoot).standardized.path
         self.paneId = paneId
+        self.database = database
+        self.claudeProjectDirOverride = claudeProjectDirOverride
     }
 
     func start() {
-        let dir = Self.claudeProjectDir(for: projectRoot)
+        stateQueue.async { [weak self] in
+            guard let self else { return }
+            let dir = self.resolvedClaudeDir()
+            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            self.startDirectoryWatcher(dir: dir)
+            self.checkForNewSession()
+        }
+    }
 
-        // Ensure the directory exists (Claude Code may not have created it yet)
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-
-        // Start directory watcher — fires when new .jsonl files appear
-        startDirectoryWatcher(dir: dir)
-
-        // Check for existing session files immediately
-        checkForNewSession()
+    private func resolvedClaudeDir() -> String {
+        claudeProjectDirOverride ?? Self.claudeProjectDir(for: projectRoot)
     }
 
     // MARK: - Directory Watching
+    // Caller MUST be on stateQueue.
 
     private func startDirectoryWatcher(dir: String) {
-        dirFD = open(dir, O_RDONLY | O_EVTONLY)
-        guard dirFD >= 0 else {
+        let fd = open(dir, O_RDONLY | O_EVTONLY)
+        guard fd >= 0 else {
             Logger.log("claude_session_watcher.dir_open_failed", fields: ["dir": .path(dir)])
             return
         }
 
         let src = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: dirFD,
+            fileDescriptor: fd,
             eventMask: [.write],
             queue: .global(qos: .utility)
         )
         src.setEventHandler { [weak self] in
-            self?.checkForNewSession()
+            self?.stateQueue.async { [weak self] in self?.checkForNewSession() }
         }
-        src.setCancelHandler { [weak self] in
-            guard let self, self.dirFD >= 0 else { return }
-            close(self.dirFD)
-            self.dirFD = -1
-        }
+        // Cancel handler captures `fd` LOCALLY — does not read self.dirFD.
+        // This is the load-bearing detail; see class-level contract.
+        src.setCancelHandler { close(fd) }
         src.resume()
+
+        dirFD = fd
         dirSource = src
     }
 
     private func checkForNewSession() {
-        let dir = Self.claudeProjectDir(for: projectRoot)
-        guard let latest = findLatestSession(in: dir) else { return }
+        let dir = resolvedClaudeDir()
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return }
 
-        // Same file we're already watching — no switch needed
-        if latest == watchedFile { return }
+        let plan = ClaudeSessionWatcherPlan.plan(
+            directoryFiles: entries,
+            dirPath: dir,
+            currentWatched: watchedFile,
+            drainedFiles: drainedFiles,
+            mtime: { path in
+                (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date) ?? .distantPast
+            }
+        )
 
-        // Finish reading remaining lines from old file before switching
-        if watchedFile != nil {
-            readNewMessages()
+        // Drain every intermediate file the planner identified. Cursor-
+        // idempotent so re-tailing a fully-read file is cheap. The
+        // `drainedFiles` set prevents O(N²) re-iteration under burst.
+        for path in plan.toDrain {
+            _ = ClaudeSessionTail.tail(
+                path: path,
+                projectRoot: projectRoot,
+                paneId: paneId.uuidString,
+                db: database
+            )
+            drainedFiles.insert(path)
         }
 
-        // If we've seen this file before, seek to end to avoid double-counting.
-        // If it's brand new, read from the beginning — every line is unprocessed.
-        let seekToEnd = processedFiles.contains(latest)
-        startWatchingFile(latest, seekToEnd: seekToEnd)
-        processedFiles.insert(latest)
+        if let next = plan.newWatched {
+            startWatchingFile(next)
+        }
     }
 
     // MARK: - File Tailing
+    // Caller MUST be on stateQueue.
 
-    private func startWatchingFile(_ path: String, seekToEnd: Bool) {
-        // Clean up old file watcher
+    private func startWatchingFile(_ path: String) {
+        let prior = watchedFile
+
+        // Tear down the old file watcher. Source-cancellation is async; the
+        // cancel handler closes the OLD fd via its locally-captured `fd`,
+        // so we do NOT call close(fileFD) here — that would double-close
+        // once the cancel handler runs.
         fileSource?.cancel()
         fileSource = nil
-        fileHandle?.closeFile()
-        fileHandle = nil
-        if fileFD >= 0 { close(fileFD); fileFD = -1 }
+        fileFD = -1
 
         watchedFile = path
 
-        guard let fh = FileHandle(forReadingAtPath: path) else {
+        let fd = open(path, O_RDONLY | O_EVTONLY)
+        guard fd >= 0 else {
             Logger.log("claude_session_watcher.open_failed", fields: ["path": .path(path)])
             return
         }
-        if seekToEnd {
-            fh.seekToEndOfFile()
-        }
-        lastReadOffset = fh.offsetInFile
-        fileHandle = fh
-
-        fileFD = open(path, O_RDONLY | O_EVTONLY)
-        guard fileFD >= 0 else { return }
 
         let src = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fileFD,
+            fileDescriptor: fd,
             eventMask: [.write, .extend],
             queue: .global(qos: .utility)
         )
+        // Capture the intended path locally. The stateQueue body guards on
+        // `self.watchedFile == capturedPath` so leftover events from a
+        // cancelled source can't read the post-rotation file from offset 0.
+        // See class-level "Burst-rotation contract".
+        let capturedPath = path
         src.setEventHandler { [weak self] in
-            self?.readNewMessages()
+            self?.stateQueue.async { [weak self] in
+                guard let self, self.watchedFile == capturedPath else { return }
+                self.readNewMessages()
+            }
         }
-        src.setCancelHandler { [weak self] in
-            guard let self, self.fileFD >= 0 else { return }
-            close(self.fileFD)
-            self.fileFD = -1
-        }
+        // Captures `fd` locally — see class-level contract.
+        src.setCancelHandler { close(fd) }
         src.resume()
+
+        fileFD = fd
         fileSource = src
 
-        // Read any existing content (for new files, this reads from the beginning)
+        if let prior {
+            Logger.log("claude_session_watcher.rotated",
+                       fields: ["from": .path(prior), "to": .path(path)])
+        } else {
+            Logger.log("claude_session_watcher.attached",
+                       fields: ["path": .path(path)])
+        }
+
+        // Initial drain — cursor decides whether this is suffix-only or first read.
         readNewMessages()
     }
 
     private func readNewMessages() {
-        guard let fh = fileHandle else { return }
-
-        fh.seek(toFileOffset: lastReadOffset)
-        let newData = fh.readDataToEndOfFile()
-        let newOffset = fh.offsetInFile
-        guard newOffset > lastReadOffset, !newData.isEmpty,
-              let text = String(data: newData, encoding: .utf8) else { return }
-        lastReadOffset = newOffset
-
-        let lines = text.components(separatedBy: "\n").filter { !$0.isEmpty }
-
-        for line in lines {
-            guard let data = line.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-
-            // Only process assistant messages with usage data
-            guard json["type"] as? String == "assistant",
-                  let message = json["message"] as? [String: Any],
-                  let usage = message["usage"] as? [String: Any] else { continue }
-
-            let inputTokens = usage["input_tokens"] as? Int ?? 0
-            let outputTokens = usage["output_tokens"] as? Int ?? 0
-            let model = message["model"] as? String
-
-            SessionDatabase.shared.recordTokenEvent(
-                sessionId: json["sessionId"] as? String ?? "unknown",
-                paneId: paneId.uuidString,
-                projectRoot: projectRoot,
-                source: "claude_session",
-                toolName: nil,
-                model: model,
-                inputTokens: inputTokens,
-                outputTokens: outputTokens,
-                savedTokens: 0,
-                costCents: Self.estimateCost(input: inputTokens, output: outputTokens, model: model),
-                feature: nil,
-                command: nil
-            )
-        }
-    }
-
-    private static func estimateCost(input: Int, output: Int, model: String?) -> Int {
-        let pricing = ModelPricing.find(model ?? "sonnet")
-        let dollars = Double(input) / 1_000_000.0 * pricing.inputPerMillion
-                    + Double(output) / 1_000_000.0 * pricing.outputPerMillion
-        return Int(dollars * 100.0)
-    }
-
-    private func findLatestSession(in dir: String) -> String? {
-        guard let files = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return nil }
-        let jsonlFiles = files.filter { $0.hasSuffix(".jsonl") && !$0.contains("index") }
-
-        return jsonlFiles
-            .map { dir + "/" + $0 }
-            .sorted { path1, path2 in
-                let t1 = (try? FileManager.default.attributesOfItem(atPath: path1)[.modificationDate] as? Date) ?? .distantPast
-                let t2 = (try? FileManager.default.attributesOfItem(atPath: path2)[.modificationDate] as? Date) ?? .distantPast
-                return t1 > t2
-            }
-            .first
+        guard let path = watchedFile else { return }
+        _ = ClaudeSessionTail.tail(
+            path: path,
+            projectRoot: projectRoot,
+            paneId: paneId.uuidString,
+            db: database
+        )
     }
 
     func stop() {
-        dirSource?.cancel()
-        dirSource = nil
-        fileSource?.cancel()
-        fileSource = nil
-        fileHandle?.closeFile()
-        fileHandle = nil
+        stateQueue.async { [weak self] in
+            guard let self else { return }
+            self.dirSource?.cancel()
+            self.dirSource = nil
+            self.fileSource?.cancel()
+            self.fileSource = nil
+            self.fileFD = -1
+            self.dirFD = -1
+        }
     }
 
     deinit {
-        stop()
+        // `stop()` is async and may not run before deallocation, so cancel
+        // sources directly here. Each source's cancel handler captures its
+        // fd as a local, so the fds close correctly without needing `self`
+        // to still exist.
+        dirSource?.cancel()
+        fileSource?.cancel()
     }
 }

@@ -251,13 +251,13 @@ struct InjectionPerformanceTests {
             input += chunk
         }
 
-        // Median-of-3 — see DependencyGraphPerfGateTests for the canonical
+        // Min-of-N — see DependencyGraphPerfGateTests for the canonical
         // pattern. `.serialized` only serializes within-suite, so peer-suite
         // CPU contention can spike a single sample under parallel runner;
         // a single transient spike on one of three runs cannot fail the
         // test, but a real regression (every run blows budget) still does.
         // Threshold preserved at 500 ms — the prior O(n²) pass took seconds,
-        // so the regression bar sits well above the median bound.
+        // so the regression bar sits well above the min-of-3 bound.
         var samples: [TimeInterval] = []
         var lastDetections: [String] = []
         for _ in 0..<3 {
@@ -266,12 +266,10 @@ struct InjectionPerformanceTests {
             samples.append(Date().timeIntervalSince(start))
             lastDetections = result.detections
         }
-        let median = samples.sorted()[1]
-
         #expect(lastDetections.isEmpty, "Benign input must not trigger detections, got \(lastDetections)")
         #expect(
-            median < 0.5,
-            "median of 3 normalize+scan on 1 MB benign input: \(samples) → median \(median)s"
+            PerfGate.passes(samples: samples, budget: 0.5),
+            "min of 3 normalize+scan on 1 MB benign input must be < 0.5s: \(samples)"
         )
     }
 }

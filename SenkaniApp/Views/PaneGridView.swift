@@ -140,6 +140,10 @@ private struct PaneRightEdgeHandle: View {
             }
         }
         .frame(width: SenkaniTheme.resizeHandleHitWidth)
+        // Skip the top region so the handle never intercepts clicks on the
+        // pane-close `X` in the header or the settings-panel `X` at the
+        // top-trailing of the body. See SenkaniTheme.resizeHandleTopExclusionInset.
+        .padding(.top, SenkaniTheme.resizeHandleTopExclusionInset)
         .onHover { hovering in
             isHovering = hovering
             if hovering {

@@ -21,21 +21,24 @@ struct BudgetEnforcementDualLayerTests {
 
     // MARK: - Helpers
 
-    private func makeSession() -> MCPSession {
-        MCPSession(
-            projectRoot: "/tmp/senkani-budget-dual-\(UUID().uuidString.prefix(8))",
+    private func makeSession() -> (MCPSession, String) {
+        let root = "/tmp/senkani-budget-dual-\(UUID().uuidString.prefix(8))"
+        let session = MCPSession(
+            projectRoot: root,
             filterEnabled: false,
             secretsEnabled: false,
             indexerEnabled: false,
             cacheEnabled: false
         )
+        return (session, root)
     }
 
     // MARK: - (a) MCP gate — global per-session limit
 
     @Test("MCP gate blocks on global per-session limit")
     func mcpBlocksOnGlobalSessionLimit() async {
-        let session = makeSession()
+        let (session, root) = makeSession()
+        defer { TempSessionDatabase.cleanup(projectRoot: root) }
         // 140 000 raw bytes → 10¢ cost savings (Claude Sonnet 4 pricing).
         await session.recordMetrics(rawBytes: 140_000, compressedBytes: 0, feature: "test")
 
@@ -53,7 +56,8 @@ struct BudgetEnforcementDualLayerTests {
 
     @Test("MCP gate warns at global per-session soft limit")
     func mcpWarnsOnGlobalSessionSoftLimit() async {
-        let session = makeSession()
+        let (session, root) = makeSession()
+        defer { TempSessionDatabase.cleanup(projectRoot: root) }
         // 120 000 bytes → 9¢ — above 8¢ soft limit, below 10¢ hard.
         await session.recordMetrics(rawBytes: 120_000, compressedBytes: 0, feature: "test")
 
@@ -111,7 +115,8 @@ struct BudgetEnforcementDualLayerTests {
 
     @Test("Pane-cap fires at MCP layer independently of global config")
     func paneCapIndependentOfGlobal() async {
-        let session = makeSession()
+        let (session, root) = makeSession()
+        defer { TempSessionDatabase.cleanup(projectRoot: root) }
         await session.updateConfig(budgetSessionCents: 10)
         await session.recordMetrics(rawBytes: 140_000, compressedBytes: 0, feature: "test")
 
@@ -131,7 +136,8 @@ struct BudgetEnforcementDualLayerTests {
 
     @Test("Below-limit call passes both layers cleanly")
     func bothLayersAllowBelowLimit() async {
-        let session = makeSession()
+        let (session, root) = makeSession()
+        defer { TempSessionDatabase.cleanup(projectRoot: root) }
         // 50 000 bytes → 3¢, well below either limit.
         await session.recordMetrics(rawBytes: 50_000, compressedBytes: 0, feature: "test")
 
@@ -188,7 +194,8 @@ struct BudgetEnforcementDualLayerTests {
         // must NOT require any hook plumbing. This test calls the MCP gate
         // with (a) a pane cap, (b) a global session limit, and (c) no hook
         // setup whatsoever. Both sub-cases must still block.
-        let session = makeSession()
+        let (session, root) = makeSession()
+        defer { TempSessionDatabase.cleanup(projectRoot: root) }
         await session.recordMetrics(rawBytes: 140_000, compressedBytes: 0, feature: "test")
 
         // Subcase 1: pane-cap only
@@ -202,7 +209,8 @@ struct BudgetEnforcementDualLayerTests {
         }
 
         // Subcase 2: global per-session only (no pane-cap — fresh session)
-        let session2 = makeSession()
+        let (session2, root2) = makeSession()
+        defer { TempSessionDatabase.cleanup(projectRoot: root2) }
         await session2.recordMetrics(rawBytes: 140_000, compressedBytes: 0, feature: "test")
         let globalDecision = await BudgetConfig.withTestOverrideAsync(
             BudgetConfig(perSessionLimitCents: 10)

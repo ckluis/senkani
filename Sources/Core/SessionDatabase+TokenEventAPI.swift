@@ -30,10 +30,16 @@ extension SessionDatabase {
         public let outputTokens: Int
         public let savedTokens: Int
         public let costCents: Int
+        /// V.18a-7 — session correlation key for the runtime-error badge.
+        /// `token_events.session_id` joins to
+        /// `runtime_telemetry_span.session_id`; the timeline pane uses
+        /// this to find ERROR/p99 spans tied to each row.
+        public let sessionId: String?
 
         public init(id: Int64, timestamp: Date, source: String, toolName: String?,
                     feature: String?, command: String?, inputTokens: Int,
-                    outputTokens: Int, savedTokens: Int, costCents: Int) {
+                    outputTokens: Int, savedTokens: Int, costCents: Int,
+                    sessionId: String? = nil) {
             self.id = id
             self.timestamp = timestamp
             self.source = source
@@ -44,6 +50,7 @@ extension SessionDatabase {
             self.outputTokens = outputTokens
             self.savedTokens = savedTokens
             self.costCents = costCents
+            self.sessionId = sessionId
         }
     }
 
@@ -104,7 +111,16 @@ extension SessionDatabase {
         feature: String?,
         command: String?,
         modelTier: String? = nil,
-        connectionId: String? = nil
+        connectionId: String? = nil,
+        // V.19a-2 — cached-token accounting. Defaults preserve all
+        // existing call sites; MCP-layer inference adapters wiring the
+        // V.19a-1 MLXPrefixCache lifecycle hooks pass non-nil values.
+        // See `TokenEventStore.recordTokenEvent` for column semantics.
+        cachedPromptTokens: Int? = nil,
+        cacheWriteTokens: Int? = nil,
+        cacheReadTokens: Int? = nil,
+        prefillMsSavedEstimate: Int? = nil,
+        cacheOrigin: CacheOrigin? = nil
     ) {
         tokenEventStore.recordTokenEvent(
             sessionId: sessionId, paneId: paneId, projectRoot: projectRoot,
@@ -112,12 +128,175 @@ extension SessionDatabase {
             inputTokens: inputTokens, outputTokens: outputTokens,
             savedTokens: savedTokens, costCents: costCents,
             feature: feature, command: command, modelTier: modelTier,
-            connectionId: connectionId
+            connectionId: connectionId,
+            cachedPromptTokens: cachedPromptTokens,
+            cacheWriteTokens: cacheWriteTokens,
+            cacheReadTokens: cacheReadTokens,
+            prefillMsSavedEstimate: prefillMsSavedEstimate,
+            cacheOrigin: cacheOrigin
         )
         OnboardingMilestoneStore.record(.firstTrackedEvent)
         if savedTokens > 0 {
             OnboardingMilestoneStore.record(.firstNonzeroSavings)
         }
+    }
+
+    /// Returns true when at least one `token_events` row has the given
+    /// `(source, feature)` pair. Surface used by
+    /// `senkani doctor --install-validation-browser` to idempotently
+    /// gate the chained-row write on first detection.
+    public func tokenEventExists(source: String, feature: String) -> Bool {
+        tokenEventStore.tokenEventExists(source: source, feature: feature)
+    }
+
+    /// U.11-pre a-3 — record a `workstream.<event>` chained audit row
+    /// for a `PaneSessionDriver` lifecycle transition. Forwards to
+    /// `TokenEventStore.recordWorkstreamEvent`. Pre-v33 anchors
+    /// silently drop the row (the writer logs the drop with
+    /// `anchor_reason`).
+    public func recordWorkstreamEvent(
+        workstreamID: UUID,
+        slug: String,
+        event: WorkstreamChainEvent
+    ) {
+        tokenEventStore.recordWorkstreamEvent(
+            workstreamID: workstreamID,
+            slug: slug,
+            event: event
+        )
+    }
+
+    /// U.11a-1 — record a `contract.<event>` chained audit row for a
+    /// `WorkstreamTaskContract` attach/advance transition. Forwards to
+    /// `TokenEventStore.recordContractEvent`. Pre-v33 anchors silently
+    /// drop the row (the writer logs the drop with `anchor_reason`).
+    public func recordContractEvent(
+        contractID: UUID,
+        workstreamID: UUID,
+        event: ContractChainEvent
+    ) {
+        tokenEventStore.recordContractEvent(
+            contractID: contractID,
+            workstreamID: workstreamID,
+            event: event
+        )
+    }
+
+    /// U.11a-2 — record an `assertion.record` chained audit row for a
+    /// `ValidationAssertion` evidence write. Forwards to
+    /// `TokenEventStore.recordAssertionEvent`. Pre-v33 anchors
+    /// silently drop the row (the writer logs the drop with
+    /// `anchor_reason`).
+    public func recordAssertionEvent(
+        assertionID: UUID,
+        contractID: UUID,
+        state: AssertionState
+    ) {
+        tokenEventStore.recordAssertionEvent(
+            assertionID: assertionID,
+            contractID: contractID,
+            state: state
+        )
+    }
+
+    /// U.11a-3 — record a `gate.evaluate` chained audit row for a
+    /// `WorkflowGate` consult. Forwards to
+    /// `TokenEventStore.recordGateEvent`. Pre-v33 anchors silently
+    /// drop the row (the writer logs the drop with `anchor_reason`).
+    public func recordGateEvent(
+        gateID: UUID,
+        contractID: UUID,
+        outcome: GateOutcome
+    ) {
+        tokenEventStore.recordGateEvent(
+            gateID: gateID,
+            contractID: contractID,
+            outcome: outcome
+        )
+    }
+
+    /// U.11a-4 — record a `handoff.open` or `handoff.close` chained
+    /// audit row in `token_events`. Forwards to
+    /// `TokenEventStore.recordHandoffEvent`. Pre-v33 anchors silently
+    /// drop the row (the writer logs the drop with `anchor_reason`).
+    public func recordHandoffEvent(
+        handoffID: UUID,
+        workstreamID: UUID,
+        contractID: UUID,
+        gateID: UUID,
+        event: HandoffChainEvent
+    ) {
+        tokenEventStore.recordHandoffEvent(
+            handoffID: handoffID,
+            workstreamID: workstreamID,
+            contractID: contractID,
+            gateID: gateID,
+            event: event
+        )
+    }
+
+    /// U.11a-4 — persist a `BlockedHandoff` to the dedicated
+    /// `workstream_handoffs` chained table. Forwards to
+    /// `TokenEventStore.recordBlockedHandoff`. The table is brand-new
+    /// in migration v40; there is no pre-v40 anchor refusal path —
+    /// callers running on a v40+ schema always land a row.
+    public func recordBlockedHandoff(
+        handoff: BlockedHandoff,
+        contractID: UUID
+    ) {
+        tokenEventStore.recordBlockedHandoff(
+            handoff: handoff,
+            contractID: contractID
+        )
+    }
+
+    /// V.17c — accept a thread handoff and persist a chained
+    /// `thread_handoff_event` audit row. Forwards to
+    /// `TokenEventStore.recordThreadHandoff`.
+    ///
+    /// Returns `.recorded` on a fresh accept, `.idempotencyHit` when the
+    /// thread was already imported into the same target provider (dedup),
+    /// and `.rejectedMissingOverrideReason` when an override was
+    /// attempted with an empty/whitespace justification (no row written).
+    /// The table is brand-new in migration v43; there is no pre-v43
+    /// anchor refusal path.
+    @discardableResult
+    public func recordThreadHandoff(_ handoff: ThreadHandoff) -> ThreadHandoffOutcome {
+        tokenEventStore.recordThreadHandoff(handoff)
+    }
+
+    /// V.17c — `thread_handoff_event` row count. Test affordance.
+    public func threadHandoffCount() -> Int {
+        tokenEventStore.threadHandoffCount()
+    }
+
+    /// V.17c — latest `(pre, post, override_reason)` for a handed-off
+    /// thread. Test affordance for the audit-row assertions.
+    public func latestThreadHandoff(threadID: String) -> (pre: Int, post: Int, overrideReason: String?)? {
+        tokenEventStore.latestThreadHandoff(threadID: threadID)
+    }
+
+    /// T.3a-4 — record a wasm_kill chained row. Forwards to
+    /// `TokenEventStore.recordWasmKill`. Pre-v33 anchors silently drop
+    /// the row (see TokenEventStore for the gate).
+    public func recordWasmKill(
+        sessionId: String,
+        reason: WasmKillReason,
+        durationUs: Int64,
+        budgetDeltaUs: Int64,
+        toolId: String?,
+        projectRoot: String? = nil,
+        paneId: String? = nil
+    ) {
+        tokenEventStore.recordWasmKill(
+            sessionId: sessionId,
+            reason: reason,
+            durationUs: durationUs,
+            budgetDeltaUs: budgetDeltaUs,
+            toolId: toolId,
+            projectRoot: projectRoot,
+            paneId: paneId
+        )
     }
 
     public func tokenStatsForProject(_ projectRoot: String, since: Date? = nil) -> PaneTokenStats {
@@ -142,6 +321,13 @@ extension SessionDatabase {
 
     public func recentTokenEvents(projectRoot: String, limit: Int = 100) -> [TimelineEvent] {
         tokenEventStore.recentTokenEvents(projectRoot: projectRoot, limit: limit)
+    }
+
+    /// V.19a-4 — recent cached-token rows for the Models/Inference
+    /// dashboard tile. Joined against `cache_lifecycle` spans by the
+    /// SwiftUI tile via `MLXInferenceTileCorrelator`.
+    public func recentCachedTokenEvents(limit: Int = 200) -> [MLXInferenceTileCorrelator.TokenEventRow] {
+        tokenEventStore.recentCachedTokenEvents(limit: limit)
     }
 
     public func recentTokenEventsAllProjects(limit: Int = 100) -> [TimelineEvent] {
@@ -174,12 +360,12 @@ extension SessionDatabase {
         tokenEventStore.sessionSummaries(projectRoot: projectRoot, limit: limit)
     }
 
-    public func getSessionCursor(path: String) -> (byteOffset: Int, turnIndex: Int) {
-        tokenEventStore.getSessionCursor(path: path)
+    public func getSessionCursor(path: String, reader: String) -> (byteOffset: Int, turnIndex: Int) {
+        tokenEventStore.getSessionCursor(path: path, reader: reader)
     }
 
-    public func setSessionCursor(path: String, byteOffset: Int, turnIndex: Int) {
-        tokenEventStore.setSessionCursor(path: path, byteOffset: byteOffset, turnIndex: turnIndex)
+    public func setSessionCursor(path: String, byteOffset: Int, turnIndex: Int, reader: String) {
+        tokenEventStore.setSessionCursor(path: path, byteOffset: byteOffset, turnIndex: turnIndex, reader: reader)
     }
 
     public func unfilteredExecCommands(
@@ -253,5 +439,10 @@ extension SessionDatabase {
     @discardableResult
     public func pruneTokenEvents(olderThanDays: Int = 90) -> Int {
         tokenEventStore.pruneTokenEvents(olderThanDays: olderThanDays)
+    }
+
+    @discardableResult
+    public func pruneSessionCursors(olderThanDays: Int = 90) -> Int {
+        tokenEventStore.pruneSessionCursors(olderThanDays: olderThanDays)
     }
 }

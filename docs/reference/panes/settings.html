@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Settings pane — reference</title>
-<meta name="description" content="Global app preferences: theme, font size, default FCSIT, key bindings, telemetry (off by default).">
+<title>Settings panel — reference</title>
+<meta name="description" content="Global app preferences panel: theme, font size, default FCSIT, key bindings, telemetry (off by default). A panel, not a pane type.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -38,26 +38,34 @@
       </ul>
     </div>
     <div class="wiki-nav-group">
-      <h4>Pane types (18)</h4>
+      <h4>Pane types (20)</h4>
       <ul>
         <li><a href="../../../docs/reference/panes/terminal.html">Terminal</a></li>
-        <li><a href="../../../docs/reference/panes/dashboard.html">Dashboard</a></li>
-        <li><a href="../../../docs/reference/panes/code-editor.html">Code Editor</a></li>
-        <li><a href="../../../docs/reference/panes/browser.html">Browser</a></li>
-        <li><a href="../../../docs/reference/panes/markdown-preview.html">Markdown Preview</a></li>
-        <li><a href="../../../docs/reference/panes/analytics.html">Analytics</a></li>
-        <li><a href="../../../docs/reference/panes/model-manager.html">Model Manager</a></li>
-        <li><a href="../../../docs/reference/panes/savings-test.html">Savings Test</a></li>
         <li><a href="../../../docs/reference/panes/agent-timeline.html">Agent Timeline</a></li>
-        <li><a href="../../../docs/reference/panes/knowledge-base.html">Knowledge Base</a></li>
-        <li><a href="../../../docs/reference/panes/diff-viewer.html">Diff Viewer</a></li>
-        <li><a href="../../../docs/reference/panes/log-viewer.html">Log Viewer</a></li>
-        <li><a href="../../../docs/reference/panes/scratchpad.html">Scratchpad</a></li>
-        <li><a href="../../../docs/reference/panes/schedules.html">Schedules</a></li>
         <li><a href="../../../docs/reference/panes/skill-library.html">Skill Library</a></li>
+        <li><a href="../../../docs/reference/panes/knowledge-base.html">Knowledge Base</a></li>
+        <li><a href="../../../docs/reference/panes/model-manager.html">Models</a></li>
         <li><a href="../../../docs/reference/panes/sprint-review.html">Sprint Review</a></li>
-        <li><a href="../../../docs/reference/panes/settings.html" class="active">Settings</a></li>
+        <li><a href="../../../docs/reference/panes/artifact-gallery.html">Artifact Gallery</a></li>
         <li><a href="../../../docs/reference/panes/ollama-launcher.html">Ollama</a></li>
+        <li><a href="../../../docs/reference/panes/dashboard.html">Dashboard</a></li>
+        <li><a href="../../../docs/reference/panes/analytics.html">Analytics</a></li>
+        <li><a href="../../../docs/reference/panes/savings-test.html">Savings Test</a></li>
+        <li><a href="../../../docs/reference/panes/schedules.html">Schedules</a></li>
+        <li><a href="../../../docs/reference/panes/log-viewer.html">Log Viewer</a></li>
+        <li><a href="../../../docs/reference/panes/served-requests.html">Served Requests</a></li>
+        <li><a href="../../../docs/reference/panes/code-editor.html">Code Editor</a></li>
+        <li><a href="../../../docs/reference/panes/markdown-preview.html">Markdown Preview</a></li>
+        <li><a href="../../../docs/reference/panes/html-preview.html">HTML Preview</a></li>
+        <li><a href="../../../docs/reference/panes/browser.html">Browser</a></li>
+        <li><a href="../../../docs/reference/panes/diff-viewer.html">Diff Viewer</a></li>
+        <li><a href="../../../docs/reference/panes/scratchpad.html">Scratchpad</a></li>
+      </ul>
+    </div>
+    <div class="wiki-nav-group">
+      <h4>Panels &amp; overlays</h4>
+      <ul>
+        <li><a href="../../../docs/reference/panes/settings.html" class="active">Settings</a></li>
       </ul>
     </div>
   </aside>
@@ -65,25 +73,25 @@
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="../../../">Home</a> <span class="sep">›</span>
       <a href="../../../docs/reference.html">Reference</a> <span class="sep">›</span>
-      <a href="../../../docs/reference/panes.html">Panes</a> <span class="sep">›</span>
-      <span class="here">Settings</span>
+      <span class="here">Settings panel</span>
     </nav>
     <span class="quadrant reference">Reference · Information</span>
-    <h1 class="page-title">Settings</h1>
+    <h1 class="page-title">Settings panel</h1>
     <div class="tag-row" style="margin-bottom:18px;">
       <span class="badge badge-live">Live</span>
-      <span class="tag tag-orange">Pane type</span>
+      <span class="tag tag-orange">Panel</span>
     </div>
 
-    <p class="lede">Global app preferences: theme, font size, default FCSIT, key bindings, telemetry (off by default).</p>
+    <p class="lede">Global app preferences — theme, font size, default FCSIT, key bindings, telemetry (off by default). This is an app-level <strong>panel</strong>, not a pane type: it overlays the workspace rather than living on the canvas, so it does not appear in the <a href="../../../docs/reference/panes.html">pane types index</a>.</p>
 
 
     <h2>Keyboard</h2>
-    <p>Open via ⌘K → type the pane name. Close with ⌘W. Focus with ⌘+digit (the pane's position on the canvas).</p>
+    <p>Open from the app menu or its toolbar control. The panel overlays the current workspace; close it to return to the canvas. Per-pane optimizer state lives in each pane's own settings panel, opened from the pane header — see <a href="../../../docs/concepts/per-pane-optimizers.html">per-pane optimizers</a>.</p>
 
     <h2>Related</h2>
     <ul>
-      <li><a href="../../../docs/reference/panes.html">All pane types</a></li>
+      <li><a href="../../../docs/reference/panes.html">Pane types index</a></li>
+      <li><a href="../../../docs/concepts/per-pane-optimizers.html">Per-pane optimizers</a></li>
       <li><a href="../../../docs/reference/options/fcsit.html">FCSIT per-pane toggles</a></li>
       <li><a href="../../../docs/reference/mcp/senkani_pane.html"><code>senkani_pane</code> — programmatic control</a></li>
     </ul>
@@ -101,7 +109,7 @@
   </div>
   <div class="foot-meta">
     <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
-    <span><a href="../../../docs/changelog.html">v0.2.0 changelog</a></span>
+    <span><a href="../../../docs/changelog.html">v0.3.0 changelog</a></span>
   </div>
 </footer>
 <script src="../../../assets/app.js" defer></script>

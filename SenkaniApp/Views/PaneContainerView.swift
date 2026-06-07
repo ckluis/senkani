@@ -10,11 +10,6 @@ struct PaneContainerView: View {
     let isActive: Bool
     var workspace: WorkspaceModel?
     @State private var showSettings = false
-    @State private var showFeatureDrawer = false
-    @State private var selectedFeature: String?
-    @State private var showFCSITFirstUse = false
-    @AppStorage(FCSITDisclosure.firstUseSeenDefaultsKey)
-    private var fcsitFirstUseSeen: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -23,23 +18,13 @@ struct PaneContainerView: View {
                 .fill(accentColor.opacity(isActive ? 1.0 : 0.5))
                 .frame(height: isActive ? SenkaniTheme.activeAccentLineHeight : SenkaniTheme.accentLineHeight)
 
-            // 24px header: status dot + title + FCSIT + gear + close
+            // 24px header: status dot + title + FCSIT + close
             paneHeader
 
             // 0.5px separator
             Rectangle()
                 .fill(SenkaniTheme.appBackground)
                 .frame(height: 0.5)
-
-            // FCSIT detail drawer — expandable per-feature breakdown
-            if showFeatureDrawer, let feature = selectedFeature {
-                FeatureDetailDrawer(featureKey: feature, pane: pane)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-
-                Rectangle()
-                    .fill(SenkaniTheme.appBackground)
-                    .frame(height: 0.5)
-            }
 
             // Body content (with settings overlay)
             ZStack {
@@ -244,61 +229,17 @@ struct PaneContainerView: View {
             .buttonStyle(.plain)
             .help(pane.features.passthrough ? "Passthrough ON — hooks disabled" : "Passthrough OFF — hooks active")
 
-            // FCSIT feature toggles — tap letter to toggle, long-press to show detail drawer
+            // FCSIT feature toggles — click any letter to open the settings panel.
+            // Letter color tint conveys on/off state; toggling lives inside the panel.
             HStack(spacing: 4) {
-                featureButton("F", key: "filter", isOn: $pane.features.filter, color: SenkaniTheme.toggleFilter)
-                featureButton("C", key: "cache", isOn: $pane.features.cache, color: SenkaniTheme.toggleCache)
-                featureButton("S", key: "secrets", isOn: $pane.features.secrets, color: SenkaniTheme.toggleSecrets)
-                featureButton("I", key: "indexer", isOn: $pane.features.indexer, color: SenkaniTheme.toggleIndexer)
-                featureButton("T", key: "terse", isOn: $pane.features.terse, color: SenkaniTheme.toggleTerse)
-            }
-            .onHover { hovering in
-                guard hovering,
-                      FCSITDisclosure.shouldShowFirstUse(seen: fcsitFirstUseSeen)
-                else { return }
-                showFCSITFirstUse = true
-            }
-            .popover(isPresented: $showFCSITFirstUse, arrowEdge: .bottom) {
-                FCSITFirstUsePopover(onDismiss: {
-                    fcsitFirstUseSeen = true
-                    showFCSITFirstUse = false
-                })
+                featureButton("F", key: "filter", isOn: pane.features.filter, color: SenkaniTheme.toggleFilter)
+                featureButton("C", key: "cache", isOn: pane.features.cache, color: SenkaniTheme.toggleCache)
+                featureButton("S", key: "secrets", isOn: pane.features.secrets, color: SenkaniTheme.toggleSecrets)
+                featureButton("I", key: "indexer", isOn: pane.features.indexer, color: SenkaniTheme.toggleIndexer)
+                featureButton("T", key: "terse", isOn: pane.features.terse, color: SenkaniTheme.toggleTerse)
             }
             .accessibilityElement(children: .contain)
-            .accessibilityLabel(Text("Per-pane optimizers: Filter, Cache, Secrets, Indexer, Terse."))
-
-            // Disclosure chevron for feature drawer
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    if showFeatureDrawer {
-                        showFeatureDrawer = false
-                    } else {
-                        selectedFeature = selectedFeature ?? "filter"
-                        showFeatureDrawer = true
-                    }
-                }
-            } label: {
-                Image(systemName: showFeatureDrawer ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 7, weight: .semibold))
-                    .foregroundStyle(showFeatureDrawer ? SenkaniTheme.textPrimary : SenkaniTheme.textTertiary)
-                    .frame(width: 12, height: 14)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Feature detail drawer")
-
-            // Gear icon → settings panel
-            Button {
-                showSettings.toggle()
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 9))
-                    .foregroundStyle(showSettings ? SenkaniTheme.textPrimary : SenkaniTheme.textTertiary)
-                    .frame(width: 14, height: 14)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Pane settings")
+            .accessibilityLabel(Text("Per-pane optimizers: Filter, Cache, Secrets, Indexer, Terse. Click any letter to open settings."))
 
             // Close button
             Button {
@@ -374,9 +315,13 @@ struct PaneContainerView: View {
             DashboardView(workspace: workspace)
         case .sprintReview:
             SprintReviewPane(workspace: workspace)
+        case .artifactGallery:
+            ArtifactGalleryView(workspace: workspace)
         case .ollamaLauncher:
             OllamaLauncherPane(pane: pane, isActive: isActive)
                 .onChange(of: pane.features) { _, _ in pane.features.persist(to: pane.configFilePath) }
+        case .openAIServedRequests:
+            OpenAIServedRequestsPane(pane: pane, workspace: workspace)
         }
     }
 
@@ -399,7 +344,11 @@ struct PaneContainerView: View {
                     cacheOn: pane.features.cache,
                     secretsOn: pane.features.secrets,
                     indexerOn: pane.features.indexer,
-                    terseOn: pane.features.terse
+                    terseOn: pane.features.terse,
+                    paneMode: HookRouter.paneModeResolver(pane.id.uuidString),
+                    initialCommand: pane.initialCommand,
+                    forwardDevServerTelemetry: pane.forwardDevServerTelemetry,
+                    runtimeTelemetryEndpoint: RuntimeTelemetryEndpoint.localLoopback()
                 ))) { _, new in new }
                 .merging([
                     // Terminal-only extras (model routing) layered on top.
@@ -430,47 +379,29 @@ struct PaneContainerView: View {
 
     // MARK: - Feature Button
 
-    /// Feature toggle that also selects the feature for the detail drawer.
-    /// Tap toggles the feature. Option-click opens the detail drawer for that feature.
-    private func featureButton(_ label: String, key: String, isOn: Binding<Bool>, color: Color) -> some View {
+    /// Compact FCSIT letter. Click opens the pane settings panel —
+    /// toggling lives inside the panel next to its explanation.
+    /// Color tint conveys current on/off state.
+    private func featureButton(_ label: String, key: String, isOn: Bool, color: Color) -> some View {
         let entry = FCSITDisclosure.entry(forKey: key)
-        let helpText = entry.map { "\($0.name) — \($0.effect) Tap to toggle. Double-click for details." }
-            ?? "Tap to toggle \(key). Double-click for details."
+        let helpText = entry.map { "\($0.name) — \($0.effect) Click for settings." }
+            ?? "Click for settings."
         return Text(label)
             .font(.system(size: 9, weight: .bold, design: .monospaced))
-            .foregroundStyle(isOn.wrappedValue ? color : SenkaniTheme.textTertiary.opacity(0.5))
+            .foregroundStyle(isOn ? color : SenkaniTheme.textTertiary.opacity(0.5))
             .padding(.horizontal, 2)
             .padding(.vertical, 1)
             .background(
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(isOn.wrappedValue ? color.opacity(0.1) : Color.clear)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 2)
-                            .stroke(selectedFeature == key && showFeatureDrawer ? color.opacity(0.4) : Color.clear, lineWidth: 1)
-                    )
+                    .fill(isOn ? color.opacity(0.1) : Color.clear)
             )
             .contentShape(Rectangle())
             .onTapGesture {
-                isOn.wrappedValue.toggle()
-                if FCSITDisclosure.shouldShowFirstUse(seen: fcsitFirstUseSeen) {
-                    showFCSITFirstUse = true
-                }
+                showSettings = true
             }
-            .simultaneousGesture(
-                TapGesture(count: 2).onEnded {
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        if selectedFeature == key && showFeatureDrawer {
-                            showFeatureDrawer = false
-                        } else {
-                            selectedFeature = key
-                            showFeatureDrawer = true
-                        }
-                    }
-                }
-            )
             .help(helpText)
-            .accessibilityLabel(Text(FCSITDisclosure.accessibilityLabel(forKey: key, isOn: isOn.wrappedValue)))
-            .accessibilityHint(Text(FCSITDisclosure.accessibilityHint(forKey: key)))
+            .accessibilityLabel(Text(FCSITDisclosure.accessibilityLabel(forKey: key, isOn: isOn)))
+            .accessibilityHint(Text("Opens pane settings to change this option."))
             .accessibilityAddTraits(.isButton)
     }
 
@@ -558,8 +489,12 @@ struct PaneContainerView: View {
             return "\(workspace?.projects.count ?? 0) projects"
         case .sprintReview:
             return "review"
+        case .artifactGallery:
+            return "artifacts"
         case .ollamaLauncher:
             return pane.ollamaDefaultModel
+        case .openAIServedRequests:
+            return "served"
         }
     }
 

@@ -155,12 +155,12 @@ struct OnboardingMilestoneCallsiteTests {
         let home = makeTempHome()
         defer { cleanupHome(home) }
 
-        // Default file (every limit nil) must NOT fire. The synthesised
-        // Codable requires every field to be present — softLimitPercent
-        // doesn't have an `Optional<Double>` type, so we always supply
-        // it even when no budget limits are set.
+        // Default file (every limit nil) must NOT fire. Partial-schema
+        // decode resilience landed via onboarding-milestone-5: an empty
+        // `{}` is now sufficient — softLimitPercent defaults to 0.8 via
+        // the explicit `init(from:)` in BudgetConfig.
         let defaultPath = home + "/budget-default.json"
-        try Data(#"{"softLimitPercent":0.8}"#.utf8)
+        try Data("{}".utf8)
             .write(to: URL(fileURLWithPath: defaultPath))
         OnboardingMilestoneStore.withTestHome(home) {
             let cfg = BudgetConfig.loadFromDisk(path: defaultPath)
@@ -195,6 +195,37 @@ struct OnboardingMilestoneCallsiteTests {
         #expect(src.contains(
             "OnboardingMilestoneStore.record(.firstWorkstreamCreated)"),
             "addWorkstream must record .firstWorkstreamCreated on success.")
+    }
+
+    // 6a. ContentView — WorkstreamSidebarView always-visible invariant.
+    //     The `workstreams.count > 1` gate hid the only discoverable
+    //     "+ New Workstream" affordance on fresh projects, making the
+    //     `.firstWorkstreamCreated` milestone unreachable
+    //     (onboarding-milestone-6 finding, walk 2026-05-13).
+    @Test("ContentView renders WorkstreamSidebarView without a count > 1 gate")
+    func contentViewWorkstreamSidebarAlwaysVisible() {
+        let src = read("SenkaniApp/Views/ContentView.swift")
+        #expect(!src.isEmpty,
+                "SenkaniApp/Views/ContentView.swift must exist.")
+        #expect(src.contains("WorkstreamSidebarView"),
+                "ContentView must render WorkstreamSidebarView.")
+        #expect(!src.contains("project.workstreams.count > 1"),
+                "ContentView must not gate WorkstreamSidebarView on project.workstreams.count > 1 — the gate hides the only discoverable + New Workstream UI on a fresh project and strands users on the seven-milestone arc.")
+    }
+
+    // 6b. WelcomeView — onboarding banner CTA wires NewWorkstreamSheet
+    //     into workspace.addWorkstream so a fresh-install user can
+    //     cross `.firstWorkstreamCreated` from the active onboarding
+    //     surface, not only the always-visible sidebar.
+    @Test("WelcomeView banner CTA presents NewWorkstreamSheet and calls workspace.addWorkstream")
+    func welcomeViewBannerOffersNewWorkstreamSheet() {
+        let src = read("SenkaniApp/Views/WelcomeView.swift")
+        #expect(!src.isEmpty,
+                "SenkaniApp/Views/WelcomeView.swift must exist.")
+        #expect(src.contains("NewWorkstreamSheet"),
+                "WelcomeView must reference NewWorkstreamSheet so the banner CTA can present it.")
+        #expect(src.contains("workspace.addWorkstream"),
+                "WelcomeView's banner tap path must route through workspace.addWorkstream so the .firstWorkstreamCreated milestone fires.")
     }
 
     // 7. SprintReviewViewModel.accept and .reject — fire

@@ -40,6 +40,104 @@ public enum HookRouter {
     /// Test seam for validation advisory delivery. Production uses `.shared`.
     nonisolated(unsafe) static var validationDatabase: SessionDatabase = .shared
 
+    /// U.2a-2b — PreToolUse hard-block reader for browser-validation
+    /// failures. Returns the most recent `result_status:'fail'` row for
+    /// the session (or `nil` if none). The HookRouter gate fires only
+    /// for the Apply-tagged tools (`Edit` / `Write` / `NotebookEdit`).
+    /// Default closure reads from `validationDatabase`; tests inject a
+    /// canned closure.
+    ///
+    /// Schneier side-channel guard: the returned row carries only
+    /// `targetURL`, `axesJSON`, `advisory`, `createdAt` — never the
+    /// raw assertion payload.
+    nonisolated(unsafe) public static var browserValidationGateReader: (String) -> SessionDatabase.BrowserValidationFailRow? = { sid in
+        validationDatabase.firstFailingBrowserValidation(sessionId: sid)
+    }
+
+    /// U.2a-2b — Apply-tagged tool names HookRouter PreToolUse hard-
+    /// blocks when a failing browser-validation row exists for the
+    /// session.
+    public static let applyTaggedToolNames: Set<String> = ["Edit", "Write", "NotebookEdit"]
+
+    /// U.2a-2b — refusal envelope shape. Stable across MCP/CLI/HookRouter
+    /// so tests can compare byte-for-byte. Side-channel guard: contains
+    /// only `failing_axis`, `fixture_id`, `advisory`, `override_hint` —
+    /// never the failed assertion's raw payload.
+    public struct BrowserValidationRefusal: Codable, Sendable, Equatable {
+        public let code: String
+        public let failingAxis: String
+        public let fixtureId: String
+        public let advisory: String
+        public let overrideHint: String
+
+        public init(failingAxis: String, fixtureId: String, advisory: String) {
+            self.code = "validation_blocked"
+            self.failingAxis = failingAxis
+            self.fixtureId = fixtureId
+            self.advisory = advisory
+            self.overrideHint = "pass allow_failed:true to senkani_validate_browser to bypass"
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case code
+            case failingAxis = "failing_axis"
+            case fixtureId = "fixture_id"
+            case advisory
+            case overrideHint = "override_hint"
+        }
+    }
+
+    /// Build the refusal envelope from a stored failing row. Public so
+    /// tests can pin the byte-stable shape without re-running HookRouter.
+    public static func buildBrowserValidationRefusal(
+        row: SessionDatabase.BrowserValidationFailRow
+    ) -> BrowserValidationRefusal {
+        // Pick the first axis name from the JSON array; fall back to "unknown"
+        // when the column is empty or malformed. The agent gets ONE axis
+        // identifier — enough to point at the failure, not enough to
+        // exfiltrate per-assertion detail.
+        let failingAxis: String = {
+            guard let data = row.axesJSON.data(using: .utf8),
+                  let arr = try? JSONSerialization.jsonObject(with: data) as? [String],
+                  let first = arr.first else { return "unknown" }
+            return first
+        }()
+        return BrowserValidationRefusal(
+            failingAxis: failingAxis,
+            fixtureId: "validation_results#\(row.id)",
+            advisory: row.advisory
+        )
+    }
+
+    /// Encode a refusal envelope as the human-readable deny reason
+    /// HookRouter writes into `permissionDecisionReason`. JSON-encoded so
+    /// the agent (and downstream tooling) can parse the contract
+    /// structurally — Schneier audit: stable shape, no leaked payload.
+    public static func encodeBrowserValidationRefusal(_ refusal: BrowserValidationRefusal) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        if let data = try? encoder.encode(refusal),
+           let str = String(data: data, encoding: .utf8) {
+            return str
+        }
+        // Fallback never lands in practice; keep deterministic so tests
+        // don't depend on encoder error paths.
+        return "{\"code\":\"validation_blocked\",\"failing_axis\":\"\(refusal.failingAxis)\"}"
+    }
+
+    /// T.1b — pane-mode resolver seam. Maps `pane_id` → `PaneMode`. The
+    /// EgressProxy daemon reads the resolved mode from the
+    /// `X-Senkani-Pane-Mode` header on incoming requests; production
+    /// wires HookRouter PreToolUse to write the header on every
+    /// MCP/CLI subprocess invocation via `PaneLaunchEnv`'s
+    /// `SENKANI_PANE_MODE` env var. Default reads from the
+    /// process-wide `PaneModeStore.shared` (`~/.senkani/pane-modes.json`);
+    /// tests inject a stub. Default-install (no file) returns
+    /// `.general` for every pane.
+    nonisolated(unsafe) public static var paneModeResolver: (String?) -> PaneMode = { paneID in
+        PaneModeStore.shared.resolve(paneID: paneID)
+    }
+
     /// V.12b test seam — tests inject a feed with a short window or
     /// a custom rate-cap sink to assert the suppression behavior
     /// without polluting the shared feed's state. Production uses
@@ -57,6 +155,23 @@ public enum HookRouter {
     /// the production path so HookRouter "just works" with no setup.
     nonisolated(unsafe) public static var trustFlagSink: (FragmentationDetector.Flag, Int) -> Void = { flag, score in
         _ = SessionDatabase.shared.recordTrustFlag(flag, score: score)
+    }
+
+    /// U.4b-1 — current `TrustMode` resolver. Default reads from
+    /// `~/.senkani/trust.json` via `TrustSettingsStore.load`. Tests
+    /// inject a canned mode. Failure to read returns `.softFlag` (the
+    /// fresh-install default) so an unreadable settings file never
+    /// surprises the operator with a sudden `.blocking` posture.
+    nonisolated(unsafe) public static var trustModeReader: () -> TrustMode = {
+        (try? TrustSettingsStore.load())?.mode ?? .softFlag
+    }
+
+    /// U.4b-1 — override existence check for the HookRouter denial
+    /// path. Returns true when an `override` row exists for the given
+    /// `callId`. Production wires `SessionDatabase.shared
+    /// .trustOverrideExists`; tests inject a canned closure.
+    nonisolated(unsafe) public static var trustOverrideReader: (String) -> Bool = { callId in
+        SessionDatabase.shared.trustOverrideExists(callId: callId)
     }
 
     /// T.4b — synchronous lookup seam for the credential gateway. The
@@ -148,6 +263,28 @@ public enum HookRouter {
                 let score = TrustScorer.score(flags: [flag])
                 trustFlagSink(flag, score)
             }
+
+            // U.4b-1 — promotion-gate denial path. When the operator
+            // has flipped trust mode to `.blocking` AND at least one
+            // flag fired for this PreToolUse, deny the call with a
+            // structured refusal. Override check fires first so a
+            // recently-overridden callId proceeds.
+            if eventName == "PreToolUse", !flags.isEmpty,
+               trustModeReader() == .blocking {
+                let callId = "\(sid):\(toolName):\(Int(Date().timeIntervalSince1970))"
+                if !trustOverrideReader(callId) {
+                    let firstFlag = flags[0]
+                    let body = "trust mode is blocking; \(firstFlag.reason.rawValue) flag fired for \(toolName) (correlation \(firstFlag.correlationCount)). Override with: senkani trust override \(callId)"
+                    emitDenialAnnotation(
+                        severity: .mustFix,
+                        body: body,
+                        toolName: toolName,
+                        toolInput: toolInput,
+                        sessionId: sessionId
+                    )
+                    return blockResponse(body, eventName: eventName)
+                }
+            }
         }
 
         // PostToolUse: record + enqueue auto-validation if Edit/Write
@@ -159,6 +296,28 @@ public enum HookRouter {
             // No-op when observer is nil (stdio mode, hook-relay mode, tests).
             entityObserver?(toolName, toolInput)
             return passthroughResponse
+        }
+
+        // U.2a-2b — PreToolUse hard-block on Apply-tagged tools when a
+        // failing browser-validation row exists for this session. Fires
+        // before budget / ConfirmationGate / pack policy so the agent
+        // gets the structured refusal envelope without burning a later
+        // gate's decision. Schneier side-channel guard: refusal carries
+        // failing_axis + fixture_id + advisory + override_hint only.
+        if eventName == "PreToolUse",
+           applyTaggedToolNames.contains(toolName),
+           let sid = sessionId,
+           let failingRow = browserValidationGateReader(sid) {
+            let refusal = buildBrowserValidationRefusal(row: failingRow)
+            let body = encodeBrowserValidationRefusal(refusal)
+            emitDenialAnnotation(
+                severity: .mustFix,
+                body: body,
+                toolName: toolName,
+                toolInput: toolInput,
+                sessionId: sessionId
+            )
+            return blockResponse(body, eventName: eventName)
         }
 
         // Fetch pending validation advisories without mutating delivery state.

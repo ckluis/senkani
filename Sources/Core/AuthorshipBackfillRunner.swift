@@ -25,6 +25,13 @@ public enum AuthorshipBackfillRunner {
         /// The fresh session id created to anchor the audit-chain row,
         /// or `nil` if `updated == 0` (no batch, no audit row needed).
         public let auditSessionId: String?
+        /// Whether the audit-chain row was confirmed durable via a
+        /// post-write SELECT. `true` when `commandCount(sessionId:) >= 1`
+        /// after `recordCommand`. `nil` when `updated == 0` (no batch,
+        /// no audit row was required). The CLI uses this to decide
+        /// whether the "Audit-chain row recorded" line is load-bearing
+        /// or whether to surface a structured failure instead.
+        public let auditRowVerified: Bool?
     }
 
     /// Run a backfill batch end-to-end:
@@ -50,7 +57,7 @@ public enum AuthorshipBackfillRunner {
     ) -> Result {
         let updated = store.backfillNullAuthorship(since: since, tag: tag)
         guard updated > 0 else {
-            return Result(updated: 0, auditSessionId: nil)
+            return Result(updated: 0, auditSessionId: nil, auditRowVerified: nil)
         }
         let sessionId = sessionDatabase.createSession(
             projectRoot: projectRoot,
@@ -66,6 +73,16 @@ public enum AuthorshipBackfillRunner {
             outputPreview: "rows=\(updated) tag=\(tag.rawValue)"
         )
         sessionDatabase.endSession(sessionId: sessionId)
-        return Result(updated: updated, auditSessionId: sessionId)
+        // V.5c durability check: prior to 2026-05-18, recordCommand +
+        // endSession were `queue.async` and the CLI returned before the
+        // queue drained — the audit-chain row + sessions.ended_at were
+        // silently lost on every short-lived CLI invocation. Filed as
+        // `authorship-backfill-audit-row-not-durable-2026-05-17` and
+        // fixed by changing those CommandStore writes to sync. The
+        // post-write SELECT here makes the success claim load-bearing:
+        // if a future contributor flips the writes back to async, this
+        // check catches the regression instead of letting the CLI lie.
+        let verified = sessionDatabase.commandCount(sessionId: sessionId) >= 1
+        return Result(updated: updated, auditSessionId: sessionId, auditRowVerified: verified)
     }
 }

@@ -14,6 +14,64 @@ import Foundation
 ///     turns every read and write into a no-op. The env gate exists
 ///     so a privacy-strict user can opt out without recompiling.
 ///
+/// Atomicity contract (Torvalds + Kleppmann audit, 2026-05-14, after
+/// `onboarding-milestone-recorder-gap-projectSelected-agentLaunched-2026-05-14`):
+///   - **In-process serialization**: every read-modify-write inside
+///     ``record(_:at:home:env:)`` runs under
+///     ``recordLock``, an `NSRecursiveLock`. Two concurrent records on
+///     different milestones from the same process **cannot** lose
+///     each other's update — they serialize at the lock boundary.
+///   - **Lock-ordering rule** (added 2026-05-21 by
+///     `swift-test-serial-full-suite-stall-investigation-2026-05-18`):
+///     when a `record` call needs to resolve a nil `home:` argument it
+///     does so BEFORE taking ``recordLock``. The earlier shape took
+///     `recordLock` first and then called `resolveDefaultHome()` from
+///     inside the critical section, which in turn took
+///     ``testHomeOverrideLock``. ``withTestHome`` holds
+///     ``testHomeOverrideLock`` across its body, and the body may
+///     itself enter `record` and need ``recordLock`` — cross-thread
+///     this is an AB-BA deadlock. The full-suite parallel-mode hang
+///     traced to exactly this inversion (sample at
+///     `/tmp/senkani-hang-current.txt` taken 2026-05-21 named
+///     `MCPSessionRegistryIsolationTests`, `SprintReviewSeedFixtureTests`,
+///     `ChainVerifierTests`, and `EventCountersTests` blocked at the
+///     same `OnboardingMilestoneStore.record` lock with the lock-holder
+///     parked one frame deeper in `resolveDefaultHome`). The fix
+///     resolves `home` before locking; the ordering rule is now
+///     **testHomeOverrideLock < recordLock** everywhere.
+///   - **On-disk atomicity**: ``write(_:home:)`` writes to
+///     `<path>.tmp` then `replaceItemAt` (POSIX `rename(2)`-equivalent
+///     on macOS), so a crashed write cannot truncate the existing
+///     file to a half-state. Either the prior file or the fresh file
+///     is observable; nothing in between.
+///   - **Once-only semantics**: a milestone whose key is already
+///     present is a no-op — the first-observed timestamp is the one
+///     we keep. The idempotency check happens inside the lock so two
+///     concurrent first-records for the same milestone agree on
+///     which one "wins" (the first to enter the critical section).
+///   - **Cross-process limitation (accepted risk)**: the lock only
+///     serializes within one process address space. If the senkani
+///     CLI and SenkaniApp GUI both fire `record` on the same
+///     millisecond against the same file, the FS-level rename is
+///     still atomic per-process, but a cross-process read-modify-
+///     write race can still lose updates. In practice the two
+///     processes record disjoint milestones (CLI-side: token-event /
+///     budget / sprint-review; GUI-side: project / agent / workstream),
+///     so the race is theoretical. If it ever surfaces, fix via
+///     `flock(2)` on the parent dir or by routing all writes through
+///     a single owner process.
+///   - **Predecessor chain is a Progression concern, not a Store
+///     concern**: the recorder is a passive observer. It does NOT
+///     refuse a `firstTrackedEvent` record when `projectSelected` is
+///     missing, and does NOT backfill predecessors. The chain logic
+///     lives in ``OnboardingMilestoneProgression`` and the UI surface
+///     reads the canonical "next" ordering from there. If on-disk
+///     state shows `firstTrackedEvent` without `projectSelected`,
+///     that is a recorder-fired-out-of-order observation (e.g. an
+///     operator `rm -f` of the file mid-flight), and the
+///     Progression layer surfaces "Pick a project" as the next step,
+///     letting the user re-cross the predecessor on its own merits.
+///
 /// Test contract:
 ///   - Every entry point accepts an injectable `home:` so tests run
 ///     under a temp directory.
@@ -23,6 +81,10 @@ import Foundation
 ///   - ``record`` is idempotent: re-recording an already-completed
 ///     milestone leaves the original timestamp unchanged. The first
 ///     observation is the one we keep.
+///   - Concurrent records on distinct milestones MUST all land —
+///     verified by ``recordIsSerializedAcrossConcurrentMilestones``
+///     in `OnboardingMilestoneTests` (fires 100 concurrent records
+///     via `withTaskGroup` and asserts every milestone is on disk).
 public enum OnboardingMilestoneStore {
 
     /// Env var consulted by ``isEnabled``. Default ON. Setting the
@@ -71,6 +133,14 @@ public enum OnboardingMilestoneStore {
 
     nonisolated(unsafe) private static var _testHomeOverride: String?
     private static let testHomeOverrideLock = NSRecursiveLock()
+
+    /// Serializes ``record(_:at:home:env:)`` read-modify-write across
+    /// threads in the same process. See the type-level "Atomicity
+    /// contract" doc above. `NSRecursiveLock` because a body inside
+    /// the critical section may legally call other store APIs
+    /// (`completed`, `isCompleted`) without deadlocking — same shape
+    /// as ``testHomeOverrideLock``.
+    private static let recordLock = NSRecursiveLock()
 
     private static func resolveDefaultHome() -> String {
         testHomeOverrideLock.lock()
@@ -146,6 +216,11 @@ public enum OnboardingMilestoneStore {
     /// — the first observation wins. Returns true if this call wrote
     /// a new entry, false if the entry already existed or the env
     /// gate is off.
+    ///
+    /// The entire read-modify-write runs under ``recordLock`` so two
+    /// concurrent records on different milestones in the same process
+    /// cannot lose each other's update via TOCTOU. See the type-level
+    /// "Atomicity contract" doc for the cross-process limitation.
     @discardableResult
     public static func record(
         _ milestone: OnboardingMilestone,
@@ -154,10 +229,42 @@ public enum OnboardingMilestoneStore {
         env: [String: String]? = nil
     ) -> Bool {
         guard isEnabled(env: env) else { return false }
-        var current = completed(home: home, env: env)
-        if current[milestone] != nil { return false }
+        // Resolve `home` BEFORE taking `recordLock`. If we resolved
+        // inside the critical section, `completed()` / `write()` would
+        // call `filePath(home: nil)` → `resolveDefaultHome()` →
+        // `testHomeOverrideLock.lock()` while already holding
+        // `recordLock` — that's AB-BA with `withTestHome`, which holds
+        // `testHomeOverrideLock` across a body that may itself call
+        // `record(home: nil)` and then need `recordLock`. The full-
+        // suite parallel deadlock surfaced in
+        // `swift-test-serial-full-suite-stall-investigation-2026-05-18`.
+        let resolvedHome = home ?? resolveDefaultHome()
+        let isFirstRecord: Bool
+        recordLock.lock()
+        var current = completed(home: resolvedHome, env: env)
+        if current[milestone] != nil {
+            recordLock.unlock()
+            return false
+        }
         current[milestone] = at
-        write(current, home: home)
+        write(current, home: resolvedHome)
+        isFirstRecord = true
+        recordLock.unlock()
+        // T.6 production hookup: fire a NotifyEvent on the first
+        // time a high-value milestone is recorded. The delivery
+        // point is no-op until SenkaniApp installs a router, so
+        // CLI / tests / first-install never see banners they
+        // didn't ask for. `firstNonzeroSavings` is the celebrate-
+        // moment ("you saved tokens for the first time");
+        // `projectSelected` is intentionally silent because users
+        // who just configured the app don't need a banner to
+        // confirm what they just clicked.
+        if isFirstRecord, milestone == .firstNonzeroSavings {
+            let copy = OnboardingMilestoneCopy.entry(for: milestone)
+            NotificationDelivery.deliver(
+                .notifyDone(toolName: "onboarding", summary: copy.title)
+            )
+        }
         return true
     }
 

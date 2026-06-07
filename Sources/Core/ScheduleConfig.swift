@@ -34,6 +34,13 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
     public var eventCounterCadence: String?
     public var locale: String?
 
+    // Drag-reorder order key. Optional so pre-field JSON on disk decodes
+    // unchanged (migrate-on-read: a nil `sortIndex` falls back to
+    // `createdAt` in `ScheduleStore.list()`). The Schedules pane writes a
+    // dense 0-based `sortIndex` on drag-reorder instead of overloading
+    // `createdAt`, so the genuine creation timestamp is preserved.
+    public var sortIndex: Int?
+
     public init(
         name: String,
         cronPattern: String,
@@ -47,7 +54,8 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
         proseCadence: String? = nil,
         compiledCadence: String? = nil,
         eventCounterCadence: String? = nil,
-        locale: String? = nil
+        locale: String? = nil,
+        sortIndex: Int? = nil
     ) {
         self.name = name
         self.cronPattern = cronPattern
@@ -62,6 +70,7 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
         self.compiledCadence = compiledCadence
         self.eventCounterCadence = eventCounterCadence
         self.locale = locale
+        self.sortIndex = sortIndex
     }
 
     // Explicit Codable so a missing key (pre-field JSON files already on
@@ -70,6 +79,7 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
         case name, cronPattern, command, budgetLimitCents, enabled
         case createdAt, lastRunAt, lastRunResult, worktree
         case proseCadence, compiledCadence, eventCounterCadence, locale
+        case sortIndex
     }
 
     public init(from decoder: Decoder) throws {
@@ -87,6 +97,17 @@ public struct ScheduledTask: Codable, Sendable, Identifiable {
         self.compiledCadence = try c.decodeIfPresent(String.self, forKey: .compiledCadence)
         self.eventCounterCadence = try c.decodeIfPresent(String.self, forKey: .eventCounterCadence)
         self.locale = try c.decodeIfPresent(String.self, forKey: .locale)
+        self.sortIndex = try c.decodeIfPresent(Int.self, forKey: .sortIndex)
+    }
+
+    /// Whether this row is backed by a launchd plist. A cron/prose schedule
+    /// installs one; a counter cadence fires from HookRouter and does not. A
+    /// counter row is identified by a NON-nil `eventCounterCadence` — even a
+    /// malformed empty-string cadence ("" vs a number) is still a counter row,
+    /// NOT launchd-backed. This keeps a counter→counter edit from spuriously
+    /// tearing down a plist that was never installed.
+    public var isLaunchdBacked: Bool {
+        eventCounterCadence == nil
     }
 }
 
@@ -96,13 +117,102 @@ public enum ScheduleStore {
     //
     // Mirrors the `LearnedRulesStore.withPath` pattern: production reads
     // `baseDir` / `launchAgentsDir` straight out of `$HOME`, tests wrap a
-    // body in `withTestDirs` to redirect both to a temp dir. `withTestDirs`
-    // holds `testLock` for its entire body so concurrent test cases
-    // serialize on the shared override slots instead of racing.
+    // body in `withTestDirs` to redirect both to a temp dir.
+    //
+    // The overrides are `@TaskLocal`, NOT a global mutable slot guarded by a
+    // lock. Each test (and each `await` chain within it) sees its own
+    // override value, so parallel test cases — including `async` CLI run
+    // paths under `AsyncParsableCommand` — never clobber each other's temp
+    // dirs. This replaced an `NSLock`-serialized global pair on
+    // 2026-05-26 when `Schedule.Create` became `AsyncParsableCommand`: an
+    // async `withTestDirs` could not hold `NSLock` across an `await`
+    // (forbidden in Swift 6), and a non-locking variant let a parallel
+    // suite swap the global out from under a running test.
 
-    nonisolated(unsafe) private static var _baseDirOverride: String?
-    nonisolated(unsafe) private static var _launchAgentsDirOverride: String?
-    private static let testLock = NSLock()
+    @TaskLocal static var _baseDirOverride: String?
+    @TaskLocal static var _launchAgentsDirOverride: String?
+
+    // MARK: - launchctl seam
+    //
+    // `remove` / `removePlist` and `PresetInstaller.install` / `reload`
+    // all run `launchctl load|unload <plist>` to (de)activate the live
+    // launchd job. In production this spawns `/bin/launchctl`; tests inject
+    // a recorder via `withLaunchctlRecorder` so they can assert the
+    // unload-then-load (re-arm) and unload-on-mode-switch invocations
+    // WITHOUT touching the real launchd (and without depending on a real
+    // machine). `@TaskLocal` so concurrent test cases stay isolated,
+    // matching the `_baseDirOverride` pattern.
+
+    /// A single `launchctl` verb + plist path the seam was asked to run.
+    public struct LaunchctlInvocation: Sendable, Equatable {
+        public let verb: String        // "load" or "unload"
+        public let plistPath: String
+        public init(verb: String, plistPath: String) {
+            self.verb = verb
+            self.plistPath = plistPath
+        }
+    }
+
+    /// Thread-safe recorder of `launchctl` invocations for tests.
+    ///
+    /// `failVerbs` injects per-verb FAILURE: any verb in the set makes
+    /// `runLaunchctl` return `false` for that invocation (simulating a real
+    /// `/bin/launchctl` non-zero exit) while STILL recording it, so a test can
+    /// drive the `load`-failed-after-unload disarm scenario and assert the
+    /// teardown happened. Default empty → every recorded verb "succeeds",
+    /// preserving the prior always-true behavior for existing tests.
+    public final class LaunchctlRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _invocations: [LaunchctlInvocation] = []
+        let failVerbs: Set<String>
+        public init(failVerbs: Set<String> = []) {
+            self.failVerbs = failVerbs
+        }
+        func record(_ inv: LaunchctlInvocation) {
+            lock.lock(); defer { lock.unlock() }
+            _invocations.append(inv)
+        }
+        public var invocations: [LaunchctlInvocation] {
+            lock.lock(); defer { lock.unlock() }
+            return _invocations
+        }
+        public var verbs: [String] { invocations.map(\.verb) }
+    }
+
+    @TaskLocal static var _launchctlRecorder: LaunchctlRecorder?
+
+    /// TEST ONLY: route every `launchctl load|unload` through `recorder`
+    /// instead of spawning `/bin/launchctl`, for the duration of `body`.
+    public static func withLaunchctlRecorder<T>(
+        _ recorder: LaunchctlRecorder,
+        _ body: () throws -> T
+    ) rethrows -> T {
+        try $_launchctlRecorder.withValue(recorder) { try body() }
+    }
+
+    /// Run `launchctl <verb> <plistPath>`. When a recorder is installed
+    /// (tests) the invocation is captured and `/bin/launchctl` is NOT
+    /// spawned; otherwise it runs the real process. Returns `true` on a
+    /// zero exit status. The recorder "succeeds" unless `verb` is in its
+    /// injected `failVerbs`, in which case it records the invocation and
+    /// returns `false` (simulating a launchctl failure for that verb).
+    @discardableResult
+    static func runLaunchctl(verb: String, plistPath: String) -> Bool {
+        if let recorder = _launchctlRecorder {
+            recorder.record(LaunchctlInvocation(verb: verb, plistPath: plistPath))
+            return !recorder.failVerbs.contains(verb)
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = [verb, plistPath]
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
+        }
+    }
 
     public static var baseDir: String {
         _baseDirOverride ?? FileManager.default.homeDirectoryForCurrentUser.path + "/.senkani/schedules"
@@ -117,24 +227,34 @@ public enum ScheduleStore {
     }
 
     /// TEST ONLY: redirect `baseDir` + `launchAgentsDir` to `base` /
-    /// `launchAgents` for the duration of `body`, then restore. Holds
-    /// `testLock` so concurrent callers serialize.
+    /// `launchAgents` for the duration of `body`. Per-task (`@TaskLocal`),
+    /// so concurrent test cases are isolated without a lock.
     public static func withTestDirs<T>(
         base: String,
         launchAgents: String,
         _ body: () throws -> T
     ) rethrows -> T {
-        testLock.lock()
-        let priorBase = _baseDirOverride
-        let priorLaunch = _launchAgentsDirOverride
-        _baseDirOverride = base
-        _launchAgentsDirOverride = launchAgents
-        defer {
-            _baseDirOverride = priorBase
-            _launchAgentsDirOverride = priorLaunch
-            testLock.unlock()
+        try $_baseDirOverride.withValue(base) {
+            try $_launchAgentsDirOverride.withValue(launchAgents) {
+                try body()
+            }
         }
-        return try body()
+    }
+
+    /// TEST ONLY (async): same contract as the sync `withTestDirs`, for
+    /// `AsyncParsableCommand` run paths. The `@TaskLocal` binding propagates
+    /// across `await` to child tasks in the structured tree, so the override
+    /// is visible to async `ScheduleStore` work without any lock.
+    public static func withTestDirs<T>(
+        base: String,
+        launchAgents: String,
+        _ body: () async throws -> T
+    ) async rethrows -> T {
+        try await $_baseDirOverride.withValue(base) {
+            try await $_launchAgentsDirOverride.withValue(launchAgents) {
+                try await body()
+            }
+        }
     }
 
     /// Read all .json files from the schedules directory.
@@ -152,7 +272,29 @@ public enum ScheduleStore {
                 guard let data = fm.contents(atPath: path) else { return nil }
                 return try? decoder.decode(ScheduledTask.self, from: data)
             }
-            .sorted { $0.createdAt < $1.createdAt }
+            .sorted(by: orderBefore)
+    }
+
+    /// Stable list ordering: rows carrying an explicit drag-reorder
+    /// `sortIndex` come first in `sortIndex` order; rows without one (pre-
+    /// `sortIndex` JSON, or never-reordered) fall back to `createdAt`, and
+    /// sort AFTER any explicitly-ordered row. `name` is the final tiebreak
+    /// so the order is deterministic. This migrates legacy schedules
+    /// gracefully — a store with no `sortIndex` anywhere reproduces the old
+    /// pure-`createdAt` order.
+    static func orderBefore(_ a: ScheduledTask, _ b: ScheduledTask) -> Bool {
+        switch (a.sortIndex, b.sortIndex) {
+        case let (ai?, bi?):
+            if ai != bi { return ai < bi }
+            return a.createdAt < b.createdAt
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        case (.none, .none):
+            if a.createdAt != b.createdAt { return a.createdAt < b.createdAt }
+            return a.name < b.name
+        }
     }
 
     /// Save a task to {name}.json.
@@ -180,20 +322,28 @@ public enum ScheduleStore {
         return try? decoder.decode(ScheduledTask.self, from: data)
     }
 
+    /// Unload (if loaded) and delete the launchd plist for `name`, leaving
+    /// the JSON config in place. Used by the edit lifecycle when a schedule
+    /// is edited from a cron/prose cadence down to a counter cadence — the
+    /// counter row stays (with its sentinel cron) but its prior launchd job
+    /// must be torn down so it can't keep firing the old cadence (ghost
+    /// double-fire). Idempotent: a no-op when no plist exists.
+    @discardableResult
+    public static func removePlist(_ name: String) -> Bool {
+        let fm = FileManager.default
+        let plistPath = launchAgentsDir + "/\(plistLabel(for: name)).plist"
+        guard fm.fileExists(atPath: plistPath) else { return false }
+        runLaunchctl(verb: "unload", plistPath: plistPath)
+        try? fm.removeItem(atPath: plistPath)
+        return true
+    }
+
     /// Remove a task's JSON file and unload+delete its launchd plist.
     public static func remove(_ name: String) throws {
         let fm = FileManager.default
 
         // Unload and remove launchd plist
-        let plistPath = launchAgentsDir + "/com.senkani.schedule.\(name).plist"
-        if fm.fileExists(atPath: plistPath) {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            process.arguments = ["unload", plistPath]
-            try? process.run()
-            process.waitUntilExit()
-            try? fm.removeItem(atPath: plistPath)
-        }
+        _ = removePlist(name)
 
         // Remove JSON config
         let jsonPath = baseDir + "/\(name).json"

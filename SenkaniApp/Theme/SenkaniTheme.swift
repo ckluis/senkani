@@ -103,6 +103,17 @@ enum SenkaniTheme {
     /// Resize handle invisible hit target width.
     static let resizeHandleHitWidth: CGFloat = 28
 
+    /// Top inset excluded from the right-edge resize handle's hit region so
+    /// it never intercepts clicks on the pane-close `X` (in the 24pt header)
+    /// or the settings-panel `X` (top-trailing of the body when open).
+    ///
+    /// Derivation (kept ≥ sum so changes upstream don't silently regress):
+    /// `accentLineHeight (1.5) + activeAccentLineHeight (2.5 worst case)
+    /// + headerHeight (24) + separator (0.5) + settings-panel-x inset (8)
+    /// + settings-panel-x icon (14) + safety margin ≈ 60`.
+    /// See `PaneRightEdgeHandleGeometryTests` for the invariant test.
+    static let resizeHandleTopExclusionInset: CGFloat = 60
+
     /// Active pane border width.
     static let activeBorderWidth: CGFloat = 1.5
 
@@ -183,7 +194,9 @@ enum SenkaniTheme {
         case .codeEditor: return accentAnalytics
         case .dashboard: return savingsGreen
         case .sprintReview: return accentSkillLibrary
+        case .artifactGallery: return accentSkillLibrary
         case .ollamaLauncher: return accentOllamaLauncher
+        case .openAIServedRequests: return accentAnalytics
         }
     }
 
@@ -207,7 +220,9 @@ enum SenkaniTheme {
         case .codeEditor: return "chevron.left.forwardslash.chevron.right"
         case .dashboard: return "chart.bar.doc.horizontal"
         case .sprintReview: return "sparkles.rectangle.stack"
+        case .artifactGallery: return "rectangle.stack.badge.person.crop"
         case .ollamaLauncher: return "cpu.fill"
+        case .openAIServedRequests: return "network"
         }
     }
 
@@ -231,7 +246,9 @@ enum SenkaniTheme {
         case .codeEditor: return "View code with syntax highlighting"
         case .dashboard: return "Multi-project portfolio overview"
         case .sprintReview: return "Review staged compound-learning proposals"
+        case .artifactGallery: return "Browse diaries, sprint snapshots, and on-disk artifacts"
         case .ollamaLauncher: return "Local LLM chat via Ollama"
+        case .openAIServedRequests: return "Live feed of OpenAI-compatible served requests"
         }
     }
 
@@ -254,7 +271,9 @@ enum SenkaniTheme {
         case .codeEditor: return "Code Editor"
         case .dashboard: return "Dashboard"
         case .sprintReview: return "Sprint Review"
+        case .artifactGallery: return "Artifact Gallery"
         case .ollamaLauncher: return "Ollama"
+        case .openAIServedRequests: return "Served Requests"
         }
     }
 }

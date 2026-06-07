@@ -52,6 +52,10 @@ struct PersistedPane: Codable {
     /// Ollama-launcher panes: persisted default model tag. Nil for all
     /// other pane types and for pre-ollama-pane persistence files.
     var ollamaDefaultModel: String?
+    /// V.18b-1 — per-pane opt-out for runtime telemetry forwarding.
+    /// Optional in JSON so pre-V.18b-1 workspace.json files load with
+    /// the default-on behavior.
+    var forwardDevServerTelemetry: Bool?
 }
 
 struct PersistedFeatures: Codable {
@@ -234,7 +238,8 @@ enum WorkspaceStorage {
             secretsCaught: pane.metrics.secretsCaught,
             fontSize: Double(pane.fontSize),
             fontFamily: pane.fontFamily,
-            ollamaDefaultModel: pane.paneType == .ollamaLauncher ? pane.ollamaDefaultModel : nil
+            ollamaDefaultModel: pane.paneType == .ollamaLauncher ? pane.ollamaDefaultModel : nil,
+            forwardDevServerTelemetry: pane.forwardDevServerTelemetry
         )
     }
 
@@ -276,6 +281,10 @@ enum WorkspaceStorage {
         // bogus command.
         if paneType == .ollamaLauncher {
             pane.ollamaDefaultModel = OllamaLauncherSupport.resolveModelTag(ppane.ollamaDefaultModel)
+        }
+        // V.18b-1 — restore opt-out toggle; pre-V.18b-1 files default ON.
+        if let forward = ppane.forwardDevServerTelemetry {
+            pane.forwardDevServerTelemetry = forward
         }
         return pane
     }

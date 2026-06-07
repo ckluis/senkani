@@ -11,6 +11,7 @@ let package = Package(
         .executable(name: "senkani-mcp", targets: ["SenkaniMCP"]),
         .executable(name: "senkani-hook", targets: ["SenkaniHook"]),
         .executable(name: "senkani-mig-helper", targets: ["SenkaniMigHelper"]),
+        .executable(name: "browserpane-exerciser", targets: ["BrowserPaneExerciser"]),
         .library(name: "MCPServer", targets: ["MCPServer"]),
         .library(name: "SenkaniFilter", targets: ["Filter"]),
         .library(name: "SenkaniCore", targets: ["Core"]),
@@ -341,6 +342,7 @@ let package = Package(
             name: "Core",
             dependencies: ["Filter"],
             path: "Sources/Core",
+            exclude: ["Stores/INVARIANTS.md"],
             resources: [
                 .copy("Presets/Defaults/log-rotation.json"),
                 .copy("Presets/Defaults/morning-brief.json"),
@@ -370,6 +372,24 @@ let package = Package(
             ],
             path: "Sources/Bundle"
         ),
+        .target(
+            name: "MonitorTUI",
+            dependencies: [
+                "Core",
+            ],
+            path: "Sources/MonitorTUI"
+        ),
+        // process-gap-browserpane-exerciser-library-carve-2026-06-06 —
+        // extracted from SenkaniApp/Services/ so the off-screen WKWebView
+        // runner is a linkable module (BrowserPaneExerciser CLI + the
+        // dispatch/parity test corpus link this instead of reaching into
+        // the SenkaniApp executableTarget). Imports only Foundation,
+        // WebKit, AppKit, Network, Core — no SwiftUI / app-shell deps.
+        .target(
+            name: "BrowserPane",
+            dependencies: ["Core"],
+            path: "Sources/BrowserPane"
+        ),
         .executableTarget(
             name: "CLI",
             dependencies: [
@@ -378,6 +398,17 @@ let package = Package(
                 "Indexer",
                 "Bench",
                 "Bundle",
+                "MonitorTUI",
+                // U.8b-4 added "MLXProseCompiler" so CLI could construct
+                // a CompositeProseCadenceCompiler(rule + mlx). U.8b-5
+                // measured the cost: the resulting CLI binary was ~92 MB
+                // (> 50 MB install.size SLO). The follow-up
+                // `phase-u8b-mlx-prose-subprocess-delegation-2026-05-28`
+                // moved the MLX arm to `SubprocessMLXProseCadenceCompiler`
+                // which shells out to `senkani-mcp prose` — so CLI no
+                // longer needs to link MLXLMCommon + MLXVLM. The
+                // MLXProseCompiler target itself still ships (depended on
+                // by SenkaniMCP and the test target).
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             path: "Sources/CLI"
@@ -397,10 +428,30 @@ let package = Package(
             ],
             path: "Sources/MCP"
         ),
+        // U.8b-1 — MLX-backed prose→cron compiler. Empty actor
+        // scaffold (throws .unavailable); U.8b-2 fills in the
+        // ensureModel ladder + prompt + JSON parse + cron gate.
+        // CLI does NOT depend on this target until U.8b-4 lands.
+        .target(
+            name: "MLXProseCompiler",
+            dependencies: [
+                "Core",
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "MLXVLM", package: "mlx-swift-lm"),
+            ],
+            path: "Sources/MLXProseCompiler"
+        ),
         .executableTarget(
             name: "SenkaniMCP",
             dependencies: [
                 "MCPServer",
+                // U.8b follow-up — `senkani-mcp prose` is the
+                // subprocess endpoint the CLI talks to so the `senkani`
+                // binary doesn't have to link MLXLMCommon + MLXVLM.
+                // SenkaniMCP already links them via MCPServer's embed +
+                // vision tools, so adding MLXProseCompiler here is
+                // net-zero on senkani-mcp's install size.
+                "MLXProseCompiler",
             ],
             path: "Sources/MCPMain"
         ),
@@ -414,6 +465,20 @@ let package = Package(
             dependencies: ["Core"],
             path: "tools/migration-runner"
         ),
+        // process-gap-browserpane-exerciser-library-carve-2026-06-06 —
+        // direct-API exerciser CLI. `--mode tab-walk` drives
+        // BrowserPaneRunner.tabWalkFocusOrder; `deadlock` / `window-count`
+        // are deferred-to-cowork-walk sentinels (the GUI-runtime modes
+        // stay with the parent's Cowork acceptance).
+        .executableTarget(
+            name: "BrowserPaneExerciser",
+            dependencies: [
+                "BrowserPane",
+                "Core",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
+            path: "tools/browserpane-exerciser"
+        ),
         .executableTarget(
             name: "SenkaniApp",
             dependencies: [
@@ -423,6 +488,7 @@ let package = Package(
                 "Bench",
                 "MCPServer",
                 "HookRelay",
+                "BrowserPane",
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
                 .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
                 .product(name: "MCP", package: "swift-sdk"),
@@ -445,6 +511,9 @@ let package = Package(
                 "MCPServer",
                 "CLI",
                 "HookRelay",
+                "MLXProseCompiler",
+                "MonitorTUI",
+                "BrowserPane",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Testing", package: "swift-testing"),
             ],
@@ -453,6 +522,8 @@ let package = Package(
                 .copy("Fixtures/secrets-adversarial"),
                 .copy("Fixtures/routing-corpus.json"),
                 .copy("Fixtures/context-plan-corpus.json"),
+                .copy("Fixtures/wasm"),
+                .copy("Fixtures/openai-conformance"),
             ]
         ),
     ]

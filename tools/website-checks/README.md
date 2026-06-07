@@ -34,6 +34,15 @@ can consume either.
 `summarize-{a11y,perf}.js` aggregate raw JSON into the appendix-style
 Markdown the website-rebuild audit doc takes.
 
+## Pane reference: canonical source + sidebar sync
+
+`docs/reference/panes.html` is the canonical pane list (its `<a class="card">`
+anchors are the source of truth). `tools/sync-pane-sidebars.py` regenerates the
+`<aside class="wiki-nav">` sidebar of every `docs/reference/panes/*.html` detail
+page from it (idempotent — re-run after editing panes.html). Two CI guards keep
+this honest: `PanesReferenceDriftTests` (panes.html ⇄ the `PaneType` enum) and
+`PaneDetailSidebarDriftTests` (every detail-page sidebar ⇄ panes.html).
+
 ## Why a local harness, not CI?
 
 The site is static GitHub Pages — there's no per-PR perf regression

@@ -98,15 +98,20 @@ struct PaneSettingsPanel: View {
                 .foregroundStyle(SenkaniTheme.textPrimary)
 
             SettingsToggleRow(title: "Filter", subtitle: "Strip ANSI codes, compress output (saves 60-90%)",
-                              isOn: $pane.features.filter, color: SenkaniTheme.toggleFilter)
+                              isOn: $pane.features.filter, color: SenkaniTheme.toggleFilter,
+                              learnMoreURL: FCSITDisclosure.learnMoreURL(forKey: "filter"))
             SettingsToggleRow(title: "Cache", subtitle: "Skip re-reading unchanged files (saves 50-99%)",
-                              isOn: $pane.features.cache, color: SenkaniTheme.toggleCache)
+                              isOn: $pane.features.cache, color: SenkaniTheme.toggleCache,
+                              learnMoreURL: FCSITDisclosure.learnMoreURL(forKey: "cache"))
             SettingsToggleRow(title: "Secrets", subtitle: "Auto-redact API keys and tokens before model sees them",
-                              isOn: $pane.features.secrets, color: SenkaniTheme.toggleSecrets)
+                              isOn: $pane.features.secrets, color: SenkaniTheme.toggleSecrets,
+                              learnMoreURL: FCSITDisclosure.learnMoreURL(forKey: "secrets"))
             SettingsToggleRow(title: "Indexer", subtitle: "Symbol-level code search instead of file reads (saves 95%)",
-                              isOn: $pane.features.indexer, color: SenkaniTheme.toggleIndexer)
+                              isOn: $pane.features.indexer, color: SenkaniTheme.toggleIndexer,
+                              learnMoreURL: FCSITDisclosure.learnMoreURL(forKey: "indexer"))
             SettingsToggleRow(title: "Terse Mode", subtitle: "Minimize agent output verbosity (saves 50-75%)",
-                              isOn: $pane.features.terse, color: SenkaniTheme.toggleTerse)
+                              isOn: $pane.features.terse, color: SenkaniTheme.toggleTerse,
+                              learnMoreURL: FCSITDisclosure.learnMoreURL(forKey: "terse"))
         }
     }
 
@@ -226,6 +231,17 @@ struct PaneSettingsPanel: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(SenkaniTheme.textPrimary)
 
+            // V.18b-1 — per-pane opt-out for runtime telemetry forwarding.
+            // The injection only happens for dev-server commands
+            // (`npm run dev`, `bun dev`, `pnpm dev`, `yarn dev`, `vite`,
+            // `next dev`); this toggle is the kill-switch.
+            SettingsToggleRow(
+                title: "Forward dev-server telemetry",
+                subtitle: "Inject OTEL_EXPORTER_OTLP_ENDPOINT for dev-server commands so traces flow into the local runtime telemetry receiver.",
+                isOn: $pane.forwardDevServerTelemetry,
+                color: SenkaniTheme.toggleFilter
+            )
+
             VStack(alignment: .leading, spacing: 6) {
                 Text("Metrics file:")
                     .font(.system(size: 10, weight: .medium))
@@ -338,6 +354,21 @@ struct SettingsToggleRow: View {
     let subtitle: String
     @Binding var isOn: Bool
     let color: Color
+    let learnMoreURL: URL?
+
+    init(
+        title: String,
+        subtitle: String,
+        isOn: Binding<Bool>,
+        color: Color,
+        learnMoreURL: URL? = nil
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self._isOn = isOn
+        self.color = color
+        self.learnMoreURL = learnMoreURL
+    }
 
     var body: some View {
         HStack {
@@ -348,6 +379,14 @@ struct SettingsToggleRow: View {
                 Text(subtitle)
                     .font(.system(size: 10))
                     .foregroundStyle(SenkaniTheme.textSecondary)
+                if let url = learnMoreURL {
+                    Link(destination: url) {
+                        Text("Learn more →")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(color)
+                    }
+                    .accessibilityHint(Text("Opens documentation for \(title) in your browser."))
+                }
             }
             Spacer()
             Toggle("", isOn: $isOn)

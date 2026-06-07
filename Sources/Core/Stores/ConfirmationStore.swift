@@ -64,14 +64,14 @@ final class ConfirmationStore: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return -1 }
             defer { sqlite3_finalize(stmt) }
 
-            sqlite3_bind_text(stmt, 1, (row.toolName as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (row.toolName as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_double(stmt, 2, row.requestedAt.timeIntervalSince1970)
             sqlite3_bind_double(stmt, 3, row.decidedAt.timeIntervalSince1970)
-            sqlite3_bind_text(stmt, 4, (row.decision.rawValue as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 5, (row.decidedBy.rawValue as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 4, (row.decision.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 5, (row.decidedBy.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             Self.bindOptionalText(stmt, 6, row.reason)
             Self.bindOptionalText(stmt, 7, prevHash)
-            sqlite3_bind_text(stmt, 8, (entryHash as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 8, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 9, anchorId)
 
             guard sqlite3_step(stmt) == SQLITE_DONE else { return -1 }
@@ -137,7 +137,7 @@ final class ConfirmationStore: @unchecked Sendable {
 
     private static func bindOptionalText(_ stmt: OpaquePointer?, _ index: Int32, _ value: String?) {
         if let val = value {
-            sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, index, (val as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
         } else {
             sqlite3_bind_null(stmt, index)
         }

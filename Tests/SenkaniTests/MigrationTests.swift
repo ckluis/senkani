@@ -296,6 +296,395 @@ struct MigrationRunnerTests {
                 "flock sidecar must exist after a run() call")
     }
 
+    @Test("v21 backfills claude_session_cursors with reader='watcher' and rebuilds PK")
+    func migration21BackfillsReaderColumn() throws {
+        // Per claude-session-cursor-turn-index-ownership-conflict-2026-05-15:
+        // Migration 21 must rebuild the legacy single-column-PK
+        // `claude_session_cursors` table into a composite (path, reader)
+        // PK, backfilling existing rows to reader='watcher' with
+        // byte_offset, turn_index, and updated_at preserved bit-identical.
+        let db = Self.openMemory()
+        defer { sqlite3_close(db) }
+
+        // Seed the legacy schema (pre-migration shape: PRIMARY KEY (path)).
+        Self.exec(db, """
+            CREATE TABLE claude_session_cursors (
+                path TEXT PRIMARY KEY,
+                byte_offset INTEGER NOT NULL DEFAULT 0,
+                turn_index INTEGER NOT NULL DEFAULT 0,
+                updated_at REAL NOT NULL
+            );
+        """)
+
+        // Three rows with distinct (path, byte_offset, turn_index,
+        // updated_at) — covers default values plus a non-trivial row.
+        Self.exec(db, """
+            INSERT INTO claude_session_cursors (path, byte_offset, turn_index, updated_at)
+            VALUES
+              ('/tmp/a.jsonl', 100, 1, 1700000000.0),
+              ('/tmp/b.jsonl', 250, 5, 1700000100.5),
+              ('/tmp/c.jsonl',   0, 0, 1700000200.25);
+        """)
+
+        // Run all migrations including v21. The runner walks v1..v21 in
+        // order; v1-v20 are idempotent against the unrelated tables we
+        // haven't created (CREATE … IF NOT EXISTS / ADD COLUMN guarded).
+        _ = try MigrationRunner.run(db: db, dbPath: ":memory:", registry: MigrationRegistry.all)
+
+        // Post-migration: `reader` column must exist with default 'watcher'.
+        var hasReader = false
+        var infoStmt: OpaquePointer?
+        #expect(sqlite3_prepare_v2(db, "PRAGMA table_info(claude_session_cursors);", -1, &infoStmt, nil) == SQLITE_OK)
+        while sqlite3_step(infoStmt) == SQLITE_ROW {
+            if let c = sqlite3_column_text(infoStmt, 1),
+               String(cString: c) == "reader" {
+                hasReader = true
+            }
+        }
+        sqlite3_finalize(infoStmt)
+        #expect(hasReader, "reader column missing after v21")
+
+        // The composite PK must list (path, reader). PRAGMA index_list +
+        // index_info would be the canonical check; the simpler shape
+        // assertion is "every row has a non-NULL reader and the count
+        // matches the seeded rows" — UNIQUE on (path) alone was the
+        // pre-migration constraint, so a second row with the same path
+        // but different reader must be insertable post-migration.
+        var insertStmt: OpaquePointer?
+        let insertSQL = """
+            INSERT INTO claude_session_cursors (path, byte_offset, turn_index, updated_at, reader)
+            VALUES ('/tmp/a.jsonl', 999, 99, 1700000300.0, 'reader');
+        """
+        #expect(sqlite3_exec(db, insertSQL, nil, nil, nil) == SQLITE_OK,
+                "post-migration must permit (same path, different reader); composite PK absent")
+        sqlite3_finalize(insertStmt)
+
+        // Every pre-existing row backfilled to reader='watcher', with
+        // byte_offset / turn_index / updated_at bit-identical to seed.
+        var stmt: OpaquePointer?
+        let sql = """
+            SELECT path, byte_offset, turn_index, updated_at, reader
+            FROM claude_session_cursors
+            WHERE reader = 'watcher'
+            ORDER BY path;
+        """
+        #expect(sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK)
+        defer { sqlite3_finalize(stmt) }
+
+        struct Row { let path: String; let byteOffset: Int64; let turnIndex: Int64; let updatedAt: Double }
+        var rows: [Row] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            rows.append(Row(
+                path: String(cString: sqlite3_column_text(stmt, 0)),
+                byteOffset: sqlite3_column_int64(stmt, 1),
+                turnIndex: sqlite3_column_int64(stmt, 2),
+                updatedAt: sqlite3_column_double(stmt, 3)
+            ))
+        }
+
+        #expect(rows.count == 3, "expected 3 backfilled rows, got \(rows.count)")
+        #expect(rows[0].path == "/tmp/a.jsonl")
+        #expect(rows[0].byteOffset == 100)
+        #expect(rows[0].turnIndex == 1)
+        #expect(rows[0].updatedAt == 1700000000.0, "updated_at preserved bit-identical")
+        #expect(rows[1].path == "/tmp/b.jsonl")
+        #expect(rows[1].byteOffset == 250)
+        #expect(rows[1].turnIndex == 5)
+        #expect(rows[1].updatedAt == 1700000100.5)
+        #expect(rows[2].path == "/tmp/c.jsonl")
+        #expect(rows[2].byteOffset == 0)
+        #expect(rows[2].turnIndex == 0)
+        #expect(rows[2].updatedAt == 1700000200.25)
+    }
+
+    @Test("v21 is a no-op when claude_session_cursors does not exist (fresh-install path)")
+    func migration21NoOpOnFreshInstall() throws {
+        // Fresh installs: MigrationRunner runs BEFORE TokenEventStore.
+        // setupSchema, so claude_session_cursors does not yet exist. v21
+        // must no-op rather than fail. setupSchema then creates the
+        // post-migration shape directly.
+        let db = Self.openMemory()
+        defer { sqlite3_close(db) }
+
+        // Run all migrations against a database with no claude_session_cursors.
+        _ = try MigrationRunner.run(db: db, dbPath: ":memory:", registry: MigrationRegistry.all)
+
+        // Table should still not exist (v21 didn't create it — setupSchema does).
+        #expect(!Self.tableExists(db, "claude_session_cursors"),
+                "v21 must not create claude_session_cursors; setupSchema does that on fresh installs")
+    }
+
+    @Test("v21 is idempotent — running twice over an already-migrated table is a no-op")
+    func migration21IdempotentReentry() throws {
+        let db = Self.openMemory()
+        defer { sqlite3_close(db) }
+
+        // Seed the post-migration shape directly (simulates a DB that
+        // already ran v21 but lost its schema_migrations row somehow —
+        // matches the same defense ALTERs use elsewhere).
+        Self.exec(db, """
+            CREATE TABLE claude_session_cursors (
+                path TEXT NOT NULL,
+                byte_offset INTEGER NOT NULL DEFAULT 0,
+                turn_index INTEGER NOT NULL DEFAULT 0,
+                updated_at REAL NOT NULL,
+                reader TEXT NOT NULL DEFAULT 'watcher',
+                PRIMARY KEY (path, reader)
+            );
+        """)
+        Self.exec(db, """
+            INSERT INTO claude_session_cursors (path, byte_offset, turn_index, updated_at, reader)
+            VALUES ('/tmp/already.jsonl', 42, 3, 1700000500.0, 'reader');
+        """)
+
+        _ = try MigrationRunner.run(db: db, dbPath: ":memory:", registry: MigrationRegistry.all)
+
+        // Row survives unchanged — v21 hit the `hasReader` early-return path.
+        var stmt: OpaquePointer?
+        let sql = "SELECT byte_offset, turn_index, updated_at, reader FROM claude_session_cursors WHERE path = '/tmp/already.jsonl';"
+        #expect(sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK)
+        defer { sqlite3_finalize(stmt) }
+        #expect(sqlite3_step(stmt) == SQLITE_ROW)
+        #expect(sqlite3_column_int64(stmt, 0) == 42)
+        #expect(sqlite3_column_int64(stmt, 1) == 3)
+        #expect(sqlite3_column_double(stmt, 2) == 1700000500.0)
+        #expect(String(cString: sqlite3_column_text(stmt, 3)) == "reader",
+                "reader-identity preserved through idempotent re-run")
+    }
+
+    // MARK: - U.2a-1 migration v22 (validation_results axes columns)
+
+    /// Seed a populated `validation_results` table in its pre-v22 shape,
+    /// then run all migrations to confirm v22 adds the five new columns
+    /// without disturbing existing rows. The pre-v22 shape is the result
+    /// of v3 + v5 (validation outcome metadata + T.5 chain extension).
+    /// Seed a `trust_audits` table in its v12 / pre-v25 shape so
+    /// migration v25 has a table to ALTER. v25 only adds three
+    /// nullable columns (observed_rate, observed_sample, call_id);
+    /// no rows are needed.
+    private static func seedPreV25TrustAudits(_ db: OpaquePointer) {
+        exec(db, """
+            CREATE TABLE trust_audits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                session_id TEXT,
+                pane_id TEXT,
+                tool_name TEXT,
+                reason TEXT,
+                score INTEGER,
+                correlation_count INTEGER,
+                flag_id INTEGER,
+                label TEXT,
+                labeled_by TEXT,
+                prev_hash TEXT,
+                entry_hash TEXT,
+                chain_anchor_id INTEGER
+            );
+        """)
+    }
+
+    private static func seedPreV22ValidationResults(_ db: OpaquePointer) {
+        exec(db, """
+            CREATE TABLE validation_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                validator_name TEXT NOT NULL,
+                category TEXT NOT NULL,
+                exit_code INTEGER NOT NULL,
+                raw_output TEXT,
+                advisory TEXT NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                created_at REAL NOT NULL,
+                delivered INTEGER DEFAULT 0,
+                outcome TEXT NOT NULL DEFAULT 'advisory',
+                reason TEXT,
+                surfaced_at REAL,
+                prev_hash TEXT,
+                entry_hash TEXT,
+                chain_anchor_id INTEGER
+            );
+        """)
+        exec(db, """
+            INSERT INTO validation_results
+              (session_id, file_path, validator_name, category, exit_code, advisory,
+               duration_ms, created_at, outcome)
+            VALUES
+              ('s1', '/tmp/a.swift', 'swiftc', 'syntax', 1, 'lint fail',
+               42, 1700000000.0, 'advisory'),
+              ('s2', '/tmp/b.swift', 'swiftc', 'syntax', 0, 'ok',
+               18, 1700000010.0, 'clean'),
+              ('s3', '/tmp/c.swift', 'rubocop', 'lint', 2, 'forbid',
+               99, 1700000020.0, 'blocking');
+        """)
+    }
+
+    /// Seed a `egress_decisions` table in its post-v19 / pre-v23 shape so
+    /// migration v23 has something to ALTER. Also seeds the `chain_anchors`
+    /// table (originally created at v4) so v23's anchor-rename + anchor-
+    /// open SQL has a destination.
+    private static func seedPreV23EgressDecisions(_ db: OpaquePointer) {
+        exec(db, """
+            CREATE TABLE IF NOT EXISTS chain_anchors (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                table_name TEXT NOT NULL,
+                started_at REAL NOT NULL,
+                started_at_rowid INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                operator_note TEXT
+            );
+        """)
+        exec(db, """
+            CREATE TABLE egress_decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                host TEXT NOT NULL,
+                method TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                rule_id TEXT NOT NULL,
+                latency_us INTEGER NOT NULL DEFAULT 0,
+                pane_id TEXT,
+                project_root TEXT,
+                prev_hash TEXT,
+                entry_hash TEXT,
+                chain_anchor_id INTEGER
+            );
+        """)
+    }
+
+    @Test("v22 adds the five axes/runner columns to validation_results")
+    func migration22AddsRunnerColumns() throws {
+        let db = Self.openMemory()
+        defer { sqlite3_close(db) }
+
+        Self.seedPreV22ValidationResults(db)
+        _ = try MigrationRunner.run(db: db, dbPath: ":memory:", registry: MigrationRegistry.all)
+
+        let expected: Set<String> = [
+            "axes", "target_url", "plan_steps", "result_status", "screenshot_path",
+        ]
+        var found: Set<String> = []
+        var infoStmt: OpaquePointer?
+        #expect(sqlite3_prepare_v2(db, "PRAGMA table_info(validation_results);", -1, &infoStmt, nil) == SQLITE_OK)
+        while sqlite3_step(infoStmt) == SQLITE_ROW {
+            if let c = sqlite3_column_text(infoStmt, 1) {
+                let name = String(cString: c)
+                if expected.contains(name) { found.insert(name) }
+            }
+        }
+        sqlite3_finalize(infoStmt)
+
+        #expect(found == expected, "v22 must add axes/target_url/plan_steps/result_status/screenshot_path; missing: \(expected.subtracting(found))")
+    }
+
+    @Test("v22 preserves pre-existing validation_results rows with NOT NULL defaults applied")
+    func migration22PreservesRowsWithDefaults() throws {
+        let db = Self.openMemory()
+        defer { sqlite3_close(db) }
+
+        Self.seedPreV22ValidationResults(db)
+        _ = try MigrationRunner.run(db: db, dbPath: ":memory:", registry: MigrationRegistry.all)
+
+        var stmt: OpaquePointer?
+        let sql = """
+            SELECT axes, plan_steps, target_url, screenshot_path
+              FROM validation_results
+             ORDER BY id ASC;
+        """
+        #expect(sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK)
+        defer { sqlite3_finalize(stmt) }
+
+        var rowCount = 0
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            rowCount += 1
+            #expect(String(cString: sqlite3_column_text(stmt, 0)) == "[]", "axes NOT NULL default '[]' must apply to legacy row")
+            #expect(String(cString: sqlite3_column_text(stmt, 1)) == "[]", "plan_steps NOT NULL default '[]' must apply to legacy row")
+            #expect(sqlite3_column_type(stmt, 2) == SQLITE_NULL, "target_url nullable; legacy row should be NULL")
+            #expect(sqlite3_column_type(stmt, 3) == SQLITE_NULL, "screenshot_path nullable; legacy row should be NULL")
+        }
+        #expect(rowCount == 3, "all three seeded rows must survive v22 unmodified")
+    }
+
+    @Test("v22 backfills result_status from outcome — advisory/clean → pass, blocking → fail")
+    func migration22BackfillsResultStatus() throws {
+        let db = Self.openMemory()
+        defer { sqlite3_close(db) }
+
+        Self.seedPreV22ValidationResults(db)
+        _ = try MigrationRunner.run(db: db, dbPath: ":memory:", registry: MigrationRegistry.all)
+
+        var stmt: OpaquePointer?
+        #expect(sqlite3_prepare_v2(db, """
+            SELECT outcome, result_status
+              FROM validation_results
+             ORDER BY id ASC;
+        """, -1, &stmt, nil) == SQLITE_OK)
+        defer { sqlite3_finalize(stmt) }
+
+        struct Backfill { let outcome: String; let status: String }
+        var rows: [Backfill] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            rows.append(Backfill(
+                outcome: String(cString: sqlite3_column_text(stmt, 0)),
+                status: String(cString: sqlite3_column_text(stmt, 1))
+            ))
+        }
+        #expect(rows.count == 3)
+        #expect(rows[0].outcome == "advisory" && rows[0].status == "pass")
+        #expect(rows[1].outcome == "clean" && rows[1].status == "pass")
+        #expect(rows[2].outcome == "blocking" && rows[2].status == "fail")
+    }
+
+    @Test("v22..v48 advance the migration ledger by exactly twenty-seven rows over a v21-baseline DB")
+    func migration22And23AdvanceLedgerByTwo() throws {
+        let db = Self.openMemory()
+        defer { sqlite3_close(db) }
+
+        // Seed schema_migrations to v21 + a pre-v22 validation_results AND
+        // a pre-v23 egress_decisions (created at v19) AND a pre-v25
+        // trust_audits (created at v12) so the runner sees exactly ten
+        // pending migrations (v22 + v23 + v24 + v25 + v26 + v27 + v28 +
+        // v29 + v30 + v31 — v24 ships eval_results self-contained, v25
+        // ships trust_audits column ALTERs requiring the v12 table, v26
+        // ships session_work_queue + session_event_stream substrate, v27
+        // ships surrogate_writes for T.2c-2 AnonymizationProxy, v28
+        // renames the trust_audits fresh-install anchor to
+        // fresh-install-pre-v25 so the v25-added columns can fold
+        // into the canonical hash map under a new migration-v25
+        // anchor opened lazily by the writers, v29 mirrors that
+        // rename for validation_results so the v22-added columns
+        // can fold into the canonical hash map under a new
+        // migration-v22 anchor opened lazily by the browser writer,
+        // v30 adds runtime_telemetry_{dataset,span,log} for V.18a-1,
+        // v31 adds per-table byte counters on runtime_telemetry_dataset
+        // for V.18a-2 store + prune).
+        Self.seedPreV22ValidationResults(db)
+        Self.seedPreV23EgressDecisions(db)
+        Self.seedPreV25TrustAudits(db)
+        Self.exec(db, """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at REAL NOT NULL,
+                description TEXT NOT NULL
+            );
+        """)
+        for version in 1...21 {
+            Self.exec(db, """
+                INSERT INTO schema_migrations (version, applied_at, description)
+                VALUES (\(version), 1700000000.0, 'baseline stamp');
+            """)
+        }
+        Self.exec(db, "PRAGMA user_version = 21;")
+
+        let before = Self.appliedCount(db)
+        let report = try MigrationRunner.run(db: db, dbPath: ":memory:", registry: MigrationRegistry.all)
+        let after = Self.appliedCount(db)
+
+        #expect(after - before == 27, "ledger must advance by exactly twenty-seven rows (v22..v48); got \(after - before)")
+        #expect(report.appliedVersions == [22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48], "runner must report v22..v48 as the newly-applied versions; got \(report.appliedVersions)")
+    }
+
     @Test("lockfile refuses subsequent runs until removed")
     func lockfileRefusesRun() throws {
         let tmpDir = NSTemporaryDirectory() + "migration-test-\(UUID().uuidString)/"

@@ -266,12 +266,12 @@ struct TreeSitterJavaPerformanceTests {
         try? source.write(toFile: fullPath, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
-        // Median-of-3 — see DependencyGraphPerfGateTests for the canonical
+        // Min-of-N — see DependencyGraphPerfGateTests for the canonical
         // pattern. `.serialized` only serializes within-suite, so peer-suite
         // CPU contention can spike a single sample under parallel runner;
         // a single transient spike on one of three runs cannot fail the
         // test, but a real regression (every run blows budget) still does.
-        // Threshold preserved at 10 ms — the median strengthens the gate
+        // Threshold preserved at 10 ms — the minimum keeps the gate honest
         // on its own (mirrors the Scala/Ruby/Haskell/PHP siblings, with
         // the InjectionGuard 2026-05-06 precedent of preserve-don't-widen).
         let clock = ContinuousClock()
@@ -283,10 +283,12 @@ struct TreeSitterJavaPerformanceTests {
             }
             samples.append(Double(elapsed.components.attoseconds) / 1e15)
         }
-        let median = samples.sorted()[1]
         // 5 classes + 30 methods + 5 nested classes + 5 inner methods = 45
         #expect(entries.count >= 40, "Should find >= 40 symbols, got \(entries.count)")
-        #expect(median < 10.0, "median of 3 Java parses: \(samples) → median \(String(format: "%.2f", median))ms")
+        #expect(
+            PerfGate.passes(samples: samples, budget: 10.0),
+            "min of 3 Java parses must be < 10ms: \(samples)"
+        )
     }
 
     @Test func javaCoexistsWithOtherLanguages() {
@@ -345,6 +347,54 @@ struct TreeSitterJavaPerformanceTests {
         // Second Java pass should match first
         #expect(javaEntries2.count == javaEntries.count, "Java should produce same results on re-parse")
         #expect(javaEntries2.map(\.name).sorted() == javaEntries.map(\.name).sorted())
+    }
+}
+
+// MARK: - Suite 4: Java Depth Stress
+
+@Suite("TreeSitterBackend — Java Depth Stress")
+struct TreeSitterJavaDepthStressTests {
+
+    // Chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Generates a top-level class with a static field initializer whose
+    // expression is a deeply-nested parenthesized chain, and indexes the
+    // file WITHOUT `runOnLargeStackThread` to prove the iterative walk
+    // is cooperative-pool-safe. Two empty top-level classes bracket the
+    // deep expression to assert pre-order symbol emission.
+    //
+    // Why a class-field initializer, not a method body: Java's
+    // `method_declaration` switch arm emits and returns without walking
+    // the method body, so depth inside `{...}` is not walked. The deep
+    // chain must live inside a node whose descendants fall through the
+    // default arm (reverse-push children). A class with a static field
+    // initializer satisfies this: class_declaration emits + pushes the
+    // body with the class name as container, the body descends to the
+    // field_declaration via default, and the field's variable_declarator
+    // → expression chain pushes ~2200 deep. The pre-refactor walk would
+    // consume ~2200 Swift call frames and crash on the cooperative
+    // pool's smaller stack; the iterative form runs in heap-allocated
+    // work-stack memory.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() {
+        let depth = 2200
+        let opens = String(repeating: "(", count: depth)
+        let closes = String(repeating: ")", count: depth)
+        let source = """
+        public class First { }
+
+        public class Container {
+            public static int X = \(opens)0\(closes);
+        }
+
+        public class Last { }
+        """
+
+        let entries = indexJava(source)
+        let classes = entries.filter { $0.kind == .class }
+        #expect(classes.map(\.name) == ["First", "Container", "Last"],
+                "Symbol order must remain left-to-right pre-order")
+        #expect(classes.allSatisfy { $0.container == nil },
+                "Top-level Java classes carry no container")
     }
 }
 

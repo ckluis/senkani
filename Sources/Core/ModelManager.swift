@@ -81,6 +81,14 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
 
     public static let shared = ModelManager()
 
+    /// Canonical id of the on-device embedding model — the SAME model the
+    /// MCP `senkani_embed` tool (`EmbedEngine`) and the RRF ranker use.
+    /// Single source of truth so no surface (the V.13c OpenAI
+    /// `/v1/embeddings` endpoint included) introduces a parallel embedding
+    /// stack with a divergent id. Matches the `minilm-l6` registry entry
+    /// below.
+    public static let embeddingModelID = "minilm-l6"
+
     // MARK: - Published State
 
     /// Current state of all managed models. Access under lock.
@@ -105,6 +113,33 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
     /// Protected by `lock`.
     private var verificationHandler: ((String) async throws -> Void)?
 
+    /// Registered embedding handler. V.13c real-engine — MCP target
+    /// registers an MLX-backed implementation at startup so `senkani serve
+    /// --openai`'s `POST /v1/embeddings` returns real on-device MiniLM
+    /// vectors instead of the placeholder. Core stays MLX-free; the CLI
+    /// link surface is unchanged. When `nil`, `ServeCommand` falls back to
+    /// `Serve.placeholderEmbeddingsEngine()` and logs the unregistered
+    /// state. Protected by `lock`.
+    private var embeddingHandler: (any EmbeddingEngine)?
+
+    /// Registered chat handler. V.13 real-chat — MCP target registers an
+    /// MLX-backed Gemma 4 implementation at startup so `senkani serve
+    /// --openai`'s `POST /v1/chat/completions` returns real on-device
+    /// completions instead of the placeholder. Core stays MLX-free; the
+    /// CLI link surface is unchanged. When `nil`, `ServeCommand` falls
+    /// back to `Serve.placeholderChatEngine()`. Protected by `lock`.
+    private var chatHandler: (any ChatEngine)?
+
+    /// Registered streaming chat handler. V.13 real-chat (sub-item 2) —
+    /// MCP target registers an MLX-backed Gemma 4 implementation that
+    /// yields token-by-token deltas as `container.generate` produces them,
+    /// so `senkani serve --openai`'s streaming SSE deltas reflect real
+    /// arrival timing rather than v13b's post-hoc content chunking. Core
+    /// stays MLX-free. When `nil`, `ServeCommand` falls back to the v13b
+    /// collected-then-chunk path through the non-streaming engine.
+    /// Protected by `lock`.
+    private var streamingChatHandler: (any StreamingChatEngine)?
+
     /// Register a download handler (called by MCP layer at startup).
     /// Thread-safe: acquires lock before writing.
     public func registerDownloadHandler(_ handler: @escaping (String) async throws -> Void) {
@@ -121,6 +156,70 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
         lock.lock()
         verificationHandler = handler
         lock.unlock()
+    }
+
+    /// Register an embedding handler (called by MCP layer at startup).
+    /// V.13c real-engine — `senkani serve --openai`'s `POST /v1/embeddings`
+    /// resolves this handler at request time; if `nil`, falls back to the
+    /// v13c placeholder. Mirrors `registerDownloadHandler` /
+    /// `registerVerificationHandler` — Core stays MLX-free.
+    /// Thread-safe.
+    public func registerEmbeddingHandler(_ handler: any EmbeddingEngine) {
+        lock.lock()
+        embeddingHandler = handler
+        lock.unlock()
+    }
+
+    /// Resolved embedding handler, if any. `ServeCommand` consults this at
+    /// request time. Returns nil when no MCP-side handler has been
+    /// registered (e.g. `senkani serve` started without the MCP startup
+    /// hook, or a unit test).
+    public func resolvedEmbeddingHandler() -> (any EmbeddingEngine)? {
+        lock.lock()
+        defer { lock.unlock() }
+        return embeddingHandler
+    }
+
+    /// Register a chat handler (called by MCP layer at startup). V.13
+    /// real-chat — `senkani serve --openai`'s `POST /v1/chat/completions`
+    /// resolves this handler at request time; if `nil`, falls back to the
+    /// v13a-3 placeholder. Mirrors `registerEmbeddingHandler` — Core stays
+    /// MLX-free. Thread-safe; idempotent (last call wins).
+    public func registerChatHandler(_ handler: any ChatEngine) {
+        lock.lock()
+        chatHandler = handler
+        lock.unlock()
+    }
+
+    /// Resolved chat handler, if any. `ServeCommand` consults this at
+    /// request time. Returns nil when no MCP-side handler has been
+    /// registered (e.g. `senkani serve` started without the MCP startup
+    /// hook, or a unit test).
+    public func resolvedChatHandler() -> (any ChatEngine)? {
+        lock.lock()
+        defer { lock.unlock() }
+        return chatHandler
+    }
+
+    /// Register a streaming chat handler (called by MCP layer at startup).
+    /// V.13 real-chat (sub-item 2) — `senkani serve --openai`'s
+    /// `streamHandler` resolves this at request time when the request
+    /// carries `stream: true`; if `nil`, falls back to the v13b
+    /// collected-then-chunk SSE path. Mirrors `registerChatHandler` — Core
+    /// stays MLX-free. Thread-safe; idempotent (last call wins).
+    public func registerStreamingChatHandler(_ handler: any StreamingChatEngine) {
+        lock.lock()
+        streamingChatHandler = handler
+        lock.unlock()
+    }
+
+    /// Resolved streaming chat handler, if any. `ServeCommand`'s
+    /// `streamHandler` consults this at request time. Returns nil when no
+    /// MCP-side streaming handler has been registered.
+    public func resolvedStreamingChatHandler() -> (any StreamingChatEngine)? {
+        lock.lock()
+        defer { lock.unlock() }
+        return streamingChatHandler
     }
 
     // MARK: - HuggingFace Cache Location
@@ -214,6 +313,18 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
             requiredRAM: 4,
             quantMethod: "INT8"
         ),
+        // T.2b-1 registration: the eval dataset used by T.2b-2's
+        // PII-Masking-300k F1 harness. No verification fixture this
+        // round — T.2b-2 owns dataset-shape validation. Pull is
+        // operator-explicit (multi-GB; never auto-pulled). The eval
+        // harness skips when status != .verified.
+        ModelInfo(
+            id: "pii-masking-300k-eval",
+            name: "PII-Masking-300k Eval Dataset (ai4privacy)",
+            repoId: "ai4privacy/pii-masking-300k",
+            expectedSizeBytes: 5_000_000_000,   // ~5GB; refined when pulled
+            requiredRAM: 1                       // dataset only — no inference
+        ),
     ]
 
     // MARK: - RAM Detection & Auto-Selection
@@ -249,6 +360,20 @@ public final class ModelManager: ObservableObject, @unchecked Sendable {
     public static let visionModelIds = ["gemma4-26b-apex", "gemma4-e4b", "gemma4-e2b"]
 
     // MARK: - Public API
+
+    /// V.13 real-chat (sub-item 3) — true iff at least one Gemma 4 tier
+    /// is BOTH installed (`.downloaded` / `.verified`) AND fits this
+    /// machine's RAM. Mirrors the SKILL acceptance ("no Gemma 4 tier is
+    /// downloaded OR fits this machine's RAM"). Used by `ServeCommand`'s
+    /// `.local` readiness gate; the gate's per-tier doctor parity test
+    /// is the same `requiredRAM <= availableRAMGB` cut + `isReady`.
+    public func anyGemma4Ready() -> Bool {
+        let ram = Self.availableRAMGB
+        lock.lock()
+        let candidates = _models.filter { $0.id.hasPrefix("gemma4") && $0.requiredRAM <= ram }
+        lock.unlock()
+        return candidates.contains { isReady($0.id) }
+    }
 
     /// Check whether a model is downloaded and ready to use. `.downloaded`
     /// (present on disk, verify not yet run) and `.verified` (verify passed)

@@ -81,7 +81,7 @@
 
     <h2>How to toggle</h2>
     <ul>
-      <li><strong>UI:</strong> click the letter in the pane header — it highlights when on.</li>
+      <li><strong>UI:</strong> click any letter in the pane header — opens that pane's settings panel, where each toggle sits next to a one-line description and a <strong>Learn more →</strong> link to the <a href="../../../docs/concepts/per-pane-optimizers.html">per-pane optimizers concept page</a>. The header letter highlights when on; toggling lives inside the panel.</li>
       <li><strong>Env var:</strong> <code>SENKANI_FILTER=on|off</code>, <code>SENKANI_CACHE=on|off</code>, <code>SENKANI_SECRETS=on|off</code>, <code>SENKANI_INDEXER=on|off</code>, <code>SENKANI_TERSE=on|off</code>.</li>
       <li><strong>MCP:</strong> <code>senkani_session</code> with <code>action:"toggle", feature:"filter"</code>.</li>
     </ul>
@@ -89,8 +89,8 @@
     <h2>Per-pane vs global</h2>
     <p>FCSIT is <strong>per-pane</strong>. Different panes can run different combinations — a terse-mode research pane alongside a full-fidelity build pane. Global defaults come from <code>~/.senkani/config.json</code>; env vars override per pane; the UI toggle is the final say for the current session.</p>
 
-    <h2>First-use disclosure</h2>
-    <p>The compact <strong>F C S I T</strong> letters in a pane header expand into a one-shot disclosure popover the first time a user hovers over them or taps any letter. The popover names every letter (Filter, Cache, Secrets, Indexer, Terse), quotes the savings band each unlocks, and explains the tap-to-toggle / double-click-for-details affordances; dismissing it via <strong>Got it</strong> sets a versioned <code>UserDefaults</code> flag (<code>senkani.fcsit.firstUseDisclosureSeen.v1</code>) so the popover never re-fires for that user. VoiceOver names each toggle in literal feature terms ("Filter, on" / "Filter, off") with the toggle's effect on the accessibility hint, so the letter glyph is never the only handle a user has on the control.</p>
+    <h2>Discoverability</h2>
+    <p>Clicking any of the five letters opens the pane's settings panel directly — the canonical surface for changing toggle state and reading what each toggle does. Each row in the panel renders a <strong>Learn more →</strong> link to the matching anchor on the <a href="../../../docs/concepts/per-pane-optimizers.html">per-pane optimizers</a> concept page. VoiceOver names each toggle in literal feature terms ("Filter, on" / "Filter, off") with the toggle's effect on the accessibility hint, so the letter glyph is never the only handle a user has on the control.</p>
 
   </article>
 </main>
@@ -106,7 +106,7 @@
   </div>
   <div class="foot-meta">
     <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
-    <span><a href="../../../docs/changelog.html">v0.2.0 changelog</a></span>
+    <span><a href="../../../docs/changelog.html">v0.3.0 changelog</a></span>
   </div>
 </footer>
 <script src="../../../assets/app.js" defer></script>

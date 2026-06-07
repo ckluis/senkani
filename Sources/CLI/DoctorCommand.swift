@@ -31,6 +31,24 @@ struct Doctor: ParsableCommand {
     @Option(name: .long, help: "Free-form note recorded on the new repair anchor's operator_note field.")
     var note: String?
 
+    @Flag(name: .long, help: "When check #20 detects a stale walk bundle, skip the auto-rebuild and only warn. Default is rebuild.")
+    var noRebuildStaleBundle = false
+
+    @Flag(name: .long, help: "Print the operator-runnable command to install Playwright Chromium (U.2a-1). Does NOT auto-download. Idempotent: writes a single `validation.browser.install` chained audit row on first cache detection.")
+    var installValidationBrowser = false
+
+    @Flag(name: .long, help: "Walk the EgressProxy adversarial smoke (T.1c 5-scenario host corpus + T.1d-5 8-scenario MITM body-inspection corpus). Reports per-scenario pass/fail with rule_id, the MITM termination state (enabled/disabled + CA-on-disk), the body-inspection corpus pass rate, and recent egress_decisions deny-row counts by ruleId. Exits non-zero on any miss. Engine-level — does not spin the live listener.")
+    var checkEgress = false
+
+    @Flag(name: .long, help: "Report the senkani_exec execution-sandbox posture derived from the live ExecRoutingDecision (T.3b). Reports DENY-BY-DEFAULT / fail-CLOSED: user-supplied scripts are REFUSED (no host /bin/sh fallback), tool-internal callers use the host path, the positive wasm-sandbox path is deferred/unavailable. Read-only status; exit 0 when the fail-CLOSED invariant holds, non-zero if it is breached.")
+    var checkSandbox = false
+
+    @Flag(name: .long, help: "Generate the MITM egress CA pem and PRINT the operator-runnable `security add-trusted-cert ...` command to add it as a System trust root (T.1d-6). DRY-RUN scaffolding only: NEVER runs `security`, never sudo, never mutates the System Keychain (that is t1d-7, gui-human). Requires a typed-string confirm.")
+    var installEgressCA = false
+
+    @Flag(name: .long, help: "Reversible counterpart to --install-egress-ca: remove the local CA pem (if present) and PRINT the operator-runnable `security remove-trusted-cert ...` command (T.1d-6). DRY-RUN scaffolding only — never runs `security`, never touches the System Keychain.")
+    var uninstallEgressCA = false
+
     // MARK: - Counters
 
     private struct Results {
@@ -57,10 +75,68 @@ struct Doctor: ParsableCommand {
             return
         }
 
+        // U.2a-1 focused install motion — print the operator-runnable
+        // command, refuse to auto-download, write a chained audit row on
+        // first cache detection.
+        if installValidationBrowser {
+            runInstallValidationBrowser()
+            return
+        }
+
+        // T.1c focused smoke motion — walk the 5-scenario adversarial
+        // smoke subset purely at the rule-engine / normalizer level,
+        // print per-scenario verdicts, exit non-zero on any miss.
+        if checkEgress {
+            try runCheckEgress()
+            return
+        }
+
+        // T.3b focused posture motion — report the senkani_exec
+        // execution-sandbox routing posture DERIVED FROM the live
+        // ExecRoutingDecision (the single source of truth), not a
+        // hardcoded string. Read-only; exits non-zero only if the
+        // fail-CLOSED invariant is breached (a user-supplied caller
+        // routing to .host).
+        if checkSandbox {
+            try runCheckSandbox()
+            return
+        }
+
+        // T.1d-6 focused install motion — generate the CA pem and PRINT
+        // (never run) the `security add-trusted-cert ...` command, gated
+        // behind a typed-string confirm. Routes through the dry-run
+        // executor so no `security` process is ever spawned here (the real
+        // trust install + sudo is t1d-7, gui-human).
+        if installEgressCA {
+            try runInstallEgressCA()
+            return
+        }
+
+        // T.1d-6 reversible counterpart — remove the local CA pem and
+        // PRINT (never run) the `security remove-trusted-cert ...` command
+        // through the same dry-run executor.
+        if uninstallEgressCA {
+            try runUninstallEgressCA()
+            return
+        }
+
         print("Senkani Doctor")
         print("==============")
 
         var results = Results()
+
+        // Numbering note: the inline `// N.` comments below are DISPATCH
+        // RUN-ORDER (the sequence checks execute in), NOT the stable
+        // `// MARK: - Check N` IDs the functions carry. The two schemes
+        // intentionally diverge for checks whose stable ID was assigned in
+        // creation order rather than run order — e.g. Release commitments
+        // runs 15th here but is stable Check 22; Audit chain runs 16th but is
+        // stable Check 15; Session work bus runs 17b but is stable Check 21;
+        // Runtime telemetry runs 21st but is stable Check 23; OpenAI endpoint
+        // runs 22nd but is stable Check 16. Do NOT
+        // "reconcile" them by renumbering the MARK headers — the stable IDs
+        // are a durable cross-reference (see doctor-unnumbered-checks-
+        // 2026-05-27). Matching note lives above `// MARK: - Check 15`.
 
         // 1. Settings JSON valid
         checkSettingsJSON(&results)
@@ -79,6 +155,14 @@ struct Doctor: ParsableCommand {
 
         // 5b. Per-RAM-tier Gemma 4 output quality
         checkMLTierQuality(&results)
+
+        // 5c. PIIClassifier Layer 3 wiring (T.2b-1). Surfaces the four
+        // states the operator needs to see: not pulled (status .available),
+        // backend not ready (status .verified but adapter throws),
+        // available (status .verified + smoke OK), verification failed
+        // (status .broken / .error). T.2b-2 extends this with the F1 +
+        // commit-sha + last-eval-run suffixes.
+        checkPIIClassifierLayer3(&results)
 
         // 6. SQLite database
         checkDatabase(&results)
@@ -117,8 +201,54 @@ struct Doctor: ParsableCommand {
         // 17. Trust flags — soft-flag FP-rate counter (Phase U.4a)
         checkTrustFlags(&results)
 
+        // 17b. Session work bus — U.9a queue + stream + offsets
+        checkSessionWorkBus(&results)
+
         // 18. Egress proxy — T.1a daemon scaffold + decision audit log
         checkEgressProxy(&results)
+
+        // 18a. MITM termination env-safety readiness (T.1d-2b-ii r85) —
+        //      surfaces the operator-state where `mitmTlsTermination`
+        //      is flipped ON in FeatureConfig but the on-disk CA pem
+        //      is missing, so the listener silently falls through to
+        //      the opaque tunnel. Mirrors the stderr WARNING the
+        //      listener emits at bind time (`EgressListener.start()`).
+        checkMITMTerminationReadiness(&results)
+
+        // 18b. Anthropic serve egress allow rule (V.13b-4b, Option B) —
+        //      surface the one-line hint when api.anthropic.com is not yet
+        //      authorized in egress-policy.json (deny-on-miss preserved).
+        checkAnthropicEgressAllowRule(&results)
+
+        // 18c. Anthropic vault labels (V.13b-5) — list provisioned upstream
+        //      anthropic-key labels (label only, NEVER plaintext). Together
+        //      with 18b this forms the operator-facing "anthropic arm
+        //      readiness" surface: 18b proves the egress allow rule is
+        //      authorized, 18c proves at least one upstream key is
+        //      provisioned so `senkani serve --openai` can serve a
+        //      non-local tier.
+        checkAnthropicVaultLabels(&results)
+
+        // 19. FileProvider eviction risk on .build/ checkouts
+        //     (build-env-swiftpm-checkout-corruption-icloud-eviction-2026-05-09 Phase A).
+        checkFileProviderEviction(&results)
+
+        // 20. Walk-bundle staleness — `tools/soak/runner/[_onboarding-pass-]SenkaniApp.app`
+        //     binary mtime vs merge-target HEAD commit time. Auto-
+        //     rebuilds via BundleRebuilder unless --no-rebuild-stale-bundle.
+        //     (onboarding-pass-stale-bundle-hazard-2026-05-14.)
+        checkBundleStaleness(&results)
+
+        // 21. Runtime telemetry receiver (Phase V.18a-3) — last-bound
+        //     loopback port + cumulative drops. Loopback boundary is
+        //     performative; see spec/architecture.md.
+        checkRuntimeTelemetryReceiver(&results)
+
+        // 22. OpenAI-compatible endpoint (Phase V.13e-2) — bind / port /
+        //     key-count + trailing-24h request count + 429-rate. The last
+        //     two read v13e-1's persisted request-log query API, so they
+        //     survive a process restart.
+        checkOpenAIEndpoint(&results)
 
         print("")
         var parts: [String] = []
@@ -131,6 +261,308 @@ struct Doctor: ParsableCommand {
         if results.failed > 0 {
             throw ExitCode.failure
         }
+    }
+
+    // MARK: - --install-validation-browser (U.2a-1)
+
+    /// Operator-runnable motion: print `npx playwright install chromium`,
+    /// probe the Chromium cache, write a single `validation.browser.install`
+    /// chained audit row on first detection. Does NOT auto-download —
+    /// keeps the operator in the loop for any third-party-binary install.
+    ///
+    /// Idempotency: the chained-row write is gated on a
+    /// `tokenEventExists(source: "doctor", feature: "validation.browser.install")`
+    /// probe. Subsequent invocations after the first detection print
+    /// `already installed` and write no new audit row.
+    private func runInstallValidationBrowser() {
+        let cachePath = PlaywrightSubprocessRunner.defaultChromiumCachePath
+        let installed = FileManager.default.fileExists(atPath: cachePath)
+
+        if !installed {
+            print("Playwright Chromium is not installed at:")
+            print("  \(cachePath)")
+            print("")
+            print("Run:")
+            print("  npx playwright install chromium")
+            print("")
+            print("This is the operator-runnable install for U.2a-1's")
+            print("browser-validation runtime. senkani will NOT auto-download")
+            print("third-party binaries.")
+            return
+        }
+
+        let alreadyRecorded = SessionDatabase.shared.tokenEventExists(
+            source: "doctor",
+            feature: "validation.browser.install"
+        )
+        if !alreadyRecorded {
+            SessionDatabase.shared.recordTokenEvent(
+                sessionId: "doctor",
+                paneId: nil,
+                projectRoot: nil,
+                source: "doctor",
+                toolName: nil,
+                model: nil,
+                inputTokens: 0,
+                outputTokens: 0,
+                savedTokens: 0,
+                costCents: 0,
+                feature: "validation.browser.install",
+                command: nil
+            )
+            // Wait for the async write to land before returning so the
+            // next invocation's existence probe sees the row.
+            SessionDatabase.shared.flushWrites()
+            print("Playwright Chromium detected at:")
+            print("  \(cachePath)")
+            print("First detection recorded to validation_results audit chain.")
+            return
+        }
+
+        print("Playwright Chromium already installed at:")
+        print("  \(cachePath)")
+    }
+
+    // MARK: - --install-egress-ca / --uninstall-egress-ca (Phase T.1d-6)
+
+    /// Injectable trust-install executor seam.
+    ///
+    /// SECURITY INVARIANT (Schneier): this leg ships NO real-exec
+    /// implementation. The ONLY conforming type below is
+    /// `DryRunTrustInstallExecutor`, which PRINTS the `security ...`
+    /// invocation and RECORDS it but NEVER spawns a process. There is no
+    /// code path in this build — not in the CLI, not in tests, not in the
+    /// autonomous loop — that runs `security add-trusted-cert` /
+    /// `remove-trusted-cert`, sudo, or any mutation of the System Keychain.
+    /// The real trust install is a separate gui-human item (t1d-7).
+    ///
+    /// Default polarity is INVERTED from `ScheduleConfig`'s launchctl seam
+    /// (which defaults to real exec): the install/uninstall motions default
+    /// to the dry-run recorder, so a caller that forgets to inject simply
+    /// gets the print/record executor and CANNOT reach a real `security`
+    /// spawn. "Never mutate the System Keychain" is therefore structurally
+    /// guaranteed, not merely a convention.
+    protocol TrustInstallExecutor: AnyObject {
+        /// Print + record the invocation. Implementations MUST NOT spawn a
+        /// process.
+        func run(_ invocation: [String])
+    }
+
+    /// The only executor in this leg: a print-and-record sink. NEVER spawns
+    /// `security`. The recorded `invocations` array is the sole place a
+    /// trust-install command "goes" — tests assert against it to prove no
+    /// process was launched (there is no process-spawn code to reach).
+    final class DryRunTrustInstallExecutor: TrustInstallExecutor {
+        private(set) var invocations: [[String]] = []
+        let silent: Bool
+        init(silent: Bool = false) { self.silent = silent }
+
+        func run(_ invocation: [String]) {
+            invocations.append(invocation)
+            if !silent {
+                print("  [dry-run] would run (operator's job, t1d-7 — NOT executed here):")
+                print("    " + invocation.joined(separator: " "))
+            }
+        }
+    }
+
+    /// The System trust-store keychain path the operator targets. PRINTED
+    /// only — never opened, never written.
+    static let systemKeychainPath = "/Library/Keychains/System.keychain"
+
+    /// Build the EXACT `security add-trusted-cert` invocation the operator
+    /// would run (with sudo) to add the CA pem as a System trust root. Pure
+    /// + static so tests assert the argv without side effects. PRINTED, not
+    /// run.
+    static func addTrustedCertInvocation(pemPath: String) -> [String] {
+        [
+            "security", "add-trusted-cert", "-d",
+            "-r", "trustRoot",
+            "-k", systemKeychainPath,
+            pemPath,
+        ]
+    }
+
+    /// Build the EXACT `security remove-trusted-cert` invocation. PRINTED,
+    /// not run.
+    static func removeTrustedCertInvocation(pemPath: String) -> [String] {
+        ["security", "remove-trusted-cert", "-d", pemPath]
+    }
+
+    /// Pure typed-confirm comparison. Extracted so the accept/reject logic
+    /// is unit-testable without a tty. Exact-match only (no trim, no
+    /// case-fold): the operator must type the expected phrase verbatim.
+    static func confirmMatches(input: String?, expected: String) -> Bool {
+        input == expected
+    }
+
+    /// The fixed confirmation phrase the operator types to authorize the
+    /// install motion. A fixed phrase (not a y/N) so muscle-memory can't
+    /// bypass the gate — same rationale as `--repair-chain`'s typed asks.
+    static let installConfirmPhrase = "INSTALL-EGRESS-CA"
+
+    /// Resolve the CA pem path. Real default is `~/.senkani/egress-ca.pem`
+    /// via `MITMCertificateAuthority.Paths.defaultPaths()`; tests inject a
+    /// temp-dir path so they NEVER touch `~/.senkani` or the System
+    /// Keychain.
+    private func defaultCAPaths() -> MITMCertificateAuthority.Paths {
+        .defaultPaths()
+    }
+
+    /// CLI dispatch wrapper. Generates the CA (real default path) and runs
+    /// the testable install motion with the default dry-run executor and a
+    /// `readLine`-backed confirm reader.
+    private func runInstallEgressCA() throws {
+        try Self.installEgressCAMotion(
+            caPaths: defaultCAPaths(),
+            executor: DryRunTrustInstallExecutor(),
+            confirmReader: { readLine() },
+            recordAudit: { Self.recordEgressCAInstallAudit() }
+        )
+    }
+
+    /// CLI dispatch wrapper for the reversible counterpart.
+    private func runUninstallEgressCA() throws {
+        try Self.uninstallEgressCAMotion(
+            caPaths: defaultCAPaths(),
+            executor: DryRunTrustInstallExecutor()
+        )
+    }
+
+    /// Testable install motion (mirrors `runInstallValidationBrowser`'s
+    /// PRINT-DON'T-EXECUTE shape). Generates the CA pem via
+    /// `MITMCertificateAuthority`, requires the typed-string confirm
+    /// (MISMATCH hard-aborts BEFORE any invocation is built or recorded),
+    /// then routes the `security add-trusted-cert ...` invocation through
+    /// the injected dry-run executor (prints + records, never spawns).
+    ///
+    /// Returns nothing; the executor's `invocations` is the observable
+    /// outcome. `recordAudit` is an optional hook so the CLI can write one
+    /// chained `egress.ca.install` audit row while tests pass a no-op.
+    static func installEgressCAMotion(
+        caPaths: MITMCertificateAuthority.Paths,
+        executor: DryRunTrustInstallExecutor,
+        confirmReader: () -> String?,
+        recordAudit: () -> Void = {}
+    ) throws {
+        print("Senkani Doctor — install egress CA (DRY RUN scaffolding)")
+        print("=======================================================")
+        print("")
+        print("This will:")
+        print("  1. Generate the local MITM egress root CA pem at:")
+        print("       \(caPaths.publicCertPEM)")
+        print("     (private key, 0600, at \(caPaths.privateKeyPEM))")
+        print("  2. PRINT the `security add-trusted-cert ...` command you")
+        print("     would run (with sudo) to trust it as a System root.")
+        print("")
+        print("It will NOT run `security`, NOT sudo, and NOT mutate the")
+        print("System Keychain. The real trust install is the operator's")
+        print("job (t1d-7, gui-human).")
+        print("")
+
+        // Typed-string gate. MISMATCH hard-aborts here — BEFORE the CA is
+        // generated and BEFORE any invocation is built or recorded, so a
+        // rejected confirm leaves the executor's `invocations` EMPTY.
+        print("Type '\(installConfirmPhrase)' to confirm, or anything else to abort:")
+        print("> ", terminator: "")
+        let typed = confirmReader()
+        guard confirmMatches(input: typed, expected: installConfirmPhrase) else {
+            print("Aborted (input did not match '\(installConfirmPhrase)'). No CA generated, no command recorded.")
+            throw ExitCode.failure
+        }
+
+        // Confirm matched — generate the CA pem (writes the public pem +
+        // 0600 key to the configured paths; tests pass a temp dir).
+        try generateCASync(paths: caPaths)
+        print("Generated CA pem at \(caPaths.publicCertPEM)")
+        print("")
+
+        // Build + route the invocation through the dry-run executor. This
+        // PRINTS and RECORDS — it does not spawn `security`.
+        let invocation = addTrustedCertInvocation(pemPath: caPaths.publicCertPEM)
+        print("Operator-runnable trust-install command (run yourself, t1d-7):")
+        print("  sudo " + invocation.joined(separator: " "))
+        print("")
+        executor.run(invocation)
+
+        recordAudit()
+        print("Done. The CA pem is on disk; the System trust install is NOT")
+        print("done — run the command above yourself (t1d-7).")
+    }
+
+    /// Testable uninstall motion. Removes the CA pem (if present) and routes
+    /// the `security remove-trusted-cert ...` invocation through the dry-run
+    /// executor (prints + records, never spawns). No typed-confirm: this is
+    /// the safe/reversible direction (it only deletes a local pem and prints
+    /// a command).
+    static func uninstallEgressCAMotion(
+        caPaths: MITMCertificateAuthority.Paths,
+        executor: DryRunTrustInstallExecutor
+    ) throws {
+        print("Senkani Doctor — uninstall egress CA (DRY RUN scaffolding)")
+        print("=========================================================")
+        print("")
+
+        let fm = FileManager.default
+        var removedAny = false
+        for path in [caPaths.publicCertPEM, caPaths.privateKeyPEM] {
+            if fm.fileExists(atPath: path) {
+                try? fm.removeItem(atPath: path)
+                print("Removed local CA file: \(path)")
+                removedAny = true
+            }
+        }
+        if !removedAny {
+            print("No local CA files at \(caPaths.publicCertPEM) — nothing to remove.")
+        }
+        print("")
+
+        let invocation = removeTrustedCertInvocation(pemPath: caPaths.publicCertPEM)
+        print("Operator-runnable trust-removal command (run yourself, t1d-7):")
+        print("  sudo " + invocation.joined(separator: " "))
+        print("")
+        executor.run(invocation)
+
+        print("Done. Local CA files cleared; the System trust REMOVAL is NOT")
+        print("done — run the command above yourself (t1d-7).")
+    }
+
+    /// Synchronously ensure the CA at `paths` exists on disk (generate if
+    /// missing, else load + validate) from the sync `ParsableCommand.run()`.
+    ///
+    /// phase-t1d-6 P0 fix: this no longer bridges through a
+    /// `DispatchSemaphore`-over-`Task`. `MITMCertificateAuthority.ensureRoot()`
+    /// is genuinely synchronous (its `await` was a pure actor-isolation hop, no
+    /// suspension point), so the CA is now minted/persisted by an actor-
+    /// nonisolated static (`ensureRootOnDisk`) entirely on the calling thread —
+    /// no Task, no semaphore, no cooperative-pool dependency. The old bridge
+    /// deadlocked a full `swift test` run under cooperative-pool saturation
+    /// (stack-sampled to dispatch_semaphore_wait at
+    /// DoctorEgressCACommandTests.swift:93). Rethrows the authority's error.
+    static func generateCASync(paths: MITMCertificateAuthority.Paths) throws {
+        try MITMCertificateAuthority.ensureRootOnDisk(paths: paths)
+    }
+
+    /// Optionally write one chained `egress.ca.install` audit row (mirrors
+    /// `runInstallValidationBrowser`'s single-row write). Idempotency is not
+    /// required for this leg — re-running install regenerates the CA, so a
+    /// fresh row per invocation is acceptable.
+    private static func recordEgressCAInstallAudit() {
+        SessionDatabase.shared.recordTokenEvent(
+            sessionId: "doctor",
+            paneId: nil,
+            projectRoot: nil,
+            source: "doctor",
+            toolName: nil,
+            model: nil,
+            inputTokens: 0,
+            outputTokens: 0,
+            savedTokens: 0,
+            costCents: 0,
+            feature: "egress.ca.install",
+            command: nil
+        )
+        SessionDatabase.shared.flushWrites()
     }
 
     // MARK: - --repair-chain (Phase T.5 round 4)
@@ -247,6 +679,15 @@ struct Doctor: ParsableCommand {
         }
     }
 
+    // Numbering note: `// MARK: - Check N` headers are STABLE IDs, assigned
+    // in creation order and never renumbered, so they appear out of order in
+    // this file and deliberately differ from the DISPATCH RUN-ORDER `// N.`
+    // comments in `run()` above (e.g. this check is run-order 16 but stable
+    // Check 15). Neither number reaches operator output — `printStatus`
+    // emits descriptive text and run()'s summary counts by
+    // pass/fail/fixed/skip, not by check number. Do NOT reconcile the two
+    // schemes. Matching note lives at the top of `run()`'s check sequence.
+
     // MARK: - Check 15: Audit chain integrity (Phase T.5)
 
     /// Display order for the chain-audit per-table walk. Single source of
@@ -257,7 +698,9 @@ struct Doctor: ParsableCommand {
         "token_events", "validation_results", "sandboxed_results",
         "commands", "pane_refresh_state", "policy_snapshots",
         "confirmations", "trust_audits", "egress_decisions",
-        "pack_audits"
+        "pack_audits", "eval_results", "surrogate_writes",
+        "workstream_handoffs", "openai_request_log",
+        "thread_handoff_event"
     ]
 
     private static let chainAuditSummaryNames: String =
@@ -341,6 +784,35 @@ struct Doctor: ParsableCommand {
         }
     }
 
+    // MARK: - Check 21: Session work bus (Phase U.9a)
+
+    /// Surface the U.9a queue + stream diagnostics: pending/processing/
+    /// dead-letter row counts, active leases, retried total, by-kind
+    /// rollup, and per-consumer lag against `session_event_stream`.
+    /// All non-blocking informational lines — `senkani doctor` exit
+    /// code stays 0 regardless of bus state in U.9a (substrate-only).
+    private func checkSessionWorkBus(_ results: inout Results) {
+        let q = SessionDatabase.shared.sessionWorkQueueStore.diagnostics()
+        let kinds = q.byKind.isEmpty
+            ? "none"
+            : q.byKind.sorted(by: { $0.key < $1.key })
+                .map { "\($0.key)=\($0.value)" }.joined(separator: ", ")
+        printStatus(.pass, "session work queue — pending: \(q.pending) | processing: \(q.processing) | succeeded: \(q.succeeded) | dead_letter: \(q.deadLetter) | active_leases: \(q.activeLeases) | retried_total: \(q.retriedTotal) | by_kind: \(kinds)")
+        results.passed += 1
+
+        let stream = SessionDatabase.shared.sessionEventStreamStore
+        let consumers = stream?.allConsumerIds() ?? []
+        for cid in consumers {
+            let lag = stream?.lag(consumerId: cid) ?? 0
+            printStatus(.pass, "session event stream consumer '\(cid)' — lag: \(lag) rows")
+            results.passed += 1
+        }
+
+        let cfg = (try? WorkBusConfigStore.load()) ?? WorkBusConfig()
+        printStatus(.pass, "work-bus config — dual_write: \(cfg.dualWrite)")
+        results.passed += 1
+    }
+
     // MARK: - Check 17: Trust flags (Phase U.4a)
 
     /// Surface the rolling 30-day soft-flag count + confirmed FP/TP
@@ -350,6 +822,19 @@ struct Doctor: ParsableCommand {
     private func checkTrustFlags(_ results: inout Results) {
         let stats = SessionDatabase.shared.trustFlagStatsLast30Days()
         printStatus(.pass, "trust flags — \(stats.doctorLine)")
+        results.passed += 1
+
+        // U.4b-1 — surface the operator-flippable trust mode plus a
+        // gap-to-promotion readout (observed FP-rate vs configured
+        // threshold + observed sample vs configured min). Defaults to
+        // the fresh-install posture when the settings file is missing.
+        let settings = (try? TrustSettingsStore.load()) ?? TrustSettings()
+        let observedRate = PromotionGate.observedRate(fp: stats.confirmedFP, tp: stats.confirmedTP)
+        let observedSample = stats.confirmedFP + stats.confirmedTP
+        let rateStr = observedRate.map { String(format: "%.3f", $0) } ?? "n/a"
+        let rateMaxStr = settings.fpRateMax.map { String(format: "%.3f", $0) } ?? "<unset>"
+        let minSampleStr = settings.minLabeledSample.map(String.init) ?? "<unset>"
+        printStatus(.pass, "trust mode: \(settings.mode.rawValue) — observed_rate: \(rateStr) / max: \(rateMaxStr) — sample: \(observedSample) / min: \(minSampleStr)")
         results.passed += 1
     }
 
@@ -699,6 +1184,141 @@ struct Doctor: ParsableCommand {
         }
     }
 
+    // MARK: - Check 5c: PIIClassifier Layer 3 (T.2b-1)
+
+    /// Outcome of the Layer 3 smoke probe — used by the pure formatter
+    /// so tests can drive all four branches without touching the live
+    /// `Layer3Inference.productionDefault` (which always throws
+    /// BackendNotReadyError until T.2a-followup ships inference wiring).
+    enum Layer3SmokeOutcome {
+        case success
+        case backendNotReady
+        case unexpectedError(String)
+    }
+
+    /// Single-line formatter — kept for tests that exercise the
+    /// Layer 3 status line in isolation. Production now calls
+    /// `formatLayer3PIIClassifierLines` (plural) so the T.2b-2
+    /// commit-sha + last-eval lines surface alongside.
+    ///
+    /// Schneier (silent-degradation visibility): the backend-not-ready
+    /// branch is an EXPLICIT line, not a silent skip. Operators see
+    /// the gating in doctor output, not just at log time.
+    static func formatLayer3PIIClassifierLine(
+        status: ModelStatus?,
+        smoke: () -> Layer3SmokeOutcome,
+        lastError: String? = nil
+    ) -> (Status, String) {
+        guard let status else {
+            return (.skip, "Layer 3 PII classifier: model id '\(PIIClassifierAdapter.modelId)' not registered")
+        }
+        switch status {
+        case .available:
+            return (.skip, "Layer 3 PII classifier: not pulled (regex+entropy active)")
+        case .verified:
+            switch smoke() {
+            case .success:
+                return (.pass, "Layer 3 PII classifier: available")
+            case .backendNotReady:
+                return (.skip, "Layer 3 PII classifier: backend not ready (T.2a-followup not yet wired)")
+            case .unexpectedError(let detail):
+                return (.fail, "Layer 3 PII classifier: smoke probe failed — \(detail)")
+            }
+        case .broken, .error:
+            let why = lastError.map { " — \($0)" } ?? ""
+            return (.fail, "Layer 3 PII classifier: verification failed\(why)")
+        case .downloading, .downloaded, .verifying:
+            return (.skip, "Layer 3 PII classifier: \(status.rawValue)")
+        }
+    }
+
+    /// Three-line formatter (T.2b-2 extension). Returns the Layer 3
+    /// status line (always) plus the model-id-plus-commit-sha line
+    /// AND the last-eval line whenever the classifier is `.verified`.
+    /// The two extra lines are NOT emitted for non-verified states
+    /// (regex+entropy or downloading paths) — there's nothing
+    /// meaningful to surface yet.
+    static func formatLayer3PIIClassifierLines(
+        status: ModelStatus?,
+        smoke: () -> Layer3SmokeOutcome,
+        lastError: String? = nil,
+        localCommitSha: String? = nil,
+        lastEval: (timestamp: Date, f1: Double)? = nil
+    ) -> [(Status, String)] {
+        let primary = formatLayer3PIIClassifierLine(
+            status: status,
+            smoke: smoke,
+            lastError: lastError
+        )
+        guard status == .verified else { return [primary] }
+
+        let sha = localCommitSha.map { String($0.prefix(12)) } ?? "unknown"
+        let modelLine: (Status, String) = (
+            localCommitSha == nil ? .skip : .pass,
+            "Layer 3 classifier model: \(PIIClassifierAdapter.modelId) @ \(sha)"
+        )
+
+        let evalLine: (Status, String)
+        if let lastEval {
+            let band = PIIClassifierEvalGate.bandLabel(
+                for: PIIClassifierEvalGate.f1Status(lastEval.f1)
+            )
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime]
+            let ts = formatter.string(from: lastEval.timestamp)
+            let status: Status
+            switch PIIClassifierEvalGate.f1Status(lastEval.f1) {
+            case .clean: status = .pass
+            case .warn: status = .fail
+            case .abort: status = .fail
+            }
+            evalLine = (
+                status,
+                String(format: "Layer 3 last eval: %@ — F1 %.3f (%@)", ts, lastEval.f1, band)
+            )
+        } else {
+            evalLine = (.skip, "Layer 3 last eval: never run")
+        }
+
+        return [primary, modelLine, evalLine]
+    }
+
+    /// Thin wrapper. Reads the live `ModelManager` + smokes the
+    /// production `Layer3Inference.productionDefault` + pulls the
+    /// last eval row from the shared `SessionDatabase`.
+    private func checkPIIClassifierLayer3(_ results: inout Results) {
+        let info = ModelManager.shared.models.first(where: { $0.id == PIIClassifierAdapter.modelId })
+        let latest = SessionDatabase.shared.latestEvalResult(modelId: PIIClassifierAdapter.modelId)
+        let lastEvalTuple: (timestamp: Date, f1: Double)? = latest.map {
+            (timestamp: $0.timestamp, f1: $0.f1)
+        }
+        let lines = Self.formatLayer3PIIClassifierLines(
+            status: info?.status,
+            smoke: {
+                do {
+                    _ = try Layer3Inference.productionDefault.detectSpans("ping", 0.85)
+                    return .success
+                } catch is PIIClassifierAdapter.BackendNotReadyError {
+                    return .backendNotReady
+                } catch {
+                    return .unexpectedError(String(describing: error))
+                }
+            },
+            lastError: info?.lastError,
+            localCommitSha: nil,  // populated by T.2a-followup
+            lastEval: lastEvalTuple
+        )
+        for (status, message) in lines {
+            printStatus(status, message)
+            switch status {
+            case .pass: results.passed += 1
+            case .skip: results.skipped += 1
+            case .fail: results.failed += 1
+            case .fixed: results.fixed += 1
+            }
+        }
+    }
+
     // MARK: - Check 6: Database
 
     private func checkDatabase(_ results: inout Results) {
@@ -941,7 +1561,7 @@ struct Doctor: ParsableCommand {
         return String(format: "%.0fms", ms)
     }
 
-    // MARK: - Release commitments (Phase V.14)
+    // MARK: - Check 22: Release commitments (Phase V.14)
 
     private func checkReleaseSLOs(_ results: inout Results) {
         let history = ReleaseSLOHistory.shared
@@ -1058,7 +1678,456 @@ struct Doctor: ParsableCommand {
         }
     }
 
+    // MARK: - Check 19: FileProvider eviction risk
+
+    /// Pure formatter for the FileProvider eviction check. Lifted out
+    /// of `checkFileProviderEviction` so tests can synthesize reports
+    /// (the `SF_DATALESS` flag is FileProvider-only and cannot be set
+    /// from user space) and assert on the operator-facing surface
+    /// without dup2-capturing stdout. Mirror of `formatChainAuditLines`.
+    static func formatFileProviderEvictionLines(
+        _ report: FileProviderEvictionReport
+    ) -> [(Status, String)] {
+        if !report.hasFinding {
+            return [(.pass, "FileProvider: no iCloud-Drive eviction symptoms (root, .build/checkouts/, source tree clean)")]
+        }
+        var lines: [(Status, String)] = []
+        if report.pathUnderFileProvider {
+            lines.append((
+                .fail,
+                "FileProvider eviction risk — \(report.scannedRoot) sits under an iCloud-Drive-managed path. See CONTRIBUTING.md `## macOS / iCloud Drive` for the disable-Desktop-&-Documents-sync remediation."
+            ))
+        }
+        if !report.datalessPaths.isEmpty {
+            let n = report.datalessPaths.count
+            let sample = report.datalessPaths.prefix(3).joined(separator: ", ")
+            let plural = n == 1 ? "" : "s"
+            lines.append((
+                .fail,
+                "FileProvider eviction — \(n) dataless-flagged file\(plural) under \(report.scannedRoot)/.build/ (sample: \(sample)). After disabling iCloud Desktop & Documents sync, run `rm -rf .build`; rebuild from a clean tree."
+            ))
+        }
+        if !report.star2Siblings.isEmpty {
+            let n = report.star2Siblings.count
+            let sample = report.star2Siblings.prefix(3).joined(separator: ", ")
+            let plural = n == 1 ? "" : "s"
+            lines.append((
+                .fail,
+                "FileProvider eviction — \(n) `* 2` Finder-shadow sibling\(plural) detected (sample: \(sample)). Each is an iCloud sync conflict; verify byte-identity with `cmp` before removing the shadows."
+            ))
+        }
+        return lines
+    }
+
+    private func checkFileProviderEviction(_ results: inout Results) {
+        let cwd = FileManager.default.currentDirectoryPath
+        let report = FileProviderEvictionScanner.scan(root: cwd)
+        for (status, message) in Self.formatFileProviderEvictionLines(report) {
+            printStatus(status, message)
+            switch status {
+            case .pass: results.passed += 1
+            case .fixed: results.fixed += 1
+            case .fail: results.failed += 1
+            case .skip: results.skipped += 1
+            }
+        }
+    }
+
+    // MARK: - Check 20: Walk-bundle staleness
+
+    /// Pure formatter for the bundle-staleness check.
+    ///
+    /// Shape (`.stale`):
+    ///   ✗ Bundle staleness — <bundle> is older than HEAD (<ref>)
+    ///     bundle: <yyyy-MM-dd HH:mm:ss> | HEAD: <yyyy-MM-dd HH:mm:ss> [— <subject>]
+    ///     recommended: `senkani walk rebuild-bundle <bundle>` (or rely on auto-rebuild)
+    static func formatBundleStalenessLines(
+        _ report: BundleStalenessReport,
+        mergeTarget: String
+    ) -> [(Status, String)] {
+        switch report.verdict {
+        case .fresh:
+            return [(.pass, "Bundle staleness: \(report.bundlePath) is up-to-date with \(mergeTarget) HEAD")]
+        case .notApplicable:
+            let reason = report.notApplicableReason ?? "not applicable"
+            return [(.skip, "Bundle staleness: skipped (\(reason))")]
+        case .stale:
+            let fmt = DateFormatter()
+            fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
+            let bundleStr = report.binaryMtime.map { fmt.string(from: $0) } ?? "?"
+            let headStr = report.headCommitTime.map { fmt.string(from: $0) } ?? "?"
+            let subject = report.headCommitSubject.map { " — \($0)" } ?? ""
+            return [
+                (.fail, "Bundle staleness — \(report.bundlePath) is older than \(mergeTarget) HEAD"),
+                (.fail, "  bundle: \(bundleStr) | HEAD: \(headStr)\(subject)"),
+                (.fail, "  recommended: `senkani walk rebuild-bundle \(report.bundlePath)` (or rely on auto-rebuild)"),
+            ]
+        }
+    }
+
+    private func checkBundleStaleness(_ results: inout Results) {
+        let projectRoot = FileManager.default.currentDirectoryPath
+        guard let bundlePath = BundleStalenessScanner.discoverBundlePath(
+            projectRoot: projectRoot
+        ) else {
+            // Silent skip — no walk bundle present, so the check is
+            // irrelevant. Don't bump the skipped counter (the doctor
+            // surface already has many "X: not running" skips; this
+            // one is too niche to surface for non-walk runs).
+            return
+        }
+        let mergeTarget = BundleStalenessScanner.resolveMergeTarget(
+            projectRoot: projectRoot
+        )
+        let headCt = BundleStalenessScanner.headCommitTime(
+            projectRoot: projectRoot, ref: mergeTarget
+        )
+        let headSubject = BundleStalenessScanner.headCommitSubject(
+            projectRoot: projectRoot, ref: mergeTarget
+        )
+        let report = BundleStalenessScanner.scan(
+            bundlePath: bundlePath,
+            headCommitTime: headCt,
+            headCommitSubject: headSubject
+        )
+        for (status, message) in Self.formatBundleStalenessLines(
+            report, mergeTarget: mergeTarget
+        ) {
+            printStatus(status, message)
+            switch status {
+            case .pass: results.passed += 1
+            case .fixed: results.fixed += 1
+            case .fail: results.failed += 1
+            case .skip: results.skipped += 1
+            }
+        }
+        // Auto-rebuild on stale unless opted out. The print line is the
+        // operator-visible signal that doctor is about to invoke a side
+        // effect; --no-rebuild-stale-bundle reverses the default.
+        guard report.verdict == .stale else { return }
+        if noRebuildStaleBundle {
+            printStatus(.skip, "Bundle staleness: --no-rebuild-stale-bundle set; skipping auto-rebuild.")
+            return
+        }
+        printStatus(.fixed, "Bundle staleness: rebuilding via shared helper...")
+        do {
+            try BundleRebuilder.rebuild(
+                bundlePath: bundlePath,
+                projectRoot: projectRoot
+            ) { print("  \($0)") }
+            // Re-balance counters: the .fail lines from the report
+            // tripped results.failed by 3; the rebuild succeeded, so
+            // demote those to fixed.
+            results.failed -= 3
+            results.fixed += 3
+            printStatus(.fixed, "Bundle staleness: bundle refreshed.")
+        } catch {
+            printStatus(.fail, "Bundle staleness: rebuild failed — \(error)")
+            results.failed += 1
+        }
+    }
+
     // MARK: - Check 18: Egress proxy (Phase T.1a)
+
+    // MARK: - --check-egress (T.1c)
+
+    /// 5-scenario adversarial smoke subset: 1 from each of the 5
+    /// behavioural categories that the 20-scenario corpus (under
+    /// `Tests/SenkaniTests/EgressProxyAdversarialTests.swift`) covers.
+    /// Pure rule-engine + normalizer assertions — no live listener,
+    /// no SQLite writes, no judge inference. Wall-clock <2 s.
+    ///
+    /// Schneier P0: each scenario constructs a representative rule set
+    /// and a single attacker-controlled host; asserts the engine
+    /// returns the expected decision + rule_id. A failure here means
+    /// the corpus contract drifted from the engine — block the build.
+    private func runCheckEgress() throws {
+        struct Scenario {
+            let label: String
+            let rules: [EgressRule]
+            let host: String
+            let expectedDecision: EgressRule.Decision
+            let expectedRuleId: String
+        }
+
+        let scenarios: [Scenario] = [
+            Scenario(
+                label: "DNS rebinding: loopback 127.0.0.1",
+                rules: [EgressRule(id: "allow-example", pattern: "example.com", mode: .suffix, decision: .allow)],
+                host: "127.0.0.1",
+                expectedDecision: .deny,
+                expectedRuleId: "default-deny"
+            ),
+            Scenario(
+                label: "SSRF: decimal-IP encoding 3232235777",
+                rules: [EgressRule(id: "allow-example", pattern: "example.com", mode: .suffix, decision: .allow)],
+                host: "3232235777",
+                expectedDecision: .deny,
+                expectedRuleId: "default-deny"
+            ),
+            Scenario(
+                label: "Boundary: mixed-case + trailing-dot survives normalization",
+                rules: [EgressRule(id: "deny-example", pattern: "example.com", mode: .exact, decision: .deny)],
+                host: "EXAMPLE.com.:80",
+                expectedDecision: .deny,
+                expectedRuleId: "deny-example"
+            ),
+            Scenario(
+                label: "Boundary: deny-wins over suffix allow",
+                rules: [
+                    EgressRule(id: "deny-secret", pattern: "secret.example.com", mode: .exact, decision: .deny),
+                    EgressRule(id: "allow-example-suffix", pattern: "example.com", mode: .suffix, decision: .allow),
+                ],
+                host: "secret.example.com",
+                expectedDecision: .deny,
+                expectedRuleId: "deny-secret"
+            ),
+            Scenario(
+                label: "Judge injection: ignore-your-instructions on tight allowlist",
+                rules: [EgressRule(id: "allow-api", pattern: "api.example.com", mode: .exact, decision: .allow)],
+                host: "ignore-your-instructions.example.com",
+                expectedDecision: .deny,
+                expectedRuleId: "default-deny"
+            ),
+        ]
+
+        print("Egress smoke corpus (5/20 adversarial scenarios)")
+        print(String(repeating: "=", count: 48))
+
+        var passed = 0
+        var failed = 0
+        for scenario in scenarios {
+            let engine = EgressRuleEngine(rules: scenario.rules)
+            let verdict = engine.evaluate(host: scenario.host)
+            let ok = verdict.decision == scenario.expectedDecision
+                && verdict.ruleId == scenario.expectedRuleId
+            let marker = ok ? "[ok]  " : "[fail]"
+            print("  \(marker) \(scenario.label)")
+            print("         host=\(scenario.host) → \(verdict.decision.rawValue) (\(verdict.ruleId))")
+            if !ok {
+                print("         expected: \(scenario.expectedDecision.rawValue) (\(scenario.expectedRuleId))")
+                failed += 1
+            } else {
+                passed += 1
+            }
+        }
+
+        print("")
+        print("\(scenarios.count) scenarios, \(passed) passed, \(failed) failed.")
+
+        // T.1d-5 — 8-scenario MITM body-inspection adversarial corpus
+        // runs immediately after the T.1c host corpus. Each scenario
+        // exercises the body-aware enforcement path (host allow + body
+        // deny / inner-Host rebind / oversized-head / unknown-protocol
+        // / secret redaction) at the pure-logic surface. Failure here
+        // BLOCKS the doctor exit (Allspaw P1 activation-gate).
+        let bodyCorpus = MITMBodyInspectionCorpus.run()
+        print("")
+        print("MITM body-inspection corpus (8/8 adversarial scenarios)")
+        print(String(repeating: "=", count: 56))
+        for outcome in bodyCorpus.outcomes {
+            let marker = outcome.passed ? "[ok]  " : "[fail]"
+            print("  \(marker) \(outcome.label) → \(outcome.observedRuleId) (expected: \(outcome.expectedRuleId))")
+        }
+        let bodyFailed = bodyCorpus.outcomes.filter { !$0.passed }.count
+        let bodyPassed = bodyCorpus.outcomes.count - bodyFailed
+        print("")
+        print("\(bodyCorpus.outcomes.count) body-inspection scenarios, \(bodyPassed) passed, \(bodyFailed) failed.")
+
+        // r99 t1d-5 r52 Karpathy P2 — CONNECT-path body-deny scenarios.
+        // `scenarios()` (above) is the FROZEN 8-scenario activation gate;
+        // the new CONNECT-path corpus reports separately so the operator
+        // sees both surfaces in --check-egress. Failures here do NOT
+        // gate the doctor exit — only the frozen 8-scenario corpus does.
+        let connectPathCorpus = MITMBodyInspectionCorpus.runConnectPath()
+        let connectPathFailed = connectPathCorpus.outcomes.filter { !$0.passed }.count
+        let connectPathPassed = connectPathCorpus.outcomes.count - connectPathFailed
+        if !connectPathCorpus.outcomes.isEmpty {
+            print("")
+            print("MITM CONNECT-path body-deny corpus (\(connectPathPassed)/\(connectPathCorpus.outcomes.count) scenarios)")
+            print(String(repeating: "=", count: 56))
+            for outcome in connectPathCorpus.outcomes {
+                let marker = outcome.passed ? "[ok]  " : "[fail]"
+                print("  \(marker) \(outcome.label) → \(outcome.observedRuleId) (expected: \(outcome.expectedRuleId))")
+            }
+            print("")
+            print("\(connectPathCorpus.outcomes.count) CONNECT-path scenarios, \(connectPathPassed) passed, \(connectPathFailed) failed.")
+        }
+
+        // T.1d-5 — MITM termination state line + recent-denial counts.
+        // Both helpers live in Core (`MITMBodyInspectionCorpus`) so the
+        // CLI never names the egress-decisions row type directly —
+        // preserves the `ServeArmEgressAuditDualRowTests` egress-write
+        // API deny-list (the deny-list pattern matches the row-type
+        // namespace and would flag the type-name reference here).
+        let features = FeatureConfig.resolve()
+        let caPaths = defaultCAPaths()
+        let publicExists = FileManager.default.fileExists(atPath: caPaths.publicCertPEM)
+        let privateExists = FileManager.default.fileExists(atPath: caPaths.privateKeyPEM)
+        let recentDenials = SessionDatabase.shared.recentEgressDecisions(limit: 200)
+        let denialCounts = MITMBodyInspectionCorpus.countDenialsByRuleId(recentDenials)
+        // v47 Allspaw P2 — capture-state distribution over the same 200-row
+        // window. Surfaces a per-state counter so the operator can spot an
+        // `.overflowed` spike (16 KB peek window undersized for their traffic).
+        let captureStateCounts = MITMBodyInspectionCorpus.countByCaptureState(recentDenials)
+        let stateLines = MITMBodyInspectionCorpus.formatCheckEgressMITMStateLines(
+            flagOn: features.mitmTlsTermination,
+            caOnDisk: publicExists && privateExists,
+            bodyCorpusPassed: bodyPassed,
+            bodyCorpusTotal: bodyCorpus.outcomes.count,
+            recentDenialCounts: denialCounts,
+            connectPathPassed: connectPathPassed,
+            connectPathTotal: connectPathCorpus.outcomes.count,
+            captureStateCounts: captureStateCounts
+        )
+        print("")
+        for line in stateLines {
+            print(line)
+        }
+
+        if failed > 0 || bodyFailed > 0 {
+            throw ExitCode.failure
+        }
+    }
+
+    // MARK: - --check-sandbox (T.3b)
+
+    /// Result of probing the live `ExecRoutingDecision` for the
+    /// execution-sandbox posture. `failClosedBreached` is the
+    /// load-bearing field: it is `true` IFF any user-supplied caller
+    /// routes to `.host` (an untrusted script reaching the host shell —
+    /// RCE). The CLI exits non-zero when it is set. Lifted out of
+    /// `runCheckSandbox` (and made pure) so a test can assert the exact
+    /// posture lines + the breach flag WITHOUT capturing stdout, mirroring
+    /// `formatChainAuditLines` and `formatCheckEgressMITMStateLines`.
+    struct SandboxPosture: Equatable {
+        var lines: [(Status, String)]
+        var failClosedBreached: Bool
+
+        static func == (lhs: SandboxPosture, rhs: SandboxPosture) -> Bool {
+            guard lhs.failClosedBreached == rhs.failClosedBreached,
+                  lhs.lines.count == rhs.lines.count else { return false }
+            for (a, b) in zip(lhs.lines, rhs.lines) where a != b { return false }
+            return true
+        }
+    }
+
+    /// Derive the operator-facing sandbox posture purely from the live
+    /// `ExecRoutingDecision.route(...)` — the SINGLE source of truth for
+    /// the v2 routing branch. This deliberately does NOT hardcode the
+    /// posture text: it probes the real router for each `ExecCallerKind`
+    /// (and the future trusted-wasm-opt-in arm) and reports what the
+    /// router actually decides. If `ExecRoutingDecision` ever changes
+    /// (e.g. a positive wasm path is authorized), this surface — and the
+    /// tests pinning it — move with it, so the doctor output can never
+    /// drift into overclaiming the posture.
+    ///
+    /// Schneier: the headline ("deny-by-default / fail-CLOSED") is
+    /// emitted ONLY when the router actually denies user-supplied callers
+    /// for BOTH `sandboxAvailable` states. If the router ever routed a
+    /// user-supplied caller to `.host`, this returns `failClosedBreached`
+    /// and a FAIL line instead — no false reassurance.
+    static func deriveSandboxPosture() -> SandboxPosture {
+        var lines: [(Status, String)] = []
+
+        // 1. The RCE-blocker: user-supplied scripts. Probe the router for
+        //    both sandbox-availability states — the fail-CLOSED invariant
+        //    is that NEITHER routes to .host.
+        let userSuppliedAvail = ExecRoutingDecision.route(
+            callerKind: .userSupplied, sandboxAvailable: true
+        )
+        let userSuppliedNoAvail = ExecRoutingDecision.route(
+            callerKind: .userSupplied, sandboxAvailable: false
+        )
+        let userSuppliedDenied =
+            userSuppliedAvail == .deny(.userSuppliedDenyByDefault)
+            && userSuppliedNoAvail == .deny(.userSuppliedDenyByDefault)
+        let failClosedBreached =
+            userSuppliedAvail == .host || userSuppliedNoAvail == .host
+
+        // 2. The trusted host arm: tool-internal callers (no wasm opt-in)
+        //    keep today's Foundation Process /bin/sh path.
+        let toolInternal = ExecRoutingDecision.route(callerKind: .toolInternal)
+        let toolInternalIsHost = toolInternal == .host
+
+        // 3. The future positive-wasm arm: a trusted opt-in caller whose
+        //    sandbox runtime is missing must fail CLOSED, never fall back.
+        let wasmOptInMissingRuntime = ExecRoutingDecision.route(
+            callerKind: .toolInternal, sandboxAvailable: false, wantsSandbox: true
+        )
+        let wasmFailsClosed =
+            wasmOptInMissingRuntime == .deny(.sandboxRuntimeUnavailable)
+
+        if failClosedBreached {
+            // The router leaked a user-supplied caller to the host shell.
+            // This must never happen; report it as a hard FAIL.
+            lines.append((
+                .fail,
+                "exec sandbox: FAIL-CLOSED BREACH — a user-supplied senkani_exec caller routes to the host shell (RCE). ExecRoutingDecision must deny .userSupplied."
+            ))
+            return SandboxPosture(lines: lines, failClosedBreached: true)
+        }
+
+        // Headline posture — emitted only when the router genuinely denies.
+        if userSuppliedDenied {
+            lines.append((
+                .pass,
+                "exec sandbox: deny-by-default / fail-CLOSED"
+            ))
+        } else {
+            // Router neither denied nor leaked to host (e.g. a future
+            // positive path returned some non-.host route). Report
+            // honestly rather than claim deny-by-default.
+            lines.append((
+                .skip,
+                "exec sandbox: user-supplied routing changed — \(userSuppliedAvail) (no longer plain deny-by-default; review ExecRoutingDecision)"
+            ))
+        }
+
+        // Per-caller facts, each derived from the router above.
+        lines.append((
+            userSuppliedDenied ? .pass : .skip,
+            "  user-supplied scripts: REFUSED (reason=\(ExecDenyReason.userSuppliedDenyByDefault.rawValue)) — no host /bin/sh fallback"
+        ))
+        lines.append((
+            toolInternalIsHost ? .pass : .skip,
+            "  tool-internal callers: host path (Foundation Process /bin/sh) — reserved for explicitly-trusted in-process callers"
+        ))
+        lines.append((
+            wasmFailsClosed ? .pass : .skip,
+            "  positive wasm sandbox path: deferred / unavailable — trusted wasm opt-in fails CLOSED (reason=\(ExecDenyReason.sandboxRuntimeUnavailable.rawValue)) on missing runtime, never falls back to host"
+        ))
+
+        return SandboxPosture(lines: lines, failClosedBreached: false)
+    }
+
+    /// CLI dispatch for `--check-sandbox`. Prints the posture derived from
+    /// the live `ExecRoutingDecision` and exits non-zero only if the
+    /// fail-CLOSED invariant is breached. Read-only — no DB writes, no
+    /// process spawn, no mutation; safe to run anytime.
+    private func runCheckSandbox() throws {
+        print("Senkani Doctor — exec sandbox posture (T.3b)")
+        print(String(repeating: "=", count: 44))
+        print("")
+
+        let posture = Self.deriveSandboxPosture()
+        for (status, message) in posture.lines {
+            printStatus(status, message)
+        }
+
+        print("")
+        print("""
+        Derived from ExecRoutingDecision (the live v2 routing source of
+        truth). No third-party wasm shell is vendored, so user-supplied
+        scripts have no sandboxed surface to run on — the safe action is
+        to refuse. Ratified operator decision 2026-06-05; the positive
+        wasm-shell path is deferred indefinitely.
+        """)
+
+        if posture.failClosedBreached {
+            throw ExitCode.failure
+        }
+    }
 
     /// Reports the EgressProxy daemon state. T.1a ships the deterministic
     /// rule + decision audit core; the live listener and port file land
@@ -1079,6 +2148,487 @@ struct Doctor: ParsableCommand {
         } else {
             printStatus(.skip, "Egress proxy: down (decisions: \(count))")
             results.skipped += 1
+        }
+    }
+
+    /// T.1d-2b-ii r85 — env-safety readiness check for the operator
+    /// state where `FeatureConfig.mitmTlsTermination` is flipped ON
+    /// but no on-disk CA pem exists for the listener to mint leaves
+    /// from. In that state `EgressConnectionHandler` silently falls
+    /// through to the opaque tunnel — the security control the
+    /// flag is supposed to deliver is INACTIVE. Doctor reports the
+    /// mismatch as `.fail` with the operator-runnable next step.
+    ///
+    /// Doctor runs in a separate process from the listener so we can't
+    /// directly observe whether the listener was constructed with a
+    /// leaf provider. Instead we report on the necessary precondition
+    /// for any wired provider: the on-disk CA pem + private-key pair
+    /// at `~/.senkani/egress-ca.{pem,key}`. If both exist + the flag
+    /// is ON → `.pass`. If the flag is ON but the CA materials are
+    /// missing → `.fail` (operator-actionable). Flag OFF → `.skip`.
+    ///
+    /// Mirror of the stderr WARNING emitted by `EgressListener.start()`.
+    private func checkMITMTerminationReadiness(_ results: inout Results) {
+        let features = FeatureConfig.resolve()
+        let paths = defaultCAPaths()
+        let publicExists = FileManager.default.fileExists(atPath: paths.publicCertPEM)
+        let privateExists = FileManager.default.fileExists(atPath: paths.privateKeyPEM)
+        let caOnDisk = publicExists && privateExists
+        let (status, message) = Self.formatMITMTerminationReadinessLine(
+            flagOn: features.mitmTlsTermination,
+            caOnDisk: caOnDisk
+        )
+        printStatus(status, message)
+        switch status {
+        case .pass: results.passed += 1
+        case .fixed: results.fixed += 1
+        case .fail: results.failed += 1
+        case .skip: results.skipped += 1
+        }
+    }
+
+    /// T.1d-2b-ii r85 — pure formatter for the MITM termination
+    /// env-safety readiness check. Lifted out so the unit test can
+    /// drive the three states without touching the filesystem or
+    /// resolving the live FeatureConfig (mirror of
+    /// `formatAnthropicVaultLabelsLine`).
+    ///
+    /// - Flag OFF → `.skip` "opaque tunnel mode".
+    /// - Flag ON + CA on disk → `.pass`.
+    /// - Flag ON + CA missing → `.fail` with the operator-runnable
+    ///   `senkani doctor --install-egress-ca` next step.
+    static func formatMITMTerminationReadinessLine(
+        flagOn: Bool,
+        caOnDisk: Bool
+    ) -> (Status, String) {
+        if !flagOn {
+            return (
+                .skip,
+                "MITM termination: flag is OFF — opaque tunnel mode (default)"
+            )
+        }
+        if caOnDisk {
+            return (
+                .pass,
+                "MITM termination: flag is ON; on-disk CA pem + key present"
+            )
+        }
+        return (
+            .fail,
+            "MITM termination: flag is ON but no on-disk CA pem/key — opaque tunnel is in effect. Run `senkani doctor --install-egress-ca` and re-enable the flag."
+        )
+    }
+
+    /// V.13b-4b (Option B) — surface whether the operator has authorized
+    /// `api.anthropic.com` egress (required to serve the Claude-API arm).
+    /// Informational only: deny-on-miss is the default and senkani never
+    /// auto-adds the rule — this points the operator at the one-line
+    /// `egress-policy.json` edit when it is absent, and confirms it when
+    /// present. Reuses the same `EgressPolicy.serveEgressAllowHint` seam
+    /// the serve-startup hint (b-4c) will use.
+    private func checkAnthropicEgressAllowRule(_ results: inout Results) {
+        let policyPath = NSHomeDirectory() + "/.senkani/egress-policy.json"
+        let (policy, _) = EgressPolicy.load(from: policyPath)
+        if let hint = policy.serveEgressAllowHint() {
+            printStatus(.skip, "Anthropic serve egress: \(hint)")
+            results.skipped += 1
+        } else {
+            printStatus(.pass, "Anthropic serve egress: api.anthropic.com allowed under serve (general) mode")
+            results.passed += 1
+        }
+    }
+
+    /// V.13b-4c — result type returned by `listAnthropicVaultLabels`.
+    /// Schneier P2 (perm-denied conflation, timeout-as-empty): distinct
+    /// cases let the formatter render distinct operator-facing messages
+    /// for each fault class, instead of collapsing every failure mode
+    /// into "unprovisioned".
+    ///
+    /// - `.ok(VaultLabels)`: vault query returned (possibly zero labels).
+    /// - `.timedOut`: the 5s semaphore ceiling elapsed before the
+    ///   background Task signaled. Distinct from `.ok([])` so the
+    ///   formatter can render `"Keychain query timed out"` rather than
+    ///   `"no labels provisioned"`.
+    /// - `.permissionDenied(Error)`: the underlying Keychain store threw
+    ///   with an OSStatus that indicates a locked / permission-denied
+    ///   state (`errSecAuthFailed`, `errSecInteractionNotAllowed`,
+    ///   `errSecUserCanceled`, `errSecAuthFailed`-class). Distinct from
+    ///   `.otherFailure` so the formatter can render a "re-run after
+    ///   unlocking the login Keychain" hint.
+    /// - `.otherFailure(Error)`: any other thrown error from the vault
+    ///   layer (corrupted item, future broker-store I/O, etc.).
+    enum KeychainVaultLookupResult: Sendable {
+        case ok(VaultLabels)
+        case timedOut
+        case permissionDenied(Error)
+        case otherFailure(Error)
+    }
+
+    /// V.13b-5 — pure formatter for the Anthropic vault-labels check.
+    /// Returns `(Status, message)` for the doctor surface. Lifted out of
+    /// `checkAnthropicVaultLabels` so the unit test can assert on the
+    /// operator-facing line directly (mirror of `formatOpenAIEndpointLine`
+    /// / `formatChainAuditLines`).
+    ///
+    /// **Schneier (no-secret-on-stdout):** input is a `VaultLabels` of
+    /// LABELS — there is no parameter shape by which a raw API key could
+    /// reach this formatter. The vault layer (`CredentialVault.list(scope:)`)
+    /// returns label keys only; the raw key material lives in the value
+    /// payload that this formatter never sees. V.13b-4c made the no-secret
+    /// guarantee type-level via the `VaultLabels` wrapper — a future
+    /// refactor that swapped the inner element type would fail to
+    /// compile here.
+    ///
+    /// V.13b-4c (Schneier P2): distinct messages per failure class.
+    ///
+    /// - `.ok` zero labels → `.skip` with the operator-actionable
+    ///   `senkani vault add anthropic-key --label <name>` pointer.
+    /// - `.ok` one or more labels → `.pass` listing every label in the order
+    ///   the vault returned them.
+    /// - `.timedOut` → `.fail` "Keychain query timed out — re-run doctor".
+    /// - `.permissionDenied(err)` → `.fail` "Keychain unavailable
+    ///   (locked / permission denied)". The error's `localizedDescription`
+    ///   is appended — OSStatus error descriptions carry only status
+    ///   codes + Apple-canned text, never vault values, so no secret
+    ///   material can reach this surface through the error.
+    /// - `.otherFailure(err)` → `.fail` "Keychain query failed:
+    ///   <localizedDescription>".
+    static func formatAnthropicVaultLabelsLine(
+        _ result: KeychainVaultLookupResult
+    ) -> (Status, String) {
+        switch result {
+        case .ok(let vaultLabels):
+            let labels = vaultLabels.labels
+            if labels.isEmpty {
+                return (
+                    .skip,
+                    "Anthropic vault: no labels provisioned. Run `senkani vault add anthropic-key --label <name>` to seed the upstream key."
+                )
+            }
+            let listed = labels.joined(separator: ", ")
+            return (
+                .pass,
+                "Anthropic vault: \(labels.count) label(s) provisioned (\(listed))"
+            )
+        case .timedOut:
+            return (
+                .fail,
+                "Anthropic vault: Keychain query timed out (>5s) — re-run `senkani doctor`. If this persists, your login Keychain may be locked or the Security daemon is unresponsive."
+            )
+        case .permissionDenied(let error):
+            return (
+                .fail,
+                "Anthropic vault: Keychain unavailable (locked / permission denied): \(error.localizedDescription)"
+            )
+        case .otherFailure(let error):
+            return (
+                .fail,
+                "Anthropic vault: Keychain query failed: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    /// V.13b-5 / V.13b-4c — synchronously list provisioned Anthropic
+    /// vault labels with a 5s ceiling. Bridges the async
+    /// `CredentialVault.list` actor call onto doctor's sync execution
+    /// path via a bounded-timeout semaphore. The list call is bounded
+    /// by the underlying store's single Keychain query; no network I/O.
+    /// Extracted so the unit test can drive the bridge with an injected
+    /// `InMemoryKeychainStore`-backed vault and assert the label list
+    /// (label-only — the raw key never reaches this surface).
+    ///
+    /// V.13b-4c hardening:
+    /// - **Thread-safe publish**: the prior `nonisolated(unsafe) var
+    ///   labels` had a real TSan race on the timeout codepath (the
+    ///   background Task could still be writing `labels` when the main
+    ///   thread returned it). Replaced with an `NSLock`-guarded
+    ///   `LookupSlot` so the background-Task write and the main-thread
+    ///   read are serialized, and the main thread only ever returns
+    ///   what was atomically published.
+    /// - **5s ceiling** (was 3s): matches the b-4d test ceiling; on
+    ///   timeout, returns `.timedOut` (NOT `.ok([])`) so the formatter
+    ///   renders a distinct "Keychain query timed out" message instead
+    ///   of the false-negative "no labels provisioned" hint.
+    /// - **Perm-denied classification**: caught throws are classified
+    ///   into `.permissionDenied` vs `.otherFailure` based on the
+    ///   underlying NSError's `code` (OSStatus). `errSecAuthFailed`,
+    ///   `errSecInteractionNotAllowed`, `errSecUserCanceled`, and
+    ///   `errSecAuthFailed`-class statuses route to `.permissionDenied`;
+    ///   everything else routes to `.otherFailure`.
+    static func listAnthropicVaultLabels(
+        vault: CredentialVault
+    ) -> KeychainVaultLookupResult {
+        // NSLock-guarded slot: the background Task writes
+        // `(result, done)` atomically; the main thread reads it
+        // atomically after the semaphore fires (or sees `done ==
+        // false` on timeout). No `nonisolated(unsafe)` shared state.
+        final class LookupSlot: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _result: KeychainVaultLookupResult? = nil
+
+            func publish(_ result: KeychainVaultLookupResult) {
+                lock.lock()
+                defer { lock.unlock() }
+                _result = result
+            }
+
+            func snapshot() -> KeychainVaultLookupResult? {
+                lock.lock()
+                defer { lock.unlock() }
+                return _result
+            }
+        }
+
+        let slot = LookupSlot()
+        let sem = DispatchSemaphore(value: 0)
+        Task {
+            defer { sem.signal() }
+            // Delegate classification to the shared async helper. The
+            // helper has NO internal wall-clock ceiling (timeoutSeconds:
+            // nil) because the ceiling on doctor's sync path is enforced
+            // here by the semaphore wait below — keeping the production
+            // behavior (a 5s wall-clock budget on doctor's blocking call
+            // path) byte-for-byte unchanged.
+            let result = await Self.listAnthropicVaultLabelsAsync(
+                vault: vault, timeoutSeconds: nil
+            )
+            slot.publish(result)
+        }
+        // V.13b-4c: 5s ceiling (was 3s). This wall-clock budget bounds
+        // doctor's BLOCKING sync execution path — it is intentionally a
+        // real-machine deadline so a hung Security daemon cannot wedge
+        // `senkani doctor`. (Tests do NOT exercise this blocking path —
+        // they call `listAnthropicVaultLabelsAsync` directly, whose
+        // ceiling is a logical Task.sleep race, not a wall-clock wait —
+        // so the suite is independent of cooperative-pool scheduling
+        // latency under full-suite parallel load.)
+        let waitResult = sem.wait(timeout: .now() + .seconds(5))
+        if waitResult == .timedOut {
+            // Timed out — do NOT collapse to empty labels.
+            return .timedOut
+        }
+        // Semaphore signaled → the async helper published a result.
+        return slot.snapshot() ?? .timedOut
+    }
+
+    /// V.13b-4c / flake-doctor-keychain-vault-sleep-timing — the pure
+    /// async classification core shared by doctor's sync bridge
+    /// (`listAnthropicVaultLabels`) and the unit tests. Performs the
+    /// exact same fault-class mapping the sync bridge used to inline:
+    ///
+    /// - vault list returns → `.ok(VaultLabels(labels))`
+    /// - vault list throws a permission-denied OSStatus → `.permissionDenied`
+    /// - vault list throws anything else → `.otherFailure`
+    /// - the logical ceiling (when `timeoutSeconds != nil`) elapses
+    ///   before the vault list completes → `.timedOut`
+    ///
+    /// **Why this exists (test-flake fix, 2026-06-05):** the prior
+    /// design only exposed the *synchronous* bridge, whose 5s ceiling is
+    /// a real `DispatchSemaphore` wall-clock wait. Under full-suite
+    /// parallel load (~3.7k tests saturating the cooperative pool) the
+    /// background `Task` could not be scheduled within 5s of wall time —
+    /// so even an instant in-memory vault lookup wall-clock-stretched
+    /// past the deadline and returned `.timedOut` instead of `.ok`,
+    /// flaking 4 tests that PASSED 9/9 in isolation. The tests now drive
+    /// THIS async helper instead. The non-timeout paths (`.ok`,
+    /// `.permissionDenied`) have no wall-clock dependence at all — they
+    /// resolve the instant the vault `await` returns, regardless of pool
+    /// saturation. The timeout-contract tests pass `timeoutSeconds:` and
+    /// race the vault's `Task.sleep` against a `Task.sleep`-based
+    /// ceiling: both sleeps are scheduled on the same clock and starve
+    /// together under load, so their RELATIVE ordering (a 4s store sleep
+    /// resolving before a 5s ceiling; a 7s store sleep losing to it) is
+    /// preserved even when absolute wall-clock stretches. The assertion
+    /// still verifies the real contract — a 4s lookup succeeds under the
+    /// 5s ceiling, a 7s lookup times out — without depending on absolute
+    /// scheduler latency.
+    ///
+    /// `timeoutSeconds: nil` disables the logical ceiling entirely
+    /// (used by the sync bridge, which enforces its own wall-clock
+    /// ceiling via the semaphore).
+    static func listAnthropicVaultLabelsAsync(
+        vault: CredentialVault,
+        timeoutSeconds: Double?
+    ) async -> KeychainVaultLookupResult {
+        // Classify the vault list into a fault class. Factored as a
+        // closure so both the no-timeout fast path and the timeout race
+        // share one classification site.
+        func classifiedList() async -> KeychainVaultLookupResult {
+            do {
+                let labels = try await vault.list(
+                    scope: AnthropicKeyProvisioner.vaultScope
+                )
+                return .ok(VaultLabels(labels))
+            } catch {
+                if Self.isPermissionDeniedError(error) {
+                    return .permissionDenied(error)
+                }
+                return .otherFailure(error)
+            }
+        }
+
+        guard let timeoutSeconds = timeoutSeconds else {
+            // No logical ceiling — resolve as soon as the vault returns.
+            return await classifiedList()
+        }
+
+        // Logical timeout race: the classified vault list vs a
+        // `Task.sleep` ceiling. First to finish wins; the loser is
+        // cancelled. `Task.sleep` honors cancellation, so the ceiling
+        // task is torn down promptly when the list wins. Both arms are
+        // scheduled on the same clock, so under cooperative-pool
+        // starvation they stretch together and their relative ordering
+        // is preserved — that is what makes the timeout assertion
+        // load-independent.
+        let timeoutNanos = UInt64(timeoutSeconds * 1_000_000_000)
+        return await withTaskGroup(
+            of: KeychainVaultLookupResult.self
+        ) { group in
+            group.addTask {
+                await classifiedList()
+            }
+            group.addTask {
+                // Sleep losing the race is cancelled; treat cancellation
+                // (CancellationError thrown by Task.sleep) as "I lost".
+                do {
+                    try await Task.sleep(nanoseconds: timeoutNanos)
+                    return .timedOut
+                } catch {
+                    // Cancelled because the list arm already won. Return a
+                    // sentinel the harvester below filters out by taking
+                    // the FIRST completed result only.
+                    return .timedOut
+                }
+            }
+            // Take the first arm to finish, cancel the rest.
+            let first = await group.next() ?? .timedOut
+            group.cancelAll()
+            return first
+        }
+    }
+
+    /// V.13b-4c — classify a Keychain `list` throw as permission-denied
+    /// vs other-failure. The `MacOSKeychainStore` wraps OSStatus into
+    /// an `NSError(domain: "MacOSKeychainStore", code: Int(status))`,
+    /// so we read back the OSStatus from the NSError code. The status
+    /// codes treated as permission-denied are:
+    ///
+    /// - `errSecAuthFailed` (-25293): authentication failed (canonical
+    ///   "Keychain locked / wrong password" status).
+    /// - `errSecInteractionNotAllowed` (-25308): UI prompt required
+    ///   but disallowed (headless serve hitting a locked Keychain).
+    /// - `errSecUserCanceled` (-128): operator dismissed an unlock
+    ///   prompt.
+    /// - `errSecNotAvailable` (-25291): no Keychain available
+    ///   (e.g. headless CI without a login Keychain).
+    ///
+    /// Everything else (e.g. `errSecParam`, future broker-store I/O
+    /// errors) routes to `.otherFailure`.
+    static func isPermissionDeniedError(_ error: Error) -> Bool {
+        let ns = error as NSError
+        // OSStatus values (from `<Security/SecBase.h>`):
+        // errSecAuthFailed = -25293, errSecInteractionNotAllowed = -25308,
+        // errSecUserCanceled = -128, errSecNotAvailable = -25291.
+        let permissionDeniedCodes: Set<Int> = [-25293, -25308, -128, -25291]
+        return permissionDeniedCodes.contains(ns.code)
+    }
+
+    /// V.13b-5 — surface provisioned upstream Anthropic vault labels.
+    /// Production reads via `AnthropicKeyProvisioner.vault()` (the real
+    /// macOS Keychain). The test path drives the pure formatter
+    /// (`formatAnthropicVaultLabelsLine`) + the bridge
+    /// (`listAnthropicVaultLabels`) directly with an
+    /// `InMemoryKeychainStore`-backed vault so CI never touches the live
+    /// Keychain. Mirror of the egress-policy file-path injection pattern
+    /// used by `checkAnthropicEgressAllowRule` above (line 1920) — there
+    /// the seam was a path argument, here the seam is the static helpers
+    /// because the vault is an async-capable actor rather than a flat
+    /// file.
+    ///
+    /// The check is non-blocking (.skip on missing labels — not .fail) so
+    /// a fresh install without an Anthropic key still passes `doctor`
+    /// overall; the absence of an upstream key is an operator
+    /// configuration choice (the local-only tiers still serve), not a
+    /// broken state.
+    private func checkAnthropicVaultLabels(_ results: inout Results) {
+        let lookup = Self.listAnthropicVaultLabels(vault: AnthropicKeyProvisioner.vault())
+        let (status, message) = Self.formatAnthropicVaultLabelsLine(lookup)
+        printStatus(status, message)
+        switch status {
+        case .pass: results.passed += 1
+        case .fixed: results.fixed += 1
+        case .fail: results.failed += 1
+        case .skip: results.skipped += 1
+        }
+    }
+
+    // MARK: - Check 23: Runtime telemetry receiver (Phase V.18a-3)
+
+    /// V.18a-3 — surface the runtime-telemetry receiver's last-bound
+    /// loopback port + cumulative drop count from the persisted
+    /// config file at `~/.senkani/runtime-telemetry-receiver.json`.
+    /// Doctor does not start the receiver; it just reads whatever
+    /// snapshot the last running instance wrote. The loopback bind
+    /// is performative — see spec/architecture.md.
+    private func checkRuntimeTelemetryReceiver(_ results: inout Results) {
+        let cfg = (try? RuntimeTelemetryReceiverConfigStore.load()) ?? RuntimeTelemetryReceiverConfig()
+        let portText = cfg.port > 0 ? ":\(cfg.port)" : "not yet bound"
+        let rateText = "\(cfg.perSourceSpansPerSecond) spans/s/source"
+        printStatus(.pass, "Runtime telemetry receiver — \(portText) | drops: \(cfg.totalDrops) | rate cap: \(rateText) | loopback boundary: performative (local-user trust)")
+        results.passed += 1
+    }
+
+    // MARK: - Check 16: OpenAI-compatible endpoint (Phase V.13e-2)
+
+    /// Pure formatter for the OpenAI-endpoint check. Returns one
+    /// informational line: bind / port / key-count / trailing-24h request
+    /// count / 429-rate. Lifted out of `checkOpenAIEndpoint` so the
+    /// `doctor-openai-check-render` test asserts on the operator-facing
+    /// surface without dup2-capturing stdout (mirror of
+    /// `formatChainAuditLines` / `formatBundleStalenessLines`).
+    ///
+    /// Always `.pass` — the check is informational (non-blocking), like the
+    /// runtime-telemetry-receiver check. An endpoint that has served zero
+    /// requests is a normal state, not a failure; the config carries
+    /// loopback defaults even when the operator has never run
+    /// `senkani serve --openai`.
+    ///
+    /// Schneier (no-secret-on-stdout): the line surfaces only the key
+    /// COUNT. The raw API key, its hash, and its label never reach this
+    /// formatter — `keyCount` is a plain `Int`. `loadAllSync` returns
+    /// hash-only records, and the caller passes `.count`, so no key
+    /// material can leak through the doctor surface.
+    static func formatOpenAIEndpointLine(
+        config: OpenAIEndpointConfig,
+        keyCount: Int,
+        stats: OpenAIRequestLogStore.TrailingStats
+    ) -> (Status, String) {
+        let rate = String(format: "%.1f%%", stats.rate429 * 100)
+        return (
+            .pass,
+            "OpenAI endpoint — bind: \(config.bind) | port: \(config.port) | keys: \(keyCount) | requests (24h): \(stats.count24h) | 429-rate: \(rate)"
+        )
+    }
+
+    /// Thin wrapper. Reads the persisted endpoint config (bind / port),
+    /// counts the provisioned keys straight off disk, and pulls the
+    /// trailing-24h request count + 429-rate from v13e-1's persisted query
+    /// API on the shared `SessionDatabase` (so the last two fields are
+    /// correct cross-process — they survive a `senkani serve --openai`
+    /// restart because they read the durable rows, not in-memory state).
+    private func checkOpenAIEndpoint(_ results: inout Results) {
+        let config = OpenAIEndpointConfig.load()
+        let keyCount = OpenAIKeyProvisioner.loadAllSync().count
+        let stats = SessionDatabase.shared.openAIRequestTrailing24hStats()
+        let (status, message) = Self.formatOpenAIEndpointLine(
+            config: config, keyCount: keyCount, stats: stats
+        )
+        printStatus(status, message)
+        switch status {
+        case .pass: results.passed += 1
+        case .fixed: results.fixed += 1
+        case .fail: results.failed += 1
+        case .skip: results.skipped += 1
         }
     }
 }

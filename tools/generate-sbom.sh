@@ -27,7 +27,7 @@ RESOLVED="$REPO_ROOT/Package.resolved"
 OUT="${1:-/dev/stdout}"
 
 # --- Project version (from CHANGELOG.md or VERSION file) ---
-project_version="0.2.0"
+project_version="0.3.0"
 if [ -f "$REPO_ROOT/VERSION" ]; then
     project_version=$(head -n1 "$REPO_ROOT/VERSION" | tr -d '[:space:]')
 fi

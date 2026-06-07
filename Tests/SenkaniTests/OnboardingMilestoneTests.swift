@@ -67,6 +67,77 @@ struct OnboardingMilestoneTests {
                 "Progression.order must match the enum's allCases order.")
     }
 
+    @Test("Canonical raw-value spelling is pinned per case (locks casing — `firstNonzeroSavings` lowercase `z`)")
+    func canonicalRawValueSpellingIsPinned() {
+        // Lock the literal `String` rawValue for every case so the
+        // on-disk JSON key cannot silently drift across a rename.
+        // Filed as `onboarding-milestones-key-casing-mismatch-2026-05-14`
+        // after a walk-time discrepancy between operator-written AC
+        // text (capital `Z` typo) and the actual recorder output
+        // (lowercase `z`). The recorder has always been canonical;
+        // this test makes the canonical spelling load-bearing test
+        // state, so a future case rename must come through here.
+        let expected: [OnboardingMilestone: String] = [
+            .projectSelected:             "projectSelected",
+            .agentLaunched:               "agentLaunched",
+            .firstTrackedEvent:           "firstTrackedEvent",
+            .firstNonzeroSavings:         "firstNonzeroSavings",
+            .firstBudgetSet:              "firstBudgetSet",
+            .firstWorkstreamCreated:      "firstWorkstreamCreated",
+            .firstStagedProposalReviewed: "firstStagedProposalReviewed",
+        ]
+        for milestone in OnboardingMilestone.allCases {
+            guard let want = expected[milestone] else {
+                Issue.record("New milestone case \(milestone) added without a canonical-spelling pin in this test.")
+                continue
+            }
+            #expect(milestone.rawValue == want,
+                    "Canonical spelling drift for \(milestone): expected '\(want)', got '\(milestone.rawValue)'.")
+        }
+        #expect(expected.count == OnboardingMilestone.allCases.count,
+                "Pin table must cover every case; got \(expected.count) pins for \(OnboardingMilestone.allCases.count) cases.")
+    }
+
+    @Test("Store silently drops unknown on-disk keys — legacy/non-canonical entries cannot crash a read")
+    func storeIgnoresUnknownOnDiskKeys() throws {
+        // Durable evidence for AC #4 of
+        // `onboarding-milestones-key-casing-mismatch-2026-05-14`:
+        // no migration shipped because no existing install holds a
+        // non-canonical key (the recorder is Codable-driven on the
+        // canonical rawValue), AND the store tolerates unknown keys
+        // on read (see Sources/Core/OnboardingMilestoneStore.swift
+        // around the `OnboardingMilestone(rawValue: key)` guard).
+        // This test pins both halves of that contract so a future
+        // refactor cannot weaken either.
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let dir = (home as NSString).appendingPathComponent(".senkani/onboarding")
+        try FileManager.default.createDirectory(
+            atPath: dir, withIntermediateDirectories: true
+        )
+        let path = OnboardingMilestoneStore.filePath(home: home)
+        // Hand-written JSON mixing one canonical key, one hypothetical
+        // legacy capital-Z key (the typo from Finding #D), and one
+        // junk key. Only the canonical key must surface on read.
+        let json = """
+        {
+          "firstNonzeroSavings": "2026-05-13T19:40:08.572Z",
+          "firstNonZeroSavings": "2026-05-13T19:40:08.572Z",
+          "totallyUnknownLegacyKey": "2026-05-13T19:40:08.572Z"
+        }
+        """
+        try json.write(toFile: path, atomically: true, encoding: .utf8)
+
+        let completed = OnboardingMilestoneStore.completed(home: home)
+        #expect(completed[.firstNonzeroSavings] != nil,
+                "Canonical key must round-trip from a hand-written file.")
+        #expect(completed.count == 1,
+                "Only the canonical key may surface; got \(completed.count) entries from a 3-key file.")
+        let landedKeys = completed.keys.map(\.rawValue).sorted()
+        #expect(landedKeys == ["firstNonzeroSavings"],
+                "Unknown keys must be silently dropped; got \(landedKeys).")
+    }
+
     @Test("Every milestone has title + populating event + next-action copy")
     func copyTableIsComplete() {
         for milestone in OnboardingMilestone.allCases {
@@ -163,6 +234,204 @@ struct OnboardingMilestoneTests {
         let posix = attrs[.posixPermissions] as? NSNumber
         #expect(posix?.intValue == 0o600,
                 "Store file must be 0600 — milestone log is user-local data; got \(String(describing: posix)).")
+    }
+
+    @Test("Concurrent records on distinct milestones all land — no lost-update race",
+          .timeLimit(.minutes(1)))
+    func recordIsSerializedAcrossConcurrentMilestones() async {
+        // Fix verification for
+        // `onboarding-milestone-recorder-gap-projectSelected-agentLaunched-2026-05-14`:
+        // before this round, `record()` had a TOCTOU between the
+        // `completed(...)` read and the `write(...)` call. Two
+        // concurrent records on different milestones could each read
+        // the same baseline, mutate their own snapshot, and write
+        // back — last write wins, the other's update vanishes.
+        // The recordLock now serializes the critical section.
+        //
+        // We exercise the race by firing N records per milestone
+        // concurrently via `withTaskGroup`. After the storm, every
+        // one of the seven milestone keys must be on disk.
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+
+        let storms = 16  // per-milestone concurrent record fan-out
+        let baseDate = Date(timeIntervalSince1970: 1_750_000_000)
+
+        await withTaskGroup(of: Void.self) { group in
+            for (index, milestone) in OnboardingMilestone.allCases.enumerated() {
+                for storm in 0..<storms {
+                    let when = baseDate.addingTimeInterval(
+                        Double(index * storms + storm)
+                    )
+                    group.addTask {
+                        _ = OnboardingMilestoneStore.record(
+                            milestone, at: when, home: home
+                        )
+                    }
+                }
+            }
+        }
+
+        let completed = OnboardingMilestoneStore.completed(home: home)
+        let landedKeys = completed.keys.map(\.rawValue).sorted()
+        for milestone in OnboardingMilestone.allCases {
+            #expect(completed[milestone] != nil,
+                    "Concurrent record storm dropped \(milestone). Got keys: \(landedKeys).")
+        }
+        #expect(completed.count == OnboardingMilestone.allCases.count,
+                "Exactly 7 keys must land; got \(completed.count).")
+    }
+
+    @Test("record(home: nil) does not deadlock against concurrent withTestHome (AB-BA fix verification)",
+          .timeLimit(.minutes(1)))
+    func recordWithNilHomeDoesNotDeadlockAgainstWithTestHome() {
+        // Fix verification for
+        // `swift-test-serial-full-suite-stall-investigation-2026-05-18`:
+        // before the 2026-05-21 lock-order fix, two threads could
+        // deadlock as follows:
+        //   - Thread A: `withTestHome(temp) { ... }` holds
+        //     `testHomeOverrideLock` across its body. Inside the body
+        //     it calls `record(home: nil)`, which (pre-fix) takes
+        //     `recordLock`, then re-enters `testHomeOverrideLock` via
+        //     `resolveDefaultHome` (recursive — fine on the same
+        //     thread).
+        //   - Thread B: calls `record(home: nil)` directly. Pre-fix:
+        //     takes `recordLock` first, then blocks at
+        //     `resolveDefaultHome` → `testHomeOverrideLock` (held by
+        //     A).
+        //   - Now A's inner record can't take `recordLock` (B holds
+        //     it). AB-BA deadlock. The serial-mode full-suite hang
+        //     observed 2026-05-18 (30+ min wall, 19s CPU, S-state)
+        //     traced to exactly this inversion via a `sample` taken
+        //     2026-05-21.
+        //
+        // Post-fix: `record` resolves `home` BEFORE taking
+        // `recordLock`. Thread B briefly waits on
+        // `testHomeOverrideLock` while A is inside `withTestHome`,
+        // then proceeds. No cross-lock dependency cycle.
+        //
+        // The race window is narrow but deterministic given an
+        // explicit signal. We coordinate via `DispatchSemaphore`:
+        // Thread A signals it has entered `withTestHome` and slept
+        // briefly; Thread B then enters `record(home: nil)` while A
+        // is still in the body and about to call its own inner
+        // `record`. Pre-fix this deadlocks → `.timeLimit(.minutes(1))`
+        // fires the time limit and the test fails. Post-fix both
+        // tasks complete in well under a second.
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+
+        // Use a fresh enough home so the test doesn't read leftover
+        // state. The two milestones (`projectSelected` and
+        // `firstNonzeroSavings`) are chosen so the "first observation
+        // wins" idempotency doesn't shadow either record.
+
+        let enteredWithTestHome = DispatchSemaphore(value: 0)
+        let group = DispatchGroup()
+        // Use raw GCD threads — this test must run two threads that
+        // exercise the lock-order inversion, and
+        // `DispatchSemaphore.wait()` is unavailable from Swift
+        // concurrency async contexts.
+
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            defer { group.leave() }
+            OnboardingMilestoneStore.withTestHome(home) {
+                // Signal B that we hold testHomeOverrideLock.
+                enteredWithTestHome.signal()
+                // Give B time to enter `record(home: nil)` and block
+                // (pre-fix: at testHomeOverrideLock after taking
+                // recordLock; post-fix: at testHomeOverrideLock
+                // BEFORE taking recordLock).
+                Thread.sleep(forTimeInterval: 0.15)
+                // Pre-fix outcome: blocks on recordLock (held by B).
+                // Post-fix outcome: resolveDefaultHome recursively
+                // re-enters testHomeOverrideLock on our own thread
+                // (NSRecursiveLock; succeeds), then takes recordLock
+                // cleanly because B never reached recordLock.
+                _ = OnboardingMilestoneStore.record(
+                    .projectSelected, home: nil)
+            }
+        }
+
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            defer { group.leave() }
+            // Wait for A to enter withTestHome (testHomeOverrideLock
+            // held).
+            enteredWithTestHome.wait()
+            // Pre-fix: takes recordLock first, then blocks on
+            // testHomeOverrideLock (held by A in withTestHome). A
+            // then tries recordLock → AB-BA deadlock.
+            // Post-fix: blocks on testHomeOverrideLock at the very
+            // first step (resolveDefaultHome), recordLock untouched
+            // during the wait. When A exits withTestHome,
+            // testHomeOverrideLock releases and we proceed.
+            _ = OnboardingMilestoneStore.record(
+                .firstNonzeroSavings, home: nil)
+        }
+
+        // Bound at 30s — pre-fix the deadlock is permanent so any
+        // finite bound surfaces the regression; post-fix this returns
+        // in well under a second.
+        let timeout = group.wait(timeout: .now() + .seconds(30))
+        #expect(timeout == .success,
+                "Cross-thread record(home: nil) + withTestHome must NOT deadlock; both tasks failed to finish within 30s.")
+
+        // Primary assertion: neither task deadlocked (we reached this
+        // line within the .timeLimit). The temp home should now hold
+        // `projectSelected` (recorded by A, which was inside
+        // withTestHome so `home: nil` resolved to `home`). B's record
+        // may have written to either `home` (if B's call happened
+        // while A still held testHomeOverrideLock) or to NSHomeDirectory()
+        // (if B's record happened after A released). We don't assert
+        // B's destination — only that the deadlock is broken.
+        let completed = OnboardingMilestoneStore.completed(home: home)
+        #expect(completed[.projectSelected] != nil,
+                "Task A's record inside withTestHome must have landed in temp home.")
+    }
+
+    @Test("record does not enforce predecessor chain — Progression owns ordering")
+    func recordDoesNotEnforcePredecessorChain() {
+        // The "Atomicity contract" doc on OnboardingMilestoneStore
+        // pins this as intentional: the Store is a passive observer,
+        // the chain logic lives in OnboardingMilestoneProgression.
+        // Recording `firstTrackedEvent` without `projectSelected`
+        // must succeed and write only the recorded key — no
+        // backfill, no refusal. The UI surface reads the
+        // Progression's "next" ordering, which surfaces
+        // `projectSelected` for the user to cross on its own merits.
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let when = Date(timeIntervalSince1970: 1_750_000_000)
+
+        let wrote = OnboardingMilestoneStore.record(
+            .firstTrackedEvent, at: when, home: home
+        )
+        #expect(wrote,
+                "record must succeed when a predecessor is missing — the Store is observation-level, not a state machine.")
+
+        let completed = OnboardingMilestoneStore.completed(home: home)
+        #expect(completed[.firstTrackedEvent] != nil,
+                "firstTrackedEvent must persist.")
+        #expect(completed[.projectSelected] == nil,
+                "Predecessor must NOT be backfilled — that's a Progression concern, not a Store concern.")
+        #expect(completed[.agentLaunched] == nil,
+                "Predecessor must NOT be backfilled — same rationale.")
+        let landedKeys = completed.keys.map(\.rawValue).sorted()
+        #expect(completed.count == 1,
+                "Exactly one key must land; got keys \(landedKeys).")
+
+        // The UI surface (read via Progression) sees `projectSelected`
+        // as the next step the user should cross, even though
+        // `firstTrackedEvent` already fired out of order. This is the
+        // canonical recovery path for the recorder-fired-out-of-order
+        // case (e.g. operator `rm -f` of the file mid-walk).
+        let summary = OnboardingMilestoneProgression.summary(
+            completed: Set(completed.keys)
+        )
+        #expect(summary.next == .projectSelected,
+                "Progression must surface projectSelected as next even though firstTrackedEvent already fired — chain reasoning lives in Progression, not Store.")
     }
 
     @Test("Env gate SENKANI_ONBOARDING_MILESTONES=off no-ops every API")

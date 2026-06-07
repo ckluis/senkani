@@ -367,12 +367,12 @@ struct CSharpPerformanceTests {
             source += "}\n"
             source += "} // namespace\n\n"
         }
-        // Median-of-3 — see DependencyGraphPerfGateTests for the canonical
+        // Min-of-N — see DependencyGraphPerfGateTests for the canonical
         // pattern. `.serialized` only serializes within-suite, so peer-suite
         // CPU contention can spike a single sample under parallel runner;
         // a single transient spike on one of three runs cannot fail the
         // test, but a real regression (every run blows budget) still does.
-        // Threshold preserved at 10 ms — the median strengthens the gate
+        // Threshold preserved at 10 ms — the minimum keeps the gate honest
         // on its own (mirrors the Scala/Ruby/Haskell/PHP siblings, with
         // the InjectionGuard 2026-05-06 precedent of preserve-don't-widen).
         let clock = ContinuousClock()
@@ -384,11 +384,61 @@ struct CSharpPerformanceTests {
             }
             samples.append(elapsed)
         }
-        let median = samples.sorted()[1]
         #expect(
-            median < .milliseconds(10),
-            "median of 3 C# parses: \(samples) → median \(median)"
+            PerfGate.passes(samples: samples, budget: .milliseconds(10)),
+            "min of 3 C# parses must be < 10ms: \(samples)"
         )
+    }
+}
+
+// MARK: - C# Depth-Stress Tests
+
+@Suite("TreeSitterBackend — C# Depth Stress")
+struct TreeSitterCSharpDepthStressTests {
+
+    // Chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Generates a top-level class with a field initializer whose
+    // expression is a deeply-nested parenthesized chain, and indexes
+    // the file WITHOUT `runOnLargeStackThread` to prove the iterative
+    // walk is cooperative-pool-safe. Two delegate declarations bracket
+    // the deep expression to assert pre-order symbol emission.
+    //
+    // Why a class-field initializer, not a method body: the C#
+    // `method_declaration` switch arm emits and returns without
+    // walking the method body, so depth inside `{...}` is not walked.
+    // The deep chain must live inside a node whose descendants fall
+    // through the default arm (reverse-push children). A class with
+    // a field initializer satisfies this: class_declaration emits +
+    // pushes the body with the class name as container, the body
+    // descends to the field_declaration via default, and the field's
+    // variable_declaration → equals_value_clause → parenthesized_
+    // expression chain pushes ~2200 deep. The pre-refactor walk would
+    // consume ~2200 Swift call frames and crash on the cooperative
+    // pool's smaller stack; the iterative form runs in heap-allocated
+    // work-stack memory.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() {
+        let depth = 2200
+        let opens = String(repeating: "(", count: depth)
+        let closes = String(repeating: ")", count: depth)
+        let source = """
+        public delegate void First(object sender);
+
+        public class Container {
+            public int X = \(opens)0\(closes);
+        }
+
+        public delegate void Last(object sender);
+        """
+
+        let entries = indexCSharp(source)
+        let delegates = entries.filter { $0.kind == .type }
+        #expect(delegates.map(\.name) == ["First", "Last"],
+                "Symbol order must remain left-to-right pre-order")
+        #expect(delegates.allSatisfy { $0.container == nil },
+                "Top-level C# delegates carry no container")
+        #expect(entries.contains { $0.name == "Container" && $0.kind == .class },
+                "Container class must still be emitted")
     }
 }
 

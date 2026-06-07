@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import SwiftTreeSitter
 
 /// Orchestrates symbol indexing across multiple backends.
@@ -262,21 +263,28 @@ public enum IndexEngine {
         return hashes
     }
 
-    private static func gitBlobHash(_ path: String) -> String? {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = ["hash-object", path]
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else { return nil }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        } catch {
+    /// Compute the git-blob-hash of a file in-process — no subprocess, no
+    /// per-file Process/Pipe allocation. Matches `git hash-object` for
+    /// regular files (SHA-1 over the `"blob <size>\0<content>"` header +
+    /// content). Returns `nil` if the file can't be read.
+    ///
+    /// Prior implementation shelled out to `/usr/bin/git hash-object` per
+    /// file, allocating a `Process` and `Pipe` for each call. On a medium-
+    /// sized repo this burst could exhaust the process's RLIMIT_NOFILE
+    /// (default 256 on macOS) before CoreAnimation could load
+    /// `default.metallib`, manifesting as `Too many open files`. See
+    /// `senkani-app-emfile-crash-during-pane-launch-2026-05-15`.
+    static func gitBlobHash(_ path: String) -> String? {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path),
+                                    options: .mappedIfSafe) else {
             return nil
         }
+        var hasher = Insecure.SHA1()
+        guard let header = "blob \(data.count)\0".data(using: .ascii) else {
+            return nil
+        }
+        hasher.update(data: header)
+        hasher.update(data: data)
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }

@@ -378,7 +378,7 @@ struct PhpPerformanceTests {
             }
             source += "}\n\n"
         }
-        // Median-of-3 — see DependencyGraphPerfGateTests for the canonical
+        // Min-of-N — see DependencyGraphPerfGateTests for the canonical
         // pattern. `.serialized` only serializes within-suite, so peer-suite
         // CPU contention can spike a single sample under parallel runner;
         // a single transient spike on one of three runs cannot fail the
@@ -394,10 +394,9 @@ struct PhpPerformanceTests {
             }
             samples.append(elapsed)
         }
-        let median = samples.sorted()[1]
         #expect(
-            median < .milliseconds(20),
-            "median of 3 PHP parses: \(samples) → median \(median)"
+            PerfGate.passes(samples: samples, budget: .milliseconds(20)),
+            "min of 3 PHP parses must be < 20ms: \(samples)"
         )
     }
 
@@ -432,6 +431,55 @@ struct PhpPerformanceTests {
 
         #expect(pyEntries.count == 2) // class + method
         #expect(pyEntries.contains { $0.name == "Greeter" && $0.kind == .class })
+    }
+}
+
+// MARK: - PHP Depth Stress
+
+@Suite("TreeSitterBackend — PHP Depth Stress")
+struct TreeSitterPhpDepthStressTests {
+
+    // Chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Generates a top-level class with a class-constant initializer whose
+    // expression is a deeply-nested parenthesized chain, and indexes the
+    // file WITHOUT `runOnLargeStackThread` to prove the iterative walk
+    // is cooperative-pool-safe. Two empty top-level classes bracket the
+    // deep expression to assert pre-order symbol emission.
+    //
+    // Why a class-constant initializer, not a method body or function:
+    // PHP's `method_declaration` and `function_definition` switch arms
+    // emit and return without walking the body, so depth inside `{...}`
+    // is not walked. The deep chain must live inside a node whose
+    // descendants fall through the default arm (reverse-push children).
+    // A class with a const initializer satisfies this: class_declaration
+    // emits + pushes the body with the class name as container, the
+    // body descends to the const_declaration via default, and the
+    // const_element → expression chain pushes ~2200 deep. The
+    // pre-refactor walk would consume ~2200 Swift call frames and crash
+    // on the cooperative pool's smaller stack; the iterative form runs
+    // in heap-allocated work-stack memory.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() {
+        let depth = 2200
+        let opens = String(repeating: "(", count: depth)
+        let closes = String(repeating: ")", count: depth)
+        let source = """
+        <?php
+        class First { }
+
+        class Container {
+            const X = \(opens)0\(closes);
+        }
+
+        class Last { }
+        """
+
+        let entries = indexPhp(source)
+        let classes = entries.filter { $0.kind == .class }
+        #expect(classes.map(\.name) == ["First", "Container", "Last"],
+                "Symbol order must remain left-to-right pre-order")
+        #expect(classes.allSatisfy { $0.container == nil },
+                "Top-level PHP classes carry no container")
     }
 }
 

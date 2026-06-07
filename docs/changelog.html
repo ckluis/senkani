@@ -53,12 +53,28 @@
     <h1 class="page-title">Changelog</h1>
     <p class="lede">Release notes per server version (reported by <a href="../docs/reference/mcp/senkani_version.html"><code>senkani_version</code></a>). Full detail lives in <a href="https://github.com/ckluis/senkani/blob/main/CHANGELOG.md">CHANGELOG.md</a> in the repo — this page is a curated summary.</p>
 
-    <h2>v0.2.0 (current) — April 2026</h2>
+    <h2>v0.3.0 (current) — May 2026</h2>
+    <ul>
+      <li><strong>Release-validation passes closed</strong> — onboarding-pass (milestones 1-7, banner-disappears contract, <code>SENKANI_ONBOARDING_MILESTONES=off</code> no-op) and surface-pass (8 surfaces: search-web, sinks, authorship, migrations, schedule, diff-viewer, quant-frontier, paired-numbers). Five release-blocker findings filed and shipped during the passes.</li>
+      <li><strong>Audit-chain durability hardened</strong> — three <code>CommandStore</code> chain-participating writes (<code>recordCommand</code>, <code>endSession</code>, <code>recordBudgetDecision</code>) flipped <code>queue.async</code> → <code>queue.sync</code> so short-lived CLI processes (e.g. <code>senkani authorship backfill</code>) commit audit rows before exiting. New <code>I10</code> invariant in <code>INVARIANTS.md</code>.</li>
+      <li><strong>T.6 macOS local notifications wired</strong> — SenkaniApp now owns a <code>UNUserNotificationCenter</code>-backed <code>LocalNotifierBridge</code>, requests UN authorization at boot, and the first production producer (<code>OnboardingMilestoneStore.record</code> on <code>firstNonzeroSavings</code>) fires the "Save your first tokens" celebrate banner. Opt-out via <code>~/.senkani/notifications.json</code>.</li>
+      <li><strong>SenkaniApp pane-launch EMFILE crash fixed</strong> — boot-time <code>RLIMIT_NOFILE</code> raise + in-process git-blob hashing (replaces fan-out to <code>git hash-object</code> subprocesses) so large indexer runs no longer exhaust the per-process file-descriptor budget.</li>
+      <li><strong><code>senkani doctor</code> check #20: walk-bundle staleness</strong> — paired with new <code>senkani walk rebuild-bundle</code> shared helper. Detects out-of-date walk bundles before they cause silent failures in operator surface passes.</li>
+      <li><strong><code>senkani onboarding milestones</code> CLI</strong> — read-only verification surface for milestone state (the operator-side inspection gap surfaced during onboarding-pass).</li>
+      <li><strong><code>senkani uninstall</code> scanner: categories 11 + 12</strong> — <code>appCacheDirectory</code> (<code>~/Library/Caches/dev.senkani.app/</code>) and <code>savedApplicationState</code> (<code>~/Library/Saved Application State/dev.senkani.app.savedState/</code>) now in the 12-category emit.</li>
+      <li><strong>Sidebar destructive-action contract</strong> — hover-revealed remove <code>X</code>, tiered-checkbox dialogs for projects and workstreams, create-time disclosure on <code>+ New Workstream</code>. Closes the long-standing "no UI to remove projects/workstreams" gap.</li>
+      <li><strong>Pane title-bar <code>X</code> close button</strong> — right-edge resize handle no longer steals its clicks.</li>
+      <li><strong><code>claude_session_cursors</code> schema hardening</strong> — <code>PRIMARY KEY</code> split to <code>(path, reader)</code> so the realtime watcher + cursor-driven reader stop fighting for the same row; cursors joined the 90-day retention sweep; <code>ClaudeSessionWatcher</code> survives burst rotation + restart without re-emitting historical token usage.</li>
+      <li><strong><code>swift build</code> warning-clean (debug + release)</strong> — 19 sites cleaned across Core / MCP / CLI / SenkaniApp / Package.swift (redundant <code>nonisolated(unsafe)</code>, stale <code>await</code>, WebKit main-actor hop). Unblocks the v0.3.0 promote AC4 zero-warning gate.</li>
+      <li><strong>Test infrastructure</strong> — <code>swift test</code> full-suite hang root-cause fix (mig-helper go-barrier + zombie reap); five listener-socket <code>DispatchSource</code> cancel handlers no longer race mutable <code>self.&lt;fd&gt;</code>; two parallel-mode flakes (fd-baseline + MCPSession savings-debug) closed via set-difference + unique-<code>tool_name</code> filter patterns. Total tests 2,350 → 3,046.</li>
+    </ul>
+
+    <h2>v0.2.0 — April 2026</h2>
     <ul>
       <li><strong>SessionDatabase split closed</strong> (April 24) — four-store layout (<code>CommandStore</code>, <code>TokenEventStore</code>, <code>SandboxStore</code>, <code>ValidationStore</code>) with <code>SessionDatabase.swift</code> reduced to lifecycle, retained counters, and cross-store composition. Public <code>SessionDatabase.shared</code> API remains stable.</li>
       <li><strong>Ollama: first-class pane + curated LLM catalog</strong> (April 20) — new <code>.ollamaLauncher</code> PaneType with a settings drawer listing 5 curated LLMs (llama3.1, qwen2.5-coder, deepseek-r1, mistral, gemma2). Size disclosed before click; click-to-pull streams <code>ollama pull</code> progress into the UI and captures the digest. Absent-state deep-links to ollama.com/download. Bounded contexts stay separate: user-facing LLMs live here, senkani-internal ML (minilm / gemma4) stays in Model Manager.</li>
       <li><strong>Add-pane gallery redesign</strong> (April 20) — categorized pane picker (Shell &amp; Agents / AI &amp; Models / Data &amp; Insights / Docs &amp; Code). Missing Dashboard entry restored.</li>
-      <li><strong>Website rebuild</strong> — multi-page wiki + tightened landing page. 20 MCP tools + 22 CLI commands + 18 panes each have their own URL. <a href="../docs/what-is-senkani.html">Start here</a>.</li>
+      <li><strong>Website rebuild</strong> — multi-page wiki + tightened landing page. 20 MCP tools + 22 CLI commands + 19 panes each have their own URL. <a href="../docs/what-is-senkani.html">Start here</a>.</li>
       <li><strong>Security hardening (v0.2.0 release)</strong> — prompt-injection guard on, SSRF guard on (DNS pre-resolution + redirect re-validation + subresource blocklist), secret detection on (13 families + entropy), socket-auth opt-in, structured JSON logs opt-in with sink redaction, retention scheduler.</li>
       <li><strong>Compound learning + KB master plan</strong> — nine-round landing 2026-04-17: H+2b context signals, H+2c instruction/workflow generators with Schneier never-auto-apply, H+2d sprint + quarterly cadence, F+1 Layer-1 rebuild coordinator, F+2 entity tracker, F+3 enrichment validator + KB rollback, F+4 KB timeline, F+5 KB↔learning bridge.</li>
       <li><strong><code>senkani_repo</code></strong> — query any public GitHub repo without cloning. Host-allowlisted, SecretDetector-scanned, TTL-cached.</li>
@@ -82,7 +98,7 @@
   </div>
   <div class="foot-meta">
     <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
-    <span><a href="../docs/changelog.html">v0.2.0 changelog</a></span>
+    <span><a href="../docs/changelog.html">v0.3.0 changelog</a></span>
   </div>
 </footer>
 <script src="../assets/app.js" defer></script>

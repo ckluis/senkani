@@ -13,9 +13,10 @@ import Foundation
 @Suite("MCPSession Phase B-ii — per-connection toggle overrides")
 struct PerConnectionOverrideTests {
 
-    private func makeSession() -> MCPSession {
-        MCPSession(
-            projectRoot: "/tmp/senkani-override-\(UUID().uuidString)",
+    private func makeSession() -> (MCPSession, String) {
+        let root = "/tmp/senkani-override-\(UUID().uuidString)"
+        let session = MCPSession(
+            projectRoot: root,
             filterEnabled: true,
             secretsEnabled: true,
             indexerEnabled: false,
@@ -23,11 +24,13 @@ struct PerConnectionOverrideTests {
             terseEnabled: false,
             injectionGuardEnabled: false
         )
+        return (session, root)
     }
 
     /// No override → effective getter returns the session-wide default.
     @Test func effectiveGetterFallsBackToSessionDefault() async {
-        let session = makeSession()
+        let (session, root) = makeSession()
+        defer { TempSessionDatabase.cleanup(projectRoot: root) }
         let filter = await session.effectiveFilterEnabled
         let secrets = await session.effectiveSecretsEnabled
         let terse = await session.effectiveTerseEnabled
@@ -40,7 +43,8 @@ struct PerConnectionOverrideTests {
     /// returns the overridden value; the session's stored default is
     /// untouched.
     @Test func overrideShadowsDefaultWithoutMutating() async {
-        let session = makeSession()
+        let (session, root) = makeSession()
+        defer { TempSessionDatabase.cleanup(projectRoot: root) }
         let baseline = await session.filterEnabled  // sanity: default is true
 
         let overrides = MCPSession.ToggleOverrides(filter: false)
@@ -58,7 +62,8 @@ struct PerConnectionOverrideTests {
     /// must observe distinct effective values. The session's stored
     /// defaults must not drift.
     @Test func twoTasksObserveDistinctOverridesOnSameSession() async {
-        let session = makeSession()
+        let (session, root) = makeSession()
+        defer { TempSessionDatabase.cleanup(projectRoot: root) }
 
         async let aResult = MCPSession.$currentToggleOverrides.withValue(
             MCPSession.ToggleOverrides(filter: false, secrets: false, terse: true)
@@ -97,7 +102,8 @@ struct PerConnectionOverrideTests {
     /// back to the session default for the unset fields and use the
     /// override for the set ones.
     @Test func partialOverrideMixesWithDefaults() async {
-        let session = makeSession()
+        let (session, root) = makeSession()
+        defer { TempSessionDatabase.cleanup(projectRoot: root) }
         let partial = MCPSession.ToggleOverrides(filter: false)  // others nil
         await MCPSession.$currentToggleOverrides.withValue(partial) {
             let f = await session.effectiveFilterEnabled
@@ -123,7 +129,7 @@ struct CommandsConnectionIdTests {
     }
 
     private static func cleanup(_ path: String) {
-        try? FileManager.default.removeItem(atPath: path)
+        TempSessionDatabase.cleanup(path: path)
     }
 
     /// `recordCommand(connectionId:)` writes the column; `commandsForConnection`

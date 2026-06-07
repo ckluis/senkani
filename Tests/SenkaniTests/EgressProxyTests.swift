@@ -333,6 +333,227 @@ struct EgressDecisionStoreTests {
     }
 }
 
+// MARK: - T.1b — PaneMode + EgressPolicy + JudgeAdapter
+
+@Suite("EgressProxy — T.1b PaneMode taxonomy + judge fallback")
+struct EgressJudgePolicyTests {
+
+    private static func tempDB() -> SessionDatabase {
+        let dir = NSTemporaryDirectory() + "senkani-egress-t1b-\(UUID().uuidString)/"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        return SessionDatabase(path: dir + "senkani.db")
+    }
+
+    @Test("PaneMode vocabulary: 4 values, default=general, allowsJudge gates redteam")
+    func paneModeVocabulary() {
+        // Exactly 4 modes, in stable rawValue casing.
+        let raws = Set(PaneMode.allCases.map(\.rawValue))
+        #expect(raws == ["research", "write", "redteam", "general"])
+        #expect(PaneMode.default == .general)
+
+        // redteam denies judge dispatch; the other three allow it.
+        #expect(PaneMode.research.allowsJudge)
+        #expect(PaneMode.write.allowsJudge)
+        #expect(PaneMode.general.allowsJudge)
+        #expect(!PaneMode.redteam.allowsJudge)
+    }
+
+    @Test("PaneMode.parseHeaderValue is case-insensitive and defaults on unknown")
+    func paneModeParse() {
+        #expect(PaneMode.parseHeaderValue("research") == .research)
+        #expect(PaneMode.parseHeaderValue("  REDTEAM ") == .redteam)
+        #expect(PaneMode.parseHeaderValue("Write") == .write)
+        // Unknown / nil / whitespace → default (.general). The deny-on-
+        // miss invariant lives in the rule engine, not here.
+        #expect(PaneMode.parseHeaderValue("orange-mode") == .general)
+        #expect(PaneMode.parseHeaderValue(nil) == .general)
+        #expect(PaneMode.parseHeaderValue("") == .general)
+    }
+
+    @Test("EgressPolicy.defaults populates every PaneMode")
+    func policyDefaults() {
+        let policy = EgressPolicy.defaults()
+        for mode in PaneMode.allCases {
+            // Engine is always present; rules list is empty per defaults.
+            let engine = policy.engine(for: mode)
+            #expect(engine.rules.isEmpty, "default for \(mode) should be empty")
+        }
+    }
+
+    @Test("EgressPolicy round-trips a 4-mode JSON file from disk")
+    func policyFullRoundTrip() throws {
+        let json = """
+        {
+          "modes": {
+            "general":  [{"id": "g1", "pattern": "registry.npmjs.org",     "mode": "exact",  "decision": "allow"}],
+            "research": [{"id": "r1", "pattern": "arxiv.org",              "mode": "suffix", "decision": "allow"}],
+            "write":    [{"id": "w1", "pattern": "github.com",             "mode": "suffix", "decision": "allow"}],
+            "redteam":  [{"id": "t1", "pattern": "evil.example.com",       "mode": "exact",  "decision": "deny"}]
+          }
+        }
+        """
+        let tmp = NSTemporaryDirectory() + "egress-policy-\(UUID().uuidString).json"
+        try json.write(toFile: tmp, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let (policy, degraded) = EgressPolicy.load(from: tmp)
+        #expect(degraded == nil)
+        #expect(policy.engine(for: .general).rules.count == 1)
+        #expect(policy.engine(for: .research).rules.count == 1)
+        #expect(policy.engine(for: .write).rules.count == 1)
+        #expect(policy.engine(for: .redteam).rules.count == 1)
+        // Spot-check that one engine actually allows its host.
+        let arxiv = policy.engine(for: .research).evaluate(host: "arxiv.org")
+        #expect(arxiv.decision == .allow)
+        #expect(arxiv.ruleId == "r1")
+    }
+
+    @Test("EgressPolicy partial customization: missing modes fall back to defaults")
+    func policyPartialCustomization() throws {
+        // Only `redteam` carries rules. Other modes should still load
+        // (with empty rule sets — the deny-on-miss default applies).
+        let json = """
+        {
+          "modes": {
+            "redteam": [{"id": "t1", "pattern": "*.exfil.example.com", "mode": "glob", "decision": "deny"}]
+          }
+        }
+        """
+        let tmp = NSTemporaryDirectory() + "egress-policy-partial-\(UUID().uuidString).json"
+        try json.write(toFile: tmp, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let (policy, degraded) = EgressPolicy.load(from: tmp)
+        #expect(degraded == nil)
+        // redteam has its rule
+        #expect(policy.engine(for: .redteam).rules.count == 1)
+        // Others fell back to empty — every static evaluation is
+        // defaultDeny, which is the safe missing-config posture.
+        #expect(policy.engine(for: .general).rules.isEmpty)
+        #expect(policy.engine(for: .research).rules.isEmpty)
+        #expect(policy.engine(for: .write).rules.isEmpty)
+    }
+
+    @Test("MockJudgeAdapter records callCount and returns the scripted verdict")
+    func mockJudgeDispatch() {
+        let adapter = MockJudgeAdapter(verdict: JudgeVerdict(decision: .allow, rationale: "well-known dev host"))
+        #expect(adapter.callCount == 0)
+        let v1 = adapter.evaluate(JudgeRequest(host: "registry.npmjs.org", method: "GET", paneMode: .write))
+        #expect(v1.decision == .allow)
+        #expect(v1.rationale == "well-known dev host")
+        #expect(adapter.callCount == 1)
+        _ = adapter.evaluate(JudgeRequest(host: "other.example.com", method: "GET", paneMode: .general))
+        #expect(adapter.callCount == 2)
+    }
+
+    @Test("GemmaJudgeAdapter returns deny with timeout rationale when inference exceeds budget")
+    func gemmaJudgeTimeoutDenies() {
+        // Inference closure intentionally sleeps past the 300ms deadline.
+        let adapter = GemmaJudgeAdapter(inference: { _ in
+            Thread.sleep(forTimeInterval: 0.500)
+            return (.allow, "should never appear — caller timed out before this")
+        })
+        let v = adapter.evaluate(JudgeRequest(host: "x.example.com", method: "GET", paneMode: .general))
+        // Schneier P0: deny-on-timeout is the safe default for a model
+        // layer. The rationale carries the timeout marker so an
+        // operator reviewing the audit row can see what happened.
+        #expect(v.decision == .deny)
+        #expect(v.rationale.contains("timeout"))
+        #expect(adapter.callCount == 1)
+    }
+
+    @Test("Migration v23 adds judge_rationale + pane_mode columns idempotently")
+    func migrationV23AddsColumns() {
+        let db = Self.tempDB()
+        var hasJudgeRationale = false
+        var hasPaneMode = false
+        db.queue.sync {
+            guard let raw = db.db else { return }
+            var stmt: OpaquePointer?
+            sqlite3_prepare_v2(raw, "PRAGMA table_info(egress_decisions);", -1, &stmt, nil)
+            defer { sqlite3_finalize(stmt) }
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                guard let c = sqlite3_column_text(stmt, 1) else { continue }
+                let col = String(cString: c)
+                if col == "judge_rationale" { hasJudgeRationale = true }
+                if col == "pane_mode" { hasPaneMode = true }
+            }
+        }
+        #expect(hasJudgeRationale, "v23 should add judge_rationale TEXT")
+        #expect(hasPaneMode, "v23 should add pane_mode TEXT")
+    }
+
+    @Test("Record + read-back round-trips judge_rationale and pane_mode")
+    func rationalePersistence() {
+        let db = Self.tempDB()
+        let ok = db.recordEgressDecision(
+            host: "registry.npmjs.org", method: "GET",
+            decision: .allow, ruleId: "judge-allow",
+            latencyUs: 150_000,
+            paneMode: .research,
+            judgeRationale: "trusted package registry"
+        )
+        #expect(ok)
+        let rows = db.recentEgressDecisions(limit: 1)
+        #expect(rows.count == 1)
+        #expect(rows[0].paneMode == .research)
+        #expect(rows[0].judgeRationale == "trusted package registry")
+        #expect(rows[0].ruleId == "judge-allow")
+    }
+
+    @Test("Connection handler header parsing: extracts X-Senkani-Pane-Mode, strips it before forward")
+    func headerParseAndStrip() {
+        let head = Data("""
+        Host: example.com\r\n\
+        X-Senkani-Pane-Mode: research\r\n\
+        Accept: */*\r\n\
+        \r\n
+        """.utf8)
+        #expect(EgressConnectionHandler.parsePaneModeHeader(head) == .research)
+
+        // Strip drops the X-Senkani-Pane-Mode line but keeps Host + Accept.
+        let stripped = EgressConnectionHandler.stripPaneModeHeader(head)
+        let stripStr = String(data: stripped, encoding: .utf8) ?? ""
+        #expect(stripStr.contains("Host: example.com"))
+        #expect(stripStr.contains("Accept:"))
+        #expect(!stripStr.contains("X-Senkani-Pane-Mode"))
+    }
+
+    @Test("redteam pane denies on static-miss without invoking judge (callCount stays at 0)")
+    func redteamNoJudgeInvariant() {
+        let adapter = MockJudgeAdapter(verdict: JudgeVerdict(decision: .allow, rationale: "judge would allow"))
+
+        // Build a redteam-only policy where the redteam engine has no
+        // rules → every host is a static-miss. The judge is wired in,
+        // but the redteam invariant must skip it.
+        var engines: [PaneMode: EgressRuleEngine] = [:]
+        for mode in PaneMode.allCases { engines[mode] = EgressRuleEngine(rules: []) }
+        let policy = EgressPolicy(engines: engines)
+
+        // Drive the static evaluation path the way the connection
+        // handler does — but inline so this test doesn't spin a real
+        // socket. The handler's static-miss + .redteam branch is the
+        // single point of truth for the invariant.
+        let mode: PaneMode = .redteam
+        let engine = policy.engine(for: mode)
+        let result = engine.evaluate(host: "unknown.example.com")
+        #expect(result.ruleId == "default-deny")
+        if result.ruleId == "default-deny", mode.allowsJudge {
+            _ = adapter.evaluate(JudgeRequest(host: "unknown.example.com", method: "GET", paneMode: mode))
+        }
+        #expect(adapter.callCount == 0, "redteam pane must NOT invoke the judge — callCount=\(adapter.callCount)")
+
+        // Sanity: the same invariant in `.general` mode DOES invoke
+        // the judge (proves the gate is correctly mode-conditional).
+        let modeGeneral: PaneMode = .general
+        if engine.evaluate(host: "unknown.example.com").ruleId == "default-deny",
+           modeGeneral.allowsJudge {
+            _ = adapter.evaluate(JudgeRequest(host: "unknown.example.com", method: "GET", paneMode: modeGeneral))
+        }
+        #expect(adapter.callCount == 1)
+    }
+}
+
 // MARK: - Test helpers
 
 private extension UInt16 {
@@ -344,7 +565,7 @@ private extension UInt16 {
 /// Build a minimal valid TLS 1.2 ClientHello carrying one server_name
 /// extension with the given hostname. File-level so multiple suites
 /// can share it.
-private func makeClientHello(sni: String) -> Data {
+func makeClientHello(sni: String) -> Data {
     var ext = Data()
     let nameBytes = Data(sni.utf8)
     let listInner = Data([0x00]) + UInt16(nameBytes.count).bigEndianBytes + nameBytes
@@ -530,7 +751,7 @@ private func tempDB() -> SessionDatabase {
     return SessionDatabase(path: dir + "senkani.db")
 }
 
-private func waitForRow(db: SessionDatabase, timeoutSeconds: Double = 3.0) -> EgressDecisionStore.Row? {
+func waitForRow(db: SessionDatabase, timeoutSeconds: Double = 3.0) -> EgressDecisionStore.Row? {
     let deadline = Date().addingTimeInterval(timeoutSeconds)
     while Date() < deadline {
         let rows = db.recentEgressDecisions(limit: 1)
@@ -792,6 +1013,79 @@ struct EgressListenerLiveTests {
         #expect(row!.method == "CONNECT")
     }
 
+    // T.1d-2b-i parity: the default-OFF gate must not alter the opaque
+    // tunnel. Both flag states drive a CONNECT + matching-SNI ClientHello
+    // through the listener to an echo fixture and assert byte-for-byte
+    // round-trip. OFF = the unchanged path; ON = the child-(i) stub seam,
+    // which currently falls through to the same tunnel (child (ii) attaches
+    // real termination later).
+    @Test("CONNECT tunnel byte-identical with MITM-termination flag OFF (T.1d-2b-i parity)")
+    func connectTunnelByteIdenticalFlagOff() throws {
+        try Self.assertConnectTunnelByteIdentical(mitmTermination: false)
+    }
+
+    @Test("CONNECT tunnel byte-identical with MITM-termination flag ON — child-(i) stub seam is inert (T.1d-2b-i parity)")
+    func connectTunnelByteIdenticalFlagOnStub() throws {
+        try Self.assertConnectTunnelByteIdentical(mitmTermination: true)
+    }
+
+    private static func assertConnectTunnelByteIdentical(mitmTermination: Bool) throws {
+        let db = tempDB()
+        let fixture = try FixtureTCPServer()
+        defer { fixture.shutdown() }
+
+        // Fixture echoes whatever bytes it receives, then closes.
+        fixture.acceptOnce { fd in
+            var buf = [UInt8](repeating: 0, count: 4096)
+            while true {
+                let n = buf.withUnsafeMutableBufferPointer { ptr -> Int in
+                    Darwin.read(fd, ptr.baseAddress, ptr.count)
+                }
+                if n <= 0 { return }
+                _ = buf.withUnsafeBufferPointer { ptr -> Int in
+                    Darwin.write(fd, ptr.baseAddress, n)
+                }
+            }
+        }
+
+        let listener = EgressListener(
+            rules: EgressRuleEngine(rules: [
+                EgressRule(id: "allow-loopback", pattern: "127.0.0.1", mode: .exact, decision: .allow)
+            ]),
+            database: db,
+            config: .init(port: 0, writePortFile: false, portFilePath: "", mitmTermination: mitmTermination)
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        let cfd = connectToLocalhost(port: listener.port)
+        try #require(cfd != nil)
+        let cli = cfd!
+        defer { close(cli) }
+
+        let req = "CONNECT 127.0.0.1:\(fixture.port) HTTP/1.1\r\nHost: 127.0.0.1:\(fixture.port)\r\n\r\n"
+        #expect(writeAllToFD(cli, Data(req.utf8)))
+
+        // Drain the 200 reply head before sending the ClientHello.
+        let okResp = readHTTPHead(cli)
+        let okStr = String(data: okResp, encoding: .utf8) ?? ""
+        #expect(okStr.contains("200 Connection Established"))
+
+        // Matching-SNI ClientHello; the echo fixture returns it verbatim.
+        let hello = makeClientHello(sni: "127.0.0.1")
+        let helloChecksum = sha256Prefix(hello)
+        #expect(writeAllToFD(cli, hello))
+
+        let echoed = readBytes(cli, count: hello.count)
+        #expect(echoed.count == hello.count)
+        #expect(sha256Prefix(echoed) == helloChecksum)
+
+        let row = waitForRow(db: db)
+        try #require(row != nil)
+        #expect(row!.decision == .allow)
+        #expect(row!.method == "CONNECT")
+    }
+
     @Test("Stop unlinks the port file and clears the bound port")
     func stopClearsPortFile() throws {
         let db = tempDB()
@@ -835,6 +1129,76 @@ struct EgressListenerLiveTests {
         default:
             Issue.record("expected .ok across 1k writes, got \(result)")
         }
+    }
+
+    /// T.1b follow-up — end-to-end redteam chain via subprocess env.
+    ///
+    /// Proves the write-side path the round shipped: a subprocess reads
+    /// `SENKANI_PANE_MODE` from its env, emits the matching
+    /// `X-Senkani-Pane-Mode` header through `HTTP_PROXY`, the daemon's
+    /// connection handler parses the header, the per-pane policy
+    /// engine selects `.redteam`, and the deny-on-miss invariant
+    /// records `pane_mode = redteam` on the audit row WITHOUT invoking
+    /// the judge. The MockJudgeAdapter `callCount` MUST stay at 0 —
+    /// Vitalik posture: a judge can be prompted into "allow" and is
+    /// disqualified from redteam decisions.
+    @Test("redteam subprocess env → header → audit row, judge call count stays 0")
+    func redteamSubprocessEnvEndToEnd() throws {
+        let db = tempDB()
+        // Per-pane policy: redteam engine carries no rules so any host
+        // hits the deny-on-miss path. (Other modes are irrelevant here.)
+        let policy = EgressPolicy(engines: [
+            .general:  EgressRuleEngine(rules: []),
+            .research: EgressRuleEngine(rules: []),
+            .write:    EgressRuleEngine(rules: []),
+            .redteam:  EgressRuleEngine(rules: []),
+        ])
+        // Judge MUST NOT be invoked on a redteam static-miss.
+        let judge = MockJudgeAdapter(verdict: JudgeVerdict(decision: .allow, rationale: "should never run"))
+        let listener = EgressListener(
+            policy: policy,
+            judge: judge,
+            database: db,
+            config: .init(port: 0, writePortFile: false, portFilePath: "")
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        // Subprocess writes a raw HTTP request to the proxy, threading
+        // the `X-Senkani-Pane-Mode` header out of its own environment.
+        // Using `/bin/bash -c` with `$SENKANI_PANE_MODE` proves the env
+        // is consulted at request-emit time — not hard-coded.
+        let script = #"""
+        printf 'GET http://blocked.example.com/ HTTP/1.1\r\nHost: blocked.example.com\r\nX-Senkani-Pane-Mode: %s\r\nConnection: close\r\n\r\n' "$SENKANI_PANE_MODE" | /usr/bin/nc 127.0.0.1 \#(listener.port)
+        """#
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/bash")
+        proc.arguments = ["-c", script]
+        var env = ProcessInfo.processInfo.environment
+        env["SENKANI_PANE_MODE"] = PaneMode.redteam.rawValue
+        proc.environment = env
+        let outPipe = Pipe()
+        proc.standardOutput = outPipe
+        proc.standardError = FileHandle(forWritingAtPath: "/dev/null") ?? FileHandle.standardError
+        try proc.run()
+        proc.waitUntilExit()
+
+        let respData = outPipe.fileHandleForReading.readDataToEndOfFile()
+        let respStr = String(data: respData, encoding: .utf8) ?? ""
+        #expect(respStr.contains("403 Forbidden"))
+
+        let row = waitForRow(db: db)
+        try #require(row != nil)
+        #expect(row!.decision == .deny)
+        #expect(row!.paneMode == .redteam,
+                "audit row must record redteam pane_mode from subprocess env-derived header")
+        #expect(row!.host == "blocked.example.com")
+
+        // Vitalik invariant: judge MUST NOT be invoked on a redteam
+        // static-miss. Counter remains 0 even though the static engine
+        // returned default-deny.
+        #expect(judge.callCount == 0,
+                "redteam pane must skip judge dispatch on static-miss")
     }
 }
 #endif

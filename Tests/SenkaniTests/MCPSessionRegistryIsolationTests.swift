@@ -28,6 +28,7 @@ struct MCPSessionRegistryIsolationTests {
     @Test func sameProjectRootReusesSession() {
         let registry = MCPSessionRegistry()
         let root = "/tmp/senkani-registry-reuse-\(UUID().uuidString)"
+        defer { TempSessionDatabase.cleanup(projectRoot: root) }
 
         let s1 = registry.session(projectRoot: root) { self.makeSession(at: root) }
         let s2 = registry.session(projectRoot: root) { self.makeSession(at: root) }
@@ -43,6 +44,10 @@ struct MCPSessionRegistryIsolationTests {
         let registry = MCPSessionRegistry()
         let rootA = "/tmp/senkani-registry-A-\(UUID().uuidString)"
         let rootB = "/tmp/senkani-registry-B-\(UUID().uuidString)"
+        defer {
+            TempSessionDatabase.cleanup(projectRoot: rootA)
+            TempSessionDatabase.cleanup(projectRoot: rootB)
+        }
 
         let sA = registry.session(projectRoot: rootA) { self.makeSession(at: rootA) }
         let sB = registry.session(projectRoot: rootB) { self.makeSession(at: rootB) }
@@ -67,6 +72,10 @@ struct MCPSessionRegistryIsolationTests {
         let registry = MCPSessionRegistry()
         let rootA = "/tmp/senkani-registry-iso-A-\(UUID().uuidString)"
         let rootB = "/tmp/senkani-registry-iso-B-\(UUID().uuidString)"
+        defer {
+            TempSessionDatabase.cleanup(projectRoot: rootA)
+            TempSessionDatabase.cleanup(projectRoot: rootB)
+        }
 
         let sA = registry.session(projectRoot: rootA) { self.makeSession(at: rootA) }
         let sB = registry.session(projectRoot: rootB) { self.makeSession(at: rootB) }

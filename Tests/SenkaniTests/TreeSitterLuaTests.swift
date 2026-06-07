@@ -279,12 +279,12 @@ struct LuaPerformanceTests {
             source += "end\n\n"
         }
         source += "return M\n"
-        // Median-of-3 — see DependencyGraphPerfGateTests for the canonical
+        // Min-of-N — see DependencyGraphPerfGateTests for the canonical
         // pattern. `.serialized` only serializes within-suite, so peer-suite
         // CPU contention can spike a single sample under parallel runner;
         // a single transient spike on one of three runs cannot fail the
         // test, but a real regression (every run blows budget) still does.
-        // Threshold preserved at 10 ms — the median strengthens the gate
+        // Threshold preserved at 10 ms — the minimum keeps the gate honest
         // on its own (mirrors the Scala/Ruby/Haskell/PHP siblings, with
         // the InjectionGuard 2026-05-06 precedent of preserve-don't-widen).
         let clock = ContinuousClock()
@@ -296,10 +296,9 @@ struct LuaPerformanceTests {
             }
             samples.append(elapsed)
         }
-        let median = samples.sorted()[1]
         #expect(
-            median < .milliseconds(10),
-            "median of 3 Lua parses: \(samples) → median \(median)"
+            PerfGate.passes(samples: samples, budget: .milliseconds(10)),
+            "min of 3 Lua parses must be < 10ms: \(samples)"
         )
     }
 
@@ -334,6 +333,40 @@ struct LuaPerformanceTests {
 
         #expect(bashEntries.count == 1) // function
         #expect(bashEntries.contains { $0.name == "greet" && $0.kind == .function })
+    }
+}
+
+// MARK: - Suite N: Depth stress (iterative-walk chain child)
+
+@Suite("TreeSitterBackend — Lua Depth Stress")
+struct TreeSitterLuaDepthStressTests {
+
+    // Deeply nested parenthesized expressions in a top-level local
+    // assignment force the AST walk to descend `depth` levels via the
+    // default arm. The pre-refactor recursive walk consumed Swift
+    // call frames at this depth and would stack-overflow on the
+    // cooperative pool. The iterative work-stack form must traverse
+    // the same tree on the cooperative pool without crashing, and
+    // must emit bracketing `first` / `last` in the source-order order
+    // the recursive form did.
+    @Test func testDepthStressIterative() {
+        let depth = 2200
+        let opens = String(repeating: "(", count: depth)
+        let closes = String(repeating: ")", count: depth)
+        let source = """
+        function first() end
+
+        local _ = \(opens)0\(closes)
+
+        function last() end
+        """
+
+        let entries = indexLua(source)
+        let funcs = entries.filter { $0.kind == .function }
+
+        #expect(funcs.count == 2, "Expected 2 top-level functions, got \(funcs.count)")
+        #expect(funcs.map(\.name) == ["first", "last"], "Symbol order must remain left-to-right pre-order")
+        #expect(funcs.allSatisfy { $0.container == nil }, "Top-level functions carry no container")
     }
 }
 

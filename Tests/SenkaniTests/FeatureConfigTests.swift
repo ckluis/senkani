@@ -69,7 +69,7 @@ struct FeatureConfigTests {
             // exhaustively and returns a Bool for every case.
             _ = config.isEnabled(feature)
         }
-        #expect(Feature.allCases.count == 5)
+        #expect(Feature.allCases.count == 6)
     }
 
     // FeatureContribution arithmetic: savedBytes is the difference between
@@ -95,6 +95,38 @@ struct FeatureConfigTests {
         #expect(Feature.indexer.rawValue == "indexer")
         #expect(Feature.terse.rawValue == "terse")
         #expect(Feature.injectionGuard.rawValue == "injectionGuard")
+        #expect(Feature.mitmTlsTermination.rawValue == "mitmTlsTermination")
+    }
+
+    // T.1d-5 (2026-06-04): the MITM-termination flag is now default-ON
+    // for NEW FeatureConfig instances — gated on the 8-scenario
+    // adversarial body-inspection corpus shipping green
+    // (Allspaw P1 activation-gate). The flag-override leg of the
+    // resolution stack still honors an explicit `false`.
+    @Test func mitmTlsTerminationFlagDefaultsOnPostT1d5() {
+        #expect(FeatureConfig().mitmTlsTermination == true,
+                "T.1d-5: new FeatureConfig instances default mitmTlsTermination to TRUE")
+        #expect(FeatureConfig.resolve().mitmTlsTermination == true,
+                "T.1d-5: resolve() with no flag/env/file picks up the true default")
+        #expect(FeatureConfig.resolve(mitmTlsTerminationFlag: true).mitmTlsTermination == true)
+        #expect(FeatureConfig.resolve(mitmTlsTerminationFlag: false).mitmTlsTermination == false,
+                "explicit false flag must still win over the on default")
+    }
+
+    // T.1d-2b-i / T.1d-5 (Allspaw P1 back-compat invariant):
+    // policy_snapshots rows written before the flag existed lack the key
+    // and MUST still decode to FALSE — the snapshot side preserves the
+    // historical audit record (the flag was off when those rows were
+    // captured). The FeatureConfig-side default flipping to TRUE in
+    // T.1d-5 MUST NOT change this — only NEW FeatureConfig instances
+    // get the true default; OLD snapshots stay accurate to what was
+    // ACTUALLY in effect at capture time.
+    @Test func policyFeaturesDecodesLegacySnapshotWithoutMitmKey() throws {
+        let legacyJSON = #"{"filter":true,"secrets":true,"indexer":true,"terse":false,"injectionGuard":true}"#
+        let decoded = try JSONDecoder().decode(PolicyFeatures.self, from: Data(legacyJSON.utf8))
+        #expect(decoded.mitmTlsTermination == false,
+                "Allspaw P1 back-compat: pre-flip snapshots without the key MUST decode to false")
+        #expect(decoded.filter == true)
     }
 
     // Config file precedence: when no flag and no env var is set, the

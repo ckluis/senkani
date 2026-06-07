@@ -177,18 +177,18 @@ struct TokenEventStoreTests {
         defer { TempSessionDatabase.cleanup(path: path) }
 
         let p = "/tmp/proj/session.jsonl"
-        #expect(db.getSessionCursor(path: p) == (0, 0), "new path → (0, 0)")
+        #expect(db.getSessionCursor(path: p, reader: "watcher") == (0, 0), "new (path, reader) → (0, 0)")
 
-        db.setSessionCursor(path: p, byteOffset: 512, turnIndex: 3)
+        db.setSessionCursor(path: p, byteOffset: 512, turnIndex: 3, reader: "watcher")
         flush(db)
-        let first = db.getSessionCursor(path: p)
+        let first = db.getSessionCursor(path: p, reader: "watcher")
         #expect(first.byteOffset == 512)
         #expect(first.turnIndex == 3)
 
-        // Upsert — same path, new values
-        db.setSessionCursor(path: p, byteOffset: 1024, turnIndex: 7)
+        // Upsert — same (path, reader), new values
+        db.setSessionCursor(path: p, byteOffset: 1024, turnIndex: 7, reader: "watcher")
         flush(db)
-        let second = db.getSessionCursor(path: p)
+        let second = db.getSessionCursor(path: p, reader: "watcher")
         #expect(second.byteOffset == 1024, "upsert replaced byte_offset")
         #expect(second.turnIndex == 7, "upsert replaced turn_index")
     }
@@ -215,5 +215,34 @@ struct TokenEventStoreTests {
 
         let stats = db.tokenStatsForProject("/tmp/proj")
         #expect(stats.commandCount == 0, "row gone from token_events")
+    }
+
+    @Test func pruneSessionCursorsDropsStaleRows() {
+        let (db, path) = makeTempDB()
+        defer { TempSessionDatabase.cleanup(path: path) }
+
+        let oldA = "/tmp/jsonl-old-a-\(UUID().uuidString).jsonl"
+        let oldB = "/tmp/jsonl-old-b-\(UUID().uuidString).jsonl"
+        let fresh = "/tmp/jsonl-fresh-\(UUID().uuidString).jsonl"
+
+        db.setSessionCursor(path: oldA, byteOffset: 100, turnIndex: 1, reader: "watcher")
+        db.setSessionCursor(path: oldB, byteOffset: 200, turnIndex: 2, reader: "watcher")
+        db.setSessionCursor(path: fresh, byteOffset: 300, turnIndex: 3, reader: "watcher")
+        flush(db)
+
+        // Backdate two rows to 100 days ago; leave the fresh one alone.
+        let oldTs = Date().addingTimeInterval(-100 * 86400).timeIntervalSince1970
+        db.executeRawSQL(
+            "UPDATE claude_session_cursors SET updated_at = \(oldTs) WHERE path IN ('\(oldA)', '\(oldB)');"
+        )
+
+        let pruned = db.pruneSessionCursors(olderThanDays: 90)
+        #expect(pruned == 2, "both stale cursor rows pruned at 90-day cutoff")
+
+        #expect(db.getSessionCursor(path: oldA, reader: "watcher") == (0, 0), "old cursor A gone")
+        #expect(db.getSessionCursor(path: oldB, reader: "watcher") == (0, 0), "old cursor B gone")
+        let kept = db.getSessionCursor(path: fresh, reader: "watcher")
+        #expect(kept.byteOffset == 300, "fresh cursor retained")
+        #expect(kept.turnIndex == 3, "fresh cursor retained intact")
     }
 }

@@ -627,7 +627,13 @@ def emit_backlog_index(items_by_status: dict[str, list], out_path: Path) -> None
     render_section("Blocked Items", "blocked", with_blocked=True, with_reason=True)
     render_section("Manual Items", "manual", with_reason=True)
     render_section("Manual Ready Items", "manual_ready", with_groomed=True)
+    render_section("Queued for Console", "queued_for_console", with_reason=True)
     render_section("In-Progress", "in_progress")
+    # Retired (GC) — NON-terminal, reversible: stays in backlog/, excluded from
+    # all pick precedence + the live burndown count. Distinct from `skipped`
+    # (terminal, moved to completed/). Operator un-retires by editing status
+    # back to the value recorded in the item's `## GC note`.
+    render_section("Retired (GC)", "retired", with_reason=True)
 
     out_path.write_text("\n".join(lines))
 

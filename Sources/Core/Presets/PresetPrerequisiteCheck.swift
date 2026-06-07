@@ -16,6 +16,13 @@ import Foundation
 ///   - `senkani-brief-cli`           — `senkani brief` CLI; shell-probe
 ///   - `senkani-improve-cli`         — `senkani improve` CLI; shell-probe
 ///   - `pushover-notification-sink`  — NotificationSink not yet shipped; always warn
+///   - `macos-local-notification-sink` — shipped via T.6 production
+///                                       hookup (SenkaniApp installs a
+///                                       UN-backed MacOSLocalSink); the
+///                                       probe is a no-op since the App
+///                                       boot wires
+///                                       `NotificationDelivery` before
+///                                       any preset can fire an event
 ///
 /// Unknown ids warn with a generic "prerequisite `<id>` has no probe
 /// registered" message so a hand-edited preset's unknown dep doesn't
@@ -111,11 +118,22 @@ public enum PresetPrerequisiteCheck {
         case "senkani-improve-cli":
             return probeShellCommand("senkani improve --help", prereq: prereq)
         case "senkani_search_web",
-             "guard-research":
+             "guard-research",
+             "macos-local-notification-sink":
             // Ship with this binary as of W.1: search_web MCP tool +
             // guard-research query filter at the tool boundary. Probe is
             // a no-op here because the binary that runs `senkani doctor`
             // is the same one that registers the tool.
+            //
+            // `macos-local-notification-sink` (T.6 production hookup):
+            // SenkaniApp's notification bootstrap installs a UN-backed
+            // MacOSLocalSink into NotificationDelivery at App boot.
+            // CLI / MCP processes that fire NotifyEvent without the
+            // App running see a silent no-op (matches the
+            // NotificationFanout swallow-throws contract) — the probe
+            // returns nil because the *capability* is shipped; whether
+            // the App is currently running is a runtime concern, not a
+            // preset-install gate.
             return nil
         case "guard-autoimprove",
              "pushover-notification-sink":

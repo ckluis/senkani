@@ -256,12 +256,12 @@ struct TreeSitterRustPerformanceTests {
         try? source.write(toFile: fullPath, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
-        // Median-of-3 — see DependencyGraphPerfGateTests for the canonical
+        // Min-of-N — see DependencyGraphPerfGateTests for the canonical
         // pattern. `.serialized` only serializes within-suite, so peer-suite
         // CPU contention can spike a single sample under parallel runner;
         // a single transient spike on one of three runs cannot fail the
         // test, but a real regression (every run blows budget) still does.
-        // Threshold preserved at 10 ms — the median strengthens the gate
+        // Threshold preserved at 10 ms — the minimum keeps the gate honest
         // on its own (mirrors the Scala/Ruby/Haskell/PHP siblings, with
         // the InjectionGuard 2026-05-06 precedent of preserve-don't-widen).
         let clock = ContinuousClock()
@@ -273,10 +273,12 @@ struct TreeSitterRustPerformanceTests {
             }
             samples.append(Double(elapsed.components.attoseconds) / 1e15)
         }
-        let median = samples.sorted()[1]
         // 5 structs + 30 methods + 30 functions = 65
         #expect(entries.count >= 60, "Should find >= 60 symbols, got \(entries.count)")
-        #expect(median < 10.0, "median of 3 Rust parses: \(samples) → median \(String(format: "%.2f", median))ms")
+        #expect(
+            PerfGate.passes(samples: samples, budget: 10.0),
+            "min of 3 Rust parses must be < 10ms: \(samples)"
+        )
     }
 
     @Test func rustCoexistsWithOtherLanguages() {
@@ -334,6 +336,53 @@ struct TreeSitterRustPerformanceTests {
         // Second Rust pass should match first
         #expect(rustEntries2.count == rustEntries.count, "Rust should produce same results on re-parse")
         #expect(rustEntries2.map(\.name).sorted() == rustEntries.map(\.name).sorted())
+    }
+}
+
+@Suite("TreeSitterBackend — Rust Depth Stress")
+struct TreeSitterRustDepthStressTests {
+
+    // Chain child of `indexer-backends-iterative-walk-refactor-2026-05-11`.
+    // Generates a top-level const with a deeply-nested parenthesized
+    // initializer, and indexes the file WITHOUT `runOnLargeStackThread`
+    // to prove the iterative walk is cooperative-pool-safe. Two empty
+    // top-level structs bracket the deep expression to assert
+    // pre-order symbol emission.
+    //
+    // Why a top-level const initializer, not a function body or an
+    // impl block: Rust's leaf-emit arms (`function_item`,
+    // `function_signature_item`, `struct_item`, `enum_item`,
+    // `type_item`) emit and return without walking the body, and
+    // `trait_item` / `impl_item` only descend into a `findBody`-
+    // resolved body block. The deep chain must live inside a node
+    // whose descendants fall through the default arm (reverse-push
+    // children). A top-level `const X: i32 = (((...0...)));` satisfies
+    // this: the const_item itself is not specifically matched by an
+    // arm (Rust's grammar emits `const_item`, not one of the matched
+    // types), so it falls through default and the parenthesized
+    // expression chain pushes ~2200 deep. The pre-refactor walk would
+    // consume ~2200 Swift call frames and crash on the cooperative
+    // pool's smaller stack; the iterative form runs in heap-allocated
+    // work-stack memory.
+    @Test("Depth-stress iterative walk does not overflow")
+    func testDepthStressIterative() {
+        let depth = 2200
+        let opens = String(repeating: "(", count: depth)
+        let closes = String(repeating: ")", count: depth)
+        let source = """
+        struct First;
+
+        const X: i32 = \(opens)0\(closes);
+
+        struct Last;
+        """
+
+        let entries = indexRust(source)
+        let structs = entries.filter { $0.kind == .struct }
+        #expect(structs.map(\.name) == ["First", "Last"],
+                "Symbol order must remain left-to-right pre-order")
+        #expect(structs.allSatisfy { $0.container == nil },
+                "Top-level Rust structs carry no container")
     }
 }
 

@@ -2,7 +2,10 @@ import Testing
 import Foundation
 @testable import Core
 
-// Coverage for `onboarding-p2-copy-fcsit-empty-states`.
+// Coverage for `onboarding-p2-copy-fcsit-empty-states`, updated
+// 2026-05-11 by `fcsit-pane-toggles-ux-redesign` to retire the
+// first-use disclosure popover and replace it with a
+// click-letter-opens-settings affordance.
 //
 // Two pure deciders + source-level wiring guards:
 //
@@ -10,7 +13,9 @@ import Foundation
 //     mapping the pane header reads when rendering the compact
 //     toggles. Tests pin the five entries in render order, the
 //     accessibility label format ("Filter, on" / "Filter, off"),
-//     and the first-use predicate (`shouldShowFirstUse`).
+//     the per-toggle `Learn more` URL shape, and the retired
+//     first-use UserDefaults key (still exposed for the one-shot
+//     launch-time cleanup).
 //
 //   - `EmptyStateGuidance` carries the headline / populating-event
 //     / next-action triplet for each early-use pane this round
@@ -59,8 +64,6 @@ struct OnboardingP2DisclosureTests {
                     "Name for \(entry.key) must be a literal feature name.")
             #expect(!entry.effect.isEmpty,
                     "Effect for \(entry.key) must explain what the toggle does.")
-            #expect(!entry.firstUseExplanation.isEmpty,
-                    "First-use explanation for \(entry.key) must be present.")
         }
     }
 
@@ -73,17 +76,32 @@ struct OnboardingP2DisclosureTests {
                 == FCSITDisclosure.entry(forKey: "secrets")?.effect)
     }
 
-    @Test("First-use disclosure shows once, then never")
-    func firstUsePredicate() {
-        #expect(FCSITDisclosure.shouldShowFirstUse(seen: false),
-                "An unseen first-use must trigger the popover.")
-        #expect(!FCSITDisclosure.shouldShowFirstUse(seen: true),
-                "A seen first-use must NOT trigger the popover.")
-        #expect(FCSITDisclosure.firstUseSeenDefaultsKey
+    @Test("Retired first-use defaults key still exposed for launch-time cleanup")
+    func retiredFirstUseKey() {
+        // The first-use popover was retired by
+        // `fcsit-pane-toggles-ux-redesign-2026-05-11`. The defaults
+        // key is kept on the type so SenkaniGUI can run an
+        // idempotent removeObject(forKey:) at launch to clear stale
+        // state on cfprefsd for upgrading users.
+        #expect(FCSITDisclosure.retiredFirstUseSeenDefaultsKey
                 == "senkani.fcsit.firstUseDisclosureSeen.v1",
-                "UserDefaults key must stay versioned (v1) so a future copy bump can ship a new disclosure without re-prompting users twice.")
-        #expect(FCSITDisclosure.firstUseBody.count == 5,
-                "First-use popover must list one body line per FCSIT toggle.")
+                "Retired UserDefaults key spelling must stay byte-identical so the cleanup actually clears the original key.")
+    }
+
+    @Test("Learn-more URL per FCSIT toggle points at the per-pane-optimizers concept page")
+    func learnMoreURLPerKey() {
+        let expected: [String: String] = [
+            "filter":  "https://senkani.app/docs/concepts/per-pane-optimizers.html#filter",
+            "cache":   "https://senkani.app/docs/concepts/per-pane-optimizers.html#cache",
+            "secrets": "https://senkani.app/docs/concepts/per-pane-optimizers.html#secrets",
+            "indexer": "https://senkani.app/docs/concepts/per-pane-optimizers.html#indexer",
+            "terse":   "https://senkani.app/docs/concepts/per-pane-optimizers.html#terse",
+        ]
+        for (key, want) in expected {
+            let url = FCSITDisclosure.learnMoreURL(forKey: key)
+            #expect(url?.absoluteString == want,
+                    "Learn-more URL for \(key) must point at the per-pane-optimizers concept anchor.")
+        }
     }
 
     // MARK: - EmptyStateGuidance
@@ -115,12 +133,67 @@ struct OnboardingP2DisclosureTests {
                 "SenkaniApp/Views/PaneContainerView.swift must exist.")
         #expect(src.contains("FCSITDisclosure.accessibilityLabel(forKey:"),
                 "featureButton must call FCSITDisclosure.accessibilityLabel for VoiceOver.")
-        #expect(src.contains("FCSITDisclosure.accessibilityHint(forKey:"),
-                "featureButton must call FCSITDisclosure.accessibilityHint for VoiceOver.")
-        #expect(src.contains("FCSITDisclosure.firstUseSeenDefaultsKey"),
-                "PaneContainerView must use the canonical first-use defaults key.")
-        #expect(src.contains("FCSITFirstUsePopover"),
-                "FCSIT first-use popover must be wired into PaneContainerView.")
+    }
+
+    @Test("PaneContainerView header retires chevron + gear + first-use popover")
+    func paneContainerHeaderRetiresLegacyAffordances() {
+        // `fcsit-pane-toggles-ux-redesign-2026-05-11` collapsed three
+        // explainer surfaces (popover / drawer / settings panel) into
+        // one canonical surface (settings panel), reached by clicking
+        // any FCSIT letter. Pin the no-chevron / no-gear / no-popover
+        // header shape so a refactor can't silently re-introduce a
+        // toggle-from-header path.
+        let src = read("SenkaniApp/Views/PaneContainerView.swift")
+        #expect(!src.contains("FCSITFirstUsePopover"),
+                "First-use popover must be fully retired from the header.")
+        #expect(!src.contains("showFCSITFirstUse"),
+                "First-use popover state must be fully retired from the header.")
+        #expect(!src.contains("showFeatureDrawer"),
+                "FeatureDetailDrawer state must be fully retired from the header.")
+        #expect(!src.contains("FeatureDetailDrawer("),
+                "FeatureDetailDrawer call site must be fully removed from the header.")
+        #expect(!src.contains("\"gearshape\""),
+                "Gear icon must be fully retired from the header — click any letter opens settings.")
+        #expect(!src.contains("chevron.down"),
+                "Disclosure chevron must be fully retired from the header.")
+        #expect(src.contains("showSettings = true"),
+                "Clicking a FCSIT letter must open the settings panel.")
+    }
+
+    @Test("PaneSettingsPanel wires Learn-more URLs into each FCSIT row")
+    func paneSettingsPanelWiresLearnMoreURLs() {
+        let src = read("SenkaniApp/Views/PaneSettingsPanel.swift")
+        #expect(!src.isEmpty,
+                "SenkaniApp/Views/PaneSettingsPanel.swift must exist.")
+        // Each F/C/S/I/T row must pass a learnMoreURL — pin by the
+        // FCSITDisclosure.learnMoreURL(forKey:) call site so a rename
+        // here doesn't silently drop the link from the row.
+        for key in ["filter", "cache", "secrets", "indexer", "terse"] {
+            #expect(src.contains("FCSITDisclosure.learnMoreURL(forKey: \"\(key)\")"),
+                    "Optimization row for \(key) must wire FCSITDisclosure.learnMoreURL into the settings panel.")
+        }
+        #expect(src.contains("Learn more →"),
+                "SettingsToggleRow must render the Learn-more link copy when a URL is supplied.")
+    }
+
+    @Test("SenkaniApp clears the retired FCSIT first-use defaults key on launch")
+    func senkaniAppClearsRetiredFCSITKey() {
+        let src = read("SenkaniApp/App/SenkaniApp.swift")
+        #expect(!src.isEmpty,
+                "SenkaniApp/App/SenkaniApp.swift must exist.")
+        #expect(src.contains("cleanupRetiredFCSITFirstUseKey"),
+                "App init must invoke cleanupRetiredFCSITFirstUseKey for the one-shot UserDefaults migration.")
+        #expect(src.contains("FCSITDisclosure.retiredFirstUseSeenDefaultsKey"),
+                "Cleanup must reference the canonical retired-key constant — keeps the spelling honest.")
+        #expect(src.contains("UserDefaults.standard.removeObject"),
+                "Cleanup must actually call removeObject on UserDefaults.standard.")
+    }
+
+    @Test("FCSITFirstUsePopover view is fully removed from the app target")
+    func firstUsePopoverFileRemoved() {
+        let src = read("SenkaniApp/Views/FCSITFirstUsePopover.swift")
+        #expect(src.isEmpty,
+                "FCSITFirstUsePopover.swift must not exist after `fcsit-pane-toggles-ux-redesign-2026-05-11`.")
     }
 
     @Test("Empty-state views consume EmptyStateGuidance")

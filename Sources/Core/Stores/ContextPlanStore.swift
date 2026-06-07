@@ -38,11 +38,11 @@ final class ContextPlanStore: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
             defer { sqlite3_finalize(stmt) }
 
-            sqlite3_bind_text(stmt, 1, (plan.id as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (plan.sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (plan.id as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (plan.sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 3, Int64(plan.plannedFanout))
             sqlite3_bind_int64(stmt, 4, Int64(plan.leafSize))
-            sqlite3_bind_text(stmt, 5, (plan.reducerChoice.rawValue as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 5, (plan.reducerChoice.rawValue as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             sqlite3_bind_int64(stmt, 6, Int64(plan.estimatedCost))
             sqlite3_bind_double(stmt, 7, plan.createdAt.timeIntervalSince1970)
 
@@ -65,7 +65,7 @@ final class ContextPlanStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
             return Self.decodeRow(stmt)
         }
     }
@@ -84,7 +84,7 @@ final class ContextPlanStore: @unchecked Sendable {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
 
             var out: [ContextPlan] = []
             while let row = Self.decodeRow(stmt) {

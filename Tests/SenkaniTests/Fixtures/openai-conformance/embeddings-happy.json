@@ -1,0 +1,14 @@
+{
+  "name": "embeddings-happy",
+  "kind": "embeddings",
+  "description": "POST /v1/embeddings happy path -> an OpenAI object:list of embedding objects with a usage.total_tokens block; served model is the ModelManager-resolved id.",
+  "request_body": "{\"model\":\"text-embedding-3-small\",\"input\":[\"alpha\",\"beta\"]}",
+  "expect": {
+    "http_status": "200 OK",
+    "contains": [
+      "\"object\":\"list\"",
+      "\"object\":\"embedding\"",
+      "\"total_tokens\":"
+    ]
+  }
+}

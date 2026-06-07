@@ -9,14 +9,28 @@ import Darwin.POSIX
 /// Tests for the JSONL → Unix socket migration on the pane IPC path.
 /// Exercises `PaneIPC.sendFireAndForget` against a real bound UDS listener
 /// in a temp directory — no libc mocking, no SocketServerManager dependency.
-// `.serialized` is required: the largeFrameRoundTrip test launches an
-// `async let` over `Task.detached` to drain a multi-KB frame
-// concurrently with the send. Under cooperative-pool contention from
-// other parallel suites, the detached task may not start polling
-// before the sender's 200 ms `SO_SNDTIMEO` expires — the kernel send
-// buffer fills and the write fails. Serializing this suite removes
-// the contention without forcing a slower socket timeout in
-// production.
+// The multi-KB `largeFrameRoundTrip` round-trip is freed of full-suite
+// cooperative-pool starvation on BOTH sides:
+//   - PRODUCTION send (commit 88140b5, RETAINED): `PaneIPC.sendFireAndForget`
+//     writes the frame through a partial-write loop (PaneIPC `writeAll`)
+//     instead of a single-shot `write(2)`, so a slow-but-DRAINING reader
+//     still receives the full frame rather than a truncated one.
+//   - TEST reader (this round): the accept-and-drain side runs on a
+//     DEDICATED OS `Thread`, NOT a `Task.detached` / cooperative-pool
+//     task. The cooperative-pool reader was the residual flake — under
+//     ~3691-test parallel load the reader Task got descheduled mid-drain,
+//     the kernel send buffer stayed full past the 200 ms `SO_SNDTIMEO`
+//     beyond `writeAll`'s zero-progress budget, and even the production
+//     loop timed out → `.writeFailed`. A dedicated `Thread` is off both
+//     the cooperative pool and the GCD worker pool, so it drains the
+//     socket continuously regardless of starvation — DETERMINISTIC, the
+//     same idiom R4 used in `MITMPipeBidirectionalDenyTests`. A readiness
+//     barrier still ensures the reader is polling before the send.
+// `.serialized` is retained as defence-in-depth against intra-suite
+// fd/temp-path contention; it is NOT load-bearing for the large-frame
+// race (which `.serialized` alone could not close, since other parallel
+// suites still starve the pool — that is why this flake recurred AFTER
+// the suite was serialized, and again AFTER 88140b5's two lucky greens).
 @Suite("PaneIPC — socket migration (fire-and-forget)", .serialized)
 struct PaneSocketMigrationTests {
 
@@ -71,8 +85,18 @@ struct PaneSocketMigrationTests {
 
     /// Accept one connection on `listenFD` with a bounded wait, read one
     /// length-prefixed frame, return the decoded payload bytes.
-    private static func acceptAndReadOneFrame(on listenFD: Int32, timeoutMs: Int32 = 1000) throws -> Data {
+    ///
+    /// `ready`, when supplied, is invoked immediately before the blocking
+    /// `poll()` — a readiness barrier letting a concurrent sender wait
+    /// until the reader is armed (used by `largeFrameRoundTrip` to remove
+    /// the accept-vs-send start-order race under full-suite load).
+    private static func acceptAndReadOneFrame(
+        on listenFD: Int32,
+        timeoutMs: Int32 = 1000,
+        ready: (() -> Void)? = nil
+    ) throws -> Data {
         var pfd = pollfd(fd: listenFD, events: Int16(POLLIN), revents: 0)
+        ready?()
         let p = poll(&pfd, 1, timeoutMs)
         guard p > 0 else { throw SocketTestError.acceptTimeout }
 
@@ -116,6 +140,45 @@ struct PaneSocketMigrationTests {
         case acceptFailed(Int32)
         case shortRead
         case invalidLength
+    }
+
+    /// A thread-safe, one-shot async signal: `fulfill()` may be called
+    /// from any thread (including the detached accept task's pool
+    /// thread); `value` suspends until the first `fulfill()`. Idempotent —
+    /// extra `fulfill()` calls are ignored. Used as a readiness barrier so
+    /// a sender can wait until a concurrent reader is armed.
+    private final class OneShotSignal: @unchecked Sendable {
+        private let lock = NSLock()
+        private var fulfilled = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+
+        func fulfill() {
+            lock.lock()
+            if fulfilled {
+                lock.unlock()
+                return
+            }
+            fulfilled = true
+            let toResume = waiters
+            waiters.removeAll()
+            lock.unlock()
+            for c in toResume { c.resume() }
+        }
+
+        var value: Void {
+            get async {
+                await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                    lock.lock()
+                    if fulfilled {
+                        lock.unlock()
+                        cont.resume()
+                    } else {
+                        waiters.append(cont)
+                        lock.unlock()
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Tests
@@ -252,30 +315,83 @@ struct PaneSocketMigrationTests {
         // Pack a moderately large params dict — exceeds the single-chunk
         // kernel buffer size so the write must drain through. Production
         // drains continuously via SocketServerManager.acceptPaneConnection;
-        // this test mirrors that by accepting + reading in a parallel
-        // task while the sender writes.
+        // this test mirrors that by accepting + reading WHILE the sender
+        // writes. The integrity contract — every one of the 200 keys
+        // round-trips byte-for-byte — is the load-bearing assertion below;
+        // nothing here weakens it.
         var params: [String: String] = [:]
         for i in 0..<200 {
             params["k\(i)"] = String(repeating: "x", count: 40)
         }
         let cmd = PaneIPCCommand(action: .list, params: params)
 
-        // Drain runs concurrently with the send. `async let` over a
-        // detached task replaces DispatchSemaphore.wait, which has the
-        // same pool-starvation hazard as DispatchGroup.wait above once
-        // this suite is no longer `.serialized`.
-        async let frameData: Data? = Task.detached(priority: .userInitiated) {
-            try? Self.acceptAndReadOneFrame(on: listenFD, timeoutMs: 2000)
-        }.value
+        // CONCURRENCY NOTE (mirrors the R4 dedicated-thread fix in
+        // MITMPipeBidirectionalDenyTests.runPipe): the reader runs on a
+        // DEDICATED OS `Thread`, NOT a `Task.detached` / cooperative-pool
+        // task. The earlier cooperative-pool reader was the residual flake:
+        // under full-suite (~3691-test) parallel load swift-testing
+        // saturates the cooperative pool, the reader Task gets descheduled
+        // mid-drain, and the kernel UDS send buffer stays FULL past the
+        // 200 ms SO_SNDTIMEO for longer than PaneIPC.writeAll's
+        // zero-progress budget — so even the production partial-write loop
+        // (commit 88140b5, RETAINED) times out and reports .writeFailed. A
+        // dedicated `Thread` is off BOTH the cooperative pool and the GCD
+        // worker pool, so it `accept()`s and drains the socket continuously
+        // regardless of cooperative-pool starvation. This removes the
+        // starvation dependence DETERMINISTICALLY, not probabilistically.
+        // The `armed` readiness barrier still ensures the reader is polling
+        // before the send (no start-order race); `frameBox` + the `done`
+        // one-shot ship the read result back to this `async` body. We use
+        // `OneShotSignal` (an `await`-able continuation), NOT
+        // `DispatchSemaphore.wait`, to join: blocking-wait is unavailable
+        // from an async context (it would park a cooperative thread), so
+        // the reader thread `fulfill()`s `done` when it exits and the test
+        // body `await`s it — joining without blocking the pool.
+        let armed = OneShotSignal()
+        let done = OneShotSignal()
+        let frameBox = FrameBox()
+
+        Thread.detachNewThread {
+            let data = try? Self.acceptAndReadOneFrame(
+                on: listenFD,
+                timeoutMs: 5000,
+                ready: { armed.fulfill() }
+            )
+            frameBox.set(data)
+            done.fulfill()
+        }
+
+        // Block until the dedicated reader thread has armed its
+        // `poll()`/`accept()` loop, so the write below races a reader that
+        // is already waiting and draining.
+        await armed.value
 
         #expect(PaneIPC.sendFireAndForget(cmd, socketPath: path) == .written)
 
-        let frame = try #require(await frameData)
+        // Join the dedicated reader thread (bounded by the reader's own 5 s
+        // accept budget). No thread leak: `detachNewThread`'s thread exits
+        // when the closure returns, which it always does — `acceptAndRead`
+        // returns on a completed read OR throws on its accept/read timeout,
+        // and either way `done.fulfill()` runs and the thread terminates.
+        await done.value
+
+        let frame = try #require(frameBox.get())
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let decoded = try decoder.decode(PaneIPCCommand.self, from: frame)
         #expect(decoded.params.count == 200)
         #expect(decoded.params["k42"] == String(repeating: "x", count: 40))
+    }
+
+    /// Thread-safe one-shot box shipping the dedicated reader thread's
+    /// decoded frame back to the `async` test body (mirrors the R4
+    /// `OutcomeBox`/`UpstreamReader` idiom). The reader thread `set`s once;
+    /// the test body `get`s after joining on the `DispatchSemaphore`.
+    private final class FrameBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _data: Data?
+        func set(_ d: Data?) { lock.lock(); _data = d; lock.unlock() }
+        func get() -> Data? { lock.lock(); defer { lock.unlock() }; return _data }
     }
 
     @Test("setBudgetStatus: encodes all four params + sends through socket")

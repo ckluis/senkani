@@ -16,6 +16,7 @@ struct SenkaniGUI: App {
         AutoRegistration.installHookWrapper()
         Self.cleanupStaleMCPProcesses()
         Self.cleanupStaleMCPFiles()
+        Self.cleanupRetiredFCSITFirstUseKey()
 
         // Start hook socket listener so senkani-hook binary can connect
         SocketServerManager.shared.hookHandler = { HookRouter.handle(eventJSON: $0) }
@@ -28,6 +29,31 @@ struct SenkaniGUI: App {
         // CLI installs/uninstalls converge through the on-event
         // mtime check inside HookRouter.handle().
         HookRouter.refreshInstalledPacks()
+
+        // T.6 — production notification wiring. Install the router
+        // before requesting UN authorization so an immediately-
+        // following `NotificationDelivery.deliver(...)` from any
+        // Core producer reaches the (now non-nil) router. UN's
+        // own delivery is async and gated by the user's grant; if
+        // the operator hasn't yet accepted the TCC prompt the
+        // OS layer silently swallows the banner — the in-process
+        // router is still installed correctly.
+        NotificationBootstrap.bootstrap()
+        NotificationBootstrap.requestAuthorizationIfNeeded()
+    }
+
+    /// One-shot removal of the retired FCSIT first-use disclosure
+    /// UserDefaults key. The first-use popover surface was retired
+    /// 2026-05-11 (`fcsit-pane-toggles-ux-redesign`) along with the
+    /// chevron / gear / drawer affordances — clicking any FCSIT
+    /// letter now opens the settings panel directly. The defaults
+    /// key is no longer read or written; removing it on launch
+    /// keeps `senkani uninstall` parity and prevents leftover state
+    /// on cfprefsd from confusing future audits. Idempotent —
+    /// harmless if the key is already absent.
+    static func cleanupRetiredFCSITFirstUseKey() {
+        UserDefaults.standard.removeObject(
+            forKey: FCSITDisclosure.retiredFirstUseSeenDefaultsKey)
     }
 
     /// Kill stale MCP server processes left over from previous sessions.

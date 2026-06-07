@@ -21,6 +21,12 @@ struct Exec: ParsableCommand {
     @Flag(name: .long, help: "Disable symbol indexer integration.")
     var noIndexer = false
 
+    @Flag(
+        name: .long,
+        help: "Inject OTEL_EXPORTER_OTLP_ENDPOINT into the child env, pointing at the local runtime-telemetry receiver. No-op (with stderr warning) when the receiver hasn't bound a port yet."
+    )
+    var telemetry = false
+
     @Argument(parsing: .captureForPassthrough, help: "The command and arguments to run.")
     var command: [String] = []
 
@@ -50,7 +56,18 @@ struct Exec: ParsableCommand {
         process.arguments = command
         process.standardOutput = pipe
         process.standardError = errPipe
-        process.environment = ProcessInfo.processInfo.environment
+
+        let telemetryEndpoint = telemetry ? RuntimeTelemetryEndpoint.localLoopback() : nil
+        if telemetry && telemetryEndpoint == nil {
+            FileHandle.standardError.write(
+                "senkani: --telemetry passed but runtime-telemetry receiver has no bound port; OTEL_EXPORTER_OTLP_ENDPOINT not injected\n".data(using: .utf8) ?? Data()
+            )
+        }
+        process.environment = Self.resolveTelemetryEnv(
+            baseEnv: ProcessInfo.processInfo.environment,
+            telemetryEnabled: telemetry,
+            endpoint: telemetryEndpoint
+        )
 
         try process.run()
 
@@ -94,5 +111,20 @@ struct Exec: ParsableCommand {
         }
 
         throw ExitCode(process.terminationStatus)
+    }
+
+    /// V.18b-2 — env-bundle helper for `--telemetry`. Operator flag is the
+    /// explicit opt-in (no dev-server allowlist applies — `exec` runs
+    /// arbitrary commands by design). Endpoint nil ⇒ no key added so the
+    /// failure mode is "no instrumentation", same shape as V.18b-1.
+    static func resolveTelemetryEnv(
+        baseEnv: [String: String],
+        telemetryEnabled: Bool,
+        endpoint: String?
+    ) -> [String: String] {
+        var env = baseEnv
+        guard telemetryEnabled, let url = endpoint, !url.isEmpty else { return env }
+        env["OTEL_EXPORTER_OTLP_ENDPOINT"] = url
+        return env
     }
 }

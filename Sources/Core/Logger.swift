@@ -65,7 +65,7 @@ public enum LogValue: Sendable {
 public enum Logger {
 
     nonisolated(unsafe) private static var _isJSON: Bool?
-    nonisolated(unsafe) private static let isJSONLock = NSLock()
+    private static let isJSONLock = NSLock()
 
     /// Test-only observation hook. When set, every `log(...)` call also
     /// invokes the sink with the raw event + fields BEFORE writing to
@@ -79,7 +79,7 @@ public enum Logger {
     /// runner don't tear each other's sinks down mid-test. `.serialized`
     /// alone is insufficient — it only orders tests within a suite.
     nonisolated(unsafe) private static var _testSink: (@Sendable (String, [String: LogValue]) -> Void)?
-    nonisolated(unsafe) private static let testSinkLock = NSLock()
+    private static let testSinkLock = NSLock()
 
     /// Test-only: install (or clear with `nil`) an observation sink.
     /// Call from `defer { Logger._setTestSink(nil) }` to avoid leaking

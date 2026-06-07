@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MCP tools — reference</title>
-<meta name="description" content="Reference for all 19 senkani MCP tools.">
+<meta name="description" content="Reference for all 23 senkani MCP tools.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -38,7 +38,7 @@
       </ul>
     </div>
     <div class="wiki-nav-group">
-      <h4>MCP tools (20)</h4>
+      <h4>MCP tools (23)</h4>
       <ul>
         <li><a href="../../docs/reference/mcp/senkani_read.html"><code>senkani_read</code></a></li>
         <li><a href="../../docs/reference/mcp/senkani_exec.html"><code>senkani_exec</code></a></li>
@@ -57,6 +57,9 @@
         <li><a href="../../docs/reference/mcp/senkani_session.html"><code>senkani_session</code></a></li>
         <li><a href="../../docs/reference/mcp/senkani_knowledge.html"><code>senkani_knowledge</code></a></li>
         <li><a href="../../docs/reference/mcp/senkani_version.html"><code>senkani_version</code></a></li>
+        <li><code>senkani_telemetry_list</code></li>
+        <li><code>senkani_telemetry_query</code></li>
+        <li><code>senkani_telemetry_get_trace</code></li>
         <li><a href="../../docs/reference/mcp/senkani_bundle.html"><code>senkani_bundle</code></a></li>
         <li><a href="../../docs/reference/mcp/senkani_repo.html"><code>senkani_repo</code></a></li>
         <li><a href="../../docs/reference/mcp/senkani_search_web.html"><code>senkani_search_web</code></a></li>
@@ -94,6 +97,9 @@
       <a class="listing-row" href="../../docs/reference/mcp/senkani_session.html"><div class="listing-name">senkani_session</div><div class="listing-desc">Query session metrics, toggle features, and manage session state from within a tool call.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
       <a class="listing-row" href="../../docs/reference/mcp/senkani_knowledge.html"><div class="listing-name">senkani_knowledge</div><div class="listing-desc">Query and update the project knowledge graph — entities, links, decisions, FTS5 search.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
       <a class="listing-row" href="../../docs/reference/mcp/senkani_version.html"><div class="listing-name">senkani_version</div><div class="listing-desc">Version negotiation: server_version, tool_schemas_version, schema_db_version, and the list of exposed tools.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
+      <div class="listing-row"><div class="listing-name">senkani_telemetry_list</div><div class="listing-desc">V.18a-6 — list runtime_telemetry datasets, optionally scoped to a project.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></div>
+      <div class="listing-row"><div class="listing-name">senkani_telemetry_query</div><div class="listing-desc">V.18a-6 — query runtime_telemetry spans by trace_id / session_id / tool_call_id / validation_run_id / time range. Cursor-paginated (1000 rows or 1 MB per page).</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></div>
+      <div class="listing-row"><div class="listing-name">senkani_telemetry_get_trace</div><div class="listing-desc">V.18a-6 — fetch one trace's full span tree (max 10K spans). Output routed through SecretDetector.</div><div class="listing-savings na">—</div><div class="listing-status"><span class="badge badge-live">Live</span></div></div>
       <a class="listing-row" href="../../docs/reference/mcp/senkani_bundle.html"><div class="listing-name">senkani_bundle</div><div class="listing-desc">Budget-bounded repo snapshot — symbol outlines + dep graph + KB entities + README in a canonical, truncation-robust order. Local or remote.</div><div class="listing-savings">repo-level</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
       <a class="listing-row" href="../../docs/reference/mcp/senkani_repo.html"><div class="listing-name">senkani_repo</div><div class="listing-desc">Query any public GitHub repo without cloning. Actions: tree, file, readme, search.</div><div class="listing-savings">query-level</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
       <a class="listing-row" href="../../docs/reference/mcp/senkani_search_web.html"><div class="listing-name">senkani_search_web</div><div class="listing-desc">Web search via DuckDuckGo Lite (no key, no quota). Returns {title, url, snippet} triples; host-pinned, redirect-pinned, SecretDetector-scanned. <code>guard-research</code> denies queries with workstation paths, globs, or secret tokens.</div><div class="listing-savings">query-level</div><div class="listing-status"><span class="badge badge-live">Live</span></div></a>
@@ -117,7 +123,7 @@
   </div>
   <div class="foot-meta">
     <span>© 2026 · MIT licensed core · Apple Silicon native · macOS 14+</span>
-    <span><a href="../../docs/changelog.html">v0.2.0 changelog</a></span>
+    <span><a href="../../docs/changelog.html">v0.3.0 changelog</a></span>
   </div>
 </footer>
 <script src="../../assets/app.js" defer></script>

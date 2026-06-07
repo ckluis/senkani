@@ -4,7 +4,16 @@
 .mcp.json
 SPEC.md
 specOld.md
-spec/
+spec/*
+# Pack fixtures (code-quality/security/devops) are product source, not
+# local backlog state — un-ignore them so CI can run PackIntegrationTests
+# (the rest of spec/ stays local-only). See process-gap-loop-verifies-on-
+# lenient-local-toolchain-vs-ci-2026-06-07.
+!spec/packs/
+# DesignSystem scaffold fixtures (V.10a) — same rationale: product source
+# read by DesignSystemSkillScaffoldTests, not local backlog state.
+!spec/design-system/
+!spec/design_system_patterns.md
 charter.md
 .claude/settings.json
 *.xcuserstate

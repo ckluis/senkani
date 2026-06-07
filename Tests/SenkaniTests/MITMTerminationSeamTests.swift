@@ -84,7 +84,8 @@ struct MITMTerminationSeamTests {
         _ = try await ca.generateRoot()
         let host = "peek-replay.example.com"
         let leaf = try await ca.leaf(forHost: host)
-        let caCert = try await ca.caCertificate()
+        let caCertDER = try await ca.caCertificateDER()
+        let caCert = try #require(SecCertificateCreateWithData(nil, caCertDER as CFData))
         let mintedLeafDER = leaf.certificateDER
 
         // The synchronous driver does the socketpair + thread-join
@@ -224,7 +225,8 @@ struct MITMTerminationSeamTests {
         _ = try await ca.generateRoot()
         let host = "127.0.0.1"  // the CONNECT host — normalized identical to SNI
         let leaf = try await ca.leaf(forHost: host)
-        let caCert = try await ca.caCertificate()
+        let caCertDER = try await ca.caCertificateDER()
+        let caCert = try #require(SecCertificateCreateWithData(nil, caCertDER as CFData))
         let mintedLeafDER = leaf.certificateDER
 
         // Capture the PKCS#12 by host. Nonisolated by construction —

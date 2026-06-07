@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "name": "security",
+  "description": "Security SkillPack: secret-leak detection + dangerous-command guard. Two-phase HandManifest paired with a HookRouter fragment that denies hard-coded credential literals and dynamic-eval vectors.",
+  "version": "0.1.0",
+  "author": "senkani",
+  "senkani_min_version": "0.3.0",
+  "skills": ["security"],
+  "policy": "policy/hook_router.json",
+  "context": "context/security.md",
+  "provenance": {
+    "source_url": null,
+    "sha256": null,
+    "signed_by": null
+  }
+}

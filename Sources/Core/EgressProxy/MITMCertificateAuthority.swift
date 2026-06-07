@@ -337,14 +337,16 @@ public actor MITMCertificateAuthority {
     /// Number of cached leaves (test introspection).
     public var cachedLeafCount: Int { leafCache.count }
 
-    /// The CA certificate as a `SecCertificate` (anchor for a custom
-    /// `SecTrust` evaluator — see tests). Never installed to any keychain.
-    public func caCertificate() throws -> SecCertificate {
-        let root = try ensureRoot()
-        guard let cert = SecCertificateCreateWithData(nil, root.certificateDER as CFData) else {
-            throw CAError.certificateDecode
-        }
-        return cert
+    /// The CA certificate's DER bytes — the anchor for a custom `SecTrust`
+    /// evaluator (see tests). Never installed to any keychain.
+    ///
+    /// Returns the `Sendable` `Data` rather than a `SecCertificate`:
+    /// `SecCertificate` is non-`Sendable` under the swift.org toolchain's SDK
+    /// (it is only `Sendable` under newer Xcode SDKs), so returning it across
+    /// this actor's isolation boundary fails to compile on CI. Callers
+    /// reconstruct the cert locally via `SecCertificateCreateWithData`.
+    public func caCertificateDER() throws -> Data {
+        try ensureRoot().certificateDER
     }
 
     // MARK: - SecIdentity load (ephemeral, never the System Keychain)

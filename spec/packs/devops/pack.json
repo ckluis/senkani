@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "name": "devops",
+  "description": "DevOps SkillPack: blast-radius gate + prod-namespace guard. Two-phase HandManifest paired with a HookRouter fragment that denies destructive container-orchestration commands and prod-tagged operations.",
+  "version": "0.1.0",
+  "author": "senkani",
+  "senkani_min_version": "0.3.0",
+  "skills": ["devops"],
+  "policy": "policy/hook_router.json",
+  "context": "context/devops.md",
+  "provenance": {
+    "source_url": null,
+    "sha256": null,
+    "signed_by": null
+  }
+}

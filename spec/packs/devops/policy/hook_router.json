@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "scope_key": "devops",
+  "rules": [
+    {
+      "kind": "deny",
+      "match": "kubectl delete",
+      "reason": "devops pack: `kubectl delete` is a high-blast-radius verb. Confirm the kubeconfig context, name the target resource explicitly (no wildcards), and document rollback before running. Override with `senkani pack uninstall devops` if you accept the risk."
+    },
+    {
+      "kind": "deny",
+      "match": "terraform destroy",
+      "reason": "devops pack: `terraform destroy` tears down every resource the workspace owns. Confirm the workspace selector, run `terraform plan` first, and have a documented rollback before destroying. Override with `senkani pack uninstall devops` if you accept the risk."
+    },
+    {
+      "kind": "deny",
+      "match": "--context=prod",
+      "reason": "devops pack: `--context=prod` targets the production cluster. Split context selection from the operation so the operator can confirm intent (`kubectl config use-context prod`, then the operation) instead of chaining both into one line. Override with `senkani pack uninstall devops` if you accept the risk."
+    }
+  ]
+}

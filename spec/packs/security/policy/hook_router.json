@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "scope_key": "security",
+  "rules": [
+    {
+      "kind": "deny",
+      "match": "API_KEY=",
+      "reason": "security pack: hard-coded API_KEY= assignment leaks credentials. Use the credential vault (`senkani vault add`) or env-var injection through the credential gateway."
+    },
+    {
+      "kind": "deny",
+      "match": "password = \"",
+      "reason": "security pack: hard-coded password literal. Move the secret to the credential vault or read it from an environment variable injected by the credential gateway."
+    },
+    {
+      "kind": "deny",
+      "match": "eval(",
+      "reason": "security pack: dynamic eval() against runtime input is a code-injection vector. Prefer explicit argv arrays, parameterized SQL, or prepared statements."
+    }
+  ]
+}

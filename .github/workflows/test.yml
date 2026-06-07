@@ -79,6 +79,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-
 
+      # The T.3a runtime-sandbox integration tests (WasmtimeRuntimeIntegration
+      # + the WASI echo test) live in the `other` chunk and shell out to the
+      # real `wasmtime` binary; without it they fail `wasmtime_missing`. The
+      # `.wasm` fixtures are committed (bundled via Bundle.module) — only the
+      # binary is missing on the runner. Install it for that slot only; the
+      # other 7 chunks don't exercise wasmtime.
+      - name: Install wasmtime (chunk[other] sandbox integration)
+        if: matrix.chunk == 'other'
+        run: brew install wasmtime
+
       # Run the single chunk this matrix slot owns. `--chunk $name`
       # invokes one `swiftpm-testing-helper` process scoped to that
       # chunk's regex; the per-chunk SIGTRAP-retry envelope

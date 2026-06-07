@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "name": "design-system",
+  "description": "Project-local design-system skill: Senkani's HTML Preview pattern set. V.10a ships the scaffold + A/B render toggle; V.10b populates patterns and wires axe-core a11y audits.",
+  "version": "0.1.0",
+  "tools": [],
+  "settings": {},
+  "metrics": [],
+  "system_prompt": {
+    "phases": [
+      {
+        "name": "preamble",
+        "body": "You apply Senkani's design-system patterns to HTML Preview output. Read spec/design_system_patterns.md for the rule set."
+      }
+    ]
+  },
+  "skill_md": "Design-system skill (V.10a scaffold). Patterns land in V.10b under spec/design-system/patterns/.",
+  "guardrails": {
+    "requires_confirm": [],
+    "egress_allow": [],
+    "secret_scope": "none"
+  },
+  "cadence": {
+    "triggers": []
+  },
+  "sandbox": "none",
+  "capabilities": []
+}

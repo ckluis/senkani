@@ -10,6 +10,10 @@ spec/*
 # (the rest of spec/ stays local-only). See process-gap-loop-verifies-on-
 # lenient-local-toolchain-vs-ci-2026-06-07.
 !spec/packs/
+# DesignSystem scaffold fixtures (V.10a) — same rationale: product source
+# read by DesignSystemSkillScaffoldTests, not local backlog state.
+!spec/design-system/
+!spec/design_system_patterns.md
 charter.md
 .claude/settings.json
 *.xcuserstate

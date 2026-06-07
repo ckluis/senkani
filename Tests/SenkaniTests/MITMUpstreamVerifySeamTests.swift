@@ -198,7 +198,8 @@ struct MITMUpstreamVerifySeamTests {
         let ca = MITMCertificateAuthority(paths: paths, keyBits: 2048)
         _ = try await ca.generateRoot()
         let leaf = try await ca.leaf(forHost: "localhost")
-        let caCert = try await ca.caCertificate()
+        let caCertDER = try await ca.caCertificateDER()
+        let caCert = try #require(SecCertificateCreateWithData(nil, caCertDER as CFData))
         let server = try #require(LoopbackTLSServer.start(leafPKCS12: leaf.pkcs12))
         defer { server.stop() }
 

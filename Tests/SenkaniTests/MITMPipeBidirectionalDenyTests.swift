@@ -422,7 +422,8 @@ struct MITMPipeBidirectionalDenyTests {
         _ = try await ca.generateRoot()
         let host = "api.example.com"
         let leaf = try await ca.leaf(forHost: host)
-        let caCert = try await ca.caCertificate()
+        let caCertDER = try await ca.caCertificateDER()
+        let caCert = try #require(SecCertificateCreateWithData(nil, caCertDER as CFData))
         let identity = try MITMCertificateAuthority.loadIdentity(from: leaf.pkcs12)
         return (identity, caCert, host, dir)
     }

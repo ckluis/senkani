@@ -111,7 +111,8 @@ import Security
 
         let host = "trust.example.com"
         let leaf = try await ca.leaf(forHost: host)
-        let caCert = try await ca.caCertificate()
+        let caCertDER = try await ca.caCertificateDER()
+        let caCert = try #require(SecCertificateCreateWithData(nil, caCertDER as CFData))
         let leafCert = try #require(SecCertificateCreateWithData(nil, leaf.certificateDER as CFData))
 
         // Build a SecTrust over [leaf, ca] with an SSL policy for `host`.
@@ -379,7 +380,8 @@ import Security
 
         // And a leaf minted by the reloaded CA still chains to it.
         let leaf = try await ca2.leaf(forHost: "reload.example.com")
-        let caCert = try await ca2.caCertificate()
+        let caCertDER = try await ca2.caCertificateDER()
+        let caCert = try #require(SecCertificateCreateWithData(nil, caCertDER as CFData))
         let leafCert = try #require(SecCertificateCreateWithData(nil, leaf.certificateDER as CFData))
         let policy = SecPolicyCreateSSL(true, "reload.example.com" as CFString)
         var trust: SecTrust?
@@ -498,7 +500,8 @@ import Security
 
         let host = "strict.example.com"
         let leaf = try await ca.leaf(forHost: host)
-        let caCert = try await ca.caCertificate()
+        let caCertDER = try await ca.caCertificateDER()
+        let caCert = try #require(SecCertificateCreateWithData(nil, caCertDER as CFData))
         let caDER = SecCertificateCopyData(caCert) as Data
 
         // SHA-1 key id is 20 bytes, so the extension DER prefixes are fixed.

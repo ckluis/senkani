@@ -166,7 +166,8 @@ struct TLSTerminationSpikeTests {
         _ = try await ca.generateRoot()
         let host = "spike.example.com"
         let leaf = try await ca.leaf(forHost: host)
-        let caCert = try await ca.caCertificate()
+        let caCertDER = try await ca.caCertificateDER()
+        let caCert = try #require(SecCertificateCreateWithData(nil, caCertDER as CFData))
 
         // The minted leaf's DER — the byte-identity oracle for the peer cert.
         let mintedLeafDER = leaf.certificateDER
@@ -258,7 +259,8 @@ struct TLSTerminationSpikeTests {
         defer { cleanup(dirA) }
         let caA = MITMCertificateAuthority(paths: pathsA, keyBits: 2048)
         _ = try await caA.generateRoot(commonName: "senkani TEST CA-A (trusted anchor)")
-        let caACert = try await caA.caCertificate()
+        let caACertDER = try await caA.caCertificateDER()
+        let caACert = try #require(SecCertificateCreateWithData(nil, caACertDER as CFData))
 
         // --- CA-B: an INDEPENDENT, UNTRUSTED CA. The server's leaf is minted
         //     under THIS root, which the client never anchors on. ---

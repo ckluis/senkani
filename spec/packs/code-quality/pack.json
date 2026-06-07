@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "name": "code-quality",
+  "description": "Code-quality SkillPack: lint discipline + review heuristics. Two-phase HandManifest paired with a HookRouter fragment that denies common lint-suppression markers.",
+  "version": "0.2.0",
+  "author": "senkani",
+  "senkani_min_version": "0.3.0",
+  "skills": ["code-quality"],
+  "policy": "policy/hook_router.json",
+  "context": "context/code-quality.md",
+  "provenance": {
+    "source_url": null,
+    "sha256": null,
+    "signed_by": null
+  }
+}

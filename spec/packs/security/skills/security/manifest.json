@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "name": "security",
+  "description": "Security SkillPack: secret-leak detection plus dangerous-command guard. Two phases — secret vocabulary and dynamic-exec vocabulary — combined in one HandManifest.",
+  "version": "0.1.0",
+  "tools": [],
+  "settings": {},
+  "metrics": [
+    "secrets_redacted_count",
+    "dynamic_exec_calls_blocked",
+    "credential_vault_lookups"
+  ],
+  "system_prompt": {
+    "phases": [
+      {
+        "name": "secret-leak-vocabulary",
+        "body": "Phase 1 — secret-leak detection. Reuse SecretDetector's named patterns (sk-ant-, sk-proj-, AKIA-prefixed AWS access keys, ya29.* GCP OAuth, sk_(live|test) Stripe, gh[pousr]_ GitHub, hf_ HuggingFace, npm_, AC-prefixed Twilio SIDs, generic api_key=/auth_token=/bearer literals) as the vocabulary. Never paste these literals into source files; never include them in chat history; never echo them to logs. When you encounter a value that looks like one of these patterns, redact it before writing it anywhere. The credential vault (`senkani vault add`) is the storage path; environment variables injected via the credential gateway are the runtime path."
+      },
+      {
+        "name": "dangerous-command-vocabulary",
+        "body": "Phase 2 — dangerous-command guard. Refuse to introduce or execute dynamic-evaluation vectors: `eval()` of untrusted input (Python/JS/Ruby), `exec()` against unsanitized arguments, dynamic SQL built by string concatenation, and shell pipes that interpolate user input directly. Prefer parameterized SQL, prepared statements, and explicit argv arrays. When asked to run a Bash command that contains shell-injection patterns (unquoted variable in a path argument, backticks, $(...) inside a single-quoted string), pause and rewrite the command into a safer form before executing."
+      }
+    ]
+  },
+  "skill_md": "# security\n\nSecret-leak detection + dangerous-command guard, combined.\n\nUse this skill when authoring code that handles credentials, when reviewing diffs, and when running shell commands that touch sensitive paths. The secret-leak phase reuses SecretDetector's vocabulary to keep the rule set consistent with the rest of Senkani's pipeline; the dangerous-command phase blocks the most common dynamic-eval and injection vectors.\n\nThe paired HookRouter policy fragment denies hard-coded API_KEY assignments, hard-coded password literals, and `eval(` invocations at the tool boundary. Override is `senkani pack uninstall security`. Read-only operations on existing secrets (e.g. `senkani vault list`) are unaffected.",
+  "guardrails": {
+    "requires_confirm": [],
+    "egress_allow": [],
+    "secret_scope": "vault"
+  },
+  "cadence": {
+    "triggers": ["pre_tool", "post_tool"]
+  },
+  "sandbox": "none",
+  "capabilities": []
+}

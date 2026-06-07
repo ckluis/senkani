@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "name": "devops",
+  "description": "DevOps SkillPack: blast-radius gate plus prod-namespace guard. Two phases — destructive-command containment and prod-tagged-resource protection — combined in one HandManifest.",
+  "version": "0.1.0",
+  "tools": [],
+  "settings": {},
+  "metrics": [
+    "destructive_calls_blocked",
+    "prod_targeted_calls_blocked",
+    "rollouts_per_day"
+  ],
+  "system_prompt": {
+    "phases": [
+      {
+        "name": "blast-radius-containment",
+        "body": "Phase 1 — destructive-command containment. Treat every destructive container-orchestration verb as a high-blast-radius operation: `kubectl delete`, `terraform destroy`, `aws *delete*` and `aws *terminate*` calls, `helm uninstall`, `gcloud * delete`. Before running any of these, name the target resource explicitly (no shell wildcards), confirm the kubeconfig context or terraform workspace points at the intended cluster, and have a documented rollback. Read-only verbs (`kubectl get`, `terraform plan`, `aws describe`, `helm status`) are always safe and should never be wrapped in a confirmation gate."
+      },
+      {
+        "name": "prod-namespace-guard",
+        "body": "Phase 2 — prod-tagged-resource protection. Any operation against a prod-tagged resource — `kubectl --context=prod` or `--namespace=prod`, `terraform workspace select prod`, AWS CLI calls into a prod profile — must announce the target context out loud before executing. Refuse to chain a prod-context selector into the same shell line as a destructive verb (e.g. `kubectl --context=prod delete pod ...`); split into two steps so the operator can confirm the context first. Match patterns are deliberately precise so read-only `kubectl get` / `terraform plan` / `aws describe` against the prod context still passes through."
+      }
+    ]
+  },
+  "skill_md": "# devops\n\nBlast-radius containment + prod-namespace guard, combined.\n\nUse this skill when running container-orchestration or cloud-provider CLIs against shared infrastructure. The blast-radius phase enforces explicit-target + confirmed-context for destructive verbs; the prod-namespace phase splits prod-context selection from destructive operations so the operator confirms intent before the apply.\n\nThe paired HookRouter policy fragment denies `kubectl delete`, `terraform destroy`, and any tool-call argument carrying `--context=prod` at the tool boundary. Override is `senkani pack uninstall devops`. Read-only verbs (`kubectl get`, `terraform plan`, `aws describe`) pass through unchanged.",
+  "guardrails": {
+    "requires_confirm": [],
+    "egress_allow": [],
+    "secret_scope": "none"
+  },
+  "cadence": {
+    "triggers": ["pre_tool"]
+  },
+  "sandbox": "none",
+  "capabilities": []
+}

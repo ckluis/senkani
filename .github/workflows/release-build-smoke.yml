@@ -29,7 +29,11 @@ jobs:
   release-build:
     name: swift build -c release
     runs-on: macos-15
-    timeout-minutes: 15
+    # `swift build -c release` of the full MLX dependency graph runs ~12-13
+    # min on a cold cache; 15 min left no headroom for checkout + toolchain
+    # install + resolve + binary-verify and intermittently timed out
+    # (build completed, job cancelled). 25 gives margin.
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4

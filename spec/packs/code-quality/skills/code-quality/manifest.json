@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "name": "code-quality",
+  "description": "Code-quality SkillPack: lint/formatter discipline plus review heuristics. Two phases — enforcement and review — combined in one HandManifest.",
+  "version": "0.2.0",
+  "tools": [],
+  "settings": {},
+  "metrics": [
+    "lint_warnings_per_kloc",
+    "tests_added_per_change",
+    "docstring_coverage_delta"
+  ],
+  "system_prompt": {
+    "phases": [
+      {
+        "name": "lint-enforcement",
+        "body": "Phase 1 — lint and formatter enforcement. Treat lint warnings as errors that block merge. Do not introduce per-line suppression comments (eslint-disable, swiftlint:disable, ruff noqa) without an inline rationale that names the rule and the trade-off. Run the project's formatter before every commit; reject diffs whose only difference is whitespace drift the formatter would have erased. When a lint rule fires repeatedly across a file, fix the underlying pattern, not each occurrence one by one."
+      },
+      {
+        "name": "review-heuristics",
+        "body": "Phase 2 — review heuristics. New code without tests is a regression risk; flag any added function or method that does not have at least one corresponding test in the same diff. New public API without a docstring is a documentation regression; flag exported symbols that lack a one-line description. Type hints (Python type annotations, TypeScript types, Swift type ascriptions) are required on public surfaces; flag missing annotations on exported symbols. Suggest the smallest fix that satisfies the rule rather than a refactor."
+      }
+    ]
+  },
+  "skill_md": "# code-quality\n\nLint discipline + review heuristics, combined.\n\nUse this skill when reviewing diffs, opening PRs, or pre-commit. The lint-enforcement phase rejects suppression-by-default; the review-heuristics phase asks for tests, docstrings, and type hints on new code.\n\nThe paired HookRouter policy fragment denies the most common suppression markers (`eslint-disable-next-line`, `swiftlint:disable`, `# noqa`) at the tool boundary so a Bash or Edit call carrying those tokens is blocked unless the operator unblocks the policy. Override is `senkani pack uninstall code-quality`.",
+  "guardrails": {
+    "requires_confirm": [],
+    "egress_allow": [],
+    "secret_scope": "none"
+  },
+  "cadence": {
+    "triggers": ["pre_tool", "post_tool"]
+  },
+  "sandbox": "none",
+  "capabilities": []
+}

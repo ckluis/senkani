@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "scope_key": "code-quality",
+  "rules": [
+    {
+      "kind": "deny",
+      "match": "eslint-disable-next-line",
+      "reason": "code-quality pack: per-line ESLint suppression bypasses enforcement. Fix the underlying issue or update the project ESLint config with a documented exception."
+    },
+    {
+      "kind": "deny",
+      "match": "swiftlint:disable",
+      "reason": "code-quality pack: source-level SwiftLint disable evades enforcement. Fix the violation or update .swiftlint.yml with a documented rule exception."
+    },
+    {
+      "kind": "deny",
+      "match": "# noqa",
+      "reason": "code-quality pack: blanket Python lint suppression (# noqa) evades enforcement. Use a targeted noqa with the specific rule code, or fix the underlying issue."
+    }
+  ]
+}

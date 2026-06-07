@@ -3,6 +3,7 @@ import MCPServer
 import Core
 import SwiftUI
 import HookRelay
+import BrowserPane
 
 // Raise RLIMIT_NOFILE before any subsystem opens fds. macOS apps launched
 // via LaunchServices inherit launchd's 256 soft cap, which a recursive

@@ -3,14 +3,16 @@ import Foundation
 
 /// U.2b-1b-4 — source-shape contract tests for `BrowserPaneRunner.swift`.
 ///
-/// `BrowserPaneRunner` lives in the `SenkaniApp` executable target
-/// (`SenkaniApp/Services/BrowserPaneRunner.swift`). The `SenkaniTests`
-/// target depends on `Core` (which declares the `BrowserRunner`
-/// protocol) but does NOT depend on `SenkaniApp`, so the runtime
-/// behavior of the off-screen WKWebView lifecycle cannot be exercised
-/// from a `swift test` run. The matching precedent is
-/// `PlaywrightRunnerAxisExtractionTests` (U.2b-1b-3) — which ships
-/// parse-only and source-grep tests for the same reason.
+/// `BrowserPaneRunner` was extracted into the `BrowserPane` library
+/// target (`Sources/BrowserPane/BrowserPaneRunner.swift`) by
+/// `process-gap-browserpane-exerciser-library-carve-2026-06-06`. The
+/// `SenkaniTests` target now links `BrowserPane`, but these tests keep
+/// their source-shape form (grep the file on disk) because they assert
+/// the byte-identity / public-surface contract child #6's parity corpus
+/// and the dispatcher wiring depend on — a contract that lives in the
+/// source text, not just the compiled symbol table. The matching
+/// precedent is `PlaywrightRunnerAxisExtractionTests` (U.2b-1b-3) —
+/// which ships parse-only and source-grep tests for the same reason.
 ///
 /// The four tests below verify the source-shape contract child #6
 /// (parity corpus) depends on:
@@ -30,11 +32,12 @@ import Foundation
 @Suite("BrowserPaneRunner source contract — U.2b-1b-4")
 struct BrowserPaneRunnerContractTests {
 
-    /// Walk up from CWD looking for `SenkaniApp/Services/`.
-    private static func servicesDir() -> URL? {
+    /// Walk up from CWD looking for `Sources/BrowserPane/` (the library
+    /// target the carve extracted the runner into).
+    private static func sourceDir() -> URL? {
         var cur = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         for _ in 0..<8 {
-            let candidate = cur.appendingPathComponent("SenkaniApp/Services", isDirectory: true)
+            let candidate = cur.appendingPathComponent("Sources/BrowserPane", isDirectory: true)
             if FileManager.default.fileExists(atPath: candidate.path) {
                 return candidate
             }
@@ -46,7 +49,7 @@ struct BrowserPaneRunnerContractTests {
     }
 
     private static func runnerSource() throws -> String? {
-        guard let dir = servicesDir() else { return nil }
+        guard let dir = sourceDir() else { return nil }
         let url = dir.appendingPathComponent("BrowserPaneRunner.swift")
         guard FileManager.default.fileExists(atPath: url.path) else {
             return nil
@@ -54,10 +57,10 @@ struct BrowserPaneRunnerContractTests {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
-    @Test("BrowserPaneRunner.swift ships at SenkaniApp/Services/")
+    @Test("BrowserPaneRunner.swift ships at Sources/BrowserPane/")
     func runnerFileShipped() throws {
         guard let source = try Self.runnerSource() else {
-            // SenkaniApp/Services/ resolution depends on CWD — skip
+            // Sources/BrowserPane/ resolution depends on CWD — skip
             // gracefully when run from outside a repo checkout.
             return
         }

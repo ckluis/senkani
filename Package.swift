@@ -11,6 +11,7 @@ let package = Package(
         .executable(name: "senkani-mcp", targets: ["SenkaniMCP"]),
         .executable(name: "senkani-hook", targets: ["SenkaniHook"]),
         .executable(name: "senkani-mig-helper", targets: ["SenkaniMigHelper"]),
+        .executable(name: "browserpane-exerciser", targets: ["BrowserPaneExerciser"]),
         .library(name: "MCPServer", targets: ["MCPServer"]),
         .library(name: "SenkaniFilter", targets: ["Filter"]),
         .library(name: "SenkaniCore", targets: ["Core"]),
@@ -378,6 +379,17 @@ let package = Package(
             ],
             path: "Sources/MonitorTUI"
         ),
+        // process-gap-browserpane-exerciser-library-carve-2026-06-06 —
+        // extracted from SenkaniApp/Services/ so the off-screen WKWebView
+        // runner is a linkable module (BrowserPaneExerciser CLI + the
+        // dispatch/parity test corpus link this instead of reaching into
+        // the SenkaniApp executableTarget). Imports only Foundation,
+        // WebKit, AppKit, Network, Core — no SwiftUI / app-shell deps.
+        .target(
+            name: "BrowserPane",
+            dependencies: ["Core"],
+            path: "Sources/BrowserPane"
+        ),
         .executableTarget(
             name: "CLI",
             dependencies: [
@@ -453,6 +465,20 @@ let package = Package(
             dependencies: ["Core"],
             path: "tools/migration-runner"
         ),
+        // process-gap-browserpane-exerciser-library-carve-2026-06-06 —
+        // direct-API exerciser CLI. `--mode tab-walk` drives
+        // BrowserPaneRunner.tabWalkFocusOrder; `deadlock` / `window-count`
+        // are deferred-to-cowork-walk sentinels (the GUI-runtime modes
+        // stay with the parent's Cowork acceptance).
+        .executableTarget(
+            name: "BrowserPaneExerciser",
+            dependencies: [
+                "BrowserPane",
+                "Core",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
+            path: "tools/browserpane-exerciser"
+        ),
         .executableTarget(
             name: "SenkaniApp",
             dependencies: [
@@ -462,6 +488,7 @@ let package = Package(
                 "Bench",
                 "MCPServer",
                 "HookRelay",
+                "BrowserPane",
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
                 .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
                 .product(name: "MCP", package: "swift-sdk"),
@@ -486,6 +513,7 @@ let package = Package(
                 "HookRelay",
                 "MLXProseCompiler",
                 "MonitorTUI",
+                "BrowserPane",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Testing", package: "swift-testing"),
             ],

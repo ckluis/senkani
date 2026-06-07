@@ -6,11 +6,13 @@ import Foundation
 ///
 /// The runtime acceptance bullet (WKWebView traffic appears in
 /// EgressProxy listener logs; out-of-allowlist target is blocked) is
-/// filed as a manual-validation follow-up at close — the same
-/// testability constraint that drove U.2b-1b-4's structural tests:
-/// `SenkaniApp` is an executableTarget that `SenkaniTests` does not
-/// depend on, so we can't allocate a real WKWebView with a
-/// `proxyConfigurations`-wired data store from inside `swift test`.
+/// filed as a manual-validation follow-up at close — the runner is now
+/// linkable (the `BrowserPane` library target, extracted by
+/// `process-gap-browserpane-exerciser-library-carve-2026-06-06`), but
+/// these tests keep their source-shape form because the egress-wiring
+/// contract child #6's dispatcher depends on lives in the source text
+/// (the macOS-14 `proxyConfigurations` API call, the override-file
+/// filename pattern) rather than only in the compiled symbol table.
 ///
 /// What this test DOES verify (the source-shape contract child #6's
 /// dispatcher wiring + the runtime-validation follow-up exercise):
@@ -26,10 +28,10 @@ import Foundation
 @Suite("BrowserPaneRunner egress-proxy wiring — U.2b-1b-5")
 struct BrowserPaneRunnerEgressWiringTests {
 
-    private static func servicesDir() -> URL? {
+    private static func sourceDir() -> URL? {
         var cur = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         for _ in 0..<8 {
-            let candidate = cur.appendingPathComponent("SenkaniApp/Services", isDirectory: true)
+            let candidate = cur.appendingPathComponent("Sources/BrowserPane", isDirectory: true)
             if FileManager.default.fileExists(atPath: candidate.path) {
                 return candidate
             }
@@ -41,7 +43,7 @@ struct BrowserPaneRunnerEgressWiringTests {
     }
 
     private static func runnerSource() throws -> String? {
-        guard let dir = servicesDir() else { return nil }
+        guard let dir = sourceDir() else { return nil }
         let url = dir.appendingPathComponent("BrowserPaneRunner.swift")
         guard FileManager.default.fileExists(atPath: url.path) else {
             return nil
@@ -52,7 +54,7 @@ struct BrowserPaneRunnerEgressWiringTests {
     @Test("BrowserPaneRunner wires EgressProxy URL through to WKWebsiteDataStore.proxyConfigurations + writes a per-target same-origin override-policy file mirroring BrowserValidationDispatcher")
     func runnerWiresEgressProxy() throws {
         guard let source = try Self.runnerSource() else {
-            // SenkaniApp/Services/ resolution depends on CWD —
+            // Sources/BrowserPane/ resolution depends on CWD —
             // skip gracefully when run from outside a checkout.
             return
         }

@@ -172,7 +172,23 @@ struct OpenAIChatRealEngineTests {
         FileHandle.standardError.write(Data(msg.utf8))
     }
 
-    @Test
+    /// Skip-honesty predicate for the MCP-seam real-model cases: BOTH a
+    /// Gemma tier on disk AND a `ChatEngine` registered in this process.
+    /// The latter is only true in an MCP-active process — plain
+    /// `swift test` (even on Apple Silicon WITH weights) leaves it nil,
+    /// which is a legitimate "production seam not wired in-process" skip,
+    /// NOT a placebo. Gating the guard on both keeps it a clean no-op in
+    /// that case while still flaring if a wired-up run greens without
+    /// asserting.
+    private static var chatSeamPresent: Bool {
+        anyGemmaReady && ModelManager.shared.resolvedChatHandler() != nil
+    }
+
+    private static var streamingSeamPresent: Bool {
+        anyGemmaReady && ModelManager.shared.resolvedStreamingChatHandler() != nil
+    }
+
+    @Test(.realModelSkipHonesty(weightsPresent: { OpenAIChatRealEngineTests.chatSeamPresent }))
     func testNonStreamingCompletionAgainstRealModel() async throws {
         guard Self.anyGemmaReady else { return }
 
@@ -213,13 +229,20 @@ struct OpenAIChatRealEngineTests {
         // Range-asserted assertions: sampler non-determinism precludes
         // byte-equality. Real-model behavioral patterns: non-empty
         // content + mentions Paris (the deterministic prompt answer).
-        guard !content.isEmpty else {
+        // Non-empty content is the load-bearing assertion — routed
+        // through RealModelGuard so a wired-seam run fires a genuine
+        // assertion (skip-honesty). The finding is still logged for the
+        // close-mode evidence-scan.
+        if content.isEmpty {
             Self.logRealModelFinding(
                 prompt: "capital of France",
                 detail: "real-model returned empty content; close-mode evidence-scan should file this as a finding"
             )
-            return
         }
+        guard RealModelGuard.expect(
+            !content.isEmpty,
+            "real Gemma completion returned empty content through the production seam"
+        ) else { return }
         // Pattern: the answer should mention "Paris" (case-insensitive).
         // Logged-not-failed when missing — preserves CI behavior under
         // real-model output drift while keeping the round transcript
@@ -245,7 +268,7 @@ struct OpenAIChatRealEngineTests {
     /// registered (MCP target not started in this process — the default
     /// for `swift test`), the test returns silently. Real arrival timing
     /// is only verifiable when the production seam is wired end-to-end.
-    @Test
+    @Test(.realModelSkipHonesty(weightsPresent: { OpenAIChatRealEngineTests.streamingSeamPresent }))
     func testStreamingDeltasArriveOverTime() async throws {
         guard Self.anyGemmaReady else { return }
         guard let registered = ModelManager.shared.resolvedStreamingChatHandler() else {
@@ -303,15 +326,19 @@ struct OpenAIChatRealEngineTests {
         // Distribution check: at least 3 distinct delta timestamps. The
         // stream always emits a role chunk + terminal chunk + ≥1 content
         // chunk; a real-engine non-bunched stream produces many content
-        // chunks spread over time. Logged-not-failed when violated to
-        // preserve CI behavior under real-model output drift.
-        guard timestamps.count >= 3 else {
+        // chunks spread over time. Routed through RealModelGuard so a
+        // wired-seam run fires a genuine assertion (skip-honesty); the
+        // finding is still logged for the close-mode evidence-scan.
+        if timestamps.count < 3 {
             Self.logRealModelFinding(
                 prompt: "streaming primary-colors probe",
                 detail: "fewer than 3 delta timestamps captured (\(timestamps.count)); content=\(accumulatedContent.debugDescription)"
             )
-            return
         }
+        guard RealModelGuard.expect(
+            timestamps.count >= 3,
+            "real Gemma stream produced fewer than 3 delta timestamps (\(timestamps.count))"
+        ) else { return }
         // Inter-delta max gap < 5s (heartbeat sanity — model produces
         // tokens steadily, not in one batch at the end).
         var maxGap: TimeInterval = 0
@@ -352,7 +379,7 @@ struct OpenAIChatRealEngineTests {
     /// not silently falling back to the heuristic. A pathological agree-
     /// case is logged-not-failed to preserve CI behavior under tokenizer
     /// drift.
-    @Test
+    @Test(.realModelSkipHonesty(weightsPresent: { OpenAIChatRealEngineTests.chatSeamPresent }))
     func testUsageMatchesRealTokenizer() async throws {
         guard Self.anyGemmaReady else { return }
         guard let registered = ModelManager.shared.resolvedChatHandler() else {
@@ -387,15 +414,21 @@ struct OpenAIChatRealEngineTests {
         // Both `usage` counts MUST be non-zero — a zero would mean the
         // adapter silently returned no Completion at all (the
         // OpenAIChatServeBridge syncEngine error path returns 0/0; that
-        // would mask a tokenizer-plumbing regression).
-        guard result.response.usage.promptTokens > 0,
-              result.response.usage.completionTokens > 0 else {
+        // would mask a tokenizer-plumbing regression). Routed through
+        // RealModelGuard so a wired-seam run fires a genuine assertion
+        // (skip-honesty); the finding is still logged.
+        let usageNonZero = result.response.usage.promptTokens > 0
+            && result.response.usage.completionTokens > 0
+        if !usageNonZero {
             Self.logRealModelFinding(
                 prompt: "tokenizer-accuracy probe",
                 detail: "usage carries zero token count(s): prompt=\(result.response.usage.promptTokens) completion=\(result.response.usage.completionTokens) — adapter may have errored into the empty-completion fallback"
             )
-            return
         }
+        guard RealModelGuard.expect(
+            usageNonZero,
+            "real-model usage carries zero token count(s) — adapter may have errored into the empty-completion fallback"
+        ) else { return }
 
         // Structural disagreement: at least one of (prompt, completion)
         // diverges from the heuristic count over the same text. The

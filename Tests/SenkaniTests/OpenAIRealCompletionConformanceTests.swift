@@ -82,7 +82,10 @@ struct OpenAIRealCompletionConformanceTests {
     /// Register the real `MLXChatEngineAdapter` → bridge to a sync engine →
     /// complete a simple prompt → assert content non-empty + a valid
     /// `finish_reason`. Range/shape only (NOT byte-equality).
-    @Test("chat non-stream: real Gemma completion is non-empty with a valid finish_reason")
+    @Test(
+        "chat non-stream: real Gemma completion is non-empty with a valid finish_reason",
+        .realModelSkipHonesty(weightsPresent: { OpenAIRealCompletionConformanceTests.anyGemmaReady })
+    )
     func chatNonStreamRealCompletion() async throws {
         // Gate FIRST — no registration in a model-absent worktree.
         guard Self.anyGemmaReady else { return }
@@ -114,7 +117,10 @@ struct OpenAIRealCompletionConformanceTests {
             id: OpenAIChatHandler.generateID()
         )
 
-        let choice = try #require(result.response.choices.first)
+        // RealModelGuard.require/.expect both perform the genuine
+        // assertion AND stamp the skip-honesty sentinel, so this
+        // model-present run cannot green without a real assertion firing.
+        let choice = try RealModelGuard.require(result.response.choices.first)
         let content = choice.message.content ?? ""
         // Content sanity (range/shape): the real model produces SOME text.
         guard !content.isEmpty else {
@@ -126,9 +132,9 @@ struct OpenAIRealCompletionConformanceTests {
         }
         // A non-tool chat completion finishes with "stop"; tool-calls would
         // be "tool_calls". Both are valid OpenAI finish_reason values.
-        #expect(choice.finishReason == "stop" || choice.finishReason == "tool_calls")
+        RealModelGuard.expect(choice.finishReason == "stop" || choice.finishReason == "tool_calls")
         // Usage counts are positive for a real completion.
-        #expect(result.response.usage.completionTokens > 0)
+        RealModelGuard.expect(result.response.usage.completionTokens > 0)
     }
 
     // MARK: - 2. chat stream / SSE
@@ -139,19 +145,22 @@ struct OpenAIRealCompletionConformanceTests {
     /// text. Mirrors `OpenAIChatRealEngineTests.testStreamingDeltasArriveOverTime`'s
     /// seam. (End-to-end `[DONE]` termination is covered by `OpenAIChatStreamTests`
     /// + the `chat-stream-happy.json` conformance fixture, not re-asserted here.)
-    @Test("chat stream: real Gemma SSE deltas accumulate to non-empty content through the production seam")
+    @Test(
+        "chat stream: real Gemma SSE deltas accumulate to non-empty content through the production seam",
+        .realModelSkipHonesty(weightsPresent: { OpenAIRealCompletionConformanceTests.anyGemmaReady })
+    )
     func chatStreamRealCompletion() async throws {
         guard Self.anyGemmaReady else { return }
 
         let mgr = Self.makeLocalManager()
         mgr.registerStreamingChatHandler(MLXStreamingChatEngineAdapter())
-        guard let registered = mgr.resolvedStreamingChatHandler() else {
-            Self.logRealModelFinding(
-                prompt: "streaming primary-colors probe",
-                detail: "no StreamingChatEngine resolved after registering MLXStreamingChatEngineAdapter on local manager"
-            )
-            return
-        }
+        // A locally-registered adapter MUST resolve when weights are
+        // present — a nil here is a real adapter-wiring defect, asserted
+        // (not silently skipped) so a model-present run goes red.
+        let registered = try RealModelGuard.require(
+            mgr.resolvedStreamingChatHandler(),
+            "no StreamingChatEngine resolved after registering MLXStreamingChatEngineAdapter on local manager"
+        )
 
         let messages = [
             ChatCompletionRequest.Message(role: "system", content: "Answer concisely in one short sentence."),
@@ -186,19 +195,29 @@ struct OpenAIRealCompletionConformanceTests {
                 prompt: "streaming primary-colors probe",
                 detail: "stream threw mid-iteration: \(error)"
             )
+            // A present model whose stream throws mid-iteration is a real
+            // failure, not a clean skip — assert so the guard sees a fired
+            // assertion and the run goes red.
+            RealModelGuard.expect(false, "real Gemma stream threw mid-iteration: \(error)")
             return
         }
 
         // Content sanity: the accumulated SSE deltas reconstruct SOME text.
-        // Best-effort (mirrors the non-stream case): a present model that
-        // streams no content is recorded as a finding, not a hard fail.
-        guard !accumulatedContent.isEmpty else {
+        // Routed through RealModelGuard.expect so a model-present run
+        // exercises a genuine assertion (skip-honesty). The diagnostic
+        // finding is still logged for the close-mode evidence-scan so a
+        // present model that streams nothing surfaces a triage pointer in
+        // addition to the hard assertion.
+        if accumulatedContent.isEmpty {
             Self.logRealModelFinding(
                 prompt: "streaming primary-colors probe",
                 detail: "no content accumulated from SSE deltas (only role + terminal chunks)"
             )
-            return
         }
+        RealModelGuard.expect(
+            !accumulatedContent.isEmpty,
+            "real Gemma stream reconstructed empty content through the production SSE seam"
+        )
 
         // NOTE (V.13e-4b re-audit P2, fixed inline): end-to-end `[DONE]` stream
         // termination is already pinned by `OpenAIChatStreamTests` +
@@ -217,43 +236,42 @@ struct OpenAIRealCompletionConformanceTests {
     /// assert the vector length matches the real MiniLM-L6 dimension (384)
     /// AND the vector is not a constant placeholder pattern (values are not
     /// all identical). Range/shape only.
-    @Test("embeddings: real MiniLM vector has the model dimension and is not a constant placeholder")
+    @Test(
+        "embeddings: real MiniLM vector has the model dimension and is not a constant placeholder",
+        .realModelSkipHonesty(weightsPresent: { OpenAIRealCompletionConformanceTests.minilmReady })
+    )
     func embeddingsRealCompletion() async throws {
         guard Self.minilmReady else { return }
 
         let mgr = Self.makeLocalManager()
         mgr.registerEmbeddingHandler(MLXEmbeddingEngineAdapter())
-        guard let registered = mgr.resolvedEmbeddingHandler() else {
-            Self.logRealModelFinding(
-                prompt: "embeddings dimension probe",
-                detail: "no EmbeddingEngine resolved after registering MLXEmbeddingEngineAdapter on local manager"
-            )
-            return
-        }
+        let registered = try RealModelGuard.require(
+            mgr.resolvedEmbeddingHandler(),
+            "no EmbeddingEngine resolved after registering MLXEmbeddingEngineAdapter on local manager"
+        )
 
         let embedding = try await registered.embed(
             model: ModelManager.embeddingModelID,
             inputs: ["The quick brown fox jumps over the lazy dog."]
         )
 
-        let vector = try #require(embedding.vectors.first)
+        let vector = try RealModelGuard.require(embedding.vectors.first)
         // MiniLM-L6-v2's sentence-embedding dimension is 384 — the same
         // surface contract the stub conformance tests pin.
-        #expect(vector.count == 384)
+        RealModelGuard.expect(vector.count == 384)
         // Not the constant placeholder pattern: a real embedding has variance
         // across its components (the placeholder failure mode is an
         // all-identical or all-zero vector).
         let distinctValues = Set(vector)
-        guard distinctValues.count > 1 else {
+        if distinctValues.count <= 1 {
             Self.logRealModelFinding(
                 prompt: "embeddings dimension probe",
                 detail: "real-model embedding had all-identical components (\(vector.first ?? 0)) — looks like a placeholder/degenerate vector"
             )
-            return
         }
-        #expect(distinctValues.count > 1)
+        RealModelGuard.expect(distinctValues.count > 1)
         // Real tokenizer count is positive for a non-empty input.
-        #expect(embedding.promptTokens > 0)
+        RealModelGuard.expect(embedding.promptTokens > 0)
     }
 
     // MARK: - 4. tool-use
@@ -264,19 +282,19 @@ struct OpenAIRealCompletionConformanceTests {
     /// `finish_reason == "tool_calls"`. If the real model declines to call
     /// the tool (answers in text instead), `logRealModelFinding` and do NOT
     /// hard-crash — best-effort, mirroring the other real-model tests.
-    @Test("tool-use: a tool_calls response (if the model elicits one) is well-formed JSON with finish_reason=tool_calls")
+    @Test(
+        "tool-use: a tool_calls response (if the model elicits one) is well-formed JSON with finish_reason=tool_calls",
+        .realModelSkipHonesty(weightsPresent: { OpenAIRealCompletionConformanceTests.anyGemmaReady })
+    )
     func toolUseRealCompletion() async throws {
         guard Self.anyGemmaReady else { return }
 
         let mgr = Self.makeLocalManager()
         mgr.registerChatHandler(MLXChatEngineAdapter())
-        guard let registered = mgr.resolvedChatHandler() else {
-            Self.logRealModelFinding(
-                prompt: "tool-use weather probe",
-                detail: "no ChatEngine resolved after registering MLXChatEngineAdapter on local manager"
-            )
-            return
-        }
+        let registered = try RealModelGuard.require(
+            mgr.resolvedChatHandler(),
+            "no ChatEngine resolved after registering MLXChatEngineAdapter on local manager"
+        )
 
         // A `get_weather(location)` function tool — mirrors the stub
         // tool-use suite's reliably-eliciting schema.
@@ -313,7 +331,10 @@ struct OpenAIRealCompletionConformanceTests {
             id: OpenAIChatHandler.generateID()
         )
 
-        let choice = try #require(result.response.choices.first)
+        // The require fires the skip-honesty sentinel up-front, so even
+        // the best-effort "model declined the tool" path below counts as a
+        // genuine model-present assertion run.
+        let choice = try RealModelGuard.require(result.response.choices.first)
         guard let toolCalls = choice.message.toolCalls, !toolCalls.isEmpty else {
             // The real model declined to call the tool (answered in text or
             // returned empty). Best-effort: record the finding, do NOT fail.
@@ -325,15 +346,15 @@ struct OpenAIRealCompletionConformanceTests {
         }
 
         // The model called a tool — assert the shape is well-formed.
-        #expect(choice.finishReason == "tool_calls")
+        RealModelGuard.expect(choice.finishReason == "tool_calls")
         for call in toolCalls {
-            #expect(!call.id.isEmpty)
-            #expect(!call.function.name.isEmpty)
+            RealModelGuard.expect(!call.id.isEmpty)
+            RealModelGuard.expect(!call.function.name.isEmpty)
             // `arguments` is a JSON-encoded STRING that itself parses to an
             // object (the OpenAI wire contract).
             let argsData = Data(call.function.arguments.utf8)
             let parsed = try? JSONSerialization.jsonObject(with: argsData)
-            #expect(parsed is [String: Any])
+            RealModelGuard.expect(parsed is [String: Any])
         }
     }
 }

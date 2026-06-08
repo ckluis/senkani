@@ -30,6 +30,15 @@ struct OpenAIChatRealEngineSloTests {
         ModelManager.visionModelIds.contains { ModelManager.shared.isReady($0) }
     }
 
+    /// Skip-honesty predicate: a Gemma tier on disk AND a `ChatEngine`
+    /// registered in this process. The latter is only true in an
+    /// MCP-active process — plain `swift test` leaves it nil (a
+    /// legitimate "production seam not wired" skip, not a placebo), so
+    /// the guard stays a clean no-op there.
+    private static var sloSeamPresent: Bool {
+        anyGemmaReady && ModelManager.shared.resolvedChatHandler() != nil
+    }
+
     private static func logSloFinding(detail: String) {
         let msg = "[v13-slo-finding] \(detail)\n"
         FileHandle.standardError.write(Data(msg.utf8))
@@ -39,7 +48,7 @@ struct OpenAIChatRealEngineSloTests {
     /// M2/M3 with `gemma4-e2b`. Time budget logged in test output for
     /// trend tracking (the close-mode evidence scan + future SLO ledger
     /// can grep `[v13-slo-finding]` for the recorded wall-clock).
-    @Test
+    @Test(.realModelSkipHonesty(weightsPresent: { OpenAIChatRealEngineSloTests.sloSeamPresent }))
     func testMinimalCompletionUnderTimeBudget() async throws {
         guard Self.anyGemmaReady else { return }
         guard let registered = ModelManager.shared.resolvedChatHandler() else {
@@ -81,7 +90,10 @@ struct OpenAIChatRealEngineSloTests {
         // here is the durable SLO contract: an outright pathological
         // regression (e.g. 5x the budget) is still a fail.
         let pathologicalCeiling: TimeInterval = 150
-        #expect(
+        // Routed through RealModelGuard so a wired-seam run fires a
+        // genuine assertion (skip-honesty); this is also the durable SLO
+        // contract assertion.
+        RealModelGuard.expect(
             elapsed < pathologicalCeiling,
             "minimal completion took \(elapsed)s, pathological ceiling \(pathologicalCeiling)s exceeded — adapter regression suspected"
         )

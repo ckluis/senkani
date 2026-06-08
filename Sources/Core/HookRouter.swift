@@ -628,7 +628,64 @@ public enum HookRouter {
             filePath: filePath,
             sessionId: sessionId
         )
-        annotationFeed.record(annotation)
+        let outcome = annotationFeed.record(annotation)
+
+        // V.3a — on an ADMITTED annotation, ALSO write one canonical
+        // `agent_trace_event` row so the V.3 hover popover reads a single
+        // source-of-truth. Additive (Allspaw): the deny-response JSON and
+        // `HookAnnotationOutcome` are unchanged above; a SUPPRESSED /
+        // rate-capped annotation writes NO row. The idempotency_key is
+        // DERIVED (Schneier: fingerprint annotation.id + toolName +
+        // createdAt, never caller-supplied), so a retry of the same
+        // admitted annotation dedups via the store's ON CONFLICT DO
+        // NOTHING.
+        if outcome == .admitted {
+            recordAdmittedAnnotationTrace(annotation)
+        }
+    }
+
+    /// V.3a — write the canonical `agent_trace_event` row for an admitted
+    /// `HookAnnotation`. Pure derivation of the row from the annotation;
+    /// extracted so a test can drive the exact mapping (pane + tool +
+    /// derived key) without re-running the whole hook path.
+    ///
+    /// The `trace` seam defaults to `SessionDatabase.shared` so production
+    /// "just works"; the HookAnnotationFeed tests inject an in-memory DB.
+    nonisolated(unsafe) static var annotationTraceDatabase: SessionDatabase = .shared
+
+    static func recordAdmittedAnnotationTrace(_ annotation: HookAnnotation) {
+        // DERIVED idempotency key — never caller-supplied. Fingerprint the
+        // canonical inputs (annotation id + tool + created-at) so a retry
+        // of the SAME admitted annotation lands one row, not two.
+        let material = "v3a-hook:\(annotation.id.uuidString)|\(annotation.toolName)|\(annotation.createdAt.timeIntervalSince1970)"
+        let key = "v3a-hook:" + SHA256Hasher.hex(of: Data(material.utf8))
+        let row = AgentTraceEvent(
+            idempotencyKey: key,
+            pane: annotation.sessionId,
+            project: nil,
+            model: nil,
+            tier: nil,
+            ladderPosition: nil,
+            feature: nil,
+            // Every annotation routed here is a denial (must-fix) tied to
+            // a blocked tool call — map to `.denied`.
+            result: .denied,
+            startedAt: annotation.createdAt,
+            completedAt: annotation.createdAt,
+            latencyMs: 0,
+            tokensIn: 0,
+            tokensOut: 0,
+            costCents: 0,
+            redactionCount: 0,
+            validationStatus: nil,
+            confirmationRequired: false,
+            egressDecisions: 0,
+            planId: nil,
+            costLedgerVersion: nil,
+            sessionId: annotation.sessionId,
+            toolCallId: annotation.toolName
+        )
+        annotationTraceDatabase.recordAgentTraceEvent(row)
     }
 
     // MARK: - Search Upgrade (Phase I)

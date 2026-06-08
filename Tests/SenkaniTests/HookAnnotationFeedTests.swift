@@ -167,6 +167,119 @@ struct HookAnnotationFeedTests {
         }
     }
 
+    // MARK: - V.3a — admitted annotation → canonical agent_trace_event row
+
+    private static func makeTempDB() -> (SessionDatabase, String) {
+        let path = "/tmp/senkani-hookann-trace-\(UUID().uuidString)/senkani.db"
+        return (SessionDatabase(path: path), path)
+    }
+
+    private static func cleanupDB(path: String) {
+        let dir = (path as NSString).deletingLastPathComponent
+        try? FileManager.default.removeItem(atPath: dir)
+    }
+
+    /// Swap `HookRouter.annotationTraceDatabase` to a temp DB for the body,
+    /// restoring the prior value on exit. Held under the same withTestFeed
+    /// HookSeamLock so peer suites running `HookRouter.handle` can't observe
+    /// the test's private trace DB.
+    @Test("V.3a — admitted ConfirmationGate deny writes exactly one agent_trace_event row with matching pane + tool")
+    func admittedAnnotationWritesCanonicalTraceRow() {
+        let (db, dbPath) = Self.makeTempDB()
+        defer { Self.cleanupDB(path: dbPath) }
+
+        HookSeamLock.shared.lock()
+        defer { HookSeamLock.shared.unlock() }
+        let priorResolver = ConfirmationGate.resolver
+        ConfirmationGate.resolver = Self.denyResolver(reason: "v3a-fixture")
+        defer { ConfirmationGate.resolver = priorResolver }
+        let priorTraceDB = HookRouter.annotationTraceDatabase
+        HookRouter.annotationTraceDatabase = db
+        defer { HookRouter.annotationTraceDatabase = priorTraceDB }
+
+        Self.withTestFeed { _ in
+            #expect(db.agentTraceEventCount() == 0, "baseline: no trace rows")
+            let event = Self.makeEvent(
+                toolName: "Edit",
+                toolInput: ["file_path": "/tmp/v3a.swift"],
+                sessionId: "sess-v3a"
+            )
+            _ = HookRouter.handle(eventJSON: event)
+
+            #expect(db.agentTraceEventCount() == 1,
+                    "one admitted annotation → exactly one canonical row")
+
+            // The derived key isn't known to the test, but the single row's
+            // dimensions must match: pane = sessionId, tool_call_id = tool.
+            let rows = db.agentTraceRowsInWindow(project: nil, since: nil)
+            #expect(rows.count == 1)
+            guard let row = rows.first else { return }
+            #expect(row.pane == "sess-v3a", "pane must carry the annotation's sessionId")
+            #expect(row.sessionId == "sess-v3a")
+            #expect(row.toolCallId == "Edit", "tool name must propagate into the row")
+            #expect(row.result == .denied, "must-fix denial maps to .denied")
+        }
+    }
+
+    @Test("V.3a — a suppressed (rate-capped) annotation writes NO extra agent_trace_event row")
+    func suppressedAnnotationWritesNoTraceRow() {
+        let (db, dbPath) = Self.makeTempDB()
+        defer { Self.cleanupDB(path: dbPath) }
+
+        HookSeamLock.shared.lock()
+        defer { HookSeamLock.shared.unlock() }
+        let priorResolver = ConfirmationGate.resolver
+        ConfirmationGate.resolver = Self.denyResolver(reason: "v3a-suppress")
+        defer { ConfirmationGate.resolver = priorResolver }
+        let priorTraceDB = HookRouter.annotationTraceDatabase
+        HookRouter.annotationTraceDatabase = db
+        defer { HookRouter.annotationTraceDatabase = priorTraceDB }
+
+        // threshold 1 → the FIRST must-fix is admitted (1 row), the SECOND
+        // is suppressed (no extra row). Same window (60s) so the second
+        // never rolls.
+        Self.withTestFeed(windowSeconds: 60, mustFixThreshold: 1) { _ in
+            let event = Self.makeEvent(
+                toolName: "Edit",
+                toolInput: ["file_path": "/tmp/v3a-suppress.swift"],
+                sessionId: "sess-suppress"
+            )
+            _ = HookRouter.handle(eventJSON: event)   // admitted → 1 row
+            #expect(db.agentTraceEventCount() == 1, "first admitted → one row")
+
+            _ = HookRouter.handle(eventJSON: event)   // suppressed → no row
+            #expect(db.agentTraceEventCount() == 1,
+                    "suppressed annotation must NOT add a canonical row")
+        }
+    }
+
+    @Test("V.3a — re-emitting the SAME admitted annotation dedups via derived idempotency_key")
+    func admittedAnnotationDedupsOnRetry() {
+        let (db, dbPath) = Self.makeTempDB()
+        defer { Self.cleanupDB(path: dbPath) }
+
+        let priorTraceDB = HookRouter.annotationTraceDatabase
+        HookRouter.annotationTraceDatabase = db
+        defer { HookRouter.annotationTraceDatabase = priorTraceDB }
+
+        // Drive the extracted derivation directly with a STABLE annotation
+        // (fixed id + createdAt) so the derived key is identical across
+        // calls. ON CONFLICT DO NOTHING then absorbs the retry.
+        let ann = HookAnnotation(
+            id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+            severity: .mustFix,
+            body: "dedup body",
+            toolName: "Write",
+            filePath: "/tmp/dedup.swift",
+            sessionId: "sess-dedup",
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        HookRouter.recordAdmittedAnnotationTrace(ann)
+        HookRouter.recordAdmittedAnnotationTrace(ann)
+        #expect(db.agentTraceEventCount() == 1,
+                "two writes of the same annotation land exactly one row (derived-key dedup)")
+    }
+
     // MARK: - Acceptance #2 (extended) — rate-cap log row on rollover
 
     @Test("Window rollover writes one rate-cap log row carrying the suppressed count")

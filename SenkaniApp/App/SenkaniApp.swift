@@ -30,6 +30,17 @@ struct SenkaniGUI: App {
         // mtime check inside HookRouter.handle().
         HookRouter.refreshInstalledPacks()
 
+        // t4c-1 — install the production credential-vault bridge so the
+        // T.4b CredentialGateway (which runs inside the just-wired
+        // SocketServerManager hookHandler → HookRouter.handle) resolves
+        // real vault reads from `CredentialVault.shared` via a balanced
+        // DispatchSemaphore actor hop, instead of the default deny-
+        // everything fallback. Fail-CLOSED preserved: `.shared` is an
+        // EMPTY InMemoryKeychainStore in production today (the operator-
+        // gated real-Keychain swap is the parent walk's remainder,
+        // deliberately NOT flipped here), so a missing key still DENIES.
+        HookRouter.installProductionCredentialVaultBridge()
+
         // T.6 — production notification wiring. Install the router
         // before requesting UN authorization so an immediately-
         // following `NotificationDelivery.deliver(...)` from any

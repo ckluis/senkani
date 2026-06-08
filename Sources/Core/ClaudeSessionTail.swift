@@ -82,11 +82,24 @@ public enum ClaudeSessionTail {
         }
 
         var emitted = 0
+        // Byte offset of the current line WITHIN the file (not the batch),
+        // so the V.3a derived idempotency key is stable across re-tails of
+        // overlapping windows. Starts at `seekTo` (where this read began)
+        // and advances by each line's UTF-8 byte length + 1 (the "\n"
+        // separator stripped by `components(separatedBy:)`).
+        var lineByteOffset = Int(seekTo)
         for line in text.components(separatedBy: "\n") {
+            let lineStartOffset = lineByteOffset
+            // Advance the cursor past this line + its separator BEFORE the
+            // skip-`continue`, so non-assistant lines still move the offset.
+            lineByteOffset += line.utf8.count + 1
+
             guard let parsed = ClaudeSessionReader.parseAssistantUsageLine(line) else { continue }
 
+            let resolvedSessionId = parsed.sessionId ?? "unknown"
+
             db.recordTokenEvent(
-                sessionId: parsed.sessionId ?? "unknown",
+                sessionId: resolvedSessionId,
                 paneId: paneId,
                 projectRoot: projectRoot,
                 source: "claude_session",
@@ -100,6 +113,26 @@ public enum ClaudeSessionTail {
                                         model: parsed.model),
                 feature: nil,
                 command: nil
+            )
+
+            // V.3a — ALSO emit one canonical `agent_trace_event` row per
+            // assistant line so the V.3 hover popover reads a single
+            // source-of-truth. Additive (Allspaw): the `token_events`
+            // write above is unchanged. Carmack: no new fd/thread — this
+            // is a second SYNC store call on the SAME batch, reusing the
+            // existing FileHandle. The idempotency_key is DERIVED
+            // (Schneier: fingerprint sessionId + byteOffset + lineHash,
+            // never caller-supplied), so a re-tailed window dedups via the
+            // store's ON CONFLICT DO NOTHING (Kleppmann: no-loss/no-dup —
+            // a mid-batch-crash re-read lands the same rows, not doubles).
+            recordAssistantLineTrace(
+                db: db,
+                sessionId: resolvedSessionId,
+                paneId: paneId,
+                projectRoot: projectRoot,
+                byteOffset: lineStartOffset,
+                line: line,
+                parsed: parsed
             )
             emitted += 1
         }
@@ -117,6 +150,54 @@ public enum ClaudeSessionTail {
         return ReadResult(eventsEmitted: emitted,
                           newOffset: Int(newOffset),
                           resetFromBeginning: resetFromBeginning)
+    }
+
+    /// V.3a — write the canonical `agent_trace_event` row for one assistant
+    /// JSONL line. The idempotency_key is DERIVED from `sessionId +
+    /// byteOffset + lineHash` (Schneier: never caller-supplied) so a
+    /// re-tail of the same byte window dedups via the store's ON CONFLICT
+    /// DO NOTHING. Extracted as an internal static so a test can drive the
+    /// exact key derivation if it needs to.
+    static func recordAssistantLineTrace(
+        db: SessionDatabase,
+        sessionId: String,
+        paneId: String,
+        projectRoot: String,
+        byteOffset: Int,
+        line: String,
+        parsed: ClaudeSessionReader.ParsedUsage
+    ) {
+        let lineHash = SHA256Hasher.hex(of: Data(line.utf8))
+        let material = "v3a-tail:\(sessionId)|\(byteOffset)|\(lineHash)"
+        let key = "v3a-tail:" + SHA256Hasher.hex(of: Data(material.utf8))
+        let when = parsed.timestamp ?? Date()
+        let row = AgentTraceEvent(
+            idempotencyKey: key,
+            pane: paneId,
+            project: projectRoot,
+            model: parsed.model,
+            tier: nil,
+            ladderPosition: nil,
+            feature: nil,
+            result: .success,
+            startedAt: when,
+            completedAt: when,
+            latencyMs: 0,
+            tokensIn: parsed.inputTokens,
+            tokensOut: parsed.outputTokens,
+            costCents: estimateCost(input: parsed.inputTokens,
+                                    output: parsed.outputTokens,
+                                    model: parsed.model),
+            redactionCount: 0,
+            validationStatus: nil,
+            confirmationRequired: false,
+            egressDecisions: 0,
+            planId: nil,
+            costLedgerVersion: nil,
+            sessionId: sessionId,
+            toolCallId: nil
+        )
+        db.recordAgentTraceEvent(row)
     }
 
     private static func estimateCost(input: Int, output: Int, model: String?) -> Int {

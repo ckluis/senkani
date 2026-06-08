@@ -154,6 +154,66 @@ public actor CredentialVault {
         let labels = try await store.list(scope: scope)
         return VaultLabels(labels)
     }
+
+    /// t4c-1 — strongly-typed `(key, byteLength)` summary for one scope.
+    /// Reads each key's value ONLY to measure its byte length, then
+    /// discards the bytes — the returned `VaultKeyByteSummary` carries
+    /// `key` + `byteLength` and has no field that can hold the raw value.
+    /// This is the type-level no-secret invariant the `senkani vault list`
+    /// verb and `doctor --vault-status` per-scope counts depend on
+    /// (mirror of `listLabels` / `VaultLabels`). A refactor that tried to
+    /// carry the value bytes back to the CLI surface would have to change
+    /// `VaultKeyByteEntry`'s stored properties AND every consumer — the
+    /// no-secret guarantee fails to compile rather than silently leaking.
+    public func listKeyByteSummary(
+        scope: String = CredentialVault.defaultScope
+    ) async throws -> VaultKeyByteSummary {
+        let keys = try await store.list(scope: scope)
+        var entries: [VaultKeyByteEntry] = []
+        entries.reserveCapacity(keys.count)
+        for key in keys {
+            // Read the value solely to measure its length; the bytes
+            // never escape this loop. `read(dryRun: false)` would throw
+            // on a key that listed but races a delete — fall back to the
+            // store's optional read so a transient miss yields 0 bytes
+            // rather than aborting the whole listing.
+            let bytes = (try? await store.read(key: key, scope: scope))?.count ?? 0
+            entries.append(VaultKeyByteEntry(key: key, byteLength: bytes))
+        }
+        return VaultKeyByteSummary(scope: scope, entries: entries)
+    }
+}
+
+/// t4c-1 — one `(key, byteLength)` row of a scope's vault contents.
+/// Schneier (type-level no-secret invariant): there is NO stored
+/// property that can hold the raw credential value — only the key name
+/// and the value's byte LENGTH. A surface built from `VaultKeyByteEntry`
+/// is value-free by construction, not by convention.
+public struct VaultKeyByteEntry: Sendable, Equatable {
+    public let key: String
+    public let byteLength: Int
+
+    public init(key: String, byteLength: Int) {
+        self.key = key
+        self.byteLength = byteLength
+    }
+}
+
+/// t4c-1 — strongly-typed summary of one vault scope's contents:
+/// the scope name plus the `(key, byteLength)` rows. Mirrors
+/// `VaultLabels`. Sendable + Equatable so it crosses the actor
+/// boundary cleanly and round-trips through tests.
+public struct VaultKeyByteSummary: Sendable, Equatable {
+    public let scope: String
+    public let entries: [VaultKeyByteEntry]
+
+    public init(scope: String, entries: [VaultKeyByteEntry]) {
+        self.scope = scope
+        self.entries = entries
+    }
+
+    public var isEmpty: Bool { entries.isEmpty }
+    public var count: Int { entries.count }
 }
 
 /// V.13b-4c — strongly-typed wrapper around the label-only return

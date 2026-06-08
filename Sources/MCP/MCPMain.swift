@@ -24,6 +24,17 @@ public struct MCPServerRunner {
             exit(0)
         }
 
+        // t4c-1 — install the production credential-vault bridge so the
+        // T.4b CredentialGateway resolves real vault reads from
+        // `CredentialVault.shared` (via a balanced DispatchSemaphore actor
+        // hop) instead of the default deny-everything fallback. Fail-CLOSED
+        // is preserved: `.shared` is an EMPTY InMemoryKeychainStore in
+        // production today (the operator-gated real-Keychain swap is the
+        // parent walk's remainder, deliberately NOT flipped here), so a
+        // missing key still DENIES before AND after this install. The bridge
+        // only changes behavior for keys that are actually provisioned.
+        HookRouter.installProductionCredentialVaultBridge()
+
         // Phase B-i: stdio MCP server is single-connection; acquire its
         // session via the registry (env-derived project root) so KBReader /
         // KBObserver can find it as the default session.

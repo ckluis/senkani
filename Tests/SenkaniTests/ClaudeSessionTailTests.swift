@@ -105,6 +105,76 @@ struct ClaudeSessionTailTests {
         #expect(count == 60, "row count must be 60 (50 + 10), got \(count)")
     }
 
+    /// V.3a — dual-write: a 10-line assistant fixture emits 10 token_events
+    /// rows AND 10 agent_trace_event canonical rows.
+    @Test func dualWriteEmits10TokenEventsAnd10TraceRows() throws {
+        let (db, dbPath) = makeTempDB()
+        defer { cleanupDB(path: dbPath) }
+
+        let dir = "/tmp/senkani-tail-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let jsonlPath = dir + "/session-1.jsonl"
+
+        let probeSession = "probe-\(UUID().uuidString)"
+        let lines = (0..<10).map { _ in makeAssistantUsageLine(sessionId: probeSession) }
+        try (lines.joined(separator: "\n") + "\n").write(toFile: jsonlPath, atomically: true, encoding: .utf8)
+
+        let projectRoot = "/tmp/test-project-\(UUID().uuidString)"
+        let paneId = UUID().uuidString
+
+        let result = ClaudeSessionTail.tail(path: jsonlPath, projectRoot: projectRoot,
+                                            paneId: paneId, db: db)
+        #expect(result.eventsEmitted == 10, "expected all 10 lines emitted")
+
+        // Flush async cursor write via a sync read.
+        _ = db.tokenStatsAllProjects()
+        let tokenCount = db.tokenStatsForProject(projectRoot).commandCount
+        #expect(tokenCount == 10, "expected 10 token_events rows, got \(tokenCount)")
+        #expect(db.agentTraceEventCount() == 10,
+                "expected 10 agent_trace_event rows (one per assistant line), got \(db.agentTraceEventCount())")
+    }
+
+    /// V.3a — idempotency: re-tailing the SAME byte window (cursor reset)
+    /// must NOT double the agent_trace_event rows — the derived
+    /// sessionId+byteOffset+lineHash key dedups via ON CONFLICT DO NOTHING.
+    @Test func reTailSameWindowKeepsTraceCountStable() throws {
+        let (db, dbPath) = makeTempDB()
+        defer { cleanupDB(path: dbPath) }
+
+        let dir = "/tmp/senkani-tail-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let jsonlPath = dir + "/session-1.jsonl"
+
+        let probeSession = "probe-\(UUID().uuidString)"
+        let lines = (0..<10).map { _ in makeAssistantUsageLine(sessionId: probeSession) }
+        try (lines.joined(separator: "\n") + "\n").write(toFile: jsonlPath, atomically: true, encoding: .utf8)
+
+        let projectRoot = "/tmp/test-project-\(UUID().uuidString)"
+        let paneId = UUID().uuidString
+
+        let first = ClaudeSessionTail.tail(path: jsonlPath, projectRoot: projectRoot,
+                                           paneId: paneId, db: db)
+        #expect(first.eventsEmitted == 10)
+        _ = db.tokenStatsAllProjects()
+        #expect(db.agentTraceEventCount() == 10, "first tail → 10 trace rows")
+
+        // Force a re-read of the SAME window by rewinding the cursor to 0.
+        // The tail re-emits all 10 lines (eventsEmitted == 10), but the
+        // derived idempotency key is identical per line, so the trace count
+        // stays 10 (dedup) even though the tail "re-emitted".
+        db.setSessionCursor(path: jsonlPath, byteOffset: 0, turnIndex: 0, reader: "watcher")
+        _ = db.tokenStatsAllProjects()
+
+        let second = ClaudeSessionTail.tail(path: jsonlPath, projectRoot: projectRoot,
+                                            paneId: paneId, db: db)
+        #expect(second.eventsEmitted == 10, "re-read re-emits the 10 lines")
+        _ = db.tokenStatsAllProjects()
+        #expect(db.agentTraceEventCount() == 10,
+                "re-tail must NOT double trace rows — derived-key dedup keeps count at 10 (got \(db.agentTraceEventCount()))")
+    }
+
     /// Cursor beyond EOF (file truncated/rotated under us) resets to 0 and
     /// re-reads the new contents. Validates the diagnostic path that logs
     /// `claude_session_tail.cursor_beyond_eof`.

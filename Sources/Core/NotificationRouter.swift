@@ -110,6 +110,31 @@ public struct NotificationRouter: Sendable {
         public init(sinks: [String: SinkSubscription]) {
             self.sinks = sinks
         }
+
+        /// Encode this config to JSON bytes. Uses a deterministic
+        /// encoder (`.sortedKeys`) so that
+        /// `encode(decode(encode(x))) == encode(x)` is byte-stable —
+        /// the eventual Settings matrix pane (parent
+        /// `t6-settings-notifications-matrix-ui-2026-05-21`) writes
+        /// the operator-edited config back via this path, and a
+        /// stable byte layout keeps disk diffs / VCS-tracked configs
+        /// noise-free across re-writes. Purely additive — does NOT
+        /// change `loadConfig`'s decode behavior.
+        public func encoded() throws -> Data {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            return try encoder.encode(self)
+        }
+
+        /// Write this config's JSON bytes to `path`, atomically.
+        /// Mirror of `NotificationRouter.loadConfig(from:)`'s read
+        /// path. Throwing (unlike the lenient `loadConfig`, which
+        /// swallows I/O errors): a write that fails MUST surface so a
+        /// settings pane can show the operator the failure rather
+        /// than silently dropping their edit.
+        public func save(to path: String) throws {
+            try encoded().write(to: URL(fileURLWithPath: path), options: .atomic)
+        }
     }
 
     /// Load a `Config` from a JSON file. Returns `nil` (default-on

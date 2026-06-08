@@ -114,21 +114,28 @@ struct ReleaseSLOInstallSizeMeasurementTests {
             .deletingLastPathComponent()   // repo root
     }
 
-    /// Run `tools/measure-install-size.sh <dir>` and return its trimmed
-    /// stdout. Throws if the binary can't launch.
-    private static func runHelper(_ dir: String) throws -> String {
+    /// Run `tools/measure-install-size.sh <args…>` and return its trimmed
+    /// stdout plus exit status. Throws if the binary can't launch.
+    @discardableResult
+    private static func runHelper(_ args: [String]) throws -> (out: String, code: Int32) {
         let script = repoRoot.appendingPathComponent("tools/measure-install-size.sh")
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/bash")
-        p.arguments = [script.path, dir]
+        p.arguments = [script.path] + args
         let out = Pipe()
         p.standardOutput = out
         p.standardError = Pipe()
         try p.run()
         p.waitUntilExit()
         let data = out.fileHandleForReading.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8)?
+        let text = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return (text, p.terminationStatus)
+    }
+
+    /// Convenience for the single-dir (total) form.
+    private static func runHelper(_ dir: String) throws -> String {
+        try runHelper([dir]).out
     }
 
     private static func writeRandom(_ bytes: Int, to path: String) {
@@ -177,6 +184,57 @@ struct ReleaseSLOInstallSizeMeasurementTests {
         // A missing dir is a `null` measurement, not an error — the
         // script's "never abort the run" contract.
         #expect(try Self.runHelper(root + "/nope") == "null")
+    }
+
+    @Test("measure-install-size.sh --per-binary + --check (D5): per-product lines and a budget gate that exits non-zero on a breach")
+    func perBinaryAndCheckModes() throws {
+        let fm = FileManager.default
+        let root = "/tmp/senkani-install-perbin-\(UUID().uuidString)"
+        let target = root + "/arm64-apple-macosx/release"
+        let link = root + "/release"
+        defer { try? fm.removeItem(atPath: root) }
+        try fm.createDirectory(atPath: target, withIntermediateDirectories: true)
+
+        // Two shipped products as fixtures. These are non-Mach-O random
+        // blobs: `strip -rSTx` REFUSES them (warning to stderr, swallowed
+        // by `|| true`), so the helper measures the copy unchanged — which
+        // exercises the strip codepath without needing real binaries.
+        // senkani-hook ≈ 0.06 MB (under its 5 MB budget); senkani ≈ 0.13 MB.
+        Self.writeRandom(64 * 1024, to: target + "/senkani-hook")
+        Self.writeRandom(128 * 1024, to: target + "/senkani")
+        try fm.createSymbolicLink(atPath: link, withDestinationPath: "arm64-apple-macosx/release")
+
+        // --per-binary: one `name<TAB>MB` line per present product.
+        let perBin = try Self.runHelper(["--per-binary", link])
+        let names = Set(perBin.out.split(separator: "\n").compactMap {
+            $0.split(separator: "\t").first.map(String.init)
+        })
+        #expect(names == ["senkani", "senkani-hook"])
+        #expect(perBin.code == 0)
+        // Each line is `name<TAB>number`.
+        for line in perBin.out.split(separator: "\n") {
+            let cols = line.split(separator: "\t")
+            #expect(cols.count == 2)
+            #expect(Double(cols[1]) != nil)
+        }
+
+        // --check: tiny fixtures are well under their budgets → exit 0.
+        let okCheck = try Self.runHelper(["--check", link])
+        #expect(okCheck.code == 0)
+        #expect(okCheck.out.contains("senkani"))
+        #expect(!okCheck.out.contains("OVER BUDGET"))
+
+        // --check breach: a senkani-hook fixture above its 5 MB budget
+        // (6 MB random, non-compressible) → exit 1 + an OVER BUDGET line.
+        let breachRoot = "/tmp/senkani-install-breach-\(UUID().uuidString)"
+        let breachTarget = breachRoot + "/release"
+        defer { try? fm.removeItem(atPath: breachRoot) }
+        try fm.createDirectory(atPath: breachTarget, withIntermediateDirectories: true)
+        Self.writeRandom(6 * 1024 * 1024, to: breachTarget + "/senkani-hook")
+        let breach = try Self.runHelper(["--check", breachTarget])
+        #expect(breach.code == 1)
+        #expect(breach.out.contains("OVER BUDGET"))
+        #expect(breach.out.contains("senkani-hook"))
     }
 }
 
@@ -244,18 +302,85 @@ struct ReleaseSLOEvaluationTests {
         #expect(history.shouldFailGate() == false)
     }
 
-    @Test("A measurement over the published threshold fails as overBudget, even with no baseline")
+    @Test("A scalar SLO over its published threshold fails as overBudget, even with no baseline")
     func overBudgetFailsImmediately() {
         let path = makeTempHistoryPath()
         defer { try? FileManager.default.removeItem(atPath: path) }
-        // Single row, install size 60 MB > 50 MB threshold.
+        // Single row, cold-start 300 ms > 250 ms threshold.
         writeRows([
-            #"{"ts":1.0,"git_sha":"a","version":"0.2.0","cold_start_ms_p95":120.0,"idle_memory_mb":null,"install_size_mb":60.0,"classifier_p95_ms":null}"#,
+            #"{"ts":1.0,"git_sha":"a","version":"0.2.0","cold_start_ms_p95":300.0,"idle_memory_mb":null,"install_size_mb":60.0,"classifier_p95_ms":null}"#,
         ], to: path)
         let history = ReleaseSLOHistory(customPath: path)
-        let install = history.evaluateAll().first { $0.slo == .installSize }!
-        #expect(install.verdict == .overBudget)
+        let cold = history.evaluateAll().first { $0.slo == .coldStart }!
+        #expect(cold.verdict == .overBudget)
         #expect(history.shouldFailGate() == true)
+
+        // The legacy summed install total now gates against the SUM of the
+        // per-binary budgets (140 MB), not the old 50 MB — 60 MB is fine.
+        let install = history.evaluateAll().first { $0.slo == .installSize }!
+        #expect(install.verdict == .ok)
+        #expect(ReleaseSLOName.installSize.threshold
+                == ReleaseSLOInstallBudget.totalBudgetMB)
+    }
+
+    @Test("Per-binary install budgets (D5): a binary over its budget fails the gate; under passes")
+    func perBinaryInstallBudgetGate() {
+        // 1. Pure budget evaluation — under each budget → no breach.
+        let ok = ReleaseSLOInstallBudget.check(measured: [
+            "senkani": 44.0, "senkani-mcp": 67.0,
+            "senkani-hook": 1.0, "senkani-mig-helper": 5.0,
+        ])
+        #expect(ok.lines.count == 4)
+        #expect(ok.anyOverBudget == false)
+        #expect(ok.breaches.isEmpty)
+
+        // 2. One binary over its budget → exactly that one breaches.
+        let bad = ReleaseSLOInstallBudget.check(measured: [
+            "senkani": 44.0, "senkani-mcp": 99.0,   // > 70 MB budget
+            "senkani-hook": 1.0,
+        ])
+        #expect(bad.anyOverBudget == true)
+        #expect(bad.breaches.map(\.product) == ["senkani-mcp"])
+
+        // 3. A budgeted product absent from the measurement is a miss,
+        //    not a breach (no line emitted for it).
+        #expect(ReleaseSLOInstallBudget.check(measured: ["senkani": 44.0])
+                .lines.map(\.product) == ["senkani"])
+
+        // 4. End-to-end through history: a row carrying a per-binary map
+        //    with one binary over budget fails the gate — even though
+        //    every scalar SLO is within threshold.
+        let badPath = makeTempHistoryPath()
+        defer { try? FileManager.default.removeItem(atPath: badPath) }
+        writeRows([
+            #"{"ts":1.0,"git_sha":"a","version":"0.4.0","cold_start_ms_p95":120.0,"idle_memory_mb":null,"install_size_mb":120.0,"classifier_p95_ms":null,"install_size_per_binary_mb":{"senkani":80.0,"senkani-mcp":67.0,"senkani-hook":1.0,"senkani-mig-helper":5.0}}"#,
+        ], to: badPath)
+        let badHistory = ReleaseSLOHistory(customPath: badPath)
+        let check = badHistory.latestInstallBudgetCheck()
+        #expect(check?.anyOverBudget == true)
+        #expect(check?.breaches.map(\.product) == ["senkani"])  // 80 > 50
+        #expect(badHistory.shouldFailGate() == true)
+
+        // 5. The same row with senkani back under its 50 MB budget passes.
+        let okPath = makeTempHistoryPath()
+        defer { try? FileManager.default.removeItem(atPath: okPath) }
+        writeRows([
+            #"{"ts":1.0,"git_sha":"a","version":"0.4.0","cold_start_ms_p95":120.0,"idle_memory_mb":null,"install_size_mb":117.0,"classifier_p95_ms":null,"install_size_per_binary_mb":{"senkani":44.0,"senkani-mcp":67.0,"senkani-hook":1.0,"senkani-mig-helper":5.0}}"#,
+        ], to: okPath)
+        let okHistory = ReleaseSLOHistory(customPath: okPath)
+        #expect(okHistory.latestInstallBudgetCheck()?.anyOverBudget == false)
+        #expect(okHistory.shouldFailGate() == false)
+
+        // 6. A pre-D5 row (no per-binary map) → no per-binary gate, never
+        //    fails on absence (back-compat).
+        let legacyPath = makeTempHistoryPath()
+        defer { try? FileManager.default.removeItem(atPath: legacyPath) }
+        writeRows([
+            #"{"ts":1.0,"git_sha":"a","version":"0.2.0","cold_start_ms_p95":120.0,"idle_memory_mb":null,"install_size_mb":21.3,"classifier_p95_ms":null}"#,
+        ], to: legacyPath)
+        let legacy = ReleaseSLOHistory(customPath: legacyPath)
+        #expect(legacy.latestInstallBudgetCheck() == nil)
+        #expect(legacy.shouldFailGate() == false)
     }
 
     @Test("Bad lines in the middle are skipped without failing the read")

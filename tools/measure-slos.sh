@@ -5,9 +5,12 @@
 #
 #   cold.start        p95 of `senkani --version` wall-time across N=20 runs
 #   idle.memory       RSS of senkani-mcp after a 10 s settle (null if down)
-#   install.size      sum of shipped product binaries in the resolved
-#                     release dir (symlink-followed; excludes the ~1.8 GB
-#                     of build intermediates) — see measure-install-size.sh
+#   install.size      STRIPPED size of each shipped product binary in the
+#                     resolved release dir (symlink-followed; excludes the
+#                     ~1.8 GB of build intermediates). Captured both as a
+#                     summed total (install_size_mb) and a per-binary map
+#                     (install_size_per_binary_mb) gated against PER-BINARY
+#                     budgets (D5) — see measure-install-size.sh
 #   classifier.p95    null until U.1 TierScorer lands
 #   openai.cold.start p95 of `senkani serve --openai` spawn → listener-ready
 #                     across N=10 runs (V.13e-3; null if binary absent / never ready)
@@ -173,14 +176,43 @@ if [ -n "${MCP_PID}" ]; then
   fi
 fi
 
-# --- install size: shipped product binaries -----------------------
+# --- install size: shipped product binaries (STRIPPED, per-binary) -
 # `du -sk .build/release` is wrong twice over: the path is a symlink
 # (du reports the ~0 KB link, not its target) and the resolved dir is
 # ~1.8 GB of build intermediates, not the shipped artifact. Delegate
-# to the canonical helper, which resolves the symlink and sums the
-# shipped executable products. A measurement miss prints `null`, so
-# this never aborts the run. See spec/slos.md `install.size`.
+# to the canonical helper, which resolves the symlink, STRIPS each
+# product into a temp copy (lossless — dSYMs exist), and measures it.
+# The summed stripped total feeds the legacy `install_size_mb` field;
+# the per-binary breakdown feeds `install_size_per_binary_mb`, the
+# authoritative input to the per-binary budget gate (D5). A
+# measurement miss prints `null`, so this never aborts the run. See
+# spec/slos.md `install.size`.
 INSTALL_SIZE_MB="$(bash tools/measure-install-size.sh "${RELEASE_DIR}" 2>/dev/null || echo null)"
+
+# Per-binary breakdown → JSON object (or `null`). The helper prints
+# one `name<TAB>MB` line per shipped product; fold those into a JSON
+# map. Captured into a temp file first so a pipe/python failure can't
+# leak a second `null` line into the substitution (back-compat with
+# pre-D5: a miss is a single `null`).
+PER_BINARY_RAW="$(mktemp)"
+bash tools/measure-install-size.sh --per-binary "${RELEASE_DIR}" \
+  > "${PER_BINARY_RAW}" 2>/dev/null || true
+INSTALL_SIZE_PER_BINARY_JSON="$(python3 -c '
+import sys, json
+out = {}
+for line in open(sys.argv[1]):
+    line = line.rstrip("\n")
+    if not line or line == "null" or "\t" not in line:
+        continue
+    name, mb = line.split("\t", 1)
+    try:
+        out[name] = float(mb)
+    except ValueError:
+        pass
+print(json.dumps(out, sort_keys=True) if out else "null")
+' "${PER_BINARY_RAW}" 2>/dev/null || echo null)"
+rm -f "${PER_BINARY_RAW}"
+[ -z "${INSTALL_SIZE_PER_BINARY_JSON}" ] && INSTALL_SIZE_PER_BINARY_JSON="null"
 
 # --- classifier p95: null pending U.1 -----------------------------
 CLASSIFIER_P95_MS="null"
@@ -200,6 +232,9 @@ ROW="$(python3 -c '
 import json, sys
 def parse(x):
     return None if x == "null" else float(x)
+# install_size_per_binary_mb arrives as a raw JSON fragment ("null" or
+# a {name: mb} object), so json.loads it rather than treating it scalar.
+per_binary = None if sys.argv[9] == "null" else json.loads(sys.argv[9])
 print(json.dumps({
     "ts": float(sys.argv[1]),
     "git_sha": sys.argv[2],
@@ -209,10 +244,11 @@ print(json.dumps({
     "install_size_mb": parse(sys.argv[6]),
     "classifier_p95_ms": parse(sys.argv[7]),
     "openai_cold_start_ms_p95": parse(sys.argv[8]),
+    "install_size_per_binary_mb": per_binary,
 }, sort_keys=True))
 ' "${TS}" "${GIT_SHA}" "${VERSION}" "${COLD_START_P95}" \
     "${IDLE_MEMORY_MB}" "${INSTALL_SIZE_MB}" "${CLASSIFIER_P95_MS}" \
-    "${OPENAI_COLD_START_P95}")"
+    "${OPENAI_COLD_START_P95}" "${INSTALL_SIZE_PER_BINARY_JSON}")"
 
 echo "${ROW}"
 

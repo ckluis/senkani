@@ -185,6 +185,81 @@ struct HandManifestLinterTests {
         #expect(HandManifestLinter.hasErrors(issues))
         #expect(issues.contains { $0.path == "(decode)" })
     }
+
+    // MARK: - T.3b-2 (re-aimed) — deny-by-default posture linter.
+    //
+    // Under the ratified DENY-BY-DEFAULT posture (ExecRoutingDecision,
+    // ec72a1f) the positive execution-sandbox guest path is dropped, so a
+    // HandManifest declaring `sandbox: wasm` (or proc/full) opts into a
+    // runtime that routes NOWHERE. The linter warns (does not block — the
+    // field is inert, not dangerous) so the author is not misled into
+    // believing execution is constrained.
+
+    @Test("warns when sandbox: wasm routes nowhere (deny-by-default)")
+    func warnsOnWasmSandboxRoutesNowhere() {
+        var m = HandManifestTests.validFixture()
+        m.sandbox = .wasm
+        let issues = HandManifestLinter.lint(m)
+        // Inert, not dangerous: a warning, never a blocking error.
+        #expect(!HandManifestLinter.hasErrors(issues))
+        let sandboxIssue = issues.first { $0.path == "sandbox" }
+        guard let sandboxIssue else {
+            Issue.record("expected a sandbox-path warning; got: \(issues)")
+            return
+        }
+        #expect(sandboxIssue.severity == .warning)
+        // Legible message: names the value, that it routes nowhere, and
+        // what to do (set sandbox: none).
+        #expect(sandboxIssue.message.contains("wasm"),
+                "message must name the declared value; got: \(sandboxIssue.message)")
+        #expect(sandboxIssue.message.contains("routes NOWHERE"),
+                "message must explain the value routes nowhere; got: \(sandboxIssue.message)")
+        #expect(sandboxIssue.message.contains("sandbox: 'none'"),
+                "message must tell the author what to do (set sandbox: none); got: \(sandboxIssue.message)")
+    }
+
+    @Test("warns on proc/full opt-in too (every non-none routes nowhere)")
+    func warnsOnProcAndFullSandbox() {
+        for value: HandSandbox in [.proc, .full] {
+            var m = HandManifestTests.validFixture()
+            m.sandbox = value
+            let issues = HandManifestLinter.lint(m)
+            #expect(!HandManifestLinter.hasErrors(issues),
+                    "\(value) is inert, not a blocking error")
+            #expect(issues.contains { $0.path == "sandbox" && $0.severity == .warning },
+                    "\(value) must warn — it routes nowhere under deny-by-default")
+        }
+    }
+
+    @Test("sandbox: none passes clean (the only value that routes anywhere)")
+    func noneSandboxPassesClean() {
+        var m = HandManifestTests.validFixture()
+        m.sandbox = .none
+        let issues = HandManifestLinter.lint(m)
+        #expect(!HandManifestLinter.hasErrors(issues))
+        // No sandbox warning at all — none is the deny-floor-consistent value.
+        #expect(!issues.contains { $0.path == "sandbox" },
+                "sandbox: none must not produce a sandbox warning; got: \(issues)")
+    }
+
+    @Test("linter agrees with the shipped router: it never declares a sandbox routes somewhere")
+    func linterAgreesWithRouter() {
+        // The router only ever returns .host (trusted) or .deny — it never
+        // dispatches to a declared HandSandbox. So EVERY non-none value the
+        // linter could see must warn. This pins the linter to the deny floor:
+        // if a future positive path re-enabled a guest, the router would
+        // change first and this test would force the linter to follow.
+        #expect(ExecRoutingDecision.route(callerKind: .userSupplied) == .deny(.userSuppliedDenyByDefault))
+        #expect(ExecRoutingDecision.route(callerKind: .toolInternal) == .host)
+
+        for value: HandSandbox in [.wasm, .proc, .full] {
+            var m = HandManifestTests.validFixture()
+            m.sandbox = value
+            let issues = HandManifestLinter.lint(m)
+            #expect(issues.contains { $0.path == "sandbox" },
+                    "\(value) routes nowhere in the shipped router — linter must warn")
+        }
+    }
 }
 
 @Suite("HandManifestExporter")

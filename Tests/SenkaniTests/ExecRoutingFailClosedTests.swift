@@ -80,6 +80,32 @@ struct ExecRoutingFailClosedTests {
         #expect(dispatched == .host)
     }
 
+    @Test("T.3b-2: deny message is legible — names what was refused, why, and what to do")
+    func denyMessageIsLegible() {
+        // Jobs/Allspaw polish (2026-06-08): the refusal must be actionable,
+        // not a cryptic error. The user-supplied deny must say WHAT was
+        // refused, WHY (the fail-CLOSED posture), and WHAT TO DO INSTEAD.
+        let userMsg = ExecDenyReason.userSuppliedDenyByDefault.operatorMessage
+        // WHAT was refused.
+        #expect(userMsg.lowercased().contains("refused"),
+                "deny message must say the command was refused; got: \(userMsg)")
+        // WHY — the fail-CLOSED / deny-by-default posture (back-compat with
+        // the tokens ExecRoutingFailClosedTests + ExecTool integration assert).
+        #expect(userMsg.contains("DENY-BY-DEFAULT") || userMsg.contains("fail-CLOSED"),
+                "deny message must explain the fail-CLOSED posture; got: \(userMsg)")
+        // WHAT TO DO INSTEAD — the legibility deliverable.
+        #expect(userMsg.contains("What to do instead"),
+                "deny message must tell the user what to do instead; got: \(userMsg)")
+
+        // The runtime-unavailable deny is legible too.
+        let rtMsg = ExecDenyReason.sandboxRuntimeUnavailable.operatorMessage
+        #expect(rtMsg.lowercased().contains("refused"))
+        #expect(rtMsg.contains("fail-CLOSED"),
+                "runtime-unavailable deny must explain fail-CLOSED; got: \(rtMsg)")
+        #expect(rtMsg.contains("What to do instead"),
+                "runtime-unavailable deny must tell the user what to do; got: \(rtMsg)")
+    }
+
     @Test("deny reasons carry distinct stable audit tokens")
     func denyReasonsHaveStableTokens() {
         // The audit-row `reason` field must be a stable, machine-greppable

@@ -20,6 +20,30 @@ import Foundation
 /// Defaults (no config file): every named sink subscribes to every
 /// event variant. Operators opt OUT, not IN — round 1 errs on the
 /// noisy side because under-notification hides failures.
+///
+/// ## Gate boundary — CLEAN SEPARATION (ratified 2026-06-08, item
+/// `t6-notification-confirmation-gate-deeper-respect`; panel D11:
+/// Norman / Allspaw / Lauret / Torvalds, unanimous)
+///
+/// **`ConfirmationGate` is intentionally NOT consulted by this router.**
+/// The per-sink event-class `events` subscription is the ONE AND ONLY
+/// notification gate. The router decides "does this sink want this event
+/// class?" — nothing more. There is deliberately no hidden coupling
+/// where a `ConfirmationGate` per-tool deny rule also suppresses a
+/// banner (Torvalds: one gate, no surprise cross-wiring; Lauret: one
+/// consistent contract per concern). The exec/write gate lives in
+/// `ConfirmationGate`/`HookRouter`; the notification gate lives here.
+///
+/// **The one non-negotiable exception is failure-surfacing, not
+/// suppression.** A `ConfirmationGate` `.deny` is the *dangerous*
+/// case to hide (Norman/Allspaw: a silent denial is the trap — the
+/// operator must always learn that an action was blocked). So a deny
+/// emits a NON-SUPPRESSIBLE `notifyFailure` via
+/// `deliverUnconditional(_:)` (below), which bypasses the per-sink
+/// subscription filter. This is not the router consulting the gate; it
+/// is the gate's *producer* refusing to let a deny go silent. The
+/// router never reads gate state — it only offers an unconditional fan
+/// the producer chooses to use for the deny class.
 public struct NotificationRouter: Sendable {
 
     /// Wire-shape keys for `NotifyEvent` variants. Matches the
@@ -60,16 +84,42 @@ public struct NotificationRouter: Sendable {
     }
 
     /// Sinks that should receive `event`, in registration order.
+    /// Honours the per-sink `events` subscription — the ONLY
+    /// notification gate (see the type doc-comment's gate boundary).
     public func sinks(for event: NotifyEvent) -> [NotificationSink] {
         let kind = EventKind.of(event)
         return entries.filter { $0.events.contains(kind) }.map(\.sink)
     }
 
+    /// EVERY registered sink, in registration order, ignoring the
+    /// per-sink subscription. Backs `deliverUnconditional(_:)` — the
+    /// non-suppressible deny-surfacing path. Not for general use: the
+    /// per-sink subscription is the gate for every event class EXCEPT
+    /// the explicit failure-surfacing exception documented on the type.
+    public func allSinks() -> [NotificationSink] {
+        entries.map(\.sink)
+    }
+
     /// Fan `event` out to every subscribed sink. Re-uses
     /// `NotificationFanout.deliver`, so a throwing sink does not
     /// block the rest — same non-blocking contract as T.6a.
+    /// Per-sink subscription is honoured: an unsubscribed sink is
+    /// silent for this event class.
     public func deliver(_ event: NotifyEvent) {
         NotificationFanout.deliver(event, to: sinks(for: event))
+    }
+
+    /// NON-SUPPRESSIBLE fan-out: deliver `event` to EVERY registered
+    /// sink regardless of its per-sink subscription. The deny-surfacing
+    /// exception (see the type doc-comment): a `ConfirmationGate` `.deny`
+    /// MUST reach the operator even when the sink opted OUT of the
+    /// `notifyFailure` class, because a silent denial is the dangerous
+    /// case (Norman/Allspaw). Same non-blocking contract — a throwing
+    /// sink does not block the rest. This does NOT consult
+    /// `ConfirmationGate`; it is the gate's producer refusing to let a
+    /// deny go silent. Use ONLY for the deny class.
+    public func deliverUnconditional(_ event: NotifyEvent) {
+        NotificationFanout.deliver(event, to: allSinks())
     }
 
     // MARK: - Config loading

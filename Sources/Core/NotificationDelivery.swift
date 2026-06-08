@@ -39,6 +39,23 @@ public enum NotificationDelivery {
         router?.deliver(event)
     }
 
+    /// NON-SUPPRESSIBLE delivery: fan `event` out to EVERY registered
+    /// sink, bypassing the per-sink subscription. The deny-surfacing
+    /// exception (ratified 2026-06-08,
+    /// `t6-notification-confirmation-gate-deeper-respect`): a
+    /// `ConfirmationGate` `.deny` MUST reach the operator even when no
+    /// sink subscribed to `notifyFailure` — a silent denial is the
+    /// dangerous case (Norman/Allspaw). Producers use this ONLY for the
+    /// deny class; every other event class flows through `deliver(_:)`
+    /// and honours the per-sink subscription (the one notification gate).
+    /// No-op when no router is installed — same default as `deliver(_:)`.
+    public static func deliverUnconditional(_ event: NotifyEvent) {
+        lock.lock()
+        let router = _router
+        lock.unlock()
+        router?.deliverUnconditional(event)
+    }
+
     /// True iff `install(_:)` has been called this process. Lets
     /// callers gate "do the work that emits the event" when no one
     /// is listening (rare — the producers above are already

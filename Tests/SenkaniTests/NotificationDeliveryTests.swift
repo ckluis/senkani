@@ -120,6 +120,109 @@ struct NotificationDeliveryTests {
         NotificationDelivery.resetForTesting()
     }
 
+    // MARK: - t6 ratified gate boundary (clean separation + deny-fires)
+    // Item: t6-notification-confirmation-gate-deeper-respect (2026-06-08,
+    // panel D11 Norman/Allspaw/Lauret/Torvalds). Per-sink subscription is
+    // the ONLY notification gate; NotificationRouter does NOT consult
+    // ConfirmationGate. The one exception is failure-surfacing: a deny
+    // emits a NON-SUPPRESSIBLE notifyFailure via deliverUnconditional,
+    // which bypasses the per-sink subscription filter.
+
+    @Test("t6 clean separation: per-sink subscription is the ONLY gate — a tool with NO matching sink subscription produces NO notification even when permitted")
+    func t6PerSinkSubscriptionIsTheOnlyGate() {
+        NotificationDelivery.resetForTesting()
+        let bridge = SpyLocalNotifierBridge()
+        // Sink subscribes to scheduleEnd ONLY. The operator opted OUT of
+        // both notifyDone AND notifyFailure on the ORDINARY path.
+        let router = NotificationRouter(entries: [
+            .init(name: "macos_local", sink: MacOSLocalSink(bridge: bridge),
+                  events: [.scheduleEnd])
+        ])
+        NotificationDelivery.install(router)
+
+        // Permitted (auto-approved) completion. notifyDone is NOT in the
+        // subscription, so NO notification is produced — the per-sink
+        // subscription is the only gate; ConfirmationGate is never
+        // consulted here.
+        NotificationDelivery.deliver(.notifyDone(toolName: "Edit", summary: "ok"))
+        #expect(bridge.posted.isEmpty,
+                "Unsubscribed event class on the ordinary deliver path must be silent — per-sink subscription is the only gate.")
+
+        // The class it DID subscribe to still flows through.
+        NotificationDelivery.deliver(.scheduleEnd(scheduleId: "nightly", summary: "done"))
+        #expect(bridge.posted.count == 1)
+        #expect(bridge.posted[0].title == "Senkani — schedule")
+        NotificationDelivery.resetForTesting()
+    }
+
+    @Test("t6 deny-fires: a ConfirmationGate deny emits a NON-SUPPRESSIBLE notifyFailure even when the sink did NOT subscribe to that class")
+    func t6DenyFiresNonSuppressibleNotifyFailure() {
+        NotificationDelivery.resetForTesting()
+        let bridge = SpyLocalNotifierBridge()
+        // Sink subscribes to notifyDone ONLY — it explicitly opted OUT
+        // of notifyFailure. On the ORDINARY path a notifyFailure would be
+        // silent for this sink. The deny-surfacing exception
+        // (Norman/Allspaw: silent denial is the trap) MUST still reach it.
+        let router = NotificationRouter(entries: [
+            .init(name: "macos_local", sink: MacOSLocalSink(bridge: bridge),
+                  events: [.notifyDone])
+        ])
+        NotificationDelivery.install(router)
+
+        // Ordinary path: opted-out class is silent (proves the sink is
+        // genuinely NOT subscribed to notifyFailure).
+        NotificationDelivery.deliver(.notifyFailure(toolName: "Edit", reason: "blocked"))
+        #expect(bridge.posted.isEmpty,
+                "Ordinary deliver path honours opt-out: notifyFailure to a sink that didn't subscribe is silent.")
+
+        // Non-suppressible deny-surfacing path: fires REGARDLESS of the
+        // per-sink subscription. This is the ratified deny-fires invariant.
+        NotificationDelivery.deliverUnconditional(
+            .notifyFailure(toolName: "Edit", reason: "Confirmation denied for 'Edit': policy disallows Edit")
+        )
+        #expect(bridge.posted.count == 1,
+                "deny MUST surface non-suppressibly — a silent denial is the dangerous case (Norman/Allspaw).")
+        #expect(bridge.posted[0].title == "Senkani — failed")
+        #expect(bridge.posted[0].subtitle == "Edit")
+        #expect(bridge.posted[0].body.contains("policy disallows Edit"))
+        NotificationDelivery.resetForTesting()
+    }
+
+    @Test("t6 deliverUnconditional reaches EVERY registered sink across mixed subscriptions; ordinary deliver still honours each")
+    func t6UnconditionalReachesEverySink() {
+        NotificationDelivery.resetForTesting()
+        let optedIn = SpyLocalNotifierBridge()    // subscribes to notifyFailure
+        let optedOut = SpyLocalNotifierBridge()   // does NOT subscribe to notifyFailure
+        let router = NotificationRouter(entries: [
+            .init(name: "in",  sink: MacOSLocalSink(bridge: optedIn),  events: [.notifyFailure]),
+            .init(name: "out", sink: MacOSLocalSink(bridge: optedOut), events: [.notifyDone]),
+        ])
+        NotificationDelivery.install(router)
+
+        // Ordinary path: only the subscriber sees it.
+        NotificationDelivery.deliver(.notifyFailure(toolName: "Bash", reason: "r"))
+        #expect(optedIn.posted.count == 1)
+        #expect(optedOut.posted.isEmpty)
+
+        // Unconditional path: BOTH see it, regardless of subscription.
+        NotificationDelivery.deliverUnconditional(.notifyFailure(toolName: "Bash", reason: "deny"))
+        #expect(optedIn.posted.count == 2)
+        #expect(optedOut.posted.count == 1,
+                "deliverUnconditional must reach the opted-out sink too.")
+        NotificationDelivery.resetForTesting()
+    }
+
+    @Test("t6 back-compat: deliverUnconditional is a silent no-op when no router is installed (CLI / hook-relay / stdio MCP default)")
+    func t6UnconditionalNoOpWithoutInstall() {
+        NotificationDelivery.resetForTesting()
+        #expect(NotificationDelivery.isInstalled == false)
+        // MUST NOT throw, hang, or crash — production deny behavior is
+        // unchanged where notifications aren't wired.
+        NotificationDelivery.deliverUnconditional(
+            .notifyFailure(toolName: "Edit", reason: "no-op")
+        )
+    }
+
     @Test("OnboardingMilestoneStore.record fires NotifyEvent on first firstNonzeroSavings — idempotent on re-record")
     func onboardingProducerFiresOnce() {
         NotificationDelivery.resetForTesting()

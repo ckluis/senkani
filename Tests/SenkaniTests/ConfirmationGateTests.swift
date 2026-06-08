@@ -219,6 +219,92 @@ struct ConfirmationGateTests {
         }
     }
 
+    // MARK: - t6 deny-fires non-suppressible notifyFailure (end-to-end)
+    // Item: t6-notification-confirmation-gate-deeper-respect (2026-06-08,
+    // panel D11 Norman/Allspaw/Lauret/Torvalds). A HookRouter
+    // ConfirmationGate `.deny` MUST emit a NON-SUPPRESSIBLE notifyFailure
+    // through the installed NotificationRouter — even when the sink opted
+    // OUT of the notifyFailure class (silent denial is the dangerous case).
+
+    @Test("HookRouter deny emits a NON-SUPPRESSIBLE notifyFailure even when the sink opted OUT of that class")
+    func hookRouterDenyFiresNonSuppressibleNotifyFailure() {
+        HookSeamLock.withLock {
+            let (db, path) = makeTempDB()
+            defer { TempSessionDatabase.cleanup(path: path) }
+            ConfirmationGate.database = db
+            ConfirmationGate.resolver = { _, _ in (.deny, .policy, "policy disallows Edit") }
+            defer { ConfirmationGate.resetToDefaults() }
+
+            // Install a router whose sink subscribes to notifyDone ONLY —
+            // it explicitly opted OUT of notifyFailure. The ordinary
+            // delivery path would suppress a notifyFailure to this sink;
+            // the deny-surfacing exception MUST override that.
+            NotificationDelivery.resetForTesting()
+            let bridge = SpyLocalNotifierBridge()
+            let router = NotificationRouter(entries: [
+                .init(name: "macos_local", sink: MacOSLocalSink(bridge: bridge),
+                      events: [.notifyDone])
+            ])
+            NotificationDelivery.install(router)
+            defer { NotificationDelivery.resetForTesting() }
+
+            let event: [String: Any] = [
+                "tool_name": "Edit",
+                "hook_event_name": "PreToolUse",
+                "tool_input": ["file_path": "/tmp/example.swift"],
+            ]
+            let json = try! JSONSerialization.data(withJSONObject: event)
+            let response = HookRouter.handle(eventJSON: json)
+
+            // The deny response to the agent is unchanged (back-compat).
+            let parsed = try! JSONSerialization.jsonObject(with: response) as! [String: Any]
+            let hookOutput = parsed["hookSpecificOutput"] as! [String: Any]
+            #expect(hookOutput["permissionDecision"] as? String == "deny")
+
+            // The deny surfaced as a banner DESPITE the sink opting out of
+            // notifyFailure — non-suppressible, per the ratified semantics.
+            #expect(bridge.posted.count == 1,
+                    "HookRouter deny MUST surface a non-suppressible notifyFailure even to a sink that opted out of that class.")
+            #expect(bridge.posted[0].title == "Senkani — failed")
+            #expect(bridge.posted[0].subtitle == "Edit")
+            #expect(bridge.posted[0].body.contains("Edit"))
+            #expect(bridge.posted[0].body.contains("policy disallows Edit"))
+        }
+    }
+
+    @Test("HookRouter back-compat: a PERMITTED (auto-approve) call fires NO notifyFailure")
+    func hookRouterPermittedPathNoFailureNotification() {
+        HookSeamLock.withLock {
+            let (db, path) = makeTempDB()
+            defer { TempSessionDatabase.cleanup(path: path) }
+            ConfirmationGate.database = db
+            // Default resolver: auto-approve. No deny -> no notifyFailure.
+            defer { ConfirmationGate.resetToDefaults() }
+
+            NotificationDelivery.resetForTesting()
+            let bridge = SpyLocalNotifierBridge()
+            let router = NotificationRouter(entries: [
+                .init(name: "macos_local", sink: MacOSLocalSink(bridge: bridge),
+                      events: Set(NotificationRouter.EventKind.allCases))
+            ])
+            NotificationDelivery.install(router)
+            defer { NotificationDelivery.resetForTesting() }
+
+            // Bash routes to handleBash; an auto-approved write/exec tool
+            // does NOT hit the deny branch, so NO notifyFailure fires.
+            let event: [String: Any] = [
+                "tool_name": "Edit",
+                "hook_event_name": "PreToolUse",
+                "tool_input": ["file_path": "/tmp/example.swift"],
+            ]
+            let json = try! JSONSerialization.data(withJSONObject: event)
+            _ = HookRouter.handle(eventJSON: json)
+
+            #expect(bridge.posted.isEmpty,
+                    "Back-compat: a permitted (auto-approve) call must not fire any notifyFailure banner.")
+        }
+    }
+
     // MARK: - NotificationSink (acceptance #4)
 
     @Test("NullNotificationSink swallows every event without throwing")

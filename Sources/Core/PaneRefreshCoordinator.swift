@@ -44,6 +44,12 @@ public final class PaneRefreshCoordinator: @unchecked Sendable {
     private let validationQueue: StatefulPaneRefresher
     private let repoDirtyState: StatefulPaneRefresher
 
+    /// U.9b-2 — loads the default-OFF `WorkBusConfig.dualWrite` flag.
+    /// Default reads `~/.senkani/work-bus.json` (missing ⇒ dualWrite=false),
+    /// so production is byte-identical to U.9a unless an operator opts in
+    /// per project root. Tests inject a loader to force the flag on/off.
+    private let workBusConfigLoader: @Sendable () -> WorkBusConfig
+
     /// Tile ids in declaration order; used for round-trip iteration in tests.
     public let tileIds: [String] = [
         PaneRefreshCoordinator.budgetBurnTileId,
@@ -57,11 +63,13 @@ public final class PaneRefreshCoordinator: @unchecked Sendable {
         budgetBurnFetch: @escaping @Sendable (PaneRefreshContext) async -> PaneRefreshOutcome,
         validationQueueFetch: @escaping @Sendable (PaneRefreshContext) async -> PaneRefreshOutcome,
         repoDirtyStateFetch: @escaping @Sendable (PaneRefreshContext) async -> PaneRefreshOutcome,
-        maxConcurrent: Int = 4
+        maxConcurrent: Int = 4,
+        workBusConfigLoader: @escaping @Sendable () -> WorkBusConfig = { (try? WorkBusConfigStore.load()) ?? WorkBusConfig() }
     ) {
         self.database = database
         self.projectRoot = projectRoot
         self.pool = PaneRefreshWorkerPool(maxConcurrent: maxConcurrent)
+        self.workBusConfigLoader = workBusConfigLoader
 
         self.budgetBurn = StatefulPaneRefresher(
             initialState: PaneRefreshState(cacheType: .duration, cacheDuration: 30),
@@ -97,6 +105,10 @@ public final class PaneRefreshCoordinator: @unchecked Sendable {
     /// tile dispatches through the worker pool; persistence fires after the
     /// outcome lands.
     public func tick(now: Date = Date()) async {
+        // U.9b-2 — read the default-OFF dual-write flag ONCE per tick so the
+        // off-path adds zero work and the on-path is deterministic across the
+        // sweep. NOT re-read per tile.
+        let dualWrite = workBusConfigLoader().dualWrite
         await withTaskGroup(of: Void.self) { group in
             for (tileId, refresher) in self.allRefreshers() {
                 guard refresher.requiresUpdate(now: now) else { continue }
@@ -109,6 +121,23 @@ public final class PaneRefreshCoordinator: @unchecked Sendable {
                             tileId: tileId,
                             state: refresher.state
                         )
+                        // U.9b-2 — dual-write bus leg (default-OFF). Only runs
+                        // when an operator opted in via `WorkBusConfig.dualWrite`.
+                        // Runs SYNCHRONOUSLY inside THIS existing withTaskGroup
+                        // child task, under the pool's `maxConcurrent` ceiling —
+                        // NO second cooperative-pool hop (Carmack no-flake). When
+                        // off, this block is never entered and the path is
+                        // byte-identical to U.9a (zero bus rows, zero parity
+                        // counters). The in-process leg is considered delivered
+                        // when the tile has usable content.
+                        if dualWrite {
+                            PaneRefreshDualWrite.run(
+                                db: self.database,
+                                projectRoot: self.projectRoot,
+                                tileId: tileId,
+                                inProcessLegOK: refresher.state.contentAvailable
+                            )
+                        }
                     }
                 }
             }

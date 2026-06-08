@@ -214,6 +214,136 @@ public enum HookRouter {
         packPolicyRegistry?.refresh()
     }
 
+    /// t4c-1 — install the production `credentialVaultLookup` bridge:
+    /// the gateway's synchronous lookup closure dispatches into the
+    /// `CredentialVault.shared` actor via a balanced `DispatchSemaphore`.
+    /// Called at app/CLI/MCP-server startup so the gateway resolves real
+    /// vault reads instead of the default deny-everything fallback.
+    ///
+    /// The doc-comment on `credentialVaultLookup` prescribes exactly this
+    /// bridge. The DEFAULT closure remains the fail-CLOSED fallback: if
+    /// this installer is never called (e.g. a non-MCP CLI path that never
+    /// runs the gateway), an unset lookup still returns `.missingKey`
+    /// (DENY) — the gateway never injects without an explicit install.
+    ///
+    /// ## Fail-CLOSED preservation (Schneier)
+    /// The bridge calls `CredentialVault.shared.read(...)`. In production
+    /// today `.shared` is an EMPTY `InMemoryKeychainStore` (the real
+    /// macOS-Keychain swap is the operator-gated remainder of the parent
+    /// walk and is deliberately NOT flipped here), so a missing key still
+    /// throws `CredentialVaultError.missingKey` and the bridge returns
+    /// `.failure(.missingKey(...))` — DENY. No production deny behavior
+    /// flips: an unprovisioned vault denies before AND after this install.
+    ///
+    /// ## Carmack lifecycle
+    /// The `DispatchSemaphore` is balanced — the background Task always
+    /// `signal()`s in a `defer`, so the synchronous `wait()` cannot hang.
+    /// No file descriptor is opened; the bridge is purely an actor hop.
+    /// On any unexpected throw the closure restores fail-CLOSED by
+    /// returning `.failure(.missingKey(...))` (DENY), never a fabricated
+    /// success.
+    ///
+    /// Idempotent: safe to call repeatedly (re-assigns the same closure).
+    public static func installProductionCredentialVaultBridge() {
+        credentialVaultLookup = { key, scope, dryRun in
+            credentialVaultLookupBridge(key: key, scope: scope, dryRun: dryRun)
+        }
+    }
+
+    /// t4c-1 — the synchronous→actor bridge body for
+    /// `installProductionCredentialVaultBridge`. Extracted as an internal
+    /// static so a unit test can drive the EXACT production wall-clock
+    /// ceiling if it ever needs to; the load-independent contract is
+    /// tested via `credentialVaultLookupBridgeAsync` (below).
+    ///
+    /// `vault` defaults to `CredentialVault.shared` (the production
+    /// singleton). Fail-CLOSED: a missing key, a non-vault throw, or a
+    /// (defensive) timeout all return `.failure(.missingKey(...))` — DENY.
+    ///
+    /// The 5s `DispatchSemaphore` ceiling is a REAL-MACHINE deadline so a
+    /// hung Security daemon (after the operator-gated real-Keychain swap)
+    /// cannot wedge the synchronous gateway path. Tests do NOT exercise
+    /// this blocking path — under full-suite cooperative-pool saturation
+    /// the background `Task` could be starved past 5s of wall-clock even
+    /// for an instant in-memory read, spuriously timing out (the exact
+    /// flake that bit `DoctorKeychainHardening`). Tests drive
+    /// `credentialVaultLookupBridgeAsync` instead, whose classification
+    /// resolves the instant the vault `await` returns — no wall-clock
+    /// dependence at all.
+    static func credentialVaultLookupBridge(
+        vault: CredentialVault = .shared,
+        key: String,
+        scope: String,
+        dryRun: Bool
+    ) -> Result<Data, CredentialVaultError> {
+        final class Box: @unchecked Sendable {
+            private let lock = NSLock()
+            // Default = DENY. The background Task overwrites this only on
+            // a real success or a real vault error; a timeout leaves the
+            // DENY default in place (fail-CLOSED).
+            private var _result: Result<Data, CredentialVaultError>
+            init(key: String, scope: String) {
+                _result = .failure(.missingKey(key: key, scope: scope))
+            }
+            func publish(_ r: Result<Data, CredentialVaultError>) {
+                lock.lock(); defer { lock.unlock() }; _result = r
+            }
+            func snapshot() -> Result<Data, CredentialVaultError> {
+                lock.lock(); defer { lock.unlock() }; return _result
+            }
+        }
+        let box = Box(key: key, scope: scope)
+        let sem = DispatchSemaphore(value: 0)
+        Task {
+            defer { sem.signal() }
+            box.publish(await credentialVaultLookupBridgeAsync(
+                vault: vault, key: key, scope: scope, dryRun: dryRun
+            ))
+        }
+        // Bounded wait. On the (defensive) timeout the box still holds the
+        // DENY default, so a wedged store fails CLOSED rather than hanging
+        // the synchronous gateway path.
+        if sem.wait(timeout: .now() + .seconds(5)) == .timedOut {
+            return .failure(.missingKey(key: key, scope: scope))
+        }
+        return box.snapshot()
+    }
+
+    /// t4c-1 — the pure async classification core shared by the sync
+    /// bridge (`credentialVaultLookupBridge`) and the unit tests. Performs
+    /// the exact same fault-class mapping the sync bridge used to inline:
+    ///
+    /// - vault read returns → `.success(value)`
+    /// - vault throws `CredentialVaultError.missingKey` → `.failure(err)`
+    ///   verbatim (so the gateway deny reason carries the real key+scope)
+    /// - vault throws anything else → fail-CLOSED `.failure(.missingKey(...))`
+    ///
+    /// This has NO wall-clock dependence — it resolves the instant the
+    /// vault `await` returns, regardless of cooperative-pool saturation —
+    /// so the tests that drive it are load-independent (mirror of
+    /// `Doctor.listAnthropicVaultLabelsAsync`, which fixed the same flake
+    /// class on 2026-06-05). The production sync bridge wraps THIS core in
+    /// a 5s semaphore ceiling for its real-machine deadline.
+    static func credentialVaultLookupBridgeAsync(
+        vault: CredentialVault,
+        key: String,
+        scope: String,
+        dryRun: Bool
+    ) async -> Result<Data, CredentialVaultError> {
+        do {
+            let value = try await vault.read(key: key, scope: scope, dryRun: dryRun)
+            return .success(value)
+        } catch let err as CredentialVaultError {
+            // The vault's own structured error (missingKey) — surface it
+            // verbatim so the gateway's deny reason carries the real
+            // keyname + scope.
+            return .failure(err)
+        } catch {
+            // Any other throw → fail-CLOSED DENY with this key/scope.
+            return .failure(.missingKey(key: key, scope: scope))
+        }
+    }
+
     /// Process a hook event JSON and return a response JSON.
     /// Returns `{}` (passthrough) for unrecognized or unroutable events.
     public static func handle(eventJSON: Data) -> Data {

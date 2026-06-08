@@ -49,6 +49,15 @@ struct Doctor: ParsableCommand {
     @Flag(name: .long, help: "Reversible counterpart to --install-egress-ca: remove the local CA pem (if present) and PRINT the operator-runnable `security remove-trusted-cert ...` command (T.1d-6). DRY-RUN scaffolding only — never runs `security`, never touches the System Keychain.")
     var uninstallEgressCA = false
 
+    @Flag(name: .long, help: "Round-trip the credential vault (t4c-1): write+read+delete a probe key, then report per-scope key counts as (scope, key, <N> bytes). NEVER prints credential values. Reads CredentialVault.shared (empty in-memory store until the operator-gated real-Keychain swap lands).")
+    var vaultStatus = false
+
+    @Option(name: .long, help: "With --vault-status, do N timed reads through CredentialVault.shared and report p95/p99 read latency (t4c-1).")
+    var latencyRuns: Int?
+
+    @Option(name: .long, help: "With --vault-status --latency-runs, the key to read on each latency probe (t4c-1). Defaults to the probe key the round-trip wrote.")
+    var latencyKey: String?
+
     // MARK: - Counters
 
     private struct Results {
@@ -117,6 +126,15 @@ struct Doctor: ParsableCommand {
         // through the same dry-run executor.
         if uninstallEgressCA {
             try runUninstallEgressCA()
+            return
+        }
+
+        // t4c-1 focused vault-status motion — round-trip CredentialVault
+        // .shared, report per-scope key counts (value-free) and optional
+        // p95/p99 read latency. Read-only of credential VALUES; the
+        // round-trip writes + deletes only a probe key.
+        if vaultStatus {
+            try runVaultStatus()
             return
         }
 
@@ -2630,5 +2648,239 @@ struct Doctor: ParsableCommand {
         case .fail: results.failed += 1
         case .skip: results.skipped += 1
         }
+    }
+
+    // MARK: - t4c-1: --vault-status
+
+    /// t4c-1 — result of a credential-vault round-trip probe. Distinct
+    /// cases let the formatter render distinct operator-facing messages
+    /// per fault class rather than collapsing every failure into one
+    /// "vault broken" line (Schneier P2, mirror of
+    /// `KeychainVaultLookupResult`).
+    ///
+    /// - `.ok`: the probe key wrote, read back byte-identical, and
+    ///   deleted cleanly. Carries the round-trip wall-clock in
+    ///   milliseconds plus the per-scope `(scope, key, <N> bytes)`
+    ///   summaries (VALUE-FREE — `VaultKeyByteSummary` has no field that
+    ///   can hold the raw value).
+    /// - `.mismatch`: the read-back bytes did not equal the written probe
+    ///   bytes — a storage-integrity fault.
+    /// - `.failure(Error)`: the vault threw on write/read/delete.
+    enum VaultStatusResult: Sendable {
+        case ok(roundTripMs: Double, summaries: [VaultKeyByteSummary])
+        case mismatch
+        case failure(Error)
+    }
+
+    /// t4c-1 — pure formatter for the `--vault-status` round-trip line +
+    /// the per-scope key-count lines. Returns `(Status, [String])` so the
+    /// unit test can assert on the operator-facing surface directly
+    /// (mirror of `formatAnthropicVaultLabelsLine`).
+    ///
+    /// **Schneier (no-secret-on-stdout):** the input is a
+    /// `VaultStatusResult` whose only data-bearing case carries
+    /// `VaultKeyByteSummary` (key name + byte LENGTH) and a round-trip
+    /// duration. There is no parameter shape by which a raw credential
+    /// value could reach this formatter — the value-free guarantee is
+    /// type-level via `VaultKeyByteSummary`.
+    ///
+    /// - `.ok` → `.pass` "vault round-trip OK / <N> ms" plus one
+    ///   `(scope, key, <N> bytes)` line per provisioned key and a
+    ///   per-scope count line.
+    /// - `.mismatch` → `.fail` "vault round-trip MISMATCH".
+    /// - `.failure(err)` → `.fail` "vault round-trip FAILED: <desc>".
+    static func formatVaultStatusLine(
+        _ result: VaultStatusResult
+    ) -> (Status, [String]) {
+        switch result {
+        case let .ok(roundTripMs, summaries):
+            var lines: [String] = []
+            lines.append(String(format: "vault round-trip OK / %.2f ms", roundTripMs))
+            for summary in summaries {
+                lines.append("scope '\(summary.scope)': \(summary.count) key(s)")
+            }
+            lines.append(contentsOf: Vault.formatVaultListLines(summaries))
+            return (.pass, lines)
+        case .mismatch:
+            return (
+                .fail,
+                ["vault round-trip MISMATCH — the probe key read back different bytes than were written. Storage-integrity fault."]
+            )
+        case let .failure(error):
+            return (
+                .fail,
+                ["vault round-trip FAILED: \(error.localizedDescription)"]
+            )
+        }
+    }
+
+    /// t4c-1 — pure formatter for the optional `--latency-runs` p95/p99
+    /// line. Takes the sorted per-read durations (milliseconds) and
+    /// renders one line. No secret material is involved — durations only.
+    static func formatVaultLatencyLine(samplesMs: [Double]) -> (Status, String) {
+        guard !samplesMs.isEmpty else {
+            return (.skip, "vault read latency: no samples collected")
+        }
+        let sorted = samplesMs.sorted()
+        func percentile(_ p: Double) -> Double {
+            let idx = min(sorted.count - 1, Int((Double(sorted.count) * p).rounded(.down)))
+            return sorted[idx]
+        }
+        let p95 = percentile(0.95)
+        let p99 = percentile(0.99)
+        return (
+            .pass,
+            String(format: "vault read latency (%d runs): p95=%.3fms p99=%.3fms", sorted.count, p95, p99)
+        )
+    }
+
+    /// t4c-1 — synchronously round-trip `CredentialVault.shared` and
+    /// summarize per-scope key counts. Bridges the async actor onto
+    /// doctor's sync execution path via a bounded-timeout
+    /// `DispatchSemaphore` (mirror of `listAnthropicVaultLabels`).
+    ///
+    /// Carmack lifecycle: the semaphore is balanced — the background Task
+    /// always `signal()`s in a `defer` so the wait cannot hang past the
+    /// 5s ceiling, and the probe key is deleted in a `defer` so a throw
+    /// mid-round-trip still cleans up the probe entry. No fd is opened;
+    /// the bridge is purely an actor hop.
+    ///
+    /// The probe writes a unique, value-free probe key
+    /// (`__senkani_doctor_probe_<uuid>`) into `CredentialVault.defaultScope`,
+    /// reads it back, asserts byte-identity, then deletes it — so the
+    /// round-trip never leaves residue and never collides with a real key.
+    static func vaultRoundTrip(
+        vault: CredentialVault = .shared,
+        scopes: [String] = Vault.knownScopes,
+        probeKey: String = "__senkani_doctor_probe_\(UUID().uuidString)"
+    ) -> VaultStatusResult {
+        final class Slot: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _value: VaultStatusResult?
+            func publish(_ v: VaultStatusResult) {
+                lock.lock(); defer { lock.unlock() }; _value = v
+            }
+            func snapshot() -> VaultStatusResult? {
+                lock.lock(); defer { lock.unlock() }; return _value
+            }
+        }
+        let slot = Slot()
+        let sem = DispatchSemaphore(value: 0)
+        Task {
+            defer { sem.signal() }
+            let probeValue = Data("probe-\(UUID().uuidString)".utf8)
+            let start = DispatchTime.now()
+            do {
+                try await vault.write(key: probeKey, scope: CredentialVault.defaultScope, value: probeValue)
+                // Ensure the probe is removed even if read-back throws.
+                var readBack: Data?
+                do {
+                    readBack = try await vault.read(key: probeKey, scope: CredentialVault.defaultScope)
+                }
+                // Best-effort cleanup; a delete failure must not mask the
+                // round-trip verdict.
+                try? await vault.delete(key: probeKey, scope: CredentialVault.defaultScope)
+
+                let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000.0
+                guard readBack == probeValue else {
+                    slot.publish(.mismatch)
+                    return
+                }
+                var summaries: [VaultKeyByteSummary] = []
+                for scope in scopes {
+                    summaries.append(try await vault.listKeyByteSummary(scope: scope))
+                }
+                slot.publish(.ok(roundTripMs: elapsedMs, summaries: summaries))
+            } catch {
+                // Make a best-effort to clean up the probe key on any throw.
+                try? await vault.delete(key: probeKey, scope: CredentialVault.defaultScope)
+                slot.publish(.failure(error))
+            }
+        }
+        // 5s wall-clock ceiling so a hung Security daemon (after the
+        // operator-gated real-Keychain swap) cannot wedge `senkani doctor`.
+        if sem.wait(timeout: .now() + .seconds(5)) == .timedOut {
+            return .failure(NSError(
+                domain: "DoctorVaultStatus", code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "vault round-trip timed out (>5s) — the store may be unresponsive (locked login Keychain?)."]
+            ))
+        }
+        return slot.snapshot() ?? .failure(NSError(
+            domain: "DoctorVaultStatus", code: -2,
+            userInfo: [NSLocalizedDescriptionKey: "vault round-trip produced no result."]
+        ))
+    }
+
+    /// t4c-1 — measure read latency over `runs` reads of `key` through
+    /// `vault`. Returns the per-read durations in milliseconds. Sync
+    /// bridge with the same balanced-semaphore lifecycle as
+    /// `vaultRoundTrip`. Value-free: the read result's bytes are
+    /// discarded — only the wall-clock duration is recorded.
+    static func vaultReadLatencySamples(
+        vault: CredentialVault = .shared,
+        key: String,
+        scope: String = CredentialVault.defaultScope,
+        runs: Int
+    ) -> [Double] {
+        guard runs > 0 else { return [] }
+        final class Slot: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _value: [Double] = []
+            func publish(_ v: [Double]) {
+                lock.lock(); defer { lock.unlock() }; _value = v
+            }
+            func snapshot() -> [Double] {
+                lock.lock(); defer { lock.unlock() }; return _value
+            }
+        }
+        let slot = Slot()
+        let sem = DispatchSemaphore(value: 0)
+        Task {
+            defer { sem.signal() }
+            var samples: [Double] = []
+            samples.reserveCapacity(runs)
+            for _ in 0..<runs {
+                let start = DispatchTime.now()
+                // Discard the bytes — only the duration is recorded.
+                _ = try? await vault.read(key: key, scope: scope)
+                let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000.0
+                samples.append(elapsedMs)
+            }
+            slot.publish(samples)
+        }
+        // Generous ceiling: 100 in-memory reads are sub-millisecond, but
+        // the real-Keychain path (operator-gated) is bounded too.
+        _ = sem.wait(timeout: .now() + .seconds(30))
+        return slot.snapshot()
+    }
+
+    /// t4c-1 — thin wrapper: round-trip the production vault, render the
+    /// value-free status lines, and (when requested) the latency line.
+    /// Exits non-zero only if the round-trip itself failed/mismatched,
+    /// so the flag is scriptable.
+    private func runVaultStatus() throws {
+        print("Senkani Doctor — credential vault status (t4c-1)")
+        print("================================================")
+
+        let probeKey = "__senkani_doctor_probe_\(UUID().uuidString)"
+        let result = Self.vaultRoundTrip(probeKey: probeKey)
+        let (status, lines) = Self.formatVaultStatusLine(result)
+        for line in lines {
+            printStatus(line == lines.first ? status : .skip, line)
+        }
+
+        // Optional latency probe.
+        if let runs = latencyRuns, runs > 0 {
+            // Default the latency key to the probe key if the operator
+            // didn't name one — the probe key was just deleted, so reads
+            // measure the miss path (still a real read round-trip).
+            let key = latencyKey ?? probeKey
+            let samples = Self.vaultReadLatencySamples(key: key, runs: runs)
+            let (latStatus, latLine) = Self.formatVaultLatencyLine(samplesMs: samples)
+            printStatus(latStatus, latLine)
+        }
+
+        if case .pass = status { return }
+        throw ExitCode.failure
     }
 }

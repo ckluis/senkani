@@ -10,6 +10,48 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ---
 
+## 2026-06-07 — T.4c-1 Phase A vault seams landed — real-Keychain walk now runnable
+
+`phase-t4c-1-vault-phase-a-seams` shipped the CI-testable "Phase A" wiring
+the operator-gated `phase-t4c-credential-vault-real-keychain` walk asserts
+in its `## Pre-conditions` table — all proven against
+`InMemoryKeychainStore`, so NO production behavior flips in CI:
+
+- `senkani vault list` → `(scope, key, <N> bytes)` rows (never the value).
+- `senkani doctor --vault-status` / `--latency-runs N` / `--latency-key K`
+  → round-trip OK + per-scope key count + p95/p99 (value-free).
+- `HookRouter.installProductionCredentialVaultBridge()` wired at CLI,
+  MCP-server, and `SenkaniApp` init — the gateway lookup now bridges into
+  `CredentialVault.shared` (still an empty `InMemoryKeychainStore` in prod;
+  fail-CLOSED preserved — missing keys still DENY).
+- `tools/soak/t4c-corpus-runner.sh` — spawns `senkani-mcp` over stdio,
+  fires 20 `tools/call`, captures `corpus.jsonl` (no keychain dep).
+
+**Operator-gated REMAINDER (run this on a real Mac with an unlocked login
+Keychain):** the parent walk's Steps 1, 4-real, 5-real, 6, 7, 9 plus the
+`CredentialVault.shared = MacOSKeychainStore()` swap. Specifically still
+NEEDS the operator / Cowork:
+
+1. Flip `CredentialVault.shared` to `MacOSKeychainStore()` (the swap that
+   needs this very proof) — or run the walk against a build that does.
+2. `senkani vault add --key "$SENTINEL_KEY"` (gui-human: first-run macOS
+   Keychain "Always Allow" prompt; getpass needs a real tty).
+3. `senkani doctor --vault-status --latency-runs 100 --latency-key
+   "$SENTINEL_KEY"` → assert p95 < 5 ms on the REAL Keychain.
+4. `tools/soak/t4c-corpus-runner.sh` against a tool whose
+   `credentialGateway.enabled=true` references `$SENTINEL_KEY` → 20 lines,
+   zero `.error`.
+5. Scan all four chained tables + raw `senkani.db` bytes + the captured
+   plain-text artifacts for `$SENTINEL_VALUE` → ZERO matches (the
+   sentinel-leak proof InMemoryKeychainStore cannot give).
+6. Teardown via `senkani vault remove` + Cowork screenshot of the
+   value-free `vault list` / `doctor --vault-status` output.
+
+See `spec/autonomous/backlog/phase-t4c-credential-vault-real-keychain.md`
+for the full step table. (`phase-t4c-1-vault-phase-a-seams-2026-06-07`)
+
+---
+
 ## 2026-05-31 — V.13e-4b real-completion OpenAI conformance — model-present validation
 
 `phase-v13e-4b-real-completion-conformance` shipped 4 REAL-model conformance

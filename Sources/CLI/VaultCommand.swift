@@ -21,8 +21,84 @@ struct Vault: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "vault",
         abstract: "Manage credential-vault entries.",
-        subcommands: [VaultAdd.self, VaultRemove.self]
+        subcommands: [VaultAdd.self, VaultRemove.self, VaultList.self]
     )
+}
+
+/// `senkani vault list` — enumerate provisioned credentials as
+/// `(scope, key, <N> bytes)` rows. t4c-1.
+///
+/// Schneier (no-secret-on-stdout, type-level): the verb reads the
+/// vault through `CredentialVault.listKeyByteSummary(scope:)`, whose
+/// return type (`VaultKeyByteSummary` of `VaultKeyByteEntry`) has NO
+/// field that can carry the raw value — only the key name and the
+/// value's byte LENGTH. The rendered line is therefore value-free by
+/// construction, not by convention; a refactor that tried to print the
+/// value would have to widen `VaultKeyByteEntry` AND the formatter and
+/// would fail the value-free unit test.
+///
+/// CI invariant: production reads the configured `CredentialVault.shared`
+/// store (an empty `InMemoryKeychainStore` until the operator-gated
+/// real-Keychain swap lands in the parent walk). Tests drive the pure
+/// `Vault.formatVaultListLines` formatter + the
+/// `listKeyByteSummary` bridge directly with an
+/// `InMemoryKeychainStore`-backed vault — CI never touches the real
+/// macOS Keychain.
+struct VaultList: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "list",
+        abstract: "List provisioned credentials as (scope, key, <N> bytes) — never the value."
+    )
+
+    @Option(name: .long, help: "Restrict the listing to a single scope. Default: enumerate the known scopes (\(Vault.knownScopes.joined(separator: ", "))).")
+    var scope: String?
+
+    func run() async throws {
+        let scopes = scope.map { [$0] } ?? Vault.knownScopes
+        var summaries: [VaultKeyByteSummary] = []
+        for s in scopes {
+            let summary = try await CredentialVault.shared.listKeyByteSummary(scope: s)
+            summaries.append(summary)
+        }
+        for line in Vault.formatVaultListLines(summaries) {
+            print(line)
+        }
+    }
+}
+
+extension Vault {
+    /// The scopes `vault list` enumerates when `--scope` is omitted.
+    /// `default` is today's only production scope; `anthropic-key` holds
+    /// the upstream Anthropic key labels (V.13b). T.2c will add
+    /// `engagement-<id>` scopes — they slot in here without an ABI break.
+    static let knownScopes: [String] = [
+        CredentialVault.defaultScope,
+        AnthropicKeyProvisioner.vaultScope,
+    ]
+
+    /// Pure formatter for `vault list`. Renders one `(scope, key, <N>
+    /// bytes)` row per entry; an empty scope renders a single
+    /// `(scope, <empty>)` line so the operator sees the scope was
+    /// queried. Lifted out so the unit test can assert on the rendered
+    /// lines without touching the filesystem or the real Keychain.
+    ///
+    /// Schneier (no-secret-on-stdout): the input is a
+    /// `[VaultKeyByteSummary]` — there is no parameter shape by which a
+    /// raw value could reach this formatter. Only the key name and the
+    /// value's byte LENGTH are rendered.
+    static func formatVaultListLines(_ summaries: [VaultKeyByteSummary]) -> [String] {
+        var lines: [String] = []
+        for summary in summaries {
+            if summary.entries.isEmpty {
+                lines.append("(\(summary.scope), <empty>)")
+                continue
+            }
+            for entry in summary.entries {
+                lines.append("(\(summary.scope), \(entry.key), \(entry.byteLength) bytes)")
+            }
+        }
+        return lines
+    }
 }
 
 struct VaultAdd: AsyncParsableCommand {

@@ -67,6 +67,11 @@ struct WorkstreamRemoveSheet: View {
                                     .foregroundStyle(.yellow)
                                     .help("Branch has \(n) unpushed commit\(n == 1 ? "" : "s")")
                             }
+                            if case .noUpstream = unpushed {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.yellow)
+                                    .help("Branch has no upstream — never pushed")
+                            }
                         }
                     }
                     .toggleStyle(.checkbox)

@@ -344,6 +344,21 @@ public enum HookRouter {
         }
     }
 
+    /// t6-schedule-end-cli-to-app-bridge — idempotent `schedule_end`
+    /// delivery seam. The `handle()` early branch routes a `schedule_end`
+    /// notify message through this closure; production wires
+    /// `ScheduleEndNotifier.deliverIfNew(...)` (durable sessionId-keyed
+    /// dedup + `NotificationDelivery.deliver(.scheduleEnd(...))`). Tests
+    /// inject a closure backed by a temp ledger so they can assert the
+    /// deliver-once / dedup-on-replay invariant without touching the real
+    /// `~/.senkani/` ledger or the global notification router. Returns true
+    /// on a first delivery, false on a deduped replay.
+    nonisolated(unsafe) public static var scheduleEndDeliver: (_ scheduleId: String, _ summary: String, _ sessionId: String) -> Bool = { scheduleId, summary, sessionId in
+        ScheduleEndNotifier.deliverIfNew(
+            scheduleId: scheduleId, summary: summary, sessionId: sessionId
+        )
+    }
+
     /// Process a hook event JSON and return a response JSON.
     /// Returns `{}` (passthrough) for unrecognized or unroutable events.
     public static func handle(eventJSON: Data) -> Data {
@@ -355,6 +370,32 @@ public enum HookRouter {
         // invoked from inside a writer's body. See HookSeamLock.swift.
         HookSeamLock.shared.lock()
         defer { HookSeamLock.shared.unlock() }
+
+        // t6-schedule-end-cli-to-app-bridge — EARLY branch for the
+        // `schedule_end` notify kind, BEFORE the `tool_name` guard below
+        // (which returns passthrough for non-tool events, so a schedule_end
+        // message would otherwise be silently dropped). This is a clean
+        // early-return for the schedule_end kind ONLY: it touches NO gate,
+        // NO tool-event path, and NO existing behavior — a schedule_end
+        // message carries no `tool_name`, so the existing routing never saw
+        // it anyway. The idempotent primitive dedups by sessionId
+        // (Kleppmann D7 constraint) so a live push and a future
+        // reconcile-on-launch replay never double-deliver. Always returns
+        // passthrough — the producer is fire-and-forget and reads no
+        // meaningful response.
+        if let event = try? JSONSerialization.jsonObject(with: eventJSON) as? [String: Any],
+           event["hook_event_name"] as? String == "schedule_end" {
+            let scheduleId = event["schedule_id"] as? String ?? ""
+            let summary = event["summary"] as? String ?? ""
+            let sessionId = event["session_id"] as? String ?? ""
+            // A missing session_id can't be deduped — without the key the
+            // Kleppmann invariant has nothing to key on, so we drop it
+            // rather than fire an undedupable banner.
+            if !sessionId.isEmpty {
+                _ = scheduleEndDeliver(scheduleId, summary, sessionId)
+            }
+            return passthroughResponse
+        }
 
         guard let event = try? JSONSerialization.jsonObject(with: eventJSON) as? [String: Any],
               let toolName = event["tool_name"] as? String else {

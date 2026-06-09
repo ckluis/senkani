@@ -487,6 +487,23 @@ extension Schedule {
                 exitCode: exitCode
             )
 
+            // t6-schedule-end-cli-to-app-bridge — best-effort GUI push over
+            // the EXISTING hook socket (ratified D7 architecture,
+            // 2026-06-08). The durable `schedule_end` token_events row above
+            // (recordEnd) is canonical truth; this push is fire-and-forget.
+            // App not running ⇒ silent no-op (the future reconcile-on-launch
+            // drain replays the DB row through the same idempotent
+            // primitive). The session_id reuses ScheduleTelemetry's
+            // derivation so it MATCHES the DB row for reconcile dedup
+            // (Kleppmann). Non-blocking, swallows all errors, never alters
+            // the CLI exit code.
+            let endSummary = task.lastRunResult ?? (exitCode == 0 ? "success" : "failed: exit \(exitCode)")
+            _ = ScheduleEndNotifier.emitScheduleEnd(
+                scheduleId: task.name,
+                summary: endSummary,
+                sessionId: ScheduleTelemetry.sessionId(taskName: task.name, runId: runId)
+            )
+
             // Cleanup worktree on success; retain on failure for inspection.
             if let handle = worktreeHandle {
                 if task.lastRunResult == "success" {

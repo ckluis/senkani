@@ -136,6 +136,15 @@ struct RemoveDialogShapeTests {
         // Destructive styling.
         #expect(src.contains(".tint(.red)"),
                 "Confirm button must use destructive (red) styling.")
+        // Unpushed-warning must fire for BOTH .unpushed AND .noUpstream
+        // (acceptance #152 — a branch with no upstream was never pushed,
+        // so it must surface the same yellow ⚠ as an ahead-of-remote one).
+        #expect(src.contains("Image(systemName: \"exclamationmark.triangle.fill\")"),
+                "Dialog must render the yellow unpushed-warning triangle.")
+        #expect(src.contains(".unpushed(let n) = unpushedByWorkstream[ws.id]"),
+                "Dialog must render the warning for the .unpushed verdict.")
+        #expect(src.contains("case .noUpstream = unpushedByWorkstream[ws.id]"),
+                "Dialog must ALSO render the warning for the .noUpstream verdict (acceptance #152) — a never-pushed branch must surface the same ⚠.")
     }
 
     @Test("WorkstreamRemoveSheet exists with tiered-checkbox surfaces")
@@ -154,6 +163,15 @@ struct RemoveDialogShapeTests {
                 "Dialog must surface force-remove as an explicit opt-in.")
         #expect(src.contains(".tint(.red)"),
                 "Confirm button must use destructive (red) styling.")
+        // Unpushed-warning must fire for BOTH .unpushed AND .noUpstream
+        // (acceptance #152 — a never-pushed branch has no upstream ref
+        // and must surface the same yellow ⚠ as an ahead-of-remote one).
+        #expect(src.contains("Image(systemName: \"exclamationmark.triangle.fill\")"),
+                "Dialog must render the yellow unpushed-warning triangle.")
+        #expect(src.contains(".unpushed(let n) = unpushed"),
+                "Dialog must render the warning for the .unpushed verdict.")
+        #expect(src.contains("case .noUpstream = unpushed"),
+                "Dialog must ALSO render the warning for the .noUpstream verdict (acceptance #152) — a never-pushed branch must surface the same ⚠.")
     }
 
     @Test("NewWorkstreamSheet shows disclosure block + editable branch")

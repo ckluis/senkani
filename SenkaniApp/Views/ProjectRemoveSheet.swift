@@ -197,6 +197,11 @@ struct ProjectRemoveSheet: View {
                         .foregroundStyle(.yellow)
                         .help("Branch has \(n) unpushed commit\(n == 1 ? "" : "s")")
                 }
+                if case .noUpstream = unpushedByWorkstream[ws.id] {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.yellow)
+                        .help("Branch has no upstream — never pushed")
+                }
             }
         }
         .padding(.vertical, 4)

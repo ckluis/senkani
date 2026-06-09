@@ -829,6 +829,24 @@ struct Doctor: ParsableCommand {
         let cfg = (try? WorkBusConfigStore.load()) ?? WorkBusConfig()
         printStatus(.pass, "work-bus config — dual_write: \(cfg.dualWrite)")
         results.passed += 1
+
+        // U.9b-3 — parity sub-row, summed across all project roots from the
+        // existing `session_work_bus.parity_*` event counters minted in
+        // u9b-1. These are DERIVABLE NOW (no new tracking infra); the
+        // latency-delta-p50/p95 + oldest-unmatched-pair-age sub-rows the
+        // parent spec also names are DEFERRED — they require new per-item
+        // pairing/timing infrastructure not built this round. Informational
+        // only; doctor exit code stays 0.
+        let parityRows = SessionDatabase.shared.eventCounts(prefix: "session_work_bus.parity_")
+        func paritySum(_ type: String) -> Int {
+            parityRows.filter { $0.eventType == type }.reduce(0) { $0 + $1.count }
+        }
+        let pMatch = paritySum(AutoValidateDualWrite.parityMatch)
+        let pDiverge = paritySum(AutoValidateDualWrite.parityDiverge)
+        let pBusOnly = paritySum(AutoValidateDualWrite.parityBusOnly)
+        let pInProcOnly = paritySum(AutoValidateDualWrite.parityInProcessOnly)
+        printStatus(.pass, "work-bus parity — match: \(pMatch) | diverge: \(pDiverge) | bus_only: \(pBusOnly) | inprocess_only: \(pInProcOnly) (latency-delta + oldest-unmatched-pair-age deferred)")
+        results.passed += 1
     }
 
     // MARK: - Check 17: Trust flags (Phase U.4a)

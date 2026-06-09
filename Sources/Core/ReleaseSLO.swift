@@ -22,7 +22,11 @@ public enum ReleaseSLOName: String, CaseIterable, Sendable {
         switch self {
         case .coldStart:       return "< 250 ms p95"
         case .idleMemory:      return "< 75 MB"
-        case .installSize:     return "< 50 MB"
+        // install.size is enforced PER-BINARY (see ReleaseSLOInstallBudget),
+        // not against one summed total. The label points there rather than
+        // implying a single number the family can never meet (the MLX/Metal
+        // daemon alone is ~67 MB stripped).
+        case .installSize:     return "per-binary budgets (stripped)"
         case .classifierP95:   return "< 2 ms p95"
         case .openaiColdStart: return "< 1500 ms p95"
         }
@@ -32,7 +36,11 @@ public enum ReleaseSLOName: String, CaseIterable, Sendable {
         switch self {
         case .coldStart:       return 250.0
         case .idleMemory:      return 75.0
-        case .installSize:     return 50.0
+        // Retained as the SUM of the per-binary budgets so the legacy
+        // single-value `install_size_mb` total still has a meaningful
+        // ceiling for the doctor surface + the regression baseline.
+        // The authoritative gate is ReleaseSLOInstallBudget (per-binary).
+        case .installSize:     return ReleaseSLOInstallBudget.totalBudgetMB
         case .classifierP95:   return 2.0
         case .openaiColdStart: return 1500.0
         }
@@ -43,6 +51,82 @@ public enum ReleaseSLOName: String, CaseIterable, Sendable {
         case .coldStart, .classifierP95, .openaiColdStart:  return "ms"
         case .idleMemory, .installSize:                     return "MB"
         }
+    }
+}
+
+/// Per-binary install-size budgets (D5,
+/// slo-install-size-unstripped-exceeds-50mb-threshold-2026-05-27).
+///
+/// `install.size` is NOT one summed gate. The shipped product family
+/// spans a 1 MB hook and a ~67 MB MLX/Metal daemon; no single total is
+/// honest. Each `.executable` product carries its OWN falsifiable budget
+/// against its STRIPPED size (stripping is lossless — every product has a
+/// sibling `.dSYM`). Keep this list in sync with `tools/measure-install-size.sh`.
+public enum ReleaseSLOInstallBudget: Sendable {
+    /// One shipped product's budget. `measuredMB` is the STRIPPED size.
+    public struct Budget: Sendable, Equatable {
+        public let product: String
+        public let budgetMB: Double
+        public let rationale: String
+        public init(product: String, budgetMB: Double, rationale: String) {
+            self.product = product
+            self.budgetMB = budgetMB
+            self.rationale = rationale
+        }
+    }
+
+    /// The canonical per-binary budget table. Budgets sit above the
+    /// measured stripped size (in comments) with deliberate headroom; a
+    /// product over its budget is a real regression, not noise.
+    public static let budgets: [Budget] = [
+        Budget(product: "senkani",            budgetMB: 50, rationale: "CLI; 44 MB stripped"),
+        Budget(product: "senkani-mcp",        budgetMB: 70, rationale: "MLX/Metal daemon, irreducible; 67 MB stripped"),
+        Budget(product: "senkani-hook",       budgetMB: 5,  rationale: "zero-dep hook; 1 MB stripped"),
+        Budget(product: "senkani-mig-helper", budgetMB: 15, rationale: "migration helper; 5 MB stripped"),
+    ]
+
+    /// Sum of the per-binary budgets — the ceiling the legacy summed
+    /// `install_size_mb` total is checked against.
+    public static var totalBudgetMB: Double {
+        budgets.reduce(0) { $0 + $1.budgetMB }
+    }
+
+    /// Budget for a named product, or `nil` if it carries no budget
+    /// (e.g. the SenkaniApp GUI bundle, which ships via DMG not a CLI).
+    public static func budget(for product: String) -> Double? {
+        budgets.first { $0.product == product }?.budgetMB
+    }
+
+    /// Per-binary verdict: which measured products are over budget.
+    /// `measured` maps product name → stripped MB. Products with no
+    /// budget are ignored; budgeted products absent from `measured`
+    /// are simply not evaluated (a measurement miss, not a breach).
+    public struct CheckResult: Sendable, Equatable {
+        public struct Line: Sendable, Equatable {
+            public let product: String
+            public let measuredMB: Double
+            public let budgetMB: Double
+            public var overBudget: Bool { measuredMB > budgetMB }
+            public init(product: String, measuredMB: Double, budgetMB: Double) {
+                self.product = product
+                self.measuredMB = measuredMB
+                self.budgetMB = budgetMB
+            }
+        }
+        public let lines: [Line]
+        public var anyOverBudget: Bool { lines.contains { $0.overBudget } }
+        public var breaches: [Line] { lines.filter { $0.overBudget } }
+        public init(lines: [Line]) { self.lines = lines }
+    }
+
+    /// Evaluate measured stripped sizes against the per-binary budgets.
+    public static func check(measured: [String: Double]) -> CheckResult {
+        let lines: [CheckResult.Line] = budgets.compactMap { b in
+            guard let mb = measured[b.product] else { return nil }
+            return CheckResult.Line(product: b.product, measuredMB: mb,
+                                    budgetMB: b.budgetMB)
+        }
+        return CheckResult(lines: lines)
     }
 }
 
@@ -61,11 +145,18 @@ public struct ReleaseSLORow: Codable, Sendable, Equatable {
     /// `nil` on rows written before V.13e-3, or when the endpoint
     /// never reached "listening on" at measure time.
     public let openaiColdStartMsP95: Double?
+    /// Per-binary STRIPPED sizes in MB (D5,
+    /// slo-install-size-...-2026-05-27), product-name → MB. `nil` on rows
+    /// written before D5 (the legacy `installSizeMB` summed total is the
+    /// only install figure those rows carry). When present, this is the
+    /// authoritative input to the per-binary budget gate.
+    public let installSizePerBinaryMB: [String: Double]?
 
     public init(ts: Double, gitSha: String?, version: String?,
                 coldStartMsP95: Double?, idleMemoryMB: Double?,
                 installSizeMB: Double?, classifierP95Ms: Double?,
-                openaiColdStartMsP95: Double? = nil) {
+                openaiColdStartMsP95: Double? = nil,
+                installSizePerBinaryMB: [String: Double]? = nil) {
         self.ts = ts
         self.gitSha = gitSha
         self.version = version
@@ -74,17 +165,19 @@ public struct ReleaseSLORow: Codable, Sendable, Equatable {
         self.installSizeMB = installSizeMB
         self.classifierP95Ms = classifierP95Ms
         self.openaiColdStartMsP95 = openaiColdStartMsP95
+        self.installSizePerBinaryMB = installSizePerBinaryMB
     }
 
     enum CodingKeys: String, CodingKey {
         case ts
-        case gitSha               = "git_sha"
+        case gitSha                 = "git_sha"
         case version
-        case coldStartMsP95       = "cold_start_ms_p95"
-        case idleMemoryMB         = "idle_memory_mb"
-        case installSizeMB        = "install_size_mb"
-        case classifierP95Ms      = "classifier_p95_ms"
-        case openaiColdStartMsP95 = "openai_cold_start_ms_p95"
+        case coldStartMsP95         = "cold_start_ms_p95"
+        case idleMemoryMB           = "idle_memory_mb"
+        case installSizeMB          = "install_size_mb"
+        case classifierP95Ms        = "classifier_p95_ms"
+        case openaiColdStartMsP95   = "openai_cold_start_ms_p95"
+        case installSizePerBinaryMB = "install_size_per_binary_mb"
     }
 
     public func value(for slo: ReleaseSLOName) -> Double? {
@@ -228,14 +321,29 @@ public final class ReleaseSLOHistory: @unchecked Sendable {
             missingReason: nil)
     }
 
+    /// Per-binary install-budget verdict for the LATEST row, or `nil`
+    /// when the latest row carries no per-binary breakdown (pre-D5 rows,
+    /// or a run where install size wasn't measured). The per-binary map
+    /// is the authoritative install gate; the legacy summed
+    /// `install_size_mb` total only feeds the doctor surface + regression
+    /// baseline.
+    public func latestInstallBudgetCheck() -> ReleaseSLOInstallBudget.CheckResult? {
+        guard let measured = load().last?.installSizePerBinaryMB,
+              !measured.isEmpty else { return nil }
+        return ReleaseSLOInstallBudget.check(measured: measured)
+    }
+
     /// Whether the gate should fail the build given the current history.
-    /// `true` when ANY SLO is `.overBudget` or `.regression`.
-    /// `.missing` and `.noHistory` never fail the gate — fresh checkouts
-    /// shouldn't break.
+    /// `true` when ANY scalar SLO is `.overBudget` or `.regression`, OR
+    /// when ANY shipped binary in the latest row exceeds its per-binary
+    /// install budget (D5). `.missing` and `.noHistory` never fail the
+    /// gate — fresh checkouts shouldn't break.
     public func shouldFailGate() -> Bool {
-        evaluateAll().contains { e in
+        let scalarFails = evaluateAll().contains { e in
             e.verdict == .overBudget || e.verdict == .regression
         }
+        let perBinaryFails = latestInstallBudgetCheck()?.anyOverBudget ?? false
+        return scalarFails || perBinaryFails
     }
 
     private func missingReason(for slo: ReleaseSLOName) -> String {

@@ -1597,9 +1597,14 @@ struct Doctor: ParsableCommand {
             return
         }
 
+        // Per-binary install budgets (D5) are the authoritative install
+        // gate — render them under the install.size line and fold any
+        // breach into the block verdict.
+        let installCheck = history.latestInstallBudgetCheck()
+
         let anyFailing = evaluations.contains { e in
             e.verdict == .overBudget || e.verdict == .regression
-        }
+        } || (installCheck?.anyOverBudget ?? false)
 
         if anyFailing {
             printStatus(.fail, "Release commitments (Phase V.14):")
@@ -1611,7 +1616,19 @@ struct Doctor: ParsableCommand {
 
         for evaluation in evaluations {
             print("    " + releaseSLOLine(evaluation))
+            if evaluation.slo == .installSize, let installCheck {
+                for line in installCheck.lines {
+                    print("      " + installBudgetLine(line))
+                }
+            }
         }
+    }
+
+    /// Render one per-binary install-budget line (stripped size vs budget).
+    private func installBudgetLine(_ l: ReleaseSLOInstallBudget.CheckResult.Line) -> String {
+        let head = String(format: "%@: %.1f MB (< %.0f MB budget, stripped)",
+                          l.product, l.measuredMB, l.budgetMB)
+        return l.overBudget ? head + " — OVER BUDGET" : head
     }
 
     private func releaseSLOLine(_ e: ReleaseSLOEvaluation) -> String {

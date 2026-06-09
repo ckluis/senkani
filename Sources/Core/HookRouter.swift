@@ -501,6 +501,24 @@ public enum HookRouter {
                 toolInput: toolInput,
                 sessionId: sessionId
             )
+            // t6 ratified 2026-06-08
+            // (`t6-notification-confirmation-gate-deeper-respect`,
+            // panel D11 Norman/Allspaw/Lauret/Torvalds): a
+            // `ConfirmationGate` `.deny` MUST surface to the operator
+            // as a NON-SUPPRESSIBLE `notifyFailure`. A silent denial is
+            // the dangerous case (Norman/Allspaw). This goes through
+            // `deliverUnconditional`, which bypasses the per-sink
+            // subscription — so even a sink that opted OUT of the
+            // `notifyFailure` class still sees the deny. This is NOT the
+            // notification router consulting `ConfirmationGate` (the
+            // per-sink subscription remains the only notification gate,
+            // clean separation); it is the deny *producer* refusing to
+            // let a block go silent. No-op when no router is installed
+            // (CLI / hook-relay / stdio MCP), so production deny
+            // behavior is unchanged where notifications aren't wired.
+            NotificationDelivery.deliverUnconditional(
+                .notifyFailure(toolName: toolName, reason: body)
+            )
             return appendAndMarkValidationIfSurfaced(
                 blockResponse(body, eventName: eventName),
                 advisory: validationAdvisory,

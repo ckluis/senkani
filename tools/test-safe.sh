@@ -349,13 +349,23 @@ run_chunk() {
   start_ts="$(date +%s)"
   while [ "$attempt" -le "$RETRIES" ]; do
     echo "::group::chunk[$name] attempt $attempt of $RETRIES"
-    if swift test --no-parallel "${args[@]}"; then
+    # Drop swift-testing's [#DeprecatedDeclaration] warning spew from the
+    # CAPTURED LOG only — it bloats each run's log by ~140MB. The two fixed-
+    # string patterns are unique to that deprecation warning and CANNOT match a
+    # failure line (✘ / error: / "Test run with" / SIGTRAP / retry). swift
+    # test's REAL exit code is read via PIPESTATUS[0], so failure detection +
+    # the SIGTRAP-retry envelope are untouched. (luminary groom D6:
+    # Bach/Torvalds — the filter must never hide a failure;
+    # swift-testing-package-dep-removal-2026-05-11 records why the dep stays.)
+    swift test --no-parallel "${args[@]}" 2>&1 \
+      | grep -v -F -e '[#DeprecatedDeclaration]' -e 'is deprecated: Swift Testing is now included'
+    local rc="${PIPESTATUS[0]}"
+    if [ "$rc" -eq 0 ]; then
       echo "::endgroup::"
       local elapsed=$(( $(date +%s) - start_ts ))
       echo "✓ chunk[$name] passed (attempt $attempt, ${elapsed}s)"
       return 0
     fi
-    local rc=$?
     echo "::endgroup::"
     if [ "$attempt" -lt "$RETRIES" ]; then
       echo "::warning::chunk[$name] attempt $attempt failed (exit $rc) — retrying"

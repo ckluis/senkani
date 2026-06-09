@@ -58,13 +58,30 @@ public enum ExecDenyReason: String, Equatable, Sendable {
     /// the host if it ever does.
     case sandboxRuntimeUnavailable = "sandbox_runtime_unavailable"
 
-    /// Operator-facing one-liner for the MCP refusal text.
+    /// Operator-facing one-liner for the MCP refusal text. T.3b-2
+    /// (2026-06-08) polish: a legible deny names WHAT was refused, WHY,
+    /// and WHAT TO DO INSTEAD — Jobs/Allspaw: a refusal a user can act on,
+    /// not a cryptic error. The deny-reason token (`rawValue`) stays
+    /// stable for the audit row; this prose may evolve.
     public var operatorMessage: String {
         switch self {
         case .userSuppliedDenyByDefault:
-            return "user-supplied command refused: senkani_exec runs user-supplied scripts fail-CLOSED (DENY-BY-DEFAULT). Host execution is reserved for explicitly-trusted callers."
+            return
+                "user-supplied command refused: senkani_exec runs " +
+                "user-supplied scripts fail-CLOSED (DENY-BY-DEFAULT). " +
+                "Host execution is reserved for explicitly-trusted " +
+                "callers. What to do instead: run the command yourself " +
+                "in your own shell, or invoke it through a trusted " +
+                "in-process tool — senkani_exec will not run arbitrary " +
+                "scripts on the host. See `senkani doctor --check-sandbox` " +
+                "for the live exec-sandbox posture."
         case .sandboxRuntimeUnavailable:
-            return "command refused: the execution sandbox runtime is unavailable and senkani_exec will not fall back to unsandboxed host execution."
+            return
+                "command refused: the execution sandbox runtime is " +
+                "unavailable and senkani_exec will NOT fall back to " +
+                "unsandboxed host execution (fail-CLOSED). What to do " +
+                "instead: install/repair the sandbox runtime, then retry; " +
+                "see `senkani doctor --check-sandbox` for the live posture."
         }
     }
 }

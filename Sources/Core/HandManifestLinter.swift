@@ -152,6 +152,46 @@ public enum HandManifestLinter {
             }
         }
 
+        // T.3b-2 (re-aimed 2026-06-08) — DENY-BY-DEFAULT posture linter.
+        //
+        // The ratified operator decision (2026-06-05, see
+        // `ExecRoutingDecision` / commit ec72a1f) makes user-supplied
+        // execution DENY-BY-DEFAULT / fail-CLOSED. No third-party wasm
+        // shell is vendored, so the positive wasm guest path is DROPPED
+        // indefinitely. A `HandManifest` that declares an execution
+        // sandbox other than `.none` therefore opts into a runtime that
+        // routes NOWHERE: `ExecRoutingDecision.route(...)` only ever
+        // returns `.host` (trusted, no-opt-in) or `.deny` — there is no
+        // dispatch that honors `.wasm`, `.proc`, or `.full`. Declaring
+        // one misleads the author into believing they constrained
+        // execution when nothing reads the field.
+        //
+        // This rule was originally specced to ENFORCE a `.wasm` opt-in
+        // (T.3b-2 positive-wasm linter). It is RE-AIMED to ENFORCE the
+        // deny floor instead: warn (do not block — the field is inert,
+        // not dangerous) so the author removes the no-op declaration and
+        // is not misled. It agrees with the shipped router: the only
+        // sandbox value that routes anywhere today is `.none` (which
+        // means "no execution-sandbox constraint", the host/deny split is
+        // decided by `ExecRoutingDecision` on caller trust, not by this
+        // field). See `Sources/Core/ExecRoutingDecision.swift` and
+        // `senkani doctor --check-sandbox`.
+        if m.sandbox != .none {
+            issues.append(.init(
+                severity: .warning,
+                path: "sandbox",
+                message:
+                    "sandbox: '\(m.sandbox.rawValue)' routes NOWHERE under " +
+                    "deny-by-default (the positive execution-sandbox guest " +
+                    "path is dropped; no wasm/proc/full runtime is wired). " +
+                    "ExecRoutingDecision honors only host (trusted callers) " +
+                    "vs deny (user-supplied) — it never dispatches to a " +
+                    "declared sandbox. Set sandbox: 'none'; this declaration " +
+                    "is inert and may mislead you into thinking execution is " +
+                    "constrained when it is not. Run `senkani doctor " +
+                    "--check-sandbox` for the live exec posture."))
+        }
+
         // V.18a-4 — runtime_telemetry.capture=full demands per-field
         // operator review. An empty (or absent) validated_fields map
         // means the operator opted into verbatim capture without

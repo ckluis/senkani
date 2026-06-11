@@ -98,14 +98,15 @@ public final class EventStreamDispatcher: @unchecked Sendable {
         self.dualWriteEnabled = dualWriteEnabled
     }
 
-    /// Convenience factory wiring the four standard consumers. The three
-    /// real consumers (`validation`, `agent_timeline`,
-    /// `compound_learning_analytics`) advance offsets + record lag via the
-    /// shared default handler; `notifications` is the no-op-recording stub
-    /// (T.6c owns its real body). Deep real-work integration for the three
-    /// is DEFERRED to T.6c / per-subsystem rounds (see build note) — wiring
-    /// each subsystem's recordEvent entry point here would balloon the
-    /// concurrency envelope and risk a behavior change beyond this spine.
+    /// Convenience factory wiring the four standard consumers.
+    /// `validation` runs its REAL work (U.9b-3b leg 1:
+    /// `ValidationStreamConsumer` — drains `validation_results` events and
+    /// drives the `auto_validate.delivered` path, commitOffset-driven,
+    /// idempotent-claim exactly-once). `agent_timeline` and
+    /// `compound_learning_analytics` still advance offsets + record lag via
+    /// the shared default handler (their deep wiring is owned by the
+    /// remaining U.9b-3b legs); `notifications` is the no-op-recording stub
+    /// (T.6c owns its real body).
     public static func standard(
         db: SessionDatabase,
         pullLimit: Int = 100,
@@ -122,7 +123,12 @@ public final class EventStreamDispatcher: @unchecked Sendable {
             dualWriteEnabled: dualWriteEnabled
         )
         let lagOnly: Handler = { _ in /* offset-advance + lag-record only */ }
-        dispatcher.register(consumerId: ConsumerId.validation, handler: lagOnly)
+        // validation: REAL work (U.9b-3b leg 1) — a drop-in via the
+        // register seam; the spine's drain contract is unchanged.
+        dispatcher.register(
+            consumerId: ConsumerId.validation,
+            handler: ValidationStreamConsumer.makeHandler(db: db)
+        )
         dispatcher.register(consumerId: ConsumerId.agentTimeline, handler: lagOnly)
         // notifications: explicit no-op stub. Recorded distinctly so the
         // intent is legible — it advances offset + lag ONLY, never any side

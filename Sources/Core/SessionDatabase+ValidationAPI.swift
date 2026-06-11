@@ -123,6 +123,14 @@ extension SessionDatabase {
         validationStore.markValidationAdvisoriesSurfaced(ids: ids)
     }
 
+    /// U.9b-3b — synchronous, idempotent delivery claim for the bus-side
+    /// `validation` consumer. Returns `true` only when THIS call flipped a
+    /// still-pending advisory row to delivered (guarded UPDATE — replays
+    /// and rows the in-process leg already surfaced lose the claim).
+    public func claimValidationDelivery(resultId: Int64) -> Bool {
+        validationStore.claimValidationDelivery(resultId: resultId)
+    }
+
     /// Legacy compatibility helper for callers/tests that explicitly want the old destructive read.
     public func fetchAndMarkDelivered(sessionId: String) -> [ValidationResultRow] {
         validationStore.fetchAndMarkDelivered(sessionId: sessionId)

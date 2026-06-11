@@ -10,6 +10,34 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ---
 
+## 2026-06-11 — Settings → Notifications matrix pane shipped — visual render walk pending
+
+Item `t6-settings-notifications-matrix-ui-2026-05-21` partial-shipped its
+code slice on `carves/drain-2026-06-09`: the sidebar **Notifications**
+tool view (per-sink × per-event checkbox matrix over
+`~/.senkani/notifications.json`, deterministic writer, live router
+reload on every flip, test-fire buttons). All matrix/reload semantics
+are CI-tested headlessly (`NotificationsMatrixSettingsTests`, 16 tests);
+what CI cannot prove is the RENDER + interaction.
+
+**Walk (exec mode: cowork-driven with operator at the GUI; ~10 min):**
+
+1. Launch SenkaniApp (Xcode-built or `swift run SenkaniApp`); sidebar
+   TOOLS → click **Notifications** (bell.badge row, under Trust Flags).
+2. Verify the matrix renders: rows "Stdout (JSON log line)" +
+   "macOS banner", columns Done / Failure / Schedule end, all ticked on
+   a fresh machine (no config file = default-on).
+3. Untick (macOS banner, Done) → confirm `~/.senkani/notifications.json`
+   appears with `macos_local: ["notify_failure","schedule_end"]`.
+4. Click **Fire done** → no banner; stdout pane/log shows the JSON line.
+   Click **Fire failure** → banner appears (TCC-authorized build).
+5. Re-tick the cell → **Fire done** → banner appears. No app restart at
+   any point.
+6. Screenshot the pane for `docs/guides/install.html` (acceptance #5's
+   screenshot is still owed; the prose shipped 2026-06-11).
+7. Walk evidence + ticks → `## Build note 2026-06-11` in the item file
+   (`spec/autonomous/backlog/t6-settings-notifications-matrix-ui-2026-05-21.md`).
+
 ## 2026-06-07 — T.4c-1 Phase A vault seams landed — real-Keychain walk now runnable
 
 `phase-t4c-1-vault-phase-a-seams` shipped the CI-testable "Phase A" wiring

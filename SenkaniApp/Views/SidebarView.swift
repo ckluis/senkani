@@ -57,6 +57,10 @@ struct SidebarView: View {
                             isActive: activeToolView == .trustFlags) {
                         activateTool(.trustFlags)
                     }
+                    toolRow(icon: "bell.badge", label: "Notifications",
+                            isActive: activeToolView == .notifications) {
+                        activateTool(.notifications)
+                    }
 
                     // Thin divider
                     Rectangle()

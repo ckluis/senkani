@@ -49,14 +49,18 @@ public final class SessionWorkQueueStore: @unchecked Sendable {
     /// Append-only enqueue. Returns the new rowid, or -1 on failure.
     /// `payload` is opaque to the queue (caller-encoded JSON or
     /// otherwise). `nextWakeupAt` defaults to "available now" (0).
+    /// `at` is the row's `created_at`/`updated_at` timestamp —
+    /// injectable so parity-timing tests are fixture-driven (U.9b-3b
+    /// leg 4), defaulting to the wall clock for production callers.
     @discardableResult
     public func enqueue(
         kind: String,
         payload: String = "",
         nextWakeupAt: Date? = nil,
-        projectRoot: String? = nil
+        projectRoot: String? = nil,
+        at: Date = Date()
     ) -> Int64 {
-        let now = Date().timeIntervalSince1970
+        let now = at.timeIntervalSince1970
         let wakeup = nextWakeupAt.map { $0.timeIntervalSince1970 } ?? 0.0
         return parent.queue.sync {
             guard let db = parent.db else { return -1 }
@@ -378,6 +382,123 @@ public final class SessionWorkQueueStore: @unchecked Sendable {
                 oldestPendingAt: oldestPendingAt,
                 nextWakeupAt: nextWakeupAt,
                 byKind: byKind
+            )
+        }
+    }
+
+    // MARK: - U.9b-3b leg 4: parity pairing/timing
+
+    /// Per-item pairing/timing snapshot backing the `senkani doctor`
+    /// latency sub-rows (U.9b-3b leg 4 — deferred by the u9b-3 spine).
+    ///
+    /// No new storage: the dual-write bus enqueue
+    /// (`AutoValidateDualWrite.run` / `PaneRefreshDualWrite.run`) happens
+    /// synchronously at the instant the in-process leg completes, so each
+    /// `session_work_queue` row already IS the pair record:
+    ///   - `created_at`  = in-process leg completion (the enqueue instant)
+    ///   - `updated_at`  = bus leg completion for `state='succeeded'` rows
+    ///                     (the terminal ack is the last `updated_at` writer)
+    ///
+    /// Pairing semantics:
+    ///   - matched   = succeeded row ⇒ delta = `updated_at - created_at`
+    ///                 (how far the bus path trailed the in-process path)
+    ///   - unmatched = pending/processing row ⇒ the in-process leg
+    ///                 delivered but the bus leg hasn't completed yet; the
+    ///                 oldest one's age is the "bus path is behind" signal
+    ///   - `dead_letter` rows are terminal divergence (will never match) —
+    ///     surfaced by the queue line's dead_letter count, NOT counted here
+    public struct ParityTiming: Sendable, Equatable {
+        /// One `updated_at - created_at` delta per matched (succeeded) pair.
+        public let matchedDeltas: [TimeInterval]
+        /// Rows whose bus leg hasn't completed (pending + processing).
+        public let unmatchedCount: Int
+        /// `now - MIN(created_at)` over unmatched rows; nil when none.
+        public let oldestUnmatchedAge: TimeInterval?
+
+        public init(
+            matchedDeltas: [TimeInterval],
+            unmatchedCount: Int,
+            oldestUnmatchedAge: TimeInterval?
+        ) {
+            self.matchedDeltas = matchedDeltas
+            self.unmatchedCount = unmatchedCount
+            self.oldestUnmatchedAge = oldestUnmatchedAge
+        }
+
+        /// Nearest-rank percentile over `matchedDeltas` (p in (0, 100]).
+        /// Pure — fixture-testable without a database.
+        public func percentile(_ p: Double) -> TimeInterval? {
+            guard !matchedDeltas.isEmpty, p > 0, p <= 100 else { return nil }
+            let sorted = matchedDeltas.sorted()
+            let rank = max(1, Int((p / 100 * Double(sorted.count)).rounded(.up)))
+            return sorted[min(rank, sorted.count) - 1]
+        }
+    }
+
+    /// Read the parity pairing/timing snapshot for the dual-write kinds.
+    /// `matchedLimit` bounds the percentile window to the most recent
+    /// succeeded rows (nothing prunes succeeded rows, so an unbounded
+    /// parity window must not grow the doctor's read). `now` is
+    /// injectable so age computation is fixture-driven in tests.
+    public func parityTiming(
+        kinds: [String],
+        matchedLimit: Int = 1000,
+        now: Date = Date()
+    ) -> ParityTiming {
+        guard !kinds.isEmpty else {
+            return ParityTiming(matchedDeltas: [], unmatchedCount: 0, oldestUnmatchedAge: nil)
+        }
+        let placeholders = kinds.map { _ in "?" }.joined(separator: ",")
+        return parent.queue.sync { () -> ParityTiming in
+            guard let db = parent.db else {
+                return ParityTiming(matchedDeltas: [], unmatchedCount: 0, oldestUnmatchedAge: nil)
+            }
+            // Matched pairs — most recent `matchedLimit` succeeded rows.
+            var deltas: [TimeInterval] = []
+            let mSQL = """
+                SELECT updated_at - created_at FROM session_work_queue
+                WHERE state = 'succeeded' AND kind IN (\(placeholders))
+                ORDER BY id DESC LIMIT ?;
+            """
+            var mStmt: OpaquePointer?
+            if sqlite3_prepare_v2(db, mSQL, -1, &mStmt, nil) == SQLITE_OK {
+                var idx: Int32 = 1
+                for k in kinds {
+                    sqlite3_bind_text(mStmt, idx, (k as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1
+                }
+                sqlite3_bind_int(mStmt, idx, Int32(matchedLimit))
+                while sqlite3_step(mStmt) == SQLITE_ROW {
+                    deltas.append(sqlite3_column_double(mStmt, 0))
+                }
+            }
+            sqlite3_finalize(mStmt)
+
+            // Unmatched pairs — bus leg not yet complete.
+            var unmatchedCount = 0
+            var oldestAge: TimeInterval? = nil
+            let uSQL = """
+                SELECT COUNT(*), MIN(created_at) FROM session_work_queue
+                WHERE state IN ('pending', 'processing') AND kind IN (\(placeholders));
+            """
+            var uStmt: OpaquePointer?
+            if sqlite3_prepare_v2(db, uSQL, -1, &uStmt, nil) == SQLITE_OK {
+                var idx: Int32 = 1
+                for k in kinds {
+                    sqlite3_bind_text(uStmt, idx, (k as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR); idx += 1
+                }
+                if sqlite3_step(uStmt) == SQLITE_ROW {
+                    unmatchedCount = Int(sqlite3_column_int64(uStmt, 0))
+                    if unmatchedCount > 0, sqlite3_column_type(uStmt, 1) != SQLITE_NULL {
+                        oldestAge = now.timeIntervalSince1970 - sqlite3_column_double(uStmt, 1)
+                    }
+                }
+            }
+            sqlite3_finalize(uStmt)
+
+            return ParityTiming(
+                matchedDeltas: deltas,
+                unmatchedCount: unmatchedCount,
+                oldestUnmatchedAge: oldestAge
             )
         }
     }

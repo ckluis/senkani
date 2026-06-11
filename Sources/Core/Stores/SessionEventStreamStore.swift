@@ -140,6 +140,60 @@ public final class SessionEventStreamStore: @unchecked Sendable {
         }
     }
 
+    /// U.9b-3b (leg 2) — atomic applied-watermark claim for consumer
+    /// real-work handlers whose canonical rows carry no claim column
+    /// (e.g. `token_events` / `agent_trace_event` rollups). A claim
+    /// cursor is an extra `session_event_stream_offsets` row, distinct
+    /// from the consumer's pull offset: the pull offset is committed by
+    /// the dispatcher only AFTER the handler returns, while the handler
+    /// advances the claim cursor through each event id BEFORE driving
+    /// the side effect. Because `pullSince` delivers events in ascending
+    /// id order, a crash-replay or in-process race re-delivering an
+    /// already-claimed event always loses the claim and drives nothing.
+    ///
+    /// Returns `true` iff THIS call advanced the cursor (the caller owns
+    /// the side effect for `eventId`). Monotonic — a stale or equal id
+    /// never advances. The seed + guarded UPDATE run inside one serial-
+    /// queue block, so check-and-advance is atomic vs. every other
+    /// database user. No migration: the cursor row auto-seeds at 0 on
+    /// first claim.
+    @discardableResult
+    public func claimThrough(cursorId: String, eventId: Int64, at: Date = Date()) -> Bool {
+        let nowEpoch = at.timeIntervalSince1970
+        return parent.queue.sync {
+            guard let db = parent.db else { return false }
+            // Seed the cursor row on first use (idempotent).
+            let seedSQL = """
+                INSERT OR IGNORE INTO session_event_stream_offsets
+                    (consumer_id, last_processed_event_id, updated_at)
+                VALUES (?, 0, ?);
+            """
+            var seed: OpaquePointer?
+            guard sqlite3_prepare_v2(db, seedSQL, -1, &seed, nil) == SQLITE_OK else { return false }
+            sqlite3_bind_text(seed, 1, (cursorId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_double(seed, 2, nowEpoch)
+            let seeded = sqlite3_step(seed) == SQLITE_DONE
+            sqlite3_finalize(seed)
+            guard seeded else { return false }
+
+            // Guarded advance: wins iff the watermark is strictly behind.
+            let sql = """
+                UPDATE session_event_stream_offsets
+                SET last_processed_event_id = ?, updated_at = ?
+                WHERE consumer_id = ? AND last_processed_event_id < ?;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_int64(stmt, 1, eventId)
+            sqlite3_bind_double(stmt, 2, nowEpoch)
+            sqlite3_bind_text(stmt, 3, (cursorId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_int64(stmt, 4, eventId)
+            guard sqlite3_step(stmt) == SQLITE_DONE else { return false }
+            return sqlite3_changes(db) == 1
+        }
+    }
+
     /// Lag (rows behind the head) for one consumer.
     public func lag(consumerId: String) -> Int {
         return parent.queue.sync {

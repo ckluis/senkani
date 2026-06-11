@@ -77,18 +77,26 @@
     <p class="lede">Reproduce the published 80.37× compression figure on your hardware. The suite drives 10 task fixtures through 7 feature configs, default 256 iterations.</p>
 
     <h2>Syntax</h2>
-    <div class="ref-signature">senkani bench [--iterations N]</div>
+    <div class="ref-signature">senkani bench [savings] [--iterations N]<br>senkani bench pii [--warm-iterations N] [--threshold X] [--json path] [--strict]</div>
 
     <h2>Behavior</h2>
     <p>Reproduces the 80.37× fixture-suite figure on your hardware. Writes JSON results; prints a summary.</p>
+    <p><code>bench</code> hosts two subcommands. <code>savings</code> is the default — bare <code>senkani bench</code> runs the token-savings suite exactly as before. <code>pii</code> is the headless PII-classifier bench: it times the classifier decode path (synthetic one-hot logits through the real BIOES/Viterbi decoder) with an injected stub backend — no model load, no network — and emits three rows in the standard bench report format: <code>pii_cold_start</code> (backend load + first call), <code>pii_warm_call</code> (median of N reuse calls), and <code>pii_output_shape</code> (span-shape assertion sweep with a quality gate). Cold/warm rows carry <code>estimated</code> confidence — stub latency shape, not real-model perf.</p>
 
     <h2>Example</h2>
-    <pre class="code">$ senkani bench --iterations 256</pre>
+    <pre class="code">$ senkani bench --iterations 256
+$ senkani bench pii --warm-iterations 32 --json pii-bench.json</pre>
 
     <h2>Flags</h2>
     <div class="ref-io-table">
       <div class="head">Flag</div><div class="head"></div><div class="head"></div><div class="head">Description</div>
       <div class="k">--iterations N</div><div class="t"></div><div class="default"></div><div class="desc">Default 256.</div><div class="k">--json</div><div class="t"></div><div class="default"></div><div class="desc">Emit full results.</div><div class="k">--scenario &lt;name&gt;</div><div class="t"></div><div class="default"></div><div class="desc">Run one scenario only.</div>
+    </div>
+
+    <h2>Flags — <code>bench pii</code></h2>
+    <div class="ref-io-table">
+      <div class="head">Flag</div><div class="head"></div><div class="head"></div><div class="head">Description</div>
+      <div class="k">--warm-iterations N</div><div class="t"></div><div class="default"></div><div class="desc">Warm reuse-call iterations after the cold call (default 32).</div><div class="k">--threshold X</div><div class="t"></div><div class="default"></div><div class="desc">PII softmax floor handed to the backend (default 0.85).</div><div class="k">--json &lt;path&gt;</div><div class="t"></div><div class="default"></div><div class="desc">Write the report as JSON (per-row timings in durationMs).</div><div class="k">--strict</div><div class="t"></div><div class="default"></div><div class="desc">Exit non-zero if the output-shape gate fails.</div>
     </div>
 
     <div class="seealso">
@@ -99,7 +107,7 @@
     </div>
 
     <div class="source-pointer">
-      <strong>Source:</strong> <code>Sources/Bench/BenchmarkScenarios.swift</code> (orchestrator), <code>Sources/Bench/BenchmarkTasks.swift</code> (task fixtures), <code>Sources/Bench/BenchBaseline.swift</code> (baseline storage)
+      <strong>Source:</strong> <code>Sources/Bench/BenchmarkScenarios.swift</code> (orchestrator), <code>Sources/Bench/BenchmarkTasks.swift</code> (task fixtures), <code>Sources/Bench/BenchBaseline.swift</code> (baseline storage), <code>Sources/Bench/PIIBenchRunner.swift</code> (<code>bench pii</code> harness)
     </div>
   </article>
 </main>

@@ -4,7 +4,7 @@ import MCPServer
 
 /// Which sidebar tool view is currently shown (nil = workspace/panes).
 enum ToolView: Equatable {
-    case models, analytics, skills, schedules, themes, knowledge, trustFlags
+    case models, analytics, skills, schedules, themes, knowledge, trustFlags, notifications
 }
 
 /// Main application view: custom HStack layout with sidebar + canvas + status bar.
@@ -215,6 +215,7 @@ struct ContentView: View {
         case .schedules: ScheduleView()
         case .knowledge: KnowledgeBaseView()
         case .trustFlags: TrustFlagsView()
+        case .notifications: NotificationsSettingsView()
         }
     }
 

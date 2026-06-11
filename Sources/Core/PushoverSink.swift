@@ -143,6 +143,20 @@ public struct PushoverSink: NotificationSink, Sendable {
                     primaryId: message.primaryId
                 )
             )
+        } catch is CredentialVaultError {
+            // T.6c sibling B: the Keychain-reading transport surfaces a
+            // missing seed as `CredentialVaultError.missingKey`. Map it
+            // to `.unconfigured` — the operator-facing distinction is
+            // "no token seeded yet", NOT "the network failed" (see the
+            // PushoverDeliveryFailReason doc contract).
+            telemetry.record(
+                PushoverDeliveryRecord(
+                    outcome: .deliveryFailed,
+                    reason: .unconfigured,
+                    eventClass: message.eventClass,
+                    primaryId: message.primaryId
+                )
+            )
         } catch {
             telemetry.record(
                 PushoverDeliveryRecord(
@@ -185,6 +199,19 @@ public struct PushoverCredentialsRef: Sendable, Equatable {
     /// Test-only marker: "pretend a token is seeded" WITHOUT any real
     /// secret. Lets CI exercise the configured (non-inert) path.
     public static let synthetic = PushoverCredentialsRef(keychainAccount: "synthetic.test.no.secret")
+}
+
+public extension PushoverCredentialsRef {
+    /// T.6c — the canonical vault KEY NAME under which `senkani doctor
+    /// --seed-pushover-key` stores the Pushover credential, and from
+    /// which the real Keychain-reading transport (T.6c sibling carve)
+    /// reads it at send time. This is the NAME of the slot — never a
+    /// secret. Matches the default `keychainAccount` so a
+    /// default-initialized ref points at the seeded slot.
+    static let vaultKey = "senkani.pushover"
+
+    /// T.6c — the `CredentialVault` scope the seeded credential lives in.
+    static let vaultScope = CredentialVault.defaultScope
 }
 
 // MARK: - GATE (3): the minimized message (body minimization at the type level)
@@ -404,9 +431,11 @@ public final class SpyPushoverDeliveryTelemetry: PushoverDeliveryTelemetry, @unc
 ///
 /// In the autonomous build the default is `NullPushoverTransport` (never
 /// sends) and tests inject `FakePushoverTransport` (records the request,
-/// optionally throws). The REAL transport — which reads the Keychain token
-/// and POSTs to `api.pushover.net` — is the operator remainder and is NOT
-/// implemented here.
+/// optionally throws). The REAL transport — `KeychainPushoverTransport`
+/// (T.6c sibling carve B, `PushoverKeychainTransport.swift`) — reads the
+/// seeded credential from the Keychain seam at send time and POSTs via an
+/// injectable `PushoverHTTPClient`; wiring it into the production
+/// bootstrap with a REAL token is operator leg C.
 public protocol PushoverTransport: Sendable {
     /// Perform one send. Throws on any failure (the sink catches + records
     /// `delivery_failed` and swallows per the non-blocking contract).

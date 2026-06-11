@@ -98,14 +98,23 @@ public final class EventStreamDispatcher: @unchecked Sendable {
         self.dualWriteEnabled = dualWriteEnabled
     }
 
-    /// Convenience factory wiring the four standard consumers. The three
-    /// real consumers (`validation`, `agent_timeline`,
-    /// `compound_learning_analytics`) advance offsets + record lag via the
-    /// shared default handler; `notifications` is the no-op-recording stub
-    /// (T.6c owns its real body). Deep real-work integration for the three
-    /// is DEFERRED to T.6c / per-subsystem rounds (see build note) — wiring
-    /// each subsystem's recordEvent entry point here would balloon the
-    /// concurrency envelope and risk a behavior change beyond this spine.
+    /// Convenience factory wiring the four standard consumers.
+    /// `validation` runs its REAL work (U.9b-3b leg 1:
+    /// `ValidationStreamConsumer` — drains `validation_results` events and
+    /// drives the `auto_validate.delivered` path, commitOffset-driven,
+    /// idempotent-claim exactly-once). `compound_learning_analytics` runs
+    /// its REAL work (U.9b-3b leg 2:
+    /// `CompoundLearningAnalyticsStreamConsumer` — rolls drained
+    /// `token_events` / `agent_trace_event` events into
+    /// `compound_learning.analytics.*` counters, commitOffset-driven,
+    /// applied-watermark-claim exactly-once). `agent_timeline` runs its
+    /// REAL work (U.9b-3b leg 3: `AgentTimelineStreamConsumer` — turns
+    /// drained `token_events` / `agent_trace_event` events into the
+    /// timeline's `agent_timeline.feed.*` freshness counters /
+    /// `feedVersion` change-detection seam, commitOffset-driven,
+    /// applied-watermark-claim exactly-once under its OWN cursor).
+    /// `notifications` is the no-op-recording stub (T.6c owns its real
+    /// body).
     public static func standard(
         db: SessionDatabase,
         pullLimit: Int = 100,
@@ -121,14 +130,29 @@ public final class EventStreamDispatcher: @unchecked Sendable {
             pollInterval: pollInterval,
             dualWriteEnabled: dualWriteEnabled
         )
-        let lagOnly: Handler = { _ in /* offset-advance + lag-record only */ }
-        dispatcher.register(consumerId: ConsumerId.validation, handler: lagOnly)
-        dispatcher.register(consumerId: ConsumerId.agentTimeline, handler: lagOnly)
+        // validation: REAL work (U.9b-3b leg 1) — a drop-in via the
+        // register seam; the spine's drain contract is unchanged.
+        dispatcher.register(
+            consumerId: ConsumerId.validation,
+            handler: ValidationStreamConsumer.makeHandler(db: db)
+        )
+        // agent_timeline: REAL work (U.9b-3b leg 3) — a drop-in via the
+        // register seam; the spine's drain contract is unchanged.
+        dispatcher.register(
+            consumerId: ConsumerId.agentTimeline,
+            handler: AgentTimelineStreamConsumer.makeHandler(db: db)
+        )
         // notifications: explicit no-op stub. Recorded distinctly so the
         // intent is legible — it advances offset + lag ONLY, never any side
         // effect (T.6c PushoverSink owns the real body).
         dispatcher.register(consumerId: ConsumerId.notifications, handler: { _ in })
-        dispatcher.register(consumerId: ConsumerId.compoundLearningAnalytics, handler: lagOnly)
+        // compound_learning_analytics: REAL work (U.9b-3b leg 2) — a
+        // drop-in via the register seam; the spine's drain contract is
+        // unchanged.
+        dispatcher.register(
+            consumerId: ConsumerId.compoundLearningAnalytics,
+            handler: CompoundLearningAnalyticsStreamConsumer.makeHandler(db: db)
+        )
         return dispatcher
     }
 

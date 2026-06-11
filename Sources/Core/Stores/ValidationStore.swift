@@ -268,6 +268,53 @@ final class ValidationStore: @unchecked Sendable {
         }
     }
 
+    /// U.9b-3b — synchronous, idempotent delivery claim for the bus-side
+    /// `validation` consumer (`ValidationStreamConsumer`). Marks ONE
+    /// advisory row delivered+surfaced IFF it is still pending; returns
+    /// `true` only when THIS call flipped the row. The guarded WHERE
+    /// clause is the cross-leg arbiter: a replayed event or a row the
+    /// in-process HookRouter leg already surfaced loses the claim, so at
+    /// most one `auto_validate.delivered` is ever driven per row.
+    ///
+    /// Unlike `markValidationAdvisoriesSurfaced` (fire-and-forget async),
+    /// this is `queue.sync` — the caller needs the claimed/lost result to
+    /// decide whether to drive the delivered counter. Same UPDATE shape as
+    /// the existing surfaced path (`delivered`, `surfaced_at` only).
+    func claimValidationDelivery(resultId: Int64, at: Date = Date()) -> Bool {
+        let ts = at.timeIntervalSince1970
+        return parent.queue.sync {
+            guard let db = parent.db else { return false }
+            let sql = """
+                UPDATE validation_results
+                   SET delivered = 1, surfaced_at = ?
+                 WHERE id = ?
+                   AND outcome = 'advisory'
+                   AND exit_code != 0
+                   AND delivered = 0
+                   AND surfaced_at IS NULL;
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                Logger.log("auto_validate.db_write.prepare_failed", fields: [
+                    "table": .string("validation_results"),
+                    "operation": .string("claim_delivery"),
+                ])
+                return false
+            }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_double(stmt, 1, ts)
+            sqlite3_bind_int64(stmt, 2, resultId)
+            guard sqlite3_step(stmt) == SQLITE_DONE else {
+                Logger.log("auto_validate.db_write.step_failed", fields: [
+                    "table": .string("validation_results"),
+                    "operation": .string("claim_delivery"),
+                ])
+                return false
+            }
+            return sqlite3_changes(db) == 1
+        }
+    }
+
     /// U.2a-2b — insert a structured browser-validation row. Populates the
     /// v22 columns (`axes`, `target_url`, `plan_steps`, `result_status`,
     /// `screenshot_path`) so HookRouter's PreToolUse gate can read

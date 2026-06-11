@@ -38,6 +38,27 @@ enum NotificationBootstrap {
         return home
     }
 
+    /// The production sink registry, in registration (and matrix
+    /// display) order. Single source of truth shared by
+    /// `bootstrap(...)` and the Settings → Notifications matrix pane
+    /// (`NotificationsSettingsView`) — the pane renders exactly the
+    /// rows the bootstrap installs, so a sink added here automatically
+    /// gains a matrix row.
+    static func productionSinks(
+        bridge: LocalNotifierBridge
+    ) -> [(name: String, sink: NotificationSink)] {
+        [
+            (name: "stdout", sink: StdoutSink()),
+            (name: "macos_local", sink: MacOSLocalSink(bridge: bridge))
+        ]
+    }
+
+    /// Names of the production-registered sinks, in display order.
+    /// Backs the matrix pane's row list without standing up a bridge.
+    static var registeredSinkNames: [String] {
+        productionSinks(bridge: NullLocalNotifierBridge()).map(\.name)
+    }
+
     /// One-shot bootstrap. Idempotent at the
     /// `NotificationDelivery.install` boundary — calling twice
     /// replaces the previously installed router.
@@ -58,14 +79,8 @@ enum NotificationBootstrap {
         let config = NotificationRouter.loadConfig(from: resolvedConfigPath)
             ?? NotificationRouter.Config(sinks: [:])  // empty config → default-on for every sink
 
-        let stdoutSink = StdoutSink()
-        let macosSink = MacOSLocalSink(bridge: resolvedBridge)
-
         let router = NotificationRouter.make(
-            sinks: [
-                (name: "stdout", sink: stdoutSink),
-                (name: "macos_local", sink: macosSink)
-            ],
+            sinks: productionSinks(bridge: resolvedBridge),
             config: config
         )
 

@@ -187,6 +187,19 @@ public struct PushoverCredentialsRef: Sendable, Equatable {
     public static let synthetic = PushoverCredentialsRef(keychainAccount: "synthetic.test.no.secret")
 }
 
+public extension PushoverCredentialsRef {
+    /// T.6c — the canonical vault KEY NAME under which `senkani doctor
+    /// --seed-pushover-key` stores the Pushover credential, and from
+    /// which the real Keychain-reading transport (T.6c sibling carve)
+    /// reads it at send time. This is the NAME of the slot — never a
+    /// secret. Matches the default `keychainAccount` so a
+    /// default-initialized ref points at the seeded slot.
+    static let vaultKey = "senkani.pushover"
+
+    /// T.6c — the `CredentialVault` scope the seeded credential lives in.
+    static let vaultScope = CredentialVault.defaultScope
+}
+
 // MARK: - GATE (3): the minimized message (body minimization at the type level)
 
 /// The minimized push payload. Construction is the enforcement point:

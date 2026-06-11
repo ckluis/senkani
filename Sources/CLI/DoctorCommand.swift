@@ -58,6 +58,9 @@ struct Doctor: ParsableCommand {
     @Option(name: .long, help: "With --vault-status --latency-runs, the key to read on each latency probe (t4c-1). Defaults to the probe key the round-trip wrote.")
     var latencyKey: String?
 
+    @Flag(name: .long, help: "Seed the Pushover credential into the credential vault (T.6c): prompts twice (entry + confirm, input hidden on a tty), writes through the Keychain seam under key '\(PushoverCredentialsRef.vaultKey)', and records ONE non-secret audit row (key NAME only — never the value). Mismatch or a missing confirm aborts with NO write. Seeding the REAL token is the operator's leg; this flag is the mechanism.")
+    var seedPushoverKey = false
+
     // MARK: - Counters
 
     private struct Results {
@@ -135,6 +138,15 @@ struct Doctor: ParsableCommand {
         // round-trip writes + deletes only a probe key.
         if vaultStatus {
             try runVaultStatus()
+            return
+        }
+
+        // T.6c focused seed motion — prompt twice (entry + confirm, no
+        // echo on a tty), write the Pushover credential through the
+        // Keychain vault seam, record ONE non-secret audit row (key NAME
+        // only). Mismatch / missing confirm aborts BEFORE any write.
+        if seedPushoverKey {
+            try runSeedPushoverKey()
             return
         }
 
@@ -579,6 +591,195 @@ struct Doctor: ParsableCommand {
             costCents: 0,
             feature: "egress.ca.install",
             command: nil
+        )
+        SessionDatabase.shared.flushWrites()
+    }
+
+    // MARK: - --seed-pushover-key (Phase T.6c child A)
+
+    /// Outcome of one `--seed-pushover-key` motion. Returned (not thrown)
+    /// so the testable motion can be asserted hermetically; the CLI
+    /// wrapper maps every non-`.seeded` outcome to a non-zero exit.
+    enum SeedPushoverOutcome: Equatable {
+        /// Entry + confirm matched — the credential was written through
+        /// the Keychain seam and ONE non-secret audit row was recorded.
+        case seeded
+        /// The first prompt returned nil/whitespace — nothing was written.
+        case abortedMissingEntry
+        /// The confirm prompt returned nil/whitespace — nothing was written.
+        case abortedMissingConfirm
+        /// Entry and confirm did not match — nothing was written.
+        case abortedMismatch
+    }
+
+    /// Canonical non-secret audit payload for a successful seed. Carries
+    /// the key NAME + scope ONLY — there is no parameter shape by which
+    /// the secret could reach this formatter (mirror of
+    /// `CredentialGateway.canonicalPayload`'s name-only invariant).
+    static func seedPushoverAuditPayload(key: String, scope: String) -> String {
+        "pushover.seed key=\(key) scope=\(scope)"
+    }
+
+    /// Testable seed motion (mirrors `installEgressCAMotion`'s injectable
+    /// shape). Prompts TWICE through the injected `promptReader` (entry +
+    /// confirm — production reads with terminal echo disabled), hard-aborts
+    /// on a missing entry, missing confirm, or mismatch BEFORE any write,
+    /// then writes the secret through the Keychain seam (`CredentialVault`
+    /// over `KeychainStore`) and records ONE non-secret audit row via
+    /// `recordAudit`.
+    ///
+    /// Entries are whitespace/newline-TRIMMED before the empty-guard and
+    /// the compare (a pasted trailing newline must not force a false
+    /// mismatch); the TRIMMED bytes are what is stored — consistent with
+    /// `AnthropicKeyProvisioner`'s trim-before-store contract.
+    ///
+    /// SECURITY (Schneier):
+    ///   * The secret is never printed, echoed, or logged — its only
+    ///     sinks are the vault write and the operator's own terminal.
+    ///   * The audit payload is built by `seedPushoverAuditPayload`,
+    ///     whose parameters are the key NAME and scope only — there is
+    ///     no shape by which the secret can reach the audit row.
+    ///   * NO real token is seeded by the autonomous build — CI drives
+    ///     this motion with fake secrets against an
+    ///     `InMemoryKeychainStore`-backed vault; the REAL token seed
+    ///     (real Keychain + real Pushover token + device-push proof) is
+    ///     the operator leg of the parent T.6c item.
+    static func seedPushoverKeyMotion(
+        vault: CredentialVault,
+        key: String = PushoverCredentialsRef.vaultKey,
+        scope: String = PushoverCredentialsRef.vaultScope,
+        promptReader: (String) -> String?,
+        recordAudit: (String) -> Void
+    ) async throws -> SeedPushoverOutcome {
+        print("Senkani Doctor — seed Pushover credential (T.6c)")
+        print("=================================================")
+        print("")
+        print("You will be prompted TWICE (entry + confirm; input hidden on")
+        print("a tty). On match the credential is written to the vault's")
+        print("Keychain seam under key '\(key)' (scope '\(scope)') and ONE")
+        print("non-secret audit row (key NAME only) is recorded. On mismatch")
+        print("or a missing confirm, NOTHING is written.")
+        print("")
+
+        let firstRaw = promptReader("Paste the Pushover credential (input hidden): ")
+        let first = firstRaw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !first.isEmpty else {
+            print("Aborted: no credential entered. Nothing was written, no audit row recorded.")
+            return .abortedMissingEntry
+        }
+
+        let secondRaw = promptReader("Paste it again to confirm (input hidden): ")
+        let second = secondRaw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !second.isEmpty else {
+            print("Aborted: missing confirmation. Nothing was written, no audit row recorded.")
+            return .abortedMissingConfirm
+        }
+
+        guard first == second else {
+            print("Aborted: the two entries did not match. Nothing was written, no audit row recorded.")
+            return .abortedMismatch
+        }
+
+        try await vault.write(key: key, scope: scope, value: Data(first.utf8))
+        recordAudit(Self.seedPushoverAuditPayload(key: key, scope: scope))
+        print("Seeded Pushover credential under key '\(key)' (scope '\(scope)').")
+        print("Recorded one audit row carrying the key NAME only — never the secret.")
+        return .seeded
+    }
+
+    /// CLI dispatch wrapper. Bridges the async motion onto doctor's sync
+    /// execution path via a `DispatchSemaphore` (mirror of
+    /// `vaultRoundTrip`'s balanced-semaphore lifecycle) — with NO
+    /// wall-clock ceiling, because the motion blocks on operator typing,
+    /// which is unbounded. The Task ALWAYS `signal()`s via `defer`, so
+    /// the wait ends exactly when the motion returns or throws.
+    private func runSeedPushoverKey() throws {
+        final class Slot: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _value: Result<SeedPushoverOutcome, Error>?
+            func publish(_ v: Result<SeedPushoverOutcome, Error>) {
+                lock.lock(); defer { lock.unlock() }; _value = v
+            }
+            func snapshot() -> Result<SeedPushoverOutcome, Error>? {
+                lock.lock(); defer { lock.unlock() }; return _value
+            }
+        }
+        let slot = Slot()
+        let sem = DispatchSemaphore(value: 0)
+        Task {
+            defer { sem.signal() }
+            do {
+                let outcome = try await Self.seedPushoverKeyMotion(
+                    vault: .shared,
+                    promptReader: { Self.readSecretLine(prompt: $0) },
+                    recordAudit: { Self.recordPushoverSeedAudit($0) }
+                )
+                slot.publish(.success(outcome))
+            } catch {
+                slot.publish(.failure(error))
+            }
+        }
+        sem.wait()
+        switch slot.snapshot() {
+        case .success(.seeded):
+            return
+        case .success:
+            // The motion already printed WHY it aborted; exit non-zero so
+            // the flag stays scriptable.
+            throw ExitCode.failure
+        case .failure(let error):
+            FileHandle.standardError.write(Data("error: \(error.localizedDescription)\n".utf8))
+            throw ExitCode.failure
+        case nil:
+            FileHandle.standardError.write(Data("error: seed motion produced no result.\n".utf8))
+            throw ExitCode.failure
+        }
+    }
+
+    /// Read one secret line for the seed prompts. The prompt goes to
+    /// STDERR (mirror of `vault add`'s STDIN contract — a piped stdout
+    /// captures no interactive text); on a tty the line is read with
+    /// terminal echo DISABLED (termios `ECHO` cleared, restored on the
+    /// way out) and a newline is emitted after the hidden input. Non-tty
+    /// stdin (heredocs / scripts) falls back to a plain line read so the
+    /// prompt-twice flow stays scriptable.
+    private static func readSecretLine(prompt: String) -> String? {
+        FileHandle.standardError.write(Data(prompt.utf8))
+        if isatty(STDIN_FILENO) != 0 {
+            var original = termios()
+            if tcgetattr(STDIN_FILENO, &original) == 0 {
+                var quiet = original
+                quiet.c_lflag &= ~tcflag_t(ECHO)
+                _ = tcsetattr(STDIN_FILENO, TCSANOW, &quiet)
+                defer { tcsetattr(STDIN_FILENO, TCSANOW, &original) }
+                let line = readLine(strippingNewline: true)
+                FileHandle.standardError.write(Data("\n".utf8))
+                return line
+            }
+        }
+        return readLine(strippingNewline: true)
+    }
+
+    /// Production audit recorder for a successful seed: ONE
+    /// `token_events` row (source "doctor", feature "pushover.seed")
+    /// whose `command` column is the canonical non-secret payload (key
+    /// NAME + scope — built by `seedPushoverAuditPayload`, which cannot
+    /// carry the value). Mirrors `recordEgressCAInstallAudit`'s
+    /// single-row write + flush.
+    private static func recordPushoverSeedAudit(_ payload: String) {
+        SessionDatabase.shared.recordTokenEvent(
+            sessionId: "doctor",
+            paneId: nil,
+            projectRoot: nil,
+            source: "doctor",
+            toolName: nil,
+            model: nil,
+            inputTokens: 0,
+            outputTokens: 0,
+            savedTokens: 0,
+            costCents: 0,
+            feature: "pushover.seed",
+            command: payload
         )
         SessionDatabase.shared.flushWrites()
     }

@@ -143,6 +143,20 @@ public struct PushoverSink: NotificationSink, Sendable {
                     primaryId: message.primaryId
                 )
             )
+        } catch is CredentialVaultError {
+            // T.6c sibling B: the Keychain-reading transport surfaces a
+            // missing seed as `CredentialVaultError.missingKey`. Map it
+            // to `.unconfigured` — the operator-facing distinction is
+            // "no token seeded yet", NOT "the network failed" (see the
+            // PushoverDeliveryFailReason doc contract).
+            telemetry.record(
+                PushoverDeliveryRecord(
+                    outcome: .deliveryFailed,
+                    reason: .unconfigured,
+                    eventClass: message.eventClass,
+                    primaryId: message.primaryId
+                )
+            )
         } catch {
             telemetry.record(
                 PushoverDeliveryRecord(
@@ -417,9 +431,11 @@ public final class SpyPushoverDeliveryTelemetry: PushoverDeliveryTelemetry, @unc
 ///
 /// In the autonomous build the default is `NullPushoverTransport` (never
 /// sends) and tests inject `FakePushoverTransport` (records the request,
-/// optionally throws). The REAL transport — which reads the Keychain token
-/// and POSTs to `api.pushover.net` — is the operator remainder and is NOT
-/// implemented here.
+/// optionally throws). The REAL transport — `KeychainPushoverTransport`
+/// (T.6c sibling carve B, `PushoverKeychainTransport.swift`) — reads the
+/// seeded credential from the Keychain seam at send time and POSTs via an
+/// injectable `PushoverHTTPClient`; wiring it into the production
+/// bootstrap with a REAL token is operator leg C.
 public protocol PushoverTransport: Sendable {
     /// Perform one send. Throws on any failure (the sink catches + records
     /// `delivery_failed` and swallows per the non-blocking contract).

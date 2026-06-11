@@ -102,11 +102,16 @@ public final class EventStreamDispatcher: @unchecked Sendable {
     /// `validation` runs its REAL work (U.9b-3b leg 1:
     /// `ValidationStreamConsumer` — drains `validation_results` events and
     /// drives the `auto_validate.delivered` path, commitOffset-driven,
-    /// idempotent-claim exactly-once). `agent_timeline` and
-    /// `compound_learning_analytics` still advance offsets + record lag via
-    /// the shared default handler (their deep wiring is owned by the
-    /// remaining U.9b-3b legs); `notifications` is the no-op-recording stub
-    /// (T.6c owns its real body).
+    /// idempotent-claim exactly-once). `compound_learning_analytics` runs
+    /// its REAL work (U.9b-3b leg 2:
+    /// `CompoundLearningAnalyticsStreamConsumer` — rolls drained
+    /// `token_events` / `agent_trace_event` events into
+    /// `compound_learning.analytics.*` counters, commitOffset-driven,
+    /// applied-watermark-claim exactly-once). `agent_timeline` still
+    /// advances offsets + records lag via the shared default handler (its
+    /// deep wiring is owned by the remaining U.9b-3b leg);
+    /// `notifications` is the no-op-recording stub (T.6c owns its real
+    /// body).
     public static func standard(
         db: SessionDatabase,
         pullLimit: Int = 100,
@@ -134,7 +139,13 @@ public final class EventStreamDispatcher: @unchecked Sendable {
         // intent is legible — it advances offset + lag ONLY, never any side
         // effect (T.6c PushoverSink owns the real body).
         dispatcher.register(consumerId: ConsumerId.notifications, handler: { _ in })
-        dispatcher.register(consumerId: ConsumerId.compoundLearningAnalytics, handler: lagOnly)
+        // compound_learning_analytics: REAL work (U.9b-3b leg 2) — a
+        // drop-in via the register seam; the spine's drain contract is
+        // unchanged.
+        dispatcher.register(
+            consumerId: ConsumerId.compoundLearningAnalytics,
+            handler: CompoundLearningAnalyticsStreamConsumer.makeHandler(db: db)
+        )
         return dispatcher
     }
 

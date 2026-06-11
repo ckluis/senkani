@@ -1033,11 +1033,7 @@ struct Doctor: ParsableCommand {
 
         // U.9b-3 — parity sub-row, summed across all project roots from the
         // existing `session_work_bus.parity_*` event counters minted in
-        // u9b-1. These are DERIVABLE NOW (no new tracking infra); the
-        // latency-delta-p50/p95 + oldest-unmatched-pair-age sub-rows the
-        // parent spec also names are DEFERRED — they require new per-item
-        // pairing/timing infrastructure not built this round. Informational
-        // only; doctor exit code stays 0.
+        // u9b-1. Informational only; doctor exit code stays 0.
         let parityRows = SessionDatabase.shared.eventCounts(prefix: "session_work_bus.parity_")
         func paritySum(_ type: String) -> Int {
             parityRows.filter { $0.eventType == type }.reduce(0) { $0 + $1.count }
@@ -1046,8 +1042,48 @@ struct Doctor: ParsableCommand {
         let pDiverge = paritySum(AutoValidateDualWrite.parityDiverge)
         let pBusOnly = paritySum(AutoValidateDualWrite.parityBusOnly)
         let pInProcOnly = paritySum(AutoValidateDualWrite.parityInProcessOnly)
-        printStatus(.pass, "work-bus parity — match: \(pMatch) | diverge: \(pDiverge) | bus_only: \(pBusOnly) | inprocess_only: \(pInProcOnly) (latency-delta + oldest-unmatched-pair-age deferred)")
+        printStatus(.pass, "work-bus parity — match: \(pMatch) | diverge: \(pDiverge) | bus_only: \(pBusOnly) | inprocess_only: \(pInProcOnly)")
         results.passed += 1
+
+        // U.9b-3b leg 4 — the latency sub-rows the u9b-3 spine deferred:
+        // latency-delta p50/p95 over matched (succeeded) dual-write pairs
+        // + the age of the oldest unmatched (pending/processing) pair.
+        // Pairing/timing derives from the queue rows themselves — see
+        // `SessionWorkQueueStore.ParityTiming`. Informational only: the
+        // formatter emits `.pass` lines exclusively, so the doctor exit
+        // code stays 0 regardless of bus latency.
+        let timing = SessionDatabase.shared.sessionWorkQueueStore.parityTiming(
+            kinds: [AutoValidateDualWrite.kind, PaneRefreshDualWrite.kind]
+        )
+        for (status, message) in Self.formatWorkBusLatencyLines(timing: timing) {
+            printStatus(status, message)
+            results.passed += 1
+        }
+    }
+
+    /// U.9b-3b leg 4 — pure formatter for the work-bus latency sub-rows.
+    /// Lifted out of `checkSessionWorkBus` (mirror of
+    /// `formatChainAuditLines`) so tests assert on the doctor surface
+    /// without dup2-capturing stdout. Every line is `.pass` by
+    /// construction — the sub-rows are informational and can never move
+    /// the doctor exit code.
+    static func formatWorkBusLatencyLines(
+        timing: SessionWorkQueueStore.ParityTiming
+    ) -> [(Status, String)] {
+        let p50 = timing.percentile(50).map(formatWorkBusInterval) ?? "n/a"
+        let p95 = timing.percentile(95).map(formatWorkBusInterval) ?? "n/a"
+        let age = timing.oldestUnmatchedAge.map(formatWorkBusInterval) ?? "n/a"
+        return [
+            (.pass, "work-bus latency-delta — matched_pairs: \(timing.matchedDeltas.count) | p50: \(p50) | p95: \(p95)"),
+            (.pass, "work-bus oldest-unmatched-pair — unmatched: \(timing.unmatchedCount) | age: \(age)")
+        ]
+    }
+
+    /// Render a parity-timing interval: sub-second values as whole
+    /// milliseconds (a bus path trailing by 50ms must not render as
+    /// "0.0s"), everything else as seconds with one decimal.
+    static func formatWorkBusInterval(_ v: TimeInterval) -> String {
+        v < 1.0 ? String(format: "%.0fms", v * 1000) : String(format: "%.1fs", v)
     }
 
     // MARK: - Check 17: Trust flags (Phase U.4a)

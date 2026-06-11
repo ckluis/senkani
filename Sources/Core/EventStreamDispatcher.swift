@@ -107,9 +107,12 @@ public final class EventStreamDispatcher: @unchecked Sendable {
     /// `CompoundLearningAnalyticsStreamConsumer` — rolls drained
     /// `token_events` / `agent_trace_event` events into
     /// `compound_learning.analytics.*` counters, commitOffset-driven,
-    /// applied-watermark-claim exactly-once). `agent_timeline` still
-    /// advances offsets + records lag via the shared default handler (its
-    /// deep wiring is owned by the remaining U.9b-3b leg);
+    /// applied-watermark-claim exactly-once). `agent_timeline` runs its
+    /// REAL work (U.9b-3b leg 3: `AgentTimelineStreamConsumer` — turns
+    /// drained `token_events` / `agent_trace_event` events into the
+    /// timeline's `agent_timeline.feed.*` freshness counters /
+    /// `feedVersion` change-detection seam, commitOffset-driven,
+    /// applied-watermark-claim exactly-once under its OWN cursor).
     /// `notifications` is the no-op-recording stub (T.6c owns its real
     /// body).
     public static func standard(
@@ -127,14 +130,18 @@ public final class EventStreamDispatcher: @unchecked Sendable {
             pollInterval: pollInterval,
             dualWriteEnabled: dualWriteEnabled
         )
-        let lagOnly: Handler = { _ in /* offset-advance + lag-record only */ }
         // validation: REAL work (U.9b-3b leg 1) — a drop-in via the
         // register seam; the spine's drain contract is unchanged.
         dispatcher.register(
             consumerId: ConsumerId.validation,
             handler: ValidationStreamConsumer.makeHandler(db: db)
         )
-        dispatcher.register(consumerId: ConsumerId.agentTimeline, handler: lagOnly)
+        // agent_timeline: REAL work (U.9b-3b leg 3) — a drop-in via the
+        // register seam; the spine's drain contract is unchanged.
+        dispatcher.register(
+            consumerId: ConsumerId.agentTimeline,
+            handler: AgentTimelineStreamConsumer.makeHandler(db: db)
+        )
         // notifications: explicit no-op stub. Recorded distinctly so the
         // intent is legible — it advances offset + lag ONLY, never any side
         // effect (T.6c PushoverSink owns the real body).

@@ -253,6 +253,208 @@ struct PIIClassifierTests {
     }
 }
 
+// MARK: - T.2 carve child B: gated real-spans suite
+
+/// T.2 carve child B (`phase-t2-pii-realspans-tests-2026-06-09`) — pins the
+/// classification CONTRACT (span detection + redaction shape) over real
+/// PII-shaped fixtures: email, phone, SSN, and multi-token name. Every test
+/// drives the REAL production decode path (`BIOESDecoder.decode` — softmax +
+/// constrained Viterbi + span collapse) through the REAL `Layer3Inference`
+/// seam shape and the REAL `PIISpanRedactor`, fed by deterministic one-hot
+/// logits from a per-fixture token→tag rule map. 0 network, 0 model load,
+/// 0 bytes of weights — the only thing stubbed is the logit source, which
+/// is exactly the piece T.2b's MLX backend replaces.
+///
+/// ## Offline flag / skip-guard
+///
+/// The suite is gated on `SENKANI_PII_REAL_SPANS_REAL_MODEL`. Unset (the CI
+/// and default-developer state) means OFFLINE: the deterministic rule path
+/// runs and the assertions fire — green with zero HF pull. Setting the flag
+/// to `1` declares "route these fixtures through the real model" — an arm
+/// that does not exist until T.2b wires `PIIClassifierAdapter.forward`, so
+/// the guard returns cleanly (a documented no-op skip, NEVER a model
+/// download triggered from a test run). T.2b's takeover point is this
+/// guard: replace the early return with the real tokenize → forward →
+/// decode bridge and keep the identical fixture assertions.
+@Suite("PIIClassifier real-span fixtures (T.2 carve child B, offline-gated)")
+struct PIIClassifierRealSpansTests {
+
+    // MARK: Offline gate
+
+    /// Env flag name — operator opt-in for the future real-model arm.
+    static let realModelFlag = "SENKANI_PII_REAL_SPANS_REAL_MODEL"
+
+    /// True unless the operator explicitly opted into the real-model arm.
+    /// CI never sets the flag, so the deterministic path always runs there.
+    static var offline: Bool {
+        ProcessInfo.processInfo.environment[realModelFlag] != "1"
+    }
+
+    // MARK: Deterministic rule path
+
+    /// Build the deterministic rule path as a `Layer3Inference` — the SAME
+    /// seam type `FilterPipeline.process` dispatches through — so the
+    /// contract is pinned at the production call shape
+    /// (`(text, threshold) → [PIISpan]`), not at a test-only signature.
+    private func rulePath(tags: [String: BIOESTag]) -> Layer3Inference {
+        // Single-space tokenizer with exact char offsets — token text at
+        // [charStart, charEnd) always equals the source substring, mirroring
+        // what a real tokenizer's char_offsets provide.
+        let tokenizeLocal: @Sendable (String) -> [TokenAlignment] = { text in
+            var alignments: [TokenAlignment] = []
+            var start: Int? = nil
+            var current = ""
+            var offset = 0
+            for ch in text {
+                if ch == " " {
+                    if let s = start {
+                        alignments.append(TokenAlignment(charStart: s, charEnd: offset, text: current))
+                        start = nil
+                        current = ""
+                    }
+                } else {
+                    if start == nil { start = offset }
+                    current.append(ch)
+                }
+                offset += 1
+            }
+            if let s = start {
+                alignments.append(TokenAlignment(charStart: s, charEnd: offset, text: current))
+            }
+            return alignments
+        }
+        return Layer3Inference { text, threshold in
+            let alignments = tokenizeLocal(text)
+            // One-hot row: winner logit 10 vs 0 elsewhere softmaxes to
+            // ≈0.9986 — above the 0.85 general-pane floor with margin.
+            let logits = alignments.map { token -> [Float] in
+                var row = [Float](repeating: 0, count: BIOESTag.tagCount)
+                row[BIOESDecoder.rawIndex(tags[token.text] ?? .O)] = 10.0
+                return row
+            }
+            return BIOESDecoder.decode(logits: logits, alignments: alignments)
+                .filter { $0.score >= Float(threshold) }
+        }
+    }
+
+    /// Production general-pane softmax floor — the threshold the live
+    /// pipeline passes for non-redteam panes.
+    private var floor: Double { PaneMode.general.piiSensitivityThreshold }
+
+    // MARK: 1. Email
+
+    @Test("real email fixture: S-private_email span detected with exact offsets and redacted as PII_PRIVATE_EMAIL")
+    func emailFixtureDetectsAndRedacts() throws {
+        guard Self.offline else { return }  // real-model arm lands with T.2b — no download from a test run
+
+        let email = "jane.doe+billing@acme-corp.io"
+        let text = "Reach me at \(email) once the audit closes"
+        let spans = try rulePath(tags: [email: .S(.privateEmail)])
+            .detectSpans(text, floor)
+
+        #expect(spans.count == 1)
+        let span = try #require(spans.first)
+        #expect(span.category == .privateEmail)
+        #expect(span.charStart == 12)
+        #expect(span.charEnd == 12 + email.count)
+        #expect(span.text == email)
+        #expect(span.score >= Float(floor) && span.score <= 1.0)
+
+        let redaction = PIISpanRedactor.apply(spans: spans, to: text)
+        #expect(redaction.redacted == "Reach me at [REDACTED:PII_PRIVATE_EMAIL] once the audit closes")
+        #expect(redaction.patterns == ["PII_PRIVATE_EMAIL"])
+        #expect(!redaction.redacted.contains("jane.doe"))
+        #expect(!redaction.redacted.contains("acme-corp.io"))
+    }
+
+    // MARK: 2. Phone
+
+    @Test("real phone fixture: B/E-private_phone tokens collapse to one span and redact as PII_PRIVATE_PHONE")
+    func phoneFixtureCollapsesAndRedacts() throws {
+        guard Self.offline else { return }  // real-model arm lands with T.2b — no download from a test run
+
+        let text = "Call (415) 555-0184 before the window closes"
+        let spans = try rulePath(tags: [
+            "(415)":    .B(.privatePhone),
+            "555-0184": .E(.privatePhone),
+        ]).detectSpans(text, floor)
+
+        #expect(spans.count == 1)
+        let span = try #require(spans.first)
+        #expect(span.category == .privatePhone)
+        #expect(span.charStart == 5)
+        #expect(span.charEnd == 19)
+        // Multi-token reconstruction preserves the inter-token space.
+        #expect(span.text == "(415) 555-0184")
+        #expect(span.score >= Float(floor) && span.score <= 1.0)
+
+        let redaction = PIISpanRedactor.apply(spans: spans, to: text)
+        #expect(redaction.redacted == "Call [REDACTED:PII_PRIVATE_PHONE] before the window closes")
+        #expect(redaction.patterns == ["PII_PRIVATE_PHONE"])
+        #expect(!redaction.redacted.contains("415"))
+        #expect(!redaction.redacted.contains("555-0184"))
+    }
+
+    // MARK: 3. SSN
+
+    @Test("real SSN fixture: S-account_number span (the 8-way space's SSN home) detected and redacted as PII_ACCOUNT_NUMBER")
+    func ssnFixtureDetectsAndRedacts() throws {
+        guard Self.offline else { return }  // real-model arm lands with T.2b — no download from a test run
+
+        // The 8-category tag space has no dedicated SSN class — government
+        // ID shapes route to `account_number` per the model card mapping.
+        let ssn = "078-05-1120"
+        let text = "SSN \(ssn) is on file for the claim"
+        let spans = try rulePath(tags: [ssn: .S(.accountNumber)])
+            .detectSpans(text, floor)
+
+        #expect(spans.count == 1)
+        let span = try #require(spans.first)
+        #expect(span.category == .accountNumber)
+        #expect(span.charStart == 4)
+        #expect(span.charEnd == 4 + ssn.count)
+        #expect(span.text == ssn)
+        #expect(span.score >= Float(floor) && span.score <= 1.0)
+
+        let redaction = PIISpanRedactor.apply(spans: spans, to: text)
+        #expect(redaction.redacted == "SSN [REDACTED:PII_ACCOUNT_NUMBER] is on file for the claim")
+        #expect(redaction.patterns == ["PII_ACCOUNT_NUMBER"])
+        #expect(!redaction.redacted.contains(ssn))
+    }
+
+    // MARK: 4. Name
+
+    @Test("real multi-token name fixture: B/I/I/E-private_person collapses to one span and redacts as PII_PRIVATE_PERSON")
+    func nameFixtureCollapsesAndRedacts() throws {
+        guard Self.offline else { return }  // real-model arm lands with T.2b — no download from a test run
+
+        let text = "Please loop in Maria del Carmen Rojas about the rollout"
+        let spans = try rulePath(tags: [
+            "Maria":  .B(.privatePerson),
+            "del":    .I(.privatePerson),
+            "Carmen": .I(.privatePerson),
+            "Rojas":  .E(.privatePerson),
+        ]).detectSpans(text, floor)
+
+        #expect(spans.count == 1)
+        let span = try #require(spans.first)
+        #expect(span.category == .privatePerson)
+        #expect(span.charStart == 15)
+        #expect(span.charEnd == 37)
+        // Four tokens collapse into ONE span with whitespace-shape-preserving
+        // text reconstruction — the boundary contract the Viterbi table pins.
+        #expect(span.text == "Maria del Carmen Rojas")
+        #expect(span.score >= Float(floor) && span.score <= 1.0)
+
+        let redaction = PIISpanRedactor.apply(spans: spans, to: text)
+        #expect(redaction.redacted == "Please loop in [REDACTED:PII_PRIVATE_PERSON] about the rollout")
+        #expect(redaction.patterns == ["PII_PRIVATE_PERSON"])
+        // No partial leak: neither the head nor the tail token survives.
+        #expect(!redaction.redacted.contains("Maria"))
+        #expect(!redaction.redacted.contains("Rojas"))
+    }
+}
+
 // MARK: - Test-local atomic
 
 /// File-scope to avoid colliding with `Atomic` defined in

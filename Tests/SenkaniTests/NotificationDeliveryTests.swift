@@ -37,7 +37,7 @@ private func makeTempHomeNDT() -> String {
     return base
 }
 
-@Suite("T.6 NotificationDelivery — production hookup", .serialized)
+@Suite("T.6 NotificationDelivery — production hookup", .serialized, .notificationDeliveryGate)
 struct NotificationDeliveryTests {
 
     @Test("Default holder is nil — deliver is a silent no-op")

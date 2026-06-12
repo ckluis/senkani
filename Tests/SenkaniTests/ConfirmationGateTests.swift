@@ -11,7 +11,7 @@ private func makeTempDB() -> (SessionDatabase, String) {
     return (db, path)
 }
 
-@Suite("T.6a — ConfirmationGate + ConfirmationStore + NotificationSink", .serialized)
+@Suite("T.6a — ConfirmationGate + ConfirmationStore + NotificationSink", .serialized, .notificationDeliveryGate)
 struct ConfirmationGateTests {
 
     // MARK: - Schema (acceptance #1)

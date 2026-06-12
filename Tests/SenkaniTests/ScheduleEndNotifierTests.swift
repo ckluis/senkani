@@ -33,7 +33,7 @@ private func makeTempLedgerPath() -> String {
 
 // MARK: - (a) + (b) Idempotent primitive + durable ledger
 
-@Suite("ScheduleEndNotifier — idempotent delivery primitive", .serialized)
+@Suite("ScheduleEndNotifier — idempotent delivery primitive", .serialized, .notificationDeliveryGate)
 struct ScheduleEndNotifierPrimitiveTests {
 
     @Test("deliverIfNew delivers once and dedups a same-sessionId replay (Kleppmann)")

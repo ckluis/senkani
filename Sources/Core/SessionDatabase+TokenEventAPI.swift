@@ -323,6 +323,31 @@ extension SessionDatabase {
         tokenEventStore.recentTokenEvents(projectRoot: projectRoot, limit: limit)
     }
 
+    // MARK: - Schedule-end reconcile (t6-schedule-end-cli-to-app-bridge LEG A)
+
+    /// Pull `schedule_end` `token_events` rows with `id > afterId`, oldest
+    /// first, up to `limit`. The reconcile drain's read seam — id-ASC is the
+    /// cursor order. See `TokenEventStore.scheduleEndEventsSince`.
+    public func scheduleEndEventsSince(
+        afterId: Int64, limit: Int
+    ) -> [(id: Int64, sessionId: String, scheduleId: String, summary: String)] {
+        tokenEventStore.scheduleEndEventsSince(afterId: afterId, limit: limit)
+            .map { ($0.id, $0.sessionId, $0.scheduleId, $0.summary) }
+    }
+
+    /// Read the schedule-end reconcile high-water cursor (returns 0 if
+    /// absent — fail-OPEN to a full re-scan, never to head).
+    public func scheduleEndReconcileCursor() -> Int64 {
+        tokenEventStore.scheduleEndReconcileCursor(consumerId: ScheduleEndReconciler.cursorId)
+    }
+
+    /// Advance the schedule-end reconcile cursor (monotonic + idempotent).
+    public func advanceScheduleEndReconcileCursor(to eventId: Int64) {
+        tokenEventStore.advanceScheduleEndReconcileCursor(
+            consumerId: ScheduleEndReconciler.cursorId, to: eventId
+        )
+    }
+
     /// V.19a-4 — recent cached-token rows for the Models/Inference
     /// dashboard tile. Joined against `cache_lifecycle` spans by the
     /// SwiftUI tile via `MLXInferenceTileCorrelator`.

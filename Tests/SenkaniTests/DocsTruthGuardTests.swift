@@ -47,8 +47,12 @@ struct DocsTruthGuardTests {
          "Flag does not exist. Init's only flags are --uninstall and --hook-path."),
         ("--hooks-only",
          "Same root cause as 'init --hooks-only': the flag has never shipped on Init."),
-        ("--dry-run",
-         "Init has no --dry-run. (If a different command grows one, narrow this rule to 'init --dry-run' only.)"),
+        // NOTE: the bare "--dry-run" rule was narrowed to "init --dry-run"
+        // (above) on 2026-06-13 when `senkani autorun --tasks <path>
+        // [--dry-run]` (Phase U.3 leg 1) shipped a legitimate --dry-run flag
+        // documented in README.md / cli.html. Init still has no --dry-run, so
+        // the exact "init --dry-run" phrase above keeps guarding the original
+        // stale-flag claim; a bare match would now false-positive on autorun.
     ]
 
     @Test("first-run docs do not advertise senkani init flags that don't exist")

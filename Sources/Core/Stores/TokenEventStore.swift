@@ -1715,6 +1715,121 @@ final class TokenEventStore: @unchecked Sendable {
         }
     }
 
+    // MARK: - Schedule-end reconcile (t6-schedule-end-cli-to-app-bridge LEG A)
+
+    /// One `schedule_end` row reconstructed for the reconcile drain. The
+    /// reconciler needs only the dedup key (`sessionId`) plus the banner
+    /// fields (`scheduleId`, `summary`); the id is the cursor watermark.
+    struct ScheduleEndRow: Equatable {
+        let id: Int64
+        let sessionId: String
+        let scheduleId: String
+        let summary: String
+    }
+
+    /// Pull `schedule_end` `token_events` rows with `id > afterId`, oldest
+    /// first, up to `limit`. id-ASC is MANDATORY: the reconciler advances a
+    /// monotonic cursor to `rows.last.id` AFTER delivering the batch, so the
+    /// pull order IS the cursor order.
+    ///
+    /// Filters on `ScheduleTelemetry.source` / `.featureEnd` (the SAME
+    /// constants `recordEnd` writes) — never string literals — so a producer
+    /// rename can't silently strand this consumer.
+    ///
+    /// Per-row reconstruction (the producer writes `command =
+    /// "{taskName}: {result}"` and `session_id = "schedule:{taskName}:{runId}"`):
+    ///   - `sessionId` = the `session_id` column verbatim (the dedup key).
+    ///   - `scheduleId` = the `command` prefix before the FIRST `": "`
+    ///     (so `"nightly backup: failed: exit 1"` → `"nightly backup"`).
+    ///     Falls back to the whole command, then to the session_id's middle
+    ///     segment, so a malformed row still yields a non-empty id.
+    ///   - `summary` = the `command` suffix after `"{scheduleId}: "` (so the
+    ///     example → `"failed: exit 1"`). Falls back to the whole command.
+    func scheduleEndEventsSince(afterId: Int64, limit: Int) -> [ScheduleEndRow] {
+        return parent.queue.sync { () -> [ScheduleEndRow] in
+            guard let db = parent.db else { return [] }
+            let sql = """
+                SELECT id, session_id, command
+                FROM token_events
+                WHERE source = ? AND feature = ? AND id > ?
+                ORDER BY id ASC
+                LIMIT ?;
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (ScheduleTelemetry.source as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_text(stmt, 2, (ScheduleTelemetry.featureEnd as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            sqlite3_bind_int64(stmt, 3, afterId)
+            sqlite3_bind_int(stmt, 4, Int32(limit))
+
+            var rows: [ScheduleEndRow] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let id = sqlite3_column_int64(stmt, 0)
+                let sessionId: String = sqlite3_column_type(stmt, 1) == SQLITE_NULL
+                    ? "" : String(cString: sqlite3_column_text(stmt, 1))
+                let command: String = sqlite3_column_type(stmt, 2) == SQLITE_NULL
+                    ? "" : String(cString: sqlite3_column_text(stmt, 2))
+                let (scheduleId, summary) = Self.reconstructScheduleEnd(
+                    command: command, sessionId: sessionId
+                )
+                rows.append(ScheduleEndRow(
+                    id: id, sessionId: sessionId, scheduleId: scheduleId, summary: summary
+                ))
+            }
+            return rows
+        }
+    }
+
+    /// Split the producer's `command` ("{taskName}: {result}") back into
+    /// `(scheduleId, summary)`. Pure + total — every fallback yields a
+    /// non-empty scheduleId so a malformed row still delivers.
+    static func reconstructScheduleEnd(command: String, sessionId: String) -> (scheduleId: String, summary: String) {
+        if let r = command.range(of: ": ") {
+            let scheduleId = String(command[command.startIndex..<r.lowerBound])
+            let summary = String(command[r.upperBound...])
+            if !scheduleId.isEmpty {
+                return (scheduleId, summary)
+            }
+        }
+        // No "{name}: {result}" shape — fall back to the whole command as the
+        // id, then to the session_id middle segment ("schedule:{name}:{runId}").
+        if !command.isEmpty {
+            return (command, command)
+        }
+        let segments = sessionId.split(separator: ":", omittingEmptySubsequences: false)
+        if segments.count >= 2 {
+            return (String(segments[1]), "")
+        }
+        return (sessionId, "")
+    }
+
+    /// Read the reconcile consumer's high-water cursor (the
+    /// `session_event_stream_offsets` row for `consumerId`). Returns 0 when
+    /// absent — fail-OPEN to a full re-scan, NEVER fail-closed to head. A
+    /// reset/missing cursor re-scans and the sessionId ledger dedups, so it
+    /// can only cost a re-scan, never a double-deliver. Inlined here (rather
+    /// than widening `SessionEventStreamStore`) to keep the change surgical.
+    func scheduleEndReconcileCursor(consumerId: String) -> Int64 {
+        return parent.queue.sync { () -> Int64 in
+            guard let db = parent.db else { return 0 }
+            let sql = "SELECT last_processed_event_id FROM session_event_stream_offsets WHERE consumer_id = ?;"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (consumerId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+            return sqlite3_column_int64(stmt, 0)
+        }
+    }
+
+    /// Advance the reconcile cursor to `eventId` via the REUSED, monotonic +
+    /// idempotent `commitOffset` (`ON CONFLICT … MAX(...)`). A lower value is
+    /// a no-op; a crash before this call re-scans next run (ledger dedups).
+    func advanceScheduleEndReconcileCursor(consumerId: String, to eventId: Int64) {
+        parent.sessionEventStreamStore.commitOffset(consumerId: consumerId, upTo: eventId)
+    }
+
     private static func parseTimelineRows(_ stmt: OpaquePointer?) -> [SessionDatabase.TimelineEvent] {
         var results: [SessionDatabase.TimelineEvent] = []
         while sqlite3_step(stmt) == SQLITE_ROW {

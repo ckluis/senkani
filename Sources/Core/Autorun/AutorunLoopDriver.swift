@@ -46,15 +46,28 @@ public struct AutorunLoopDriver: Sendable {
     private let database: SessionDatabase
     private let commandRunner: CommandRunner
     private let sink: NotificationSink
+    private let supervisionPrompt: SupervisionPrompt
 
     public init(
         database: SessionDatabase,
         commandRunner: CommandRunner,
-        sink: NotificationSink
+        sink: NotificationSink,
+        supervisionPrompt: SupervisionPrompt = AlwaysProceedSupervisionPrompt()
     ) {
         self.database = database
         self.commandRunner = commandRunner
         self.sink = sink
+        self.supervisionPrompt = supervisionPrompt
+    }
+
+    // MARK: - Supervision predicate (LEG 2)
+
+    /// Pure predicate: is the task at `taskIndex` supervised (operator
+    /// prompted after the gate clears) given a `--supervise-first N` policy?
+    /// The first `N` tasks (indices `0..<N`) are supervised; tasks at index
+    /// `>= N` run unattended. `N == 0` ⇒ nothing supervised (leg-1 behavior).
+    public static func isSupervised(taskIndex: Int, superviseFirst: Int) -> Bool {
+        taskIndex < superviseFirst
     }
 
     /// The unique validation sessionId for a run. Scoping each run to its
@@ -134,6 +147,12 @@ public struct AutorunLoopDriver: Sendable {
         /// A gate command was non-clean → halted (a `notifyFailure` was
         /// emitted). `failedCommand` is the first command that failed.
         case halted(taskIndex: Int, failedCommand: String, exitCode: Int32)
+        /// The gate cleared but the operator answered `n` at the supervision
+        /// prompt (LEG 2, `--supervise-first N`) → the run stopped before the
+        /// commit-event (a `notifyFailure` was emitted). DISTINCT from
+        /// `.halted` so an operator abort is distinguishable from a validation
+        /// failure.
+        case abortedBySupervisor(taskIndex: Int)
     }
 
     /// The result of a live run: the per-task outcomes in order. If a task
@@ -156,11 +175,17 @@ public struct AutorunLoopDriver: Sendable {
     ///   - contracts: the tasks (decompose output).
     ///   - runId: scopes the validation sessionId (`autorun-<run-id>`).
     ///   - output: human progress sink (defaults to `print`).
+    ///   - superviseFirst: `--supervise-first N` policy. On the first `N`
+    ///     tasks, AFTER the gate clears and BEFORE the commit-event, the
+    ///     injected `SupervisionPrompt` is consulted; `.abort` stops the run
+    ///     (a `notifyFailure`, no `notifyDone`). Tasks at index `>= N` run
+    ///     unattended. `0` (default) ⇒ fully unattended (leg-1 behavior).
     @discardableResult
     public func run(
         contracts: [WorkstreamTaskContract],
         runId: String,
-        output: (String) -> Void = { print($0) }
+        output: (String) -> Void = { print($0) },
+        superviseFirst: Int = 0
     ) -> RunResult {
         let sessionId = Self.sessionId(runId: runId)
         var outcomes: [TaskOutcome] = []
@@ -234,6 +259,34 @@ public struct AutorunLoopDriver: Sendable {
                 )
                 outcomes.append(.halted(taskIndex: index, failedCommand: bad.advisory, exitCode: bad.exitCode))
                 return RunResult(outcomes: outcomes, allCommitted: false)
+            }
+
+            // SUPERVISION (LEG 2): the gate cleared (validation rows already
+            // written above), so on the first N tasks we ask the operator
+            // BEFORE the commit-event. `.abort` stops the run with a
+            // `notifyFailure` (the SAME sink/fanout the halt path uses) and NO
+            // `notifyDone` — distinguishable from a gate failure via
+            // `.abortedBySupervisor`. The spine NEVER reads stdin; the answer
+            // arrives through the injected prompt seam (the CLI fronts a real
+            // stdin reader, tests inject a canned mock).
+            if Self.isSupervised(taskIndex: index, superviseFirst: superviseFirst) {
+                switch supervisionPrompt.confirmAdvance(
+                    taskIndex: index,
+                    total: total,
+                    objective: contract.objective
+                ) {
+                case .abort:
+                    let reason = "\(taskId) aborted by supervisor before commit"
+                    output("  ABORTED by supervisor")
+                    NotificationFanout.deliver(
+                        .notifyFailure(toolName: "autorun", reason: reason),
+                        to: [sink]
+                    )
+                    outcomes.append(.abortedBySupervisor(taskIndex: index))
+                    return RunResult(outcomes: outcomes, allCommitted: false)
+                case .proceed:
+                    break  // fall through to the existing commit path
+                }
             }
 
             // All-clean ⇒ proceed/commit-event.
@@ -316,5 +369,71 @@ public final class MockCommandRunner: CommandRunner, @unchecked Sendable {
         _ran.append(command)
         lock.unlock()
         return canned[command] ?? defaultResult
+    }
+}
+
+// MARK: - SupervisionPrompt seam (LEG 2)
+
+/// The operator's answer to a supervision prompt: proceed to the commit, or
+/// abort the run.
+public enum SupervisionAnswer: Equatable, Sendable {
+    /// Commit this task and continue the loop.
+    case proceed
+    /// Stop the run before this task's commit-event.
+    case abort
+}
+
+/// Asks the operator whether to advance past a supervised task's gate. The
+/// loop driver's ONLY TTY seam — the spine never reads stdin directly, so
+/// tests inject a canned mock and the spine stays Core-pure. The CLI fronts
+/// a real stdin reader (`ProcessSupervisionPrompt`).
+public protocol SupervisionPrompt: Sendable {
+    /// The gate for the task at `taskIndex` (of `total`) just cleared. Return
+    /// `.proceed` to commit it or `.abort` to stop the run.
+    func confirmAdvance(taskIndex: Int, total: Int, objective: String) -> SupervisionAnswer
+}
+
+/// Default prompt for unsupervised callers/tests: always `.proceed`. The
+/// `init` default seam so existing callers compile unchanged.
+public struct AlwaysProceedSupervisionPrompt: SupervisionPrompt {
+    public init() {}
+    public func confirmAdvance(taskIndex: Int, total: Int, objective: String) -> SupervisionAnswer {
+        .proceed
+    }
+}
+
+/// Test supervision prompt. Returns canned answers per call (by call index,
+/// with a default fallback) and records the `(taskIndex, total, objective)`
+/// tuples it was asked, in order. Thread-safe.
+public final class MockSupervisionPrompt: SupervisionPrompt, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _asked: [(taskIndex: Int, total: Int, objective: String)] = []
+    /// Canned answers consumed by call index. Once exhausted, `defaultAnswer`
+    /// is returned for every further call.
+    private let answers: [SupervisionAnswer]
+    /// Answer returned once `answers` is exhausted.
+    private let defaultAnswer: SupervisionAnswer
+
+    public init(
+        answers: [SupervisionAnswer] = [],
+        defaultAnswer: SupervisionAnswer = .proceed
+    ) {
+        self.answers = answers
+        self.defaultAnswer = defaultAnswer
+    }
+
+    /// The `(taskIndex, total, objective)` tuples this prompt was asked, in
+    /// order.
+    public var asked: [(taskIndex: Int, total: Int, objective: String)] {
+        lock.lock(); defer { lock.unlock() }
+        return _asked
+    }
+
+    public func confirmAdvance(taskIndex: Int, total: Int, objective: String) -> SupervisionAnswer {
+        lock.lock()
+        let callIndex = _asked.count
+        _asked.append((taskIndex, total, objective))
+        lock.unlock()
+        return callIndex < answers.count ? answers[callIndex] : defaultAnswer
     }
 }

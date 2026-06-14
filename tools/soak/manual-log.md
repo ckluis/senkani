@@ -2608,6 +2608,45 @@ total). These are the things only a real session can exercise.
       file now reads `"version": 2` and every rule has `recurrenceCount`,
       `sources`, `signalType: "failure"`, etc.
 
+### 2026-06-14 — t1d-7 operator CA-install walk (PASS)
+
+- Operator workstation: Chriss-Mac-mini (operator's real Mac).
+- Corrected walk (groomed plan was materially STALE — re-derived against
+  the shipped `.build/release/senkani`):
+  1. `senkani doctor --install-egress-ca` (confirm `INSTALL-EGRESS-CA`) —
+     DRY-RUN: generated `~/.senkani/egress-ca.pem` (+ 0600 `egress-ca.key`)
+     and PRINTED the install command. No sudo, no Keychain touch (only
+     conformer is DryRunTrustInstallExecutor).
+  2. Operator ran the printed:
+     `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /Users/clank/.senkani/egress-ca.pem`
+     → installed + trusted.
+- Trust flip: `verify-cert -p ssl` CSSMERR_TP_NOT_TRUSTED →
+  "certificate verification successful" (exit 0).
+- SHA-256 fingerprint (matched on-disk cert):
+  7A:19:DD:4F:CD:AB:FC:81:E6:2E:E9:81:E7:49:4D:88:4D:46:25:BE:72:73:BF:0B:6B:26:5C:FE:AA:7A:90:39
+- CA subject/issuer: O=senkani, CN=senkani Egress MITM Root CA
+  (self-signed, CA:TRUE, valid 2026-06-01 → 2036-05-29).
+- Body-inspection: `senkani doctor --check-egress` (CA trusted) →
+  5/5 host + 8/8 MITM body-inspection + 2/2 CONNECT-path, all DENY, exit 0.
+- Browser caveat acknowledged: System trust honored by Safari/curl/system,
+  NOT Chrome/Firefox (own stores) — out of scope.
+- Teardown:
+  `sudo security remove-trusted-cert -d /Users/clank/.senkani/egress-ca.pem`
+  then
+  `sudo security delete-certificate -c "senkani Egress MITM Root CA" /Library/Keychains/System.keychain`
+  → verify-cert back to NOT_TRUSTED; cert "could not be found", 0 copies
+  across all keychains; local pem+key preserved. REVERSIBLE confirmed.
+- VERDICT: PASS.
+- Stale-plan findings: confirm phrase is INSTALL-EGRESS-CA (not INSTALL);
+  install/uninstall are dry-run/print-only (no sudo, no Keychain mutation);
+  real listener is `senkani egress start` (NOT `serve --egress-proxy`,
+  which doesn't exist); CA CN is `senkani Egress MITM Root CA` (NOT
+  `senkani-mitm-ca`).
+- Teardown-gap defect: `doctor --uninstall-egress-ca` prints only
+  `remove-trusted-cert` (removes trust setting, LEAVES the cert object);
+  full baseline restore also needs `security delete-certificate`. (This
+  item.)
+
 ### Prior waves (cross-link to existing queue)
 
 - Wave 1/2/3 hardening soak S1–S12 — see

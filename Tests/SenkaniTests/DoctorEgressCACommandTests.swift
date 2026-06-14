@@ -97,14 +97,22 @@ struct DoctorEgressCACommandTests {
         let recorder = Doctor.DryRunTrustInstallExecutor(silent: true)
         try Doctor.uninstallEgressCAMotion(caPaths: paths, executor: recorder)
 
-        // Recorded the removal invocation (printed, never run).
-        #expect(recorder.invocations.count == 1,
-                "uninstall must record exactly one removal invocation, got \(recorder.invocations.count)")
-        let inv = recorder.invocations.first ?? []
-        #expect(inv.first == "security" && inv.contains("remove-trusted-cert"),
-                "invocation must be `security remove-trusted-cert ...`, got: \(inv)")
-        #expect(inv.last == paths.publicCertPEM,
-                "removal invocation must reference the TEST CA pem path, got: \(inv)")
+        // Recorded BOTH the removal AND the delete invocation (printed,
+        // never run). `remove-trusted-cert` only withdraws the trust setting;
+        // the cert OBJECT survives, so a full baseline restore also needs
+        // `security delete-certificate`.
+        #expect(recorder.invocations.count == 2,
+                "uninstall must record remove-trusted-cert AND delete-certificate, got \(recorder.invocations.count)")
+        let removeInv = recorder.invocations.first ?? []
+        #expect(removeInv.first == "security" && removeInv.contains("remove-trusted-cert"),
+                "first invocation must be remove-trusted-cert, got: \(removeInv)")
+        #expect(removeInv.last == paths.publicCertPEM,
+                "removal must reference the test CA pem path, got: \(removeInv)")
+        let deleteInv = recorder.invocations.last ?? []
+        #expect(deleteInv.first == "security" && deleteInv.contains("delete-certificate"),
+                "second invocation must be delete-certificate (remove-trusted-cert leaves the cert object), got: \(deleteInv)")
+        #expect(deleteInv.contains("senkani Egress MITM Root CA") && deleteInv.contains(Doctor.systemKeychainPath),
+                "delete-certificate must target the CA CN in the System keychain, got: \(deleteInv)")
 
         // Local pem + key removed from the temp dir.
         #expect(!FileManager.default.fileExists(atPath: paths.publicCertPEM),
@@ -183,5 +191,10 @@ struct DoctorEgressCACommandTests {
         let remove = Doctor.removeTrustedCertInvocation(pemPath: pem)
         #expect(remove == ["security", "remove-trusted-cert", "-d", pem],
                 "remove-trusted-cert argv drifted: \(remove)")
+
+        let delete = Doctor.deleteCertificateInvocation()
+        #expect(delete == ["security", "delete-certificate", "-c",
+                           "senkani Egress MITM Root CA", Doctor.systemKeychainPath],
+                "delete-certificate argv drifted: \(delete)")
     }
 }

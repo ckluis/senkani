@@ -419,6 +419,15 @@ struct Doctor: ParsableCommand {
         ["security", "remove-trusted-cert", "-d", pemPath]
     }
 
+    /// Build the EXACT `security delete-certificate` invocation. PRINTED,
+    /// not run. `remove-trusted-cert` withdraws the TRUST SETTING but leaves
+    /// the cert OBJECT in the System Keychain, so a full baseline restore
+    /// also needs this delete (surfaced live in the t1d-7 operator walk,
+    /// 2026-06-14). Targets the CA by its subject CN in the System keychain.
+    static func deleteCertificateInvocation() -> [String] {
+        ["security", "delete-certificate", "-c", "senkani Egress MITM Root CA", systemKeychainPath]
+    }
+
     /// Pure typed-confirm comparison. Extracted so the accept/reject logic
     /// is unit-testable without a tty. Exact-match only (no trim, no
     /// case-fold): the operator must type the expected phrase verbatim.
@@ -553,8 +562,20 @@ struct Doctor: ParsableCommand {
         print("")
         executor.run(invocation)
 
+        // `remove-trusted-cert` only withdraws the TRUST SETTING — it leaves
+        // the cert OBJECT in the System Keychain. A full baseline restore
+        // also needs `security delete-certificate` (surfaced live in the
+        // t1d-7 operator walk, 2026-06-14). Routed through the SAME dry-run
+        // executor — printed/recorded, never spawned.
+        let deleteInvocation = deleteCertificateInvocation()
+        print("Then DELETE the leftover cert object (remove-trusted-cert only")
+        print("withdraws trust; the cert object remains) — run yourself, t1d-7:")
+        print("  sudo " + deleteInvocation.joined(separator: " "))
+        print("")
+        executor.run(deleteInvocation)
+
         print("Done. Local CA files cleared; the System trust REMOVAL is NOT")
-        print("done — run the command above yourself (t1d-7).")
+        print("done — run the commands above yourself (t1d-7).")
     }
 
     /// Synchronously ensure the CA at `paths` exists on disk (generate if

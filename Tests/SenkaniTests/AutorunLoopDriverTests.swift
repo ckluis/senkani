@@ -419,4 +419,263 @@ struct AutorunLoopDriverTests {
         // Every request went ONLY to the pinned host.
         #expect(transport.sent.allSatisfy { $0.host == PushoverSink.host })
     }
+
+    // MARK: - Supervision (LEG 2 — `--supervise-first N`)
+
+    @Test("isSupervised predicate: true for indices < N, false for >= N; N=0 ⇒ none")
+    func isSupervisedPredicate() {
+        // N = 2 ⇒ indices 0,1 supervised; 2+ unattended.
+        #expect(AutorunLoopDriver.isSupervised(taskIndex: 0, superviseFirst: 2))
+        #expect(AutorunLoopDriver.isSupervised(taskIndex: 1, superviseFirst: 2))
+        #expect(!AutorunLoopDriver.isSupervised(taskIndex: 2, superviseFirst: 2))
+        #expect(!AutorunLoopDriver.isSupervised(taskIndex: 99, superviseFirst: 2))
+        // N = 0 ⇒ nothing supervised.
+        #expect(!AutorunLoopDriver.isSupervised(taskIndex: 0, superviseFirst: 0))
+        #expect(!AutorunLoopDriver.isSupervised(taskIndex: 5, superviseFirst: 0))
+    }
+
+    @Test("supervise proceed → all commit; only indices < N prompted, with correct tuples")
+    func superviseProceedAllCommit() {
+        let (db, path) = Self.makeTempDB()
+        defer { TempSessionDatabase.close(db, path: path) }
+
+        let runner = MockCommandRunner(defaultResult: CommandRunResult(exitCode: 0, output: nil))
+        let sink = MockNotificationSink()
+        // Canned .proceed for both prompts (and a .proceed fallback).
+        let prompt = MockSupervisionPrompt(answers: [.proceed, .proceed])
+        let driver = AutorunLoopDriver(
+            database: db, commandRunner: runner, sink: sink, supervisionPrompt: prompt
+        )
+
+        let md = """
+        - alpha [cmd: a0]
+        - bravo [cmd: b0]
+        - charlie [cmd: c0]
+        """
+        let contracts = TaskDecomposer().decompose(markdown: md)
+        let result = driver.run(
+            contracts: contracts,
+            runId: "sup-proceed-\(UUID().uuidString.prefix(8))",
+            output: { _ in },
+            superviseFirst: 2
+        )
+
+        #expect(result.allCommitted)
+        #expect(result.outcomes == [
+            .committed(taskIndex: 0),
+            .committed(taskIndex: 1),
+            .committed(taskIndex: 2),
+        ])
+        // Only indices 0 and 1 were prompted (index 2 ran unattended).
+        let asked = prompt.asked
+        #expect(asked.count == 2)
+        #expect(asked.map(\.taskIndex) == [0, 1])
+        #expect(asked.allSatisfy { $0.total == 3 })
+        #expect(asked.map(\.objective) == ["alpha", "bravo"])
+        // Three commit-event notifyDone, no failure.
+        #expect(sink.delivered.count == 3)
+        #expect(sink.delivered.allSatisfy {
+            if case .notifyDone = $0 { return true } else { return false }
+        })
+    }
+
+    @Test("supervise abort → notifyFailure + stop; later command never runs; abortedBySupervisor")
+    func superviseAbortStops() {
+        let (db, path) = Self.makeTempDB()
+        defer { TempSessionDatabase.close(db, path: path) }
+
+        let runner = MockCommandRunner(defaultResult: CommandRunResult(exitCode: 0, output: nil))
+        let sink = MockNotificationSink()
+        // Abort at the very first prompt (index 0).
+        let prompt = MockSupervisionPrompt(answers: [.abort])
+        let driver = AutorunLoopDriver(
+            database: db, commandRunner: runner, sink: sink, supervisionPrompt: prompt
+        )
+
+        let md = """
+        - first [cmd: cmd-first]
+        - second [cmd: cmd-second]
+        """
+        let contracts = TaskDecomposer().decompose(markdown: md)
+        let result = driver.run(
+            contracts: contracts,
+            runId: "sup-abort-\(UUID().uuidString.prefix(8))",
+            output: { _ in },
+            superviseFirst: 3
+        )
+
+        #expect(!result.allCommitted)
+        #expect(result.outcomes == [.abortedBySupervisor(taskIndex: 0)])
+        // Task 0's gate command ran; task 1's never did (the loop stopped).
+        #expect(runner.ran == ["cmd-first"])
+        #expect(!runner.ran.contains("cmd-second"))
+        // Exactly one delivered event: a notifyFailure naming the abort. No
+        // notifyDone.
+        #expect(sink.delivered.count == 1)
+        if case .notifyFailure(let tool, let reason) = sink.delivered[0] {
+            #expect(tool == "autorun")
+            #expect(reason.contains("abort"))
+        } else {
+            Issue.record("expected notifyFailure, got \(sink.delivered[0])")
+        }
+        #expect(!sink.delivered.contains {
+            if case .notifyDone = $0 { return true } else { return false }
+        })
+        // The prompt was asked exactly once.
+        #expect(prompt.asked.count == 1)
+    }
+
+    @Test("supervise scoped to first N: task N+1 advances with no prompt")
+    func superviseScopedToFirstN() {
+        let (db, path) = Self.makeTempDB()
+        defer { TempSessionDatabase.close(db, path: path) }
+
+        let runner = MockCommandRunner(defaultResult: CommandRunResult(exitCode: 0, output: nil))
+        let sink = MockNotificationSink()
+        let prompt = MockSupervisionPrompt(answers: [.proceed])
+        let driver = AutorunLoopDriver(
+            database: db, commandRunner: runner, sink: sink, supervisionPrompt: prompt
+        )
+
+        let md = """
+        - t0 [cmd: x0]
+        - t1 [cmd: x1]
+        - t2 [cmd: x2]
+        """
+        let contracts = TaskDecomposer().decompose(markdown: md)
+        let result = driver.run(
+            contracts: contracts,
+            runId: "sup-scope-\(UUID().uuidString.prefix(8))",
+            output: { _ in },
+            superviseFirst: 1
+        )
+
+        #expect(result.allCommitted)
+        #expect(result.outcomes == [
+            .committed(taskIndex: 0),
+            .committed(taskIndex: 1),
+            .committed(taskIndex: 2),
+        ])
+        // The prompt was asked EXACTLY once — index 0 only.
+        #expect(prompt.asked.count == 1)
+        #expect(prompt.asked.map(\.taskIndex) == [0])
+        // Tasks 1 & 2 advanced unattended.
+        #expect(sink.delivered.count == 3)
+    }
+
+    @Test("gate FAILURE halts before the prompt: outcome .halted, prompt never consulted")
+    func gateFailureHaltsBeforePrompt() {
+        let (db, path) = Self.makeTempDB()
+        defer { TempSessionDatabase.close(db, path: path) }
+
+        // Task 0's command fails — the task must halt at the gate, never
+        // reaching the supervision prompt.
+        let runner = MockCommandRunner(
+            canned: ["boom": CommandRunResult(exitCode: 9, output: nil)],
+            defaultResult: CommandRunResult(exitCode: 0, output: nil)
+        )
+        let sink = MockNotificationSink()
+        let prompt = MockSupervisionPrompt(answers: [.proceed])
+        let driver = AutorunLoopDriver(
+            database: db, commandRunner: runner, sink: sink, supervisionPrompt: prompt
+        )
+
+        let contracts = TaskDecomposer().decompose(markdown: "- doomed [cmd: boom]")
+        let result = driver.run(
+            contracts: contracts,
+            runId: "sup-gatefail-\(UUID().uuidString.prefix(8))",
+            output: { _ in },
+            superviseFirst: 3
+        )
+
+        #expect(!result.allCommitted)
+        // A gate failure — NOT a supervisor abort.
+        #expect(result.outcomes.count == 1)
+        if case .halted(let idx, let cmd, let code) = result.outcomes[0] {
+            #expect(idx == 0)
+            #expect(cmd == "boom")
+            #expect(code == 9)
+        } else {
+            Issue.record("expected .halted, got \(result.outcomes[0])")
+        }
+        // The prompt was NEVER consulted (gate runs first, halt returns early).
+        #expect(prompt.asked.isEmpty)
+        // The delivered event is a gate-failure notifyFailure (command + code).
+        #expect(sink.delivered.count == 1)
+        if case .notifyFailure(let tool, let reason) = sink.delivered[0] {
+            #expect(tool == "autorun")
+            #expect(reason.contains("boom") && reason.contains("9"))
+        } else {
+            Issue.record("expected notifyFailure, got \(sink.delivered[0])")
+        }
+    }
+
+    @Test("superviseFirst:0 == leg-1 behavior: prompt never consulted, all commit")
+    func superviseFirstZeroIsLegOneBehavior() {
+        let (db, path) = Self.makeTempDB()
+        defer { TempSessionDatabase.close(db, path: path) }
+
+        let runner = MockCommandRunner(defaultResult: CommandRunResult(exitCode: 0, output: nil))
+        let sink = MockNotificationSink()
+        // Would abort if ever consulted — proving it never is.
+        let prompt = MockSupervisionPrompt(answers: [.abort], defaultAnswer: .abort)
+        let driver = AutorunLoopDriver(
+            database: db, commandRunner: runner, sink: sink, supervisionPrompt: prompt
+        )
+
+        let md = """
+        - one [cmd: o0]
+        - two [cmd: t0]
+        """
+        let contracts = TaskDecomposer().decompose(markdown: md)
+        // superviseFirst defaults to 0 — omit it.
+        let result = driver.run(
+            contracts: contracts,
+            runId: "sup-zero-\(UUID().uuidString.prefix(8))",
+            output: { _ in }
+        )
+
+        #expect(result.allCommitted)
+        #expect(result.outcomes == [
+            .committed(taskIndex: 0),
+            .committed(taskIndex: 1),
+        ])
+        // The prompt was NEVER consulted.
+        #expect(prompt.asked.isEmpty)
+        // Two notifyDone, no failure (leg-1 counts).
+        #expect(sink.delivered.count == 2)
+        #expect(sink.delivered.allSatisfy {
+            if case .notifyDone = $0 { return true } else { return false }
+        })
+    }
+
+    @Test("supervised abort still leaves the aborted task's clean validation rows")
+    func superviseAbortLeavesValidationRows() {
+        let (db, path) = Self.makeTempDB()
+        defer { TempSessionDatabase.close(db, path: path) }
+
+        let runner = MockCommandRunner(defaultResult: CommandRunResult(exitCode: 0, output: nil))
+        let sink = MockNotificationSink()
+        let prompt = MockSupervisionPrompt(answers: [.abort])
+        let driver = AutorunLoopDriver(
+            database: db, commandRunner: runner, sink: sink, supervisionPrompt: prompt
+        )
+
+        let runId = "sup-rows-\(UUID().uuidString.prefix(8))"
+        let contracts = TaskDecomposer().decompose(markdown: "- task [cmd: vc0; vc1]")
+        let result = driver.run(
+            contracts: contracts,
+            runId: runId,
+            output: { _ in },
+            superviseFirst: 1
+        )
+
+        #expect(result.outcomes == [.abortedBySupervisor(taskIndex: 0)])
+        // Validation rows were written BEFORE the prompt (gate runs first), so
+        // the supervised pause still leaves durable clean evidence.
+        db.flushWrites()
+        let rows = db.validationResults(sessionId: AutorunLoopDriver.sessionId(runId: runId))
+        #expect(rows.count == 2)
+        #expect(rows.allSatisfy { $0.outcome == "clean" })
+    }
 }

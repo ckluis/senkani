@@ -2,7 +2,7 @@ import ArgumentParser
 import Foundation
 import Core
 
-/// `senkani autorun` — the overnight one-task-one-commit loop (U.3, LEG 1).
+/// `senkani autorun` — the overnight one-task-one-commit loop (U.3, legs 1–2).
 ///
 /// Decomposes a free-form markdown task file into U.11
 /// `WorkstreamTaskContract` rows, persists them to
@@ -17,13 +17,14 @@ import Core
 /// own that would shadow a future subcommand. Leg-1 options live directly
 /// on the single command body:
 ///
-///   --tasks <path>   Markdown task file; one top-level bullet per task.
-///   --dry-run        Print the plan and exit; execute nothing.
+///   --tasks <path>        Markdown task file; one top-level bullet per task.
+///   --dry-run             Print the plan and exit; execute nothing.
+///   --supervise-first N   Pause for operator y/n after the gate clears on the
+///                         first N tasks (leg 2); n aborts. 0 = unattended.
 ///
-/// LEG-1 SCOPE — deferred to later legs (NOT built here): the TUI /
-/// decomposer pane, `--supervise-first`, `ctrl+.` WIP-stash halt,
-/// `--allow-classes` + `taskClass` inference, the REAL Pushover transport,
-/// and first-run operator approval.
+/// DEFERRED to later legs (NOT built here): the TUI / decomposer pane,
+/// `ctrl+.` WIP-stash halt, `--allow-classes` + `taskClass` inference, the
+/// REAL Pushover transport, and first-run operator approval.
 struct Autorun: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "autorun",
@@ -35,6 +36,9 @@ struct Autorun: ParsableCommand {
 
     @Flag(name: .long, help: "Print the decomposed plan and per-task gate, then exit without executing anything.")
     var dryRun = false
+
+    @Option(name: .long, help: "Pause for operator y/n after the gate clears on the first N tasks; n aborts the run. 0 = fully unattended.")
+    var superviseFirst: Int = 0
 
     func run() throws {
         // Decompose the task file → WorkstreamTaskContract rows.
@@ -78,7 +82,8 @@ struct Autorun: ParsableCommand {
             sink: PushoverSink(
                 credentials: .synthetic,
                 transport: FakePushoverTransport()
-            )
+            ),
+            supervisionPrompt: ProcessSupervisionPrompt()
         )
 
         // --dry-run: decompose + persist + print the plan; execute nothing.
@@ -92,6 +97,20 @@ struct Autorun: ParsableCommand {
         // sink, so for the live path we treat that as "not seeded for real"
         // and require an operator on the TTY.
         let attendedOnTTY = isatty(STDIN_FILENO) == 1
+
+        // Supervision conflict guard (LEG 2): `--supervise-first N>0` REQUIRES
+        // an operator on the TTY — the spine will ask for a y/n. Refuse BEFORE
+        // starting the run so an unattended `--supervise-first` never blocks
+        // forever on stdin (or, with the fail-safe stdin reader, aborts on the
+        // first EOF without the operator ever seeing the prompt).
+        if superviseFirst > 0 && !attendedOnTTY {
+            FileHandle.standardError.write(
+                ("senkani autorun: --supervise-first requires an operator on the TTY; "
+                    + "rerun attended or with --supervise-first 0\n").data(using: .utf8) ?? Data()
+            )
+            throw ExitCode.failure
+        }
+
         let pushoverSeededForReal = false // leg 1: only the fake transport is wired
         if let refusal = AutorunLoopDriver.unattendedRefusalReason(
             pushoverSeeded: pushoverSeededForReal,
@@ -105,7 +124,7 @@ struct Autorun: ParsableCommand {
 
         // Live run. Print the plan header, then the loop.
         for line in driver.planLines(for: contracts) { print(line) }
-        let result = driver.run(contracts: contracts, runId: runId)
+        let result = driver.run(contracts: contracts, runId: runId, superviseFirst: superviseFirst)
         if !result.allCommitted {
             // The loop halted at a failing task — surface a non-zero exit so
             // scripts/CI see the halt.
@@ -151,5 +170,38 @@ struct ProcessCommandRunner: CommandRunner {
         process.waitUntilExit()
         let output = String(data: data, encoding: .utf8)
         return CommandRunResult(exitCode: process.terminationStatus, output: output)
+    }
+}
+
+/// The REAL `SupervisionPrompt` for the CLI (LEG 2): prints a one-line y/N
+/// prompt for a supervised task and reads ONE line from stdin. Lives in the
+/// CLI target (process/stdin I/O is wiring, not Core-pure spine logic — the
+/// same placement rationale as `ProcessCommandRunner`).
+///
+/// FAIL-SAFE: only `y`/`yes` (case-insensitive, trimmed) advances. EVERYTHING
+/// else — a bare newline, `n`, garbage, or EOF (nil from `readLine`) —
+/// returns `.abort`. When supervision was explicitly requested, the loop must
+/// never advance unattended, so an empty/EOF answer is treated as "stop".
+struct ProcessSupervisionPrompt: SupervisionPrompt {
+    /// Pure, directly-testable classification of a raw stdin answer line
+    /// (or `nil` for EOF) into a `SupervisionAnswer`. FAIL-SAFE: only `y`/`yes`
+    /// (trimmed, case-insensitive) → `.proceed`; a bare newline (`""`), `n`,
+    /// any other string, and EOF (`nil`) → `.abort`. Extracted from the
+    /// `readLine` call so the safety-critical answer mapping is unit-tested
+    /// without touching stdin.
+    static func classify(_ line: String?) -> SupervisionAnswer {
+        guard let line else {
+            // EOF — no operator answer. Fail safe: abort.
+            return .abort
+        }
+        let answer = line.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return (answer == "y" || answer == "yes") ? .proceed : .abort
+    }
+
+    func confirmAdvance(taskIndex: Int, total: Int, objective: String) -> SupervisionAnswer {
+        FileHandle.standardOutput.write(
+            "  [\(taskIndex + 1)/\(total)] \(objective) — commit? [y/N] ".data(using: .utf8) ?? Data()
+        )
+        return Self.classify(readLine(strippingNewline: true))
     }
 }

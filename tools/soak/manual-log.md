@@ -2647,6 +2647,22 @@ total). These are the things only a real session can exercise.
   full baseline restore also needs `security delete-certificate`. (This
   item.)
 
+### 2026-06-14 — senkani-app-emfile-crash real-machine validation (PASS, corrected)
+
+- Operator Mac, bundle app launched from tools/soak/runner/SenkaniApp.app.
+- EMFILE fix VALIDATED under a real watcher-drain burst: app held fd count 101
+  (baseline 94) while the watcher ingested 2000 probe events + 44,452 total
+  claude_session events (hundreds of files); 0 new SenkaniApp-*.ips crash
+  reports; "Open a tracked shell" pane launched cleanly.
+- The 2026-05-15 groomed walk was materially STALE (4 drifts) — procedure was
+  re-derived live (see the item's Execution evidence section + the re-groom
+  follow-up emfile-validation-walk-regroom-stale-fixture-2026-06-14):
+  bundle missing → 08-make-app-bundle.command; per-pane watcher on working dir
+  → launch in default/main-repo workstream; watcher needs a FRESH pane to start
+  (! TRACK → OK TRACK), not pre-written probes; find -newermt @epoch / log show
+  --start date -u are non-portable on macOS.
+- VERDICT: PASS. Fix (raiseFileDescriptorLimit + in-process SHA1) holds.
+
 ### Prior waves (cross-link to existing queue)
 
 - Wave 1/2/3 hardening soak S1–S12 — see

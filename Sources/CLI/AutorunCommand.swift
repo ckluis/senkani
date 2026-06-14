@@ -21,10 +21,13 @@ import Core
 ///   --dry-run             Print the plan and exit; execute nothing.
 ///   --supervise-first N   Pause for operator y/n after the gate clears on the
 ///                         first N tasks (leg 2); n aborts. 0 = unattended.
+///   --allow-classes CSV   Restrict unattended autorun to tasks whose inferred
+///                         class is on the comma-list (leg 3); out-of-list tasks
+///                         pause for operator y/n regardless of --supervise-first.
 ///
 /// DEFERRED to later legs (NOT built here): the TUI / decomposer pane,
-/// `ctrl+.` WIP-stash halt, `--allow-classes` + `taskClass` inference, the
-/// REAL Pushover transport, and first-run operator approval.
+/// `ctrl+.` WIP-stash halt, the REAL Pushover transport, and first-run operator
+/// approval.
 struct Autorun: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "autorun",
@@ -39,6 +42,9 @@ struct Autorun: ParsableCommand {
 
     @Option(name: .long, help: "Pause for operator y/n after the gate clears on the first N tasks; n aborts the run. 0 = fully unattended.")
     var superviseFirst: Int = 0
+
+    @Option(name: .long, help: "Restrict unattended autorun to tasks whose inferred class is in this comma-list (e.g. test-fix,docs). Out-of-list tasks pause for operator y/n regardless of --supervise-first; an out-of-list task in an unattended (no-TTY) run aborts via the fail-safe stdin reader.")
+    var allowClasses: String?
 
     func run() throws {
         // Decompose the task file → WorkstreamTaskContract rows.
@@ -124,7 +130,13 @@ struct Autorun: ParsableCommand {
 
         // Live run. Print the plan header, then the loop.
         for line in driver.planLines(for: contracts) { print(line) }
-        let result = driver.run(contracts: contracts, runId: runId, superviseFirst: superviseFirst)
+        let allowList = TaskClass.parseAllowList(allowClasses ?? "")
+        let result = driver.run(
+            contracts: contracts,
+            runId: runId,
+            superviseFirst: superviseFirst,
+            allowList: allowList
+        )
         if !result.allCommitted {
             // The loop halted at a failing task — surface a non-zero exit so
             // scripts/CI see the halt.

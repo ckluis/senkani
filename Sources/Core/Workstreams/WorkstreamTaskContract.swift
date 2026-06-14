@@ -12,6 +12,12 @@ import Foundation
 /// a typo — counting the listed names gives 11; we ship the named
 /// fields. The closing summary calls this out.
 ///
+/// U.3 leg 3 adds an OPTIONAL `task_class` field (the `--allow-classes`
+/// class gate). It is JSON-only: encoded into `contracts.json` when present
+/// and omitted when nil (`encodeIfPresent`), with NO DB column (the v39
+/// `workstream_contracts` table is never written by the autorun loop). A nil
+/// `taskClass` encodes byte-identically to the pre-leg-3 shape.
+///
 /// `acceptance: [UUID]` is wire-only here — the assertion type
 /// (`ValidationAssertion`) and its FK lookup land in a-2.
 ///
@@ -32,6 +38,9 @@ public struct WorkstreamTaskContract: Codable, Equatable, Sendable {
     public let commands: [String]
     public let acceptance: [UUID]
     public let reviewLevel: ReviewLevel
+    /// U.3 leg-3 inferred task class (the `--allow-classes` gate). Optional
+    /// and JSON-only: omitted from the encoding when nil; no DB column.
+    public let taskClass: TaskClass?
 
     public init(
         id: UUID,
@@ -44,7 +53,8 @@ public struct WorkstreamTaskContract: Codable, Equatable, Sendable {
         budget: ContractBudget,
         commands: [String],
         acceptance: [UUID],
-        reviewLevel: ReviewLevel
+        reviewLevel: ReviewLevel,
+        taskClass: TaskClass? = nil
     ) {
         self.id = id
         self.workstreamID = workstreamID
@@ -57,6 +67,7 @@ public struct WorkstreamTaskContract: Codable, Equatable, Sendable {
         self.commands = commands
         self.acceptance = acceptance
         self.reviewLevel = reviewLevel
+        self.taskClass = taskClass
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -71,6 +82,7 @@ public struct WorkstreamTaskContract: Codable, Equatable, Sendable {
         case commands
         case acceptance
         case reviewLevel = "review_level"
+        case taskClass = "task_class"
     }
 }
 

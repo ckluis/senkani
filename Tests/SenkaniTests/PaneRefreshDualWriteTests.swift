@@ -61,7 +61,8 @@ struct PaneRefreshDualWriteTests {
 
         // Baseline: a coordinator that has NO dual-write capability invoked
         // (default loader ⇒ dualWrite=false). This is the U.9a tile-state path.
-        let (dbBase, _) = Self.makeDB()
+        let (dbBase, dbBasePath) = Self.makeDB()
+        defer { TempSessionDatabase.close(dbBase, path: dbBasePath) }
         let root = "/tmp/senkani-u9b2-off"
         let baseline = PaneRefreshCoordinator(
             database: dbBase, projectRoot: root,
@@ -74,7 +75,8 @@ struct PaneRefreshDualWriteTests {
 
         // Explicit dualWrite=false coordinator on a fresh DB. Must produce
         // byte-identical tile state AND write zero bus rows / zero counters.
-        let (db, _) = Self.makeDB()
+        let (db, dbPath) = Self.makeDB()
+        defer { TempSessionDatabase.close(db, path: dbPath) }
         let coord = PaneRefreshCoordinator(
             database: db, projectRoot: root,
             budgetBurnFetch: budgetFetch,
@@ -106,7 +108,8 @@ struct PaneRefreshDualWriteTests {
 
     @Test("dualWrite=true: each refreshed tile enqueues a pane_refresh bus row + .parity_match; bus dispatch respects the same maxConcurrent ceiling as PaneRefreshWorkerPool")
     func dualWriteOnEnqueuesAndRespectsCeiling() async {
-        let (db, _) = Self.makeDB()
+        let (db, dbPath) = Self.makeDB()
+        defer { TempSessionDatabase.close(db, path: dbPath) }
         let root = "/tmp/senkani-u9b2-on"
 
         let coord = PaneRefreshCoordinator(

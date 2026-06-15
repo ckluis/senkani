@@ -79,13 +79,6 @@ struct WasmtimeRuntimeIntegrationTests {
         return (SessionDatabase(path: path), path)
     }
 
-    static func cleanupDB(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-shm")
-        try? fm.removeItem(atPath: path + "-wal")
-    }
-
     /// Force `parent.queue.async` writes from `recordWasmKill` to
     /// flush before the test reads back via raw SQLite. Matches the
     /// pattern in `WasmtimeSubprocessRuntimeChainTests.flushQueue`.
@@ -106,7 +99,7 @@ struct WasmtimeRuntimeIntegrationTests {
         #expect(moduleBytes.count >= 32, "\(fixture.name).wasm must be non-trivial (>= 32 bytes)")
 
         let (db, dbPath) = Self.makeTempDB()
-        defer { Self.cleanupDB(dbPath) }
+        defer { TempSessionDatabase.close(db, path: dbPath) }
 
         // Per-test workdir so the escape-* assertion "no files
         // created outside this dir" has a tight scope to assert

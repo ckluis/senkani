@@ -24,10 +24,11 @@ struct AutoValidateDualWriteTests {
     }
 
     private static func cleanupDB(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-shm")
-        try? fm.removeItem(atPath: path + "-wal")
+        // Delegate to the single-source-of-truth helper so the primary +
+        // ALL sidecars (incl. `.migrating` / `.schema.lock`) are reclaimed,
+        // not just `.sqlite`/`-wal`/`-shm`. Stays in lockstep when new
+        // sidecars are added.
+        TempSessionDatabase.cleanup(path: path)
     }
 
     private static func eventCount(_ db: SessionDatabase, _ type: String, projectRoot: String) -> Int {

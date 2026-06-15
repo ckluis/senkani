@@ -27,11 +27,8 @@ import SQLite3
         return (SessionDatabase(path: path), path)
     }
 
-    private func cleanupDB(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-shm")
-        try? fm.removeItem(atPath: path + "-wal")
+    private func cleanupDB(_ db: SessionDatabase, _ path: String) {
+        TempSessionDatabase.close(db, path: path)
     }
 
     private func makeRow(
@@ -74,7 +71,7 @@ import SQLite3
     @Test("Migration v34 creates sprint_review_snapshots with expected schema + indexes")
     func migrationCreatesTableAndIndexes() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { cleanupDB(db, path) }
 
         #expect(db.currentSchemaVersion() >= 34, "schema version should be ≥ 34 after init, got \(db.currentSchemaVersion())")
 
@@ -121,7 +118,7 @@ import SQLite3
     @Test("snapshot(db:now:snapshot:) writes one row per SprintReviewRow with shared captured_at")
     func snapshotWritesRowsWithSharedTimestamp() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { cleanupDB(db, path) }
 
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let rows = [
@@ -157,7 +154,7 @@ import SQLite3
     @Test("Provider.versions returns chain sorted captured_at ASC with monotonic version + previousVersion")
     func providerVersionsReturnsChain() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { cleanupDB(db, path) }
 
         let baseRow = makeRow(id: "stable-id", kind: .filterRule, title: "rule-X")
         let snap = makeSnapshot([baseRow])
@@ -192,7 +189,7 @@ import SQLite3
     @Test("snapshot prunes rows older than retentionDays default (30d) on next write")
     func retentionDefaultPrunesOldSnapshots() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { cleanupDB(db, path) }
 
         let t0 = Date(timeIntervalSince1970: 1_700_000_000)
         let snap = makeSnapshot([makeRow(id: "r")])
@@ -224,7 +221,7 @@ import SQLite3
     @Test("SENKANI_SPRINT_REVIEW_RETENTION_DAYS env override shrinks window")
     func retentionEnvOverridePrunes() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { cleanupDB(db, path) }
 
         let env = ["SENKANI_SPRINT_REVIEW_RETENTION_DAYS": "7"]
         let t0 = Date(timeIntervalSince1970: 1_700_000_000)
@@ -257,7 +254,7 @@ import SQLite3
     @Test("ChainVerifier.verifyTokenEvents passes after v34 — auxiliary table did not perturb chain")
     func chainVerifierNoRegression() {
         let (db, path) = makeTempDB()
-        defer { cleanupDB(path) }
+        defer { cleanupDB(db, path) }
 
         // Write a token_events row through the per-test db so a
         // chain anchor + entry_hash exist. Stays out of the shared

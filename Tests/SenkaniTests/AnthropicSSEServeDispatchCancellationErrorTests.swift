@@ -182,6 +182,7 @@ struct AnthropicSSEServeDispatchCancellationErrorTests {
         let engine = _makeStreamingEngine()
         let path = "/tmp/senkani-sse-d-ok-\(UUID().uuidString).sqlite"
         let db = SessionDatabase(path: path)
+        defer { TempSessionDatabase.close(db, path: path) }
         let chain = OpenAIAuditChain()
 
         let outcome = ClaudeAPIServeDispatch.streamingPlan(
@@ -347,6 +348,7 @@ struct AnthropicSSEServeDispatchCancellationErrorTests {
         let engine = _makeStreamingEngine()
         let path = "/tmp/senkani-sse-d-mid-err-\(UUID().uuidString).sqlite"
         let db = SessionDatabase(path: path)
+        defer { TempSessionDatabase.close(db, path: path) }
         let chain = OpenAIAuditChain()
 
         let outcome = ClaudeAPIServeDispatch.streamingPlan(
@@ -504,6 +506,7 @@ struct AnthropicSSEServeDispatchCancellationErrorTests {
         let engine = _makeStreamingEngine()
         let path = "/tmp/senkani-sse-d-leak-\(UUID().uuidString).sqlite"
         let db = SessionDatabase(path: path)
+        defer { TempSessionDatabase.close(db, path: path) }
         let chain = OpenAIAuditChain()
 
         let outcome = ClaudeAPIServeDispatch.streamingPlan(

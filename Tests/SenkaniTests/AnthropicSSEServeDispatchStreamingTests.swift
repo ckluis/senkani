@@ -354,6 +354,7 @@ struct AnthropicSSEServeDispatchStreamingTests {
         let engine = _makeStreamingEngine()
         let path = "/tmp/senkani-sse-b-audit-\(UUID().uuidString).sqlite"
         let db = SessionDatabase(path: path)
+        defer { TempSessionDatabase.close(db, path: path) }
         let chain = OpenAIAuditChain()
 
         let outcome = ClaudeAPIServeDispatch.streamingPlan(

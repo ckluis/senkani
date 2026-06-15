@@ -133,7 +133,8 @@ struct RedteamPaneAndEngagementTests {
 
     @Test("engagementEndDisablesRewriteBack — closed engagement renders surrogates literally")
     func engagementEndDisablesRewriteBack() async throws {
-        let (ctx, vault, _) = try await makeEngagement(id: "engagement-end-test")
+        let (ctx, vault, root) = try await makeEngagement(id: "engagement-end-test")
+        defer { TempSessionDatabase.cleanup(projectRoot: root.path) }
         let emitter = SimpleStubEmitter(needle: "Voldemort", category: "PRIVATE_PERSON")
         let proxy = AnonymizationProxy(engagement: ctx, vault: vault, emitter: emitter)
 

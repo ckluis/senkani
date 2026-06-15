@@ -70,7 +70,8 @@ struct AnonymizationProxyTests {
 
     @Test("outboundScrubReplacesPIIWithSurrogates")
     func outboundScrubReplacesPIIWithSurrogates() async throws {
-        let (ctx, vault, _) = try await makeEngagement()
+        let (ctx, vault, root) = try await makeEngagement()
+        defer { TempSessionDatabase.cleanup(projectRoot: root.path) }
         let emitter = StubEmitter(fixtures: [
             ("Harry Potter", "PRIVATE_PERSON"),
             ("harry@hogwarts.edu", "PRIVATE_EMAIL"),
@@ -88,7 +89,8 @@ struct AnonymizationProxyTests {
 
     @Test("surrogateReuseWithinEngagement")
     func surrogateReuseWithinEngagement() async throws {
-        let (ctx, vault, _) = try await makeEngagement()
+        let (ctx, vault, root) = try await makeEngagement()
+        defer { TempSessionDatabase.cleanup(projectRoot: root.path) }
         let emitter = StubEmitter(fixtures: [
             ("Harry Potter", "PRIVATE_PERSON"),
         ])
@@ -111,7 +113,8 @@ struct AnonymizationProxyTests {
 
     @Test("inboundRewriteBackRestoresOriginal — bare, JSON-quoted, code-fenced")
     func inboundRewriteBackRestoresOriginal() async throws {
-        let (ctx, vault, _) = try await makeEngagement()
+        let (ctx, vault, root) = try await makeEngagement()
+        defer { TempSessionDatabase.cleanup(projectRoot: root.path) }
         let emitter = StubEmitter(fixtures: [
             ("Harry Potter", "PRIVATE_PERSON"),
             ("harry@hogwarts.edu", "PRIVATE_EMAIL"),
@@ -145,6 +148,8 @@ struct AnonymizationProxyTests {
     func engagementIsolation() async throws {
         let (ctxA, vaultA, rootA) = try await makeEngagement(id: "engagement-A")
         let (ctxB, vaultB, rootB) = try await makeEngagement(id: "engagement-B")
+        defer { TempSessionDatabase.cleanup(projectRoot: rootA.path) }
+        defer { TempSessionDatabase.cleanup(projectRoot: rootB.path) }
 
         // The roots are disjoint by construction (each tmp dir is
         // unique); the vault paths must therefore be disjoint too.
@@ -206,6 +211,7 @@ struct AnonymizationProxyTests {
         )
         let credentialVault = CredentialVault(store: store)
         let root = Self.uniqueTmpDir()
+        defer { TempSessionDatabase.cleanup(projectRoot: root.path) }
         let provider = EngagementContextProvider(credentialVault: credentialVault, root: root)
         let (ctx, source) = try await provider.makeContext(
             id: "seeded",

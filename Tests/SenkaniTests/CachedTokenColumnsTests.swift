@@ -37,10 +37,11 @@ struct CachedTokenColumnsTests {
     }
 
     private static func cleanupDB(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-shm")
-        try? fm.removeItem(atPath: path + "-wal")
+        // Delegate to the single-source-of-truth helper so this stays in
+        // lockstep — it unlinks the primary + all five sidecars, including
+        // the `.migrating`/`.schema.lock` MigrationRunner flock sidecars
+        // that the old bespoke teardown leaked to /tmp.
+        TempSessionDatabase.cleanup(path: path)
     }
 
     /// Flush the parent.queue async write by issuing a sync probe.

@@ -33,13 +33,6 @@ import Foundation
         return (SessionDatabase(path: path), path)
     }
 
-    private func cleanupDB(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-shm")
-        try? fm.removeItem(atPath: path + "-wal")
-    }
-
     private func diaryDir(home: String, workspaceSlug: String) -> URL {
         URL(fileURLWithPath: "\(home)/.senkani/diaries/\(workspaceSlug)")
     }
@@ -223,7 +216,7 @@ import Foundation
             }
 
             let (db, dbPath) = tempDB()
-            defer { cleanupDB(dbPath) }
+            defer { TempSessionDatabase.close(db, path: dbPath) }
             let provider = PaneDiaryArtifactProvider(home: home)
             let store = ArtifactStore(
                 providers: [provider],

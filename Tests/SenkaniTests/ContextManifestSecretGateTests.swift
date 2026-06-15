@@ -58,10 +58,9 @@ private func makeTempDB() -> (SessionDatabase, String) {
 }
 
 private func cleanupDB(_ path: String) {
-    let fm = FileManager.default
-    try? fm.removeItem(atPath: path)
-    try? fm.removeItem(atPath: path + "-shm")
-    try? fm.removeItem(atPath: path + "-wal")
+    // Delegate to the single source of truth so the primary file AND all
+    // sidecars (.migrating/.schema.lock included) are unlinked in lockstep.
+    TempSessionDatabase.cleanup(path: path)
 }
 
 // MARK: - 1. Refusal without override

@@ -27,11 +27,12 @@ struct ProviderHealthSnapshotTests {
         return (SessionDatabase(path: path), path)
     }
 
-    private static func cleanupDB(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-shm")
-        try? fm.removeItem(atPath: path + "-wal")
+    private static func cleanupDB(_ db: SessionDatabase, _ path: String) {
+        // Route through the single-source-of-truth helper so the primary
+        // file AND all migration sidecars (.migrating / .schema.lock) are
+        // reclaimed. `close(_:path:)` drains + closes the live handle before
+        // unlinking, avoiding a deinit `sqlite3_close` on a deleted -wal/-shm.
+        TempSessionDatabase.close(db, path: path)
     }
 
     // MARK: - 1 + 2: staleness derivation (pure, table-driven)
@@ -71,7 +72,7 @@ struct ProviderHealthSnapshotTests {
     @Test("a turn_completed provider_runtime_event flips the snapshot last_refresh forward (no timer)")
     func eventDrivenRefresh() {
         let (db, path) = Self.makeTempDB()
-        defer { Self.cleanupDB(path) }
+        defer { Self.cleanupDB(db, path) }
 
         // Seed a snapshot with an OLD last_refresh.
         let old = Date(timeIntervalSince1970: 1_000)
@@ -122,7 +123,7 @@ struct ProviderHealthSnapshotTests {
     @Test("provider refresh upserts a fresh snapshot from the local probe (no spawn)")
     func explicitRefreshUpserts() {
         let (db, path) = Self.makeTempDB()
-        defer { Self.cleanupDB(path) }
+        defer { Self.cleanupDB(db, path) }
 
         let probe = ProviderHealthProbe { providerID in
             ProviderHealthProbe.LocalProbeResult(
@@ -158,7 +159,7 @@ struct ProviderHealthSnapshotTests {
     @Test("a representative refresh session writes ZERO egress_decisions rows (no-network invariant)")
     func noNetworkInvariant() {
         let (db, path) = Self.makeTempDB()
-        defer { Self.cleanupDB(path) }
+        defer { Self.cleanupDB(db, path) }
 
         let egressBefore = db.egressDecisionCount()
 
@@ -202,7 +203,7 @@ struct ProviderHealthSnapshotTests {
     @Test("auth-state enum round-trips through the store: signed_in / signed_out / expired / unknown")
     func authStateRoundTrip() {
         let (db, path) = Self.makeTempDB()
-        defer { Self.cleanupDB(path) }
+        defer { Self.cleanupDB(db, path) }
 
         let cases: [(String, ProviderHealthSnapshot.AuthState)] = [
             ("p_signed_in", .signedIn),

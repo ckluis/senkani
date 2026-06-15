@@ -25,13 +25,6 @@ struct WasmtimeSubprocessRuntimeChainTests {
         return (SessionDatabase(path: path), path)
     }
 
-    private static func cleanupDB(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-shm")
-        try? fm.removeItem(atPath: path + "-wal")
-    }
-
     /// Wait for the parent.queue async write to land. The store's
     /// `recordWasmKill` dispatches onto `parent.queue.async`, so the
     /// caller must `parent.queue.sync` (or a SELECT through the
@@ -45,7 +38,7 @@ struct WasmtimeSubprocessRuntimeChainTests {
     @Test("recordWasmKill writes a row with wasm_* columns + entry_hash populated")
     func wasmKillRowAppearsInTokenEvents() {
         let (db, path) = Self.makeTempDB()
-        defer { Self.cleanupDB(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         db.recordWasmKill(
             sessionId: "t3a-4-fuel-test",
@@ -108,7 +101,7 @@ struct WasmtimeSubprocessRuntimeChainTests {
     @Test("100 mixed wasm_kill + token_event rows verify clean via ChainVerifier")
     func hundredMixedKillRowsVerifyClean() {
         let (db, path) = Self.makeTempDB()
-        defer { Self.cleanupDB(path) }
+        defer { TempSessionDatabase.close(db, path: path) }
 
         let reasons: [WasmKillReason] = [.fuel, .epoch, .escape, .crash]
         for i in 0..<100 {

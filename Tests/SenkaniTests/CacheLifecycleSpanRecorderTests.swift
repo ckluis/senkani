@@ -38,10 +38,7 @@ struct CacheLifecycleSpanRecorderTests {
     }
 
     private static func cleanupDB(_ path: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: path)
-        try? fm.removeItem(atPath: path + "-shm")
-        try? fm.removeItem(atPath: path + "-wal")
+        TempSessionDatabase.cleanup(path: path)
     }
 
     private static func makeRecorder(

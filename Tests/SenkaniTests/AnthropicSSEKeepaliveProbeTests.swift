@@ -182,6 +182,7 @@ struct AnthropicSSEKeepaliveProbeTests {
         let engine = _kpStreamingEngine()
         let path = "/tmp/senkani-sse-e-keepalive-\(UUID().uuidString).sqlite"
         let db = SessionDatabase(path: path)
+        defer { TempSessionDatabase.close(db, path: path) }
         let chain = OpenAIAuditChain()
 
         let outcome = ClaudeAPIServeDispatch.streamingPlan(

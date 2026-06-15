@@ -678,4 +678,168 @@ struct AutorunLoopDriverTests {
         #expect(rows.count == 2)
         #expect(rows.allSatisfy { $0.outcome == "clean" })
     }
+
+    // MARK: - Class gate (LEG 3 — `--allow-classes`)
+
+    /// Build a single contract carrying an EXPLICIT `taskClass` via the new
+    /// trailing init param.
+    private static func classedContract(
+        objective: String,
+        commands: [String],
+        taskClass: TaskClass?
+    ) -> WorkstreamTaskContract {
+        WorkstreamTaskContract(
+            id: UUID(),
+            workstreamID: UUID(),
+            objective: objective,
+            fileScope: [],
+            allowedTools: [],
+            dependencies: [],
+            staleSpecAt: nil,
+            budget: ContractBudget(tokensMax: 0, wallClockMaxS: 0),
+            commands: commands,
+            acceptance: [],
+            reviewLevel: .none,
+            taskClass: taskClass
+        )
+    }
+
+    @Test("out-of-class task w/ non-empty allowlist routes through prompt; abort → pausedOutOfClass, not committed, even at superviseFirst=0")
+    func outOfClassAbortPauses() {
+        let (db, path) = Self.makeTempDB()
+        defer { TempSessionDatabase.close(db, path: path) }
+
+        let runner = MockCommandRunner(defaultResult: CommandRunResult(exitCode: 0, output: nil))
+        let sink = MockNotificationSink()
+        // The class-gate ack is declined.
+        let prompt = MockSupervisionPrompt(answers: [.abort])
+        let driver = AutorunLoopDriver(
+            database: db, commandRunner: runner, sink: sink, supervisionPrompt: prompt
+        )
+
+        // A feature task under an allowlist of [.testFix] is out-of-class.
+        let contracts = [
+            Self.classedContract(objective: "add a shiny feature", commands: ["c0"], taskClass: .feature),
+        ]
+        let result = driver.run(
+            contracts: contracts,
+            runId: "ooc-abort-\(UUID().uuidString.prefix(8))",
+            output: { _ in },
+            superviseFirst: 0,            // even fully unattended, the class gate fires
+            allowList: [.testFix]
+        )
+
+        #expect(!result.allCommitted)
+        #expect(result.outcomes == [.pausedOutOfClass(taskIndex: 0)])
+        // The gate command ran (class gate is AFTER the validation gate).
+        #expect(runner.ran == ["c0"])
+        // The prompt was consulted once despite superviseFirst=0.
+        #expect(prompt.asked.count == 1)
+        // Exactly one notifyFailure, no notifyDone.
+        #expect(sink.delivered.count == 1)
+        if case .notifyFailure(let tool, let reason) = sink.delivered[0] {
+            #expect(tool == "autorun")
+            #expect(reason.contains("out-of-class"))
+        } else {
+            Issue.record("expected notifyFailure, got \(sink.delivered[0])")
+        }
+        #expect(!sink.delivered.contains {
+            if case .notifyDone = $0 { return true } else { return false }
+        })
+    }
+
+    @Test("in-list task w/ non-empty allowlist runs unattended: prompt NOT consulted, commits")
+    func inListRunsUnattended() {
+        let (db, path) = Self.makeTempDB()
+        defer { TempSessionDatabase.close(db, path: path) }
+
+        let runner = MockCommandRunner(defaultResult: CommandRunResult(exitCode: 0, output: nil))
+        let sink = MockNotificationSink()
+        // Would abort if ever consulted — proving the in-list task never prompts.
+        let prompt = MockSupervisionPrompt(answers: [.abort], defaultAnswer: .abort)
+        let driver = AutorunLoopDriver(
+            database: db, commandRunner: runner, sink: sink, supervisionPrompt: prompt
+        )
+
+        let contracts = [
+            Self.classedContract(objective: "fix flaky test", commands: ["c0"], taskClass: .testFix),
+        ]
+        let result = driver.run(
+            contracts: contracts,
+            runId: "inlist-\(UUID().uuidString.prefix(8))",
+            output: { _ in },
+            superviseFirst: 0,
+            allowList: [.testFix, .docs]
+        )
+
+        #expect(result.allCommitted)
+        #expect(result.outcomes == [.committed(taskIndex: 0)])
+        // The class gate allowed it unattended — the prompt was never consulted.
+        #expect(prompt.asked.isEmpty)
+        // One notifyDone, no failure.
+        #expect(sink.delivered.count == 1)
+        #expect(sink.delivered.allSatisfy {
+            if case .notifyDone = $0 { return true } else { return false }
+        })
+    }
+
+    @Test("out-of-class proceed falls through to commit")
+    func outOfClassProceedCommits() {
+        let (db, path) = Self.makeTempDB()
+        defer { TempSessionDatabase.close(db, path: path) }
+
+        let runner = MockCommandRunner(defaultResult: CommandRunResult(exitCode: 0, output: nil))
+        let sink = MockNotificationSink()
+        let prompt = MockSupervisionPrompt(answers: [.proceed])
+        let driver = AutorunLoopDriver(
+            database: db, commandRunner: runner, sink: sink, supervisionPrompt: prompt
+        )
+
+        let contracts = [
+            Self.classedContract(objective: "add a feature", commands: ["c0"], taskClass: .feature),
+        ]
+        let result = driver.run(
+            contracts: contracts,
+            runId: "ooc-proceed-\(UUID().uuidString.prefix(8))",
+            output: { _ in },
+            superviseFirst: 0,
+            allowList: [.testFix]
+        )
+
+        #expect(result.allCommitted)
+        #expect(result.outcomes == [.committed(taskIndex: 0)])
+        // The class gate asked once; the operator allowed it through.
+        #expect(prompt.asked.count == 1)
+    }
+
+    // MARK: - Envelope round-trip carrying taskClass (schemaVersion 2)
+
+    @Test("envelope: a contract carrying a taskClass persists + reloads field-equal at schemaVersion 2")
+    func envelopeTaskClassRoundTrip() throws {
+        #expect(AutorunContractStore.schemaVersion == 2)
+
+        let root = Self.tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // Decompose stamps taskClass; "fix flaky test" → .testFix.
+        let contracts = TaskDecomposer().decompose(markdown: "- fix flaky test\n- add a feature")
+        #expect(contracts[0].taskClass == .testFix)
+        #expect(contracts[1].taskClass == .feature)
+
+        let runId = "20260614-000000-classed"
+        let dest = try AutorunContractStore.persist(runId: runId, contracts: contracts, rootDir: root)
+
+        let loaded = AutorunContractStore.load(runId: runId, rootDir: root)
+        #expect(loaded == contracts)
+        #expect(loaded?[0].taskClass == .testFix)
+        #expect(loaded?[1].taskClass == .feature)
+
+        // The envelope advertises the bumped schema version.
+        let envelope = AutorunContractStore.loadEnvelope(runId: runId, rootDir: root)
+        #expect(envelope?.schemaVersion == 2)
+        // Byte-stable canonical re-encode.
+        let onDisk = try Data(contentsOf: dest)
+        let reencoded = try AutorunContractStore.canonicalEncoder().encode(envelope!)
+        #expect(onDisk == reencoded)
+    }
 }

@@ -9,12 +9,13 @@ import Foundation
 /// `WorkstreamTaskContract` (U.11's contract type — U.3 ships ZERO new
 /// task-type definitions, per the item's Q4 scope decision) per bullet.
 ///
-/// ## Field mapping (leg 1 — EXISTING `WorkstreamTaskContract` fields only)
+/// ## Field mapping (EXISTING `WorkstreamTaskContract` fields + leg-3 taskClass)
 ///
 /// The decomposer fills the contract from the bullet text plus optional
-/// inline annotations. It does NOT introduce a `taskClass` field — class
-/// inference + `--allow-classes` are a LATER leg (the item's Q3 guardrail
-/// list), and adding the column would be a schema break. Mapping:
+/// inline annotations. Leg 3 stamps `taskClass` by inferring a class from
+/// the objective (`TaskClass.infer`) — this rides in the JSON envelope only
+/// (no DB column; the `workstream_contracts` SQL column is deferred since the
+/// autorun loop never writes that table). Mapping:
 ///
 ///   - `objective`     ← the bullet's prose (annotations stripped).
 ///   - `commands`      ← `cmd:` / `cmds:` inline annotation, split on `;`
@@ -89,7 +90,8 @@ public struct TaskDecomposer: Sendable {
                 budget: ContractBudget(tokensMax: 0, wallClockMaxS: 0),
                 commands: parsed.commands.isEmpty ? Self.defaultCommands : parsed.commands,
                 acceptance: [],
-                reviewLevel: .none
+                reviewLevel: .none,
+                taskClass: TaskClass.infer(from: parsed.objective)
             )
             contracts.append(contract)
         }

@@ -41,6 +41,18 @@ import Foundation
 /// (each task + its gate) and returns WITHOUT executing any command and
 /// WITHOUT real notification sends. The dry-run path never touches the
 /// CommandRunner or the NotificationSink.
+///
+/// ## The class gate (LEG 3 — `--allow-classes`)
+///
+/// When a non-empty `allowList` is passed, each task is checked AFTER its
+/// validation gate clears and BEFORE the supervise-first block: a task whose
+/// inferred `taskClass` is NOT on the list (or is nil) routes through the SAME
+/// `SupervisionPrompt` ack path REGARDLESS of the `--supervise-first` count. An
+/// `.abort` answer stops the run with a `.pausedOutOfClass` outcome (distinct
+/// from `.abortedBySupervisor`); `.proceed` falls through to the existing
+/// supervise-first block (a task that is BOTH out-of-class and supervised may
+/// prompt twice, with distinct messages). An empty `allowList` ⇒ allow-all
+/// (leg-1/2 back-compat).
 public struct AutorunLoopDriver: Sendable {
 
     private let database: SessionDatabase
@@ -68,6 +80,18 @@ public struct AutorunLoopDriver: Sendable {
     /// `>= N` run unattended. `N == 0` ⇒ nothing supervised (leg-1 behavior).
     public static func isSupervised(taskIndex: Int, superviseFirst: Int) -> Bool {
         taskIndex < superviseFirst
+    }
+
+    // MARK: - Class-gate predicate (LEG 3)
+
+    /// Pure predicate: is `taskClass` allowed under `allowList` (the
+    /// `--allow-classes` policy)? An EMPTY `allowList` ⇒ `true` for any class
+    /// (allow-all — leg-1/2 back-compat). A NON-empty list ⇒ allowed iff the
+    /// class is present; a nil class under a non-empty list is NOT allowed
+    /// (fail-safe — an unclassifiable task must not slip past a restriction).
+    public static func isClassAllowed(_ taskClass: TaskClass?, allowList: [TaskClass]) -> Bool {
+        guard !allowList.isEmpty else { return true }
+        return taskClass.map(allowList.contains) ?? false
     }
 
     /// The unique validation sessionId for a run. Scoping each run to its
@@ -153,6 +177,13 @@ public struct AutorunLoopDriver: Sendable {
         /// `.halted` so an operator abort is distinguishable from a validation
         /// failure.
         case abortedBySupervisor(taskIndex: Int)
+        /// The gate cleared but the task's inferred class was NOT on a non-empty
+        /// `--allow-classes` list (LEG 3), so it routed through the supervision
+        /// ack path and the operator answered `n` (or EOF/unattended aborted) →
+        /// the run stopped before the commit-event (a `notifyFailure` was
+        /// emitted). DISTINCT from `.abortedBySupervisor` — the class gate is a
+        /// separate trigger from the supervise-first gate.
+        case pausedOutOfClass(taskIndex: Int)
     }
 
     /// The result of a live run: the per-task outcomes in order. If a task
@@ -180,12 +211,18 @@ public struct AutorunLoopDriver: Sendable {
     ///     injected `SupervisionPrompt` is consulted; `.abort` stops the run
     ///     (a `notifyFailure`, no `notifyDone`). Tasks at index `>= N` run
     ///     unattended. `0` (default) ⇒ fully unattended (leg-1 behavior).
+    ///   - allowList: `--allow-classes` policy (LEG 3). EMPTY (default) ⇒
+    ///     allow-all (leg-1/2 back-compat). Non-empty ⇒ a task whose inferred
+    ///     class is not on the list routes through the supervision ack path
+    ///     REGARDLESS of `superviseFirst`; `.abort` stops the run with a
+    ///     `.pausedOutOfClass` outcome.
     @discardableResult
     public func run(
         contracts: [WorkstreamTaskContract],
         runId: String,
         output: (String) -> Void = { print($0) },
-        superviseFirst: Int = 0
+        superviseFirst: Int = 0,
+        allowList: [TaskClass] = []
     ) -> RunResult {
         let sessionId = Self.sessionId(runId: runId)
         var outcomes: [TaskOutcome] = []
@@ -259,6 +296,38 @@ public struct AutorunLoopDriver: Sendable {
                 )
                 outcomes.append(.halted(taskIndex: index, failedCommand: bad.advisory, exitCode: bad.exitCode))
                 return RunResult(outcomes: outcomes, allCommitted: false)
+            }
+
+            // CLASS GATE (LEG 3): the validation gate cleared. If a non-empty
+            // `--allow-classes` list is in force and THIS task's inferred class
+            // is not on it (or is nil), pause for an operator ack via the SAME
+            // supervision prompt seam — REGARDLESS of `superviseFirst`. `.abort`
+            // stops the run with a `.pausedOutOfClass` outcome (distinct from a
+            // supervisor abort) and one `notifyFailure`; an unattended (EOF) run
+            // aborts via the fail-safe stdin reader. `.proceed` falls through to
+            // the supervise-first block below (a task that is BOTH out-of-class
+            // and supervised may prompt twice — distinct messages make it clear
+            // which gate is asking).
+            if !Self.isClassAllowed(contract.taskClass, allowList: allowList) {
+                let classLabel = contract.taskClass?.rawValue ?? "unknown"
+                output("  OUT-OF-CLASS — task class `\(classLabel)` not in --allow-classes; pausing for operator ack")
+                switch supervisionPrompt.confirmAdvance(
+                    taskIndex: index,
+                    total: total,
+                    objective: contract.objective
+                ) {
+                case .abort:
+                    let reason = "\(taskId) PAUSED — out-of-class (`\(classLabel)`) before commit"
+                    output("  PAUSED — out-of-class (`\(classLabel)`), operator declined")
+                    NotificationFanout.deliver(
+                        .notifyFailure(toolName: "autorun", reason: reason),
+                        to: [sink]
+                    )
+                    outcomes.append(.pausedOutOfClass(taskIndex: index))
+                    return RunResult(outcomes: outcomes, allCommitted: false)
+                case .proceed:
+                    break  // operator allowed this out-of-class task; fall through
+                }
             }
 
             // SUPERVISION (LEG 2): the gate cleared (validation rows already

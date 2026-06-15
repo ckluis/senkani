@@ -29,7 +29,11 @@ public enum AutorunContractStore {
     /// Bumped when the on-disk envelope shape changes. A file written by a
     /// newer schema is treated as "no durable plan" by an older reader
     /// (forward-incompatible reads fail safe to re-decompose).
-    public static let schemaVersion = 1
+    ///
+    /// v2 (leg 3): the contract gained an optional `task_class`. Old v1 files
+    /// stay readable (the version check is `<=`); a v2 file on an older binary
+    /// fails safe to re-decompose.
+    public static let schemaVersion = 2
 
     /// The durable on-disk envelope. `Codable` with the canonical encoder.
     public struct Envelope: Codable, Equatable, Sendable {

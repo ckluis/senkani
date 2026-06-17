@@ -9,8 +9,10 @@ import Core
 /// `~/.senkani/autorun/<run-id>/contracts.json` (the resume seam), and
 /// runs each task through a per-task validation gate: every gate command
 /// must exit clean for the task to commit; any failure HALTS the loop.
-/// Each committed task and each halt emits a notification (Pushover via a
-/// fake transport in leg 1 — real-device push is the operator remainder).
+/// Each committed task and each halt emits a notification through a
+/// seed-gated PushoverSink (leg 4): the real KeychainPushoverTransport when
+/// the operator has seeded the Pushover credential, otherwise inert. The
+/// live-device push proof remains the operator remainder.
 ///
 /// Per `docs/cli-conventions.md` this is a PURE-HOST parent (the
 /// `BenchCommand` pattern): it declares NO greedily-binding options of its
@@ -25,9 +27,11 @@ import Core
 ///                         class is on the comma-list (leg 3); out-of-list tasks
 ///                         pause for operator y/n regardless of --supervise-first.
 ///
-/// DEFERRED to later legs (NOT built here): the TUI / decomposer pane,
-/// `ctrl+.` WIP-stash halt, the REAL Pushover transport, and first-run operator
-/// approval.
+/// DEFERRED to later legs (NOT built here): the TUI / decomposer pane and
+/// first-run operator approval. (`ctrl+.` WIP-stash halt is disqualified —
+/// the loop never mutates the working tree, so there is no in-flight diff to
+/// stash.) Leg 4 wired the real seed-gated Pushover transport; proving live
+/// device delivery against api.pushover.net is the operator leg C walk.
 struct Autorun: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "autorun",
@@ -80,15 +84,18 @@ struct Autorun: ParsableCommand {
         }
 
         // Wire the real seams: real process launcher + the shared
-        // ValidationStore + a PushoverSink over a fake transport (leg 1 —
-        // events are observable but no real network; real push is operator).
+        // ValidationStore + a seed-gated PushoverSink (leg 4). The selector
+        // probes the vault (value-free, fail-closed) and installs the REAL
+        // KeychainPushoverTransport when the operator has seeded the
+        // Pushover credential; otherwise the sink is inert. `seededForReal`
+        // drives the unattended-refusal gate below, derived from the SAME
+        // probe so the two can never disagree. (Live device push remains the
+        // operator leg C of phase-t6c-1-pushover-seed-operator.)
+        let sinkSelection = AutorunSinkSelector.resolve()
         let driver = AutorunLoopDriver(
             database: SessionDatabase.shared,
             commandRunner: ProcessCommandRunner(),
-            sink: PushoverSink(
-                credentials: .synthetic,
-                transport: FakePushoverTransport()
-            ),
+            sink: sinkSelection.sink,
             supervisionPrompt: ProcessSupervisionPrompt()
         )
 
@@ -99,9 +106,9 @@ struct Autorun: ParsableCommand {
         }
 
         // Unattended-refusal precondition: refuse an unattended run when
-        // Pushover is not seeded. Leg 1 wires the synthetic (fake-transport)
-        // sink, so for the live path we treat that as "not seeded for real"
-        // and require an operator on the TTY.
+        // Pushover is not seeded. Leg 4 resolves this from the real vault
+        // probe (see the selector above), so an unattended run is allowed
+        // ONLY once the operator has genuinely seeded the credential.
         let attendedOnTTY = isatty(STDIN_FILENO) == 1
 
         // Supervision conflict guard (LEG 2): `--supervise-first N>0` REQUIRES
@@ -117,7 +124,7 @@ struct Autorun: ParsableCommand {
             throw ExitCode.failure
         }
 
-        let pushoverSeededForReal = false // leg 1: only the fake transport is wired
+        let pushoverSeededForReal = sinkSelection.pushoverSeededForReal
         if let refusal = AutorunLoopDriver.unattendedRefusalReason(
             pushoverSeeded: pushoverSeededForReal,
             attendedOnTTY: attendedOnTTY

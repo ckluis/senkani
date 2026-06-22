@@ -5,6 +5,19 @@ import SwiftUI
 import HookRelay
 import BrowserPane
 
+// Ignore SIGPIPE process-wide BEFORE any socket listener starts. The hook
+// + pane listeners in SocketServerManager do raw `Darwin.write` on
+// Unix-domain sockets; a write to a peer that already disconnected (e.g.
+// the 5 ms hook-relay client closed before HookRouter.handle returned)
+// would otherwise deliver the DEFAULT SIGPIPE and terminate this process
+// TRACELESSLY — no .ips, no stderr, no jetsam, no unified-log entry. With
+// SIGPIPE ignored the write fails with EPIPE (already discarded by every
+// raw-socket writer here) and the process lives. Placed before the
+// GUI/socket/hook/mcp branch dispatch so it covers every host mode this
+// binary runs as. Closes
+// t6-banner-walk-app-exits-traceless-on-claude-pane-prompt-2026-06-22.
+ignoreBrokenPipeSignal()
+
 // Raise RLIMIT_NOFILE before any subsystem opens fds. macOS apps launched
 // via LaunchServices inherit launchd's 256 soft cap, which a recursive
 // index pass can exhaust — triggering EMFILE on the next system asset

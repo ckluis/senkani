@@ -10,6 +10,22 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ---
 
+## 2026-06-22 — ✅ EXECUTED + PASSED — T.6 Cowork banner walk (`t6-notification-cowork-banner-walk-2026-05-21`)
+
+The groomed banner walk ran operator-supervised on a real machine and PASSED
+end-to-end (item closed `done` 2026-06-22, mv'd to `completed/2026/`). Verified
+the macOS Notification Center banner fires with exact copy **`Senkani — done` /
+`onboarding` / `Save your first tokens`** on first `firstNonzeroSavings`, and
+that the `~/.senkani/notifications.json` opt-out suppresses it at the
+`macos_local` sink while the milestone re-fires. Two accepted deviations (Step 2
+auth via System Settings; Step 12 stdout-cross-check substituted by the
+milestone-re-fire proof) are documented in the closed item's
+`## Run findings 2026-06-22`. Harness note: GUI/Cowork walks must wrap the
+**xcodebuild** product, not the `swift build` soak wrap — see
+`completed/2026/2026-06-22-t6-banner-walk-soak-bundle-not-self-contained-open-launch-crash-2026-06-18.md`.
+
+---
+
 ## 2026-06-11 — Settings → Notifications matrix pane shipped — visual render walk pending
 
 Item `t6-settings-notifications-matrix-ui-2026-05-21` partial-shipped its

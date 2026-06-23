@@ -15,6 +15,10 @@ public enum HookRelay {
     internal static let defaultTokenPath = NSHomeDirectory() + "/.senkani/.token"
     private static let timeoutMs: UInt32 = 5 // 5ms — hooks must be imperceptible
 
+    /// Append-log of deadline-driven passthroughs (the gate-bypass signal).
+    /// See `recordDrop`. Path is injectable for tests only.
+    internal static let defaultDropLogPath = NSHomeDirectory() + "/.senkani/hook-relay-drops.log"
+
     /// P2-12: read a same-UID-only token file. Returns nil if absent or
     /// insecure. Inlined (not imported from Core) to preserve HookRelay's
     /// zero-dependency contract — see Lesson #12 in the file header.
@@ -56,6 +60,58 @@ public enum HookRelay {
         guard w1 == 4 else { return false }
         let w2 = payload.withUnsafeBytes { Darwin.write(fd, $0.baseAddress!, payload.count) }
         return w2 == payload.count
+    }
+
+    /// Best-effort parse of the Claude Code hook event name (`PreToolUse`,
+    /// `PostToolUse`, `Notification`, `Stop`, …) from the raw stdin payload.
+    /// Used ONLY to LABEL a dropped-verdict log line so the operator can tell
+    /// a deny-capable drop (PreToolUse) from a never-deny one (Notification).
+    /// Returns nil on any parse failure — observability must never throw or
+    /// change the passthrough contract. Foundation-only (zero-dep, Lesson #12).
+    internal static func hookEventName(from data: Data) -> String? {
+        guard !data.isEmpty,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let name = obj["hook_event_name"] as? String,
+              !name.isEmpty
+        else { return nil }
+        return name
+    }
+
+    /// CARVE 1 (observability, pure-additive): record a DEADLINE-driven
+    /// passthrough — the relay gave up on the server's verdict before it
+    /// arrived, so any `deny`/`block` the server computed past the deadline
+    /// was silently discarded and the tool call proceeded UNBLOCKED. This is
+    /// the gate-bypass signal of
+    /// `t6-hook-relay-5ms-deadline-drops-deny-decisions-2026-06-22`. It does
+    /// NOT change behavior (the caller still passes through); it makes the
+    /// otherwise-invisible drop detectable.
+    ///
+    /// Appends one TSV line `<iso8601>\t<reason>\t<hook_event_name>\n` to the
+    /// drop log via an atomic `O_APPEND` write, so concurrent short-lived
+    /// relay processes don't clobber each other. Entirely best-effort: any
+    /// failure (no dir, no perms, full disk) is swallowed — a relay must
+    /// never fail a hook because it couldn't write a metric. `path`/`now` are
+    /// injectable for tests only. Zero-dep (Foundation + Darwin.POSIX).
+    internal static func recordDrop(reason: String,
+                                    hookEvent: String?,
+                                    at path: String? = nil,
+                                    now: Date = Date()) {
+        let target = path ?? defaultDropLogPath
+        let dir = (target as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(
+            atPath: dir, withIntermediateDirectories: true)
+        let ts = ISO8601DateFormatter().string(from: now)
+        let event = (hookEvent ?? "unknown")
+            .replacingOccurrences(of: "\t", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+        let line = "\(ts)\t\(reason)\t\(event)\n"
+        let fd = Darwin.open(target, O_WRONLY | O_APPEND | O_CREAT, 0o600)
+        guard fd >= 0 else { return }
+        defer { Darwin.close(fd) }
+        _ = Data(line.utf8).withUnsafeBytes { buf in
+            guard let base = buf.baseAddress else { return -1 }
+            return Darwin.write(fd, base, buf.count)
+        }
     }
 
     /// Relay a hook event from stdin to the daemon socket and write the response to stdout.
@@ -121,6 +177,9 @@ public enum HookRelay {
         var pollFD = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
         let pollResult = poll(&pollFD, 1, Int32(timeoutMs))
         guard pollResult > 0 else {
+            // Deadline drop: server didn't accept within the deadline. Any
+            // verdict it would have computed never reaches us → bypass signal.
+            recordDrop(reason: "connect_timeout", hookEvent: hookEventName(from: inputData))
             passthrough()
             return 0
         }
@@ -145,6 +204,11 @@ public enum HookRelay {
         pollFD = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
         let readPoll = poll(&pollFD, 1, Int32(timeoutMs))
         guard readPoll > 0 else {
+            // THE critical deadline drop: the server accepted our request and
+            // is running HookRouter.handle() (which routinely exceeds 5ms),
+            // but the response — possibly a `deny`/`block` — did not arrive in
+            // time. We pass through (approve) and the verdict is discarded.
+            recordDrop(reason: "read_timeout", hookEvent: hookEventName(from: inputData))
             passthrough()
             return 0
         }

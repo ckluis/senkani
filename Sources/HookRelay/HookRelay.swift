@@ -15,6 +15,14 @@ public enum HookRelay {
     internal static let defaultTokenPath = NSHomeDirectory() + "/.senkani/.token"
     private static let timeoutMs: UInt32 = 5 // 5ms — hooks must be imperceptible
 
+    /// CARVE 2: larger deadline for DENY-CAPABLE hooks (PreToolUse), so the
+    /// common case still gets the server's REAL verdict before any fail-closed
+    /// default fires. 250ms is 20x under the 5s credential-vault semaphore
+    /// ceiling so it never inherits that wedge. Operator-tunable at runtime via
+    /// `SENKANI_HOOK_DENY_DEADLINE_MS` (no rebuild). Never-deny hooks keep the
+    /// 5ms imperceptible deadline.
+    private static let denyCapableTimeoutMs: UInt32 = 250
+
     /// Append-log of deadline-driven passthroughs (the gate-bypass signal).
     /// See `recordDrop`. Path is injectable for tests only.
     internal static let defaultDropLogPath = NSHomeDirectory() + "/.senkani/hook-relay-drops.log"
@@ -77,6 +85,59 @@ public enum HookRelay {
         return name
     }
 
+    /// CARVE 2: hooks that can carry a DENY/BLOCK verdict. Today that is
+    /// exactly `PreToolUse` — verified against the server's own routing: every
+    /// deny gate in `HookRouter.handle` (trust-mode, browser-validation,
+    /// budget, ConfirmationGate, pack-policy) fires only when
+    /// `hook_event_name == "PreToolUse"`; `PostToolUse` early-returns a
+    /// passthrough, and `Notification`/`Stop`/`SubagentStop`/`PreCompact`
+    /// return `{}`. A nil (unparseable) name is treated as NEVER-DENY
+    /// (fail-OPEN) on purpose: never assert a block on a payload we could not
+    /// classify — failing closed on nil would broadly block on malformed /
+    /// schema-drifted payloads and on never-deny events we merely failed to
+    /// parse, converting a narrow bypass into a wide availability hit. The
+    /// residual (a genuine PreToolUse whose name won't parse slips through
+    /// fail-open) stays observable in the drop log as `hook_event_name=unknown`.
+    internal static func isDenyCapable(_ name: String?) -> Bool { name == "PreToolUse" }
+
+    /// CARVE 2: what the read-poll timeout should do for a given hook +
+    /// posture. Isolated as a pure function so the timing-dependent branch in
+    /// `run()` is exercised by deterministic unit tests without spawning the
+    /// live socket relay.
+    internal enum TimeoutAction: Equatable { case passthrough, failClosedAsk }
+
+    internal static func timeoutAction(denyCapable: Bool,
+                                       failClosedEnabled: Bool) -> TimeoutAction {
+        (denyCapable && failClosedEnabled) ? .failClosedAsk : .passthrough
+    }
+
+    /// CARVE 2: the poll deadline (ms) for connect + read. Deny-capable hooks
+    /// get the larger `denyCapableTimeoutMs` (or the `override` parsed from
+    /// `SENKANI_HOOK_DENY_DEADLINE_MS`); never-deny hooks keep the 5ms
+    /// imperceptible deadline. Pure helper so the selection is unit-testable.
+    internal static func pollDeadlineMs(denyCapable: Bool, override: UInt32?) -> UInt32 {
+        denyCapable ? (override ?? denyCapableTimeoutMs) : timeoutMs
+    }
+
+    /// CARVE 2: the fail-closed response body. The relay NEVER computed a
+    /// verdict — it only knows the policy check did not return within the
+    /// deadline — so it escalates to the human gate via
+    /// `permissionDecision: "ask"` rather than fabricating a `"deny"`. A hard
+    /// deny would brick the agent whenever the daemon is merely slow/wedged,
+    /// which the relay cannot distinguish from "computing a deny". Byte-shaped
+    /// to match `Core.HookRouter.blockResponse` (`hookSpecificOutput` →
+    /// `hookEventName`/`permissionDecision`/`permissionDecisionReason`); `ask`
+    /// is a valid decision per `spec/hooks.md`. Hand-built literal (with
+    /// backslash/quote escaping of the echoed name) to preserve HookRelay's
+    /// zero-dependency contract — no JSONSerialization-encode, no Core import.
+    internal static func failClosedAskBody(eventName: String?) -> String {
+        let name = eventName ?? "PreToolUse"
+        let escaped = name
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "{\"hookSpecificOutput\":{\"hookEventName\":\"\(escaped)\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"senkani gate verdict timed out — pausing for your decision to fail safe (the policy check did not return within the deadline; this is fail-closed, not a policy decision). Approve to proceed, or stop. Tune SENKANI_HOOK_DENY_DEADLINE_MS or set SENKANI_HOOK_FAILCLOSED=off; see ~/.senkani/hook-relay-drops.log.\"}}"
+    }
+
     /// CARVE 1 (observability, pure-additive): record a DEADLINE-driven
     /// passthrough — the relay gave up on the server's verdict before it
     /// arrived, so any `deny`/`block` the server computed past the deadline
@@ -132,6 +193,17 @@ public enum HookRelay {
             return 0
         }
 
+        // CARVE 2: classify the hook + resolve the fail-closed posture once.
+        // `eventName`/`denyCapable` drive both the deadline selection (larger
+        // for deny-capable hooks) and the read-timeout action below.
+        let eventName = hookEventName(from: inputData)
+        let denyCapable = isDenyCapable(eventName)
+        let failClosedEnabled =
+            (ProcessInfo.processInfo.environment["SENKANI_HOOK_FAILCLOSED"] ?? "on") != "off"
+        let deadlineOverride = ProcessInfo.processInfo
+            .environment["SENKANI_HOOK_DENY_DEADLINE_MS"]
+            .flatMap { UInt32($0) }
+
         // Connect to daemon socket
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
@@ -173,13 +245,17 @@ public enum HookRelay {
             return 0
         }
 
-        // Wait for connect with poll (5ms timeout)
+        // Wait for connect with poll. Deny-capable hooks get the LARGER
+        // deadline so a momentarily-busy-but-up daemon still gets time to
+        // accept and we reach the read-poll (the fail-closed site).
         var pollFD = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
-        let pollResult = poll(&pollFD, 1, Int32(timeoutMs))
+        let connectDeadline = pollDeadlineMs(denyCapable: denyCapable, override: deadlineOverride)
+        let pollResult = poll(&pollFD, 1, Int32(connectDeadline))
         guard pollResult > 0 else {
-            // Deadline drop: server didn't accept within the deadline. Any
-            // verdict it would have computed never reaches us → bypass signal.
-            recordDrop(reason: "connect_timeout", hookEvent: hookEventName(from: inputData))
+            // KEEP fail-OPEN here: a connect timeout means the server never
+            // accept()ed (daemon-down / no-GUI), so there is no verdict to
+            // honor and failing closed would block every CLI-only user.
+            recordDrop(reason: "connect_timeout", hookEvent: eventName)
             passthrough()
             return 0
         }
@@ -200,16 +276,27 @@ public enum HookRelay {
         let sent2 = inputData.withUnsafeBytes { Darwin.write(fd, $0.baseAddress!, inputData.count) }
         guard sent2 == inputData.count else { passthrough(); return 0 }
 
-        // Read response: 4-byte length prefix + JSON
+        // Read response: 4-byte length prefix + JSON. Deny-capable hooks get
+        // the LARGER deadline so the server's REAL verdict usually arrives
+        // before any fail-closed default fires.
         pollFD = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-        let readPoll = poll(&pollFD, 1, Int32(timeoutMs))
+        let readDeadline = pollDeadlineMs(denyCapable: denyCapable, override: deadlineOverride)
+        let readPoll = poll(&pollFD, 1, Int32(readDeadline))
         guard readPoll > 0 else {
             // THE critical deadline drop: the server accepted our request and
-            // is running HookRouter.handle() (which routinely exceeds 5ms),
-            // but the response — possibly a `deny`/`block` — did not arrive in
-            // time. We pass through (approve) and the verdict is discarded.
-            recordDrop(reason: "read_timeout", hookEvent: hookEventName(from: inputData))
-            passthrough()
+            // is running HookRouter.handle() but the response — possibly a
+            // `deny`/`block` — did not arrive in time. CARVE 2: for a
+            // deny-capable hook with fail-closed enabled, escalate to the
+            // human gate (`permissionDecision:"ask"`) instead of silently
+            // approving; otherwise keep the historical fail-open passthrough.
+            switch timeoutAction(denyCapable: denyCapable, failClosedEnabled: failClosedEnabled) {
+            case .failClosedAsk:
+                recordDrop(reason: "read_timeout_failclosed_ask", hookEvent: eventName)
+                writeFailClosedAsk(eventName: eventName)
+            case .passthrough:
+                recordDrop(reason: "read_timeout", hookEvent: eventName)
+                passthrough()
+            }
             return 0
         }
 
@@ -238,5 +325,12 @@ public enum HookRelay {
 
     private static func passthrough() {
         FileHandle.standardOutput.write(Data("{}".utf8))
+    }
+
+    /// CARVE 2: emit the fail-closed "ask" verdict on stdout — the same
+    /// `FileHandle.standardOutput.write(Data(...utf8))` channel as
+    /// `passthrough()`, with the body from `failClosedAskBody`.
+    private static func writeFailClosedAsk(eventName: String?) {
+        FileHandle.standardOutput.write(Data(failClosedAskBody(eventName: eventName).utf8))
     }
 }

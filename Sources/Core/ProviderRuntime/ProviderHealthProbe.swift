@@ -151,6 +151,13 @@ public struct ProviderHealthProbe: Sendable {
         )
     }
 
+    /// The provider ids senkani knows how to health-probe. MUST stay in
+    /// sync with `binaryName(forProviderID:)` below — every id here maps
+    /// to a non-nil binary (pinned by `ProviderHealthProbeKnownIDsTests`).
+    /// Surfaced for the GUI Provider-Health dashboard's empty-store
+    /// "probe known providers" action, so there is one source of truth.
+    public static let knownProviderIDs: [String] = ["codex", "claude_code", "gemini", "opencode"]
+
     /// Map a provider id to its CLI binary name. Returns nil for an
     /// unknown provider (treated as not-installed).
     static func binaryName(forProviderID providerID: String) -> String? {

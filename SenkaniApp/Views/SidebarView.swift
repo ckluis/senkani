@@ -61,6 +61,10 @@ struct SidebarView: View {
                             isActive: activeToolView == .notifications) {
                         activateTool(.notifications)
                     }
+                    toolRow(icon: "heart.text.square", label: "Provider Health",
+                            isActive: activeToolView == .providerHealth) {
+                        activateTool(.providerHealth)
+                    }
 
                     // Thin divider
                     Rectangle()

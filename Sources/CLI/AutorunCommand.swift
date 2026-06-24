@@ -135,6 +135,32 @@ struct Autorun: ParsableCommand {
             throw ExitCode.failure
         }
 
+        // Headless fail-open guard: an unattended run must export
+        // SENKANI_HOOK_FAILCLOSED=off so the inherited hook-relay subprocess
+        // keeps the historical fail-open passthrough rather than emitting an
+        // unanswerable `ask` that would wedge the no-operator loop. `setenv`
+        // mutates THIS process's environment before any child spawns, so every
+        // descendant — the `/bin/sh -c` gate commands now, the `claude` agent in
+        // a later leg, and its hook-relay subprocess — inherits it (the relay
+        // reads `ProcessInfo.environment[SENKANI_HOOK_FAILCLOSED]`). The policy
+        // only fires unattended and honors an explicit operator value (see the
+        // `AutorunHookFailClosedPolicy` doc for the off-intent normalization +
+        // the propagation contract the future `claude`-spawn leg must preserve —
+        // it must NOT rebuild a curated `process.environment` dict that drops
+        // this key). See `hook-relay-failclosed-autorun-unattended-optout-2026-06-22`.
+        if let failClosedOverride = AutorunHookFailClosedPolicy.overrideValue(
+            attendedOnTTY: attendedOnTTY,
+            existingValue: ProcessInfo.processInfo.environment[AutorunHookFailClosedPolicy.envVarName]
+        ) {
+            setenv(AutorunHookFailClosedPolicy.envVarName, failClosedOverride, 1)
+            FileHandle.standardError.write(
+                ("senkani autorun: unattended run — exporting "
+                    + "\(AutorunHookFailClosedPolicy.envVarName)=\(failClosedOverride) so the hook relay's "
+                    + "fail-closed `ask` cannot wedge the loop (set it explicitly to keep failing closed)\n")
+                    .data(using: .utf8) ?? Data()
+            )
+        }
+
         // Live run. Print the plan header, then the loop.
         for line in driver.planLines(for: contracts) { print(line) }
         let allowList = TaskClass.parseAllowList(allowClasses ?? "")

@@ -32,8 +32,23 @@ public enum BrowserDispatchRegistry {
     /// back to the structured refusal.
     public typealias HeadlessRunnerFactory = @Sendable (_ egressProxyURL: String?) -> (any BrowserRunner)?
 
+    /// U.2b-2 child (b headless seam) — factory shape for the VISIBLE-pane
+    /// runner. Identical signature to `HeadlessRunnerFactory`: SenkaniApp
+    /// registers a closure that constructs (or returns a shared) visible
+    /// `BrowserPaneRunner` for the given egress proxy URL. Returning `nil`
+    /// is allowed and treated identically to "factory not registered" —
+    /// the dispatcher then fails CLOSED with the
+    /// `validation_browser_pane_no_runner` structured refusal (NEVER a
+    /// fabricated pass). The concrete visible-pane runner lives in the
+    /// SenkaniApp executable target (WebKit + AppKit), so neither
+    /// `Sources/CLI` nor `Sources/MCP` can construct it directly; today no
+    /// host registers a pane factory (the GUI/Cowork half lands later), so
+    /// CLI / MCP `.pane` dispatches resolve to the structured refusal.
+    public typealias PaneRunnerFactory = @Sendable (_ egressProxyURL: String?) -> (any BrowserRunner)?
+
     private static let lock = NSLock()
     nonisolated(unsafe) private static var _factory: HeadlessRunnerFactory?
+    nonisolated(unsafe) private static var _paneFactory: PaneRunnerFactory?
 
     /// Register (or replace) the factory. SenkaniApp calls this once
     /// at app boot. Passing `nil` clears the slot — useful in tests
@@ -66,6 +81,47 @@ public enum BrowserDispatchRegistry {
             guard let runner = factory(egressProxyURL) else {
                 throw PlaywrightRunnerError.validationBrowserMissing(
                     installHint: "register a BrowserDispatchRegistry.headlessRunnerFactory at app startup"
+                )
+            }
+            return try runner.run(plan: plan, targetURL: targetURL, screenshot: screenshot)
+        }
+    }
+
+    /// U.2b-2 child (b headless seam) — register (or replace) the visible-
+    /// pane factory. SenkaniApp's GUI/Cowork half calls this once the
+    /// visible BrowserPane runner is available. Passing `nil` clears the
+    /// slot — useful in tests exercising the "no pane runner registered"
+    /// fail-closed fallback. Same lock idiom as the headless slot; the
+    /// factory closure is invoked OUTSIDE the lock at dispatch time.
+    public static func registerPaneRunnerFactory(_ factory: PaneRunnerFactory?) {
+        lock.lock()
+        defer { lock.unlock() }
+        _paneFactory = factory
+    }
+
+    /// Returns the registered visible-pane factory, or `nil` if none was set.
+    public static func paneRunnerFactory() -> PaneRunnerFactory? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _paneFactory
+    }
+
+    /// Convenience: construct a `BrowserValidationDispatcher.Runner`
+    /// closure that delegates to the registered VISIBLE-pane factory.
+    /// Returns `nil` when no factory is registered — the dispatcher then
+    /// fails CLOSED with the `validation_browser_pane_no_runner` refusal
+    /// (the ONLY way `.pane` yields a non-refusal Response is an
+    /// explicitly-registered, non-nil pane runner).
+    ///
+    /// Exactly mirrors `makeHeadlessRunnerClosure` so the dispatcher's
+    /// `.pane` arm can invoke the returned closure byte-for-byte the same
+    /// way it invokes the headless one.
+    public static func makePaneRunnerClosure(egressProxyURL: String?) -> BrowserValidationDispatcher.Runner? {
+        guard let factory = paneRunnerFactory() else { return nil }
+        return { plan, targetURL, screenshot, _ in
+            guard let runner = factory(egressProxyURL) else {
+                throw PlaywrightRunnerError.validationBrowserMissing(
+                    installHint: "register a BrowserDispatchRegistry.paneRunnerFactory once the visible pane is available"
                 )
             }
             return try runner.run(plan: plan, targetURL: targetURL, screenshot: screenshot)

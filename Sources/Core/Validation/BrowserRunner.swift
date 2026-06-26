@@ -18,16 +18,19 @@ public protocol BrowserRunner: Sendable {
 /// `senkani validate --browser --dispatch <value>` Option both normalize
 /// into this enum.
 ///
-/// U.2b-2 child (a) adds the third case `.pane`, which targets a
-/// visible `BrowserPane`. Until child (b) wires the actual pane
-/// execution (the GUI/Cowork half), `.pane` resolves to a structured
-/// `validation_browser_pane_not_yet_wired` refusal in
-/// `BrowserValidationDispatcher` — a correctly-shaped audit row + fail
-/// Response, so the three-value parity and mixed-runner chain-integrity
-/// tests hold byte-for-byte regardless of which arm runs. The
-/// `pane_id` selector rides `BrowserValidationDispatcher.Request.paneId`
-/// (default-safe: `nil` resolves to the most-recently-focused pane once
-/// child (b) lands the registry).
+/// U.2b-2 child (a) added the third case `.pane`, which targets a
+/// visible `BrowserPane`. The headless seam (this round) wires the
+/// `.pane` arm to a registered pane-runner closure
+/// (`BrowserDispatchRegistry.makePaneRunnerClosure`); when none is
+/// registered (GUI not running / pane unavailable) the dispatcher fails
+/// CLOSED with a structured `validation_browser_pane_no_runner` refusal —
+/// a correctly-shaped audit row + fail Response, never a fabricated
+/// pass. The visible-pane WKWebView execution + SwiftUI refusal-banner
+/// overlay + input-lock that register the pane factory are the operator
+/// Cowork/GUI half. The `pane_id` selector rides
+/// `BrowserValidationDispatcher.Request.paneId` (default-safe: `nil`
+/// resolves to the most-recently-focused pane once the GUI lands the
+/// registry).
 ///
 /// Codable round-trip uses the raw string values directly so MCP/CLI
 /// callers can pass `"subprocess"` / `"headless"` / `"pane"`. Unknown

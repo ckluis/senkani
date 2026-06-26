@@ -333,17 +333,20 @@ struct BrowserValidateDispatchTests {
         #expect(EgressPolicy.sameOriginAllowlist(targetURL: bad) == nil)
     }
 
-    // MARK: - Test 6 (U.2b-2 child (a)): dispatch:.pane structured refusal
+    // MARK: - Test 6 (U.2b-2 headless seam): dispatch:.pane with NO pane
+    // runner → fail-closed structured refusal.
 
-    @Test("dispatch:.pane returns structured validation_browser_pane_not_yet_wired refusal; audit row carries runner=wkwebview-pane; no runner closure invoked")
+    @Test("dispatch:.pane with NO paneRunner returns fail-closed validation_browser_pane_no_runner refusal; audit row carries runner=wkwebview-pane; no runner closure invoked")
     func paneDispatchReturnsStructuredRefusal() throws {
         let evSink = LockedArray<BrowserValidationDispatcher.TokenEventInput>()
         let rowSink = LockedArray<BrowserValidationDispatcher.BrowserValidationRow>()
         let subprocessRunnerCalled = LockedBoxBool(value: false)
         let headlessRunnerCalled = LockedBoxBool(value: false)
 
-        // Both runner arms must be UNTOUCHED by a .pane dispatch — the
-        // pane arm is a no-op-but-correctly-shaped refusal row.
+        // With NO paneRunner injected, both other runner arms must be
+        // UNTOUCHED by a .pane dispatch — the pane arm is a fail-closed,
+        // correctly-shaped refusal row. SECURITY-CRITICAL: a missing pane
+        // runner can ONLY refuse, never silently pass.
         let subprocessRunner: BrowserValidationDispatcher.Runner = { _, _, _, _ in
             subprocessRunnerCalled.set(true)
             Issue.record(".pane path must NOT invoke the subprocess runner closure")
@@ -368,6 +371,7 @@ struct BrowserValidateDispatchTests {
             dispatch: .pane,
             paneId: "pane-abc-123"
         )
+        // NOTE: paneRunner is NOT passed (defaults nil) — the fail-closed path.
         let response = try BrowserValidationDispatcher.dispatch(
             request: request,
             runner: subprocessRunner,
@@ -377,14 +381,26 @@ struct BrowserValidateDispatchTests {
         )
 
         // Structured refusal Response shape: fail + the canonical
-        // validation_browser_pane_not_yet_wired advisory, no screenshot.
+        // validation_browser_pane_no_runner advisory, no screenshot.
         #expect(response.resultStatus == "fail",
-                ".pane dispatch must surface result_status:fail until child (b) wires execution")
-        #expect(response.advisory.contains("validation_browser_pane_not_yet_wired"),
-                "advisory must carry the canonical pane-not-yet-wired code; got: \(response.advisory)")
+                ".pane dispatch with no pane runner must surface result_status:fail (fail-closed)")
+        #expect(response.advisory.contains("validation_browser_pane_no_runner"),
+                "advisory must carry the canonical pane-no-runner code; got: \(response.advisory)")
+        // It must NOT carry the old not-yet-wired code (semantics changed).
+        #expect(!response.advisory.contains("validation_browser_pane_not_yet_wired"),
+                "advisory must NOT carry the retired pane-not-yet-wired code; got: \(response.advisory)")
         #expect(response.screenshotPath == nil, "pane refusal writes no screenshot")
         #expect(!subprocessRunnerCalled.get() && !headlessRunnerCalled.get(),
                 "neither runner closure may be invoked on the .pane arm")
+
+        // Schneier source/output guard: the refusal advisory leaks ONLY
+        // the axis name(s) + counts + the static code/hint — NEVER raw
+        // assertion payload / raw_output / plan_steps. (Mirrors the
+        // parity-suite guard at hookRouterPreToolUseGateParity ~:282-283.)
+        #expect(!response.advisory.contains("raw_output"),
+                "pane refusal advisory must not leak raw_output; got: \(response.advisory)")
+        #expect(!response.advisory.contains("plan_steps"),
+                "pane refusal advisory must not leak plan_steps; got: \(response.advisory)")
 
         // Exactly one validation.dispatch audit row, runner=wkwebview-pane.
         let events = evSink.snapshot()
@@ -401,6 +417,95 @@ struct BrowserValidateDispatchTests {
         let rows = rowSink.snapshot()
         #expect(rows.count == 1)
         #expect(rows.first?.resultStatus == "fail")
+    }
+
+    // MARK: - Test 6a (U.2b-2 headless seam): dispatch:.pane WITH an
+    // injected stub paneRunner → a real Response (not a refusal).
+
+    @Test("dispatch:.pane WITH an injected stub paneRunner returns a real Response (status reflects the stub, not a refusal); audit row carries runner=wkwebview-pane")
+    func paneDispatchWithRunnerReturnsRealResponse() throws {
+        let evSink = LockedArray<BrowserValidationDispatcher.TokenEventInput>()
+        let rowSink = LockedArray<BrowserValidationDispatcher.BrowserValidationRow>()
+        let paneRunnerCalled = LockedBoxBool(value: false)
+        let subprocessRunnerCalled = LockedBoxBool(value: false)
+        let headlessRunnerCalled = LockedBoxBool(value: false)
+
+        // The injected stub paneRunner returns a real pass result, exactly
+        // as the headless leg injects its stub. This is the ONLY way .pane
+        // yields a non-refusal Response.
+        let paneStub: BrowserValidationDispatcher.Runner = { _, _, _, _ in
+            paneRunnerCalled.set(true)
+            return PlaywrightResult(
+                resultStatus: "pass",
+                axesRun: ["completeness", "perf"],
+                assertionsPassed: 7,
+                assertionsFailed: 0,
+                screenshotPath: "/tmp/u2b-2-pane-real.png",
+                advisory: nil
+            )
+        }
+        let neverSubprocess: BrowserValidationDispatcher.Runner = { _, _, _, _ in
+            subprocessRunnerCalled.set(true)
+            Issue.record(".pane path must NOT invoke the subprocess runner closure")
+            return PlaywrightResult(resultStatus: "fail", axesRun: [], assertionsPassed: 0,
+                                    assertionsFailed: 0, screenshotPath: nil, advisory: nil)
+        }
+        let neverHeadless: BrowserValidationDispatcher.Runner = { _, _, _, _ in
+            headlessRunnerCalled.set(true)
+            Issue.record(".pane path must NOT invoke the headless runner closure")
+            return PlaywrightResult(resultStatus: "fail", axesRun: [], assertionsPassed: 0,
+                                    assertionsFailed: 0, screenshotPath: nil, advisory: nil)
+        }
+
+        let request = BrowserValidationDispatcher.Request(
+            targetURL: "https://example.com/pane-real",
+            axes: [.perf, .completeness],
+            diff: nil,
+            allowFailed: false,
+            screenshot: true,
+            sessionId: "sid-u2b-2-pane-real",
+            projectRoot: "/tmp/u2b-2-pane-real",
+            dispatch: .pane,
+            paneId: "pane-real-1"
+        )
+        let response = try BrowserValidationDispatcher.dispatch(
+            request: request,
+            runner: neverSubprocess,
+            headlessRunner: neverHeadless,
+            paneRunner: paneStub,
+            resultSink: { rowSink.append($0) },
+            tokenEventSink: { evSink.append($0) }
+        )
+
+        // Real Response: status reflects the stub (pass), NOT a refusal.
+        #expect(response.resultStatus == "pass",
+                ".pane WITH a paneRunner must surface the stub's status (pass), not a refusal; got: \(response.resultStatus)")
+        #expect(!response.advisory.contains("validation_browser_pane_no_runner"),
+                "a real .pane Response must NOT carry the no-runner refusal code; got: \(response.advisory)")
+        #expect(response.assertionsPassed == 7, "assertions_passed must reflect the stub")
+        #expect(response.assertionsFailed == 0)
+        #expect(response.screenshotPath == "/tmp/u2b-2-pane-real.png",
+                "screenshot path must thread through from the stub paneRunner")
+        // ONLY the paneRunner was invoked.
+        #expect(paneRunnerCalled.get(), "the injected paneRunner closure must be invoked on the .pane arm")
+        #expect(!subprocessRunnerCalled.get() && !headlessRunnerCalled.get(),
+                "the .pane arm must NOT invoke the subprocess/headless closures")
+
+        // Audit row still carries runner=wkwebview-pane (unchanged from
+        // the auditChainRunnerValue encoding).
+        let events = evSink.snapshot()
+        #expect(events.count == 1,
+                ".pane dispatch (pass, allow_failed:false) writes exactly one validation.dispatch row; got \(events.count)")
+        let dispatchRow = events.first!
+        #expect(dispatchRow.command.contains("runner=wkwebview-pane"),
+                "audit command must record runner=wkwebview-pane; got: \(dispatchRow.command)")
+        #expect(dispatchRow.command.contains("status=pass"),
+                "audit command must record status=pass for the real pane dispatch; got: \(dispatchRow.command)")
+
+        // validation_results row recorded with status=pass.
+        let rows = rowSink.snapshot()
+        #expect(rows.count == 1)
+        #expect(rows.first?.resultStatus == "pass")
     }
 
     // MARK: - Test 6b (U.2b-2 child (a)): allow_failed override parity on .pane
@@ -457,10 +562,13 @@ struct BrowserValidateDispatchTests {
         // when the underlying runner returns the same PlaywrightResult.
         // The .subprocess and .headless arms route through identical stub
         // closures, so their Response bytes must be equal. The .pane arm
-        // is a no-op refusal (no runner closure), so it returns a fail
-        // Response — parity here is the AUDIT-ROW shape (runner= is the
-        // only intended difference) plus the byte-stable encoding contract
-        // (sorted keys, withoutEscapingSlashes) holding for all three.
+        // here is dispatched with NO paneRunner injected, so it fails
+        // closed to a refusal Response — parity here is the AUDIT-ROW
+        // shape (runner= is the only intended difference) plus the byte-
+        // stable encoding contract (sorted keys, withoutEscapingSlashes)
+        // holding for all three. (Three-way PASS-result parity — with a
+        // stub paneRunner injected — is covered by the parity suite's
+        // axisCorpusParityAcrossDispatchModes.)
         let stub: BrowserValidationDispatcher.Runner = { _, _, _, _ in
             PlaywrightResult(resultStatus: "pass", axesRun: ["completeness", "perf"],
                              assertionsPassed: 4, assertionsFailed: 0,
@@ -528,7 +636,7 @@ struct BrowserValidateDispatchTests {
         let paneBytes = try BrowserValidationDispatcher.encode(pane.response)
         let paneJSON = String(data: paneBytes, encoding: .utf8) ?? ""
         #expect(paneJSON.contains("\"result_status\":\"fail\""))
-        #expect(paneJSON.contains("validation_browser_pane_not_yet_wired"))
+        #expect(paneJSON.contains("validation_browser_pane_no_runner"))
         // sorted-keys: allow_failed precedes result_status alphabetically.
         if let allowIdx = paneJSON.range(of: "\"allow_failed\"")?.lowerBound,
            let statusIdx = paneJSON.range(of: "\"result_status\"")?.lowerBound {

@@ -41,7 +41,7 @@ struct Validate: ParsableCommand {
     @Option(name: .long, help: "[--browser] Output format. 'json' produces byte-identical output to the senkani_validate_browser MCP response.")
     var format: String?
 
-    @Option(name: .long, help: "[--browser] Runner selector. 'subprocess' (default) drives the node+Playwright Chromium subprocess. 'headless' drives the off-screen WKWebView runner via BrowserDispatchRegistry's factory (registered by SenkaniApp at startup); standalone CLI invocations without that factory still see a structured headless_not_yet_implemented refusal. 'pane' (U.2b-2) targets a visible BrowserPane; until U.2b-2 child (b) wires pane execution, it returns a structured validation_browser_pane_not_yet_wired refusal.")
+    @Option(name: .long, help: "[--browser] Runner selector. 'subprocess' (default) drives the node+Playwright Chromium subprocess. 'headless' drives the off-screen WKWebView runner via BrowserDispatchRegistry's factory (registered by SenkaniApp at startup); standalone CLI invocations without that factory still see a structured headless_not_yet_implemented refusal. 'pane' (U.2b-2) targets a visible BrowserPane via BrowserDispatchRegistry's pane factory (registered by the SenkaniApp GUI half); standalone CLI invocations without a registered pane runner fail closed with a structured validation_browser_pane_no_runner refusal — never a silent pass.")
     var dispatch: String = "subprocess"
 
     @Option(name: .long, help: "[--browser --dispatch pane] BrowserPane id to target. Omit to target the most-recently-focused pane (resolved by U.2b-2 child (b)). Ignored for 'subprocess' / 'headless' dispatch.")
@@ -159,6 +159,13 @@ struct Validate: ParsableCommand {
         // the structured headless_not_yet_implemented refusal.
         let headlessClosure: BrowserValidationDispatcher.Runner? =
             BrowserDispatchRegistry.makeHeadlessRunnerClosure(egressProxyURL: egressProxy)
+        // U.2b-2 (headless seam) — look up the VISIBLE-pane runner factory.
+        // Nil when running the standalone CLI binary (no GUI host registers
+        // a pane factory yet); the dispatcher then fails CLOSED with the
+        // structured `validation_browser_pane_no_runner` refusal — visible-
+        // pane execution requires the GUI, never a silent pass from the CLI.
+        let paneClosure: BrowserValidationDispatcher.Runner? =
+            BrowserDispatchRegistry.makePaneRunnerClosure(egressProxyURL: egressProxy)
         let db = SessionDatabase.shared
         let resultSink: BrowserValidationDispatcher.ResultSink = { row in
             let planJSON = Self.encodePlanSteps(row.planSteps)
@@ -198,6 +205,7 @@ struct Validate: ParsableCommand {
             request: request,
             runner: runnerClosure,
             headlessRunner: headlessClosure,
+            paneRunner: paneClosure,
             resultSink: resultSink,
             tokenEventSink: tokenEventSink
         )

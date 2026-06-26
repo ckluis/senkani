@@ -162,34 +162,64 @@ struct BrowserPaneRunnerParityTests {
 
     // MARK: - Test 1: axis corpus parity across dispatch modes
 
-    @Test("axis-corpus parity: dispatcher Response byte-identical across .subprocess and .headless for each fixture",
+    @Test("axis-corpus parity: dispatcher Response byte-identical across .subprocess, .headless AND .pane for each fixture",
           arguments: BrowserPaneRunnerParityTests.corpus)
     func axisCorpusParityAcrossDispatchModes(fixture: ParityFixture) throws {
         let subprocessResp = try dispatchOnce(fixture: fixture, mode: .subprocess)
         let headlessResp = try dispatchOnce(fixture: fixture, mode: .headless)
+        // U.2b-2 (headless seam) — the .pane leg now injects a stub
+        // paneRunner closure that returns the SAME fixture.stubResult the
+        // headless leg injects (dispatchOnce wires `paneRunner: runner`).
+        // The parity assertion therefore covers all 20 corpus fixtures
+        // three-way (well above the ≥10 the acceptance bullet requires).
+        let paneResp = try dispatchOnce(fixture: fixture, mode: .pane)
 
         // Byte-identity at the three primary fields the acceptance bullet
         // calls out: result_status, assertions_passed, assertions_failed.
         // These ride the dispatcher's runner-agnostic seam — equal stub
-        // outputs MUST surface equal dispatcher outputs.
+        // outputs MUST surface equal dispatcher outputs across ALL THREE
+        // arms.
         #expect(subprocessResp.response.resultStatus == headlessResp.response.resultStatus,
                 "\(fixture.id): result_status differs (subprocess=\(subprocessResp.response.resultStatus), headless=\(headlessResp.response.resultStatus))")
+        #expect(subprocessResp.response.resultStatus == paneResp.response.resultStatus,
+                "\(fixture.id): result_status differs (subprocess=\(subprocessResp.response.resultStatus), pane=\(paneResp.response.resultStatus))")
         #expect(subprocessResp.response.assertionsPassed == headlessResp.response.assertionsPassed,
                 "\(fixture.id): assertions_passed differs (subprocess=\(subprocessResp.response.assertionsPassed), headless=\(headlessResp.response.assertionsPassed))")
+        #expect(subprocessResp.response.assertionsPassed == paneResp.response.assertionsPassed,
+                "\(fixture.id): assertions_passed differs (subprocess=\(subprocessResp.response.assertionsPassed), pane=\(paneResp.response.assertionsPassed))")
         #expect(subprocessResp.response.assertionsFailed == headlessResp.response.assertionsFailed,
                 "\(fixture.id): assertions_failed differs (subprocess=\(subprocessResp.response.assertionsFailed), headless=\(headlessResp.response.assertionsFailed))")
+        #expect(subprocessResp.response.assertionsFailed == paneResp.response.assertionsFailed,
+                "\(fixture.id): assertions_failed differs (subprocess=\(subprocessResp.response.assertionsFailed), pane=\(paneResp.response.assertionsFailed))")
         #expect(subprocessResp.response.axesRun == headlessResp.response.axesRun,
                 "\(fixture.id): axes_run differs (subprocess=\(subprocessResp.response.axesRun), headless=\(headlessResp.response.axesRun))")
+        #expect(subprocessResp.response.axesRun == paneResp.response.axesRun,
+                "\(fixture.id): axes_run differs (subprocess=\(subprocessResp.response.axesRun), pane=\(paneResp.response.axesRun))")
+
+        // Full Response JSON byte-identity across all three arms — the
+        // dispatcher's encoding contract holds runner-agnostic.
+        let subBytes = try BrowserValidationDispatcher.encode(subprocessResp.response)
+        let hdBytes = try BrowserValidationDispatcher.encode(headlessResp.response)
+        let paneBytes = try BrowserValidationDispatcher.encode(paneResp.response)
+        #expect(subBytes == hdBytes, "\(fixture.id): subprocess/headless Response JSON must be byte-identical")
+        #expect(subBytes == paneBytes, "\(fixture.id): subprocess/pane Response JSON must be byte-identical")
 
         // Audit-row shape: dispatcher writes one validation.dispatch row
         // per call; the runner= field is the only intended difference.
-        // Confirm that.
+        // Confirm that across all three arms.
         let subRow = try #require(subprocessResp.dispatchRow)
         let hdRow = try #require(headlessResp.dispatchRow)
+        let paneRow = try #require(paneResp.dispatchRow)
         let subWithoutRunner = subRow.command.replacingOccurrences(of: "runner=subprocess", with: "runner=<R>")
         let hdWithoutRunner = hdRow.command.replacingOccurrences(of: "runner=wkwebview-headless", with: "runner=<R>")
+        let paneWithoutRunner = paneRow.command.replacingOccurrences(of: "runner=wkwebview-pane", with: "runner=<R>")
         #expect(subWithoutRunner == hdWithoutRunner,
                 "\(fixture.id): audit command must match modulo runner= field; got\nsubprocess: \(subRow.command)\nheadless:   \(hdRow.command)")
+        #expect(subWithoutRunner == paneWithoutRunner,
+                "\(fixture.id): audit command must match modulo runner= field; got\nsubprocess: \(subRow.command)\npane:       \(paneRow.command)")
+        // The pane row carries its distinct runner= discriminant.
+        #expect(paneRow.command.contains("runner=wkwebview-pane"),
+                "\(fixture.id): pane audit command must record runner=wkwebview-pane; got: \(paneRow.command)")
     }
 
     // MARK: - Test 2: fail-mode envelope parity
@@ -555,6 +585,7 @@ struct BrowserPaneRunnerParityTests {
             request: request,
             runner: runner,
             headlessRunner: runner,
+            paneRunner: runner,
             resultSink: { rowSink.append($0) },
             tokenEventSink: { evSink.append($0) }
         )

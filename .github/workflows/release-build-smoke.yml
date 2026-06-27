@@ -17,6 +17,49 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # PR-trigger path filter (added 2026-06-27): run the ~12-13 min release
+    # build on a PR ONLY when a dependency manifest changes.
+    #
+    # WHAT THIS GAINS — a dependency-pin / package-graph regression (the
+    # 2026-05-07 `mlx-swift-lm@main` "no such module 'Tokenizers'" incident,
+    # see header) can ONLY be introduced by a change to Package.swift or
+    # Package.resolved: the build runs `swift package resolve`, honoring the
+    # committed pins, and there are no branch-tracking pins, nested/vendored
+    # manifests, or submodules. So on a source-only / docs-only / CI-only PR the
+    # resolved graph is byte-identical and this release dep-graph check has
+    # nothing new to catch — ~12-13 min skipped on most PRs.
+    #
+    # WHAT THIS TRADES (the honest cost) — `swift build -c release` is ALSO the
+    # only PRE-merge job that (1) compiles in release mode (`-O` / whole-module
+    # optimization) and (2) compiles the SenkaniMCP / SenkaniHook /
+    # SenkaniMigHelper / SenkaniApp executable mains. The `tests` workflow runs
+    # `swift test` (the test closure only, in debug) — it builds none of those
+    # mains and never compiles in release mode. So after this filter a SOURCE-
+    # only PR no longer gets release-mode + executable-main compile coverage
+    # PRE-merge (e.g. an unguarded caller of a `#if DEBUG`-only symbol, or a
+    # release-only optimizer/link failure, passes `tests` and fails only on
+    # `main`). That coverage is intentionally moved to the `push: branches:
+    # [main]` trigger above, which stays UNFILTERED and rebuilds in release on
+    # every push to main as a post-merge backstop. Accepted trade: minutes off
+    # most PRs for post-merge (not pre-merge) detection of release-only source
+    # breakage. (A CI-only PR that bumps this workflow's own `swift-version`
+    # pin is likewise non-manifest and skips here — caught by the same backstop.)
+    #
+    # Branch-protection note (verified 2026-06-27): `main` has no classic
+    # branch protection and no rulesets, and repo auto-merge is disabled — so
+    # the `swift build -c release` check is NOT a required status check and a
+    # path-filtered run (the run is simply not created) cannot wedge any merge
+    # today. IF this check is ever added to a required-status-checks list, a
+    # path-filtered required check reports no status and GitHub holds it Pending,
+    # which WILL block / wedge auto-merge. Resolve that BEFORE requiring it, by:
+    #   (a) keeping this check non-required — let the `tests` workflow's
+    #       `Build & test (summary)` aggregator be the required gate; or
+    #   (b) converting this to an always-run job whose expensive build steps
+    #       are gated on a dorny/paths-filter manifest check, so the job
+    #       always reports a result and is immune to the skipped-required wedge.
+    paths:
+      - Package.swift
+      - Package.resolved
 
 permissions:
   contents: read

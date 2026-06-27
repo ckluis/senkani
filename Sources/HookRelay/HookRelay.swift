@@ -162,9 +162,19 @@ public enum HookRelay {
         try? FileManager.default.createDirectory(
             atPath: dir, withIntermediateDirectories: true)
         let ts = ISO8601DateFormatter().string(from: now)
-        let event = (hookEvent ?? "unknown")
-            .replacingOccurrences(of: "\t", with: " ")
-            .replacingOccurrences(of: "\n", with: " ")
+        // Replace ALL control chars (C0 `< 0x20` incl. the TSV-structural
+        // `\t`/`\n` and ESC `0x1B`, DEL `0x7F`, C1 `0x80–0x9F`) with a space so
+        // a crafted `hook_event_name` can neither break the TSV row NOR plant a
+        // terminal escape that the `senkani doctor` read-side would render.
+        // (`HookRelayDropSummary.sanitizeForDisplay` is the load-bearing defense
+        // for logs already on disk; this keeps NEW writes clean at the source.)
+        let event = String(String.UnicodeScalarView(
+            (hookEvent ?? "unknown").unicodeScalars.map { scalar -> Unicode.Scalar in
+                let v = scalar.value
+                return (v < 0x20 || v == 0x7F || (v >= 0x80 && v <= 0x9F))
+                    ? Unicode.Scalar(0x20)! : scalar
+            }
+        ))
         let line = "\(ts)\t\(reason)\t\(event)\n"
         let fd = Darwin.open(target, O_WRONLY | O_APPEND | O_CREAT, 0o600)
         guard fd >= 0 else { return }

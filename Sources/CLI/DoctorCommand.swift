@@ -2,6 +2,7 @@ import ArgumentParser
 import Bench
 import Core
 import Foundation
+import HookRelay
 import Indexer
 
 struct Doctor: ParsableCommand {
@@ -179,6 +180,14 @@ struct Doctor: ParsableCommand {
 
         // 4. Hook script exists
         checkHookScript(&results)
+
+        // 4b. Hook relay drops — the read-side surface for carve-1's
+        //     deadline-driven passthrough log (the gate-bypass signal of
+        //     t6-hook-relay-5ms-deadline-drops). Reports per-reason counts,
+        //     the PreToolUse-read_timeout bypass callout + fail-closed fire
+        //     rate, and a 24h window. Informational: an absent log → "0 drops
+        //     recorded" (healthy), never moves the doctor exit code.
+        checkHookRelayDrops(&results)
 
         // 5. Model cache
         checkModels(&results)
@@ -1384,6 +1393,83 @@ struct Doctor: ParsableCommand {
                 printStatus(.fail, "Hook binary is a bash wrapper (~300ms overhead per tool call). Run with --fix or: swift build -c release --product senkani-hook && cp .build/release/senkani-hook ~/.senkani/bin/")
                 results.failed += 1
             }
+        }
+    }
+
+    // MARK: - Check 4b: Hook relay drops (hook-relay-drop-log-doctor-surface)
+
+    /// Surface the hook-relay drop log written by carve-1's
+    /// `HookRelay.recordDrop`. Every line is informational — the doctor exit
+    /// code never moves on drop state: a deadline-driven passthrough is a
+    /// SIGNAL to act on (tune a deadline), not a config defect. An absent /
+    /// empty log → "0 drops recorded" (the healthy fresh-machine state).
+    ///
+    /// SECURITY: prints ONLY the reason / hookEvent / count data already in
+    /// the log — never any credential or payload bytes. Carve-1's writer made
+    /// the log lines non-sensitive by construction; this read-side surface
+    /// adds nothing the writer didn't already record.
+    private func checkHookRelayDrops(_ results: inout Results) {
+        let path = HookRelayDropSummary.defaultDropLogPath()
+        let summary = HookRelayDropSummary.load(now: Date())
+
+        printStatus(.pass, "Hook relay drops — \(path)")
+        results.passed += 1
+
+        guard summary.total > 0 else {
+            // Distinguish a genuinely empty/absent log (healthy) from a
+            // non-empty log whose rows could not be parsed — drops may be
+            // present but unreadable, which is NOT the healthy state.
+            if summary.malformedLines > 0 {
+                printStatus(.pass, "  log present but no parseable drop rows (\(summary.malformedLines) unrecognized line(s))")
+            } else {
+                printStatus(.pass, "  0 drops recorded")
+            }
+            results.passed += 1
+            return
+        }
+
+        let scopeNote = summary.truncated ? " (showing last ~1 MB; older entries omitted)" : ""
+        printStatus(.pass, "  \(summary.total) drops recorded (last 24h: \(summary.recentTotal))\(scopeNote)")
+        results.passed += 1
+
+        // Per-reason breakdown. NOTE: only PreToolUse is deny-capable, so the
+        // AGGREGATE read_timeout count is NOT the gate-bypass number (it folds
+        // in never-deny hooks) — the PreToolUse-specific line below is.
+        let readTimeouts = summary.byReason["read_timeout"] ?? 0
+        let failClosed = summary.failClosedFires
+        let connectTimeouts = summary.byReason["connect_timeout"] ?? 0
+        printStatus(.pass, "  read_timeout: \(readTimeouts)  (deadline passthroughs, all hooks)")
+        results.passed += 1
+        printStatus(.pass, "  read_timeout_failclosed_ask: \(failClosed)  (fail-closed fire rate)")
+        results.passed += 1
+        printStatus(.pass, "  connect_timeout: \(connectTimeouts)")
+        results.passed += 1
+
+        // THE actionable gate-bypass line: a PreToolUse read_timeout is a
+        // deny-capable hook whose verdict was dropped past the deadline.
+        printStatus(.pass, "  PreToolUse read_timeout: \(summary.preToolUseReadTimeouts)  (gate-bypass indicator)")
+        results.passed += 1
+
+        // Top hook_event_names by count (top 3), count desc then name asc for a
+        // deterministic tie-break. The name is LOG-DERIVED (an external hook
+        // payload field), so SANITIZE it — a crafted name carrying ANSI escapes
+        // must not spoof or corrupt this trusted diagnostic's output.
+        let topEvents = summary.byHookEvent
+            .sorted { lhs, rhs in
+                lhs.value != rhs.value ? lhs.value > rhs.value : lhs.key < rhs.key
+            }
+            .prefix(3)
+            .map { "\(HookRelayDropSummary.sanitizeForDisplay($0.key))=\($0.value)" }
+            .joined(separator: ", ")
+        printStatus(.pass, "  top hook events: \(topEvents)")
+        results.passed += 1
+
+        // ONE conditional tuning hint when recent read_timeouts are
+        // non-trivial (the deadline-too-tight signal). Kept to a single line
+        // — no p99 over-build.
+        if (summary.recentByReason["read_timeout"] ?? 0) > 0 {
+            printStatus(.pass, "  hint: recent read_timeouts — consider raising SENKANI_HOOK_DENY_DEADLINE_MS")
+            results.passed += 1
         }
     }
 

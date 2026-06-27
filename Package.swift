@@ -398,6 +398,7 @@ let package = Package(
                 "Indexer",
                 "Bench",
                 "Bundle",
+                "HookRelay",
                 "MonitorTUI",
                 // U.8b-4 added "MLXProseCompiler" so CLI could construct
                 // a CompositeProseCadenceCompiler(rule + mlx). U.8b-5

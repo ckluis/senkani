@@ -87,6 +87,19 @@ struct PaneMetadataProbesTests {
         #expect(probes.branchProbe(wd) == nil)
     }
 
+    @Test("branch: detached HEAD ('HEAD') → nil, not a meaningless chip")
+    func branchDetachedHeadNil() {
+        let wd = "/detached"
+        let key = MockProcessRunner.key(
+            "/usr/bin/git", ["-C", wd, "rev-parse", "--abbrev-ref", "HEAD"]
+        )
+        let runner = MockProcessRunner(
+            canned: [key: ProcessRunResult(stdout: "HEAD\n", exitCode: 0)]
+        )
+        let probes = PaneMetadataProbes(runner: runner, now: { self.fixedDate })
+        #expect(probes.branchProbe(wd) == nil)
+    }
+
     @Test("branch: empty / whitespace stdout → nil")
     func branchBlankNil() {
         let wd = "/empty"
@@ -131,14 +144,32 @@ struct PaneMetadataProbesTests {
 
     @Test("port: a PGID with two ports → the LOWEST")
     func portLowestOfTwo() {
+        // The HIGHER port (8080) is listed FIRST so the test discriminates
+        // "lowest" from "first-seen": a first-seen-wins bug returns 8080 here
+        // and is killed by the `== 5173` assertion.
         let fixture = """
         COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
-        vite     4242 dev    20u  IPv6 0x0  0t0  TCP [::1]:5173 (LISTEN)
         vite     4242 dev    21u  IPv4 0x1  0t0  TCP *:8080 (LISTEN)
+        vite     4242 dev    20u  IPv6 0x0  0t0  TCP [::1]:5173 (LISTEN)
         """
         let runner = lsofRunner(stdout: fixture)
         let probes = PaneMetadataProbes(runner: runner, now: { self.fixedDate })
         #expect(probes.portProbe("4242") == 5173)
+    }
+
+    @Test("port: a bare bracketed address with no port ([::1]) is not parsed as bogus port 1")
+    func portBareBracketNoPortIgnored() {
+        // A NAME of bare "[::1]" (no :port) must be SKIPPED, not misread as port
+        // 1 — which, being lower than any real port, would be wrongly selected
+        // as the LOWEST. The same PGID also owns a real *:8080, which must win.
+        let fixture = """
+        COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
+        weird    4242 dev    19u  IPv6 0x0  0t0  TCP [::1] (LISTEN)
+        node     4242 dev    23u  IPv4 0x1  0t0  TCP *:8080 (LISTEN)
+        """
+        let runner = lsofRunner(stdout: fixture)
+        let probes = PaneMetadataProbes(runner: runner, now: { self.fixedDate })
+        #expect(probes.portProbe("4242") == 8080)
     }
 
     @Test("port: no matching PID → nil")
@@ -212,6 +243,24 @@ struct PaneMetadataProbesTests {
         let ghCall = runner.calls.first(where: { $0.executable == Self.ghPath })
         #expect(ghCall != nil)
         #expect(ghCall?.args == ["pr", "list", "--head", branch, "--json", "number,url", "--limit", "1"])
+    }
+
+    @Test("pr: multi-element array → the FIRST PR is returned")
+    func prFirstOfMultiple() {
+        // gh --limit 1 returns at most one, but the parse takes `.first`
+        // defensively; assert it is the FIRST element, not the second.
+        let branch = "feature/multi"
+        let runner = MockProcessRunner(canned: [
+            Self.whichGhKey: ProcessRunResult(stdout: Self.ghPath, exitCode: 0),
+            Self.ghListKey(branch: branch): ProcessRunResult(
+                stdout: #"[{"number":11,"url":"https://x/pull/11"},{"number":22,"url":"https://x/pull/22"}]"#,
+                exitCode: 0
+            ),
+        ])
+        let probes = PaneMetadataProbes(runner: runner, now: { self.fixedDate })
+        let ref = probes.prProbe(branch)
+        #expect(ref?.number == 11)
+        #expect(ref?.url == "https://x/pull/11")
     }
 
     @Test("pr: empty array → nil")

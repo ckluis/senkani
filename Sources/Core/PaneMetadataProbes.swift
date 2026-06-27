@@ -88,11 +88,15 @@ public final class PaneMetadataProbes: @unchecked Sendable {
             for token in fields[nameStart...] {
                 guard let colon = token.lastIndex(of: ":") else { continue }
                 let after = token[token.index(after: colon)...]
-                let portToken = after.prefix(while: { $0.isNumber })
-                if let port = Int(portToken) {
-                    rowPort = port
-                    break
-                }
+                // The port is the WHOLE remainder after the final colon — a
+                // strict all-digits check, so a bare bracketed address carrying
+                // no port ("[::1]" ⇒ remainder "1]") is rejected rather than
+                // yielding a bogus port 1. Every `-sTCP:LISTEN` socket NAME ends
+                // in ":<port>", so a real listener still parses.
+                guard !after.isEmpty, after.allSatisfy({ $0.isNumber }),
+                      let port = Int(after) else { continue }
+                rowPort = port
+                break
             }
             guard let port = rowPort else { continue }
 
@@ -122,7 +126,9 @@ public final class PaneMetadataProbes: @unchecked Sendable {
         )
         guard result.exitCode == 0 else { return nil }
         let branch = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        return branch.isEmpty ? nil : branch
+        // A detached HEAD makes `--abbrev-ref HEAD` print the literal "HEAD";
+        // that is not a branch, so surface no chip rather than a meaningless one.
+        return (branch.isEmpty || branch == "HEAD") ? nil : branch
     }
 
     // MARK: - PR probe (gh, which-degrade + TTL cache)
@@ -153,6 +159,12 @@ public final class PaneMetadataProbes: @unchecked Sendable {
         }
         prLock.unlock()
 
+        // Stamp the resolution start time. The write below only commits if no
+        // FRESHER entry (one whose probe started later) landed while gh was
+        // running — so under concurrent same-branch hover probes a slow thread's
+        // stale result can never overwrite a fast thread's newer one.
+        let started = now()
+
         // (a) Resolve gh — silent degrade if not installed. Done OUTSIDE the
         // lock (a subprocess call must not hold the cache lock).
         let which = runner.run(executable: "/usr/bin/which", args: ["gh"])
@@ -182,7 +194,16 @@ public final class PaneMetadataProbes: @unchecked Sendable {
         }
 
         prLock.lock()
-        prCache[branch] = (ref: ref, at: now())
+        // Only commit if no fresher entry landed while gh was running (a slow
+        // thread must not overwrite a fast thread's newer result under
+        // concurrent same-branch probes). Stamp `started`, not write-time, so
+        // "fresher" means "probed more recently".
+        if let existing = prCache[branch], existing.at > started {
+            let winner = existing.ref
+            prLock.unlock()
+            return winner
+        }
+        prCache[branch] = (ref: ref, at: started)
         prLock.unlock()
         return ref
     }

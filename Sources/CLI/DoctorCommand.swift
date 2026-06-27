@@ -1416,39 +1416,50 @@ struct Doctor: ParsableCommand {
         results.passed += 1
 
         guard summary.total > 0 else {
-            printStatus(.pass, "  0 drops recorded")
+            // Distinguish a genuinely empty/absent log (healthy) from a
+            // non-empty log whose rows could not be parsed — drops may be
+            // present but unreadable, which is NOT the healthy state.
+            if summary.malformedLines > 0 {
+                printStatus(.pass, "  log present but no parseable drop rows (\(summary.malformedLines) unrecognized line(s))")
+            } else {
+                printStatus(.pass, "  0 drops recorded")
+            }
             results.passed += 1
             return
         }
 
-        printStatus(.pass, "  \(summary.total) drops recorded (last 24h: \(summary.recentTotal))")
+        let scopeNote = summary.truncated ? " (showing last ~1 MB; older entries omitted)" : ""
+        printStatus(.pass, "  \(summary.total) drops recorded (last 24h: \(summary.recentTotal))\(scopeNote)")
         results.passed += 1
 
-        // Per-reason breakdown, labelling the two posture-relevant reasons.
+        // Per-reason breakdown. NOTE: only PreToolUse is deny-capable, so the
+        // AGGREGATE read_timeout count is NOT the gate-bypass number (it folds
+        // in never-deny hooks) — the PreToolUse-specific line below is.
         let readTimeouts = summary.byReason["read_timeout"] ?? 0
         let failClosed = summary.failClosedFires
         let connectTimeouts = summary.byReason["connect_timeout"] ?? 0
-        printStatus(.pass, "  read_timeout: \(readTimeouts)  (gate-bypass indicator)")
+        printStatus(.pass, "  read_timeout: \(readTimeouts)  (deadline passthroughs, all hooks)")
         results.passed += 1
         printStatus(.pass, "  read_timeout_failclosed_ask: \(failClosed)  (fail-closed fire rate)")
         results.passed += 1
         printStatus(.pass, "  connect_timeout: \(connectTimeouts)")
         results.passed += 1
 
-        // The single most actionable line: a PreToolUse read_timeout is a
-        // deny-capable hook whose verdict was dropped — a potential gate
-        // bypass.
-        printStatus(.pass, "  PreToolUse read_timeout: \(summary.preToolUseReadTimeouts)  (potential gate bypass)")
+        // THE actionable gate-bypass line: a PreToolUse read_timeout is a
+        // deny-capable hook whose verdict was dropped past the deadline.
+        printStatus(.pass, "  PreToolUse read_timeout: \(summary.preToolUseReadTimeouts)  (gate-bypass indicator)")
         results.passed += 1
 
-        // Top hook_event_names by count (top 3). Sort by count desc, then
-        // name asc for a deterministic tie-break.
+        // Top hook_event_names by count (top 3), count desc then name asc for a
+        // deterministic tie-break. The name is LOG-DERIVED (an external hook
+        // payload field), so SANITIZE it — a crafted name carrying ANSI escapes
+        // must not spoof or corrupt this trusted diagnostic's output.
         let topEvents = summary.byHookEvent
             .sorted { lhs, rhs in
                 lhs.value != rhs.value ? lhs.value > rhs.value : lhs.key < rhs.key
             }
             .prefix(3)
-            .map { "\($0.key)=\($0.value)" }
+            .map { "\(HookRelayDropSummary.sanitizeForDisplay($0.key))=\($0.value)" }
             .joined(separator: ", ")
         printStatus(.pass, "  top hook events: \(topEvents)")
         results.passed += 1

@@ -87,6 +87,9 @@ struct HookRelayDropSummaryTests {
         #expect(s.byReason["read_timeout"] == 1)
         #expect(s.byReason["connect_timeout"] == 1)
         #expect(s.preToolUseReadTimeouts == 1)
+        // The two malformed lines are counted (so the doctor surface can tell
+        // "no drops" apart from "present but unparseable").
+        #expect(s.malformedLines == 2)
     }
 
     @Test("a line with ≥3 fields plus extra trailing tab-fields still parses on the first 3")
@@ -178,5 +181,72 @@ struct HookRelayDropSummaryTests {
     func defaultPathAccessor() {
         let p = HookRelayDropSummary.defaultDropLogPath()
         #expect(p.hasSuffix("/.senkani/hook-relay-drops.log"))
+    }
+
+    // MARK: - re-audit hardening (D1–D4)
+
+    @Test("a FUTURE-dated row counts all-time but NOT recent (skew/tamper must not inflate 24h)")
+    func futureDatedRowExcludedFromRecent() {
+        let futureTs = Self.iso(Self.now.addingTimeInterval(3_600)) // +1h
+        let contents = "\(futureTs)\tread_timeout\tPreToolUse"
+        let s = HookRelayDropSummary.summarize(contents: contents, now: Self.now)
+        #expect(s.total == 1)
+        #expect(s.recentTotal == 0, "a future-dated row must not count as recent")
+    }
+
+    @Test("all-malformed non-empty log → total 0 but malformedLines > 0 (NOT the empty/healthy state)")
+    func allMalformedDistinguished() {
+        let contents = [
+            "garbage line one no tabs",
+            "another bad line",
+            "ts\tonly-two-fields",
+        ].joined(separator: "\n")
+        let s = HookRelayDropSummary.summarize(contents: contents, now: Self.now)
+        #expect(s.total == 0)
+        #expect(s.malformedLines == 3)
+        #expect(s != HookRelayDropSummary.empty, "must be distinguishable from an empty log")
+    }
+
+    @Test("sanitizeForDisplay strips ANSI/control chars and caps length")
+    func sanitizeStripsEscapes() {
+        let crafted = "\u{1B}[2K\rPreToolUse\u{1B}[32m all clear" // ESC[2K, CR, ESC[32m
+        let clean = HookRelayDropSummary.sanitizeForDisplay(crafted)
+        #expect(!clean.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7F })
+        #expect(clean == "[2KPreToolUse[32m all clear") // printable kept, ESC + CR dropped
+        let long = String(repeating: "x", count: 100)
+        #expect(HookRelayDropSummary.sanitizeForDisplay(long, maxLength: 10).count == 11) // 10 + "…"
+    }
+
+    @Test("recordDrop strips control chars from hook_event_name at write time")
+    func recordDropSanitizesWriter() throws {
+        let path = NSTemporaryDirectory() + "senkani-drop-writer-\(UUID().uuidString).log"
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        HookRelay.recordDrop(reason: "read_timeout",
+                             hookEvent: "\u{1B}[2K\tPre\nToolUse",
+                             at: path, now: Self.now)
+        let written = try String(contentsOfFile: path, encoding: .utf8)
+        // No raw ESC survived; the crafted \t / \n in the NAME became spaces, so
+        // the row stays a single line with exactly 3 tab-separated fields.
+        #expect(!written.unicodeScalars.contains { $0.value == 0x1B })
+        let line = written.trimmingCharacters(in: .newlines)
+        #expect(line.components(separatedBy: "\t").count == 3)
+    }
+
+    @Test("load tails an over-cap log: truncated set, partial first line dropped, only the tail counted")
+    func loadTailsOverCapLog() throws {
+        let ts = Self.iso(Self.now)
+        let path = NSTemporaryDirectory() + "senkani-drop-tail-\(UUID().uuidString).log"
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let lines = (0..<200).map { _ in "\(ts)\tread_timeout\tPreToolUse" }
+        try (lines.joined(separator: "\n") + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+
+        let full = HookRelayDropSummary.load(path: path, now: Self.now)
+        #expect(full.total == 200)
+        #expect(full.truncated == false)
+
+        let tailed = HookRelayDropSummary.load(path: path, now: Self.now, maxBytes: 200)
+        #expect(tailed.truncated == true)
+        #expect(tailed.total > 0 && tailed.total < 200, "only the tail is counted")
+        #expect(tailed.malformedLines == 0, "the partial first line was dropped, not mis-counted")
     }
 }

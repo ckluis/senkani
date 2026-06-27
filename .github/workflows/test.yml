@@ -14,29 +14,100 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Matrix fan-out: each of the 8 named chunks defined in
-  # `tools/test-safe.sh` runs in its own GH Actions job. Wall-clock
-  # for the workflow as a whole is bounded by the slowest single
-  # chunk, not by the sum of all chunks. SwiftPM build cache is
-  # shared across slots via the `actions/cache@v4` key on
-  # `Package.resolved` — 7 of 8 jobs should hit the cache on a
-  # no-deps PR.
+  # Build the project + ALL test code ONCE, then share the compiled
+  # `.build` to the test-only chunk jobs via a commit-SHA-keyed cache.
   #
-  # `chunk:` list is hard-coded here to keep the workflow self-
-  # contained and reviewable. Keep in lockstep with the `CHUNKS`
-  # array in `tools/test-safe.sh`. Renames or additions to that
-  # array require a matching edit here. The single-source-of-truth
-  # alternative (workflow-output pre-job emitting `--list-chunks`)
-  # was rejected on simplicity grounds during scope-groom (build
-  # round 2026-05-18): drift risk is small, reviewability win is
-  # large.
+  # Why (ci-test-yml-build-once-test-many-2026-06-27): each chunk job used
+  # to run a full `swift build --build-tests` of the whole project before
+  # executing its (small) regex-scoped test slice, so the project's own
+  # modules + the test target compiled 8x — once per fresh runner. On
+  # GitHub-hosted macOS the account's concurrent-runner cap (~5 observed)
+  # forced those 8 HEAVY build+test jobs through ~2 waves, ~35 min
+  # wall-clock. Compiling once turns the 8 chunks into LIGHT test-only
+  # jobs that flow through the runner cap far faster (1 heavy build +
+  # light test waves) and removes ~7x of redundant dependency/project
+  # compile in runner-minutes.
+  build:
+    name: build (compile once)
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # SwiftyLab/setup-swift is the actively maintained successor to
+      # swift-actions/setup-swift (the latter's version registry stops at
+      # ~6.0). It tracks current swift.org releases and caches the
+      # toolchain download (shared across all jobs in this workflow).
+      - name: Install Swift 6.3
+        uses: SwiftyLab/setup-swift@latest
+        with:
+          swift-version: "6.3"
+
+      - name: Show toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+
+      # Debug dependency cache, keyed on Package.resolved so an unchanged
+      # dep graph restores warm. This `build` job now maintains the dep
+      # cache for the whole `tests` workflow (the chunk jobs no longer
+      # build, so they no longer save it).
+      - name: Cache SwiftPM dependency build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/Developer/Xcode/DerivedData
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Build project + tests (once)
+        run: swift build --build-tests
+
+      # Share the fully-built `.build` to the chunk jobs, keyed on the
+      # commit SHA: a source change produces a new SHA -> new key, so the
+      # chunks restore THIS commit's build and never a stale one
+      # (acceptance: cache keyed on commit SHA, not Package.resolved).
+      #
+      # SwiftPM's `.build` embeds absolute paths, but GitHub macOS runners
+      # use a stable workspace path (/Users/runner/work/senkani/senkani)
+      # and the same pinned toolchain, so the restore yields a valid
+      # incremental (no-op) build in the chunks — verified in the chunk
+      # logs on the carve PR. If a chunk ever shows a FULL rebuild, the
+      # SHA cache missed and it fell back to the dep cache (correct, just
+      # slower): investigate the portability assumption rather than ship a
+      # change that silently still rebuilds.
+      - name: Save built .build for chunks (SHA-keyed)
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .build
+            ~/Library/Developer/Xcode/DerivedData
+          key: ${{ runner.os }}-build-${{ github.sha }}
+
+  # Matrix fan-out: each of the 8 named chunks defined in
+  # `tools/test-safe.sh` runs its test slice in its own GH Actions job,
+  # reusing the single `build` job's compiled `.build` (an incremental
+  # no-op build). Wall-clock for the matrix is bounded by the slowest
+  # single chunk's TESTS, not by a per-chunk full build.
+  #
+  # `chunk:` list is hard-coded here to keep the workflow self-contained
+  # and reviewable. Keep in lockstep with the `CHUNKS` array in
+  # `tools/test-safe.sh`. Renames or additions to that array require a
+  # matching edit here. The single-source-of-truth alternative
+  # (workflow-output pre-job emitting `--list-chunks`) was rejected on
+  # simplicity grounds during scope-groom (build round 2026-05-18): drift
+  # risk is small, reviewability win is large.
   chunk:
     name: chunk[${{ matrix.chunk }}]
-    # macos-15 ships Xcode 16.4 / Swift 6.1.2 by default. The project
-    # is developed against Swift 6.3 — 6.1's stricter actor-isolation
-    # enforcement flagged dozens of legitimate-on-6.3 sites. Pinning
-    # the runner toolchain to 6.3 (Bach: "match the local environment")
-    # closes that gap without retrofitting hundreds of source sites.
+    needs: build
+    # macos-15 ships Xcode 16.4 / Swift 6.1.2 by default. The project is
+    # developed against Swift 6.3 — 6.1's stricter actor-isolation
+    # enforcement flagged dozens of legitimate-on-6.3 sites. Pinning the
+    # runner toolchain to 6.3 (Bach: "match the local environment") closes
+    # that gap without retrofitting hundreds of source sites.
     runs-on: macos-15
     timeout-minutes: 30
     strategy:
@@ -55,10 +126,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # SwiftyLab/setup-swift is the actively maintained successor to
-      # swift-actions/setup-swift (the latter's version registry stops at
-      # ~6.0 — `swift-version: "6.3"` returned "not available" in
-      # iteration #4). SwiftyLab tracks current swift.org releases.
       - name: Install Swift 6.3
         uses: SwiftyLab/setup-swift@latest
         with:
@@ -69,13 +136,18 @@ jobs:
           swift --version
           xcodebuild -version
 
-      - name: Cache SwiftPM build artifacts
-        uses: actions/cache@v4
+      # Restore the compiled `.build` produced by the `build` job (exact
+      # commit SHA). restore-keys falls back to the debug dep cache so a
+      # SHA miss still gets warm dependencies — then test-safe.sh's
+      # `swift test` rebuilds only the project+tests (the pre-change
+      # behavior), never shipping a stale build.
+      - name: Restore built .build (SHA-keyed; dep-cache fallback)
+        uses: actions/cache/restore@v4
         with:
           path: |
             .build
             ~/Library/Developer/Xcode/DerivedData
-          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          key: ${{ runner.os }}-build-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-spm-
 
@@ -84,22 +156,27 @@ jobs:
       # real `wasmtime` binary; without it they fail `wasmtime_missing`. The
       # `.wasm` fixtures are committed (bundled via Bundle.module) — only the
       # binary is missing on the runner. Install it for that slot only; the
-      # other 7 chunks don't exercise wasmtime.
+      # other 7 chunks don't exercise wasmtime. (The `build` job does not run
+      # tests, so it does not need the binary — only compiles the test code,
+      # which shells out at run time.)
       - name: Install wasmtime (chunk[other] sandbox integration)
         if: matrix.chunk == 'other'
         run: brew install wasmtime
 
-      # Run the single chunk this matrix slot owns. `--chunk $name`
-      # invokes one `swiftpm-testing-helper` process scoped to that
-      # chunk's regex; the per-chunk SIGTRAP-retry envelope
-      # (`TEST_SAFE_RETRIES`, default 3) lives inside the script.
-      - name: Build & test (chunk[${{ matrix.chunk }}])
+      # Run the single chunk this matrix slot owns against the shared
+      # `.build`. `--chunk $name` invokes one `swift test --no-parallel
+      # --filter <regex>` process (an incremental no-op build off the
+      # restored `.build`, then the chunk's tests); the per-chunk
+      # SIGTRAP-retry envelope (`TEST_SAFE_RETRIES`, default 3) lives
+      # inside the script. test-safe.sh is unchanged — `bash
+      # tools/test-safe.sh` with no args still does a full build + all
+      # chunks for local runs.
+      - name: Test (chunk[${{ matrix.chunk }}])
         run: ./tools/test-safe.sh --chunk ${{ matrix.chunk }}
 
-  # Branch-protection aggregator. One check, depends on every
-  # chunk job. If any chunk red-lines, `summary` red-lines.
-  # Operator post-merge: re-point branch protection from the
-  # retired `Build & test` check to `Build & test (summary)`.
+  # Branch-protection aggregator. One check, depends on every chunk job.
+  # If any chunk red-lines, `summary` red-lines. Branch protection (when
+  # configured) requires `Build & test (summary)`.
   summary:
     name: Build & test (summary)
     needs: chunk
@@ -119,10 +196,9 @@ jobs:
             exit 1
           fi
 
-      # Diagnostic surface: print the chunk regex table in the
-      # summary job log so reviewers reading a failed run can see
-      # what's in each chunk without spelunking individual job
-      # logs.
+      # Diagnostic surface: print the chunk regex table in the summary job
+      # log so reviewers reading a failed run can see what's in each chunk
+      # without spelunking individual job logs.
       - name: Chunk inventory (for log archaeology)
         if: always()
         run: ./tools/test-safe.sh --list-chunks

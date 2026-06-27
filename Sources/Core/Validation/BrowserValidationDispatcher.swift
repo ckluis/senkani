@@ -34,12 +34,14 @@ public enum BrowserValidationDispatcher {
         public let sessionId: String
         public let projectRoot: String?
         /// U.2b-1a — runner selector. `.subprocess` invokes the runner
-        /// closure as before; `.headless` short-circuits to a structured
-        /// `headless_not_yet_implemented` refusal until U.2b-1b lands the
-        /// off-screen WKWebView runner; `.pane` (U.2b-2 child (a))
-        /// short-circuits to a structured
-        /// `validation_browser_pane_not_yet_wired` refusal until child
-        /// (b) lands the visible-pane execution.
+        /// closure; `.headless` invokes the injected `headlessRunner`
+        /// closure (or a `headless_not_yet_implemented` refusal when none
+        /// is registered); `.pane` invokes the injected `paneRunner`
+        /// closure (or a fail-closed `validation_browser_pane_no_runner`
+        /// refusal when none is registered — never a fabricated pass). The
+        /// visible-pane WKWebView execution + SwiftUI refusal-banner
+        /// overlay + input-lock are the operator Cowork/GUI half that
+        /// registers the pane factory.
         public let dispatch: BrowserDispatchMode
         /// U.2b-2 child (a) — visible-pane selector. Identifies which
         /// `BrowserPane` a `dispatch: .pane` call targets. `nil` resolves
@@ -238,6 +240,7 @@ public enum BrowserValidationDispatcher {
         request: Request,
         runner: Runner,
         headlessRunner: Runner? = nil,
+        paneRunner: Runner? = nil,
         resultSink: ResultSink,
         tokenEventSink: TokenEventSink,
         spanSink: SpanSink = noopSpanSink
@@ -299,25 +302,36 @@ public enum BrowserValidationDispatcher {
                 )
             }
         case .pane:
-            // U.2b-2 child (a) — the visible-pane execution path lands in
-            // sibling child (b) (the GUI/Cowork half). Until then `.pane`
-            // resolves to a structured `validation_browser_pane_not_yet_
-            // wired` refusal: a correctly-shaped fail Response + a
-            // validation.dispatch audit row carrying runner=wkwebview-pane.
-            // This is intentionally NOT wired to a runner closure — it is
-            // a no-op-but-correctly-shaped row so the three-value parity
-            // and mixed-runner chain-integrity tests hold byte-for-byte
-            // regardless of which arm runs. The `paneId` selector is
-            // carried on the Request but not yet consulted; child (b)
-            // resolves it against the BrowserPane registry.
-            result = PlaywrightResult(
-                resultStatus: "fail",
-                axesRun: [],
-                assertionsPassed: 0,
-                assertionsFailed: 0,
-                screenshotPath: nil,
-                advisory: "validation_browser_pane_not_yet_wired — the visible-pane runner lands in U.2b-2 child (b); use dispatch:'subprocess' or 'headless' until then"
-            )
+            // U.2b-2 (headless seam) — wire the VISIBLE-pane runner. The
+            // paneRunner slot is nil-by-default to preserve source
+            // compatibility with callers that haven't wired it. SECURITY-
+            // CRITICAL fail-closed contract: the ONLY way `.pane` produces
+            // a non-refusal Response is via an explicitly-injected,
+            // non-nil paneRunner. When non-nil, invoke through the SAME
+            // runRunner helper the `.headless` and `.subprocess` arms use,
+            // so error translation + audit row shapes match byte-for-byte
+            // (the audit already encodes runner=wkwebview-pane via
+            // dispatchMode.auditChainRunnerValue). When nil, fall back to a
+            // structured `validation_browser_pane_no_runner` refusal — a
+            // correctly-shaped fail Response + a validation.dispatch audit
+            // row carrying runner=wkwebview-pane. NEVER a fabricated pass:
+            // a missing pane runner (GUI not running / pane unavailable)
+            // can only refuse, never silently approve. The `paneId`
+            // selector is carried on the Request; the registered pane
+            // factory resolves it against the BrowserPane registry (the
+            // GUI/Cowork half).
+            if let paneRunner {
+                result = runRunner(paneRunner, plan: plan, request: request, egressPolicyOverridePath: overridePath)
+            } else {
+                result = PlaywrightResult(
+                    resultStatus: "fail",
+                    axesRun: [],
+                    assertionsPassed: 0,
+                    assertionsFailed: 0,
+                    screenshotPath: nil,
+                    advisory: "validation_browser_pane_no_runner — no visible pane runner registered (GUI not running / pane unavailable); register a BrowserDispatchRegistry.paneRunnerFactory, or use dispatch:'subprocess' or 'headless'"
+                )
+            }
         }
 
         let advisory = formatAdvisory(

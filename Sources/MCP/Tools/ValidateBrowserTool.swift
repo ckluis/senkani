@@ -65,6 +65,13 @@ enum ValidateBrowserTool {
         // the dispatcher falls back to the structured refusal.
         let headlessClosure: BrowserValidationDispatcher.Runner? =
             BrowserDispatchRegistry.makeHeadlessRunnerClosure(egressProxyURL: egressProxyURL)
+        // U.2b-2 (headless seam) — look up the VISIBLE-pane runner factory.
+        // Today no host registers one (the GUI/Cowork half lands later), so
+        // this resolves to nil and the dispatcher fails CLOSED with the
+        // `validation_browser_pane_no_runner` refusal — correct: visible-
+        // pane execution requires the GUI, never a silent pass from MCP.
+        let paneClosure: BrowserValidationDispatcher.Runner? =
+            BrowserDispatchRegistry.makePaneRunnerClosure(egressProxyURL: egressProxyURL)
         let db = SessionDatabase.shared
         let resultSink: BrowserValidationDispatcher.ResultSink = { row in
             let planJSON = encodePlanSteps(row.planSteps)
@@ -106,6 +113,7 @@ enum ValidateBrowserTool {
                 request: request,
                 runner: runnerClosure,
                 headlessRunner: headlessClosure,
+                paneRunner: paneClosure,
                 resultSink: resultSink,
                 tokenEventSink: tokenEventSink
             )

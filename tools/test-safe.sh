@@ -90,15 +90,28 @@ cd "$(dirname "$0")/.."
 # Catch-all "other" chunk is constructed at run-time from the union
 # of every other chunk's regex (skip-inverted). New chunks added
 # above "other" automatically narrow it.
+#
+# CHUNK COUNT vs CI runner concurrency (ci-test-yml-build-once-test-many-
+# 2026-06-27): GitHub-hosted macOS enforces an account concurrent-runner
+# cap (~5 observed). With 8 named+other chunks the matrix queued through
+# ~2 waves (~35 min wall-clock). These four named groups + the "other"
+# catch-all = 5 chunks total, so on a PR (where Item 1's path filter
+# keeps release-build-smoke from competing for a slot) all 5 run in ONE
+# wave. The four named groups are balanced by measured TEST time (build
+# ~12 min is fixed per chunk; the variable is each group's test slice) so
+# the slowest group is minimized:
+#   parsers-kb       ~7.1m tests   learning-session ~8.6m tests
+#   onboarding-pane  ~8.4m tests   hook             ~8.5m tests
+#   other            ~9.6m tests (the bottleneck; wasmtime integration)
+# Every original regex token is preserved (just regrouped), so the
+# "other" catch-all union is unchanged and no test moves chunk membership
+# beyond the rename. Keep in lockstep with test.yml's matrix `chunk:` list.
 # ---------------------------------------------------------------------
 CHUNKS=(
-  "parsers:TreeSitter|GrammarManifest|GrammarStaleness"
-  "learning:Compound|ContextPlan|Combinator|InstructionSignal|AnnotationSignal|ContextSignal|EnrichmentValidator|EnrichmentWorkflow|MultiplierClaim|ReflectiveLearningRun|PromptArtifactRegression"
-  "kb:Knowledge|KB[A-Z]|PinnedContext|EntityTracker"
-  "pane:Pane[A-Z]|PaneRefresh|PaneSocket|PaneFont|PaneGallery|PaneDiary|Browser|Workspace|Workstream|Schedule|Watch|RelationsGraph"
+  "parsers-kb:TreeSitter|GrammarManifest|GrammarStaleness|Knowledge|KB[A-Z]|PinnedContext|EntityTracker"
+  "learning-session:Compound|ContextPlan|Combinator|InstructionSignal|AnnotationSignal|ContextSignal|EnrichmentValidator|EnrichmentWorkflow|MultiplierClaim|ReflectiveLearningRun|PromptArtifactRegression|Migration|SessionDatabase|TokenEventStore|Chain[A-Z]|Agent[A-Z]|ClaudeSession|ValidationStore|Sandbox|Authorship|Daemon|RetentionScheduler|Logger|Persistence|StoreExec"
+  "onboarding-pane:Onboarding|Welcome|FCSIT|FirstValue|TaskStarter|LaunchCoordinator|ActivationStatus|EmptyState|DocsTruth|DocsShape|CommandPalette|Pane[A-Z]|PaneRefresh|PaneSocket|PaneFont|PaneGallery|PaneDiary|Browser|Workspace|Workstream|Schedule|Watch|RelationsGraph"
   "hook:Hook|ConfirmationGate|AutoValidate|InjectionGuard|SecretDetector|EntropyDetector|HookRelayHandshake"
-  "session:Migration|SessionDatabase|TokenEventStore|Chain[A-Z]|Agent[A-Z]|ClaudeSession|ValidationStore|Sandbox|Authorship|Daemon|RetentionScheduler|Logger|Persistence|StoreExec"
-  "onboarding:Onboarding|Welcome|FCSIT|FirstValue|TaskStarter|LaunchCoordinator|ActivationStatus|EmptyState|DocsTruth|DocsShape|CommandPalette"
 )
 
 # ---------------------------------------------------------------------

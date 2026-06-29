@@ -14,13 +14,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Matrix fan-out: each of the 8 named chunks defined in
+  # Matrix fan-out: each of the 5 named groups defined in
   # `tools/test-safe.sh` runs in its own GH Actions job. Wall-clock
   # for the workflow as a whole is bounded by the slowest single
   # chunk, not by the sum of all chunks. SwiftPM build cache is
   # shared across slots via the `actions/cache@v4` key on
-  # `Package.resolved` — 7 of 8 jobs should hit the cache on a
-  # no-deps PR.
+  # `Package.resolved` — every job should hit the cache on a no-deps PR.
+  #
+  # CHUNK COUNT = 5 to fit ONE runner wave (ci-test-yml-build-once-
+  # test-many-2026-06-27): GitHub-hosted macOS enforces an account
+  # concurrent-runner cap (~5 observed), so the previous 8-chunk matrix
+  # queued through ~2 waves (~35 min wall-clock). Five chunks run
+  # concurrently in a single wave (on a PR, Item 1's path filter keeps
+  # release-build-smoke from competing for a slot), cutting wall-clock
+  # to ~the slowest single chunk (~22 min). The four named groups are
+  # balanced by measured TEST time in `tools/test-safe.sh`; "other" is
+  # the catch-all and the bottleneck (wasmtime integration).
   #
   # `chunk:` list is hard-coded here to keep the workflow self-
   # contained and reviewable. Keep in lockstep with the `CHUNKS`
@@ -43,13 +52,10 @@ jobs:
       fail-fast: false
       matrix:
         chunk:
-          - parsers
-          - learning
-          - kb
-          - pane
+          - parsers-kb
+          - learning-session
+          - onboarding-pane
           - hook
-          - session
-          - onboarding
           - other
     steps:
       - name: Checkout
@@ -84,7 +90,7 @@ jobs:
       # real `wasmtime` binary; without it they fail `wasmtime_missing`. The
       # `.wasm` fixtures are committed (bundled via Bundle.module) — only the
       # binary is missing on the runner. Install it for that slot only; the
-      # other 7 chunks don't exercise wasmtime.
+      # other 4 chunks don't exercise wasmtime.
       - name: Install wasmtime (chunk[other] sandbox integration)
         if: matrix.chunk == 'other'
         run: brew install wasmtime

@@ -88,4 +88,65 @@ struct HookRelayFailClosedTests {
         #expect(hso["hookEventName"] as? String == #"weird"name\x"#)
         #expect(hso["permissionDecision"] as? String == "ask")
     }
+
+    // MARK: - env-flag parsing is trim + case-insensitive
+    //   (hook-relay-env-flag-parsing-case-insensitive-2026-06-24)
+
+    @Test func normalizeFlagValueTrimsAndLowercases() {
+        #expect(HookRelay.normalizeFlagValue("OFF", default: "on") == "off")
+        #expect(HookRelay.normalizeFlagValue("Off", default: "on") == "off")
+        #expect(HookRelay.normalizeFlagValue(" off ", default: "on") == "off")
+        #expect(HookRelay.normalizeFlagValue("\toff\n", default: "on") == "off")
+        #expect(HookRelay.normalizeFlagValue("ON", default: "off") == "on")
+        #expect(HookRelay.normalizeFlagValue(" On ", default: "off") == "on")
+        #expect(HookRelay.normalizeFlagValue(nil, default: "on") == "on", "unset → default")
+        #expect(HookRelay.normalizeFlagValue(nil, default: "off") == "off")
+        #expect(HookRelay.normalizeFlagValue("", default: "on") == "", "explicit empty stays empty (not the default)")
+        #expect(HookRelay.normalizeFlagValue("Garbage", default: "on") == "garbage")
+    }
+
+    @Test func failClosedIsCaseAndWhitespaceInsensitive() {
+        // Default ON when unset; fail-OPEN ONLY for a normalized exact "off".
+        #expect(HookRelay.isFailClosed(fromRaw: nil) == true, "unset defaults fail-CLOSED")
+        #expect(HookRelay.isFailClosed(fromRaw: "off") == false)
+        #expect(HookRelay.isFailClosed(fromRaw: "OFF") == false, "uppercase OFF now means fail-open (was the foot-gun)")
+        #expect(HookRelay.isFailClosed(fromRaw: "Off") == false)
+        #expect(HookRelay.isFailClosed(fromRaw: " off ") == false, "stray whitespace tolerated")
+        #expect(HookRelay.isFailClosed(fromRaw: "on") == true)
+        #expect(HookRelay.isFailClosed(fromRaw: "ON") == true)
+        #expect(HookRelay.isFailClosed(fromRaw: "") == true, "empty → fail-CLOSED (safe side)")
+        #expect(HookRelay.isFailClosed(fromRaw: "garbage") == true, "garbage → fail-CLOSED (safe side)")
+    }
+
+    @Test func activationIsCaseAndWhitespaceInsensitive() {
+        // SENKANI_INTERCEPT or SENKANI_HOOK == "on" enables; both default off.
+        #expect(HookRelay.isActivated(intercept: "on", hook: nil) == true)
+        #expect(HookRelay.isActivated(intercept: "ON", hook: nil) == true)
+        #expect(HookRelay.isActivated(intercept: " On ", hook: nil) == true)
+        #expect(HookRelay.isActivated(intercept: nil, hook: "on") == true)
+        #expect(HookRelay.isActivated(intercept: nil, hook: "ON") == true)
+        #expect(HookRelay.isActivated(intercept: nil, hook: nil) == false, "both unset → off")
+        #expect(HookRelay.isActivated(intercept: "off", hook: "off") == false)
+        #expect(HookRelay.isActivated(intercept: " off ", hook: " off ") == false)
+        #expect(HookRelay.isActivated(intercept: "garbage", hook: "garbage") == false, "only exact 'on' activates")
+    }
+
+    // MARK: - read-timeout drop-log reason (forced-fail-open marker)
+    //   (hook-relay-forced-failopen-droplog-marker-2026-06-24)
+
+    @Test func readTimeoutDropReasonDistinguishesForcedFailOpen() {
+        // deny-capable + fail-closed → escalate to the human ask.
+        #expect(HookRelay.readTimeoutDropReason(denyCapable: true, failClosedEnabled: true)
+                == "read_timeout_failclosed_ask")
+        // deny-capable + fail-OPEN → forced downgrade; DISTINCT from a normal
+        // passthrough so an auditor can find auto-downgraded runs.
+        #expect(HookRelay.readTimeoutDropReason(denyCapable: true, failClosedEnabled: false)
+                == "read_timeout_failopen_forced")
+        // never-deny hook → the historical generic passthrough reason (unchanged),
+        // regardless of the FAILCLOSED posture.
+        #expect(HookRelay.readTimeoutDropReason(denyCapable: false, failClosedEnabled: true)
+                == "read_timeout")
+        #expect(HookRelay.readTimeoutDropReason(denyCapable: false, failClosedEnabled: false)
+                == "read_timeout")
+    }
 }

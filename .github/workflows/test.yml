@@ -9,6 +9,26 @@ on:
 permissions:
   contents: read
 
+# Decision (ci-release-smoke-concurrency-cancel-push-main-2026-06-27, acceptance #2):
+# this workflow INTENTIONALLY keeps the shared `github.ref` group + `cancel-in-progress` on
+# push:main — it does NOT adopt release-build-smoke.yml's per-`github.sha` push grouping. Why
+# the asymmetry is correct, not an oversight:
+#   - `tests` has NO path filter: every PR runs this identical debug build + full test matrix
+#     PRE-merge. So unlike release-build-smoke (whose push:main is its SOLE pre-merge release/
+#     exec-main coverage after the path filter), a cancelled intermediate-main-commit `tests`
+#     run loses EFFECTIVELY no coverage — each PR's content was tested against main-at-PR-time
+#     and the tip of main is always rebuilt + tested. The one narrow residual is a logical
+#     (semantic) merge conflict: main lands via true two-parent merge commits and GitHub
+#     computes `refs/pull/<n>/merge` at PR-event time, so a textually-clean intermediate merge
+#     commit's tree can differ from any tree CI tested and be masked at the tip — an accepted,
+#     bounded gap given the ~5-runner cap (running the full 5-chunk matrix per intermediate
+#     commit would massively oversubscribe it; cumulative breakage is still caught at the tip).
+#   - cancel-in-progress is actively BENEFICIAL here during a rapid drain: it avoids redundant
+#     full 5-job matrix rebuilds of soon-superseded commits against the constrained ~5
+#     concurrent-runner cap (see the chunk-count rationale below), keeping the pool free for
+#     the tip that matters.
+# Revisit only if `tests` ever gains a path filter that makes its push:main run a sole
+# pre-merge coverage backstop (the condition that made release-build-smoke load-bearing).
 concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true

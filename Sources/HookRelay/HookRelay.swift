@@ -111,6 +111,30 @@ public enum HookRelay {
         (denyCapable && failClosedEnabled) ? .failClosedAsk : .passthrough
     }
 
+    /// The drop-log reason for a deadline-driven read-timeout, given the hook's
+    /// deny-capability + the resolved posture. Pure so the reason vocabulary is
+    /// unit-tested without the live socket relay, and the single source of the
+    /// mapping (no drift between the action switch and the recorded reason):
+    ///   * deny-capable + fail-closed → `read_timeout_failclosed_ask` (the gate
+    ///     escalates to the human `ask`);
+    ///   * deny-capable + fail-OPEN   → `read_timeout_failopen_forced` (fail-open
+    ///     was explicitly in effect — e.g. forced by the unattended-autorun
+    ///     guard — so a deny-capable verdict was dropped; distinct from a normal
+    ///     passthrough so an auditor can find auto-downgraded runs);
+    ///   * never-deny hook            → `read_timeout` (the historical generic
+    ///     passthrough reason — unchanged).
+    /// The vocabulary is APPEND-ONLY: existing reasons keep their meaning so log
+    /// parsers do not break.
+    internal static func readTimeoutDropReason(denyCapable: Bool,
+                                               failClosedEnabled: Bool) -> String {
+        switch timeoutAction(denyCapable: denyCapable, failClosedEnabled: failClosedEnabled) {
+        case .failClosedAsk:
+            return "read_timeout_failclosed_ask"
+        case .passthrough:
+            return denyCapable ? "read_timeout_failopen_forced" : "read_timeout"
+        }
+    }
+
     /// CARVE 2: the poll deadline (ms) for connect + read. Deny-capable hooks
     /// get the larger `denyCapableTimeoutMs` (or the `override` parsed from
     /// `SENKANI_HOOK_DENY_DEADLINE_MS`); never-deny hooks keep the 5ms
@@ -185,13 +209,38 @@ public enum HookRelay {
         }
     }
 
+    /// Read a runtime env flag normalized for tolerant parsing: trim
+    /// surrounding whitespace + lowercase, so `OFF`/`Off`/`" off "` all read as
+    /// `off` and `ON`/`On`/`" on "` as `on`. Pure (takes the raw value) so the
+    /// posture predicates below are unit-testable without mutating the process
+    /// environment. Zero-dependency: Foundation string ops only (no Core import).
+    internal static func normalizeFlagValue(_ raw: String?, default def: String) -> String {
+        (raw ?? def).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    /// Activation: `SENKANI_INTERCEPT` OR `SENKANI_HOOK` reads as exactly `on`
+    /// (case-insensitive + whitespace-trimmed). Both default OFF when unset.
+    internal static func isActivated(intercept: String?, hook: String?) -> Bool {
+        normalizeFlagValue(intercept, default: "off") == "on"
+            || normalizeFlagValue(hook, default: "off") == "on"
+    }
+
+    /// `SENKANI_HOOK_FAILCLOSED` defaults ON (fail-closed); fail-OPEN ONLY when
+    /// the normalized value is exactly `off`. Every other value — including
+    /// garbage or an empty string — stays on the SAFE fail-closed side. This
+    /// closes the case-sensitivity foot-gun where `OFF`/`Off`/`" off "` used to
+    /// read as fail-CLOSED (the opposite of the operator's plain intent).
+    internal static func isFailClosed(fromRaw raw: String?) -> Bool {
+        normalizeFlagValue(raw, default: "on") != "off"
+    }
+
     /// Relay a hook event from stdin to the daemon socket and write the response to stdout.
     /// On ANY failure, emits `{}` (passthrough — never block the agent).
     public static func run() -> Int32 {
-        // Check activation env vars
-        let intercept = ProcessInfo.processInfo.environment["SENKANI_INTERCEPT"] ?? "off"
-        let hookEnabled = ProcessInfo.processInfo.environment["SENKANI_HOOK"] ?? "off"
-        guard intercept == "on" || hookEnabled == "on" else {
+        // Check activation env vars (case-insensitive + whitespace-trimmed).
+        let env = ProcessInfo.processInfo.environment
+        guard isActivated(intercept: env["SENKANI_INTERCEPT"],
+                          hook: env["SENKANI_HOOK"]) else {
             passthrough()
             return 0
         }
@@ -208,10 +257,8 @@ public enum HookRelay {
         // for deny-capable hooks) and the read-timeout action below.
         let eventName = hookEventName(from: inputData)
         let denyCapable = isDenyCapable(eventName)
-        let failClosedEnabled =
-            (ProcessInfo.processInfo.environment["SENKANI_HOOK_FAILCLOSED"] ?? "on") != "off"
-        let deadlineOverride = ProcessInfo.processInfo
-            .environment["SENKANI_HOOK_DENY_DEADLINE_MS"]
+        let failClosedEnabled = isFailClosed(fromRaw: env["SENKANI_HOOK_FAILCLOSED"])
+        let deadlineOverride = env["SENKANI_HOOK_DENY_DEADLINE_MS"]
             .flatMap { UInt32($0) }
 
         // Connect to daemon socket
@@ -299,12 +346,18 @@ public enum HookRelay {
             // deny-capable hook with fail-closed enabled, escalate to the
             // human gate (`permissionDecision:"ask"`) instead of silently
             // approving; otherwise keep the historical fail-open passthrough.
-            switch timeoutAction(denyCapable: denyCapable, failClosedEnabled: failClosedEnabled) {
+            // Record the posture-specific reason (pure helper = single source of
+            // the mapping, unit-tested), THEN emit the matching response.
+            let action = timeoutAction(denyCapable: denyCapable, failClosedEnabled: failClosedEnabled)
+            recordDrop(
+                reason: readTimeoutDropReason(denyCapable: denyCapable,
+                                              failClosedEnabled: failClosedEnabled),
+                hookEvent: eventName
+            )
+            switch action {
             case .failClosedAsk:
-                recordDrop(reason: "read_timeout_failclosed_ask", hookEvent: eventName)
                 writeFailClosedAsk(eventName: eventName)
             case .passthrough:
-                recordDrop(reason: "read_timeout", hookEvent: eventName)
                 passthrough()
             }
             return 0

@@ -1437,17 +1437,27 @@ struct Doctor: ParsableCommand {
         // in never-deny hooks) — the PreToolUse-specific line below is.
         let readTimeouts = summary.byReason["read_timeout"] ?? 0
         let failClosed = summary.failClosedFires
+        let forcedFailOpen = summary.forcedFailOpenFires
         let connectTimeouts = summary.byReason["connect_timeout"] ?? 0
-        printStatus(.pass, "  read_timeout: \(readTimeouts)  (deadline passthroughs, all hooks)")
+        printStatus(.pass, "  read_timeout: \(readTimeouts)  (deadline passthroughs)")
         results.passed += 1
         printStatus(.pass, "  read_timeout_failclosed_ask: \(failClosed)  (fail-closed fire rate)")
+        results.passed += 1
+        // Forced fail-open: a deny-capable verdict dropped on a read-timeout
+        // because SENKANI_HOOK_FAILCLOSED=off was in effect (e.g. the
+        // unattended-autorun guard). Surfaced separately so an auto-downgraded
+        // run leaves a queryable trace, not just an ephemeral stderr line.
+        printStatus(.pass, "  read_timeout_failopen_forced: \(forcedFailOpen)  (forced fail-open — FAILCLOSED=off)")
         results.passed += 1
         printStatus(.pass, "  connect_timeout: \(connectTimeouts)")
         results.passed += 1
 
-        // THE actionable gate-bypass line: a PreToolUse read_timeout is a
-        // deny-capable hook whose verdict was dropped past the deadline.
-        printStatus(.pass, "  PreToolUse read_timeout: \(summary.preToolUseReadTimeouts)  (gate-bypass indicator)")
+        // THE actionable gate-bypass line: a deny-capable hook whose verdict was
+        // dropped past the deadline. Counts the new distinct
+        // `read_timeout_failopen_forced` rows AND legacy `read_timeout`+PreToolUse
+        // rows (written before the distinct reason existed), so the indicator
+        // stays complete across both log formats.
+        printStatus(.pass, "  deny-capable gate bypassed: \(summary.denyCapableBypasses)  (gate-bypass indicator)")
         results.passed += 1
 
         // Top hook_event_names by count (top 3), count desc then name asc for a

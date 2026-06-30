@@ -117,40 +117,42 @@ struct PaneMetadataProbesTests {
 
     private func lsofRunner(stdout: String, exitCode: Int32 = 0) -> MockProcessRunner {
         let key = MockProcessRunner.key(
-            "/usr/sbin/lsof", ["-i", "-P", "-n", "-sTCP:LISTEN"]
+            "/usr/sbin/lsof", ["-i", "-P", "-n", "-sTCP:LISTEN", "-Fpn"]
         )
         return MockProcessRunner(canned: [key: ProcessRunResult(stdout: stdout, exitCode: exitCode)])
     }
 
-    @Test("port: mixed PIDs + address formats → only matching-PGID row's port")
+    @Test("port: field-output, mixed PIDs → only matching-PGID set's port")
     func portMatchingPgidOnly() {
-        // Header + three rows: PID 4242 (target) on *:8080, PID 9999 on
-        // 127.0.0.1:3000, PID 4242 (target) on [::1]:5173 — but we test the
-        // single-port case here by giving the target exactly one row.
+        // lsof `-Fpn` field output: `p<pid>` begins a process set, `n<name>`
+        // is each listening address under it. PID 4242 (target) on *:8080,
+        // PID 9999 on 127.0.0.1:3000.
         let fixture = """
-        COMMAND   PID USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME
-        node     4242 dev    23u  IPv4 0x0          0t0  TCP *:8080 (LISTEN)
-        ruby     9999 dev    11u  IPv4 0x1          0t0  TCP 127.0.0.1:3000 (LISTEN)
+        p4242
+        n*:8080
+        p9999
+        n127.0.0.1:3000
         """
         let runner = lsofRunner(stdout: fixture)
         let probes = PaneMetadataProbes(runner: runner, now: { self.fixedDate })
 
         #expect(probes.portProbe("4242") == 8080)
-        // Exact argv assertion for the port probe.
+        // Exact argv assertion for the port probe — now includes `-Fpn`.
         #expect(runner.calls.count == 1)
         #expect(runner.calls[0].executable == "/usr/sbin/lsof")
-        #expect(runner.calls[0].args == ["-i", "-P", "-n", "-sTCP:LISTEN"])
+        #expect(runner.calls[0].args == ["-i", "-P", "-n", "-sTCP:LISTEN", "-Fpn"])
     }
 
     @Test("port: a PGID with two ports → the LOWEST")
     func portLowestOfTwo() {
         // The HIGHER port (8080) is listed FIRST so the test discriminates
         // "lowest" from "first-seen": a first-seen-wins bug returns 8080 here
-        // and is killed by the `== 5173` assertion.
+        // and is killed by the `== 5173` assertion. Both addresses are `n`
+        // lines under the single `p4242` set.
         let fixture = """
-        COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
-        vite     4242 dev    21u  IPv4 0x1  0t0  TCP *:8080 (LISTEN)
-        vite     4242 dev    20u  IPv6 0x0  0t0  TCP [::1]:5173 (LISTEN)
+        p4242
+        n*:8080
+        n[::1]:5173
         """
         let runner = lsofRunner(stdout: fixture)
         let probes = PaneMetadataProbes(runner: runner, now: { self.fixedDate })
@@ -159,13 +161,13 @@ struct PaneMetadataProbesTests {
 
     @Test("port: a bare bracketed address with no port ([::1]) is not parsed as bogus port 1")
     func portBareBracketNoPortIgnored() {
-        // A NAME of bare "[::1]" (no :port) must be SKIPPED, not misread as port
+        // An `n` of bare "[::1]" (no :port) must be SKIPPED, not misread as port
         // 1 — which, being lower than any real port, would be wrongly selected
         // as the LOWEST. The same PGID also owns a real *:8080, which must win.
         let fixture = """
-        COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
-        weird    4242 dev    19u  IPv6 0x0  0t0  TCP [::1] (LISTEN)
-        node     4242 dev    23u  IPv4 0x1  0t0  TCP *:8080 (LISTEN)
+        p4242
+        n[::1]
+        n*:8080
         """
         let runner = lsofRunner(stdout: fixture)
         let probes = PaneMetadataProbes(runner: runner, now: { self.fixedDate })
@@ -175,8 +177,8 @@ struct PaneMetadataProbesTests {
     @Test("port: no matching PID → nil")
     func portNoMatchNil() {
         let fixture = """
-        COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
-        node     1111 dev    23u  IPv4 0x0  0t0  TCP *:8080 (LISTEN)
+        p1111
+        n*:8080
         """
         let runner = lsofRunner(stdout: fixture)
         let probes = PaneMetadataProbes(runner: runner, now: { self.fixedDate })
@@ -190,13 +192,41 @@ struct PaneMetadataProbesTests {
         #expect(probes.portProbe("4242") == nil)
     }
 
-    @Test("port: header-row tolerance — header alone yields nil, never a parse crash")
-    func portHeaderToleranceNil() {
-        // Only the header row (no data). The header's PID column is "PID",
-        // not an Int, so it is skipped — and there is no matching data row.
-        let runner = lsofRunner(stdout: "COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME\n")
+    @Test("port: a spaced-COMMAND listener (broke the columnar parse) is found in field output")
+    func portSpacedCommandFoundInFieldOutput() {
+        // Regression for the columnar-parse fragility this change fixes: a
+        // listener whose COMMAND has an embedded space in its first 9 chars
+        // (real macOS examples "Core Audi", "Keychain ", "System Se") shifted
+        // the default lsof columns so its PID landed in the wrong field and the
+        // row was silently dropped. Field output (`-Fpn`) has NO COMMAND column,
+        // so the very same listener — represented here by its `p<pid>`/`n<name>`
+        // fields — parses cleanly and its port IS found.
+        let fixture = """
+        p4242
+        n*:8080
+        """
+        let runner = lsofRunner(stdout: fixture)
         let probes = PaneMetadataProbes(runner: runner, now: { self.fixedDate })
-        #expect(probes.portProbe("PID") == nil)
+        #expect(probes.portProbe("4242") == 8080)
+    }
+
+    @Test("port: stray non-p/n field lines are ignored, never a parse crash")
+    func portStrayFieldLinesIgnored() {
+        // Defensive: even though `-Fpn` emits only `p`/`n`, an unexpected field
+        // line (or a blank) must be ignored, and a real `n` under the matching
+        // `p` still resolves. The `p9999` set's address must NOT leak into the
+        // `p4242` match (process-set tracking).
+        let fixture = """
+        p4242
+        f23
+        n*:8080
+        p9999
+        n127.0.0.1:3000
+        """
+        let runner = lsofRunner(stdout: fixture)
+        let probes = PaneMetadataProbes(runner: runner, now: { self.fixedDate })
+        #expect(probes.portProbe("4242") == 8080)
+        #expect(probes.portProbe("9999") == 3000)
     }
 
     // MARK: - PR (gh, which-degrade + TTL)
@@ -342,9 +372,9 @@ struct PaneMetadataProbesTests {
         let runner = MockProcessRunner(canned: [
             MockProcessRunner.key("/usr/bin/git", ["-C", wd, "rev-parse", "--abbrev-ref", "HEAD"]):
                 ProcessRunResult(stdout: branch + "\n", exitCode: 0),
-            MockProcessRunner.key("/usr/sbin/lsof", ["-i", "-P", "-n", "-sTCP:LISTEN"]):
+            MockProcessRunner.key("/usr/sbin/lsof", ["-i", "-P", "-n", "-sTCP:LISTEN", "-Fpn"]):
                 ProcessRunResult(
-                    stdout: "node \(pgid) dev 23u IPv4 0x0 0t0 TCP *:8080 (LISTEN)\n",
+                    stdout: "p\(pgid)\nn*:8080\n",
                     exitCode: 0
                 ),
             Self.whichGhKey: ProcessRunResult(stdout: Self.ghPath, exitCode: 0),

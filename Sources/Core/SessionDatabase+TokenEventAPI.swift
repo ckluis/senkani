@@ -330,9 +330,9 @@ extension SessionDatabase {
     /// cursor order. See `TokenEventStore.scheduleEndEventsSince`.
     public func scheduleEndEventsSince(
         afterId: Int64, limit: Int
-    ) -> [(id: Int64, sessionId: String, scheduleId: String, summary: String)] {
+    ) -> [(id: Int64, sessionId: String, scheduleId: String, summary: String, timestamp: Double)] {
         tokenEventStore.scheduleEndEventsSince(afterId: afterId, limit: limit)
-            .map { ($0.id, $0.sessionId, $0.scheduleId, $0.summary) }
+            .map { ($0.id, $0.sessionId, $0.scheduleId, $0.summary, $0.timestamp) }
     }
 
     /// Read the schedule-end reconcile high-water cursor (returns 0 if

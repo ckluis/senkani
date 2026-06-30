@@ -67,6 +67,33 @@ struct HookRelayDropSummaryTests {
         #expect(s.failClosedFires == 1)
     }
 
+    // MARK: - forced-fail-open marker
+    //   (hook-relay-forced-failopen-droplog-marker-2026-06-24)
+
+    @Test("forced-fail-open rows count via forcedFailOpenFires + complete the gate-bypass tally")
+    func forcedFailOpenCounts() {
+        let ts = Self.iso(Self.now)
+        let contents = [
+            "\(ts)\tread_timeout_failopen_forced\tPreToolUse",  // new distinct reason
+            "\(ts)\tread_timeout_failopen_forced\tPreToolUse",
+            "\(ts)\tread_timeout\tPreToolUse",                  // LEGACY pre-marker bypass row
+            "\(ts)\tread_timeout\tPostToolUse",                 // never-deny passthrough (not a bypass)
+            "\(ts)\tread_timeout_failclosed_ask\tPreToolUse",   // fail-closed escalation (not a bypass)
+        ].joined(separator: "\n")
+
+        let s = HookRelayDropSummary.summarize(contents: contents, now: Self.now)
+
+        #expect(s.byReason["read_timeout_failopen_forced"] == 2)
+        #expect(s.forcedFailOpenFires == 2)
+        // Legacy bypass rows (read_timeout + PreToolUse) still counted here.
+        #expect(s.preToolUseReadTimeouts == 1)
+        // The complete deny-capable gate-bypass tally spans both log formats:
+        // 2 forced-fail-open + 1 legacy PreToolUse read_timeout = 3. The
+        // never-deny read_timeout and the failclosed_ask are NOT bypasses.
+        #expect(s.denyCapableBypasses == 3)
+        #expect(s.failClosedFires == 1)
+    }
+
     // MARK: - malformed lines are skipped, not fatal
 
     @Test("malformed lines (no tabs / 2 fields) are SKIPPED; neighbors still counted")

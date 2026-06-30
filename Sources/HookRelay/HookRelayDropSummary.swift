@@ -76,6 +76,21 @@ public struct HookRelayDropSummary: Equatable, Sendable {
     /// All-time count of `read_timeout_failclosed_ask` rows — the fail-closed
     /// escalation ("ask the human gate") fire rate.
     public var failClosedFires: Int { byReason["read_timeout_failclosed_ask"] ?? 0 }
+
+    /// All-time count of `read_timeout_failopen_forced` rows — a deny-capable
+    /// hook (PreToolUse) whose verdict was dropped on a read-timeout BECAUSE
+    /// fail-open was explicitly in effect (`SENKANI_HOOK_FAILCLOSED=off`, e.g.
+    /// forced by the unattended-autorun guard). This is the post-marker name
+    /// for what older logs recorded as a plain `read_timeout` on `PreToolUse`
+    /// (still surfaced via `preToolUseReadTimeouts`), so an auditor can tell an
+    /// auto-downgraded overnight run apart from a normal/default passthrough.
+    public var forcedFailOpenFires: Int { byReason["read_timeout_failopen_forced"] ?? 0 }
+
+    /// The complete deny-capable gate-bypass count across log formats: the new
+    /// distinct `read_timeout_failopen_forced` rows PLUS legacy
+    /// `read_timeout`+`PreToolUse` rows written before the distinct reason
+    /// existed. Both denote a deny-capable verdict dropped past the deadline.
+    public var denyCapableBypasses: Int { forcedFailOpenFires + preToolUseReadTimeouts }
 }
 
 extension HookRelayDropSummary {

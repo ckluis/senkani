@@ -349,3 +349,129 @@ struct ScheduleEndReconcilerLiveTests {
         #expect(spy.delivered.count == 1, "still exactly ONE banner — no double-deliver across push + replay")
     }
 }
+
+// MARK: - Cold-start recency floor (LEG B; recency-floor decision 2026-06-22)
+//   Kleppmann / Norman / Sutherland. The floor suppresses a relaunch banner
+//   storm on the first run past a fresh/zero cursor, COLD-START ONLY.
+
+@Suite("ScheduleEndReconciler — cold-start recency floor")
+struct ScheduleEndReconcilerFloorTests {
+
+    // Seeded rows are stamped at ~real-now by recordEnd. We drive the floor by
+    // injecting the reconcile `now`: a `now` 48h in the FUTURE makes every
+    // ~now row appear >24h old (floored); a `now` at the seed time keeps them
+    // recent (delivered). The 48h/24h margins dominate any ms seed-time drift.
+    private static let floor24h: TimeInterval = 24 * 3600
+
+    // (1) cold cursor + rows older than the floor → SILENTLY floored, yet the
+    //     cursor still advances past them (consumed once, never re-flooding).
+    @Test("cold start: rows older than the floor are skipped; cursor still advances; no re-flood")
+    func coldStartFloorsOldRows() {
+        let (db, _) = makeTempDB()
+        seedEnd(db, taskName: "a", runId: "r1")
+        seedEnd(db, taskName: "b", runId: "r2")
+        let ref = Date()
+        let rec = RecordingDeliver()
+
+        let result = ScheduleEndReconciler.reconcileToHead(
+            db: db, deliver: rec.deliver,
+            now: { ref.addingTimeInterval(48 * 3600) },   // 48h future → seeds look >24h old
+            firstRunFloor: Self.floor24h
+        )
+
+        #expect(result.scanned == 2, "both rows pulled")
+        #expect(result.delivered == 0, "both floored — no relaunch banner storm")
+        #expect(result.skipped == 2)
+        #expect(rec.callCount == 0, "deliver never invoked for a floored row")
+        #expect(result.newCursor > 0, "cursor advanced PAST the floored rows (consumed once)")
+
+        // Anti-re-flood: a second drain (cursor now non-zero → floor disarms)
+        // scans nothing old — the floored rows never re-flood.
+        let rerun = ScheduleEndReconciler.reconcileToHead(
+            db: db, deliver: rec.deliver, now: { ref }, firstRunFloor: Self.floor24h
+        )
+        #expect(rerun.scanned == 0, "no re-flood: cursor is already past the floored rows")
+    }
+
+    // (2) cold cursor + rows within the floor window → delivered normally.
+    @Test("cold start: rows within the floor window deliver normally")
+    func coldStartDeliversRecentRows() {
+        let (db, _) = makeTempDB()
+        seedEnd(db, taskName: "a", runId: "r1")
+        seedEnd(db, taskName: "b", runId: "r2")
+        let ref = Date()
+        let rec = RecordingDeliver()
+
+        let result = ScheduleEndReconciler.reconcileToHead(
+            db: db, deliver: rec.deliver,
+            now: { ref },                 // seeds are ~now → within 24h → delivered
+            firstRunFloor: Self.floor24h
+        )
+        #expect(result.delivered == 2, "recent rows are NOT floored")
+        #expect(result.skipped == 0)
+    }
+
+    // (3) established (non-zero) cursor applies NO floor — the cursor==0
+    //     keystone: byte-identical to the pre-floor behavior even with a
+    //     far-future now + a floor set.
+    @Test("established cursor: the floor does NOT arm (cursor==0 keystone)")
+    func establishedCursorIgnoresFloor() {
+        let (db, _) = makeTempDB()
+        seedEnd(db, taskName: "a", runId: "r1")
+        let rec = RecordingDeliver()
+        // First drain (no floor) advances the cursor to a NON-zero head.
+        _ = ScheduleEndReconciler.reconcileToHead(db: db, deliver: rec.deliver)
+        #expect(rec.callCount == 1)
+
+        // A new row arrives; reconcile WITH a floor + far-future now. Because the
+        // cursor is now non-zero the floor does NOT arm → the row delivers (it
+        // would have been floored on a cold cursor).
+        seedEnd(db, taskName: "b", runId: "r2")
+        let result = ScheduleEndReconciler.reconcileToHead(
+            db: db, deliver: rec.deliver,
+            now: { Date().addingTimeInterval(48 * 3600) },
+            firstRunFloor: Self.floor24h
+        )
+        #expect(result.delivered == 1, "established cursor ⇒ no floor ⇒ the row delivers")
+        #expect(result.skipped == 0)
+    }
+
+    // (4) multi-batch cold history (limit 1) stays floored across ALL batches —
+    //     the arming decision is FROZEN at reconcileToHead entry, so batch 2+
+    //     (whose per-pass cursor is non-zero) do NOT un-floor.
+    @Test("multi-batch cold history stays floored (arming frozen, not re-derived per pass)")
+    func multiBatchColdStaysFloored() {
+        let (db, _) = makeTempDB()
+        seedEnd(db, taskName: "a", runId: "r1")
+        seedEnd(db, taskName: "b", runId: "r2")
+        seedEnd(db, taskName: "c", runId: "r3")
+        let ref = Date()
+        let rec = RecordingDeliver()
+
+        let result = ScheduleEndReconciler.reconcileToHead(
+            db: db, deliver: rec.deliver,
+            now: { ref.addingTimeInterval(48 * 3600) },
+            limit: 1,                                  // force one row per batch
+            firstRunFloor: Self.floor24h
+        )
+        #expect(result.scanned == 3, "all three drained across 3 batches")
+        #expect(result.delivered == 0, "ALL floored — a re-derived per-batch gate would deliver batches 2+")
+        #expect(result.skipped == 3)
+    }
+
+    // (5) firstRunFloor nil (the default) ⇒ NO floor, even on a cold cursor with
+    //     a far-future now → byte-identical to the pre-floor drain.
+    @Test("default (no firstRunFloor) delivers all rows — the floor is strictly opt-in")
+    func nilFloorDeliversAll() {
+        let (db, _) = makeTempDB()
+        seedEnd(db, taskName: "a", runId: "r1")
+        seedEnd(db, taskName: "b", runId: "r2")
+        let rec = RecordingDeliver()
+        let result = ScheduleEndReconciler.reconcileToHead(
+            db: db, deliver: rec.deliver,
+            now: { Date().addingTimeInterval(48 * 3600) }   // far future, but NO floor set
+        )
+        #expect(result.delivered == 2, "no floor ⇒ every row delivers regardless of age")
+        #expect(result.skipped == 0)
+    }
+}

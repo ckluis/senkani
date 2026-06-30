@@ -41,10 +41,10 @@ public final class PaneMetadataProbes: @unchecked Sendable {
     // MARK: - Port probe (lsof)
 
     /// `portProbe` — input is the pane shell's PGID (as a String). Runs
-    /// `/usr/sbin/lsof -i -P -n -sTCP:LISTEN` and returns the LOWEST TCP
-    /// listening port owned by a process whose PID column equals the probe
-    /// key, or `nil` if none. lsof exits `1` when there are no listeners at
-    /// all — treated as "no port", not an error.
+    /// `/usr/sbin/lsof -i -P -n -sTCP:LISTEN -Fpn` (field output) and returns
+    /// the LOWEST TCP listening port owned by a process whose PID equals the
+    /// probe key, or `nil` if none. lsof exits `1` when there are no listeners
+    /// at all — treated as "no port", not an error.
     public var portProbe: (String) -> Int? {
         { [weak self] probeKey in
             self?.resolvePort(pgid: probeKey)
@@ -54,54 +54,57 @@ public final class PaneMetadataProbes: @unchecked Sendable {
     private func resolvePort(pgid: String) -> Int? {
         let result = runner.run(
             executable: "/usr/sbin/lsof",
-            args: ["-i", "-P", "-n", "-sTCP:LISTEN"]
+            // Field output (`-F`): one field per line, each prefixed by a type
+            // char — `p<pid>` (process-level, begins a process set) and
+            // `n<name>` (file-level address). This replaces the default
+            // columnar layout, whose PID-at-field-index-1 assumption broke on a
+            // listener whose COMMAND has an embedded space in its first 9 chars:
+            // macOS lsof truncates COMMAND to 9 chars but keeps spaces unquoted
+            // (real examples "Core Audi", "Keychain ", "System Se"), shifting
+            // every column so the PID parse dropped the row and that listener's
+            // port was silently missed. Field output has no COMMAND column and
+            // no header row, so there is no column-index or spaced-COMMAND
+            // ambiguity. `-P`/`-n` keep ports/hosts numeric.
+            args: ["-i", "-P", "-n", "-sTCP:LISTEN", "-Fpn"]
         )
         // lsof exits non-zero (1) when there are simply no listeners. That is
         // not an error for us — there is just no port. Any non-zero exit ⇒ nil.
         guard result.exitCode == 0 else { return nil }
 
         var lowest: Int? = nil
+        // Walk the field lines, tracking the current process set. A `p<pid>`
+        // line begins a set; its `n<name>` lines (the listening addresses)
+        // belong to it until the next `p`. Only addresses under a PID that
+        // equals the probe PGID are considered.
+        var currentMatches = false
         for line in result.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
-            // lsof default columns:
-            //   COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME
-            // PID is field index 1; NAME (the address) is the LAST field.
-            let fields = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
-            guard fields.count >= 2 else { continue }
-
-            let pidField = String(fields[1])
-            // Header tolerance: the header row's PID column is the literal
-            // "PID", not an Int — skip any row whose PID field isn't an Int.
-            guard Int(pidField) != nil else { continue }
-            guard pidField == pgid else { continue }
-
-            // NAME is the address column, e.g. "*:8080", "127.0.0.1:3000",
-            // "[::1]:5173" — and with `-sTCP:LISTEN` lsof appends a trailing
-            // " (LISTEN)" annotation, so a naive "last field" grabs "(LISTEN)".
-            // Scan the columns from the NAME column onward (index 8 in the
-            // default 9-column layout) and take the first token that yields a
-            // valid port after its FINAL ":" (drops the "(LISTEN)" suffix and
-            // is robust to the IPv6 "[::1]:5173" form, whose final colon
-            // precedes the port). Guard the start index in case a row is
-            // shorter than the default layout.
-            let nameStart = min(8, fields.count - 1)
-            var rowPort: Int? = nil
-            for token in fields[nameStart...] {
-                guard let colon = token.lastIndex(of: ":") else { continue }
-                let after = token[token.index(after: colon)...]
-                // The port is the WHOLE remainder after the final colon — a
-                // strict all-digits check, so a bare bracketed address carrying
-                // no port ("[::1]" ⇒ remainder "1]") is rejected rather than
-                // yielding a bogus port 1. Every `-sTCP:LISTEN` socket NAME ends
-                // in ":<port>", so a real listener still parses.
+            guard let prefix = line.first else { continue }
+            let value = line.dropFirst()
+            switch prefix {
+            case "p":
+                // New process set — match its PID against the probe PGID. A
+                // non-numeric `p` value (none expected from `-Fpn`) simply
+                // won't equal the numeric PGID, so no special header handling
+                // is needed (field output has no header row).
+                currentMatches = (value == Substring(pgid))
+            case "n":
+                guard currentMatches else { continue }
+                // NAME is the address, e.g. "*:8080", "127.0.0.1:3000",
+                // "[::1]:5173". The port is the strict all-digits remainder
+                // after the FINAL ":" — robust to the IPv6 bracketed form
+                // (whose final colon precedes the port), and a bare "[::1]"
+                // with no port (remainder "1]") is rejected rather than
+                // misread as a bogus port 1.
+                guard let colon = value.lastIndex(of: ":") else { continue }
+                let after = value[value.index(after: colon)...]
                 guard !after.isEmpty, after.allSatisfy({ $0.isNumber }),
                       let port = Int(after) else { continue }
-                rowPort = port
-                break
-            }
-            guard let port = rowPort else { continue }
-
-            if lowest == nil || port < lowest! {
-                lowest = port
+                if lowest == nil || port < lowest! {
+                    lowest = port
+                }
+            default:
+                // `-Fpn` emits only `p` and `n`; ignore anything else defensively.
+                continue
             }
         }
         return lowest

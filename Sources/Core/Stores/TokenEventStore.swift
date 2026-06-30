@@ -1725,6 +1725,12 @@ final class TokenEventStore: @unchecked Sendable {
         let sessionId: String
         let scheduleId: String
         let summary: String
+        /// Epoch seconds from `token_events.timestamp` (already written +
+        /// indexed — NO migration). Surfaced for the cold-start recency floor
+        /// in `ScheduleEndReconciler`. A NULL/absent stamp reads as 0 (epoch
+        /// 1970) so an unstampable row is treated as old → floored (silent) on
+        /// a cold start, never replayed as a stale relaunch banner.
+        let timestamp: Double
     }
 
     /// Pull `schedule_end` `token_events` rows with `id > afterId`, oldest
@@ -1749,7 +1755,7 @@ final class TokenEventStore: @unchecked Sendable {
         return parent.queue.sync { () -> [ScheduleEndRow] in
             guard let db = parent.db else { return [] }
             let sql = """
-                SELECT id, session_id, command
+                SELECT id, session_id, command, timestamp
                 FROM token_events
                 WHERE source = ? AND feature = ? AND id > ?
                 ORDER BY id ASC
@@ -1770,11 +1776,15 @@ final class TokenEventStore: @unchecked Sendable {
                     ? "" : String(cString: sqlite3_column_text(stmt, 1))
                 let command: String = sqlite3_column_type(stmt, 2) == SQLITE_NULL
                     ? "" : String(cString: sqlite3_column_text(stmt, 2))
+                // Epoch seconds; NULL → 0 (treated as old → floored on cold start).
+                let timestamp = sqlite3_column_type(stmt, 3) == SQLITE_NULL
+                    ? 0.0 : sqlite3_column_double(stmt, 3)
                 let (scheduleId, summary) = Self.reconstructScheduleEnd(
                     command: command, sessionId: sessionId
                 )
                 rows.append(ScheduleEndRow(
-                    id: id, sessionId: sessionId, scheduleId: scheduleId, summary: summary
+                    id: id, sessionId: sessionId, scheduleId: scheduleId, summary: summary,
+                    timestamp: timestamp
                 ))
             }
             return rows

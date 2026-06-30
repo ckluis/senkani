@@ -89,10 +89,31 @@ public enum ScheduleEndReconciler {
         ledgerPath: String? = nil,
         deliver: (_ scheduleId: String, _ summary: String, _ sessionId: String, _ ledgerPath: String?) -> Bool = defaultDeliver,
         now: () -> Date = { Date() },
-        limit: Int = 200
+        limit: Int = 200,
+        firstRunFloor: TimeInterval? = nil,
+        floorArmed: Bool? = nil
     ) -> ReconcileResult {
         let cursor = db.scheduleEndReconcileCursor()
         let rows = db.scheduleEndEventsSince(afterId: cursor, limit: limit)
+
+        // Cold-start recency floor (operator-ratified 2026-06-22). On the FIRST
+        // run past a fresh/zero cursor, a never-advanced cursor would replay the
+        // ENTIRE schedule_end history and storm the operator with relaunch
+        // banners. The floor suppresses delivery of rows older than
+        // `firstRunFloor` — but ONLY on the cold-start branch. ARMED iff the
+        // cursor was 0: an established (non-zero) cursor applies NO floor and
+        // runs byte-identical to before, so the floor is structurally incapable
+        // of dropping a row an established cursor would legitimately replay.
+        // `reconcileToHead` freezes the arming decision at its entry and threads
+        // it in via `floorArmed` (a multi-batch cold history would otherwise
+        // un-floor after batch 1 advances the cursor to non-zero); a standalone
+        // call derives the gate from its own cursor read. `firstRunFloor == nil`
+        // (the default) ⇒ no floor regardless of arming → existing callers and
+        // tests are byte-unchanged.
+        let armed = floorArmed ?? (cursor == 0)
+        let floorEpoch: Double? = (armed && firstRunFloor != nil)
+            ? now().timeIntervalSince1970 - firstRunFloor!
+            : nil
 
         var delivered = 0
         var skipped = 0
@@ -100,6 +121,15 @@ public enum ScheduleEndReconciler {
             // No session_id ⇒ nothing to dedup on; skip (don't fire an
             // undedupable banner) but let the cursor still pass it.
             if row.sessionId.isEmpty {
+                skipped += 1
+                continue
+            }
+            // Cold-start floor: a row older than the floor is SILENTLY skipped
+            // (never delivered — a >24h-old relaunch banner has no value; the DB
+            // row + schedule history remain the record). It stays IN the batch,
+            // so the `rows.last.id` advance below still carries the cursor past
+            // it — consumed exactly once, never re-flooding on the next launch.
+            if let floor = floorEpoch, row.timestamp < floor {
                 skipped += 1
                 continue
             }
@@ -137,17 +167,25 @@ public enum ScheduleEndReconciler {
         deliver: (_ scheduleId: String, _ summary: String, _ sessionId: String, _ ledgerPath: String?) -> Bool = defaultDeliver,
         now: () -> Date = { Date() },
         limit: Int = 200,
-        maxBatches: Int = 1000
+        maxBatches: Int = 1000,
+        firstRunFloor: TimeInterval? = nil
     ) -> ReconcileResult {
         var totalScanned = 0
         var totalDelivered = 0
         var totalSkipped = 0
         var lastCursor = db.scheduleEndReconcileCursor()
+        // Freeze the cold-start arming decision ONCE, here at entry: the floor
+        // applies for the WHOLE drain iff the cursor was 0 at the start. Threaded
+        // into every `reconcileOnce` pass so a multi-batch cold history does NOT
+        // un-floor after batch 1 advances the cursor to non-zero (re-deriving
+        // the gate per-pass would let batches 2+ flood un-floored).
+        let floorArmed = (lastCursor == 0)
         var batches = 0
 
         while batches < maxBatches {
             let result = reconcileOnce(
-                db: db, ledgerPath: ledgerPath, deliver: deliver, now: now, limit: limit
+                db: db, ledgerPath: ledgerPath, deliver: deliver, now: now, limit: limit,
+                firstRunFloor: firstRunFloor, floorArmed: floorArmed
             )
             lastCursor = result.newCursor
             if result.scanned == 0 { break }

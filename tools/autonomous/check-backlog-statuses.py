@@ -4,11 +4,21 @@ check-backlog-statuses — validate that every per-item file in
 `spec/autonomous/backlog/` uses a status value the /senkani-autonomous
 loop recognizes.
 
-The loop's pick precedence at SKILL.md Step 3 matches only:
+The closed status taxonomy (PROCESS.md "Status taxonomy is closed") is NINE
+values. Seven are pick-eligible at SKILL.md Step 3:
 
     open | blocked | manual | manual_ready | in_progress | done | skipped
 
-Files using any other status (e.g. `ready`, `ready_to_build`, `wip`)
+Two more are valid but intentionally NON-pickable convergence/burndown statuses:
+
+    retired | queued_for_console
+
+(`retired` = reversible GC, prior status recorded in a `## GC note`;
+`queued_for_console` = routed to the attended operator console. Both stay in
+`backlog/` and preserve their prior status's companion flags — see
+FLAG_PRESERVING_STATUSES below.)
+
+Files using any value OUTSIDE these nine (e.g. `ready`, `ready_to_build`, `wip`)
 sit invisible to all four round modes — they are never picked, never
 groomed, never closed. The 2026-05-13 trigger:
 `onboarding-milestone-6-workstream-create-discoverability-2026-05-13`
@@ -61,7 +71,25 @@ VALID_STATUSES = {
     "in_progress",
     "done",
     "skipped",
+    # Convergence/burndown statuses (PROCESS.md `## retired and queued_for_console`).
+    # Both are NON-terminal, non-pickable, and stay in backlog/. `retired` is a
+    # reversible GC status that records its prior status in a `## GC note`;
+    # `queued_for_console` marks an item routed to the attended operator console.
+    # The taxonomy is closed at these nine — see PROCESS.md "Status taxonomy is closed."
+    "retired",
+    "queued_for_console",
 }
+
+# `retired` and `queued_for_console` legitimately PRESERVE the companion flags
+# (groomable / decomposable / scope_groomable / groomed / decomposed) of their prior
+# status: `retired` is reversible (the prior status + its flags are restored on
+# un-retire), and `queued_for_console` is en route back to a pickable status. So the
+# per-file companion-flag invariants in `check_file` are SKIPPED for these two —
+# checking them would flag a legitimately preserved flag (e.g. a retired-while-
+# decomposed item carrying `decomposed:` + `decomposable: true`). The repo-wide
+# checks (dangling `blocked_by`, decomposed-parent closure, completed-evidence) still
+# apply, since they run in separate passes outside `check_file`.
+FLAG_PRESERVING_STATUSES = {"retired", "queued_for_console"}
 
 GROOMED_DATE_VALID_STATUSES = {"manual_ready", "done", "skipped", "in_progress"}
 DECOMPOSED_DATE_VALID_STATUSES = {"manual_ready", "done", "skipped", "in_progress"}
@@ -116,6 +144,14 @@ def check_file(path: Path) -> list[str]:
     elif status not in VALID_STATUSES:
         valid = " | ".join(sorted(VALID_STATUSES))
         findings.append(f"status: {status!r} is not in the taxonomy ({valid})")
+
+    if status in FLAG_PRESERVING_STATUSES:
+        # `retired` / `queued_for_console` preserve their prior status's companion
+        # flags for audit + reversibility — skip the per-file companion-flag
+        # invariants below. The repo-wide checks (dangling `blocked_by`,
+        # decomposed-parent closure, completed-evidence) run in separate passes and
+        # still apply to these items.
+        return findings
 
     groomable = fm.get("groomable", "").lower() == "true"
     decomposable = fm.get("decomposable", "").lower() == "true"

@@ -289,5 +289,60 @@ class DanglingBlockedByTests(unittest.TestCase):
         self.assertEqual(rc, 0, msg=f"stdout={stdout!r} stderr={stderr!r}")
 
 
+class ConvergenceStatusTests(unittest.TestCase):
+    """`retired` + `queued_for_console` are valid (non-pickable) statuses that
+    preserve their prior status's companion flags. Motivator:
+    phase-t1-egress-proxy-mitm-ca-install (retired, carries decomposable + decomposed)
+    was a recurring false-positive before the taxonomy + FLAG_PRESERVING_STATUSES fix."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.backlog = self.root / "backlog"
+        self.backlog.mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_retired_status_is_valid(self) -> None:
+        write_item(self.backlog / "r.md", "r", "retired")
+        rc, stdout, stderr = run_check(self.backlog)
+        self.assertEqual(rc, 0, msg=f"stdout={stdout!r} stderr={stderr!r}")
+        self.assertNotIn("not in the taxonomy", stdout)
+
+    def test_queued_for_console_status_is_valid(self) -> None:
+        write_item(self.backlog / "q.md", "q", "queued_for_console")
+        rc, stdout, stderr = run_check(self.backlog)
+        self.assertEqual(rc, 0, msg=f"stdout={stdout!r} stderr={stderr!r}")
+        self.assertNotIn("not in the taxonomy", stdout)
+
+    def test_retired_preserves_decomposable_and_decomposed_flags(self) -> None:
+        # The phase-t1 case: a retired-while-decomposed item legitimately keeps
+        # `decomposable: true` + `decomposed:` from its pre-retirement state.
+        write_item(
+            self.backlog / "rt.md", "rt", "retired",
+            "decomposable: true\ndecomposed: 2026-05-31\n",
+        )
+        rc, stdout, stderr = run_check(self.backlog)
+        self.assertEqual(rc, 0, msg=f"stdout={stdout!r} stderr={stderr!r}")
+        self.assertNotIn("decomposable: true", stdout)
+        self.assertNotIn("decomposed:", stdout)
+
+    def test_queued_for_console_preserves_groom_flags(self) -> None:
+        write_item(
+            self.backlog / "qg.md", "qg", "queued_for_console",
+            "groomable: true\nscope_groomable: true\ngroomed: 2026-05-01\n",
+        )
+        rc, stdout, stderr = run_check(self.backlog)
+        self.assertEqual(rc, 0, msg=f"stdout={stdout!r} stderr={stderr!r}")
+
+    def test_invalid_status_still_flagged(self) -> None:
+        # Regression guard: the taxonomy stays closed — `ready` is still rejected.
+        write_item(self.backlog / "bad.md", "bad", "ready")
+        rc, stdout, stderr = run_check(self.backlog)
+        self.assertEqual(rc, 1, msg=f"stdout={stdout!r} stderr={stderr!r}")
+        self.assertIn("not in the taxonomy", stdout)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

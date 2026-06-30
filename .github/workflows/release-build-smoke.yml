@@ -64,8 +64,26 @@ on:
 permissions:
   contents: read
 
+# Per-commit backstop on push:main (ci-release-smoke-concurrency-cancel-push-main-2026-06-27).
+#
+# This run is now load-bearing: the PR path filter above (Package.swift / Package.resolved
+# only) moved release-mode (`-O` / WMO) + executable-main compile coverage OFF source-only PRs
+# and onto this `push: branches: [main]` backstop. So each landed main commit deserves its OWN
+# completed release build — a cancelled intermediate-commit run means a release-only source
+# breakage on that commit goes uncaught until the tip.
+#
+# Keying the PUSH group on `github.sha` gives every main commit its own concurrency group, so
+# two (or three+) merges landing <13 min apart never cancel — and never pending-supersede —
+# each other's release run. Worst case is more concurrent runner minutes (main pushes are
+# infrequent merges), NEVER fewer-than-intended backstop builds.
+#
+# PR behavior is UNCHANGED: for `pull_request`, `github.ref` is `refs/pull/<n>/merge`, so the
+# group is per-PR and `cancel-in-progress: true` still supersedes a stale run when a PR branch
+# is force-pushed (the correct, desired behavior for PR refs). The `&& ... ||` form is the
+# standard Actions ternary; `github.sha` is always a non-empty 40-char hex string, so it is
+# never the falsy operand that would make the idiom fall through to `github.ref`.
 concurrency:
-  group: release-build-smoke-${{ github.ref }}
+  group: release-build-smoke-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 jobs:

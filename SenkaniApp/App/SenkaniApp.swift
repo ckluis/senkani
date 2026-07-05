@@ -1,6 +1,7 @@
 import SwiftUI
 import Core
 import MCPServer
+import UserNotifications
 
 struct SenkaniGUI: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -50,7 +51,20 @@ struct SenkaniGUI: App {
         // OS layer silently swallows the banner — the in-process
         // router is still installed correctly.
         NotificationBootstrap.bootstrap()
-        NotificationBootstrap.requestAuthorizationIfNeeded()
+        // LEG-B: present notifications as banners even when SenkaniApp is
+        // frontmost (without a delegate, foreground UN notifications go
+        // silently to Notification Center).
+        UNUserNotificationCenter.current().delegate = NotifPresenter.shared
+        // LEG-B WIRE — schedule-end reconcile-on-launch drain. Runs AFTER
+        // bootstrap() installs the router (closes the router-nil race) AND from
+        // inside the authorization completion, so it fires only once the auth
+        // decision has resolved — draining pre-grant would burn the reconcile
+        // cursor + delivered-ledger for <24h rows while the OS still can't
+        // present them (first-launch banners lost, never retried). When auth is
+        // already determined the completion fires immediately.
+        NotificationBootstrap.requestAuthorizationIfNeeded {
+            Task.detached { _ = ScheduleEndReconciler.reconcileToHead(db: .shared, firstRunFloor: 24*3600) }
+        }
     }
 
     /// One-shot removal of the retired FCSIT first-use disclosure
@@ -164,5 +178,19 @@ struct SenkaniGUI: App {
         MenuBarExtra("Senkani", systemImage: "bolt.circle") {
             MenuBarContentView(manager: menuBarManager)
         }
+    }
+}
+
+/// LEG-B — forces schedule-end (and every app notification) to present as a
+/// banner even while SenkaniApp is the frontmost app. Retained process-wide
+/// via `shared` because `UNUserNotificationCenter.delegate` is weak.
+final class NotifPresenter: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
+    static let shared = NotifPresenter()
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound, .list])
     }
 }

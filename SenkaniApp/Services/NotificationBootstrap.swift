@@ -95,11 +95,14 @@ enum NotificationBootstrap {
     /// Pulled out from `bootstrap(...)` so unit tests can install
     /// a router without triggering the TCC prompt (which would
     /// hang the test suite in CI).
-    static func requestAuthorizationIfNeeded() {
+    static func requestAuthorizationIfNeeded(completion: @escaping @Sendable () -> Void = {}) {
         let center = UNUserNotificationCenter.current()
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in
-            // intentionally empty — denial is OK; the router is
-            // installed regardless.
+            // Denial is OK; the router is installed regardless. The completion
+            // runs AFTER the auth decision resolves (post-prompt on first
+            // launch, immediately when already determined) so a caller can
+            // defer work that needs the OS actually able to present.
+            completion()
         }
     }
 }

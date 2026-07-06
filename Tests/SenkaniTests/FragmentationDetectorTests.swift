@@ -320,8 +320,21 @@ struct FragmentationDetectorTests {
             #expect(s == "{}", "PostToolUse must be passthrough; got \(s)")
         }
 
-        // Detector + sink fired at least once for the burst.
-        let flags = db.recentTrustFlags(limit: 10)
+        // Detector + sink fired at least once for the burst. Phase
+        // hook-relay a-1 moved the trust-flag PERSISTENCE off the
+        // synchronous response path (the sink is now invoked from a
+        // detached `Task` in `handle()`), so poll until the async settles
+        // instead of reading synchronously. The sink stays swapped to our
+        // temp `db` for the whole poll (the restore `defer` runs only after
+        // this block), so every deferred write lands in `db`.
+        var flags: [TrustFlagRow] = []
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            db.flushWrites()
+            flags = db.recentTrustFlags(limit: 10)
+            if flags.contains(where: { $0.reason == .toolBurst && $0.toolName == "Edit" }) { break }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
         #expect(flags.contains { $0.reason == .toolBurst && $0.toolName == "Edit" })
     }
 }

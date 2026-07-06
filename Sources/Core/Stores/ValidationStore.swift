@@ -142,6 +142,170 @@ final class ValidationStore: @unchecked Sendable {
         }
     }
 
+    /// U.9c-1 — outbox-atomic sibling of `insertValidationResult`. This is
+    /// the FIRST production writer of `session_event_stream`: when the
+    /// operator opts into `WorkBusConfig.dualWrite`, `AutoValidateQueue`
+    /// routes each canonical `validation_results` insert through here so a
+    /// paired `session_event_stream` row lands inside the SAME transaction
+    /// (`SessionDatabase.withOutboxTransaction`).
+    ///
+    /// Atomicity (Kleppmann no-loss/no-dup): the canonical INSERT and the
+    /// stream append share one `BEGIN IMMEDIATE … COMMIT`. If the canonical
+    /// step fails, the stream append fails, or the injected fault throws,
+    /// the whole composition rolls back — no orphan canonical row, no ghost
+    /// stream row. The chain cache is advanced INSIDE the serial-queue txn
+    /// block (matching `insertValidationResult`, so no concurrent writer
+    /// interleaves before COMMIT); on ANY throw the `catch` invalidates the
+    /// cache so a rolled-back `entry_hash` never poisons the next writer's
+    /// `prev_hash`.
+    ///
+    /// Synchronous (Carmack no-flake, R7/R8): `withOutboxTransaction` runs
+    /// on `parent.queue` via `queue.sync`; the caller (the existing
+    /// off-actor detached validation worker) blocks on it directly — no new
+    /// `Task.detached(.utility)`, no second cooperative-pool hop.
+    ///
+    /// Returns the `(resultId, streamId)` pair on success, or `nil` when the
+    /// transaction rolled back (the caller treats a nil as "no row this
+    /// attempt").
+    ///
+    /// `_afterCanonicalInsert` is a TEST-ONLY fault seam (default nil): when
+    /// supplied it runs after the canonical INSERT and before the stream
+    /// append; a throw from it exercises the rollback branch (the canonical
+    /// row must not persist, and no stream row is written).
+    @discardableResult
+    func insertValidationResultWithOutbox(
+        sessionId: String,
+        filePath: String,
+        validatorName: String,
+        category: String,
+        exitCode: Int32,
+        rawOutput: String?,
+        advisory: String,
+        durationMs: Int,
+        projectRoot: String?,
+        outcome: String? = nil,
+        reason: String? = nil,
+        validationRunId: String? = nil,
+        _afterCanonicalInsert: ((Int64) throws -> Void)? = nil
+    ) -> (resultId: Int64, streamId: Int64)? {
+        let now = Date().timeIntervalSince1970
+        let resolvedOutcome = outcome ?? (exitCode == 0 ? "clean" : "advisory")
+        do {
+            let landed: (resultId: Int64, streamId: Int64) = try parent.withOutboxTransaction { tx in
+                let db = tx.db
+                // Same chain-aware canonical shape as `insertValidationResult`
+                // (ensureV22:false — auto-validate never lazy-opens v22).
+                let (anchorId, useV22Shape) = self.resolveWriteAnchorLocked(db: db, ensureV22: false)
+                let prevHash = self.chain.latestEntryHash(db: db, anchorId: anchorId)
+                let columns = Self.canonicalColumns(
+                    sessionId: sessionId,
+                    filePath: filePath,
+                    validatorName: validatorName,
+                    category: category,
+                    exitCode: exitCode,
+                    rawOutput: rawOutput,
+                    advisory: advisory,
+                    durationMs: durationMs,
+                    createdAt: now,
+                    delivered: 0,
+                    outcome: resolvedOutcome,
+                    reason: reason,
+                    surfacedAt: nil,
+                    axesJSON: "[]",
+                    targetURL: nil,
+                    planStepsJSON: "[]",
+                    resultStatus: nil,
+                    screenshotPath: nil,
+                    useV22Shape: useV22Shape
+                )
+                let entryHash = ChainHasher.entryHash(
+                    table: "validation_results", columns: columns, prev: prevHash
+                )
+                let sql = """
+                    INSERT INTO validation_results
+                    (session_id, file_path, validator_name, category, exit_code, raw_output, advisory, duration_ms, created_at, outcome, reason,
+                     prev_hash, entry_hash, chain_anchor_id, validation_run_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """
+                var stmt: OpaquePointer?
+                guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                    throw SessionDatabase.OutboxError.bodyFailed("validation_results prepare failed")
+                }
+                defer { sqlite3_finalize(stmt) }
+                sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                sqlite3_bind_text(stmt, 2, (filePath as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                sqlite3_bind_text(stmt, 3, (validatorName as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                sqlite3_bind_text(stmt, 4, (category as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                sqlite3_bind_int(stmt, 5, exitCode)
+                Self.bindOptionalText(stmt, 6, rawOutput)
+                sqlite3_bind_text(stmt, 7, (advisory as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                sqlite3_bind_int(stmt, 8, Int32(durationMs))
+                sqlite3_bind_double(stmt, 9, now)
+                sqlite3_bind_text(stmt, 10, (resolvedOutcome as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                Self.bindOptionalText(stmt, 11, reason)
+                Self.bindOptionalText(stmt, 12, prevHash)
+                sqlite3_bind_text(stmt, 13, (entryHash as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+                sqlite3_bind_int64(stmt, 14, anchorId)
+                Self.bindOptionalText(stmt, 15, validationRunId)
+                guard sqlite3_step(stmt) == SQLITE_DONE else {
+                    throw SessionDatabase.OutboxError.bodyFailed("validation_results step failed")
+                }
+                let resultId = sqlite3_last_insert_rowid(db)
+
+                // TEST-ONLY fault seam — exercises the rollback branch.
+                try _afterCanonicalInsert?(resultId)
+
+                // Paired stream row — SAME transaction. `sourceId` is the
+                // canonical rowid so `ValidationStreamConsumer` claims the
+                // exact advisory row via `claimValidationDelivery`.
+                let streamId = tx.appendEvent(
+                    sourceTable: ValidationEventStreamProducer.sourceTable,
+                    sourceId: resultId,
+                    kind: resolvedOutcome,
+                    projectRoot: projectRoot,
+                    at: Date(timeIntervalSince1970: now)
+                )
+                guard streamId > 0 else {
+                    throw SessionDatabase.OutboxError.bodyFailed("session_event_stream append failed")
+                }
+
+                // Advance the chain cache INSIDE the serial-queue txn block
+                // (matches insertValidationResult): the single-writer queue
+                // means no other write interleaves before COMMIT. A later
+                // COMMIT failure throws and the `catch` invalidates it.
+                self.chain.recordWrite(anchorId: anchorId, entryHash: entryHash)
+                return (resultId: resultId, streamId: streamId)
+            }
+            parent.recordEvent(type: ValidationEventStreamProducer.producedCounter, projectRoot: projectRoot)
+            return landed
+        } catch {
+            // Rolled back — the cached prev_hash may reflect a lookup or a
+            // recordWrite made inside the aborted transaction; drop it so
+            // the next writer re-reads the committed chain tail.
+            parent.queue.sync { self.chain.invalidate() }
+            Logger.log("auto_validate.db_write.outbox_failed", fields: [
+                "table": .string("validation_results"),
+                "operation": .string("insert_with_outbox"),
+                "error": .string("\(error)"),
+            ])
+            return nil
+        }
+    }
+
+    /// U.9c-1 — total canonical `validation_results` rows. Paired with
+    /// `SessionEventStreamStore.count(sourceTable:)` for the parity audit.
+    func validationResultsRowCount() -> Int {
+        return parent.queue.sync {
+            guard let db = parent.db else { return 0 }
+            let sql = "SELECT COUNT(*) FROM validation_results;"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+            return Int(sqlite3_column_int64(stmt, 0))
+        }
+    }
+
     /// V.18a-5 — read a row's `validation_run_id` by row id. nil if the
     /// row is missing or the column is NULL. Tests use this to verify
     /// the writer round-trips the id; production callers go through the

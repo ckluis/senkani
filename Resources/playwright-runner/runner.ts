@@ -23,7 +23,18 @@
 // `~/Library/Caches/ms-playwright/chromium-*` so the Swift refusal
 // path (PlaywrightSubprocessRunner) lets the spawn proceed.
 
-import { chromium, Browser, Page } from "playwright";
+// NOTE: `chromium` is a runtime VALUE import; `Browser`/`Page` are
+// TYPE-ONLY and MUST stay on a separate `import type` line. This file is
+// executed as `node runner.ts` (bare, no TS loader — see
+// PlaywrightSubprocessRunner.spawnAndDecode), relying on Node's default
+// type-stripping (>=22.18/23.6). Type-stripping cannot erase a type-only
+// binding that shares a value import, so a merged
+// `import { chromium, Browser, Page }` throws a hard SyntaxError
+// ("does not provide an export named 'Browser'") and breaks the DEFAULT
+// `.subprocess` dispatch. Keep these two lines split. Regression guard:
+// RunnerTypeStripSourceShapeTests.
+import { chromium } from "playwright";
+import type { Browser, Page } from "playwright";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";

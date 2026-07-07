@@ -4,7 +4,7 @@ import AppKit
 import Network
 import Core
 
-/// U.2b-1b-4 — off-screen WKWebView lifecycle + 4-axis evaluateJavaScript
+/// U.2b-1b-4 — off-screen WKWebView lifecycle + 4-axis callAsyncJavaScript
 /// runner. Conforms to `BrowserRunner` (the `Sources/Core/Validation/
 /// BrowserRunner.swift` protocol the `BrowserValidationDispatcher` calls).
 /// Child #6 wires the dispatcher's `.headless` arm to this runner; today
@@ -22,11 +22,14 @@ import Core
 ///   * Per-axis dispatch reads the extracted IIFE source from
 ///     `Resources/playwright-runner/axes/<axis>.js` (the byte sequence
 ///     U.2b-1b-3 hoisted out of `runner.ts`) and feeds it to
-///     `WKWebView.evaluateJavaScript`. The parity corpus child #6 ships
-///     diffs the Playwright vs WKWebView outputs against the SAME bytes.
+///     `WKWebView.callAsyncJavaScript` (wrapped `return (<IIFE>);` — the
+///     axis files stay IIFE expressions for Playwright's `page.evaluate`;
+///     this runner branches the wrapping and awaits Promise-returning
+///     axes). The parity corpus child #6 ships diffs the Playwright vs
+///     WKWebView outputs against the SAME bytes.
 ///   * Sutton P0 — focus-order Tab walk uses the **synthetic** path:
 ///     a `KeyboardEvent("keydown",{key:"Tab"})` dispatched via
-///     `evaluateJavaScript` on `document.activeElement`. Decision
+///     `callAsyncJavaScript` on `document.activeElement`. Decision
 ///     captured here: direct `NSEvent` keyDown to an off-screen
 ///     WKWebView does not advance focus reliably without the window
 ///     becoming key (which would defeat the off-screen invariant),
@@ -106,11 +109,39 @@ public final class BrowserPaneRunner: BrowserRunner, @unchecked Sendable {
     /// source-compatible).
     public let egressProxyURL: URL?
 
+    /// U.2b-2 GUI child a-1 — dispatch target for `run(...)`.
+    ///
+    ///   * `.offScreen` (default; source-compatible with every U.2b-1b
+    ///     caller) — allocate a private off-screen `NSWindow` + `WKWebView`
+    ///     via `LifecycleHandle`, navigate to `targetURL`, evaluate the
+    ///     axes, tear down. This is the `dispatch: .headless` runner.
+    ///   * `.visiblePane(paneId:)` — resolve `paneId` against
+    ///     `LivePaneRegistry` (fail-closed) and evaluate the axes against
+    ///     that pane's ALREADY-loaded live `WKWebView` — no navigation, no
+    ///     window allocation. This is the `dispatch: .pane` runner. A `nil`
+    ///     `paneId` resolves to the most-recently-focused live pane.
+    public enum Mode: Sendable {
+        case offScreen
+        case visiblePane(paneId: String?)
+    }
+
+    private let mode: Mode
+
+    /// U.2b-2 GUI child a-1 — the pane input-lock state lives on the
+    /// runner (acceptance: "lock state lives on the runner"). Guarded by
+    /// `lockMutex`; the visible-pane `run(...)` drives it (lock on
+    /// dispatch start, unlock on success, banner on refusal), and the GUI
+    /// (`BrowserPaneView`, sibling a-2's runtime wiring) reads
+    /// `lockSnapshot()` / dismisses via `dismissBanner()`.
+    private var lockState = PaneLockStateMachine()
+    private let lockMutex = NSLock()
+
     public init(
         axesDirectory: URL? = nil,
         axisTimeout: TimeInterval = BrowserPaneRunner.defaultAxisTimeout,
         contentRect: NSRect = BrowserPaneRunner.defaultContentRect,
-        egressProxyURL: URL? = nil
+        egressProxyURL: URL? = nil,
+        mode: Mode = .offScreen
     ) {
         self.axesDirectory = axesDirectory
             ?? BrowserPaneRunner.defaultAxesDirectory()
@@ -119,6 +150,31 @@ public final class BrowserPaneRunner: BrowserRunner, @unchecked Sendable {
         self.axisTimeout = axisTimeout
         self.contentRect = contentRect
         self.egressProxyURL = egressProxyURL
+        self.mode = mode
+    }
+
+    // MARK: - Pane input lock (U.2b-2 GUI child a-1)
+
+    /// Thread-safe snapshot of the lock state machine for the GUI to bind
+    /// its URL-bar / nav-gesture `.disabled(...)` modifiers against.
+    public func lockSnapshot() -> PaneLockStateMachine {
+        lockMutex.lock(); defer { lockMutex.unlock() }
+        return lockState
+    }
+
+    /// Apply a lock event under the mutex. Returns the machine's result so
+    /// callers (and tests) can observe rejected edges (double dispatch,
+    /// dismiss-while-active).
+    @discardableResult
+    public func applyLockEvent(_ event: PaneLockStateMachine.Event) -> Result<PaneLockStateMachine.State, PaneLockStateMachine.TransitionError> {
+        lockMutex.lock(); defer { lockMutex.unlock() }
+        return lockState.apply(event)
+    }
+
+    /// Operator dismissed the refusal banner — unlock the pane.
+    @discardableResult
+    public func dismissBanner() -> Result<PaneLockStateMachine.State, PaneLockStateMachine.TransitionError> {
+        return applyLockEvent(.bannerDismissed)
     }
 
     /// U.2b-1b-5 — write the per-target same-origin allowlist to a
@@ -183,6 +239,14 @@ public final class BrowserPaneRunner: BrowserRunner, @unchecked Sendable {
                 advisory: "no_axes_requested — plan was empty"
             )
         }
+
+        // U.2b-2 GUI child a-1 — visible-pane mode binds to the live
+        // WKWebView `BrowserPaneView` registered, instead of allocating an
+        // off-screen window. Fail-closed pane resolution runs FIRST.
+        if case let .visiblePane(paneId) = mode {
+            return runVisiblePane(axesRequested: axesRequested, paneId: paneId)
+        }
+
         guard let url = URL(string: targetURL) else {
             return PlaywrightResult(
                 resultStatus: "fail",
@@ -269,6 +333,119 @@ public final class BrowserPaneRunner: BrowserRunner, @unchecked Sendable {
             screenshotPath: nil,
             advisory: advisories.isEmpty ? nil : advisories.joined(separator: " | ")
         )
+    }
+
+    // MARK: - U.2b-2 GUI child a-1 — visible-pane run
+
+    /// Evaluate the requested axes against the live `WKWebView` a
+    /// `BrowserPaneView` registered under `paneId`. Fail-closed:
+    ///   * `paneId` that is unknown / closed / (nil with no live pane) →
+    ///     structured refusal, NEVER a fall-back to a different pane and
+    ///     NEVER a fabricated pass.
+    ///   * A second run while a dispatch is already in flight on this
+    ///     runner's lock → `validation_browser_pane_busy` refusal (the
+    ///     double-dispatch guard).
+    /// No navigation and no window allocation — the pane is locked so the
+    /// operator cannot move it out from under the axis evaluation. The
+    /// Schneier guard holds: the refusal advisory carries ONLY the
+    /// resolution kind + the caller-supplied `paneId`, never page text.
+    private func runVisiblePane(axesRequested: [String], paneId: String?) -> PlaywrightResult {
+        let registry = LivePaneRegistry.shared
+        let resolution = registry.resolve(paneId: paneId)
+        guard case .resolved = resolution,
+              let surface = registry.surface(paneId: paneId) as? WKWebView else {
+            return PlaywrightResult(
+                resultStatus: "fail",
+                axesRun: [],
+                assertionsPassed: 0,
+                assertionsFailed: axesRequested.count,
+                screenshotPath: nil,
+                advisory: "validation_browser_pane_unresolved — \(Self.resolutionRefusalReason(resolution))"
+            )
+        }
+
+        // Fail-closed against double-dispatch on the same pane: a rejected
+        // `.dispatchStarted` means a run is already in flight — refuse.
+        if case .failure(let err) = applyLockEvent(.dispatchStarted) {
+            return PlaywrightResult(
+                resultStatus: "fail",
+                axesRun: [],
+                assertionsPassed: 0,
+                assertionsFailed: axesRequested.count,
+                screenshotPath: nil,
+                advisory: "validation_browser_pane_busy — \(err)"
+            )
+        }
+
+        var assertionsPassed = 0
+        var assertionsFailed = 0
+        var advisories: [String] = []
+        for axis in axesRequested {
+            switch loadAxisSource(axis: axis) {
+            case .failure(let message):
+                assertionsFailed += 1
+                advisories.append("axis=\(axis) source_unavailable: \(message)")
+            case .success(let js):
+                do {
+                    _ = try Self.evaluateOnLivePane(surface, js: js, timeout: axisTimeout)
+                    assertionsPassed += 1
+                } catch {
+                    assertionsFailed += 1
+                    advisories.append("axis=\(axis) evaluate_failed: \(String(describing: error).prefix(160))")
+                }
+            }
+        }
+
+        // Unlock on success; show the refusal banner (stay locked) on any
+        // failure — the two acceptance-named unlock/lock edges.
+        applyLockEvent(assertionsFailed == 0 ? .dispatchSucceeded : .dispatchRefused)
+
+        return PlaywrightResult(
+            resultStatus: assertionsFailed == 0 ? "pass" : "fail",
+            axesRun: axesRequested,
+            assertionsPassed: assertionsPassed,
+            assertionsFailed: assertionsFailed,
+            screenshotPath: nil,
+            advisory: advisories.isEmpty ? nil : advisories.joined(separator: " | ")
+        )
+    }
+
+    /// Refusal reason string for an unresolved pane. Schneier-safe: names
+    /// only the resolution kind + the caller-supplied id.
+    static func resolutionRefusalReason(_ resolution: LivePaneRegistry.Resolution) -> String {
+        switch resolution {
+        case .resolved(let id): return "resolved pane_id=\(id)"
+        case .unknownPane(let id): return "unknown_pane pane_id=\(id)"
+        case .closedPane(let id): return "closed_pane pane_id=\(id)"
+        case .noPanes: return "no_live_pane"
+        }
+    }
+
+    /// Evaluate `js` against an already-loaded live `WKWebView` on the
+    /// main actor, blocking the (background) caller via a semaphore —
+    /// mirrors `LifecycleHandle.evaluateSync` but against an existing pane
+    /// web view rather than an off-screen one.
+    static func evaluateOnLivePane(_ webView: WKWebView, js: String, timeout: TimeInterval) throws -> Any? {
+        let box = WebViewBox(webView)
+        let valueBox = AnyBox()
+        let errorBox = ErrorBox()
+        let sem = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                box.webView.evaluateJavaScript(js) { value, error in
+                    valueBox.value = value
+                    errorBox.value = error
+                    sem.signal()
+                }
+            }
+        }
+        if sem.wait(timeout: .now() + timeout) == .timedOut {
+            throw RunnerError.timeout("evaluate_timeout")
+        }
+        if let err = errorBox.value {
+            throw RunnerError.javascriptException(String(describing: err).prefix(200).description)
+        }
+        return valueBox.value
     }
 
     // MARK: - Sutton P0 — Tab walk
@@ -470,6 +647,15 @@ private final class AnyBox: @unchecked Sendable {
     var value: Any?
 }
 
+/// U.2b-2 GUI child a-1 — hand-vouched Sendable box carrying a live
+/// (non-Sendable) `WKWebView` across the `DispatchQueue.main.async`
+/// boundary in `evaluateOnLivePane`. The web view is only ever touched
+/// inside `MainActor.assumeIsolated`, so the hand-off is safe.
+private final class WebViewBox: @unchecked Sendable {
+    let webView: WKWebView
+    init(_ webView: WKWebView) { self.webView = webView }
+}
+
 /// Main-actor isolated owner of the NSWindow + WKWebView pair. All
 /// AppKit/WebKit mutation lives here.
 @MainActor
@@ -533,14 +719,54 @@ private final class LifecycleState {
         webView.load(req)
     }
 
+    /// Evaluate an axis IIFE-expression body against the loaded page and
+    /// hand the marshaled result back on the main actor.
+    ///
+    /// Uses `callAsyncJavaScript` (macOS 11+), NOT the legacy
+    /// `evaluateJavaScript(_:completionHandler:)`. `callAsyncJavaScript`
+    /// runs the source as the body of an *async function* and awaits its
+    /// returned value, so a Promise-returning axis resolves BEFORE WebKit
+    /// marshals it. `Resources/playwright-runner/axes/perf.js` returns
+    /// `new Promise(...)` resolving to `{inp_ms, lcp_ms}`; the legacy API
+    /// handed that Promise object straight back and WKWebView could not
+    /// marshal it (`WKErrorDomain Code=5`, "unsupported type"), failing
+    /// the perf axis on every page. See
+    /// `browserpane-runner-evaluatejs-no-promise-await-2026-07-05`.
+    ///
+    /// **Per-runner wrapping (branch, not shared edit).** The axis `.js`
+    /// files stay IIFE *expressions* so Playwright's `page.evaluate(STRING)`
+    /// keeps working unchanged; only this runner adapts them.
+    /// `callAsyncJavaScript` wants a function *body* (statements), so the
+    /// IIFE expression is wrapped `return (<expr>);`. `return`ing a Promise
+    /// from an async body awaits it; `return`ing a sync value passes it
+    /// through — so ALL axes route through this ONE path uniformly (sync:
+    /// completeness/design/security; async: perf). A JS throw or a Promise
+    /// rejection inside the body surfaces as `.failure` → the caller's
+    /// `RunnerError.javascriptException`, exactly as the legacy path did.
     func evaluate(js: String, completion: @escaping @MainActor (Any?, Error?) -> Void) {
         guard let webView = webView else {
             completion(nil, BrowserPaneRunner.RunnerError.timeout("lifecycle_not_brought_up"))
             return
         }
-        webView.evaluateJavaScript(js) { value, error in
-            completion(value, error)
-        }
+        // Wrap the axis IIFE expression as an async-function body. The
+        // parens keep leading `//` file-header comments inside a single
+        // returned expression; the awaited result (Promise-resolved or
+        // sync) is what WKWebView marshals.
+        let body = "return (\n\(js)\n);"
+        webView.callAsyncJavaScript(
+            body,
+            arguments: [:],
+            in: nil,          // frame: nil = main frame
+            in: .page,        // contentWorld: .page = the page's own JS world
+            completionHandler: { result in
+                switch result {
+                case .success(let value):
+                    completion(value, nil)
+                case .failure(let error):
+                    completion(nil, error)
+                }
+            }
+        )
     }
 }
 

@@ -37,6 +37,22 @@ public enum HookRouter {
     /// nil in stdio-mode MCP server and hook-relay mode (graceful no-op).
     nonisolated(unsafe) public static var entityObserver: ((_ toolName: String, _ toolInput: [String: Any]) -> Void)?
 
+    /// Phase hook-relay a-1 — test seam for the PostToolUse Edit/Write
+    /// auto-validation enqueue. `handlePostEditWrite` invokes this from a
+    /// fire-and-forget `Task {}`, so `handle()` returns without awaiting
+    /// the enqueue body. Production wires the real `AutoValidateQueue.shared`
+    /// actor (byte-identical to the prior inline call). The non-blocking
+    /// bookkeeping regression suite injects a deliberately-slow seam to pin
+    /// the contract: a regression that awaits the enqueue INLINE on the
+    /// synchronous response path (dropping the `Task {}`) would stall behind
+    /// the slow seam and the regression test times out. `AutoValidateQueue`'s
+    /// own body does no synchronous blocking I/O (`record` → `queue.async`),
+    /// so a resource-occupancy timing probe cannot bite — the injectable
+    /// seam is the only deterministic way to slow the enqueue on demand.
+    nonisolated(unsafe) public static var autoValidateEnqueue: @Sendable (_ path: String, _ sessionId: String, _ projectRoot: String) async -> Void = { path, sessionId, projectRoot in
+        await AutoValidateQueue.shared.enqueue(path: path, sessionId: sessionId, projectRoot: projectRoot)
+    }
+
     /// Test seam for validation advisory delivery. Production uses `.shared`.
     nonisolated(unsafe) static var validationDatabase: SessionDatabase = .shared
 
@@ -153,6 +169,14 @@ public enum HookRouter {
     /// to assert flags surface; production wires it to
     /// `SessionDatabase.shared.recordTrustFlag(...)`. Default sink is
     /// the production path so HookRouter "just works" with no setup.
+    ///
+    /// Phase hook-relay a-1: the sink is invoked from a detached `Task`
+    /// in `handle()` (see the flag-persistence loop), NOT inline on the
+    /// synchronous response path — `recordTrustFlag` blocks on the serial
+    /// DB `queue.sync`, and nothing on the response path reads the
+    /// persisted flag row back, so the write is deferred while the
+    /// in-memory classification that drives the deny decision stays
+    /// synchronous.
     nonisolated(unsafe) public static var trustFlagSink: (FragmentationDetector.Flag, Int) -> Void = { flag, score in
         _ = SessionDatabase.shared.recordTrustFlag(flag, score: score)
     }
@@ -430,9 +454,29 @@ public enum HookRouter {
                 toolName: toolName,
                 fragment: fragment
             ))
-            for flag in flags {
-                let score = TrustScorer.score(flags: [flag])
-                trustFlagSink(flag, score)
+            // Phase hook-relay a-1 — the flag CLASSIFICATION above
+            // (`fragmentationDetector.record`) stays synchronous because
+            // `flags` feeds the same-event PreToolUse `.blocking` deny
+            // decision below. Only the PERSISTENCE of each flag+score is
+            // moved off the synchronous response path: `recordTrustFlag`
+            // (→ `TrustAuditStore.recordFlag`) blocks on the serial DB
+            // `queue.sync`, so persisting inline would make `handle()`
+            // wait on a SQLite write it never reads back. The deny path
+            // reads only the in-memory `flags` + `trustModeReader()` +
+            // `trustOverrideReader()` (override rows, NOT flag rows), so
+            // deferring the flag-row write cannot change any verdict. A
+            // single detached `Task` preserves flag emission order and
+            // exactly-once semantics (each flag is still written once via
+            // the same sink), reusing the fire-and-forget `Task {}`
+            // pattern already live for `AutoValidateQueue.enqueue`.
+            if !flags.isEmpty {
+                let flagsToPersist = flags
+                Task {
+                    for flag in flagsToPersist {
+                        let score = TrustScorer.score(flags: [flag])
+                        trustFlagSink(flag, score)
+                    }
+                }
             }
 
             // U.4b-1 — promotion-gate denial path. When the operator
@@ -1216,11 +1260,7 @@ public enum HookRouter {
         let absPath = filePath.hasPrefix("/") ? filePath : root + "/" + filePath
 
         Task {
-            await AutoValidateQueue.shared.enqueue(
-                path: absPath,
-                sessionId: sid,
-                projectRoot: root
-            )
+            await autoValidateEnqueue(absPath, sid, root)
         }
     }
 

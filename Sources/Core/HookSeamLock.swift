@@ -7,6 +7,7 @@ import Foundation
 /// `HookRouter.credentialGatewayRecorder`,
 /// `HookRouter.credentialGatewayCatalog`,
 /// `HookRouter.validationDatabase`, `HookRouter.entityObserver`,
+/// `HookRouter.autoValidateEnqueue`,
 /// `ConfirmationGate.catalog`, `ConfirmationGate.database`).
 ///
 /// Why: tests swap these statics inside `defer`-restore blocks. Under

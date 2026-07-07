@@ -24,6 +24,22 @@ milestone-re-fire proof) are documented in the closed item's
 **xcodebuild** product, not the `swift build` soak wrap — see
 `completed/2026/2026-06-22-t6-banner-walk-soak-bundle-not-self-contained-open-launch-crash-2026-06-18.md`.
 
+> **Canonical `.app` build step for GUI/Cowork walks (2026-07-05):** run
+> `senkani walk rebuild-bundle-xcodebuild <bundle-path>` (e.g.
+> `tools/soak/runner/SenkaniApp.app`) for the walk's Step-2/Step-3 `.app`
+> build. It builds via `xcodebuild -scheme SenkaniApp -destination
+> 'platform=macOS'` (the `-destination` is required for this SwiftPM package
+> and is baked into the command), wraps the xcodebuild product, copies every
+> resource bundle, ad-hoc codesigns, and lsregisters — producing an
+> `open`-launchable bundle with NO `Bundle.module` crash-loop. Do NOT
+> hand-roll the wrap and do NOT use `senkani walk rebuild-bundle` (fast
+> `swift build` path — crash-loops under `open`-launch). The scheme-level
+> `xcodebuild -showBuildSettings` returns no `BUILT_PRODUCTS_DIR` for this
+> SwiftPM executable scheme, so any walk boilerplate that greps
+> `BUILT_PRODUCTS_DIR` is stale — the command handles product location
+> internally. Shipped by
+> `process-gap-no-xcodebuild-aware-app-bundler-2026-07-05`.
+
 ---
 
 ## 2026-06-11 — Settings → Notifications matrix pane shipped — visual render walk pending

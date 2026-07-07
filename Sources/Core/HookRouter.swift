@@ -250,6 +250,30 @@ public enum HookRouter {
         }
     }
 
+    /// The credential-vault sync bridge's real-machine blocking ceiling,
+    /// in seconds. Regression-pinned by
+    /// `VaultSemaphoreCeilingTests.ceilingConstantPinnedToFiveSeconds` —
+    /// a future edit that silently WIDENS (or removes) this trips the
+    /// pin, forcing a conscious review.
+    ///
+    /// ## Why this is a constant and not a latency knob (a-2, 2026-07-06)
+    /// The `phase-hook-relay-async-decouple-a-2` round evaluated
+    /// relocating this sync block off the response path and took the
+    /// operator-ratified escape hatch: LEAVE IT SYNC. The bridge is a
+    /// CONSCIOUS synchronous surface — `CredentialGateway.evaluate` is a
+    /// synchronous function whose `.proceed`/`.deny` verdict depends on
+    /// the lookup RESULT, and that verdict is the response the relay
+    /// subprocess blocks on. The read is therefore on the critical path
+    /// by necessity (fire-and-WAIT), unlike the a-1 bookkeeping
+    /// (fire-and-forget, zero response-path readers). This ceiling is a
+    /// DEFENSIVE fail-CLOSED deadline for a wedged `securityd` AFTER the
+    /// operator-gated real-Keychain swap — NOT a value to tune down for
+    /// latency: tightening it would convert a slow-but-valid Keychain
+    /// read (first-unlock, Touch ID, cold `securityd`) into a spurious
+    /// DENY of a genuinely-provisioned credential, breaking injection
+    /// semantics. See the a-2 item `## Design decision 2026-07-06`.
+    static let credentialVaultLookupCeilingSeconds: Int = 5
+
     /// t4c-1 — the synchronous→actor bridge body for
     /// `installProductionCredentialVaultBridge`. Extracted as an internal
     /// static so a unit test can drive the EXACT production wall-clock
@@ -260,21 +284,30 @@ public enum HookRouter {
     /// singleton). Fail-CLOSED: a missing key, a non-vault throw, or a
     /// (defensive) timeout all return `.failure(.missingKey(...))` — DENY.
     ///
-    /// The 5s `DispatchSemaphore` ceiling is a REAL-MACHINE deadline so a
-    /// hung Security daemon (after the operator-gated real-Keychain swap)
-    /// cannot wedge the synchronous gateway path. Tests do NOT exercise
-    /// this blocking path — under full-suite cooperative-pool saturation
-    /// the background `Task` could be starved past 5s of wall-clock even
-    /// for an instant in-memory read, spuriously timing out (the exact
-    /// flake that bit `DoctorKeychainHardening`). Tests drive
-    /// `credentialVaultLookupBridgeAsync` instead, whose classification
-    /// resolves the instant the vault `await` returns — no wall-clock
-    /// dependence at all.
+    /// The `ceiling` `DispatchSemaphore` deadline (production default
+    /// `credentialVaultLookupCeilingSeconds` == 5s) is a REAL-MACHINE
+    /// deadline so a hung Security daemon (after the operator-gated
+    /// real-Keychain swap) cannot wedge the synchronous gateway path.
+    /// `ceiling` is a TEST SEAM only — production never passes it, so the
+    /// production deadline stays pinned to the constant. Tests pass a
+    /// tiny `ceiling` against a deliberately-slow store to drive the
+    /// timeout→fail-CLOSED path DETERMINISTICALLY in the correct
+    /// direction (a 500ms store read always exceeds a 10ms ceiling; pool
+    /// saturation only makes the read slower, never faster, so there is
+    /// no flake — the opposite direction, a fast read starved past 5s,
+    /// is the `DoctorKeychainHardening` flake the ASYNC-core tests avoid).
+    ///
+    /// This bridge stays SYNCHRONOUS by conscious design — see
+    /// `credentialVaultLookupCeilingSeconds` above and the a-2 item's
+    /// `## Design decision 2026-07-06` for the full relocation analysis
+    /// and why precompute/cache and tighter-deadline both regress
+    /// verdict correctness or fail-CLOSED.
     static func credentialVaultLookupBridge(
         vault: CredentialVault = .shared,
         key: String,
         scope: String,
-        dryRun: Bool
+        dryRun: Bool,
+        ceiling: DispatchTimeInterval = .seconds(credentialVaultLookupCeilingSeconds)
     ) -> Result<Data, CredentialVaultError> {
         final class Box: @unchecked Sendable {
             private let lock = NSLock()
@@ -303,7 +336,7 @@ public enum HookRouter {
         // Bounded wait. On the (defensive) timeout the box still holds the
         // DENY default, so a wedged store fails CLOSED rather than hanging
         // the synchronous gateway path.
-        if sem.wait(timeout: .now() + .seconds(5)) == .timedOut {
+        if sem.wait(timeout: .now() + ceiling) == .timedOut {
             return .failure(.missingKey(key: key, scope: scope))
         }
         return box.snapshot()

@@ -10,6 +10,21 @@ wave-by-wave operator diary; the roadmap is the long-lived spec.
 
 ---
 
+## 2026-07-05 — V.17b-2 Provider Health dashboard pane — Cowork walk groomed
+
+`phase-v17b-2-dashboard-pane-row-2026-06-06` groomed to a Cowork-runnable
+walk (status: `manual_ready`). The SwiftUI pane already shipped
+(`SenkaniApp/Views/ProviderHealthDashboardView.swift`, commit `b1ccbbc`,
+2026-06-24) — this walk validates the render (fresh/stale/error tier
+coloring, remediation-hint strip, refresh-button re-probe) and the
+no-network invariant, no code ships. Exec mode: **either** (fully
+Cowork-drivable via Bash + `mcp__computer-use__screenshot`; GUI steps need
+an xcodebuild-wrapped `.app` per the standing gotcha). Time estimate: ~20
+min operator-supervised. See
+[groomed plan](../../spec/autonomous/backlog/phase-v17b-2-dashboard-pane-row-2026-06-06.md).
+
+---
+
 ## 2026-06-22 — ✅ EXECUTED + PASSED — T.6 Cowork banner walk (`t6-notification-cowork-banner-walk-2026-05-21`)
 
 The groomed banner walk ran operator-supervised on a real machine and PASSED

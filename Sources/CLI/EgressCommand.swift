@@ -109,18 +109,42 @@ struct Egress: ParsableCommand {
             EgressPaths.writePid(getpid())
 
             print("egress: listening on :\(listener.port)")
+            // stdout is block-buffered when not a TTY; flush so the
+            // "listening" line is durable BEFORE the foreground park (the
+            // crash this fixes lost this line to the buffer — the tell was
+            // that only the unbuffered stderr mitmTls warning survived).
+            fflush(stdout)
 
             // Install SIGTERM/SIGINT handlers — clean shutdown unlinks
             // both the port file and the pid file.
+            //
+            // The gate is what the foreground daemon parks on. The signal
+            // handlers call `Foundation.exit(0)` (primary teardown) and
+            // also `gate.signal()` (belt-and-braces: if exit is ever
+            // removed, the park unwinds and run() returns exit-0 cleanly).
+            let gate = DispatchSemaphore(value: 0)
             let terminate: @Sendable () -> Void = {
                 listener.stop()
                 EgressPaths.unlinkPid()
+                gate.signal()
                 Foundation.exit(0)
             }
             installSignal(SIGTERM, handler: terminate)
             installSignal(SIGINT, handler: terminate)
 
-            dispatchMain()
+            // Park the foreground daemon until a termination signal fires.
+            // MUST NOT be `dispatchMain()`: this `run()` executes on a
+            // Swift-concurrency cooperative-pool thread (the parent
+            // `Senkani` is an `AsyncParsableCommand`, so its async `main()`
+            // drains on the real main thread and sync subcommand `run()`s
+            // land off-main). `dispatch_main()` asserts main-thread and
+            // traps (`brk 1` → EXC_BREAKPOINT/SIGTRAP) off-main — which
+            // crashed every `senkani egress start`. The accept loop
+            // (`com.senkani.egress-listener`) and the SIGTERM/SIGINT
+            // sources (`.global(qos:)`) all run on independent GCD queues,
+            // so parking THIS thread is sufficient and thread-agnostic.
+            // See egress-start-dispatchmain-non-main-thread-crash-2026-07-05.
+            blockForegroundDaemon(until: gate)
         }
     }
 
@@ -242,6 +266,27 @@ enum EgressPolicyLoader {
         for mode in PaneMode.allCases { engines[mode] = legacy }
         return (EgressPolicy(engines: engines), nil)
     }
+}
+
+/// Park the calling thread until `gate` is signalled — the foreground
+/// `senkani egress start` daemon's blocking primitive.
+///
+/// CRITICAL: this must NOT be `dispatchMain()`. `Egress.Start.run()`
+/// executes on a Swift-concurrency cooperative-pool thread (the parent
+/// `Senkani` is an `AsyncParsableCommand`, whose async `main()` drains on
+/// the real main thread; a sync subcommand `run()` therefore lands
+/// off-main). `dispatch_main()` asserts it is called on the main thread
+/// and traps (`brk 1` → EXC_BREAKPOINT/SIGTRAP) otherwise, which crashed
+/// every invocation. A semaphore park is thread-agnostic and — unlike
+/// `dispatchMain()` — returns when signalled, so the SIGTERM/SIGINT
+/// handlers can unwind the daemon cleanly. The listener's accept loop and
+/// the signal sources run on independent GCD queues, so nothing depends
+/// on this thread draining a run loop or the main queue.
+///
+/// Internal (not private) so the regression test can drive it off the
+/// main thread via `@testable import CLI`.
+func blockForegroundDaemon(until gate: DispatchSemaphore) {
+    gate.wait()
 }
 
 private func installSignal(_ sig: Int32, handler: @escaping @Sendable () -> Void) {

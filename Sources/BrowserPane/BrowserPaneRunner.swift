@@ -4,7 +4,7 @@ import AppKit
 import Network
 import Core
 
-/// U.2b-1b-4 — off-screen WKWebView lifecycle + 4-axis evaluateJavaScript
+/// U.2b-1b-4 — off-screen WKWebView lifecycle + 4-axis callAsyncJavaScript
 /// runner. Conforms to `BrowserRunner` (the `Sources/Core/Validation/
 /// BrowserRunner.swift` protocol the `BrowserValidationDispatcher` calls).
 /// Child #6 wires the dispatcher's `.headless` arm to this runner; today
@@ -22,11 +22,14 @@ import Core
 ///   * Per-axis dispatch reads the extracted IIFE source from
 ///     `Resources/playwright-runner/axes/<axis>.js` (the byte sequence
 ///     U.2b-1b-3 hoisted out of `runner.ts`) and feeds it to
-///     `WKWebView.evaluateJavaScript`. The parity corpus child #6 ships
-///     diffs the Playwright vs WKWebView outputs against the SAME bytes.
+///     `WKWebView.callAsyncJavaScript` (wrapped `return (<IIFE>);` — the
+///     axis files stay IIFE expressions for Playwright's `page.evaluate`;
+///     this runner branches the wrapping and awaits Promise-returning
+///     axes). The parity corpus child #6 ships diffs the Playwright vs
+///     WKWebView outputs against the SAME bytes.
 ///   * Sutton P0 — focus-order Tab walk uses the **synthetic** path:
 ///     a `KeyboardEvent("keydown",{key:"Tab"})` dispatched via
-///     `evaluateJavaScript` on `document.activeElement`. Decision
+///     `callAsyncJavaScript` on `document.activeElement`. Decision
 ///     captured here: direct `NSEvent` keyDown to an off-screen
 ///     WKWebView does not advance focus reliably without the window
 ///     becoming key (which would defeat the off-screen invariant),
@@ -716,14 +719,54 @@ private final class LifecycleState {
         webView.load(req)
     }
 
+    /// Evaluate an axis IIFE-expression body against the loaded page and
+    /// hand the marshaled result back on the main actor.
+    ///
+    /// Uses `callAsyncJavaScript` (macOS 11+), NOT the legacy
+    /// `evaluateJavaScript(_:completionHandler:)`. `callAsyncJavaScript`
+    /// runs the source as the body of an *async function* and awaits its
+    /// returned value, so a Promise-returning axis resolves BEFORE WebKit
+    /// marshals it. `Resources/playwright-runner/axes/perf.js` returns
+    /// `new Promise(...)` resolving to `{inp_ms, lcp_ms}`; the legacy API
+    /// handed that Promise object straight back and WKWebView could not
+    /// marshal it (`WKErrorDomain Code=5`, "unsupported type"), failing
+    /// the perf axis on every page. See
+    /// `browserpane-runner-evaluatejs-no-promise-await-2026-07-05`.
+    ///
+    /// **Per-runner wrapping (branch, not shared edit).** The axis `.js`
+    /// files stay IIFE *expressions* so Playwright's `page.evaluate(STRING)`
+    /// keeps working unchanged; only this runner adapts them.
+    /// `callAsyncJavaScript` wants a function *body* (statements), so the
+    /// IIFE expression is wrapped `return (<expr>);`. `return`ing a Promise
+    /// from an async body awaits it; `return`ing a sync value passes it
+    /// through — so ALL axes route through this ONE path uniformly (sync:
+    /// completeness/design/security; async: perf). A JS throw or a Promise
+    /// rejection inside the body surfaces as `.failure` → the caller's
+    /// `RunnerError.javascriptException`, exactly as the legacy path did.
     func evaluate(js: String, completion: @escaping @MainActor (Any?, Error?) -> Void) {
         guard let webView = webView else {
             completion(nil, BrowserPaneRunner.RunnerError.timeout("lifecycle_not_brought_up"))
             return
         }
-        webView.evaluateJavaScript(js) { value, error in
-            completion(value, error)
-        }
+        // Wrap the axis IIFE expression as an async-function body. The
+        // parens keep leading `//` file-header comments inside a single
+        // returned expression; the awaited result (Promise-resolved or
+        // sync) is what WKWebView marshals.
+        let body = "return (\n\(js)\n);"
+        webView.callAsyncJavaScript(
+            body,
+            arguments: [:],
+            in: nil,          // frame: nil = main frame
+            in: .page,        // contentWorld: .page = the page's own JS world
+            completionHandler: { result in
+                switch result {
+                case .success(let value):
+                    completion(value, nil)
+                case .failure(let error):
+                    completion(nil, error)
+                }
+            }
+        )
     }
 }
 

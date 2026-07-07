@@ -60,7 +60,7 @@ across stores globally ordered without explicit `BEGIN` — see I2.
 
 ## I2 — `BEGIN IMMEDIATE` is reserved for multi-statement writes
 
-**Rule.** Today exactly one method wraps work in an explicit
+**Rule.** A small, enumerated set of methods wraps work in an explicit
 transaction:
 
 - `CommandStore.recordCommand` — `BEGIN IMMEDIATE` …
@@ -68,17 +68,29 @@ transaction:
   `UPDATE sessions` … `COMMIT` / `ROLLBACK on defer`. The boundary
   is load-bearing because search results would otherwise be visible
   before the session aggregate row updates, and aggregates would
-  drift from the base table if the second statement failed.
+  drift from the base table if the second statement failed. This is
+  the one store-internal case (it spans only `CommandStore`'s own
+  tables).
+- **Façade outbox family** (`SessionDatabase+WorkBusAPI.swift`) — the
+  U.9a `withOutboxTransaction` and the U.9c-2 `ackWorkOnCommit` both
+  open a `BEGIN IMMEDIATE … COMMIT` on the parent `queue.sync` and
+  bind an `OutboxTransaction` handle so the caller's canonical-row
+  write, a `session_event_stream` append, a `session_work_queue`
+  enqueue, and/or the `session_work_queue` ack all commit or roll back
+  as one unit. `ackWorkOnCommit` rolls back (returning `.leaseLost`)
+  when its ack UPDATE matches 0 rows, so a canonical effect never
+  persists without an exclusive live-lease ack — the at-least-once
+  fence (U.9c-2).
 
 Every other write today is a single statement and relies on the serial
 queue (I1) for global ordering. That is the **only** correct shape
 for new single-statement writes.
 
-**Cross-store transactions are currently forbidden.** No method in the
-façade or in any store opens a transaction that spans two stores'
-tables. If a future feature genuinely needs one (e.g. "delete a
-session and all its sandboxed results in one atomic step"), it must
-be added with:
+**Cross-store transactions are confined to the façade.** No *store*
+class may open a transaction that spans two stores' tables — that stays
+forbidden. A genuinely cross-table atomic step (e.g. the outbox family
+above, or "delete a session and all its sandboxed results in one atomic
+step") must be added with:
 
 1. A new method on the façade (not on a store).
 2. An explicit `BEGIN IMMEDIATE` … `COMMIT` issued through
@@ -95,6 +107,13 @@ store is allowed to assume it owns its tables.
   aggregates updated).
 - `Tests/SenkaniTests/CommandStoreTests.swift::fts5SyncPreservesConsistencyUnderSerialWrites`
   asserts FTS5 sync inside the same boundary.
+- `Tests/SenkaniTests/SessionWorkBusTests.swift::outboxRollbackAtomicity`
+  proves `withOutboxTransaction` rolls back the stream append + queue
+  enqueue together when the body throws.
+- `Tests/SenkaniTests/SessionWorkQueueLeaseAckTests.swift` proves
+  `ackWorkOnCommit` commits the effect + ack atomically, rolls both
+  back on a body throw, and returns `.leaseLost` (rolling the effect
+  back) when the lease was lost — with no double-ack on a re-ack.
 
 ## I3 — Public-API byte-identity (the façade contract)
 

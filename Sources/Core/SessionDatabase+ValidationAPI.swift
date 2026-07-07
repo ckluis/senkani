@@ -48,6 +48,49 @@ extension SessionDatabase {
         )
     }
 
+    /// U.9c-1 — outbox-atomic validation insert: the canonical
+    /// `validation_results` row plus a paired `session_event_stream` row in
+    /// ONE transaction. Called by `AutoValidateQueue` ONLY when
+    /// `WorkBusConfig.dualWrite` is on; the default path stays on the
+    /// fire-and-forget `insertValidationResult` and is byte-identical to
+    /// pre-U.9c. Returns `(resultId, streamId)` on success, `nil` on
+    /// rollback.
+    @discardableResult
+    public func insertValidationResultWithOutbox(
+        sessionId: String,
+        filePath: String,
+        validatorName: String,
+        category: String,
+        exitCode: Int32,
+        rawOutput: String?,
+        advisory: String,
+        durationMs: Int,
+        projectRoot: String?,
+        outcome: String? = nil,
+        reason: String? = nil,
+        validationRunId: String? = nil
+    ) -> (resultId: Int64, streamId: Int64)? {
+        validationStore.insertValidationResultWithOutbox(
+            sessionId: sessionId,
+            filePath: filePath,
+            validatorName: validatorName,
+            category: category,
+            exitCode: exitCode,
+            rawOutput: rawOutput,
+            advisory: advisory,
+            durationMs: durationMs,
+            projectRoot: projectRoot,
+            outcome: outcome,
+            reason: reason,
+            validationRunId: validationRunId
+        )
+    }
+
+    /// U.9c-1 — total canonical `validation_results` rows (parity audit).
+    public func validationResultsRowCount() -> Int {
+        validationStore.validationResultsRowCount()
+    }
+
     /// V.18a-5 — read the `validation_run_id` stored on a row.
     public func validationRunId(forResultId id: Int64) -> String? {
         validationStore.validationRunId(forResultId: id)

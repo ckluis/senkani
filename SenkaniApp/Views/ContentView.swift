@@ -25,6 +25,15 @@ struct ContentView: View {
     /// and session-watcher start are never skipped.
     @State private var launcher: LaunchCoordinator?
 
+    /// V.3d — the app-level pane-metadata wiring bridge. Constructs the real
+    /// `PaneMetadataProbes(runner: SystemProcessRunner())`, binds them into a
+    /// `PaneMetadataResolver`, and drives the v3c
+    /// `PaneMetadataRefreshCoordinator`. The sidebar observes
+    /// `paneMetadata.resolver` for its synchronous per-pane hover reads;
+    /// `syncPaneMetadata()` reconciles the coordinator's tracked panes against
+    /// the live workspace on every pane-structure change.
+    @State private var paneMetadata = PaneMetadataWiring()
+
     var body: some View {
         ZStack {
         VStack(spacing: 0) {
@@ -38,7 +47,8 @@ struct ContentView: View {
                         ensureLauncher().launchPane(
                             type: type, title: title, command: command
                         )
-                    }
+                    },
+                    paneMetadataResolver: paneMetadata.resolver
                 )
 
                 // Thin divider between sidebar and canvas
@@ -117,6 +127,10 @@ struct ContentView: View {
             ThemeEngine.shared.restoreLastTheme()
             restoreWorkspace()  // Also starts MetricsStore after workspace is populated
             registerPaneSocketHandler()
+            // V.3d — reconcile the pane-metadata coordinator against the
+            // just-restored panes, then start its refresh cadences.
+            syncPaneMetadata()
+            paneMetadata.start()
         }
         .onDisappear {
             WorkspaceStorage.save(workspace)
@@ -124,14 +138,19 @@ struct ContentView: View {
             sessions.stopAll()
             SocketServerManager.shared.paneHandler = nil
             MetricsStore.shared.stop()
+            paneMetadata.stop()  // V.3d — tear down the refresh cadences
         }
         // Auto-save workspace when project/pane structure changes
         .onChange(of: workspace.projects.count) { _, _ in
             saveWorkspace()
             MetricsStore.shared.start(projects: workspace.projects)
+            syncPaneMetadata()  // V.3d — new/removed project ⇒ reconcile panes
         }
         .onChange(of: workspace.activeProjectID) { _, _ in saveWorkspace() }
-        .onChange(of: workspace.panes.count) { _, _ in saveWorkspace() }
+        .onChange(of: workspace.panes.count) { _, _ in
+            saveWorkspace()
+            syncPaneMetadata()  // V.3d — new/removed pane ⇒ reconcile tracking
+        }
         // Periodic auto-save (every 30s) to persist metrics through crashes/rebuilds
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
             saveWorkspace()
@@ -262,6 +281,15 @@ struct ContentView: View {
 
     private func saveWorkspace() {
         WorkspaceStorage.save(workspace)
+    }
+
+    /// V.3d — reconcile the pane-metadata refresh coordinator's tracked panes
+    /// against every live workspace pane (across all projects/workstreams).
+    /// Idempotent: `PaneMetadataWiring.sync` re-adds existing panes (replacing
+    /// their registration) and untracks panes that have gone away, so it is
+    /// safe to call on every pane-structure change.
+    private func syncPaneMetadata() {
+        paneMetadata.sync(panes: workspace.allPanes)
     }
 
     // MARK: - Pane Socket Handler (IPC from MCP tools over ~/.senkani/pane.sock)

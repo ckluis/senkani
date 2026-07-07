@@ -184,18 +184,42 @@ public actor AutoValidateQueue {
             // skip, not a leg failure).
             let inProcessLegOK = !attempts.isEmpty
             for attempt in attempts {
-                db.insertValidationResult(
-                    sessionId: item.sessionId,
-                    filePath: attempt.path,
-                    validatorName: attempt.validatorName,
-                    category: attempt.category,
-                    exitCode: attempt.exitCode,
-                    rawOutput: attempt.rawOutput,
-                    advisory: attempt.advisory,
-                    durationMs: attempt.durationMs,
-                    outcome: attempt.outcome.rawValue,
-                    reason: attempt.reason
-                )
+                if dualWrite {
+                    // U.9c-1 — the FIRST production producer of
+                    // `session_event_stream`: route the canonical insert +
+                    // its paired stream row through the outbox transaction,
+                    // atomically and SYNCHRONOUSLY on THIS detached worker
+                    // thread (no new cooperative-pool hop — the R7/R8
+                    // no-flake guarantee). Only entered when an operator
+                    // opted into `WorkBusConfig.dualWrite`; the OFF branch
+                    // below is byte-identical to the pre-U.9c path.
+                    db.insertValidationResultWithOutbox(
+                        sessionId: item.sessionId,
+                        filePath: attempt.path,
+                        validatorName: attempt.validatorName,
+                        category: attempt.category,
+                        exitCode: attempt.exitCode,
+                        rawOutput: attempt.rawOutput,
+                        advisory: attempt.advisory,
+                        durationMs: attempt.durationMs,
+                        projectRoot: item.projectRoot,
+                        outcome: attempt.outcome.rawValue,
+                        reason: attempt.reason
+                    )
+                } else {
+                    db.insertValidationResult(
+                        sessionId: item.sessionId,
+                        filePath: attempt.path,
+                        validatorName: attempt.validatorName,
+                        category: attempt.category,
+                        exitCode: attempt.exitCode,
+                        rawOutput: attempt.rawOutput,
+                        advisory: attempt.advisory,
+                        durationMs: attempt.durationMs,
+                        outcome: attempt.outcome.rawValue,
+                        reason: attempt.reason
+                    )
+                }
                 switch attempt.outcome {
                 case .clean:
                     db.recordEvent(type: "auto_validate.clean", projectRoot: item.projectRoot)

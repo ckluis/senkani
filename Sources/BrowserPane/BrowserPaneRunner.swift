@@ -127,14 +127,15 @@ public final class BrowserPaneRunner: BrowserRunner, @unchecked Sendable {
 
     private let mode: Mode
 
-    /// U.2b-2 GUI child a-1 — the pane input-lock state lives on the
-    /// runner (acceptance: "lock state lives on the runner"). Guarded by
-    /// `lockMutex`; the visible-pane `run(...)` drives it (lock on
-    /// dispatch start, unlock on success, banner on refusal), and the GUI
-    /// (`BrowserPaneView`, sibling a-2's runtime wiring) reads
-    /// `lockSnapshot()` / dismisses via `dismissBanner()`.
-    private var lockState = PaneLockStateMachine()
-    private let lockMutex = NSLock()
+    /// U.2b-2 GUI child a-2 — the pane input-lock state NO LONGER lives on
+    /// the runner. The factory builds a FRESH `BrowserPaneRunner` per
+    /// dispatch, so a runner-local lock was discarded after every run (and
+    /// a fresh runner's `.unlocked` machine could never catch a genuine
+    /// double dispatch). The visible-pane run now drives the process-global
+    /// `PaneDispatchStateStore.shared`, keyed by the RESOLVED `pane_id` — the
+    /// store outlives the per-dispatch runner and is what `BrowserPaneView`
+    /// observes. `PaneLockStateMachine` remains the sole transition
+    /// authority; the store delegates to it (a-1's re-audit option (b)).
 
     public init(
         axesDirectory: URL? = nil,
@@ -151,30 +152,6 @@ public final class BrowserPaneRunner: BrowserRunner, @unchecked Sendable {
         self.contentRect = contentRect
         self.egressProxyURL = egressProxyURL
         self.mode = mode
-    }
-
-    // MARK: - Pane input lock (U.2b-2 GUI child a-1)
-
-    /// Thread-safe snapshot of the lock state machine for the GUI to bind
-    /// its URL-bar / nav-gesture `.disabled(...)` modifiers against.
-    public func lockSnapshot() -> PaneLockStateMachine {
-        lockMutex.lock(); defer { lockMutex.unlock() }
-        return lockState
-    }
-
-    /// Apply a lock event under the mutex. Returns the machine's result so
-    /// callers (and tests) can observe rejected edges (double dispatch,
-    /// dismiss-while-active).
-    @discardableResult
-    public func applyLockEvent(_ event: PaneLockStateMachine.Event) -> Result<PaneLockStateMachine.State, PaneLockStateMachine.TransitionError> {
-        lockMutex.lock(); defer { lockMutex.unlock() }
-        return lockState.apply(event)
-    }
-
-    /// Operator dismissed the refusal banner — unlock the pane.
-    @discardableResult
-    public func dismissBanner() -> Result<PaneLockStateMachine.State, PaneLockStateMachine.TransitionError> {
-        return applyLockEvent(.bannerDismissed)
     }
 
     /// U.2b-1b-5 — write the per-target same-origin allowlist to a
@@ -335,24 +312,33 @@ public final class BrowserPaneRunner: BrowserRunner, @unchecked Sendable {
         )
     }
 
-    // MARK: - U.2b-2 GUI child a-1 — visible-pane run
+    // MARK: - U.2b-2 GUI child a-2 — visible-pane run
 
     /// Evaluate the requested axes against the live `WKWebView` a
     /// `BrowserPaneView` registered under `paneId`. Fail-closed:
     ///   * `paneId` that is unknown / closed / (nil with no live pane) →
     ///     structured refusal, NEVER a fall-back to a different pane and
     ///     NEVER a fabricated pass.
-    ///   * A second run while a dispatch is already in flight on this
-    ///     runner's lock → `validation_browser_pane_busy` refusal (the
-    ///     double-dispatch guard).
+    ///   * A second run while a dispatch is already in flight on the SAME
+    ///     resolved pane → `validation_browser_pane_busy` refusal (the
+    ///     double-dispatch guard, now checked against the persistent
+    ///     `PaneDispatchStateStore`, not a throwaway per-runner lock).
     /// No navigation and no window allocation — the pane is locked so the
     /// operator cannot move it out from under the axis evaluation. The
     /// Schneier guard holds: the refusal advisory carries ONLY the
-    /// resolution kind + the caller-supplied `paneId`, never page text.
+    /// resolution kind + the caller-supplied `paneId`, never page text; and
+    /// the banner the store surfaces carries ONLY `failingAxis` +
+    /// `fixtureId` (`PaneRefusal`'s two fields), never captured output.
+    ///
+    /// Lock/banner outcome is written into `PaneDispatchStateStore.shared`
+    /// keyed by the RESOLVED concrete `pane_id` (so `paneId: nil` — the
+    /// most-recently-focused convenience — still keys the store by the real
+    /// id, which is what `BrowserPaneView` observes). The store outlives
+    /// this per-dispatch runner instance, closing the a-1 statelessness gap.
     private func runVisiblePane(axesRequested: [String], paneId: String?) -> PlaywrightResult {
         let registry = LivePaneRegistry.shared
         let resolution = registry.resolve(paneId: paneId)
-        guard case .resolved = resolution,
+        guard case .resolved(let resolvedId) = resolution,
               let surface = registry.surface(paneId: paneId) as? WKWebView else {
             return PlaywrightResult(
                 resultStatus: "fail",
@@ -364,9 +350,12 @@ public final class BrowserPaneRunner: BrowserRunner, @unchecked Sendable {
             )
         }
 
-        // Fail-closed against double-dispatch on the same pane: a rejected
-        // `.dispatchStarted` means a run is already in flight — refuse.
-        if case .failure(let err) = applyLockEvent(.dispatchStarted) {
+        let store = PaneDispatchStateStore.shared
+
+        // Lock on dispatch start via the SHARED, pane-keyed store. Fail-closed
+        // against double-dispatch: a rejected `.dispatchStarted` means a run
+        // is already in flight on this pane — refuse (busy), do not run twice.
+        if case .failure(let err) = store.dispatchStarted(paneId: resolvedId) {
             return PlaywrightResult(
                 resultStatus: "fail",
                 axesRun: [],
@@ -380,10 +369,12 @@ public final class BrowserPaneRunner: BrowserRunner, @unchecked Sendable {
         var assertionsPassed = 0
         var assertionsFailed = 0
         var advisories: [String] = []
+        var firstFailingAxis: String?
         for axis in axesRequested {
             switch loadAxisSource(axis: axis) {
             case .failure(let message):
                 assertionsFailed += 1
+                if firstFailingAxis == nil { firstFailingAxis = axis }
                 advisories.append("axis=\(axis) source_unavailable: \(message)")
             case .success(let js):
                 do {
@@ -391,14 +382,29 @@ public final class BrowserPaneRunner: BrowserRunner, @unchecked Sendable {
                     assertionsPassed += 1
                 } catch {
                     assertionsFailed += 1
+                    if firstFailingAxis == nil { firstFailingAxis = axis }
                     advisories.append("axis=\(axis) evaluate_failed: \(String(describing: error).prefix(160))")
                 }
             }
         }
 
-        // Unlock on success; show the refusal banner (stay locked) on any
-        // failure — the two acceptance-named unlock/lock edges.
-        applyLockEvent(assertionsFailed == 0 ? .dispatchSucceeded : .dispatchRefused)
+        // Unlock on success; surface the refusal banner (stay locked) on any
+        // failure — the two acceptance-named unlock/lock edges, both written
+        // into the store so the observing pane view reflects them. The banner
+        // payload is pinned to the two Schneier-safe identifiers: the first
+        // failing axis + the resolved pane_id as the fixture the refusal is
+        // scoped to (an opaque, page-content-free id).
+        if assertionsFailed == 0 {
+            store.dispatchSucceeded(paneId: resolvedId)
+        } else {
+            store.dispatchRefused(
+                paneId: resolvedId,
+                refusal: PaneDispatchStateStore.PaneRefusal(
+                    failingAxis: firstFailingAxis ?? "unknown",
+                    fixtureId: resolvedId
+                )
+            )
+        }
 
         return PlaywrightResult(
             resultStatus: assertionsFailed == 0 ? "pass" : "fail",

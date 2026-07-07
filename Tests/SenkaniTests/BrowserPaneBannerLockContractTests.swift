@@ -69,8 +69,13 @@ struct BrowserPaneBannerLockContractTests {
                 "the visible-pane run must resolve the pane via LivePaneRegistry")
         #expect(src.contains("validation_browser_pane_unresolved"),
                 "an unresolved pane_id must fail CLOSED with a structured refusal advisory, never a fabricated pass or a fall-back to a different pane")
-        #expect(src.contains("PaneLockStateMachine"),
-                "the pane input-lock state must live on the runner (acceptance: lock state lives on the runner)")
+        // U.2b-2 a-2 rewire: the pane lock/banner outcome is written into
+        // the process-global `PaneDispatchStateStore` (keyed by the resolved
+        // pane_id) instead of a throwaway per-runner `PaneLockStateMachine`.
+        // The store — not the runner — holds the persistent per-pane machine,
+        // so the double-dispatch guard checks stable state across dispatches.
+        #expect(src.contains("PaneDispatchStateStore"),
+                "the visible-pane run must drive the process-global PaneDispatchStateStore (keyed by pane_id), which outlives the per-dispatch runner and delegates transitions to PaneLockStateMachine")
         #expect(src.contains("validation_browser_pane_busy"),
                 "a double dispatch on the same pane must fail closed (busy refusal), not run twice concurrently")
     }
@@ -113,8 +118,15 @@ struct BrowserPaneBannerLockContractTests {
         guard let src = try Self.repoFile("SenkaniApp/Views/BrowserPaneView.swift") else { return }
         #expect(src.contains("RefusalBannerView"),
                 "BrowserPaneView must render the RefusalBannerView overlay at the top of the pane")
-        #expect(src.contains("paneLock.inputEnabled"),
-                "BrowserPaneView must gate the URL bar + nav gestures on the pane input-lock (.disabled when locked)")
+        // U.2b-2 a-2 rewire: the view OBSERVES `PaneDispatchStateStore` and
+        // gates on `paneState.inputEnabled` (the observed store entry for
+        // this pane), replacing the orphaned local `@State paneLock`.
+        #expect(src.contains("PaneDispatchStateStore"),
+                "BrowserPaneView must observe PaneDispatchStateStore (replacing the orphaned local @State paneLock / @State refusalBanner mutation-island)")
+        #expect(src.contains("paneState.inputEnabled"),
+                "BrowserPaneView must gate the URL bar + nav gestures on the OBSERVED lock state (.disabled(!paneState.inputEnabled))")
+        #expect(src.contains("paneState.refusal"),
+                "BrowserPaneView must render the banner from the OBSERVED store payload (paneState.refusal), not a local @State island")
         #expect(src.contains("LivePaneRegistry.shared.register") && src.contains("LivePaneRegistry.shared.unregister"),
                 "BrowserPaneView must publish/withdraw its live WKWebView to/from LivePaneRegistry on appear/disappear so pane_id resolution is fail-closed on a closed pane")
     }

@@ -32,6 +32,17 @@ raiseFileDescriptorLimit()
 // every host mode may need the headless arm wired.
 BrowserPaneRunnerFactory.register()
 
+// U.2b-2 GUI child a-1 — register the VISIBLE-pane runner factory so
+// `dispatch: .pane` stops fail-closed-refusing when this app is running.
+// Mirrors the `register()` (headless) call above; writes only the Core
+// `_paneFactory` slot via `BrowserDispatchRegistry.registerPaneRunnerFactory`,
+// leaving the headless slot untouched. Constructs a `.visiblePane` runner
+// bound to whatever live pane `BrowserPaneView` publishes into
+// `LivePaneRegistry`. This registration lives in the SenkaniApp binary
+// only — the standalone CLI / `senkani-mcp` binaries never link SenkaniApp,
+// so `.pane` stays fail-closed there (no SwiftUI is pulled in).
+BrowserPaneRunnerFactory.registerPaneRunner()
+
 let isSocketMode = CommandLine.arguments.contains("--socket-server")
 let isHookMode = CommandLine.arguments.contains("--hook")
 // MCP mode requires an explicit flag. The previous fallback

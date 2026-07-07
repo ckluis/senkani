@@ -194,6 +194,22 @@ public final class SessionEventStreamStore: @unchecked Sendable {
         }
     }
 
+    /// U.9c-1 — total events on the stream for a given source table. Used
+    /// by `ValidationEventStreamProducer.recordParityAudit` to compare the
+    /// paired stream rows against the canonical `validation_results` count.
+    public func count(sourceTable: String) -> Int {
+        return parent.queue.sync {
+            guard let db = parent.db else { return 0 }
+            let sql = "SELECT COUNT(*) FROM session_event_stream WHERE source_table = ?;"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (sourceTable as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+            return Int(sqlite3_column_int64(stmt, 0))
+        }
+    }
+
     /// Lag (rows behind the head) for one consumer.
     public func lag(consumerId: String) -> Int {
         return parent.queue.sync {

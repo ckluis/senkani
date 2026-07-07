@@ -57,6 +57,91 @@ extension SessionDatabase {
         case commitFailed(String)
         case bodyFailed(String)
     }
+
+    /// Outcome of `ackWorkOnCommit` (U.9c-2). `committed` carries the
+    /// work body's return value; `leaseLost` means the worker no longer
+    /// held the lease at ack time (expired + reclaimed, owner mismatch,
+    /// or the row is already terminal) — the transaction was rolled
+    /// back, so NEITHER the work's effect NOR the ack persisted.
+    public enum AckCommitResult<T> {
+        case committed(T)
+        case leaseLost
+    }
+
+    /// Ack-on-commit: run the worker's unit of work and the queue ack in
+    /// ONE transaction (U.9c-2). The `work` closure writes its canonical
+    /// effect through the bound `OutboxTransaction` (same `db` handle,
+    /// same `BEGIN IMMEDIATE … COMMIT`), then this method transitions the
+    /// leased row `processing → succeeded` in that same transaction.
+    ///
+    /// **Delivery contract — at-least-once.** The effect and the ack
+    /// commit atomically or not at all:
+    ///
+    /// - `work` throws  → `ROLLBACK`; the error propagates; the row stays
+    ///   `processing` and is re-leasable after its lease expires. No
+    ///   effect, no ack. (Crash between BEGIN and COMMIT is equivalent —
+    ///   SQLite discards the uncommitted transaction on reopen.)
+    /// - lease no longer held at ack time (the ack UPDATE matches 0 rows:
+    ///   expired + reclaimed by another worker, wrong owner, or already
+    ///   terminal) → `ROLLBACK` and return `.leaseLost`. The effect is
+    ///   deliberately rolled back too: the row now belongs to whoever
+    ///   reclaimed it, so persisting this worker's effect would be a
+    ///   double-delivery. The reclaiming worker re-runs the effect —
+    ///   at-least-once. Effects MUST therefore be idempotent.
+    /// - success → `COMMIT`; return `.committed(result)`. Crash after
+    ///   COMMIT leaves the effect done and the row `succeeded` — never
+    ///   redelivered.
+    ///
+    /// There is no at-most-once path: a crash in the redelivery window
+    /// re-runs an idempotent effect. A second ack of an already-succeeded
+    /// row is the `.leaseLost` no-op above — detectable, never a
+    /// double-ack or state corruption.
+    ///
+    /// The closure runs ON the serial dispatch queue — DO NOT re-enter
+    /// `queue.sync` from inside it; use the bound `OutboxTransaction`
+    /// helpers.
+    public func ackWorkOnCommit<T>(
+        id: Int64,
+        owner: String,
+        resultSummary: String? = nil,
+        now: Date = Date(),
+        work: (OutboxTransaction) throws -> T
+    ) throws -> AckCommitResult<T> {
+        return try queue.sync {
+            guard let db = self.db else { throw OutboxError.databaseUnavailable }
+            var beginErr: UnsafeMutablePointer<CChar>?
+            if sqlite3_exec(db, "BEGIN IMMEDIATE;", nil, nil, &beginErr) != SQLITE_OK {
+                let msg = beginErr.map { String(cString: $0) } ?? "unknown"
+                if let beginErr { sqlite3_free(beginErr) }
+                throw OutboxError.beginFailed(msg)
+            }
+            let tx = OutboxTransaction(db: db, parent: self)
+            do {
+                let result = try work(tx)
+                // Ack inside the SAME transaction as the work's effect.
+                let changed = tx.ackWork(id: id, owner: owner, resultSummary: resultSummary, at: now)
+                if changed == 0 {
+                    // Lease no longer held — roll the effect back too so a
+                    // row another worker may have reclaimed is never
+                    // double-delivered with a persisted effect.
+                    sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+                    return AckCommitResult<T>.leaseLost
+                }
+                var commitErr: UnsafeMutablePointer<CChar>?
+                if sqlite3_exec(db, "COMMIT;", nil, nil, &commitErr) != SQLITE_OK {
+                    let msg = commitErr.map { String(cString: $0) } ?? "unknown"
+                    if let commitErr { sqlite3_free(commitErr) }
+                    sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+                    throw OutboxError.commitFailed(msg)
+                }
+                self.recordEvent(type: "session_work_queue.acked")
+                return AckCommitResult<T>.committed(result)
+            } catch {
+                sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+                throw error
+            }
+        }
+    }
 }
 
 /// Handle passed to the `withOutboxTransaction` closure. Provides
@@ -142,5 +227,37 @@ public final class OutboxTransaction {
         }
         guard sqlite3_step(stmt) == SQLITE_DONE else { return -1 }
         return sqlite3_last_insert_rowid(db)
+    }
+
+    /// Ack the queue row `id` inside the bound transaction (U.9c-2):
+    /// transition `processing → succeeded` iff `owner` still holds the
+    /// lease. Returns the number of rows changed — `0` means the lease
+    /// is no longer held (expired + reclaimed, wrong owner, or already
+    /// terminal), and the caller rolls the whole transaction back so no
+    /// canonical effect persists without an exclusive ack. The owner +
+    /// `state = 'processing'` guard is what makes a second ack a
+    /// detectable no-op rather than a double-ack.
+    @discardableResult
+    public func ackWork(id: Int64, owner: String, resultSummary: String? = nil, at: Date = Date()) -> Int {
+        let sql = """
+            UPDATE session_work_queue
+               SET state = 'succeeded',
+                   result_summary = ?,
+                   updated_at = ?
+             WHERE id = ? AND lease_owner = ? AND state = 'processing';
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+        defer { sqlite3_finalize(stmt) }
+        if let s = resultSummary {
+            sqlite3_bind_text(stmt, 1, (s as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+        } else {
+            sqlite3_bind_null(stmt, 1)
+        }
+        sqlite3_bind_double(stmt, 2, at.timeIntervalSince1970)
+        sqlite3_bind_int64(stmt, 3, id)
+        sqlite3_bind_text(stmt, 4, (owner as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { return 0 }
+        return Int(sqlite3_changes(db))
     }
 }

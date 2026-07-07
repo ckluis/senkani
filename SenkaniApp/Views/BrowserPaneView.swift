@@ -2,6 +2,7 @@ import SwiftUI
 import WebKit
 import AppKit
 import Core
+import BrowserPane
 
 /// Embedded web browser pane — navigate URLs, preview localhost, read docs.
 /// Uses WKWebView with a URL bar, back/forward, and refresh.
@@ -15,30 +16,43 @@ struct BrowserPaneView: View {
     @State private var pageTitle: String = ""
     @State private var designController = BrowserDesignController()
     @State private var keyMonitor: Any?
+    /// U.2b-2 GUI child a-1 — pane input-lock (URL bar + nav gestures
+    /// disabled during a `dispatch: .pane` run). Mirrors the runner's
+    /// `PaneLockStateMachine`; the runtime coupling to the live runner
+    /// lock is sibling a-2's walk.
+    @State private var paneLock = PaneLockStateMachine()
+    /// U.2b-2 GUI child a-1 — refusal banner shown at the top of the pane
+    /// when a `dispatch: .pane` run refuses. Non-nil ⇒ overlay visible.
+    @State private var refusalBanner: RefusalBanner?
 
     var body: some View {
         VStack(spacing: 0) {
             // URL bar
             HStack(spacing: 6) {
+                // U.2b-2 GUI child a-1 — nav gestures disabled while the
+                // pane input-lock is engaged (a `dispatch: .pane` run is in
+                // flight or a refusal banner is up), so the operator cannot
+                // navigate the pane out from under an axis evaluation.
                 Button { webViewState?.goBack() } label: {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 10))
                 }
                 .buttonStyle(.plain)
-                .disabled(!(webViewState?.canGoBack ?? false))
+                .disabled(!paneLock.inputEnabled || !(webViewState?.canGoBack ?? false))
 
                 Button { webViewState?.goForward() } label: {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 10))
                 }
                 .buttonStyle(.plain)
-                .disabled(!(webViewState?.canGoForward ?? false))
+                .disabled(!paneLock.inputEnabled || !(webViewState?.canGoForward ?? false))
 
                 Button { webViewState?.reload() } label: {
                     Image(systemName: isLoading ? "xmark" : "arrow.clockwise")
                         .font(.system(size: 10))
                 }
                 .buttonStyle(.plain)
+                .disabled(!paneLock.inputEnabled)
 
                 TextField("URL or search...", text: $urlText)
                     .textFieldStyle(.plain)
@@ -48,6 +62,8 @@ struct BrowserPaneView: View {
                     .background(SenkaniTheme.paneBody)
                     .cornerRadius(4)
                     .onSubmit { navigateTo(urlText) }
+                    // URL bar disabled during dispatch — the pane input-lock.
+                    .disabled(!paneLock.inputEnabled)
 
                 if BrowserDesignMode.isEnabled() {
                     Image(systemName: designController.state.isActive ? "cursorarrow.rays" : "cursorarrow")
@@ -62,7 +78,7 @@ struct BrowserPaneView: View {
 
             Rectangle().fill(SenkaniTheme.appBackground).frame(height: 0.5)
 
-            // Web content with optional toast overlay.
+            // Web content with optional toast + refusal-banner overlays.
             ZStack(alignment: .top) {
                 BrowserWebView(
                     urlString: pane.previewFilePath,
@@ -71,8 +87,28 @@ struct BrowserPaneView: View {
                     state: $webViewState,
                     onDidStartNavigation: { [paneId = pane.id.uuidString] in
                         designController.didStartNavigation(paneId: paneId)
+                    },
+                    onWebViewReady: { [paneId = pane.id.uuidString] webView in
+                        // U.2b-2 GUI child a-1 — publish this pane's live
+                        // WKWebView so `BrowserPaneRunner`'s visible-pane
+                        // mode can resolve `pane_id` → this surface.
+                        LivePaneRegistry.shared.register(paneId: paneId, surface: webView)
                     }
                 )
+
+                // U.2b-2 GUI child a-1 — refusal-banner overlay. Shown ONLY
+                // when a `dispatch: .pane` run refused. Dismiss unlocks.
+                if let banner = refusalBanner {
+                    RefusalBannerView(
+                        banner: banner,
+                        onDismiss: {
+                            refusalBanner = nil
+                            _ = paneLock.apply(.bannerDismissed)
+                        },
+                        onOpenAdvisory: { banner.printAdvisory() }
+                    )
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
 
                 if let toast = designController.toast {
                     Text(toast)
@@ -99,6 +135,10 @@ struct BrowserPaneView: View {
         }
         .onDisappear {
             designController.paneClosed(paneId: pane.id.uuidString)
+            // U.2b-2 GUI child a-1 — unregister this pane's surface so a
+            // stale `pane_id` fail-closed-refuses (never resolves to a
+            // different, still-live pane).
+            LivePaneRegistry.shared.unregister(paneId: pane.id.uuidString)
             if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
         }
     }
@@ -156,12 +196,16 @@ struct BrowserWebView: NSViewRepresentable {
     @Binding var pageTitle: String
     @Binding var state: WKWebView?
     var onDidStartNavigation: (() -> Void)? = nil
+    /// U.2b-2 GUI child a-1 — called once the live WKWebView exists so the
+    /// pane can publish it into `LivePaneRegistry` for `.pane` dispatch.
+    var onWebViewReady: ((WKWebView) -> Void)? = nil
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         let wv = WKWebView(frame: .zero, configuration: config)
         wv.navigationDelegate = context.coordinator
         state = wv
+        onWebViewReady?(wv)
 
         if let url = URL(string: urlString.isEmpty ? "https://docs.anthropic.com" : urlString) {
             wv.load(URLRequest(url: url))

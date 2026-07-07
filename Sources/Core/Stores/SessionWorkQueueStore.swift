@@ -33,6 +33,22 @@ public final class SessionWorkQueueStore: @unchecked Sendable {
         public let projectRoot: String?
     }
 
+    /// Result of a lease-renewal attempt (U.9c-2). Distinguishes a live
+    /// renewal from the two failure modes production callers must handle
+    /// differently: an *expired* lease (the TTL already passed — the
+    /// worker lost the row and must NOT resurrect it) versus a *lost*
+    /// lease (owner mismatch, or the row is no longer `processing`).
+    public enum LeaseRenewal: Sendable, Equatable {
+        /// Lease extended; carries the new `lease_expires_at`.
+        case renewed(newExpiry: Date)
+        /// The lease TTL had already passed at `now` — renewal refused so
+        /// a reclaimed (or about-to-be-reclaimed) row is never
+        /// resurrected. This is the double-delivery fence.
+        case expired
+        /// Owner mismatch, unknown row, or the row is not `processing`.
+        case notHeld
+    }
+
     /// Diagnostics rollup consumed by `senkani doctor` + dashboard tiles.
     public struct Diagnostics: Sendable, Equatable {
         public let pending: Int
@@ -167,31 +183,81 @@ public final class SessionWorkQueueStore: @unchecked Sendable {
         }
     }
 
-    /// Extend the lease's TTL. Owner must match the stored
-    /// `lease_owner`; mismatch returns false and is a no-op.
-    @discardableResult
-    public func heartbeat(id: Int64, owner: String, leaseTtl: TimeInterval = 60, now: Date = Date()) -> Bool {
+    /// Renew (extend) a lease the caller still validly holds (U.9c-2).
+    /// Unlike a naive TTL bump, renewal is *fenced*: it refuses to
+    /// extend a lease whose `lease_expires_at` has already passed at
+    /// `now`, so a worker that stalled past its TTL can never resurrect
+    /// a row the reaper may already have reclaimed — that is the fence
+    /// against double-delivery. Timing is entirely `now`-injectable; no
+    /// wall clock is read on the renewal path.
+    ///
+    /// Boundary note: renewal requires `lease_expires_at > now`, while
+    /// `reapExpiredLeases` reclaims on `lease_expires_at <= now`. The
+    /// two predicates partition the instant of expiry with no gap and no
+    /// overlap — at exactly `lease_expires_at == now` the reaper owns
+    /// the row and renewal fails `.expired`.
+    public func renewLease(id: Int64, owner: String, leaseTtl: TimeInterval = 60, now: Date = Date()) -> LeaseRenewal {
         let nowEpoch = now.timeIntervalSince1970
         let expiresEpoch = nowEpoch + leaseTtl
-        return parent.queue.sync {
-            guard let db = parent.db else { return false }
+        return parent.queue.sync { () -> LeaseRenewal in
+            guard let db = parent.db else { return .notHeld }
+            // Fenced renewal: extend only while still owned, still
+            // processing, AND not yet expired at `now`.
             let sql = """
                 UPDATE session_work_queue
                    SET lease_expires_at = ?,
                        heartbeat_at = ?,
                        updated_at = ?
-                 WHERE id = ? AND lease_owner = ? AND state = 'processing';
+                 WHERE id = ? AND lease_owner = ? AND state = 'processing'
+                       AND lease_expires_at > ?;
             """
             var stmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
-            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return .notHeld }
             sqlite3_bind_double(stmt, 1, expiresEpoch)
             sqlite3_bind_double(stmt, 2, nowEpoch)
             sqlite3_bind_double(stmt, 3, nowEpoch)
             sqlite3_bind_int64(stmt, 4, id)
             sqlite3_bind_text(stmt, 5, (owner as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
-            return sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db) > 0
+            sqlite3_bind_double(stmt, 6, nowEpoch)
+            let stepOK = sqlite3_step(stmt) == SQLITE_DONE
+            let changed = sqlite3_changes(db)
+            sqlite3_finalize(stmt)
+            if stepOK && changed > 0 {
+                parent.recordEvent(type: "session_work_queue.renewed")
+                return .renewed(newExpiry: Date(timeIntervalSince1970: expiresEpoch))
+            }
+            // Renewal did not fire — disambiguate `.expired` (row still
+            // owned + processing but past its TTL) from `.notHeld`
+            // (wrong owner / unknown row / already terminal). A single
+            // SELECT under the same serial-queue turn keeps the read
+            // consistent with the failed UPDATE.
+            var dStmt: OpaquePointer?
+            let dSQL = "SELECT 1 FROM session_work_queue WHERE id = ? AND lease_owner = ? AND state = 'processing';"
+            guard sqlite3_prepare_v2(db, dSQL, -1, &dStmt, nil) == SQLITE_OK else { return .notHeld }
+            defer { sqlite3_finalize(dStmt) }
+            sqlite3_bind_int64(dStmt, 1, id)
+            sqlite3_bind_text(dStmt, 2, (owner as NSString).utf8String, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+            if sqlite3_step(dStmt) == SQLITE_ROW {
+                // Owned + processing but the fenced UPDATE didn't fire ⇒
+                // lease_expires_at <= now ⇒ expired.
+                return .expired
+            }
+            return .notHeld
         }
+    }
+
+    /// Extend the lease's TTL (renewal). Thin Bool wrapper over
+    /// `renewLease`: `true` iff the lease was live and got extended.
+    /// Renewing an expired or lost lease returns `false` and is a
+    /// no-op — it will NOT resurrect a reclaimed row. Callers needing to
+    /// distinguish *expired* from *not-held* should call `renewLease`
+    /// directly. Owner must match the stored `lease_owner`.
+    @discardableResult
+    public func heartbeat(id: Int64, owner: String, leaseTtl: TimeInterval = 60, now: Date = Date()) -> Bool {
+        if case .renewed = renewLease(id: id, owner: owner, leaseTtl: leaseTtl, now: now) {
+            return true
+        }
+        return false
     }
 
     /// Mark the row succeeded. Owner check applies.

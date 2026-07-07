@@ -13,6 +13,16 @@ struct SidebarView: View {
     /// doing so skipped hook + session setup and was the original
     /// motivation for the LaunchCoordinator round.
     let onLaunchPane: (PaneType, String, String) -> Void
+    /// V.3d — the observed pane-metadata resolver. The per-pane row reads the
+    /// last cached `PaneMetadata` snapshot for a pane via the synchronous
+    /// cache-hit `metadata(for:)` hover path (never blocks on a probe or DB).
+    /// `ContentView` constructs the resolver (wired to the real
+    /// `PaneMetadataProbes` + `PaneMetadataRefreshCoordinator` in
+    /// `PaneMetadataWiring`) and passes it in here. Chip rendering + the hover
+    /// popover keyed off this snapshot are OUT OF SCOPE this round — the
+    /// sibling `phase-v3d-sidebar-chips-popover-visual-walk` Cowork walk
+    /// validates those; this scaffold only establishes the read seam.
+    let paneMetadataResolver: PaneMetadataResolver
     @State private var showClaudeLaunch = false
     @State private var enrichmentBadge: Int = 0
     @State private var hoveredProjectID: UUID?
@@ -85,7 +95,21 @@ struct SidebarView: View {
                             .padding(.vertical, 4)
                     } else {
                         ForEach(workspace.projects) { project in
-                            projectRow(project)
+                            VStack(alignment: .leading, spacing: 0) {
+                                projectRow(project)
+
+                                // MARK: - V.3d per-pane row sub-list
+                                // One row per pane inside the project row —
+                                // structurally absent before this wiring bridge
+                                // (the only prior `ForEach` was
+                                // `ForEach(workspace.projects)`). Each row reads
+                                // the pane's cached `PaneMetadata` snapshot via
+                                // the observed resolver. Chip content + hover
+                                // popover are OUT OF SCOPE (sibling visual walk).
+                                ForEach(project.panes) { pane in
+                                    paneRow(pane)
+                                }
+                            }
                         }
                     }
 
@@ -259,6 +283,50 @@ struct SidebarView: View {
         .onHover { inside in
             hoveredProjectID = inside ? project.id : (hoveredProjectID == project.id ? nil : hoveredProjectID)
         }
+    }
+
+    // MARK: - Per-pane row (V.3d scaffold)
+
+    /// One row per pane inside the project row. Reads the last cached
+    /// `PaneMetadata` snapshot for the pane through the observed
+    /// `PaneMetadataResolver` (synchronous cache-hit hover path — never blocks
+    /// on a probe or DB). This scaffold establishes the row structure + the
+    /// resolver read seam ONLY. The chip content (port / branch / PR pills),
+    /// the hover popover (content + redaction), the PR-chip click, and the
+    /// perceived <100ms p95 render timing are explicitly OUT OF SCOPE for this
+    /// wiring bridge — the sibling
+    /// `phase-v3d-sidebar-chips-popover-visual-walk` Cowork walk validates
+    /// them. The metadata snapshot is read here so the wiring seam is
+    /// exercised; the rendered chip pills are deferred.
+    private func paneRow(_ pane: PaneModel) -> some View {
+        let metadata = paneMetadataResolver.metadata(for: pane.id.uuidString)
+        return HStack(spacing: 4) {
+            Image(systemName: "chevron.forward")
+                .font(.system(size: 7, weight: .semibold))
+                .foregroundStyle(SenkaniTheme.textTertiary)
+                .frame(width: 10)
+
+            Text(pane.title)
+                .font(.system(size: 10))
+                .foregroundStyle(SenkaniTheme.textSecondary)
+                .lineLimit(1)
+
+            Spacer()
+
+            // Chip slot — populated by the sibling visual-walk round. The
+            // metadata snapshot is READ here (exercising the resolver seam);
+            // the port/branch/PR pills + hover popover are deferred to that
+            // walk, so a present snapshot only surfaces a neutral placeholder
+            // dot for now.
+            if metadata != nil {
+                Circle()
+                    .fill(SenkaniTheme.accentAnalytics.opacity(0.4))
+                    .frame(width: 4, height: 4)
+            }
+        }
+        .padding(.leading, 26)
+        .padding(.trailing, 12)
+        .padding(.vertical, 3)
     }
 
     // MARK: - Project status helpers

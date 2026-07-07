@@ -44,6 +44,19 @@ import Core
 /// same `PlaywrightResult` Codable, same `axes_run` ordering, same
 /// `result_status` strings. Child #6 verifies parity.
 ///
+/// U.2b-1b-6 — assertion-evaluation parity. `run(...)` no longer
+/// smoke-tests that each axis's JS merely executes; it CAPTURES each
+/// axis's measurement, decodes it into the same measurement type the
+/// subprocess arm decodes, and routes it through the same shared Swift
+/// evaluators (`PerfAxis.evaluate` / `CompletenessAxis.evaluate`) —
+/// `aggregateAxisResults(...)` folds the counts exactly as `runner.ts`'s
+/// `main()` does (perf + completeness counted; security + design measured
+/// but uncounted, matching the subprocess arm which has no production
+/// `evaluateSecurity` / `evaluateDesign`). `result_status` is computed
+/// from ACTUAL assertion outcomes, so a genuinely-failing page (e.g. a
+/// missing `<meta name="description">`) can no longer false-pass. See
+/// `process-gap-u2b-1b-6-headless-arm-skips-assertion-evaluation-2026-07-07`.
+///
 /// Threading: `run(plan:targetURL:screenshot:)` is **synchronous** to
 /// match the `BrowserRunner` protocol. Internally it bounces work to
 /// the main actor (WebKit/AppKit are main-actor-isolated) and waits
@@ -280,35 +293,106 @@ public final class BrowserPaneRunner: BrowserRunner, @unchecked Sendable {
             )
         }
 
-        var assertionsPassed = 0
-        var assertionsFailed = 0
-        var advisories: [String] = []
+        // U.2b-1b-6 — CAPTURE each axis's measurement (stop discarding it),
+        // decode it into the SAME measurement type the subprocess arm decodes,
+        // and route it through the SAME shared Swift evaluators. The prior
+        // implementation ran each axis's JS, `_ = try`-discarded the result,
+        // counted 1 pass/axis when the JS merely executed, and false-passed on
+        // genuinely-failing pages. See
+        // `process-gap-u2b-1b-6-headless-arm-skips-assertion-evaluation-2026-07-07`.
+        var perfMeasurement: PerfMeasurement?
+        var completenessMeasurement: CompletenessMeasurement?
+        var securityMeasurement: SecurityMeasurement?
+        var designMeasurement: DesignMeasurement?
 
         for axis in axesRequested {
-            let source = loadAxisSource(axis: axis)
-            switch source {
+            let js: String
+            switch loadAxisSource(axis: axis) {
             case .failure(let message):
-                assertionsFailed += 1
-                advisories.append("axis=\(axis) source_unavailable: \(message)")
-                continue
-            case .success(let js):
-                do {
-                    _ = try lifecycle.evaluateSync(js: js, timeout: axisTimeout)
-                    assertionsPassed += 1
-                } catch {
-                    assertionsFailed += 1
-                    advisories.append("axis=\(axis) evaluate_failed: \(String(describing: error).prefix(160))")
+                // Axis source unavailable = a measurement error. runner.ts's
+                // page.evaluate throwing surfaces as a whole-run browser
+                // failure (fail / 0 / 0); mirror that rather than fabricating
+                // a per-axis pass/fail from an I/O error.
+                return BrowserPaneRunner.measurementFailure(
+                    axesRequested,
+                    "axis=\(axis) source_unavailable: \(message)"
+                )
+            case .success(let source):
+                js = source
+            }
+
+            let value: Any?
+            do {
+                value = try lifecycle.evaluateSync(js: js, timeout: axisTimeout)
+            } catch {
+                // Measurement JS threw / timed out — mirror runner.ts's
+                // browser-exception path (fail / 0 / 0 for the whole run), NOT
+                // a per-axis +1 failed. The page-load falsifier above is
+                // unaffected (it returns before reaching this loop).
+                return BrowserPaneRunner.measurementFailure(
+                    axesRequested,
+                    "axis=\(axis) evaluate_failed: \(String(describing: error).prefix(160))"
+                )
+            }
+
+            switch axis {
+            case ValidationAxes.perf.rawValue:
+                guard let m = BrowserPaneRunner.decodeJSONMeasurement(PerfMeasurement.self, from: value) else {
+                    return BrowserPaneRunner.measurementFailure(axesRequested, "axis=perf measurement_decode_failed")
                 }
+                perfMeasurement = m
+            case ValidationAxes.completeness.rawValue:
+                guard let dom = BrowserPaneRunner.decodeJSONMeasurement(CompletenessDOM.self, from: value) else {
+                    return BrowserPaneRunner.measurementFailure(axesRequested, "axis=completeness measurement_decode_failed")
+                }
+                // HEAD-probe each same-origin link for its status code — the
+                // auxiliary step runner.ts performs via page.request.fetch
+                // outside page.evaluate (completeness.js returns hrefs only).
+                let internalLinks = BrowserPaneRunner.probeInternalLinks(dom.sameOriginLinks, timeout: axisTimeout)
+                completenessMeasurement = CompletenessMeasurement(
+                    title: dom.title,
+                    metaDescription: dom.metaDescription,
+                    internalLinks: internalLinks,
+                    images: dom.images
+                )
+            case ValidationAxes.security.rawValue:
+                // security.js emits the SecurityMeasurement shape directly.
+                securityMeasurement = BrowserPaneRunner.decodeJSONMeasurement(SecurityMeasurement.self, from: value)
+            case ValidationAxes.design.rawValue:
+                // design.js emits phase-1 { interactive_targets, dom_focus_order };
+                // the Tab-walk (tab_focus_order) is a separate off-screen
+                // navigation (see tabWalkFocusOrder) the parity counts do not
+                // depend on, so it is left empty here.
+                if let dom = BrowserPaneRunner.decodeJSONMeasurement(DesignDOM.self, from: value) {
+                    designMeasurement = DesignMeasurement(
+                        interactiveTargets: dom.interactiveTargets,
+                        domFocusOrder: dom.domFocusOrder,
+                        tabFocusOrder: []
+                    )
+                }
+            default:
+                break
             }
         }
 
-        return PlaywrightResult(
-            resultStatus: assertionsFailed == 0 ? "pass" : "fail",
+        let aggregate = BrowserPaneRunner.aggregateAxisResults(
             axesRun: axesRequested,
-            assertionsPassed: assertionsPassed,
-            assertionsFailed: assertionsFailed,
+            perf: perfMeasurement,
+            perfExpected: BrowserPaneRunner.parsePerfExpected(plan: plan),
+            completeness: completenessMeasurement,
+            security: securityMeasurement,
+            design: designMeasurement
+        )
+
+        return PlaywrightResult(
+            resultStatus: aggregate.resultStatus,
+            axesRun: axesRequested,
+            assertionsPassed: aggregate.assertionsPassed,
+            assertionsFailed: aggregate.assertionsFailed,
             screenshotPath: nil,
-            advisory: advisories.isEmpty ? nil : advisories.joined(separator: " | ")
+            advisory: aggregate.advisory,
+            securityMeasurement: aggregate.securityMeasurement,
+            designMeasurement: aggregate.designMeasurement
         )
     }
 
@@ -556,6 +640,244 @@ public final class BrowserPaneRunner: BrowserRunner, @unchecked Sendable {
         } catch {
             return .failure("read_failed path=\(url.path) error=\(error)")
         }
+    }
+
+    // MARK: - U.2b-1b-6 — measurement decode + shared-evaluator aggregation
+
+    /// Aggregated headless-arm outcome. Populated by
+    /// `aggregateAxisResults(...)` and copied into the returned
+    /// `PlaywrightResult` by `run(...)`.
+    public struct HeadlessAggregate: Sendable, Equatable {
+        public let resultStatus: String
+        public let assertionsPassed: Int
+        public let assertionsFailed: Int
+        public let advisory: String?
+        public let securityMeasurement: SecurityMeasurement?
+        public let designMeasurement: DesignMeasurement?
+
+        public init(
+            resultStatus: String,
+            assertionsPassed: Int,
+            assertionsFailed: Int,
+            advisory: String?,
+            securityMeasurement: SecurityMeasurement?,
+            designMeasurement: DesignMeasurement?
+        ) {
+            self.resultStatus = resultStatus
+            self.assertionsPassed = assertionsPassed
+            self.assertionsFailed = assertionsFailed
+            self.advisory = advisory
+            self.securityMeasurement = securityMeasurement
+            self.designMeasurement = designMeasurement
+        }
+    }
+
+    /// PARITY CONTRACT (U.2b-1b-6). Mirrors `runner.ts` `main()` assertion
+    /// aggregation so the off-screen WKWebView arm produces byte-identical
+    /// `result_status` / `assertions_passed` / `assertions_failed` to the
+    /// `PlaywrightSubprocessRunner` arm for the same measurement inputs.
+    ///
+    /// The subprocess reference (`Resources/playwright-runner/runner.ts`)
+    /// folds assertion counts from **perf + completeness ONLY** — it
+    /// *measures* security + design (attaching the payload to
+    /// `security_measurement` / `design_measurement`) but never evaluates
+    /// their assertions into the counts (there is no production caller of
+    /// `SecurityAxis.evaluate` / `DesignAxis.evaluate`; runner.ts has no
+    /// `evaluateSecurity` / `evaluateDesign`). To keep the two arms
+    /// byte-identical this aggregator does the same: perf + completeness route
+    /// through the shared Swift `PerfAxis.evaluate` / `CompletenessAxis.evaluate`
+    /// (whose per-assertion pass/fail decisions match runner.ts's
+    /// `evaluatePerf` / `evaluateCompleteness` row-for-row), while security +
+    /// design are captured-but-uncounted.
+    ///
+    /// `result_status` = `assertions_failed == 0 ? "pass"
+    ///                   : (assertions_passed == 0 ? "fail" : "partial")`,
+    /// exactly matching runner.ts — computed from ACTUAL assertion outcomes,
+    /// never from whether the axis JS threw. A completeness measurement with a
+    /// missing `<meta name="description">` can therefore no longer false-pass.
+    public static func aggregateAxisResults(
+        axesRun: [String],
+        perf: PerfMeasurement?,
+        perfExpected: PerfExpected?,
+        completeness: CompletenessMeasurement?,
+        security: SecurityMeasurement?,
+        design: DesignMeasurement?
+    ) -> HeadlessAggregate {
+        var passed = 0
+        var failed = 0
+        var advisories: [String] = []
+
+        func fold(_ rows: [AssertionResult]) {
+            for row in rows {
+                if row.passed {
+                    passed += 1
+                } else {
+                    failed += 1
+                    if let advisory = row.advisory {
+                        advisories.append("\(row.assertionId): \(advisory)")
+                    }
+                }
+            }
+        }
+
+        if axesRun.contains(ValidationAxes.perf.rawValue), let perf {
+            fold(PerfAxis.evaluate(measurement: perf, expected: perfExpected))
+        }
+        if axesRun.contains(ValidationAxes.completeness.rawValue), let completeness {
+            fold(CompletenessAxis.evaluate(measurement: completeness))
+        }
+        // security + design: measured + attached, NOT folded into the counts —
+        // parity with runner.ts (see contract note above).
+
+        let resultStatus = failed == 0 ? "pass" : (passed == 0 ? "fail" : "partial")
+        return HeadlessAggregate(
+            resultStatus: resultStatus,
+            assertionsPassed: passed,
+            assertionsFailed: failed,
+            advisory: advisories.isEmpty ? nil : advisories.joined(separator: " | "),
+            securityMeasurement: axesRun.contains(ValidationAxes.security.rawValue) ? security : nil,
+            designMeasurement: axesRun.contains(ValidationAxes.design.rawValue) ? design : nil
+        )
+    }
+
+    /// Phase-1 completeness DOM shape returned by `axes/completeness.js`
+    /// (`{ title, metaDescription, sameOriginLinks, images }`). The
+    /// `internal_links` status codes are resolved afterward by
+    /// `probeInternalLinks(...)`, mirroring runner.ts's
+    /// `measureCompleteness` HEAD-probe loop.
+    public struct CompletenessDOM: Decodable, Sendable, Equatable {
+        public let title: String?
+        public let metaDescription: String?
+        public let sameOriginLinks: [String]
+        public let images: [CompletenessMeasurement.ImageElement]
+
+        enum CodingKeys: String, CodingKey {
+            case title
+            case metaDescription
+            case sameOriginLinks
+            case images
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.title = try c.decodeIfPresent(String.self, forKey: .title)
+            self.metaDescription = try c.decodeIfPresent(String.self, forKey: .metaDescription)
+            self.sameOriginLinks = try c.decodeIfPresent([String].self, forKey: .sameOriginLinks) ?? []
+            self.images = try c.decodeIfPresent([CompletenessMeasurement.ImageElement].self, forKey: .images) ?? []
+        }
+
+        public init(
+            title: String?,
+            metaDescription: String?,
+            sameOriginLinks: [String],
+            images: [CompletenessMeasurement.ImageElement]
+        ) {
+            self.title = title
+            self.metaDescription = metaDescription
+            self.sameOriginLinks = sameOriginLinks
+            self.images = images
+        }
+    }
+
+    /// Phase-1 design DOM shape returned by `axes/design.js`
+    /// (`{ interactive_targets, dom_focus_order }`). `tab_focus_order` is a
+    /// separate off-screen Tab-walk (see `tabWalkFocusOrder`) and is absent
+    /// from this payload; the parity counts do not consume design assertions,
+    /// so the attached `DesignMeasurement` carries an empty tab-walk.
+    public struct DesignDOM: Decodable, Sendable, Equatable {
+        public let interactiveTargets: [DesignMeasurement.InteractiveTarget]
+        public let domFocusOrder: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case interactiveTargets = "interactive_targets"
+            case domFocusOrder = "dom_focus_order"
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.interactiveTargets = try c.decodeIfPresent([DesignMeasurement.InteractiveTarget].self, forKey: .interactiveTargets) ?? []
+            self.domFocusOrder = try c.decodeIfPresent([String].self, forKey: .domFocusOrder) ?? []
+        }
+
+        public init(interactiveTargets: [DesignMeasurement.InteractiveTarget], domFocusOrder: [String]) {
+            self.interactiveTargets = interactiveTargets
+            self.domFocusOrder = domFocusOrder
+        }
+    }
+
+    /// Decode a WKWebView `callAsyncJavaScript` marshaled value (an
+    /// `NSDictionary` / `NSArray` / `NSNumber` / `NSString` / `NSNull` tree)
+    /// into a Codable measurement type by round-tripping through
+    /// `JSONSerialization` → `JSONDecoder`. Returns nil when the value is
+    /// absent, not a JSON object, or does not match the target shape.
+    public static func decodeJSONMeasurement<T: Decodable>(_ type: T.Type, from value: Any?) -> T? {
+        guard let value, JSONSerialization.isValidJSONObject(value) else { return nil }
+        guard let data = try? JSONSerialization.data(withJSONObject: value) else { return nil }
+        return try? JSONDecoder().decode(T.self, from: data)
+    }
+
+    /// Parse the `perf` step's `expected` JSON (`{ inp_ms, lcp_ms }`) into a
+    /// `PerfExpected`, mirroring runner.ts's `parsePerfExpected`. Returns nil
+    /// when there is no perf step, no `expected`, or the JSON is malformed —
+    /// `PerfAxis.evaluate` then falls back to the Web-Vitals defaults.
+    public static func parsePerfExpected(plan: [ValidationStep]) -> PerfExpected? {
+        guard let step = plan.first(where: { $0.axis == .perf }),
+              let expected = step.expected,
+              let data = expected.data(using: .utf8) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(PerfExpected.self, from: data)
+    }
+
+    /// HEAD-probe each same-origin link for its status code, mirroring
+    /// runner.ts's `measureCompleteness` (`page.request.fetch(href,
+    /// { method: "HEAD", failOnStatusCode: false })`). A network error or a
+    /// non-HTTP response yields `status_code: nil`, which the shared
+    /// `CompletenessAxis` evaluator treats as a failed link — same as
+    /// runner.ts's `(status_code ?? 999) >= 400`.
+    static func probeInternalLinks(_ hrefs: [String], timeout: TimeInterval) -> [CompletenessMeasurement.InternalLink] {
+        hrefs.map { headProbe(href: $0, timeout: timeout) }
+    }
+
+    /// Single synchronous HEAD probe. MUST be called from a background thread
+    /// (the enclosing `run(...)` contract) — it blocks on a semaphore.
+    static func headProbe(href: String, timeout: TimeInterval) -> CompletenessMeasurement.InternalLink {
+        guard let url = URL(string: href) else {
+            return CompletenessMeasurement.InternalLink(href: href, statusCode: nil)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "HEAD"
+        request.timeoutInterval = timeout
+        let statusBox = AnyBox()
+        let sem = DispatchSemaphore(value: 0)
+        let task = URLSession.shared.dataTask(with: request) { _, response, _ in
+            if let http = response as? HTTPURLResponse {
+                statusBox.value = http.statusCode
+            }
+            sem.signal()
+        }
+        task.resume()
+        if sem.wait(timeout: .now() + timeout + 1) == .timedOut {
+            task.cancel()
+            return CompletenessMeasurement.InternalLink(href: href, statusCode: nil)
+        }
+        return CompletenessMeasurement.InternalLink(href: href, statusCode: statusBox.value as? Int)
+    }
+
+    /// Whole-run measurement failure — mirrors runner.ts's browser-exception
+    /// path (structured `fail` with `assertions_passed: 0`,
+    /// `assertions_failed: 0`, axes populated) so a decode/eval error surfaces
+    /// as a fail the caller can distinguish from an assertion failure, rather
+    /// than a fabricated per-axis pass.
+    static func measurementFailure(_ axesRun: [String], _ advisory: String) -> PlaywrightResult {
+        PlaywrightResult(
+            resultStatus: "fail",
+            axesRun: axesRun,
+            assertionsPassed: 0,
+            assertionsFailed: 0,
+            screenshotPath: nil,
+            advisory: advisory
+        )
     }
 }
 

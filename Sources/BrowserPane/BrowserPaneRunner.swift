@@ -430,13 +430,29 @@ public final class BrowserPaneRunner: BrowserRunner, @unchecked Sendable {
         let valueBox = AnyBox()
         let errorBox = ErrorBox()
         let sem = DispatchSemaphore(value: 0)
+        // Mirror the off-screen `evaluate(js:)` path: wrap the axis IIFE as
+        // an async-function body and await it via `callAsyncJavaScript` so a
+        // Promise-returning axis (perf.js) resolves before WKWebView marshals
+        // it. The legacy `evaluateJavaScript(_:completionHandler:)` hands the
+        // Promise back un-awaited (WKErrorDomain Code=5, "unsupported type"),
+        // failing the perf axis on every live pane. `in: .page` keeps the eval
+        // in the page's own JS world, matching the prior receiver behavior.
+        let body = "return (\n\(js)\n);"
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
-                box.webView.evaluateJavaScript(js) { value, error in
-                    valueBox.value = value
-                    errorBox.value = error
-                    sem.signal()
-                }
+                box.webView.callAsyncJavaScript(
+                    body,
+                    arguments: [:],
+                    in: nil,          // frame: nil = main frame
+                    in: .page,        // contentWorld: .page = the page's own JS world
+                    completionHandler: { result in
+                        switch result {
+                        case .success(let value): valueBox.value = value
+                        case .failure(let error): errorBox.value = error
+                        }
+                        sem.signal()
+                    }
+                )
             }
         }
         if sem.wait(timeout: .now() + timeout) == .timedOut {

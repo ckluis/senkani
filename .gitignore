@@ -43,3 +43,12 @@ charter.md
 /_*.stderr
 /_*.stdout
 /_*-SenkaniApp.app/
+
+# baton run state (local-only)
+_orch/
+
+# soak runner outputs, local only
+tools/soak/runner/SenkaniApp.app/
+tools/soak/runner/.phase-*-done
+tools/soak/runner/*-bundle.log
+tools/soak/evidence/

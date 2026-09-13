@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Senkani Hosted — the MCP layer that stops your agent from re-reading your codebase</title>
+<meta name="description" content="A hosted MCP server that caches reads, filters exec output, serves symbol-level code intelligence, and ships permission-scoped context to every agent you run.">
+<style>
+  :root{
+    --bg:#0b0d10; --bg2:#101318; --panel:#141920; --line:#232a33;
+    --txt:#d7dee7; --dim:#8a94a3; --faint:#5c6673;
+    --acc:#4ade80; --acc2:#38bdf8; --warn:#fbbf24; --bad:#f87171;
+    --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--txt);font-family:var(--sans);font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased}
+  a{color:var(--acc2);text-decoration:none} a:hover{text-decoration:underline}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  .mono{font-family:var(--mono)}
+  /* nav */
+  nav{position:sticky;top:0;z-index:50;background:rgba(11,13,16,.85);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  .nav-in{display:flex;align-items:center;gap:28px;height:60px}
+  .logo{font-family:var(--mono);font-weight:700;font-size:17px;color:var(--txt)}
+  .logo b{color:var(--acc)}
+  .nav-links{display:flex;gap:22px;font-size:14px;color:var(--dim);margin-left:auto;align-items:center}
+  .nav-links a{color:var(--dim)} .nav-links a:hover{color:var(--txt);text-decoration:none}
+  .btn{display:inline-block;padding:9px 18px;border-radius:8px;font-weight:600;font-size:14px;border:1px solid var(--line)}
+  .btn-acc{background:var(--acc);color:#05230f;border-color:var(--acc)}
+  .btn-acc:hover{text-decoration:none;filter:brightness(1.08)}
+  .btn-ghost{color:var(--txt)} .btn-ghost:hover{text-decoration:none;border-color:var(--dim)}
+  /* hero */
+  header.hero{padding:88px 0 64px;background:
+    radial-gradient(600px 300px at 70% -10%,rgba(56,189,248,.08),transparent),
+    radial-gradient(500px 260px at 20% 0%,rgba(74,222,128,.07),transparent)}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--acc);margin-bottom:18px}
+  h1{font-size:clamp(34px,5vw,54px);line-height:1.12;letter-spacing:-.02em;font-weight:800;max-width:780px}
+  h1 .hl{color:var(--acc)}
+  .sub{margin-top:20px;font-size:19px;color:var(--dim);max-width:720px}
+  .cta-row{margin-top:32px;display:flex;gap:14px;flex-wrap:wrap}
+  .btn-lg{padding:13px 26px;font-size:15px}
+  /* terminal */
+  .term{margin-top:48px;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;font-family:var(--mono);font-size:13.5px;box-shadow:0 20px 60px rgba(0,0,0,.45)}
+  .term-bar{display:flex;gap:7px;padding:11px 14px;border-bottom:1px solid var(--line);background:var(--bg2)}
+  .dot{width:11px;height:11px;border-radius:50%}
+  .term-title{margin-left:8px;color:var(--faint);font-size:12px}
+  .term-body{padding:18px 20px;line-height:1.75;overflow-x:auto}
+  .t-cmd{color:var(--txt)} .t-p{color:var(--faint)} .t-ok{color:var(--acc)} .t-dim{color:var(--dim)}
+  .t-del{color:var(--bad)} .t-add{color:var(--acc)} .t-warn{color:var(--warn)}
+  /* sections */
+  section{padding:76px 0;border-top:1px solid var(--line)}
+  .kick{font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--acc2);margin-bottom:14px}
+  h2{font-size:clamp(26px,3.4vw,36px);letter-spacing:-.02em;line-height:1.15;font-weight:750;max-width:760px}
+  h3{font-size:18px;margin-bottom:8px;font-weight:650}
+  .lede{color:var(--dim);font-size:17.5px;max-width:720px;margin-top:14px}
+  .grid{display:grid;gap:18px;margin-top:40px}
+  .g3{grid-template-columns:repeat(3,1fr)} .g2{grid-template-columns:repeat(2,1fr)}
+  @media(max-width:900px){.g3,.g2{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:24px}
+  .card p{color:var(--dim);font-size:14.5px;margin-top:8px}
+  .card .big{font-family:var(--mono);font-size:26px;color:var(--txt);font-weight:700}
+  .card .unit{color:var(--faint);font-size:13px;font-family:var(--mono)}
+  /* tables */
+  table{width:100%;border-collapse:collapse;margin-top:28px;font-size:14px}
+  th{font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);text-align:left;padding:10px 12px;border-bottom:1px solid var(--line)}
+  td{padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  td.mono,th.r,td.r{text-align:right}
+  td:first-child{font-family:var(--mono);color:var(--txt);white-space:nowrap}
+  td .q{display:block;color:var(--faint);font-size:12.5px;font-family:var(--sans)}
+  .num{font-family:var(--mono);color:var(--acc);white-space:nowrap}
+  /* flow */
+  .flow{display:flex;align-items:stretch;gap:0;margin-top:36px;flex-wrap:wrap}
+  .step{flex:1;min-width:200px;background:var(--panel);border:1px solid var(--line);padding:20px;position:relative}
+  .step+.step{border-left:none}
+  .step:first-child{border-radius:12px 0 0 12px}.step:last-child{border-radius:0 12px 12px 0}
+  @media(max-width:900px){.step{border-radius:12px!important;border-left:1px solid var(--line)!important;margin-top:-1px}}
+  .step .n{font-family:var(--mono);color:var(--acc);font-size:12px}
+  .step h4{margin:6px 0 6px;font-size:15.5px}
+  .step p{font-size:13.5px;color:var(--dim)}
+  .step .save{font-family:var(--mono);font-size:12.5px;color:var(--acc);margin-top:10px;display:block}
+  /* code block */
+  pre.code{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;font-family:var(--mono);font-size:13px;line-height:1.7;overflow-x:auto;margin-top:28px}
+  .c-k{color:var(--acc2)} .c-s{color:var(--acc)} .c-c{color:var(--faint)} .c-f{color:var(--warn)}
+  /* callout */
+  .callout{margin-top:28px;border-left:3px solid var(--acc);background:rgba(74,222,128,.06);padding:16px 20px;border-radius:0 10px 10px 0;font-size:14.5px;color:var(--dim)}
+  .callout b{color:var(--txt)}
+  /* faq */
+  .faq{margin-top:36px}
+  details{border-bottom:1px solid var(--line);padding:18px 4px}
+  summary{cursor:pointer;font-weight:600;font-size:16px;list-style:none;display:flex;justify-content:space-between;align-items:center}
+  summary::after{content:"+";font-family:var(--mono);color:var(--acc);font-size:20px}
+  details[open] summary::after{content:"–"}
+  details p{color:var(--dim);margin-top:12px;font-size:15px;max-width:760px}
+  /* pricing */
+  .price{display:flex;flex-direction:column}
+  .price .amt{font-size:38px;font-weight:800;font-family:var(--mono);margin-top:10px}
+  .price .per{color:var(--faint);font-size:13px;font-family:var(--mono)}
+  .price ul{list-style:none;margin-top:18px;font-size:14px;color:var(--dim)}
+  .price li{padding:6px 0;border-bottom:1px dashed var(--line)}
+  .price li::before{content:"▸ ";color:var(--acc)}
+  .tier-flag{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--bg);background:var(--acc);border-radius:5px;padding:3px 8px;display:inline-block}
+  /* footer */
+  footer{border-top:1px solid var(--line);padding:48px 0 64px;color:var(--faint);font-size:14px}
+  .foot-grid{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap}
+  .foot-grid a{color:var(--dim);display:block;padding:3px 0}
+  .fineprint{margin-top:40px;font-size:12.5px;color:var(--faint);max-width:820px}
+  .tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  @media(max-width:700px){
+    .nav-links a:not(.btn){display:none}
+    table{min-width:620px}
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap nav-in">
+    <div class="logo">senkani<b>_hosted</b></div>
+    <div class="nav-links">
+      <a href="#mechanics">Mechanics</a>
+      <a href="#intel">Code intelligence</a>
+      <a href="#context">Context engine</a>
+      <a href="#trust">Trust</a>
+      <a href="#pricing">Pricing</a>
+      <a class="btn btn-acc" href="#pricing">Get an endpoint</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">MCP server · hosted · language-modular</div>
+    <h1>Your agent doesn't think badly.<br>It <span class="hl">reads wastefully.</span> We fixed the reading.</h1>
+    <p class="sub">Senkani is a remote MCP endpoint that sits between your coding agent and your repositories. Cached file access, filtered command output, symbol-level code intelligence over computed graphs, and permission-scoped context documents — exposed through the MCP protocol your tools already speak.</p>
+    <div class="cta-row">
+      <a class="btn btn-acc btn-lg" href="#pricing">Attach a repo</a>
+      <a class="btn btn-ghost btn-lg" href="#mechanics">Read the mechanics ↓</a>
+    </div>
+
+    <div class="term">
+      <div class="term-bar">
+        <span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span>
+        <span class="term-title">claude-code — attached to senkani endpoint</span>
+      </div>
+      <div class="term-body">
+<span class="t-p">›</span> <span class="t-cmd">agent: find where SIGPIPE handling broke the pane socket</span><br><br>
+<span class="t-p"># built-in Read: pulls 1,847-line SocketServer.swift wholesale</span><br>
+<span class="t-del">read  SocketServer.swift .................. ~14,200 tok</span><br><br>
+<span class="t-p"># senkani_read: AST outline first, then only the accept() span,</span><br>
+<span class="t-p"># cached, secret-redacted, schema-minimal</span><br>
+<span class="t-add">senkani_outline  SocketServer.swift ............. 96 tok</span><br>
+<span class="t-add">senkani_fetch    accept(fd:) L412-L467 .......... 214 tok</span><br>
+<span class="t-add">senkani_xref     callers(accept) → 2 sites ...... 61 tok</span><br><br>
+<span class="t-warn">same answer · 371 tokens instead of 14,200 · cache hit on re-reads: 0 tok</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- PROBLEM -->
+<section id="problem" style="border-top:none">
+  <div class="wrap">
+    <div class="kick">The problem, precisely</div>
+    <h2>Agents pay retail for information the repo already summarized.</h2>
+    <p class="lede">Every mainstream agent loop burns tokens on three things that never needed to be tokens: whole-file reads for one function, raw shell output, and asking a frontier model whether tests passed.</p>
+    <div class="grid g3">
+      <div class="card"><div class="big">50–99%</div><span class="unit">of file-read tokens</span><p>are boilerplate the task never touches. Reading a whole file to reach one function is the single most common waste pattern in agent traces.</p></div>
+      <div class="card"><div class="big">60–90%</div><span class="unit">of exec output</span><p>is compiler noise, progress bars, and warnings. A regex knew it was noise. Your agent paid list price anyway.</p></div>
+      <div class="card"><div class="big">$0.00</div><span class="unit">correct cost of "did tests pass?"</span><p>A local parser answers pass/fail deterministically. Sending test logs to a frontier model to summarize is burning dollars to avoid writing ten lines of regex.</p></div>
+    </div>
+    <div class="callout"><b>Honesty clause:</b> the percentages above are our fixture-bench measurements under controlled conditions. Live sessions run lower — cold caches, novel files. Every claim on this page carries its measurement basis, and your dashboard shows <i>your</i> live numbers, not ours. If a vendor quotes you one unqualified multiplier, close the tab.</div>
+  </div>
+</section>
+
+<!-- MECHANICS -->
+<section id="mechanics">
+  <div class="wrap">
+    <div class="kick">Mechanics</div>
+    <h2>Four moves between the agent and the file system.</h2>
+    <p class="lede">No magic, no agent-side SDK. The tools replace built-ins at the protocol level; your existing client discovers them automatically.</p>
+
+    <div class="flow">
+      <div class="step"><span class="n">01</span><h4>CACHE</h4><p>Content-addressed reads. Re-reads during a session cost zero tokens — agents re-read constantly.</p><span class="save">re-reads: −100%</span></div>
+      <div class="step"><span class="n">02</span><h4>FILTER</h4><p>Command-shaped output rules: compilers, test runners, git, package managers. Structured results, not raw dumps.</p><span class="save">exec output: 60–90% smaller</span></div>
+      <div class="step"><span class="n">03</span><h4>OUTLINE-FIRST</h4><p>Tree-sitter AST before bytes. Agents navigate symbols, then fetch exactly the line spans they need.</p><span class="save">navigation: ~90% smaller</span></div>
+      <div class="step"><span class="n">04</span><h4>COMPRESS</h4><p>Schema-minimal responses. <span class="mono">{symbol, file, line}</span> — not the function body it came from.</p><span class="save">result payloads: schema-bound</span></div>
+    </div>
+
+    <div class="tscroll">
+    <table>
+      <thead><tr><th>Tool</th><th>Replaces</th><th style="width:42%">What it actually does</th><th class="r">Measured saving*</th></tr></thead>
+      <tbody>
+        <tr><td>senkani_read</td><td>Read</td><td>Cache + filter + secret scan + outline-first<span class="q">egress-scanned; re-reads free</span></td><td class="r num">50–99%</td></tr>
+        <tr><td>senkani_exec</td><td>Bash</td><td>Per-command filter rules; background mode for long runs<span class="q">adaptive truncation</span></td><td class="r num">60–90%</td></tr>
+        <tr><td>senkani_search</td><td>Grep</td><td>BM25 full-text + optional embedding fusion, ranked returns<span class="q">returns locations, not bodies</span></td><td class="r num">~99%</td></tr>
+        <tr><td>senkani_fetch</td><td>Read (whole file)</td><td>Extract one symbol's lines only</td><td class="r num">50–99%</td></tr>
+        <tr><td>senkani_outline</td><td>Read-for-structure</td><td>Tree-sitter AST outline in hundreds of tokens</td><td class="r num">~90%</td></tr>
+        <tr><td>senkani_deps</td><td>Import archaeology</td><td>Dependency graph query instead of reading 20 files</td><td class="r num">~95%</td></tr>
+        <tr><td>senkani_parse</td><td>Paste logs to LLM</td><td>Regex extraction of pass/fail/duration</td><td class="r num">~90% + $0</td></tr>
+        <tr><td>senkani_bundle</td><td>Hand-curated dumps</td><td>Budget-bounded repo brief, canonical order, critical-first</td><td class="r num">~80%</td></tr>
+        <tr><td>+ 12 more</td><td colspan="3" style="font-family:var(--sans)">embed · explore · watch · web · search_web · knowledge · repo · session · version · …<span class="q">full table in the docs; every entry lists its measurement basis</span></td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <div class="callout"><b>*Measurement basis:</b> fixture bench — controlled, cache-friendly, repeatable. It is the <i>ceiling</i>. The paired <i>floor</i> comes from replaying real sessions against your repos and appears on your dashboard from week one. We publish both or neither; that rule is enforced by a check in our own CI.</div>
+  </div>
+</section>
+
+<!-- CODE INTELLIGENCE -->
+<section id="intel">
+  <div class="wrap">
+    <div class="kick">Code intelligence</div>
+    <h2>Grep finds text. Graphs find consequences.</h2>
+    <p class="lede">Every attached repo gets continuous indexing: tree-sitter symbol tables, dependency graphs, cross-references. Retrieval expands along those edges before anything reaches a model.</p>
+
+    <div class="grid g3">
+      <div class="card"><h3>Symbols, not strings</h3><p>Rename-safe navigation over AST-extracted definitions, references, implementations — ranked by graph distance to what the agent is already touching.</p></div>
+      <div class="card"><h3>Graph-expanded retrieval</h3><p>Vector search proposes candidates; the call/dep graph pulls in callers, callees, and behaviour siblings within N hops. The model sees the relevant neighborhood, not fifty near-misses.</p></div>
+      <div class="card"><h3>Impact queries</h3><p>"What breaks if I change this function?" answered by walking edges computed at push time — not by hoping the model memorized your architecture.</p></div>
+    </div>
+
+    <h3 style="margin-top:52px">Language modules bolt on per workspace</h3>
+    <p class="lede" style="margin-top:8px">The core speaks tree-sitter for broad coverage. Attach a language module and the workspace gains its native intelligence. Elixir, for instance — where BEAM hands you structure other ecosystems have to infer:</p>
+
+<pre class="code"><span class="c-c"># attached module: elixir (NextLS diagnostics + Xref + OTP topology)</span>
+senkani_xref       callers(MyApp.Billing.capture)     <span class="c-s">→ 4 sites, 1 behind a behaviour impl</span>
+senkani_deps_graph MyApp.Web                          <span class="c-s">→ context boundary violations: 2</span>
+senkani_sup_tree   MyApp.Application                  <span class="c-s">→ 12 children, 2 without restart strategy</span>
+
+<span class="c-c"># retrieval = vector candidates ∪ {N-hop graph neighbors}</span>
+<span class="c-k">query:</span> "where does refund logic bypass the ledger?"
+<span class="c-k">graph-RAG expansion:</span> capture/1 → Refund ← issue_credit/2 ← LedgerServer (GenServer)
+<span class="c-k">model receives:</span> 2.1k tokens of exact neighborhood  <span class="c-c">(not 50k of plausible guesses)</span></pre>
+
+    <p class="lede" style="margin-top:20px">Tool tables vary per workspace — attach the Elixir module and <span class="mono">sup_tree</span> appears; detach it and it's gone. Clients negotiate schemas by version, so nothing breaks when a module lands. That negotiation surface shipped before this product did; it's load-bearing, not aspirational.</p>
+  </div>
+</section>
+
+<!-- CONTEXT ENGINE -->
+<section id="context">
+  <div class="wrap">
+    <div class="kick">Context engine</div>
+    <h2>Documentation that knows who's asking.</h2>
+    <p class="lede">Architecture notes, decisions, runbooks — stored as structured rows with provenance and staleness columns, compiled into markdown variants per visibility tier, and served over a virtual filesystem your agent can Read and Grep like any other directory.</p>
+
+    <pre class="code"><span class="c-c">// the loop</span>
+git push ──▶ graph nodes touched ──▶ knowledge rows marked <span class="c-f">stale</span>
+                                              │
+                     incremental rebuild ◀────┘   <span class="c-c">(classic SSG build, nothing exotic)</span>
+                              │
+              ▼ variant matrix: one MD render per visibility tier
+              ├── /context/public/payments-overview.md      ← doubles as your docs site
+              ├── /context/member/payments-overview.md
+              ├── /context/team-payments/payments-overview.md   ← includes the rate-limit internals
+              └── /context/admin/payments-overview.md           ← includes the incident timeline</pre>
+
+    <div class="grid g2" style="margin-top:32px">
+      <div class="card"><h3>The field is the ACL, not the file</h3><p>A wiki page is visible to everyone or no one. Here each section carries its own tier; the contractor-grade render simply omits what a contractor must not see — and never learns that anything was omitted. Rights evaluate server-side against the caller's principal on every MCP request.</p></div>
+      <div class="card"><h3>Permission correctness is a build gate</h3><p>Because variants are static artifacts, CI scans every render and fails the build if an artifact contains sections above its tier. Scoped access stops being a runtime promise and becomes a checked invariant — with a diff trail for your auditors.</p></div>
+      <div class="card"><h3>Agents write rows, not prose</h3><p>Agent-contributed knowledge lands as structured entries through review — provenance-tagged, source-commit-linked — instead of freehand edits slowly wrecking a markdown file nobody diffs.</p></div>
+      <div class="card"><h3>Stale is a trigger, not a vibe</h3><p>Knowledge rows link to code-graph nodes. Change the code, the linked rows flag themselves, affected variants rebuild incrementally, and readers get last-known-good plus a staleness header.</p></div>
+    </div>
+
+    <div class="callout"><b>Why markdown?</b> Because it's the format agents already consume best and humans already review cheapest. We didn't invent a knowledge format; we invented supply chain for one.</div>
+  </div>
+</section>
+
+<!-- TRUST -->
+<section id="trust">
+  <div class="wrap">
+    <div class="kick">Trust</div>
+    <h2>The boring security decisions, made explicitly.</h2>
+    <div class="grid g2" style="margin-top:36px">
+      <div class="card"><h3>Two-stage egress guard</h3><p>Every byte leaving the server passes deterministic secret detection first — prefix rules, checksum validators, entropy windows — then a small local NER model for contextual PII that regexes miss. Deterministic catches stay deterministic; the model never gates alone.</p></div>
+      <div class="card"><h3>SSRF hardened by construction</h3><p>Outbound fetches are host-allowlisted, DNS-resolved and re-validated against private ranges, redirect-checked per hop, with subresource classes blocked at the engine level. Built for hostile input, documented in the threat model.</p></div>
+      <div class="card"><h3>Audit everything, enforce budgets</h3><p>Per-call audit log: which principal, which tool, which repo, how many tokens, what was redacted. Hard token/cost ceilings enforced at the gateway per user, team, or repo — the cutoff fires before the invoice does.</p></div>
+      <div class="card"><h3>Self-host escape hatch</h3><p>Hosted: your code is indexed in an isolated per-repo worker; nothing trains anything, ever. Want bytes to never leave your VPC? Run the same binary against your own object storage; hosted becomes control-plane only.</p></div>
+    </div>
+  </div>
+<!-- Architecture -->
+<section id="architecture">
+  <div class="wrap">
+    <div class="kick">Architecture</div>
+    <h2>Two-tier deployment</h2>
+    <p class="lede">Senkani hosted runs as a coordinated two-tier system. The <b>web tier</b> is a remote MCP endpoint that indexes remote repos, aggregates team savings metrics, and enforces budgets and audit policies. The <b>local tier</b> is a thin agent running in each developer's worktree that caches index data for their checked-out branches, supports offline work, and writes changes back to the remote tier when ready. This division of labor lets teams share index warmness for cost efficiency while letting individuals keep WIP experiments private and offline.</p>
+    <div class="grid g2">
+      <div class="card"><h3>Web tier</h3><ul><li>Hosted MCP endpoint, reachable from any client</li><li>Shared per-repo MiniLM/LSM indexes across the team</li><li>Savings dashboard & budgets, hard cutoffs at gateway</li><li>SSO/SAML, audit export, DPA</li></ul></div>
+      <div class="card"><h3>Local tier</h3><ul><li>Git worktree-scoped index cache</li><li>Offline mode — queries work without network</li><li>WIP branches never pollute team-shared state</li><li>On-push, selectively push index updates to web tier</li></ul></div>
+    </div>
+    <div class="callout"><b>Synchronization:</b> On push, the local tier pushes incremental index diffs to the web tier for the updated repo. On checkout/switch, the local tier warms its cache from the web tier. The web tier never contains a developer's private WIP index unless they explicitly push it.</div>
+  </div>
+</section>
+
+
+</section>
+
+<!-- PRICING -->
+<section id="pricing">
+  <div class="wrap">
+    <div class="kick">Pricing</div>
+    <h2>Cheaper than one bad week of agent spend.</h2>
+    <div class="grid g3">
+      <div class="card price">
+        <span class="tier-flag">Local</span>
+        <div class="amt">$0</div><span class="per">forever · stdio binary</span>
+        <ul>
+          <li>Single repo, single user</li>
+          <li>Full tool surface, local models</li>
+          <li>No telemetry leaves the machine</li>
+          <li>Community support</li>
+        </ul>
+        <a class="btn btn-ghost" style="margin-top:20px;text-align:center" href="#">Download binary</a>
+      </div>
+      <div class="card price" style="border-color:var(--acc)">
+        <span class="tier-flag">Team</span>
+        <div class="amt">$29</div><span class="per">per dev / month</span>
+        <ul>
+          <li>Remote MCP endpoint, unlimited repos</li>
+          <li>Shared warm indexes across the team</li>
+          <li>Graph-RAG + language modules</li>
+          <li>Savings dashboard, hard budgets</li>
+          <li>Context engine (member/team tiers)</li>
+        </ul>
+        <a class="btn btn-acc" style="margin-top:20px;text-align:center" href="#">Attach a repo</a>
+      </div>
+      <div class="card price">
+        <span class="tier-flag">Enterprise</span>
+        <div class="amt" style="font-size:30px">Talk to us</div><span class="per">annual</span>
+        <ul>
+          <li>SSO/SAML, SCIM, RBAC tiers</li>
+          <li>Audit export, DPA, retention controls</li>
+          <li>Private-VPC workers / self-hosted</li>
+          <li>Full visibility-lattice context engine</li>
+          <li>SLA + migration help</li>
+        </ul>
+        <a class="btn btn-ghost" style="margin-top:20px;text-align:center" href="#">Contact</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FAQ -->
+<section id="faq">
+  <div class="wrap">
+    <div class="kick">Objections, pre-answered</div>
+    <h2>Frequently asked, aggressively.</h2>
+    <div class="faq">
+      <details open>
+        <summary>Is the big multiplier real?</summary>
+        <p>The fixture number (80×, synthetic, controlled) is the optimization math's ceiling. Live-session replays land meaningfully lower because real work reads novel files and pays cold-start indexing. Both numbers ship together on every surface we control, and your dashboard reports your live floor — which is the only number that affects your bill. Anyone selling you a single unqualified multiplier is selling you their best day.</p>
+      </details>
+      <details>
+        <summary>Can't a good prompt solve this?</summary>
+        <p>A prompt changes how the model asks. It cannot change what Read returns. When the unit of transfer is a 1,800-line file and the need is 55 lines, no amount of instruction fixes the metering. We changed the metering.</p>
+      </details>
+      <details>
+        <summary>Another vector DB with a chat wrapper?</summary>
+        <p>No. Embeddings are one fusion input among deterministic systems: content-addressed caches, command-shaped filters, AST extraction, and computed graphs. Retrieval quality was never the bottleneck — transfer volume and access control were.</p>
+      </details>
+      <details>
+        <summary>What do my agents need installed?</summary>
+        <p>Nothing. Any MCP-capable client — Claude Code, Cursor, your homegrown harness — points at the endpoint URL with an OAuth token. Tools are discovered at connect time; schema versions negotiate cleanly when we ship new capabilities.</p>
+      </details>
+      <details>
+        <summary>Which languages get graph intelligence?</summary>
+        <p>Tree-sitter grammars cover the mainstream set on day one: symbols, outlines, dep graphs, semantic search. Deep native modules (diagnostics, xref precision, runtime topology) land per language — Elixir first, because BEAM's explicit structure makes the value obvious. Tell us yours; the module API is the roadmap, not a secret.</p>
+      </details>
+      <details>
+        <summary>What happens to my data?</summary>
+        <p>Hosted: isolated per-repo index workers, egress scanning on every response, per-call audit, zero training on your content — contractual, not vibes. Self-hosted: index and storage run in your VPC; we see control-plane telemetry only. The local binary is the same code path with the network cable pulled.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-grid">
+    <div style="max-width:340px">
+      <div class="logo">senkani<b>_hosted</b></div>
+      <p style="margin-top:10px;font-size:13.5px;color:var(--faint)">The MCP layer between your agents and your repos: cheaper reads, smarter graphs, scoped context.</p>
+    </div>
+    <div><a href="#mechanics">Mechanics</a><a href="#intel">Code intelligence</a><a href="#context">Context engine</a></div>
+    <div><a href="#trust">Trust</a><a href="#pricing">Pricing</a><a href="#faq">FAQ</a></div>
+    <div><a href="#">Docs</a><a href="#">Changelog</a><a href="#">GitHub</a><a href="#">Status</a></div>
+  </div>
+  <div class="wrap fineprint">
+    Savings figures cite fixture-bench measurements unless marked otherwise; live-session floors are reported per-workspace on your dashboard once captured. The paired-numbers rule is enforced in our CI — if you ever find an unqualified multiplier on this site, reply to the changelog post and we'll fix it same day.
+  </div>
+</footer>
+
+</body>
+</html>

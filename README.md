@@ -1,5 +1,9 @@
 # Senkani (閃蟹)
 
+> [!NOTE]
+> **Archived.** senkani is no longer maintained. The repository is read-only; the code and the
+> [project page](https://ckluis.github.io/senkani/) stay available. Current work: [ckluis.github.io/experiments](https://ckluis.github.io/experiments/).
+
 [![tests](https://github.com/ckluis/senkani/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/ckluis/senkani/actions/workflows/test.yml)
 [![license](https://img.shields.io/github/license/ckluis/senkani)](LICENSE)
 [![release](https://img.shields.io/github/v/release/ckluis/senkani)](https://github.com/ckluis/senkani/releases)
